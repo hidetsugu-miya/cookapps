@@ -103,7 +103,7 @@ Claude Code の中では、`/mcp` で `cookup` の 6 つのツールが見えま
 |---|---|---|---|
 | `list_inbox` | なし | 全アカウントの受信トレイのスレッドを、新しい順に返す | 読み取り |
 | `get_thread` | `account`、`id` | スレッドの全メッセージを返す。本文はプレーンテキストを優先し、無ければ HTML を返す | 読み取り |
-| `list_events` | `from`、`to`（`YYYY-MM-DD`、`to` の日を含む） | 全アカウントの予定を、早い順に返す | 読み取り |
+| `list_events` | `from`、`to`（`YYYY-MM-DD`、`to` の日を含む） | 全アカウントの予定を、カレンダー名（`calendar`）付きで早い順に返す | 読み取り |
 | `archive` | `account`、`id` | スレッドを受信トレイから外す | 書き込み |
 | `set_read` | `account`、`id`、`read` | スレッドを既読（`true`）または未読（`false`）にする | 書き込み |
 | `trash` | `account`、`id` | スレッドをゴミ箱へ移す。Gmail から元に戻せる | 書き込み |
