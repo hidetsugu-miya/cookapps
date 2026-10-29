@@ -305,6 +305,12 @@ fn parse_range<Tz: TimeZone>(tz: &Tz, from: &str, to: &str) -> Result<(String, S
     range_bounds(tz, from, to + Duration::days(1)).ok_or("日付の範囲を求められません".into())
 }
 
+/// Puts the titled copy of an event first, so dropping the later copies keeps it.
+/// A calendar shared as free/busy only gives its events no title.
+fn titled_first(events: &mut [RawEvent]) {
+    events.sort_by_key(|e| e.summary.is_empty());
+}
+
 /// Whether `e` repeats an event already seen: the same event on several accounts has one iCalUID and time.
 fn is_duplicate(seen: &mut HashSet<(String, When)>, e: &RawEvent) -> bool {
     !e.ical_uid.is_empty() && !seen.insert((e.ical_uid.clone(), e.when.clone()))
@@ -709,8 +715,7 @@ async fn collect_events(
             }
         }
     }
-    // A calendar shared as free/busy only gives its events no title; keep the titled copy of an event seen twice.
-    events.sort_by_key(|e| e.summary.is_empty());
+    titled_first(&mut events);
     Ok(Collected {
         events,
         needs_login,
@@ -1067,6 +1072,26 @@ mod tests {
         // An event with no iCalUID is never merged with another.
         let (all, _) = build_week(&jst(), date("2026-01-01"), vec![raw("x"), raw("y")]);
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn the_titled_copy_of_an_event_is_kept() {
+        let mut untitled = timed("2026-10-30T16:00:00+09:00", "2026-10-30T18:00:00+09:00");
+        untitled.summary = String::new();
+        untitled.ical_uid = "uid".into();
+        let titled = RawEvent {
+            summary: "ブロック".into(),
+            account: "b@example.com".into(),
+            ..untitled.clone()
+        };
+        let mut events = vec![untitled, titled];
+        titled_first(&mut events);
+        let items = flat_events(&events);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].summary, "ブロック");
+        let (_, segs) = build_week(&jst(), date("2026-10-25"), events);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].info.summary, "ブロック");
     }
 
     #[test]
