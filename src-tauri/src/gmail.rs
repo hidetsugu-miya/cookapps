@@ -240,6 +240,17 @@ pub struct ApiError {
     pub(crate) message: String,
 }
 
+impl ApiError {
+    /// A failure Todoist (or another API) answered with `status`.
+    pub(crate) fn with_status(status: u16, message: String) -> Self {
+        Self {
+            status: Some(status),
+            rate_limited: false,
+            message,
+        }
+    }
+}
+
 impl From<String> for ApiError {
     fn from(message: String) -> Self {
         Self {

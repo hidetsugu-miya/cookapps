@@ -312,12 +312,12 @@ fn access_token_of(res: TokenResponse) -> Result<String, String> {
     })
 }
 
-fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
+pub(crate) fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| e.to_string())
 }
 
 /// A missing entry counts as deleted, so a repeated or concurrent run ends in the same state.
-fn delete_entry(entry: &keyring::Entry) -> Result<(), String> {
+pub(crate) fn delete_entry(entry: &keyring::Entry) -> Result<(), String> {
     ignore_missing(entry.delete_credential())
 }
 

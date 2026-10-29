@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod auth;
 pub mod calendar;
 pub mod gmail;
+pub mod todoist;
 
 // tao's macOS backend shows `Some(0)` as "0", so no unread must be `None`.
 fn badge_of(count: u32) -> Option<i64> {
@@ -32,6 +33,17 @@ pub fn run() {
             gmail::archive,
             gmail::set_read,
             gmail::sync,
+            todoist::todoist_load,
+            todoist::todoist_save_token,
+            todoist::todoist_disconnect,
+            todoist::todoist_add,
+            todoist::todoist_add_subtask,
+            todoist::todoist_task_from_mail,
+            todoist::todoist_set_done,
+            todoist::todoist_update,
+            todoist::todoist_move,
+            todoist::todoist_delete,
+            todoist::todoist_open,
             set_badge
         ])
         .run(tauri::generate_context!())
