@@ -87,6 +87,10 @@ impl Auth {
 
     /// `None` means login is required (no stored token, or Google rejected it with invalid_grant).
     pub async fn refresh(&self, dir: &Path, account: &str) -> Result<Option<String>, String> {
+        // The keychain service holds names that are not accounts, so a name from outside is checked before it reaches it.
+        if !is_registered(&self.accounts(dir)?, account) {
+            return Ok(None);
+        }
         let entry = keyring_entry(account)?;
         let refresh_token = match entry.get_password() {
             Ok(p) => p,
@@ -116,7 +120,11 @@ impl Auth {
     }
 
     /// Revokes the account's grant at Google (a failure is logged, not fatal), then forgets its token and its listing.
-    async fn remove(&self, app: &AppHandle, account: &str) -> Result<(), String> {
+    async fn remove(&self, dir: &Path, account: &str) -> Result<(), String> {
+        let list = self.accounts(dir)?;
+        if !is_registered(&list, account) {
+            return Err("登録されていないアカウントです".into());
+        }
         let entry = keyring_entry(account)?;
         match entry.get_password() {
             Ok(token) => {
@@ -129,9 +137,7 @@ impl Auth {
         }
         delete_entry(&entry)?;
         self.access.lock().unwrap().remove(account);
-        let dir = config_dir(app)?;
-        let list = accounts::load(&dir)?.unwrap_or_default();
-        accounts::save(&dir, &accounts::without_account(list, account))
+        accounts::save(dir, &accounts::without_account(list, account))
     }
 
     /// Returns the logged-in account's email address.
@@ -280,7 +286,11 @@ pub async fn remove_account(
 ) -> Result<(), String> {
     sync.forget(&account);
     calendar.forget(&account);
-    auth.remove(&app, &account).await.map_err(|e| {
+    let removed = match config_dir(&app) {
+        Ok(dir) => auth.remove(&dir, &account).await,
+        Err(e) => Err(e),
+    };
+    removed.map_err(|e| {
         eprintln!("cookup: remove_account account={account} status=- error={e}");
         e
     })
@@ -310,6 +320,10 @@ fn access_token_of(res: TokenResponse) -> Result<String, String> {
             res.error_description.unwrap_or_default()
         )
     })
+}
+
+fn is_registered(list: &[String], account: &str) -> bool {
+    list.iter().any(|a| a == account)
 }
 
 pub(crate) fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
@@ -520,6 +534,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.email_address, "a@example.com");
+    }
+
+    #[test]
+    fn only_listed_accounts_are_registered() {
+        let list = vec!["a@example.com".to_string()];
+        assert!(is_registered(&list, "a@example.com"));
+        assert!(!is_registered(&list, "todoist"));
+        assert!(!is_registered(&[], "a@example.com"));
+    }
+
+    /// A directory without accounts.json: no account is registered, so neither call reaches the keychain.
+    #[test]
+    fn refresh_and_remove_refuse_an_unregistered_account() {
+        let dir = std::env::temp_dir().join("cookup-test-no-accounts");
+        let auth = Auth::new();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert_eq!(rt.block_on(auth.refresh(&dir, "todoist")), Ok(None));
+        let err = rt.block_on(auth.remove(&dir, "todoist")).unwrap_err();
+        assert!(err.contains("登録されていない"), "{err}");
     }
 
     #[test]
