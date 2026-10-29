@@ -31,6 +31,70 @@ pub fn sender_address(from: &str) -> Option<String> {
     (plain && !local.is_empty() && !domain.is_empty() && !domain.contains('@')).then_some(address)
 }
 
+/// `text` without its RFC 5322 comments: `dmarc=pass (p=NONE) header.from=x` becomes `dmarc=pass  header.from=x`.
+fn strip_comments(text: &str) -> String {
+    let mut depth = 0u32;
+    text.chars()
+        .filter(|&c| match c {
+            '(' => {
+                depth += 1;
+                false
+            }
+            ')' if depth > 0 => {
+                depth -= 1;
+                false
+            }
+            _ => depth == 0,
+        })
+        .collect()
+}
+
+/// The domain of an `Authentication-Results` property value: `@example.com` and `a@example.com` give `example.com`.
+fn property_domain(value: &str) -> String {
+    let domain = value.rsplit('@').next().unwrap_or_default();
+    domain.trim_end_matches('.').to_lowercase()
+}
+
+/// Whether Gmail vouches for the sender of `from`. `results` are the `Authentication-Results` headers of the message;
+/// only the ones Gmail itself added (`mx.google.com`) count. They vouch when they say `dmarc=pass`,
+/// or `dkim=pass` for the very domain of `from`. Without a readable address in `from`, nothing does.
+pub fn authenticated(results: &[&str], from: &str) -> bool {
+    let Some(address) = sender_address(from) else {
+        return false;
+    };
+    let from_domain = property_domain(&address);
+    results.iter().any(|result| {
+        let result = strip_comments(result);
+        let mut parts = result.split(';');
+        if parts.next().and_then(|id| id.split_whitespace().next()) != Some("mx.google.com") {
+            return false;
+        }
+        parts.any(|info| {
+            let mut words = info.split_whitespace();
+            let Some((method, outcome)) = words.next().and_then(|w| w.split_once('=')) else {
+                return false;
+            };
+            if !outcome.eq_ignore_ascii_case("pass") {
+                return false;
+            }
+            let property = |name: &str| {
+                info.split_whitespace()
+                    .filter_map(|w| w.split_once('='))
+                    .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                    .map(|(_, v)| property_domain(v))
+            };
+            match method.to_ascii_lowercase().as_str() {
+                // The domain DMARC checked is the one of From; if the header names it, it must be this one.
+                "dmarc" => property("header.from").is_none_or(|d| d == from_domain),
+                "dkim" => property("header.d")
+                    .or_else(|| property("header.i"))
+                    .is_some_and(|d| d == from_domain),
+                _ => false,
+            }
+        })
+    })
+}
+
 pub fn is_known(senders: &[String], from: &str) -> bool {
     sender_address(from).is_some_and(|a| senders.contains(&a))
 }
@@ -114,15 +178,16 @@ impl ImageSenders {
     }
 }
 
-/// Whether the sender of `from` is remembered.
+/// The ones of `froms` whose sender is remembered.
 #[tauri::command]
 pub async fn image_sender_known(
     app: AppHandle,
     senders: State<'_, ImageSenders>,
-    from: String,
-) -> Result<bool, String> {
+    froms: Vec<String>,
+) -> Result<Vec<String>, String> {
     let list = senders.loaded(&config_dir(&app)?).await?;
-    Ok(is_known(list.as_deref().unwrap_or_default(), &from))
+    let list = list.as_deref().unwrap_or_default();
+    Ok(froms.into_iter().filter(|f| is_known(list, f)).collect())
 }
 
 /// Remembers the sender of `from`.
@@ -187,6 +252,75 @@ mod tests {
         ] {
             assert_eq!(sender_address(from), None, "{from}");
         }
+    }
+
+    const MX: &str = "mx.google.com; dkim=pass header.i=@example.com header.s=s1 header.b=AbC; spf=pass (google.com: domain of a@example.com designates 1.2.3.4 as permitted sender) smtp.mailfrom=a@example.com; dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=example.com";
+
+    #[test]
+    fn authenticated_takes_dmarc_pass_or_dkim_pass_for_the_from_domain() {
+        let from = "Alice <a@example.com>";
+        assert!(authenticated(&[MX], from));
+        // dmarc=pass alone, in any case, and with the DKIM domain of a subdomain or another signer.
+        assert!(authenticated(
+            &["mx.google.com; DMARC=Pass header.from=Example.com"],
+            from
+        ));
+        assert!(authenticated(
+            &["mx.google.com; dmarc=pass (p=NONE) header.from=example.com"],
+            "Bob <b@Example.com>"
+        ));
+        // dkim=pass alone, with header.d or header.i, a mailbox-style header.i, and several headers.
+        assert!(authenticated(
+            &["mx.google.com; dkim=pass header.d=example.com"],
+            from
+        ));
+        assert!(authenticated(
+            &["mx.google.com; dkim=pass header.i=news@example.com"],
+            from
+        ));
+        assert!(authenticated(
+            &[
+                "other.example; dmarc=pass",
+                "mx.google.com; dkim=pass header.d=example.com"
+            ],
+            from
+        ));
+        // The authserv-id may carry a version.
+        assert!(authenticated(
+            &["mx.google.com 1; dmarc=pass header.from=example.com"],
+            from
+        ));
+    }
+
+    #[test]
+    fn authenticated_refuses_anything_else() {
+        let from = "Alice <a@example.com>";
+        for results in [
+            // No header at all.
+            vec![],
+            // Not added by Gmail: a sender can write any header.
+            vec!["evil.example; dmarc=pass header.from=example.com"],
+            vec!["mx.google.com.evil.example; dmarc=pass"],
+            // Failed, softfailed, or missing results.
+            vec!["mx.google.com; dmarc=fail header.from=example.com; dkim=pass header.d=other.example"],
+            vec!["mx.google.com; dkim=neutral header.d=example.com; spf=pass smtp.mailfrom=a@example.com"],
+            vec!["mx.google.com; dkim=none"],
+            vec!["mx.google.com"],
+            // dkim=pass for a domain other than From's, even one that merely ends the same way.
+            vec!["mx.google.com; dkim=pass header.d=other.example"],
+            vec!["mx.google.com; dkim=pass header.d=badexample.com"],
+            vec!["mx.google.com; dkim=pass header.i=@sub.example.com"],
+            // dmarc=pass that names a different From domain.
+            vec!["mx.google.com; dmarc=pass header.from=other.example"],
+            // A pass written inside a comment is no result.
+            vec!["mx.google.com; dmarc=fail (dmarc=pass header.from=example.com)"],
+            // spf alone does not tie to From.
+            vec!["mx.google.com; spf=pass smtp.mailfrom=a@example.com"],
+        ] {
+            assert!(!authenticated(&results, from), "{results:?}");
+        }
+        // A From with no readable address is never vouched for.
+        assert!(!authenticated(&[MX], "no address"));
     }
 
     #[test]

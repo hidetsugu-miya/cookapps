@@ -18,9 +18,10 @@ use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
 
 use crate::auth::{config_dir, Auth};
+use crate::image_senders::authenticated;
 use crate::images::{
-    cid_refs, image_mime, inline_data_uri, replace_cids, run_limited, uris_by_reference,
-    wanted_images, CidRef, InlineImage, UriCache, FETCH_TIMEOUT, MAX_INLINE_IMAGES,
+    cid_refs, image_mime, inline_data_uri, references_to, replace_cids, run_limited, wanted_images,
+    CidRef, InlineImage, UriCache, FETCH_TIMEOUT, MAX_INLINE_IMAGES,
 };
 
 const THREADS_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
@@ -165,19 +166,23 @@ pub struct ThreadDetail {
     /// Some message of the thread carries the UNREAD label.
     unread: bool,
     messages: Vec<MessageDetail>,
+    /// The `cid:` images left as references in the bodies because they have to be fetched; `thread_images` takes them back.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pending_images: Vec<PendingImage>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageDetail {
-    /// Gmail's message ID, to find the message again; not sent to the frontend.
-    #[serde(skip)]
+    /// Gmail's message ID. The frontend finds the message's images by it.
     id: String,
     from: String,
     date_ms: i64,
     /// `body` is HTML when true, plain text otherwise.
     html: bool,
     body: String,
+    /// Gmail's own `Authentication-Results` vouch for the sender: see `image_senders::authenticated`.
+    authenticated: bool,
 }
 
 /// Gmail's format=full usually re-encodes text parts to UTF-8 while keeping the original
@@ -227,9 +232,18 @@ impl MessageDetail {
         let (mut html, mut plain) = (Vec::new(), Vec::new());
         collect_text(&m.payload, &mut html, &mut plain);
         let is_html = !html.is_empty() && !(prefer_plain && !plain.is_empty());
+        let from = header(&m.payload, "From");
+        let results: Vec<_> = m
+            .payload
+            .headers
+            .iter()
+            .filter(|h| h.name.eq_ignore_ascii_case("Authentication-Results"))
+            .map(|h| h.value.as_str())
+            .collect();
         Self {
             id: m.id.clone(),
-            from: header(&m.payload, "From"),
+            authenticated: authenticated(&results, &from),
+            from,
             date_ms: m.internal_date.parse().unwrap_or(0),
             html: is_html,
             body: if is_html {
@@ -260,6 +274,7 @@ impl ThreadDetail {
                 .iter()
                 .any(|m| m.label_ids.iter().any(|l| l == "UNREAD")),
             messages,
+            pending_images: Vec::new(),
         }
     }
 }
@@ -289,12 +304,8 @@ fn inline_images<'a>(p: &'a Payload, out: &mut Vec<InlineImage<'a>>) {
 /// Not the attachment ID: Gmail may hand out a new one on every `threads.get`, which would miss the cache each time.
 type InlineKey = (String, String, String);
 
-fn inline_key(account: &str, message_id: &str, image: &InlineImage) -> InlineKey {
-    (
-        account.to_owned(),
-        message_id.to_owned(),
-        image.cid.to_owned(),
-    )
+fn inline_key(account: &str, message_id: &str, cid: &str) -> InlineKey {
+    (account.to_owned(), message_id.to_owned(), cid.to_owned())
 }
 
 /// Cap of `InlineCache`, in bytes of data: URI. One thread holds up to 20 MB of images (27 MB as base64).
@@ -353,13 +364,61 @@ fn thread_cid_refs(detail: &ThreadDetail) -> Vec<Vec<CidRef>> {
         .collect()
 }
 
-/// An attachment image of message `n` that is neither in its part nor in the cache.
-struct MissingImage {
-    n: usize,
+/// A `cid:` image that `thread` left as a reference because it is neither in its part nor in the cache.
+/// It goes to the frontend and comes back to `thread_images` as it is.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingImage {
+    message_id: String,
     cid: String,
-    key: InlineKey,
     attachment_id: String,
     mime: String,
+    /// The references to it in the message's body, as written (`cid:foo%40bar`).
+    references: Vec<String>,
+}
+
+/// How long `PendingImages` remembers what `thread` left.
+const PENDING_TTL: Duration = Duration::from_secs(300);
+
+/// What `thread` left to fetch, by (account, thread ID), for `PENDING_TTL`. `thread_images` fetches only what matches it,
+/// so the frontend cannot have it fetch an attachment the thread does not have.
+#[derive(Default)]
+pub struct PendingImages(Mutex<HashMap<(String, String), Remembered>>);
+
+/// When the images were remembered, and which.
+type Remembered = (Instant, Vec<PendingImage>);
+
+impl PendingImages {
+    /// Replaces what is remembered for the thread, and drops what has expired.
+    fn remember(&self, now: Instant, account: &str, id: &str, images: Vec<PendingImage>) {
+        let mut all = self.0.lock().unwrap();
+        all.retain(|_, (at, _)| now.saturating_duration_since(*at) < PENDING_TTL);
+        let key = (account.to_owned(), id.to_owned());
+        if images.is_empty() {
+            all.remove(&key);
+        } else {
+            all.insert(key, (now, images));
+        }
+    }
+
+    /// The ones of `asked` that are remembered for the thread, each once.
+    fn confirm(
+        &self,
+        now: Instant,
+        account: &str,
+        id: &str,
+        asked: &[PendingImage],
+    ) -> Vec<PendingImage> {
+        let all = self.0.lock().unwrap();
+        match all.get(&(account.to_owned(), id.to_owned())) {
+            Some((at, known)) if now.saturating_duration_since(*at) < PENDING_TTL => known
+                .iter()
+                .filter(|k| asked.contains(k))
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// The images the HTML messages of `detail` refer to by `cid:` (`refs` from `thread_cid_refs`): per message,
@@ -371,7 +430,7 @@ fn find_cid_images(
     t: &Thread,
     detail: &ThreadDetail,
     refs: &[Vec<CidRef>],
-) -> (Vec<HashMap<String, Arc<str>>>, Vec<MissingImage>) {
+) -> (Vec<HashMap<String, Arc<str>>>, Vec<PendingImage>) {
     let mut ready = vec![HashMap::new(); detail.messages.len()];
     let (mut total, mut taken, mut missing) = (0, 0, Vec::new());
     for (n, d) in detail.messages.iter().enumerate().filter(|(_, d)| d.html) {
@@ -389,15 +448,14 @@ fn find_cid_images(
                 }
                 continue;
             }
-            let key = inline_key(account, &m.id, image);
-            if let Some(uri) = cache.get(&key) {
+            if let Some(uri) = cache.get(&inline_key(account, &m.id, image.cid)) {
                 ready[n].insert(cid, uri);
                 continue;
             }
-            missing.push(MissingImage {
-                n,
+            missing.push(PendingImage {
+                message_id: m.id.clone(),
+                references: references_to(&d.body, &refs[n], image.cid),
                 cid,
-                key,
                 attachment_id: image.attachment_id.to_owned(),
                 mime: image.mime.clone(),
             });
@@ -407,33 +465,49 @@ fn find_cid_images(
 }
 
 /// Fetches the images a few at a time, each within `FETCH_TIMEOUT`, and keeps them in the cache.
-/// Returns (message, Content-ID, URI) of those that arrived.
+/// Returns the ones that arrived with their URI.
 async fn fetch_missing(
     dir: &Path,
     auth: &Auth,
     cache: &InlineCache,
-    missing: Vec<MissingImage>,
-) -> Vec<(usize, String, Arc<str>)> {
-    let jobs = missing.into_iter().map(|m| {
+    account: &str,
+    pending: Vec<PendingImage>,
+) -> Vec<(PendingImage, Arc<str>)> {
+    let jobs = pending.into_iter().map(|p| {
         let (dir, auth) = (dir.to_owned(), auth.clone());
+        let key = inline_key(account, &p.message_id, &p.cid);
         async move {
-            let fetch = attachment_uri(&dir, &auth, &m.key, &m.attachment_id, &m.mime);
+            let fetch = attachment_uri(&dir, &auth, &key, &p.attachment_id, &p.mime);
             let uri = tokio::time::timeout(FETCH_TIMEOUT, fetch)
                 .await
                 .ok()
                 .flatten();
-            (m.n, m.cid, m.key, uri)
+            (p, key, uri)
         }
     });
     run_limited(jobs, crate::images::CONCURRENCY)
         .await
         .into_iter()
-        .filter_map(|(n, cid, key, uri)| {
+        .filter_map(|(p, key, uri)| {
             let uri = uri?;
             cache.put(INLINE_CACHE_BYTES, key, Arc::clone(&uri));
-            Some((n, cid, uri))
+            Some((p, uri))
         })
         .collect()
+}
+
+/// Per message ID, the URI of each reference (as written in the body) to the images that arrived.
+fn uris_by_message(
+    fetched: Vec<(PendingImage, Arc<str>)>,
+) -> HashMap<String, HashMap<String, Arc<str>>> {
+    let mut out: HashMap<String, HashMap<String, Arc<str>>> = HashMap::new();
+    for (p, uri) in fetched {
+        let uris = out.entry(p.message_id).or_default();
+        for reference in p.references {
+            uris.entry(reference).or_insert_with(|| Arc::clone(&uri));
+        }
+    }
+    out
 }
 
 /// A failed Google API call. `status` is `None` when no HTTP response was received.
@@ -571,7 +645,7 @@ async fn send_json_refreshing_with<T: DeserializeOwned>(
     {
         return Ok(Some(v));
     }
-    let Some(refreshed) = auth.refresh(dir, account).await? else {
+    let Some(refreshed) = auth.refresh(dir, account, &token).await? else {
         return Ok(None);
     };
     send_json(auth.http(), method, &refreshed, url, query, body, retries)
@@ -730,7 +804,7 @@ async fn get_threads_refreshing(
     if let Some(found) = get_threads(auth.http(), &token, ids, retries).await? {
         return Ok(Some(found));
     }
-    let Some(refreshed) = auth.refresh(dir, account).await? else {
+    let Some(refreshed) = auth.refresh(dir, account, &token).await? else {
         return Ok(None);
     };
     get_threads(auth.http(), &refreshed, ids, retries)
@@ -1123,7 +1197,7 @@ async fn get_thread(
 
 /// One thread with its messages. `prefer_plain` picks the plain-text part over the HTML one when both exist.
 /// The `cid:` images that are in the message or the cache are inlined at once; the ones that need a fetch stay
-/// as references, for `thread_images`, so the body does not wait for them.
+/// as references and come back in `pending_images`, for `thread_images`, so the body does not wait for them.
 /// `Ok(None)` means `account` must log in again.
 pub async fn fetch_thread(
     dir: &Path,
@@ -1140,12 +1214,13 @@ pub async fn fetch_thread(
     // A text consumer (prefer_plain, the MCP server) gets no image data.
     if !prefer_plain {
         let refs = thread_cid_refs(&detail);
-        let (ready, _) = find_cid_images(cache, account, &t, &detail, &refs);
+        let (ready, pending) = find_cid_images(cache, account, &t, &detail, &refs);
         for ((d, refs), uris) in detail.messages.iter_mut().zip(&refs).zip(&ready) {
             if !uris.is_empty() {
                 d.body = replace_cids(&d.body, refs, uris);
             }
         }
+        detail.pending_images = pending;
     }
     Ok(Some(detail))
 }
@@ -1156,58 +1231,37 @@ pub async fn thread(
     app: AppHandle,
     auth: State<'_, Auth>,
     cache: State<'_, InlineCache>,
+    pending: State<'_, PendingImages>,
     account: String,
     id: String,
 ) -> Result<Option<ThreadDetail>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("thread", &account, e))?;
-    fetch_thread(&dir, &auth, &cache, &account, &id, false)
+    let detail = fetch_thread(&dir, &auth, &cache, &account, &id, false)
         .await
-        .map_err(|e| log_failure("thread", &account, e))
-}
-
-/// The `cid:` images that `thread` left as references because they had to be fetched, per message ID:
-/// the data: URI of each reference as written in the body (`cid:foo%40bar`). A message with none is absent.
-/// shortcut: an image another call put in the cache since `thread` is not returned, so it stays a reference until the thread is opened again.
-async fn fetch_thread_images(
-    dir: &Path,
-    auth: &Auth,
-    cache: &InlineCache,
-    account: &str,
-    id: &str,
-) -> Result<HashMap<String, HashMap<String, String>>, ApiError> {
-    let Some(t) = get_thread(dir, auth, account, id).await? else {
-        return Ok(HashMap::new());
-    };
-    let detail = ThreadDetail::new(&t, false);
-    let refs = thread_cid_refs(&detail);
-    let (_, missing) = find_cid_images(cache, account, &t, &detail, &refs);
-    let mut uris = vec![HashMap::new(); detail.messages.len()];
-    for (n, cid, uri) in fetch_missing(dir, auth, cache, missing).await {
-        uris[n].insert(cid, uri);
+        .map_err(|e| log_failure("thread", &account, e))?;
+    if let Some(d) = &detail {
+        pending.remember(Instant::now(), &account, &id, d.pending_images.clone());
     }
-    Ok(detail
-        .messages
-        .iter()
-        .zip(&refs)
-        .zip(&uris)
-        .filter(|(_, uris)| !uris.is_empty())
-        .map(|((d, refs), uris)| (d.id.clone(), uris_by_reference(&d.body, refs, uris)))
-        .collect())
+    Ok(detail)
 }
 
-/// See `fetch_thread_images`. A failure leaves the references as they are.
+/// Fetches the `images` that `thread` left to fetch for the thread (anything else asked for is ignored) and returns,
+/// per message ID, the data: URI of each reference as written in the body (`cid:foo%40bar`). One that fails stays a reference.
 #[tauri::command]
 pub async fn thread_images(
     app: AppHandle,
     auth: State<'_, Auth>,
     cache: State<'_, InlineCache>,
+    pending: State<'_, PendingImages>,
     account: String,
     id: String,
-) -> Result<HashMap<String, HashMap<String, String>>, String> {
+    images: Vec<PendingImage>,
+) -> Result<HashMap<String, HashMap<String, Arc<str>>>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("thread_images", &account, e))?;
-    fetch_thread_images(&dir, &auth, &cache, &account, &id)
-        .await
-        .map_err(|e| log_failure("thread_images", &account, e))
+    let images = pending.confirm(Instant::now(), &account, &id, &images);
+    Ok(uris_by_message(
+        fetch_missing(&dir, &auth, &cache, &account, images).await,
+    ))
 }
 
 /// Moves the thread to the trash (recoverable in Gmail). `Ok(None)` means `account` must log in again.
@@ -1528,22 +1582,15 @@ mod tests {
     }
 
     #[test]
-    fn inline_key_ignores_the_attachment_id_that_changes_between_fetches() {
-        let image = |attachment_id| InlineImage {
-            cid: "logo@x",
-            mime: "image/png".into(),
-            size: 1,
-            attachment_id,
-            data: "",
-        };
-        let key = inline_key("a", "m1", &image("first"));
-        assert_eq!(key, inline_key("a", "m1", &image("second")));
+    fn inline_key_is_the_account_message_and_content_id() {
+        // Not the attachment ID, which Gmail may hand out anew on every `threads.get`.
+        let key = inline_key("a", "m1", "logo@x");
         assert_eq!(key, ("a".into(), "m1".into(), "logo@x".into()));
-        assert_ne!(key, inline_key("a", "m2", &image("first")));
+        assert_ne!(key, inline_key("a", "m2", "logo@x"));
     }
 
     #[test]
-    fn inline_cache_keeps_uris_within_its_limit_and_starts_over_when_full() {
+    fn inline_cache_keeps_uris_within_its_limit_dropping_the_oldest_when_full() {
         let cache = InlineCache::default();
         cache.put(10, key("a", "1"), "123456".into());
         assert_eq!(cache.get(&key("a", "1")), Some("123456".into()));
@@ -1599,11 +1646,168 @@ mod tests {
         ids.sort();
         assert_eq!(ids, ["a", "c"]);
         assert_eq!(&*ready[0]["c"], "data:c");
-        let to_fetch: Vec<_> = missing
-            .iter()
-            .map(|m| (m.n, &m.cid[..], &m.attachment_id[..]))
-            .collect();
-        assert_eq!(to_fetch, [(0, "b", "att-b")]);
+        assert_eq!(
+            missing,
+            [PendingImage {
+                message_id: "m1".into(),
+                cid: "b".into(),
+                attachment_id: "att-b".into(),
+                mime: "image/png".into(),
+                references: vec!["cid:b".into()],
+            }]
+        );
+    }
+
+    /// What the frontend reads (`src/main.js`: `m.id`, `t.pendingImages`, `m.authenticated`) is in the serialized detail.
+    #[test]
+    fn thread_detail_serializes_what_the_frontend_reads() {
+        let html = r#"<img src="cid:a%40x"><img src="CID:a@x">"#;
+        let t: Thread = serde_json::from_value(json!({"id": "t", "messages": [{
+            "id": "m1", "internalDate": "1",
+            "payload": {"mimeType": "multipart/related", "parts": [
+                {"mimeType": "text/html", "body": {"data": b64(html.as_bytes())}},
+                {"mimeType": "image/png", "headers": [{"name": "Content-ID", "value": "<a@x>"}],
+                 "body": {"attachmentId": "att", "size": 3}}]}}]}))
+        .unwrap();
+        let mut detail = ThreadDetail::new(&t, false);
+        let refs = thread_cid_refs(&detail);
+        detail.pending_images =
+            find_cid_images(&InlineCache::default(), "acc", &t, &detail, &refs).1;
+        let value = serde_json::to_value(&detail).unwrap();
+        assert_eq!(value["messages"][0]["id"], "m1");
+        assert_eq!(value["messages"][0]["authenticated"], false);
+        assert_eq!(
+            value["pendingImages"],
+            json!([{
+                "messageId": "m1", "cid": "a@x", "attachmentId": "att", "mime": "image/png",
+                "references": ["cid:a%40x", "CID:a@x"]
+            }])
+        );
+        // What the frontend sends back to `thread_images` is read as the same image.
+        let back: Vec<PendingImage> =
+            serde_json::from_value(value["pendingImages"].clone()).unwrap();
+        assert_eq!(back, detail.pending_images);
+        // None pending: the key is left out (the MCP server's output has no use for it).
+        detail.pending_images.clear();
+        assert!(serde_json::to_value(&detail)
+            .unwrap()
+            .get("pendingImages")
+            .is_none());
+    }
+
+    #[test]
+    fn message_is_authenticated_by_gmails_authentication_results() {
+        let message = |headers: serde_json::Value| {
+            detail(json!({"id": "t", "messages": [{"id": "m", "internalDate": "1",
+                "payload": {"mimeType": "text/plain", "headers": headers, "body": {"data": "AAAA"}}}]}))
+            .messages[0]
+                .authenticated
+        };
+        let from = json!({"name": "From", "value": "A <a@example.com>"});
+        let results = |v: &str| json!({"name": "authentication-results", "value": v});
+        assert!(message(json!([
+            from,
+            results("mx.google.com; dmarc=pass header.from=example.com")
+        ])));
+        assert!(!message(json!([
+            from,
+            results("mx.google.com; dmarc=fail header.from=example.com")
+        ])));
+        assert!(!message(json!([from])));
+    }
+
+    fn pending(cid: &str, attachment_id: &str) -> PendingImage {
+        PendingImage {
+            message_id: "m1".into(),
+            cid: cid.into(),
+            attachment_id: attachment_id.into(),
+            mime: "image/png".into(),
+            references: vec![format!("cid:{cid}")],
+        }
+    }
+
+    #[test]
+    fn pending_images_confirm_only_what_thread_left_for_that_thread() {
+        let store = PendingImages::default();
+        let now = Instant::now();
+        store.remember(
+            now,
+            "acc",
+            "t1",
+            vec![pending("a", "att-a"), pending("b", "att-b")],
+        );
+        // Anything asked that was not left is dropped: another attachment ID, another image, a repeat.
+        let asked = [
+            pending("b", "att-b"),
+            pending("b", "att-b"),
+            pending("a", "other-attachment"),
+            pending("zzz", "att-z"),
+        ];
+        assert_eq!(
+            store.confirm(now, "acc", "t1", &asked),
+            [pending("b", "att-b")]
+        );
+        // Not for another thread or account, nor one never left.
+        assert!(store.confirm(now, "acc", "t2", &asked).is_empty());
+        assert!(store.confirm(now, "other", "t1", &asked).is_empty());
+        assert!(store.confirm(now, "acc", "t1", &[]).is_empty());
+    }
+
+    #[test]
+    fn pending_images_expire_and_are_replaced_by_the_latest_open() {
+        let store = PendingImages::default();
+        let now = Instant::now();
+        let asked = [pending("a", "att-a")];
+        store.remember(now, "acc", "t1", asked.to_vec());
+        assert_eq!(
+            store
+                .confirm(
+                    now + PENDING_TTL - Duration::from_secs(1),
+                    "acc",
+                    "t1",
+                    &asked
+                )
+                .len(),
+            1
+        );
+        assert!(store
+            .confirm(now + PENDING_TTL, "acc", "t1", &asked)
+            .is_empty());
+        // Reopening replaces it; one with nothing to fetch forgets it. An expired entry of another thread goes.
+        store.remember(now, "acc", "t2", asked.to_vec());
+        store.remember(
+            now + PENDING_TTL,
+            "acc",
+            "t1",
+            vec![pending("a", "att-new")],
+        );
+        assert!(store
+            .confirm(now + PENDING_TTL, "acc", "t1", &asked)
+            .is_empty());
+        assert!(store
+            .0
+            .lock()
+            .unwrap()
+            .get(&("acc".into(), "t2".into()))
+            .is_none());
+        store.remember(now + PENDING_TTL, "acc", "t1", Vec::new());
+        assert!(store.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn uris_by_message_gives_each_written_reference_the_shared_uri() {
+        let uri: Arc<str> = "data:A".into();
+        let mut a = pending("a@x", "att");
+        a.references = vec!["cid:a%40x".into(), "CID:a@x".into()];
+        let out = uris_by_message(vec![(a, Arc::clone(&uri))]);
+        // One allocation, shared: the two references and the caller's own handle.
+        assert_eq!(Arc::strong_count(&uri), 3);
+        // The shape `showCidImages` reads: {message ID: {reference as written: URI}}.
+        assert_eq!(
+            serde_json::to_value(out).unwrap(),
+            json!({"m1": {"cid:a%40x": "data:A", "CID:a@x": "data:A"}})
+        );
+        assert!(uris_by_message(Vec::new()).is_empty());
     }
 
     fn b64(bytes: &[u8]) -> String {
@@ -1644,7 +1848,8 @@ mod tests {
                 from: "A <a@example.com>".into(),
                 date_ms: 1,
                 html: false,
-                body: "こんにちは".into()
+                body: "こんにちは".into(),
+                authenticated: false
             }]
         );
     }

@@ -13,6 +13,7 @@ use tauri_plugin_opener::OpenerExt;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
+    sync::Mutex as AsyncMutex,
 };
 use url::Url;
 
@@ -62,6 +63,8 @@ struct Profile {
 pub struct Auth {
     http: reqwest::Client,
     access: Arc<Mutex<HashMap<String, String>>>,
+    /// Per account, held while its token is refreshed, so calls that were rejected together refresh once.
+    refreshing: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
 }
 
 impl Auth {
@@ -73,6 +76,7 @@ impl Auth {
                 .build()
                 .expect("reqwest client"),
             access: Arc::default(),
+            refreshing: Arc::default(),
         }
     }
 
@@ -85,12 +89,31 @@ impl Auth {
         let cached = self.access.lock().unwrap().get(account).cloned();
         match cached {
             Some(t) => Ok(Some(t)),
-            None => self.refresh(dir, account).await,
+            None => self.refresh(dir, account, "").await,
         }
     }
 
+    /// A new access token after `rejected` was refused. Calls rejected at the same time take turns: one that finds
+    /// a token other than `rejected` in the cache once it has the turn uses that one instead of refreshing again.
     /// `None` means login is required (no stored token, or Google rejected it with invalid_grant).
-    pub async fn refresh(&self, dir: &Path, account: &str) -> Result<Option<String>, String> {
+    pub async fn refresh(
+        &self,
+        dir: &Path,
+        account: &str,
+        rejected: &str,
+    ) -> Result<Option<String>, String> {
+        let turn = self
+            .refreshing
+            .lock()
+            .unwrap()
+            .entry(account.to_owned())
+            .or_default()
+            .clone();
+        let _turn = turn.lock().await;
+        let cached = self.access.lock().unwrap().get(account).cloned();
+        if let Some(token) = cached.filter(|t| t != rejected) {
+            return Ok(Some(token));
+        }
         // The keychain service holds names that are not accounts, so a name from outside is checked before it reaches it.
         if !is_registered(&self.accounts(dir)?, account) {
             return Ok(None);
@@ -559,9 +582,33 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        assert_eq!(rt.block_on(auth.refresh(&dir, "todoist")), Ok(None));
+        assert_eq!(rt.block_on(auth.refresh(&dir, "todoist", "")), Ok(None));
         let err = rt.block_on(auth.remove(&dir, "todoist")).unwrap_err();
         assert!(err.contains("登録されていない"), "{err}");
+    }
+
+    /// The token another call already refreshed is used without touching the keychain: the directory has no accounts.json.
+    #[test]
+    fn refresh_uses_the_token_a_concurrent_call_already_refreshed() {
+        let dir = std::env::temp_dir().join("cookup-test-no-accounts");
+        let auth = Auth::new();
+        auth.access
+            .lock()
+            .unwrap()
+            .insert("a@example.com".into(), "new".into());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert_eq!(
+            rt.block_on(auth.refresh(&dir, "a@example.com", "old")),
+            Ok(Some("new".into()))
+        );
+        // `new` itself was rejected: nothing newer is cached, and the account is not registered.
+        assert_eq!(
+            rt.block_on(auth.refresh(&dir, "a@example.com", "new")),
+            Ok(None)
+        );
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub fn run() {
         .manage(auth::Auth::new())
         .manage(gmail::SyncState::default())
         .manage(gmail::InlineCache::default())
+        .manage(gmail::PendingImages::default())
         .manage(images::ImageCache::default())
         .manage(image_senders::ImageSenders::default())
         .manage(calendar::CalendarCache::default())
