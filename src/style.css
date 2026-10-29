@@ -80,11 +80,38 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .row-btn:disabled { opacity: .4; cursor: default; }
 .date { text-align: right; white-space: nowrap; padding-right: 8px; color: #666; font-size: 12px; }
 
-#messages article { border: 1px solid #ddd; border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
-.message-head { padding: 12px 16px; background: #fafafa; border-bottom: 1px solid #eee; }
-.plain { padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Detail view: the toolbar is tinted, the subject sits above the messages, and each message lines its body up with the sender's name (avatar 40px + gap 16px). */
+#mail-header.detail { background: #eef3fb; border-bottom: 1px solid #d3e3fd; }
+#mail-header.detail .icon-btn { color: #444746; border-radius: 50%; }
+#mail-header.detail #thread-todo { margin-left: auto; }
+#thread-head { margin: 16px 0 20px 56px; font-size: 22px; line-height: 1.35; }
+#thread-subject { display: inline; margin: 0; font-size: inherit; font-weight: normal; color: #1f1f1f; white-space: normal; overflow-wrap: anywhere; }
+#thread-head .label { margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: #e1e3e1; color: #444746; font-size: 11px; vertical-align: middle; }
+#messages article { margin-bottom: 20px; }
+#messages article.folded { margin-bottom: 0; border-bottom: 1px solid #eceef1; }
+#messages article.folded + article { margin-top: 16px; }
+.msg-head { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; column-gap: 16px; align-items: start; width: 100%; box-sizing: border-box; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; }
+button.msg-head { cursor: pointer; }
+.msg-head:focus-visible { outline: 2px solid #0b5bd3; outline-offset: 2px; border-radius: 8px; }
+.msg-avatar { width: 40px; height: 40px; border-radius: 50%; background: #a8c7fa; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.msg-avatar svg { width: 26px; height: 26px; margin-top: 6px; fill: #fff; stroke: none; }
+.msg-head .name { color: #1f1f1f; font-weight: 600; }
+.msg-head .addr, .msg-head .to, .msg-head .when { color: #5e5e5e; font-size: 12px; }
+.msg-head .to { display: block; margin-top: 2px; }
+.msg-head .when { padding-top: 2px; white-space: nowrap; }
+.msg-head.folded { align-items: center; padding: 10px 0; border-radius: 8px; }
+.msg-head.folded:hover { background: #f6f7f9; }
+.msg-head.folded .avatar { justify-self: center; }
+.msg-head.folded .snip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5e5e5e; }
+.msg-body { margin: 12px 0 0 56px; }
+.plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 #messages iframe { display: block; width: 100%; border: 0; }
-.images-bar { padding: 8px 16px; border-bottom: 1px solid #eee; }
+/* The images switch is one small line of text above the body, its button drawn as a link. */
+.images-bar { margin-bottom: 8px; font-size: 12px; }
+.images-bar .text-btn { height: auto; padding: 0; border: 0; border-radius: 0; background: none; color: #0b57d0; font: inherit; }
+.images-bar .text-btn:hover:not(:disabled) { background: none; text-decoration: underline; }
+.images-bar .text-btn:focus-visible { outline: 2px solid #0b5bd3; outline-offset: 2px; }
+.images-bar .text-btn:disabled { opacity: .4; cursor: default; }
 
 /* Calendar: --hour is set from HOUR_PX in main.js. */
 #calendar { flex: 1; min-height: 0; display: flex; flex-direction: column; --gutter: 56px; }
