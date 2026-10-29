@@ -197,24 +197,92 @@ function row(t) {
   return li;
 }
 
+// Sizes the frame to its document. The frame goes to 0 first, or the viewport would floor the height.
+function fitFrame(frame) {
+  frame.style.height = "0";
+  frame.style.height = `${frame.contentDocument.documentElement.scrollHeight}px`;
+}
+
+// Fits the frame when its document loads and again when an image in it loads or fails. A frame in a hidden view is 0 wide,
+// so the observer fits it once the view is shown (and after a window resize).
+function autoFit(frame) {
+  frame.onload = () => {
+    fitFrame(frame);
+    for (const type of ["load", "error"]) frame.contentDocument.addEventListener(type, () => fitFrame(frame), true);
+  };
+  new ResizeObserver(() => fitFrame(frame)).observe(frame);
+}
+
+// The https image URLs of a parsed HTML mail, once each. DOMParser's document is inert: nothing is fetched.
+const externalImages = (doc) => [
+  ...new Set(
+    [...doc.querySelectorAll("img[src]")].map((i) => i.getAttribute("src").trim()).filter((s) => /^https:\/\//i.test(s)),
+  ),
+];
+
+// The "show images" bar: Rust fetches the images, and the document is rebuilt with them as data: URIs.
+function imagesBar(doc, urls, frame) {
+  const bar = document.createElement("div");
+  bar.className = "images-bar";
+  const button = document.createElement("button");
+  button.className = "text-btn";
+  button.textContent = "画像を表示";
+  button.onclick = async () => {
+    $("error").hidden = true;
+    button.disabled = true;
+    try {
+      const images = await invoke("fetch_images", { urls });
+      for (const img of doc.querySelectorAll("img[src]")) {
+        const data = images[img.getAttribute("src").trim()];
+        if (data) img.setAttribute("src", data);
+      }
+      frame.srcdoc = `<!DOCTYPE html>${doc.documentElement.outerHTML}`;
+      bar.remove();
+    } catch (e) {
+      button.disabled = false;
+      showError(e);
+    }
+  };
+  bar.append(button);
+  return bar;
+}
+
 function message(m) {
   const article = document.createElement("article");
   const head = document.createElement("div");
   head.className = "message-head";
   head.textContent = `${m.from} — ${new Date(m.dateMs).toLocaleString("ja-JP")}`;
-  let body;
+  article.append(head);
   if (m.html) {
-    // Empty sandbox: no scripts, no same-origin access to the app.
-    body = document.createElement("iframe");
-    body.setAttribute("sandbox", "");
-    body.srcdoc = m.body;
+    // No allow-scripts: scripts do not run. allow-same-origin only lets this page read the document's height.
+    const frame = document.createElement("iframe");
+    frame.setAttribute("sandbox", "allow-same-origin");
+    frame.srcdoc = m.body;
+    autoFit(frame);
+    const doc = new DOMParser().parseFromString(m.body, "text/html");
+    const urls = externalImages(doc);
+    if (urls.length) article.append(imagesBar(doc, urls, frame));
+    article.append(frame);
   } else {
-    body = document.createElement("div");
+    const body = document.createElement("div");
     body.className = "plain";
     body.textContent = m.body;
+    article.append(body);
   }
-  article.append(head, body);
   return article;
+}
+
+// Marks a just-opened unread thread read in Gmail and in its row, if the list has one. A failure is shown, the row stays unread.
+async function markRead(account, id) {
+  try {
+    const done = await invoke("set_read", { account, id, read: true });
+    const r = rows.get(`${account}/${id}`);
+    if (done && r) setReadState(r.t, r.li, true);
+  } catch (e) {
+    showError(e);
+  } finally {
+    updateBadge();
+  }
 }
 
 // The thread shown in the detail view and its list row.
@@ -233,6 +301,7 @@ async function openThread({ id, account }, li, origin = "mail") {
     show("thread");
     // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
     $("trash").hidden = $("archive").hidden = !li;
+    if (t.unread) markRead(account, id);
   } catch (e) {
     showError(e);
   }
