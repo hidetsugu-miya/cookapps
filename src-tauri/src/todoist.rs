@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -132,7 +132,7 @@ pub enum Bucket {
     NoDue,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Subtask {
     id: String,
@@ -142,7 +142,7 @@ pub struct Subtask {
 }
 
 /// The Gmail thread a task's description links to.
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MailRef {
     account: String,
@@ -150,13 +150,13 @@ pub struct MailRef {
 }
 
 /// The task whose detail lists a subtask row: the subtask's own parent.
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ParentRef {
     id: String,
     content: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskItem {
     id: String,
@@ -176,7 +176,7 @@ pub struct TaskItem {
     parent: Option<ParentRef>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectItem {
     id: String,
@@ -186,7 +186,7 @@ pub struct ProjectItem {
     inbox: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Todo {
     projects: Vec<ProjectItem>,
     /// Top-level active tasks, then the subtasks that are overdue, due today, or have subtasks of their own as rows of their own, by due date.
@@ -197,7 +197,7 @@ pub struct Todo {
 }
 
 /// Why and since when a `Todo` is the cached one.
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Offline {
     /// RFC 3339, UTC: when the content was fetched.
@@ -207,7 +207,7 @@ pub struct Offline {
 }
 
 /// What `todoist-cache.json` holds: the last successfully fetched `Todo` and when.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct CacheFile {
     fetched_at: String,
     todo: Todo,
@@ -241,13 +241,31 @@ fn remove_cache(dir: &Path) -> Result<(), String> {
     }
 }
 
+/// Sets each task's bucket again against `today`: the cached ones were set on the day they were fetched.
+/// shortcut: the order and which subtasks are rows stay as fetched, so a task that became due today since then is not added; the next successful fetch fixes it.
+fn rebucket(todo: &mut Todo, today: NaiveDate) {
+    for t in &mut todo.tasks {
+        t.bucket = bucket_of(t.due.as_ref().and_then(|d| d.date.parse().ok()), today);
+    }
+}
+
 /// The answer to a failed fetch: the cached `Todo` marked with `reason`, or the failure itself when nothing is cached.
-fn offline_todo(cached: Option<CacheFile>, reason: String) -> Result<Todo, String> {
+fn offline_todo(
+    cached: Option<CacheFile>,
+    reason: String,
+    today: NaiveDate,
+) -> Result<Todo, String> {
     match cached {
-        Some(CacheFile { fetched_at, todo }) => Ok(Todo {
-            offline: Some(Offline { fetched_at, reason }),
-            ..todo
-        }),
+        Some(CacheFile {
+            fetched_at,
+            mut todo,
+        }) => {
+            rebucket(&mut todo, today);
+            Ok(Todo {
+                offline: Some(Offline { fetched_at, reason }),
+                ..todo
+            })
+        }
         None => Err(reason),
     }
 }
@@ -503,6 +521,8 @@ pub struct TodoistState {
     /// `None` means not loaded: the keychain is read. The lock is held across a read, a save and a disconnect, so they never interleave.
     token: tokio::sync::Mutex<Option<String>>,
     done: Mutex<Arc<Vec<ApiTask>>>,
+    /// The last saved or read cache, so an offline spell reads the file once. Touched only while `token` is locked, in order with a save and a disconnect.
+    cache: Mutex<Option<CacheFile>>,
 }
 
 impl TodoistState {
@@ -515,6 +535,19 @@ impl TodoistState {
                 .map_err(|e| e.to_string())??;
         }
         Ok(cached.clone())
+    }
+
+    /// The cache: the copy in memory, else the file's (read off the async threads). The caller holds the `token` lock.
+    async fn cache(&self, dir: Result<PathBuf, String>) -> Result<Option<CacheFile>, String> {
+        if let Some(cached) = self.cache.lock().unwrap().clone() {
+            return Ok(Some(cached));
+        }
+        let Ok(dir) = dir else { return Ok(None) };
+        let loaded = tokio::task::spawn_blocking(move || load_cache(&dir))
+            .await
+            .map_err(|e| e.to_string())?;
+        self.cache.lock().unwrap().clone_from(&loaded);
+        Ok(loaded)
     }
 
     /// Forgets the copy in memory (a rejected token); the keychain keeps the stored one.
@@ -723,13 +756,14 @@ pub async fn todoist_load(
         }
         Err(e) => {
             let reason = log_failure(command, TOKEN_USER, e);
-            let cached = match config_dir(&app) {
-                Ok(dir) => tokio::task::spawn_blocking(move || load_cache(&dir))
-                    .await
-                    .map_err(|e| e.to_string())?,
-                Err(_) => None,
+            // A token saved since the fetch began belongs to another connection, whose cache this is not.
+            let current = state.token.lock().await;
+            let cached = if current.as_deref() == Some(token.as_str()) {
+                state.cache(config_dir(&app)).await?
+            } else {
+                None
             };
-            return offline_todo(cached, reason).map(Some);
+            return offline_todo(cached, reason, Local::now().date_naive()).map(Some);
         }
     };
     let done = match done {
@@ -753,22 +787,27 @@ pub async fn todoist_load(
     };
     let todo = build_todo(projects, tasks, &done, Local::now().date_naive(), &Local);
     // The token lock is held through the write: a disconnect in between would otherwise leave the cache behind.
-    let cached = state.token.lock().await;
-    if cached.is_none() {
+    let current = state.token.lock().await;
+    // Another token than the fetch used (disconnected, or connected again meanwhile): this content is not that connection's.
+    if current.as_deref() != Some(token.as_str()) {
         return Ok(Some(todo));
     }
     let dir = config_dir(&app);
     let fetched_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     // The write and its fsync run off the async threads; the todo goes along and comes back.
-    let (todo, saved) = tokio::task::spawn_blocking(move || {
+    let (todo, fetched_at, saved) = tokio::task::spawn_blocking(move || {
         let saved = dir.and_then(|dir| save_cache(&dir, &todo, &fetched_at));
-        (todo, saved)
+        (todo, fetched_at, saved)
     })
     .await
     .map_err(|e| e.to_string())?;
     if let Err(e) = saved {
         log_failure("todoist_cache", TOKEN_USER, e);
     }
+    *state.cache.lock().unwrap() = Some(CacheFile {
+        fetched_at,
+        todo: todo.clone(),
+    });
     Ok(Some(todo))
 }
 
@@ -807,9 +846,15 @@ pub async fn todoist_disconnect(
     let dir = config_dir(&app);
     let mut cached = state.token.lock().await;
     let cleared = tokio::task::spawn_blocking(move || {
-        delete_entry(&token_entry()?)?;
-        delete_entry(&keyring_entry(TOKEN_USER)?)?;
-        remove_cache(&dir?)
+        // All three run even when one fails, so a failed keychain delete does not leave the cache behind.
+        [
+            token_entry().and_then(|e| delete_entry(&e)),
+            keyring_entry(TOKEN_USER).and_then(|e| delete_entry(&e)),
+            dir.and_then(|dir| remove_cache(&dir)),
+        ]
+        .into_iter()
+        .find_map(Result::err)
+        .map_or(Ok(()), Err)
     })
     .await
     .map_err(|e| e.to_string())
@@ -817,6 +862,7 @@ pub async fn todoist_disconnect(
     // Forgotten even when a delete failed: the next read then shows what the keychain really holds.
     *cached = None;
     *state.done.lock().unwrap() = Arc::default();
+    *state.cache.lock().unwrap() = None;
     cleared.map_err(|e| log_failure("todoist_disconnect", TOKEN_USER, e))
 }
 
@@ -1577,7 +1623,7 @@ mod tests {
             fetched_at: "2026-10-29T01:02:03Z".into(),
             todo: cached_todo(),
         };
-        let todo = offline_todo(Some(cached), "503".into()).unwrap();
+        let todo = offline_todo(Some(cached), "503".into(), date("2026-10-29")).unwrap();
         assert_eq!(
             todo.offline,
             Some(Offline {
@@ -1592,8 +1638,25 @@ mod tests {
     }
 
     #[test]
+    fn a_cached_today_task_is_overdue_the_next_day() {
+        let cached = CacheFile {
+            fetched_at: "2026-10-29T01:02:03Z".into(),
+            todo: cached_todo(),
+        };
+        assert_eq!(cached.todo.tasks[0].bucket, Bucket::Today);
+        let next_day =
+            offline_todo(Some(cached.clone()), "503".into(), date("2026-10-30")).unwrap();
+        assert_eq!(next_day.tasks[0].bucket, Bucket::Overdue);
+        let day_before = offline_todo(Some(cached), "503".into(), date("2026-10-28")).unwrap();
+        assert_eq!(day_before.tasks[0].bucket, Bucket::Upcoming);
+    }
+
+    #[test]
     fn a_failed_fetch_without_a_cache_is_the_failure() {
-        assert_eq!(offline_todo(None, "503".into()).unwrap_err(), "503");
+        assert_eq!(
+            offline_todo(None, "503".into(), date("2026-10-29")).unwrap_err(),
+            "503"
+        );
     }
 
     #[test]
