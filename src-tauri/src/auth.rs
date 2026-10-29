@@ -17,7 +17,6 @@ const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
 const KEYRING_SERVICE: &str = "jp.mysis.cookup";
-const LEGACY_KEYRING_USER: &str = "google-refresh-token";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -102,39 +101,14 @@ impl Auth {
         }
     }
 
-    /// Registered accounts. First moves the single-account keychain entry of an older version, once.
-    pub async fn accounts(&self, app: &AppHandle) -> Result<Vec<String>, String> {
-        let dir = config_dir(app)?;
-        let stored = accounts::load(&dir)?;
-        let legacy = legacy_keyring_entry()?;
-        let legacy_token = match legacy.get_password() {
-            Ok(p) => Some(p),
-            Err(keyring::Error::NoEntry) => None,
-            Err(e) => return Err(format!("キーチェーンの読み取りに失敗: {e}")),
-        };
-        if !accounts::needs_migration(stored.is_some(), legacy_token.is_some()) {
-            return Ok(stored.unwrap_or_default());
-        }
-        let legacy_token = legacy_token.unwrap_or_default();
-        let client = load_client(app)?;
-        let Some(access) = self.refresh_access(&client, &legacy_token).await? else {
-            delete_entry(&legacy)?;
-            return Ok(vec![]);
-        };
-        let email = self.fetch_email(&access).await?;
-        keyring_entry(&email)?
-            .set_password(&legacy_token)
-            .map_err(|e| format!("キーチェーンへの保存に失敗: {e}"))?;
-        accounts::save(&dir, std::slice::from_ref(&email))?;
-        delete_entry(&legacy)?;
-        self.access.lock().unwrap().insert(email.clone(), access);
-        Ok(vec![email])
+    /// Registered accounts.
+    pub fn accounts(&self, app: &AppHandle) -> Result<Vec<String>, String> {
+        Ok(accounts::load(&config_dir(app)?)?.unwrap_or_default())
     }
 
     /// Returns the logged-in account's email address.
     async fn login(&self, app: &AppHandle, login_hint: Option<&str>) -> Result<String, String> {
-        // Runs the legacy migration first so adding an account never strands the old token.
-        let existing = self.accounts(app).await?;
+        let existing = self.accounts(app)?;
         let client = load_client(app)?;
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -282,11 +256,6 @@ fn ignore_missing(result: Result<(), keyring::Error>) -> Result<(), String> {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(format!("キーチェーンの削除に失敗: {e}")),
     }
-}
-
-/// The single-account entry of versions before multi-account support.
-fn legacy_keyring_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, LEGACY_KEYRING_USER).map_err(|e| e.to_string())
 }
 
 fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {

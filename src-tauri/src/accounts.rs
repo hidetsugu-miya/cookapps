@@ -47,11 +47,6 @@ pub fn with_account(mut accounts: Vec<String>, email: &str) -> Vec<String> {
     accounts
 }
 
-/// The single-account keychain entry moves to a per-account one only while accounts.json is absent.
-pub fn needs_migration(accounts_file_exists: bool, legacy_token_exists: bool) -> bool {
-    !accounts_file_exists && legacy_token_exists
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,25 +75,6 @@ mod tests {
         let list = with_account(list, "b@example.com");
         let list = with_account(list, "a@example.com");
         assert_eq!(list, vec!["a@example.com", "b@example.com"]);
-    }
-
-    #[test]
-    fn migrates_only_when_file_absent_and_legacy_present() {
-        assert!(needs_migration(false, true));
-        assert!(!needs_migration(true, true));
-        assert!(!needs_migration(false, false));
-        assert!(!needs_migration(true, false));
-    }
-
-    #[test]
-    fn already_migrated_state_starts_without_migrating() {
-        // accounts.json exists and the legacy entry is gone: the list loads from the file as is.
-        let dir = temp_dir("migrated");
-        save(&dir, &["a@example.com".to_string()]).unwrap();
-        let stored = load(&dir).unwrap();
-        assert!(!needs_migration(stored.is_some(), false));
-        assert_eq!(stored, Some(vec!["a@example.com".to_string()]));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

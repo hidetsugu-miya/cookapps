@@ -464,7 +464,6 @@ async fn account_threads(
 pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, String> {
     let accounts = auth
         .accounts(&app)
-        .await
         .map_err(|e| log_failure("inbox", "-", e))?;
     let (mut lists, mut needs_login, mut failed, mut history_ids) =
         (Vec::new(), Vec::new(), HashMap::new(), HashMap::new());
