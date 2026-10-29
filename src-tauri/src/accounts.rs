@@ -3,6 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 const FILE: &str = "accounts.json";
+const TMP_FILE: &str = "accounts.json.tmp";
 
 #[derive(Serialize, Deserialize)]
 struct AccountsFile {
@@ -23,9 +24,18 @@ pub fn load(dir: &Path) -> Result<Option<Vec<String>>, String> {
 
 pub fn save(dir: &Path, accounts: &[String]) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let path = dir.join(FILE);
-    std::fs::write(&path, render(accounts)?)
+    let (path, tmp) = (dir.join(FILE), dir.join(TMP_FILE));
+    // Rename over the target so a crash mid-write leaves the old file, not a truncated one.
+    write_synced(&tmp, &render(accounts)?)
+        .and_then(|()| std::fs::rename(&tmp, &path))
         .map_err(|e| format!("{} を書けません: {e}", path.display()))
+}
+
+fn write_synced(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()
 }
 
 fn parse(text: &str) -> Result<Vec<String>, serde_json::Error> {
@@ -83,6 +93,27 @@ mod tests {
         assert_eq!(load(&dir), Ok(None));
         save(&dir, &["a@example.com".to_string()]).unwrap();
         assert_eq!(load(&dir), Ok(Some(vec!["a@example.com".to_string()])));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn failed_save_leaves_the_existing_file_untouched() {
+        let dir = temp_dir("atomic");
+        save(&dir, &["a@example.com".to_string()]).unwrap();
+        // A directory in the temporary file's place makes the write fail before the rename.
+        std::fs::create_dir(dir.join(TMP_FILE)).unwrap();
+        assert!(save(&dir, &["b@example.com".to_string()]).is_err());
+        assert_eq!(load(&dir), Ok(Some(vec!["a@example.com".to_string()])));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn save_replaces_the_file_without_leaving_the_temporary_one() {
+        let dir = temp_dir("replace");
+        save(&dir, &["a@example.com".to_string()]).unwrap();
+        save(&dir, &["b@example.com".to_string()]).unwrap();
+        assert_eq!(load(&dir), Ok(Some(vec!["b@example.com".to_string()])));
+        assert!(!dir.join(TMP_FILE).exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
