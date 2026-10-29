@@ -87,20 +87,24 @@ $("back").onclick = () => {
   $("error").hidden = true;
   show("list");
 };
-$("trash").onclick = async () => {
+// Runs a thread command ("trash" / "archive"); on success the thread leaves the list.
+async function removeCurrent(command) {
+  const buttons = [$("trash"), $("archive")];
   $("error").hidden = true;
-  $("trash").disabled = true;
+  buttons.forEach((b) => (b.disabled = true));
   try {
-    const done = await invoke("trash", { id: current.id });
+    const done = await invoke(command, { id: current.id });
     if (done === null) return show("login");
     current.li.remove();
     show("list");
   } catch (e) {
     showError(e);
   } finally {
-    $("trash").disabled = false;
+    buttons.forEach((b) => (b.disabled = false));
   }
-};
+}
+$("trash").onclick = () => removeCurrent("trash");
+$("archive").onclick = () => removeCurrent("archive");
 $("login-button").onclick = async () => {
   $("error").hidden = true;
   $("login-button").disabled = true;

@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use encoding_rs::{Encoding, UTF_8};
 use reqwest::Method;
 use serde::{de::{DeserializeOwned, IgnoredAny}, Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
 
@@ -201,18 +202,35 @@ async fn send_json_refreshing<T: DeserializeOwned>(
     method: Method,
     url: &str,
     query: &[(&str, &str)],
+    body: Option<&Value>,
 ) -> Result<Option<T>, String> {
-    if let Some(v) = send_json(auth.http(), method.clone(), token, url, query).await? {
+    if let Some(v) = send_json(auth.http(), method.clone(), token, url, query, body).await? {
         return Ok(Some(v));
     }
     let Some(refreshed) = auth.refresh(app).await? else {
         return Ok(None);
     };
     *token = refreshed;
-    send_json(auth.http(), method, token, url, query)
+    send_json(auth.http(), method, token, url, query, body)
         .await?
         .ok_or("認証に失敗しました".to_string())
         .map(Some)
+}
+
+fn build_request(
+    http: &reqwest::Client,
+    method: Method,
+    token: &str,
+    url: &str,
+    query: &[(&str, &str)],
+    body: Option<&Value>,
+) -> reqwest::RequestBuilder {
+    let req = http.request(method, url).bearer_auth(token).query(query);
+    match body {
+        Some(body) => req.json(body),
+        // Gmail rejects a bodyless POST without Content-Length (411), and reqwest omits it.
+        None => req.header(reqwest::header::CONTENT_LENGTH, "0"),
+    }
 }
 
 /// `Ok(None)` means the token was rejected with 401.
@@ -222,13 +240,9 @@ async fn send_json<T: DeserializeOwned>(
     token: &str,
     url: &str,
     query: &[(&str, &str)],
+    body: Option<&Value>,
 ) -> Result<Option<T>, String> {
-    let res = http
-        .request(method, url)
-        .bearer_auth(token)
-        // Gmail rejects a bodyless POST without Content-Length (411), and reqwest omits it.
-        .header(reqwest::header::CONTENT_LENGTH, "0")
-        .query(query)
+    let res = build_request(http, method, token, url, query, body)
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -254,7 +268,7 @@ pub async fn inbox(
         return Ok(None);
     };
     let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
-    let Some(list) = send_json_refreshing::<ThreadList>(&app, &auth, &mut token, Method::GET, THREADS_URL, &list_query).await?
+    let Some(list) = send_json_refreshing::<ThreadList>(&app, &auth, &mut token, Method::GET, THREADS_URL, &list_query, None).await?
     else {
         return Ok(None);
     };
@@ -264,7 +278,7 @@ pub async fn inbox(
         let mut set = JoinSet::new();
         for t in chunk {
             let (http, token, url) = (http.clone(), token.clone(), format!("{THREADS_URL}/{}", t.id));
-            set.spawn(async move { send_json::<Thread>(&http, Method::GET, &token, &url, &METADATA_QUERY).await });
+            set.spawn(async move { send_json::<Thread>(&http, Method::GET, &token, &url, &METADATA_QUERY, None).await });
         }
         while let Some(res) = set.join_next().await {
             let thread = res.map_err(|e| e.to_string())??.ok_or("認証に失敗しました")?;
@@ -286,7 +300,7 @@ pub async fn thread(
         return Ok(None);
     };
     let url = format!("{THREADS_URL}/{id}");
-    let thread = send_json_refreshing::<Thread>(&app, &auth, &mut token, Method::GET, &url, &[("format", "full")]).await?;
+    let thread = send_json_refreshing::<Thread>(&app, &auth, &mut token, Method::GET, &url, &[("format", "full")], None).await?;
     Ok(thread.map(ThreadDetail::from))
 }
 
@@ -297,7 +311,23 @@ pub async fn trash(app: AppHandle, auth: State<'_, Auth>, id: String) -> Result<
         return Ok(None);
     };
     let url = format!("{THREADS_URL}/{id}/trash");
-    let done = send_json_refreshing::<IgnoredAny>(&app, &auth, &mut token, Method::POST, &url, &[]).await?;
+    let done = send_json_refreshing::<IgnoredAny>(&app, &auth, &mut token, Method::POST, &url, &[], None).await?;
+    Ok(done.map(|_| ()))
+}
+
+fn archive_body() -> Value {
+    json!({"removeLabelIds": ["INBOX"]})
+}
+
+/// Removes the INBOX label from the thread. `Ok(None)` means login is required.
+#[tauri::command]
+pub async fn archive(app: AppHandle, auth: State<'_, Auth>, id: String) -> Result<Option<()>, String> {
+    let Some(mut token) = auth.token(&app).await? else {
+        return Ok(None);
+    };
+    let url = format!("{THREADS_URL}/{id}/modify");
+    let body = archive_body();
+    let done = send_json_refreshing::<IgnoredAny>(&app, &auth, &mut token, Method::POST, &url, &[], Some(&body)).await?;
     Ok(done.map(|_| ()))
 }
 
@@ -344,6 +374,28 @@ mod tests {
         assert_eq!(item.from, "");
         assert_eq!(item.date_ms, 0);
         assert!(!item.unread);
+    }
+
+    #[test]
+    fn bodyless_request_declares_zero_content_length() {
+        let http = reqwest::Client::new();
+        let req = build_request(&http, Method::POST, "t", "https://example.com/x", &[], None)
+            .build()
+            .unwrap();
+        assert_eq!(req.headers()[reqwest::header::CONTENT_LENGTH], "0");
+        assert!(req.body().is_none());
+    }
+
+    #[test]
+    fn json_request_leaves_content_length_to_reqwest() {
+        let http = reqwest::Client::new();
+        let body = archive_body();
+        let req = build_request(&http, Method::POST, "t", "https://example.com/x", &[], Some(&body))
+            .build()
+            .unwrap();
+        assert!(!req.headers().contains_key(reqwest::header::CONTENT_LENGTH));
+        assert_eq!(req.headers()[reqwest::header::CONTENT_TYPE], "application/json");
+        assert_eq!(req.body().unwrap().as_bytes().unwrap(), br#"{"removeLabelIds":["INBOX"]}"#);
     }
 
     #[test]
