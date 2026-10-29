@@ -1231,6 +1231,10 @@ function tag(name, className = "", text = "") {
 // Open tasks that "今日" lists: overdue or due today.
 const isDueToday = (t) => t.bucket === "overdue" || t.bucket === "today";
 const setTodoCount = (count) => setNavCount("nav-todo", count, "Todo", "今日");
+// Set when the count fetch finds no usable token: it stops reading the keychain until a load on the Todo screen succeeds.
+let todoCountOff = false;
+// The first count fetch also takes the completed tasks, so the cache it saves keeps the done subtasks.
+let countWithDone = true;
 
 // The last data from the backend, or null while a token is needed.
 let todo = null;
@@ -1722,6 +1726,9 @@ async function loadTodo(quiet = false, withDone = true) {
     const same = text !== null && text === todoText;
     todoText = text;
     todo = data;
+    todoCountOff = false;
+    // Also while a field is being typed in, when nothing is drawn below.
+    setTodoCount(data.tasks.filter(isDueToday).length);
     projectById = new Map(data.projects.map((p) => [p.id, p]));
     taskById = new Map(data.tasks.map((t) => [t.id, t]));
     drawTodoNotice(data.offline);
@@ -1815,11 +1822,14 @@ setInterval(() => screen === "todo" && $("todo-token").hidden && !document.hidde
 
 // Fetches only for the Todo count on the sidebar while another screen is shown: `todo` and the Todo screen stay as they are, and a missing token or a failure shows no count and no message.
 async function loadTodoCount() {
-  if (screen === "todo" || document.hidden) return;
+  if (screen === "todo" || document.hidden || todoCountOff) return;
   let count = 0;
   try {
-    const data = await invoke("todoist_load", { withDone: false });
-    if (data) count = data.tasks.filter(isDueToday).length;
+    const data = await invoke("todoist_load", { withDone: countWithDone });
+    if (data) {
+      countWithDone = false;
+      count = data.tasks.filter(isDueToday).length;
+    } else todoCountOff = true;
   } catch {}
   // The Todo screen sets the count itself, and its data is newer than this fetch.
   if (screen !== "todo") setTodoCount(count);
