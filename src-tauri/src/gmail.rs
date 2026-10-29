@@ -132,8 +132,8 @@ pub struct MessageDetail {
     body: String,
 }
 
-/// Gmail hands back each part's bytes as stored (transfer encoding removed), so the
-/// Content-Type charset decides how to read them.
+/// Gmail's format=full usually re-encodes text parts to UTF-8 while keeping the original
+/// Content-Type charset (e.g. ISO-2022-JP), so UTF-8 wins and the declared charset is the fallback.
 fn decode_part(p: &Payload) -> String {
     // shortcut: undecodable base64 yields an empty part, upgrade if Gmail ever sends such data.
     let bytes = URL_SAFE_NO_PAD
@@ -145,7 +145,11 @@ fn decode_part(p: &Payload) -> String {
         .find(|(k, _)| k.trim().eq_ignore_ascii_case("charset"))
         .and_then(|(_, v)| Encoding::for_label(v.trim().trim_matches('"').as_bytes()))
         .unwrap_or(UTF_8);
-    encoding.decode(&bytes).0.into_owned()
+    // ISO-2022-JP is 7-bit, so it also passes as UTF-8; its escape sequences give it away.
+    match std::str::from_utf8(&bytes) {
+        Ok(text) if !bytes.contains(&0x1b) => text.to_owned(),
+        _ => encoding.decode(&bytes).0.into_owned(),
+    }
 }
 
 /// Collects the text of every non-attachment text/html and text/plain part in the MIME tree.
@@ -414,6 +418,16 @@ mod tests {
 
     // "こんにちは" in ISO-2022-JP
     const JIS_KONNICHIWA: &[u8] = b"\x1b$B$3$s$K$A$O\x1b(B";
+
+    #[test]
+    fn utf8_body_wins_over_declared_iso_2022_jp() {
+        let d = detail(serde_json::json!({"id": "t", "messages": [{
+            "internalDate": "1",
+            "payload": {"mimeType": "text/plain",
+                "headers": [{"name": "Content-Type", "value": "text/plain; charset=\"ISO-2022-JP\""}],
+                "body": {"data": b64("こんにちは".as_bytes())}}}]}));
+        assert_eq!(d.messages[0].body, "こんにちは");
+    }
 
     #[test]
     fn decodes_iso_2022_jp_plain_part() {
