@@ -108,7 +108,6 @@ function readBox(t, li) {
 function rowButton(className, label, svg, action) {
   const button = document.createElement("button");
   button.className = `row-btn ${className}`;
-  button.title = label;
   button.setAttribute("aria-label", label);
   button.innerHTML = svg;
   button.onclick = (e) => {
@@ -363,6 +362,55 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("resize", refreshPopup);
 // The unread count follows every change of the list: load, sync, read toggle, removal.
 new MutationObserver(refreshPopup).observe($("threads"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+
+// Tooltip for icon-only controls. The native title is slow or missing in WKWebView, so the text is the control's aria-label.
+const TIP_DELAY_MS = 300;
+const tip = el("tooltip");
+tip.hidden = true;
+document.body.append(tip);
+let tipTimer = 0;
+
+function hideTip() {
+  clearTimeout(tipTimer);
+  tip.hidden = true;
+}
+
+// Right of a sidebar control, below any other; kept inside the window. While the account popup is open it covers that area, so the sidebar's account controls show none.
+function showTip(target) {
+  hideTip();
+  const inSidebar = target.closest("#sidebar");
+  if (popupAccount !== null && target.closest("#accounts")) return;
+  tipTimer = setTimeout(() => {
+    tip.textContent = target.getAttribute("aria-label");
+    tip.hidden = false;
+    const r = target.getBoundingClientRect();
+    const left = inSidebar ? r.right + 8 : r.left + (r.width - tip.offsetWidth) / 2;
+    const top = inSidebar ? r.top + (r.height - tip.offsetHeight) / 2 : r.bottom + 6;
+    tip.style.left = `${Math.max(4, Math.min(left, innerWidth - tip.offsetWidth - 4))}px`;
+    tip.style.top = `${Math.max(4, Math.min(top, innerHeight - tip.offsetHeight - 4))}px`;
+  }, TIP_DELAY_MS);
+}
+
+// Delegated, so rows and avatars built later get tooltips too.
+const TIP_TARGET = "button[aria-label], input[aria-label]";
+document.addEventListener("mouseover", (e) => {
+  const t = e.target.closest?.(TIP_TARGET);
+  if (t && !t.contains(e.relatedTarget)) showTip(t);
+});
+document.addEventListener("mouseout", (e) => {
+  const t = e.target.closest?.(TIP_TARGET);
+  if (t && !t.contains(e.relatedTarget)) hideTip();
+});
+// Only keyboard focus shows it; a click also focuses the control and must not bring the tooltip back.
+document.addEventListener("focusin", (e) => {
+  const t = e.target.closest?.(TIP_TARGET);
+  if (t?.matches(":focus-visible")) showTip(t);
+});
+document.addEventListener("focusout", hideTip);
+document.addEventListener("pointerdown", hideTip);
+document.addEventListener("click", hideTip);
+document.addEventListener("scroll", hideTip, true);
+document.addEventListener("keydown", (e) => e.key === "Escape" && hideTip());
 
 // Which screen the sidebar selected: "mail" or "calendar". Background work reads it; only the sidebar changes it.
 let screen = "mail";
