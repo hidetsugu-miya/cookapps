@@ -4,5 +4,5 @@ src-tauri/gen/
 .DS_Store
 CLAUDE.local.md
 mise.toml
-.claude/rules/
+.claude/
 src-tauri/.cargo/
