@@ -114,18 +114,18 @@ function rowButton(className, label, svg, action) {
   return button;
 }
 
-// Runs "archive" / "trash" on the row's thread; on success the row leaves the list.
-async function removeRow(command, t, li, button) {
+// Takes the row out at once and runs "archive" / "trash" in the background; on failure the row comes back.
+async function removeRow(command, account, id, li) {
+  const list = li.parentNode;
+  const next = li.nextSibling;
+  li.remove();
   $("error").hidden = true;
-  button.disabled = true;
   try {
-    const done = await invoke(command, { account: t.account, id: t.id });
+    const done = await invoke(command, { account, id });
     if (done === null) return load();
-    li.remove();
   } catch (e) {
+    list.insertBefore(li, next && next.parentNode === list ? next : null);
     showError(e);
-  } finally {
-    button.disabled = false;
   }
 }
 
@@ -152,8 +152,8 @@ function row(t) {
   const trail = cell("trail", "");
   const actions = cell("row-actions", "");
   actions.append(
-    rowButton("archive-row", "アーカイブ", CHECK_SVG, (b) => removeRow("archive", t, li, b)),
-    rowButton("trash-row", "ゴミ箱へ移動", $("trash").innerHTML, (b) => removeRow("trash", t, li, b)),
+    rowButton("archive-row", "アーカイブ", CHECK_SVG, () => removeRow("archive", t.account, t.id, li)),
+    rowButton("trash-row", "ゴミ箱へ移動", $("trash").innerHTML, () => removeRow("trash", t.account, t.id, li)),
   );
   trail.append(cell("date", formatDate(t.dateMs)), actions);
   li.append(readBox(t, li), cell("unread-dot", ""), avatar, cell("from", name), subject, trail);
@@ -243,21 +243,10 @@ $("back").onclick = () => {
   $("error").hidden = true;
   show("list");
 };
-// Runs a thread command ("trash" / "archive"); on success the thread leaves the list.
-async function removeCurrent(command) {
-  const buttons = [$("trash"), $("archive")];
-  $("error").hidden = true;
-  buttons.forEach((b) => (b.disabled = true));
-  try {
-    const done = await invoke(command, { account: current.account, id: current.id });
-    if (done === null) return load();
-    current.li.remove();
-    show("list");
-  } catch (e) {
-    showError(e);
-  } finally {
-    buttons.forEach((b) => (b.disabled = false));
-  }
+// Detail view "trash" / "archive": back to the list at once, the work runs in the background.
+function removeCurrent(command) {
+  show("list");
+  removeRow(command, current.account, current.id, current.li);
 }
 $("trash").onclick = () => removeCurrent("trash");
 $("archive").onclick = () => removeCurrent("archive");
