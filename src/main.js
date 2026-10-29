@@ -208,9 +208,9 @@ function row(t) {
   const trail = cell("trail", "");
   const actions = cell("row-actions", "");
   actions.append(
-    rowButton("todo-row", "Todo にする", TODO_SVG, (button) => makeTodo(t.account, t.id, t.subject, button)),
     rowButton("archive-row", "アーカイブ", CHECK_SVG, () => removeRow("archive", t.account, t.id, li)),
     rowButton("trash-row", "ゴミ箱へ移動", $("trash").innerHTML, () => removeRow("trash", t.account, t.id, li)),
+    rowButton("todo-row", "Todo にする", TODO_SVG, (button) => makeTodo(t.account, t.id, t.subject, button)),
   );
   trail.append(cell("date", formatDate(t.dateMs)), actions);
   li.append(readBox(t, li), cell("unread-dot", ""), avatar, cell("from", name), subject, trail);
