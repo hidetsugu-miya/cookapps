@@ -23,6 +23,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(auth::Auth::new())
         .manage(gmail::SyncState::default())
+        .manage(gmail::InlineCache::default())
         .manage(calendar::CalendarCache::default())
         .manage(todoist::TodoistState::default())
         .invoke_handler(tauri::generate_handler![

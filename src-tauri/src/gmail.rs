@@ -18,7 +18,10 @@ use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
 
 use crate::auth::{config_dir, Auth};
-use crate::images::{image_mime, inline_data_uri, replace_cids, wanted_images, InlineImage};
+use crate::images::{
+    image_mime, inline_data_uri, replace_cids, run_limited, wanted_images, InlineImage,
+    MAX_INLINE_IMAGES,
+};
 
 const THREADS_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
@@ -121,13 +124,16 @@ pub struct ThreadItem {
     unread: bool,
 }
 
-fn header(payload: &Payload, name: &str) -> String {
+fn header_ref<'a>(payload: &'a Payload, name: &str) -> Option<&'a str> {
     payload
         .headers
         .iter()
         .find(|h| h.name.eq_ignore_ascii_case(name))
-        .map(|h| h.value.clone())
-        .unwrap_or_default()
+        .map(|h| h.value.as_str())
+}
+
+fn header(payload: &Payload, name: &str) -> String {
+    header_ref(payload, name).unwrap_or_default().to_owned()
 }
 
 impl ThreadItem {
@@ -259,16 +265,19 @@ impl ThreadDetail {
 }
 
 /// Every image part with a Content-ID in the MIME tree: the targets of `cid:` references.
-fn inline_images(p: &Payload, out: &mut Vec<InlineImage>) {
-    let cid = header(p, "Content-ID");
-    let cid = cid.trim().trim_start_matches('<').trim_end_matches('>');
+fn inline_images<'a>(p: &'a Payload, out: &mut Vec<InlineImage<'a>>) {
+    let cid = header_ref(p, "Content-ID")
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>');
     if let (false, Some(mime)) = (cid.is_empty(), image_mime(&p.mime_type)) {
         out.push(InlineImage {
-            cid: cid.to_owned(),
+            cid,
             mime,
             size: p.body.size.max(p.body.data.len() as u64 / 4 * 3),
-            attachment_id: p.body.attachment_id.clone(),
-            data: p.body.data.clone(),
+            attachment_id: &p.body.attachment_id,
+            data: &p.body.data,
         });
     }
     for part in &p.parts {
@@ -276,48 +285,119 @@ fn inline_images(p: &Payload, out: &mut Vec<InlineImage>) {
     }
 }
 
-/// The data: URI of an inline image: its own data, else the attachment fetched from Gmail. `None` leaves the reference as it is.
-async fn inline_uri(
-    dir: &Path,
-    auth: &Auth,
-    account: &str,
-    message_id: &str,
-    image: &InlineImage,
-) -> Option<String> {
-    let data = if image.data.is_empty() {
-        let mut url = reqwest::Url::parse(MESSAGES_URL).ok()?;
-        url.path_segments_mut()
-            .ok()?
-            .extend([message_id, "attachments", &image.attachment_id]);
-        send_json_refreshing::<AttachmentBody>(
-            dir,
-            auth,
-            account,
-            Method::GET,
-            url.as_str(),
-            &[],
-            None,
-        )
-        .await
-        .ok()??
-        .data
-    } else {
-        image.data.clone()
-    };
-    inline_data_uri(&image.mime, &data)
-}
+/// Where an attachment image lives: (account, message ID, attachment ID).
+type InlineKey = (String, String, String);
 
-/// Replaces the `cid:` references in `html` with the data: URIs of the message's own images.
-async fn inline_cids(dir: &Path, auth: &Auth, account: &str, m: &Message, html: &str) -> String {
-    let mut images = Vec::new();
-    inline_images(&m.payload, &mut images);
-    let mut uris = HashMap::new();
-    for image in wanted_images(html, &images) {
-        if let Some(uri) = inline_uri(dir, auth, account, &m.id, image).await {
-            uris.insert(image.cid.clone(), uri);
+/// Cap of `InlineCache`, in bytes of data: URI. One thread holds up to 20 MB of images (27 MB as base64).
+const INLINE_CACHE_BYTES: usize = 64 * 1024 * 1024;
+
+/// The data: URIs of fetched attachment images, kept in memory for the run so reopening a thread does not fetch them again.
+/// When a new one does not fit, the cache starts over.
+#[derive(Default)]
+pub struct InlineCache(Mutex<(usize, HashMap<InlineKey, String>)>);
+
+impl InlineCache {
+    fn get(&self, key: &InlineKey) -> Option<String> {
+        self.0.lock().unwrap().1.get(key).cloned()
+    }
+
+    fn put(&self, limit: usize, key: InlineKey, uri: String) {
+        let (bytes, uris) = &mut *self.0.lock().unwrap();
+        if uri.len() > limit {
+            return;
+        }
+        if *bytes + uri.len() > limit {
+            uris.clear();
+            *bytes = 0;
+        }
+        *bytes += uri.len();
+        if let Some(old) = uris.insert(key, uri) {
+            *bytes -= old.len();
         }
     }
-    replace_cids(html, &uris)
+
+    pub fn forget(&self, account: &str) {
+        let (bytes, uris) = &mut *self.0.lock().unwrap();
+        uris.retain(|k, _| k.0 != account);
+        *bytes = uris.values().map(String::len).sum();
+    }
+}
+
+/// The data: URI of an attachment image fetched from Gmail. `None` leaves the reference as it is.
+/// An image is not worth waiting out a rate limit for, so nothing is sent again.
+async fn attachment_uri(dir: &Path, auth: &Auth, key: &InlineKey, mime: &str) -> Option<String> {
+    let (account, message_id, attachment_id) = key;
+    let mut url = reqwest::Url::parse(MESSAGES_URL).ok()?;
+    url.path_segments_mut()
+        .ok()?
+        .extend([message_id, "attachments", attachment_id]);
+    let body = send_json_refreshing_with::<AttachmentBody>(
+        dir,
+        auth,
+        account,
+        NO_RETRIES,
+        Method::GET,
+        url.as_str(),
+        &[],
+        None,
+    )
+    .await
+    .ok()??;
+    inline_data_uri(mime, &body.data)
+}
+
+/// Replaces the `cid:` references in the HTML messages of `detail` with the data: URIs of their own images.
+/// One count and one size limit span the thread, and the attachments are fetched a few at a time.
+async fn inline_thread_cids(
+    dir: &Path,
+    auth: &Auth,
+    cache: &InlineCache,
+    account: &str,
+    t: &Thread,
+    detail: &mut ThreadDetail,
+) {
+    let mut uris = vec![HashMap::new(); detail.messages.len()];
+    let (mut total, mut taken, mut jobs) = (0, 0, Vec::new());
+    for (n, d) in detail.messages.iter().enumerate().filter(|(_, d)| d.html) {
+        let Some(m) = t.messages.iter().find(|m| m.id == d.id) else {
+            continue;
+        };
+        let mut images = Vec::new();
+        inline_images(&m.payload, &mut images);
+        for image in wanted_images(&d.body, &images, &mut total, MAX_INLINE_IMAGES - taken) {
+            taken += 1;
+            let cid = image.cid.to_owned();
+            if !image.data.is_empty() {
+                if let Some(uri) = inline_data_uri(&image.mime, image.data) {
+                    uris[n].insert(cid, uri);
+                }
+                continue;
+            }
+            let key = (
+                account.to_owned(),
+                m.id.clone(),
+                image.attachment_id.to_owned(),
+            );
+            if let Some(uri) = cache.get(&key) {
+                uris[n].insert(cid, uri);
+                continue;
+            }
+            let (dir, auth, mime) = (dir.to_owned(), auth.clone(), image.mime.clone());
+            jobs.push(async move {
+                let uri = attachment_uri(&dir, &auth, &key, &mime).await;
+                (n, cid, key, uri)
+            });
+        }
+    }
+    for (n, cid, key, uri) in run_limited(jobs, crate::images::CONCURRENCY).await {
+        if let Some(uri) = uri {
+            cache.put(INLINE_CACHE_BYTES, key, uri.clone());
+            uris[n].insert(cid, uri);
+        }
+    }
+    for (d, uris) in detail.messages.iter_mut().zip(&uris) {
+        d.body = replace_cids(&d.body, uris);
+    }
 }
 
 /// A failed Google API call. `status` is `None` when no HTTP response was received.
@@ -990,6 +1070,7 @@ pub async fn sync(
 pub async fn fetch_thread(
     dir: &Path,
     auth: &Auth,
+    cache: &InlineCache,
     account: &str,
     id: &str,
     prefer_plain: bool,
@@ -1011,11 +1092,7 @@ pub async fn fetch_thread(
     let mut detail = ThreadDetail::new(&t, prefer_plain);
     // A text consumer (prefer_plain, the MCP server) gets no image data.
     if !prefer_plain {
-        for d in detail.messages.iter_mut().filter(|d| d.html) {
-            if let Some(m) = t.messages.iter().find(|m| m.id == d.id) {
-                d.body = inline_cids(dir, auth, account, m, &d.body).await;
-            }
-        }
+        inline_thread_cids(dir, auth, cache, account, &t, &mut detail).await;
     }
     Ok(Some(detail))
 }
@@ -1025,11 +1102,12 @@ pub async fn fetch_thread(
 pub async fn thread(
     app: AppHandle,
     auth: State<'_, Auth>,
+    cache: State<'_, InlineCache>,
     account: String,
     id: String,
 ) -> Result<Option<ThreadDetail>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("thread", &account, e))?;
-    fetch_thread(&dir, &auth, &account, &id, false)
+    fetch_thread(&dir, &auth, &cache, &account, &id, false)
         .await
         .map_err(|e| log_failure("thread", &account, e))
 }
@@ -1304,6 +1382,83 @@ mod tests {
     fn empty_list_response_has_no_threads() {
         let list: ThreadList = serde_json::from_str(r#"{"resultSizeEstimate": 0}"#).unwrap();
         assert!(list.threads.is_empty());
+    }
+
+    #[test]
+    fn inline_images_finds_image_parts_with_a_content_id_at_any_depth() {
+        let p: Payload = serde_json::from_value(json!({
+            "mimeType": "multipart/related",
+            "parts": [
+                {"mimeType": "text/html", "body": {"data": "AAAA"}},
+                {"mimeType": "multipart/alternative", "parts": [
+                    {"mimeType": "image/PNG", "headers": [{"name": "content-id", "value": " <a@x> "}],
+                     "body": {"attachmentId": "att1", "size": 300}}]},
+                // No declared size: estimated from the 8 base64 characters.
+                {"mimeType": "image/gif", "headers": [{"name": "Content-ID", "value": "b"}],
+                 "body": {"data": "AAAAAAAA", "size": 0}},
+                {"mimeType": "image/png", "body": {"attachmentId": "no-cid"}},
+                {"mimeType": "application/pdf", "headers": [{"name": "Content-ID", "value": "<p>"}],
+                 "body": {"attachmentId": "pdf"}}]
+        }))
+        .unwrap();
+        let mut found = Vec::new();
+        inline_images(&p, &mut found);
+        let got: Vec<_> = found
+            .iter()
+            .map(|i| (i.cid, i.mime.as_str(), i.size, i.attachment_id, i.data))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("a@x", "image/png", 300, "att1", ""),
+                ("b", "image/gif", 6, "", "AAAAAAAA")
+            ]
+        );
+    }
+
+    #[test]
+    fn thread_detail_is_unread_when_any_message_is() {
+        let unread =
+            |labels: &[&[&str]]| ThreadDetail::new(&thread_with_labels("t", labels), false).unread;
+        assert!(unread(&[&["INBOX"], &["INBOX", "UNREAD"]]));
+        assert!(!unread(&[&["INBOX"], &["INBOX"]]));
+        assert!(!unread(&[]));
+    }
+
+    fn key(account: &str, attachment: &str) -> InlineKey {
+        (account.into(), "m".into(), attachment.into())
+    }
+
+    #[test]
+    fn inline_cache_keeps_uris_within_its_limit_and_starts_over_when_full() {
+        let cache = InlineCache::default();
+        cache.put(10, key("a", "1"), "123456".into());
+        assert_eq!(cache.get(&key("a", "1")), Some("123456".into()));
+        // 6 + 6 > 10: the old entry goes, the new one stays.
+        cache.put(10, key("a", "2"), "abcdef".into());
+        assert_eq!(cache.get(&key("a", "1")), None);
+        assert_eq!(cache.get(&key("a", "2")), Some("abcdef".into()));
+        // One bigger than the limit is not kept, and the rest stays.
+        cache.put(10, key("a", "3"), "x".repeat(11));
+        assert_eq!(cache.get(&key("a", "3")), None);
+        assert_eq!(cache.get(&key("a", "2")), Some("abcdef".into()));
+        // Putting the same key again counts it once: 6 + 4 fits the limit, so nothing is dropped.
+        cache.put(10, key("a", "2"), "abcdef".into());
+        cache.put(10, key("a", "4"), "wxyz".into());
+        assert_eq!(cache.get(&key("a", "2")), Some("abcdef".into()));
+    }
+
+    #[test]
+    fn inline_cache_forgets_one_account() {
+        let cache = InlineCache::default();
+        cache.put(10, key("a", "1"), "aaaaaa".into());
+        cache.put(10, key("b", "1"), "bb".into());
+        cache.forget("a");
+        assert_eq!(cache.get(&key("a", "1")), None);
+        assert_eq!(cache.get(&key("b", "1")), Some("bb".into()));
+        // The forgotten bytes are free again: 2 + 8 fits the limit.
+        cache.put(10, key("c", "1"), "cccccccc".into());
+        assert_eq!(cache.get(&key("b", "1")), Some("bb".into()));
     }
 
     fn b64(bytes: &[u8]) -> String {
