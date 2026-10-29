@@ -205,9 +205,18 @@ function updateBadge() {
   invoke("set_badge", { count }).catch(() => {});
 }
 
+// What the last archive / trash did, for "元に戻す" and Cmd+Z: the command that reverses it and the thread data to put back.
+// One only; a newer removal replaces it.
+let lastRemoved = null;
+const REMOVALS = {
+  archive: { undo: "unarchive", message: "アーカイブしました" },
+  trash: { undo: "untrash", message: "ゴミ箱へ移動しました" },
+};
+
 // Takes the row out at once and runs "archive" / "trash" in the background; on failure the row comes back.
 async function removeRow(command, account, id, li) {
   const key = `${account}/${id}`;
+  const t = rows.get(key)?.t;
   pending.add(key);
   li.remove();
   updateBadge();
@@ -216,6 +225,10 @@ async function removeRow(command, account, id, li) {
     const done = await invoke(command, { account, id });
     if (done === null) return load();
     rows.delete(key);
+    if (t) {
+      lastRemoved = { undo: REMOVALS[command].undo, account, id, t };
+      toast(REMOVALS[command].message, { label: "元に戻す", run: undoRemove });
+    }
   } catch (e) {
     // Back by the state it has now: a mark-as-read meanwhile moves it to the read section.
     place(li, li.classList.contains("unread"));
@@ -223,6 +236,24 @@ async function removeRow(command, account, id, li) {
   } finally {
     pending.delete(key);
     updateBadge();
+  }
+}
+
+// Reverses the last removal in Gmail and puts the row back in date order; on failure it stays available.
+async function undoRemove() {
+  const op = lastRemoved;
+  if (!op) return;
+  lastRemoved = null;
+  toastEl.hidden = true;
+  $("error").hidden = true;
+  try {
+    const done = await invoke(op.undo, { account: op.account, id: op.id });
+    if (done === null) return load();
+    applyChanges([op.t], []);
+    toast("元に戻しました");
+  } catch (e) {
+    lastRemoved ??= op;
+    showError(e);
   }
 }
 
@@ -1039,6 +1070,14 @@ function removeCurrent(command) {
 $("thread-todo").onclick = () => makeTodo(current.account, current.id, $("thread-subject").textContent, $("thread-todo"));
 $("trash").onclick = () => removeCurrent("trash");
 $("archive").onclick = () => removeCurrent("archive");
+// Cmd+Z undoes the last removal; in a text field it stays that field's own undo.
+document.addEventListener("keydown", (e) => {
+  if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.key !== "z" || composing(e) || !lastRemoved) return;
+  const a = document.activeElement;
+  if (a?.isContentEditable || a?.closest?.("input, textarea")) return;
+  e.preventDefault();
+  undoRemove();
+});
 // Logs in (the account chosen in the browser, or `hint` preselected) and reloads the list.
 async function addAccount(hint, button) {
   $("error").hidden = true;
@@ -1338,8 +1377,18 @@ toastEl.setAttribute("role", "status");
 document.body.append(toastEl);
 let toastTimer = 0;
 
-function toast(text) {
+// `action` ({ label, run }) adds a button that hides the notice and runs `run`.
+function toast(text, action) {
   toastEl.textContent = text;
+  if (action) {
+    const button = document.createElement("button");
+    button.textContent = action.label;
+    button.onclick = () => {
+      toastEl.hidden = true;
+      action.run();
+    };
+    toastEl.append(button);
+  }
   toastEl.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (toastEl.hidden = true), 4000);

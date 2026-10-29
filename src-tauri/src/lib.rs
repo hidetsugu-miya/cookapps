@@ -88,6 +88,8 @@ pub fn run() {
             gmail::thread_images,
             gmail::trash,
             gmail::archive,
+            gmail::untrash,
+            gmail::unarchive,
             gmail::set_read,
             gmail::sync,
             images::fetch_images,
