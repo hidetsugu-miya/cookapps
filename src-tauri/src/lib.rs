@@ -21,27 +21,49 @@ fn set_badge(window: tauri::WebviewWindow, count: u32) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Parses a link from a mail body; only http(s) may be handed to the browser.
-fn web_link(raw: &str) -> Result<url::Url, String> {
-    let url = url::Url::parse(raw.trim()).map_err(|_| "リンクの URL が不正です".to_owned())?;
-    match url.scheme() {
-        "http" | "https" => Ok(url),
-        _ => Err("http と https 以外のリンクは開けません".into()),
+/// What to do with a navigation of the webview or one of its frames.
+#[derive(Debug, PartialEq)]
+enum Navigation {
+    /// The app's own page, or a frame's `about:srcdoc`.
+    Allow,
+    /// A link of a mail body: handed to the default browser.
+    Browser,
+    Cancel,
+}
+
+fn navigation_of(url: &tauri::Url) -> Navigation {
+    match (url.scheme(), url.host_str()) {
+        ("about", _) | ("tauri", Some("localhost")) => Navigation::Allow,
+        // Windows and Android serve the app from this origin.
+        ("http" | "https", Some("tauri.localhost")) => Navigation::Allow,
+        ("http" | "https", _) => Navigation::Browser,
+        _ => Navigation::Cancel,
     }
 }
 
-/// Opens a link of a mail body in the default browser.
-#[tauri::command]
-fn open_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    let url = web_link(&url).map_err(|e| gmail::log_failure("open_link", "-", e))?;
-    app.opener()
-        .open_url(url.as_str(), None::<&str>)
-        .map_err(|e| gmail::log_failure("open_link", "-", format!("ブラウザを開けません: {e}")))
+/// A mail body's frame may navigate the top window only by a user's click (its sandbox has
+/// allow-top-navigation-by-user-activation); that navigation is always cancelled here, and an http(s) URL goes to the browser.
+fn navigation_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("navigation")
+        .on_navigation(|webview, url| {
+            match navigation_of(url) {
+                Navigation::Allow => return true,
+                Navigation::Browser => {
+                    if let Err(e) = webview.opener().open_url(url.as_str(), None::<&str>) {
+                        gmail::log_failure("navigation", "-", format!("ブラウザを開けません: {e}"));
+                    }
+                }
+                Navigation::Cancel => {}
+            }
+            false
+        })
+        .build()
 }
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(navigation_plugin())
         .manage(auth::Auth::new())
         .manage(gmail::SyncState::default())
         .manage(gmail::InlineCache::default())
@@ -76,7 +98,6 @@ pub fn run() {
             todoist::todoist_move,
             todoist::todoist_delete,
             todoist::todoist_open,
-            open_link,
             set_badge
         ])
         .run(tauri::generate_context!())
@@ -85,7 +106,11 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{badge_of, web_link};
+    use super::{badge_of, navigation_of, Navigation};
+
+    fn url(raw: &str) -> tauri::Url {
+        raw.parse().unwrap()
+    }
 
     #[test]
     fn zero_removes_the_badge() {
@@ -98,24 +123,42 @@ mod tests {
     }
 
     #[test]
-    fn web_links_are_http_and_https_only() {
-        let url = web_link(" https://docs.google.com/document/d/x/edit?tab=t.0 ").unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://docs.google.com/document/d/x/edit?tab=t.0"
-        );
-        assert!(web_link("http://example.com").is_ok());
-        assert!(web_link("HTTPS://example.com").is_ok());
+    fn the_apps_own_pages_and_frames_are_allowed() {
+        for ok in [
+            "tauri://localhost/index.html",
+            "tauri://localhost",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/index.html",
+            "about:srcdoc",
+            "about:blank",
+        ] {
+            assert_eq!(navigation_of(&url(ok)), Navigation::Allow, "{ok}");
+        }
+    }
+
+    #[test]
+    fn web_links_go_to_the_browser() {
+        for web in [
+            "https://docs.google.com/document/d/x/edit?tab=t.0",
+            "http://example.com",
+            "HTTPS://example.com/",
+            "https://tauri.localhost.example.com/",
+        ] {
+            assert_eq!(navigation_of(&url(web)), Navigation::Browser, "{web}");
+        }
+    }
+
+    #[test]
+    fn other_navigations_are_cancelled() {
         for bad in [
             "javascript:alert(1)",
             "data:text/html,x",
             "file:///etc/passwd",
             "mailto:a@example.com",
-            "//example.com",
-            "/relative",
-            "",
+            "tauri://example.com/",
+            "ftp://example.com/",
         ] {
-            assert!(web_link(bad).is_err(), "{bad}");
+            assert_eq!(navigation_of(&url(bad)), Navigation::Cancel, "{bad}");
         }
     }
 }
