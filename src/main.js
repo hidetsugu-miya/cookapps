@@ -225,9 +225,11 @@ const setAttr = Element.prototype.setAttribute;
 // Sends a mail's links to Rust. The frame's sandbox lets only a user's click navigate the top window (allow-top-navigation-by-user-activation),
 // and Rust's on_navigation cancels that and opens an http(s) URL in the default browser. WebKit calls no listener this page adds to the
 // frame's document (the sandbox has no allow-scripts), so the links are rewritten here instead:
-// - http(s): target="_top", with the resolved URL as the title, which the tooltip shows, so a link whose text says otherwise shows;
-// - the rest (mailto:, #anchors, ...): target="_self", so neither the mail's <base target> nor its own target reaches the top window;
-// - an empty href is dropped: it would reload the frame and lose the images put in.
+// - http(s): target="_top", with the resolved URL as the title, so a link whose text says otherwise shows. This is WebKit's plain title
+//   display, slow or absent like any plain title (see the tooltip below); mouse moves inside the frame never reach this page, so nothing else can be shown;
+// - a #anchor: target="_self", so neither the mail's <base target> nor its own target reaches the top window;
+// - an empty href, and anything else that is not http(s) or a #anchor (mailto:, a relative link, about:, ...), loses its href:
+//   it would reload the frame, or navigate it away from the mail.
 // SVG <a> is left out: its href is not a string.
 function routeLinks(doc) {
   for (const a of queryAll(doc, "a[href]:not(svg a), area[href]")) {
@@ -236,10 +238,9 @@ function routeLinks(doc) {
       Element.prototype.removeAttribute.call(a, "href");
       continue;
     }
-    // A #anchor stays an in-page jump in the frame.
+    // A #anchor is left to the frame.
     const url = raw.startsWith("#") ? "" : hrefGetters[localNameOf.call(a)].call(a);
     const web = /^https?:/i.test(url);
-    // Anything else but an anchor (mailto:, a relative link resolved against the app's page, about:) would navigate the frame away from the mail.
     if (!web && !raw.startsWith("#")) {
       Element.prototype.removeAttribute.call(a, "href");
       continue;
@@ -289,7 +290,8 @@ const decodeImage = HTMLImageElement.prototype.decode;
 function fitAfterImages(frame) {
   const doc = frame.contentDocument;
   if (!doc) return;
-  Promise.allSettled([...queryAll(doc, "img")].map((img) => decodeImage.call(img))).then(() => fitFrame(frame));
+  // loading=lazy images may never start loading, so their decode may never settle; the frame observer and the next call cover them.
+  Promise.allSettled([...queryAll(doc, "img:not([loading=lazy i])")].map((img) => decodeImage.call(img))).then(() => fitFrame(frame));
 }
 
 // Fits the frame when its document loads and when its images are in, then hands the document to `onLoad`.
@@ -300,6 +302,22 @@ function autoFit(frame, onLoad) {
     onLoad(frame.contentDocument);
   };
   frameObserver.observe(frame);
+}
+
+// Parses a mail with DOMParser (no script or nested frame runs, and no declarative shadow root is attached) and writes it back
+// without what `routeLinks` cannot reach or what could move a frame: nested frames, <object>, <embed>, meta refresh, and
+// declarative shadow roots, whose <template> is replaced by its content. A DOCTYPE is written back only if the mail had one, as it was,
+// so the rendering mode does not change.
+const BLOCKED = "iframe, frame, frameset, object, embed, meta[http-equiv=refresh i]";
+const SHADOW_TEMPLATE = "template[shadowrootmode], template[shadowroot]";
+const doctypeOf = Object.getOwnPropertyDescriptor(Document.prototype, "doctype").get;
+function plainBody(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  // A template's content may hold another, so one is unwrapped at a time.
+  for (let t; (t = queryAll(doc, SHADOW_TEMPLATE)[0]); ) t.replaceWith(...t.content.childNodes);
+  queryAll(doc, BLOCKED).forEach((el) => el.remove());
+  const doctype = doctypeOf.call(doc);
+  return (doctype ? new XMLSerializer().serializeToString(doctype) : "") + rootOf.call(doc).outerHTML;
 }
 
 // Limits a mail to inline styles and data: images. The frame's sandbox has allow-same-origin, so with no scripts allowed
@@ -319,7 +337,6 @@ const externalImages = (doc) => [
 // src, background and style attributes and <style> text for its data: URI. `uris` is {reference as written: URI}.
 const CID_REF = /cid:[^"')<>\\\s]+/gi;
 function showCidImages(doc, uris) {
-  if (!uris) return;
   const swap = (text) => text.replace(CID_REF, (ref) => uris[ref] ?? ref);
   for (const el of queryAll(doc, "[src], [background], [style]")) {
     for (const name of ["src", "background", "style"]) {
@@ -460,11 +477,12 @@ function message(m, ctx) {
     // With the page's origin shared, the missing allow-scripts (backed by the CSP's script-src 'self') is the only guard.
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-same-origin allow-top-navigation-by-user-activation");
-    frame.srcdoc = withBodyCsp(m.body);
+    frame.srcdoc = withBodyCsp(plainBody(m.body));
     autoFit(frame, (doc) => {
       routeLinks(doc);
       ctx.cids.then((byMessage) => {
         if (ctx.stale()) return;
+        if (!byMessage[m.id]) return;
         showCidImages(doc, byMessage[m.id]);
         fitAfterImages(frame);
       });
