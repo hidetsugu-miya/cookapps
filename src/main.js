@@ -998,10 +998,11 @@ function checkBox(color, checked, label) {
 }
 
 // The thread a task links to, only when it is of an account cookup has: a description can name any address.
-const linkedMail = (t) => (t.mail && accountButtons().some((b) => b.dataset.account === t.mail.account) ? t.mail : null);
+const linkedMail = (t, accounts) => (t.mail && accounts.has(t.mail.account) ? t.mail : null);
+const accountSet = () => new Set(accountButtons().map((b) => b.dataset.account));
 
-function taskRow(t, showProject) {
-  const mail = linkedMail(t);
+function taskRow(t, showProject, accounts) {
+  const mail = linkedMail(t, accounts);
   const li = tag("li", `task${showProject ? "" : " single"}`);
   li.onclick = () => {
     // A subtask row opens the task that holds it.
@@ -1050,12 +1051,13 @@ function renderList() {
   const showProject = todoView === "today";
   const tasks = viewTasks(todoView);
   $("todo-title").textContent = todoView === "today" ? "今日" : todoView === "inbox" ? "受信箱" : projectOf(todoView).name;
+  const accounts = accountSet();
   const parts = [];
   for (const [bucket, label] of TODO_GROUPS) {
     const items = tasks.filter((t) => t.bucket === bucket);
     if (items.length === 0) continue;
     const list = tag("ul");
-    list.append(...items.map((t) => taskRow(t, showProject)));
+    list.append(...items.map((t) => taskRow(t, showProject, accounts)));
     parts.push(tag("div", `group${bucket === "overdue" ? " overdue" : ""}`, label), list);
   }
   $("todo-list").replaceChildren(...(parts.length ? parts : [tag("p", "todo-empty", "タスクはありません")]));
@@ -1269,7 +1271,7 @@ function renderDetail() {
   desc.onblur = () => desc.value !== t.description && saveTask(t.id, { description: desc.value });
 
   const parts = [head, meta, desc];
-  const mail = linkedMail(t);
+  const mail = linkedMail(t, accountSet());
   if (mail) {
     const card = tag("div", "mail-link");
     card.insertAdjacentHTML("beforeend", MAIL_SVG);
@@ -1318,15 +1320,27 @@ function renderDetail() {
 }
 
 function renderTodo() {
+  todoUndrawn = false;
   if (!projectOf(todoView) && todoView !== "today" && todoView !== "inbox") todoView = "today";
   renderProjects();
   if (todoOpen) renderDetail();
   else renderList();
 }
 
-// Fetches the tasks and draws them. `quiet` is the timed refresh: it draws nothing when nothing changed or a field is being typed in.
+// Whether a text field of the open task holds what the user is typing; a redraw would replace it with Todoist's older value.
+// The subtask field counts only while it has text: it is emptied on Enter, and the redraw must show the subtask just added.
+function editingDetail() {
+  const a = document.activeElement;
+  return $("todo-detail").contains(a) && a.matches("textarea, input:not([type=checkbox])") && (a.dataset.field !== "sub" || a.value !== "");
+}
+
+// Set when a load updated `todo` without drawing it (a field was being typed in), so the next quiet refresh draws it even if nothing else changed.
+let todoUndrawn = false;
+
+// Fetches the tasks and draws them. `quiet` is the timed refresh: it fetches nothing while a field is being typed in, and draws nothing when nothing changed.
 // Without `withDone` the backend reuses the completed tasks it fetched last. Returns true when a token is needed (the token form is shown).
 async function loadTodo(quiet = false, withDone = true) {
+  if (quiet && editingDetail()) return false;
   const seq = ++todoSeq;
   try {
     const data = await invoke("todoist_load", { withDone });
@@ -1335,12 +1349,15 @@ async function loadTodo(quiet = false, withDone = true) {
       showTokenForm();
       return true;
     }
-    // While a field is being typed in, `todo` stays as drawn, so the next refresh sees the change and draws it.
-    if (quiet && $("todo-detail").contains(document.activeElement)) return false;
     const same = JSON.stringify(data) === JSON.stringify(todo);
     todo = data;
     projectById = new Map(data.projects.map((p) => [p.id, p]));
-    if (quiet && same) return false;
+    // A field being typed in keeps what was typed; the detail is drawn after the focus leaves, by the next save's load or the next refresh.
+    if (editingDetail()) {
+      todoUndrawn = true;
+      return false;
+    }
+    if (quiet && same && !todoUndrawn) return false;
     renderTodo();
   } catch (e) {
     showError(e);
