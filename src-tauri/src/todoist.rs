@@ -661,16 +661,20 @@ pub async fn todoist_load(
     };
     let done = match done {
         Some(fetched) => {
-            // The done subtasks only complete the counts, so their failure (e.g. a plan without history) must not hide the tasks.
-            let mut fetched = fetched.unwrap_or_else(|e| {
-                log_failure(command, TOKEN_USER, e);
-                Vec::new()
-            });
-            // build_todo reads only the subtasks.
-            fetched.retain(|t| t.parent_id.is_some());
-            let fetched = Arc::new(fetched);
-            *state.done.lock().unwrap() = Arc::clone(&fetched);
-            fetched
+            match fetched {
+                Ok(mut fetched) => {
+                    // build_todo reads only the subtasks.
+                    fetched.retain(|t| t.parent_id.is_some());
+                    let fetched = Arc::new(fetched);
+                    *state.done.lock().unwrap() = Arc::clone(&fetched);
+                    fetched
+                }
+                // The done subtasks only complete the counts, so their failure (e.g. a plan without history) must not hide the tasks; the last ones stay.
+                Err(e) => {
+                    log_failure(command, TOKEN_USER, e);
+                    Arc::clone(&state.done.lock().unwrap())
+                }
+            }
         }
         None => Arc::clone(&state.done.lock().unwrap()),
     };
