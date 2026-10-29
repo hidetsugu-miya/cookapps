@@ -554,7 +554,8 @@ $("back").onclick = () => {
 };
 // Detail view "trash" / "archive": back to the list at once, the work runs in the background.
 function removeCurrent(command) {
-  show("list");
+  if (threadOrigin === "todo") setScreen("todo");
+  else show("list");
   removeRow(command, current.account, current.id, current.li);
 }
 $("thread-todo").onclick = () => makeTodo(current.account, current.id, $("thread-subject").textContent, $("thread-todo"));
@@ -872,7 +873,7 @@ async function makeTodo(account, id, subject, button) {
   button.disabled = true;
   try {
     const done = await invoke("todoist_task_from_mail", { account, threadId: id, subject });
-    if (done === null) return showError("Todoist に接続していません。Todo 画面でトークンを保存してください");
+    if (done === null) return showError("Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください");
     toast(`受信箱に「${subject || "(件名なし)"}」を追加しました`);
   } catch (e) {
     showError(e);
@@ -914,6 +915,8 @@ let todoSeq = 0;
 
 // The projects by ID, rebuilt on each load.
 let projectById = new Map();
+// The tasks by ID, rebuilt on each load.
+let taskById = new Map();
 
 const inboxOf = () => todo.projects.find((p) => p.inbox);
 const projectOf = (id) => projectById.get(id);
@@ -1178,7 +1181,7 @@ function dueChip(t) {
       if (e.key === "Enter") finish(true);
       else if (e.key === "Escape") finish(false);
     };
-    input.onblur = () => finish(false);
+    input.onblur = () => finish(true);
   };
   return b;
 }
@@ -1236,7 +1239,7 @@ function subtaskRow(s) {
     todoCall("todoist_set_done", { id: s.id, done: box.checked }, box);
   };
   // A subtask with subtasks of its own has a row among the tasks, so it opens like one; otherwise nothing could reach its subtasks.
-  if (todo.tasks.some((x) => x.id === s.id)) {
+  if (taskById.has(s.id)) {
     li.onclick = () => {
       todoOpen = s.id;
       renderTodo();
@@ -1252,7 +1255,7 @@ function subtaskRow(s) {
 }
 
 function renderDetail() {
-  const t = todo.tasks.find((x) => x.id === todoOpen);
+  const t = taskById.get(todoOpen);
   if (!t) {
     todoOpen = null;
     return renderList();
@@ -1374,6 +1377,7 @@ async function loadTodo(quiet = false, withDone = true) {
     todoText = text;
     todo = data;
     projectById = new Map(data.projects.map((p) => [p.id, p]));
+    taskById = new Map(data.tasks.map((t) => [t.id, t]));
     // A field being typed in keeps what was typed; the detail is drawn after the focus leaves, by the next save's load or the next refresh.
     if (editingDetail()) {
       todoUndrawn = true;
@@ -1410,6 +1414,7 @@ $("todo-delete").onclick = () => {
   todoOpen = null;
   // Gone from the list at once; the reload after the call brings it back if Todoist refused.
   todo.tasks = todo.tasks.filter((t) => t.id !== id);
+  taskById.delete(id);
   renderTodo();
   todoCall("todoist_delete", { id });
 };
