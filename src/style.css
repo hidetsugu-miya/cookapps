@@ -42,8 +42,11 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 #login { display: flex; justify-content: center; padding: 64px; }
 #relogin { margin-bottom: 8px; }
 #relogin > div, #cal-notice > div { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; background: #fff4e5; margin-bottom: 4px; }
-#threads { list-style: none; margin: 0; padding: 0; }
-#threads:empty::after { content: "受信トレイにスレッドはありません"; display: block; padding: 48px 0; text-align: center; color: #888; }
+#threads ul { list-style: none; margin: 0; padding: 0; }
+#read-heading { display: flex; align-items: center; gap: 6px; margin: 16px 16px 4px; padding: 8px 0; border-bottom: 1px solid #e6e8eb; font-size: 13px; font-weight: normal; color: #444; }
+#read-heading svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+#read-heading:has(+ #read-threads:empty) { display: none; }
+#threads:not(:has(li))::after { content: "受信トレイにスレッドはありません"; display: block; padding: 48px 0; text-align: center; color: #888; }
 #threads li { display: grid; grid-template-columns: 20px 8px 32px 180px 1fr auto; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 12px; cursor: pointer; }
 #threads li:hover { background: #f1f3f5; }
 #threads li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
