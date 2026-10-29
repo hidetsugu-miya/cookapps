@@ -40,21 +40,26 @@ function avatarColor(s) {
 }
 
 const CHECK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>';
+const TODO_SVG = $("thread-todo").innerHTML.trim();
 
 // #main scrolls both the list and the thread, so each view keeps its own position.
 let listScroll = 0;
 
 function show(view) {
   if (!$("threads").hidden) listScroll = $("main").scrollTop;
+  // The calendar and Todo screens bring their own header.
+  const own = view === "calendar" || view === "todo";
   $("calendar").hidden = view !== "calendar";
-  $("mail-header").hidden = view === "calendar";
-  $("main").hidden = view === "calendar";
+  $("todo").hidden = view !== "todo";
+  $("mail-header").hidden = own;
+  $("main").hidden = own;
   $("login").hidden = view !== "login";
   $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
   $("threads").hidden = view !== "list";
   $("reload").hidden = view !== "list";
   $("thread").hidden = view !== "thread";
   $("back").hidden = view !== "thread";
+  $("thread-todo").hidden = view !== "thread";
   $("trash").hidden = view !== "thread";
   $("archive").hidden = view !== "thread";
   $("thread-subject").hidden = view !== "thread";
@@ -182,6 +187,7 @@ function row(t) {
   const trail = cell("trail", "");
   const actions = cell("row-actions", "");
   actions.append(
+    rowButton("todo-row", "Todo にする", TODO_SVG, (button) => makeTodo(t.account, t.id, t.subject, button)),
     rowButton("archive-row", "アーカイブ", CHECK_SVG, () => removeRow("archive", t.account, t.id, li)),
     rowButton("trash-row", "ゴミ箱へ移動", $("trash").innerHTML, () => removeRow("trash", t.account, t.id, li)),
   );
@@ -224,6 +230,8 @@ async function openThread({ id, account }, li) {
     $("thread-subject").textContent = t.subject || "(件名なし)";
     $("messages").replaceChildren(...t.messages.map(message));
     show("thread");
+    // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
+    $("trash").hidden = $("archive").hidden = !li;
   } catch (e) {
     showError(e);
   }
@@ -412,7 +420,7 @@ document.addEventListener("click", hideTip);
 document.addEventListener("scroll", hideTip, true);
 document.addEventListener("keydown", (e) => e.key === "Escape" && hideTip());
 
-// Which screen the sidebar selected: "mail" or "calendar". Background work reads it; only the sidebar changes it.
+// Which screen the sidebar selected: "mail", "calendar" or "todo". Background work reads it; only the sidebar changes it.
 let screen = "mail";
 
 // Only the latest of overlapping loads may draw the list.
@@ -544,6 +552,7 @@ function removeCurrent(command) {
   show("list");
   removeRow(command, current.account, current.id, current.li);
 }
+$("thread-todo").onclick = () => makeTodo(current.account, current.id, $("thread-subject").textContent, $("thread-todo"));
 $("trash").onclick = () => removeCurrent("trash");
 $("archive").onclick = () => removeCurrent("archive");
 // Logs in (the account chosen in the browser, or `hint` preselected) and reloads the list.
@@ -806,7 +815,7 @@ async function loadCalendar(refresh = false) {
 
 function setScreen(name) {
   screen = name;
-  for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"]]) {
+  for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"], ["nav-todo", "todo"]]) {
     if (target === name) $(id).setAttribute("aria-current", "page");
     else $(id).removeAttribute("aria-current");
   }
@@ -815,6 +824,9 @@ function setScreen(name) {
     calScrolled = false;
     show("calendar");
     loadCalendar();
+  } else if (name === "todo") {
+    show("todo");
+    loadTodo();
   } else {
     show("list");
   }
@@ -822,6 +834,7 @@ function setScreen(name) {
 
 $("nav-mail").onclick = () => setScreen("mail");
 $("nav-calendar").onclick = () => setScreen("calendar");
+$("nav-todo").onclick = () => setScreen("todo");
 const moveWeek = (date) => {
   calDate = date;
   loadCalendar();
@@ -832,5 +845,524 @@ $("cal-today").onclick = () => moveWeek(isoDate(new Date()));
 $("calendar").style.setProperty("--hour", `${HOUR_PX}px`);
 setInterval(() => screen === "calendar" && !document.hidden && loadCalendar(true), CAL_REFRESH_MS);
 setInterval(() => screen === "calendar" && drawNow(), 60000);
+
+// Short notice at the bottom right; it fades after a few seconds.
+const toastEl = el("toast");
+toastEl.hidden = true;
+toastEl.setAttribute("role", "status");
+document.body.append(toastEl);
+let toastTimer = 0;
+
+function toast(text) {
+  toastEl.textContent = text;
+  toastEl.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (toastEl.hidden = true), 4000);
+}
+
+// Creates a Todoist task in the inbox that points at the thread, and says so.
+async function makeTodo(account, id, subject, button) {
+  $("error").hidden = true;
+  button.disabled = true;
+  try {
+    const done = await invoke("todoist_task_from_mail", { account, threadId: id, subject });
+    if (done === null) return showError("Todoist に接続していません。Todo 画面でトークンを保存してください");
+    toast(`受信箱に「${subject || "(件名なし)"}」を追加しました`);
+  } catch (e) {
+    showError(e);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+const TODO_REFRESH_MS = 5 * 60 * 1000;
+// The Todoist apps' colors for priorities 1 to 4.
+const PRIORITY_COLORS = { 1: "#d1453b", 2: "#eb8909", 3: "#246fe0", 4: "#b4b9c2" };
+const TODO_GROUPS = [["overdue", "期限切れ"], ["today", "今日"], ["upcoming", "明日以降"], ["none", "期限なし"]];
+const svgOf = (paths) => `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+const MAIL_SVG = svgOf('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>');
+const SUB_SVG = svgOf('<path d="M6 4v10a3 3 0 0 0 3 3h9"/><path d="M15 14l3 3-3 3"/>');
+const OPEN_SVG = svgOf('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>');
+const DAY_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M12 14v3"/>');
+const DATE_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/>');
+const FLAG_SVG = svgOf('<path d="M5 21V4h11l-2 4 2 4H5"/>');
+const INBOX_SVG = $("nav-mail").innerHTML.trim();
+const PLUS_SVG = $("add-account").innerHTML.trim();
+const DELETE_SVG = $("todo-delete").innerHTML.trim();
+
+function tag(name, className = "", text = "") {
+  const node = document.createElement(name);
+  node.className = className;
+  node.textContent = text;
+  return node;
+}
+
+// The last data from the backend, or null while a token is needed.
+let todo = null;
+// "today", "inbox", or a project's ID.
+let todoView = "today";
+// The ID of the task shown in the detail view, or null for the list.
+let todoOpen = null;
+// Only the latest of overlapping loads may draw.
+let todoSeq = 0;
+
+const inboxOf = () => todo.projects.find((p) => p.inbox);
+const projectOf = (id) => todo.projects.find((p) => p.id === id);
+const viewProjectId = (view) => (view === "inbox" ? inboxOf()?.id : view);
+
+function viewTasks(view) {
+  if (view === "today") return todo.tasks.filter((t) => t.bucket === "overdue" || t.bucket === "today");
+  const id = viewProjectId(view);
+  return todo.tasks.filter((t) => t.projectId === id);
+}
+
+// "今日" for today (or its time), else "10/27", with the time if there is one.
+function dueLabel(due) {
+  const today = due.date === isoDate(new Date());
+  const [, m, d] = due.date.split("-").map(Number);
+  if (today) return due.time ?? "今日";
+  return due.time ? `${m}/${d} ${due.time}` : `${m}/${d}`;
+}
+
+// Which part the Todo screen shows: the token form, the task list, or one task.
+function todoMode(mode) {
+  $("todo-token").hidden = mode !== "token";
+  $("projects").hidden = mode === "token";
+  $("todo-add").hidden = mode !== "list";
+  $("todo-list").hidden = mode !== "list";
+  $("todo-detail").hidden = mode !== "detail";
+  $("todo-back").hidden = mode !== "detail";
+  $("todo-delete").hidden = mode !== "detail";
+  $("todo-disconnect").hidden = mode === "token";
+  $("todo-reload").hidden = mode === "token";
+  resetDelete();
+}
+
+function showTokenForm(note = "") {
+  todo = null;
+  todoOpen = null;
+  todoMode("token");
+  $("todo-title").textContent = "Todo";
+  $("todo-token-note").textContent = note;
+  $("todo-token-input").focus();
+}
+
+function projectButton(view, icon, name, count) {
+  const b = tag("button", "proj");
+  b.setAttribute("aria-current", String(view === todoView));
+  if (typeof icon === "string" && icon.startsWith("<")) b.innerHTML = icon;
+  else {
+    const dot = tag("span", "pdot");
+    dot.style.background = icon;
+    b.append(dot);
+  }
+  b.append(tag("span", "name", name), tag("span", "count", String(count)));
+  b.onclick = () => {
+    todoView = view;
+    todoOpen = null;
+    renderTodo();
+  };
+  return b;
+}
+
+function renderProjects() {
+  const inbox = inboxOf();
+  $("projects").replaceChildren(
+    projectButton("today", DAY_SVG, "今日", viewTasks("today").length),
+    projectButton("inbox", INBOX_SVG, "受信箱", viewTasks("inbox").length),
+    tag("h3", "", "プロジェクト"),
+    ...todo.projects.filter((p) => p !== inbox).map((p) => projectButton(p.id, p.color, p.name, viewTasks(p.id).length)),
+  );
+}
+
+function checkBox(color, checked, label) {
+  const box = tag("input", "check");
+  box.type = "checkbox";
+  box.checked = checked;
+  box.setAttribute("aria-label", label);
+  box.style.setProperty("--p", color);
+  return box;
+}
+
+function taskRow(t, showProject) {
+  const li = tag("li", `task${showProject ? "" : " single"}`);
+  li.onclick = () => {
+    todoOpen = t.id;
+    renderTodo();
+  };
+  const box = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
+  // The row opens the task on click; the checkbox must not.
+  box.onclick = (e) => e.stopPropagation();
+  box.onchange = () => {
+    li.classList.add("done");
+    todoCall("todoist_set_done", { id: t.id, done: true }, box);
+  };
+  const line = tag("div", "t");
+  if (t.mail) line.insertAdjacentHTML("beforeend", MAIL_SVG);
+  line.append(tag("span", "", t.content));
+  if (t.subTotal) {
+    const count = tag("span", "subcount");
+    count.innerHTML = SUB_SVG;
+    count.append(`${t.subDone}/${t.subTotal}`);
+    line.append(count);
+  }
+  const body = tag("div", "body");
+  body.append(line);
+  li.append(box, body);
+  if (showProject) {
+    const p = projectOf(t.projectId);
+    const tagEl = tag("div", "ptag");
+    const dot = tag("span", "pdot");
+    dot.style.background = p?.color;
+    tagEl.append(dot, p?.name ?? "");
+    li.append(tagEl);
+  }
+  const trail = tag("div", "trail");
+  const actions = tag("div", "row-actions");
+  if (t.mail) actions.append(rowButton("mail-row", "メールを開く", MAIL_SVG, () => openMailFromTodo(t.mail)));
+  actions.append(rowButton("open-row", "Todoist で開く", OPEN_SVG, () => invoke("todoist_open", { id: t.id }).catch(showError)));
+  trail.append(tag("span", `due${t.bucket === "overdue" ? " over" : ""}`, t.due ? dueLabel(t.due) : ""), actions);
+  li.append(trail);
+  return li;
+}
+
+function renderList() {
+  todoMode("list");
+  const showProject = todoView === "today";
+  const tasks = viewTasks(todoView);
+  $("todo-title").textContent = todoView === "today" ? "今日" : todoView === "inbox" ? "受信箱" : projectOf(todoView).name;
+  const parts = [];
+  for (const [bucket, label] of TODO_GROUPS) {
+    const items = tasks.filter((t) => t.bucket === bucket);
+    if (items.length === 0) continue;
+    const list = tag("ul");
+    list.append(...items.map((t) => taskRow(t, showProject)));
+    parts.push(tag("div", `group${bucket === "overdue" ? " overdue" : ""}`, label), list);
+  }
+  $("todo-list").replaceChildren(...(parts.length ? parts : [tag("p", "todo-empty", "タスクはありません")]));
+}
+
+// Opens the thread of a task's mail link in the mail screen.
+async function openMailFromTodo({ account, threadId }) {
+  setScreen("mail");
+  await openThread({ id: threadId, account }, rows.get(`${account}/${threadId}`)?.li ?? null);
+}
+
+// Runs a change, then reloads whether it worked or not, so the screen shows what Todoist has.
+// A null answer (a token is needed) shows up in that reload. Returns whether the change worked.
+async function todoCall(command, args, control) {
+  $("error").hidden = true;
+  if (control) control.disabled = true;
+  let ok = true;
+  try {
+    await invoke(command, args);
+  } catch (e) {
+    ok = false;
+    showError(e);
+  }
+  if (control) control.disabled = false;
+  await loadTodo();
+  return ok;
+}
+
+const saveTask = (id, fields) => todoCall("todoist_update", { id, ...fields });
+
+// The menu under `anchor`; one at a time, closed by a pick, a click elsewhere, or Escape.
+let menuEl = null;
+
+function closeMenu() {
+  menuEl?.remove();
+  menuEl = null;
+}
+
+function openMenu(anchor, items) {
+  closeMenu();
+  menuEl = tag("div", "menu");
+  menuEl.setAttribute("role", "menu");
+  for (const item of items) {
+    const b = tag("button");
+    b.setAttribute("role", "menuitem");
+    b.setAttribute("aria-current", String(item.current));
+    const dot = tag("span", "pdot");
+    dot.style.background = item.color;
+    b.append(dot, item.label);
+    b.onclick = () => {
+      closeMenu();
+      item.pick();
+    };
+    menuEl.append(b);
+  }
+  document.body.append(menuEl);
+  const r = anchor.getBoundingClientRect();
+  menuEl.style.left = `${Math.max(8, Math.min(r.left, innerWidth - menuEl.offsetWidth - 8))}px`;
+  menuEl.style.top = `${Math.max(8, Math.min(r.bottom + 4, innerHeight - menuEl.offsetHeight - 8))}px`;
+  menuEl.querySelector("button").focus();
+}
+
+document.addEventListener("pointerdown", (e) => {
+  if (menuEl && !e.target.closest(".menu")) closeMenu();
+});
+document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
+
+function chip(svg, text, className = "") {
+  const b = tag("button", `chip ${className}`.trim());
+  b.insertAdjacentHTML("beforeend", svg);
+  b.append(text);
+  return b;
+}
+
+// The due chip turns into a text field taking Todoist's natural language ("明日 15時", "毎週月曜"); empty clears the due date.
+function dueChip(t) {
+  const b = chip(DATE_SVG, t.due ? dueLabel(t.due) : "期限なし", t.bucket === "overdue" ? "over" : "");
+  b.onclick = () => {
+    const input = tag("input", "chip-input");
+    input.value = t.due?.string ?? "";
+    input.placeholder = "例: 明日 15時";
+    input.setAttribute("aria-label", "期限（空欄で期限なし）");
+    b.replaceWith(input);
+    input.focus();
+    input.select();
+    let finished = false;
+    const finish = (save) => {
+      if (finished) return;
+      finished = true;
+      if (save && input.value.trim() !== (t.due?.string ?? "")) saveTask(t.id, { dueString: input.value });
+      else input.replaceWith(b);
+    };
+    input.onkeydown = (e) => {
+      if (e.isComposing) return;
+      if (e.key === "Enter") finish(true);
+      else if (e.key === "Escape") finish(false);
+    };
+    input.onblur = () => finish(false);
+  };
+  return b;
+}
+
+function projectChip(t) {
+  const p = projectOf(t.projectId);
+  const b = tag("button", "chip");
+  const dot = tag("span", "pdot");
+  dot.style.background = p?.color;
+  b.append(dot, p?.name ?? "");
+  b.onclick = () =>
+    openMenu(
+      b,
+      todo.projects.map((x) => ({
+        label: x.inbox ? "受信箱" : x.name,
+        color: x.color,
+        current: x.id === t.projectId,
+        pick: () => x.id !== t.projectId && todoCall("todoist_move", { id: t.id, projectId: x.id }),
+      })),
+    );
+  return b;
+}
+
+function priorityChip(t) {
+  const b = chip(FLAG_SVG, `優先度 ${t.priority}`);
+  b.style.color = PRIORITY_COLORS[t.priority];
+  b.onclick = () =>
+    openMenu(
+      b,
+      [1, 2, 3, 4].map((n) => ({
+        label: `優先度 ${n}`,
+        color: PRIORITY_COLORS[n],
+        current: n === t.priority,
+        pick: () => n !== t.priority && saveTask(t.id, { priority: n }),
+      })),
+    );
+  return b;
+}
+
+// Pressing Enter in a field commits it; Enter that confirms an IME conversion does not.
+const onEnter = (input, action) => {
+  input.onkeydown = (e) => {
+    if (e.key === "Enter" && !e.isComposing) action();
+  };
+};
+
+function subtaskRow(s) {
+  const li = tag("li", `task single${s.done ? " done" : ""}`);
+  const box = checkBox(PRIORITY_COLORS[4], s.done, s.done ? "未完了に戻す" : "完了にする");
+  box.onchange = () => {
+    li.classList.toggle("done", box.checked);
+    todoCall("todoist_set_done", { id: s.id, done: box.checked }, box);
+  };
+  const body = tag("div", "body");
+  body.append(tag("div", "t", s.content));
+  const trail = tag("div", "trail");
+  trail.append(tag("span", "due", s.due ? dueLabel(s.due) : ""));
+  li.append(box, body, trail);
+  return li;
+}
+
+function renderDetail() {
+  const t = todo.tasks.find((x) => x.id === todoOpen);
+  if (!t) {
+    todoOpen = null;
+    return renderList();
+  }
+  // A reload redraws the whole detail; the field being typed in keeps the focus and the caret.
+  const active = document.activeElement;
+  const field = $("todo-detail").contains(active) ? active.dataset.field : null;
+  const caret = active.selectionStart;
+  todoMode("detail");
+  $("todo-title").textContent = projectOf(t.projectId)?.name ?? "";
+
+  const box = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
+  box.onchange = () => todoCall("todoist_set_done", { id: t.id, done: true }, box);
+  const name = tag("input", "name");
+  name.value = t.content;
+  name.dataset.field = "name";
+  name.setAttribute("aria-label", "タスクの名前");
+  name.onchange = () => (name.value.trim() ? saveTask(t.id, { content: name.value }) : (name.value = t.content));
+  onEnter(name, () => name.blur());
+  const head = tag("div", "head");
+  head.append(box, name);
+
+  const meta = tag("div", "meta");
+  meta.append(dueChip(t), projectChip(t), priorityChip(t));
+
+  const desc = tag("textarea");
+  desc.value = t.description;
+  desc.placeholder = "説明を追加";
+  desc.dataset.field = "desc";
+  desc.setAttribute("aria-label", "説明");
+  desc.onblur = () => desc.value !== t.description && saveTask(t.id, { description: desc.value });
+
+  const parts = [head, meta, desc];
+  if (t.mail) {
+    const card = tag("div", "mail-link");
+    card.insertAdjacentHTML("beforeend", MAIL_SVG);
+    const text = tag("span");
+    text.append(tag("b", "", t.content), ` — ${t.mail.account}`);
+    card.append(text, tag("span", "go", "メールを開く"));
+    card.onclick = () => openMailFromTodo(t.mail);
+    parts.push(card);
+  }
+
+  const title = tag("div", "section-title", t.subTotal ? `サブタスク ${t.subDone}/${t.subTotal}` : "サブタスク");
+  if (t.subTotal) {
+    const bar = tag("span", "bar");
+    const fill = tag("i");
+    fill.style.width = `${(t.subDone / t.subTotal) * 100}%`;
+    bar.append(fill);
+    title.append(bar);
+  }
+  const subs = tag("ul", "subs");
+  subs.append(...t.subtasks.map(subtaskRow));
+  const add = tag("div", "add-sub");
+  add.insertAdjacentHTML("beforeend", PLUS_SVG);
+  const input = tag("input");
+  input.placeholder = "サブタスクを追加";
+  input.dataset.field = "sub";
+  input.setAttribute("aria-label", "サブタスクを追加");
+  onEnter(input, () => {
+    if (input.value.trim()) todoCall("todoist_add_subtask", { parentId: t.id, content: input.value }, input);
+  });
+  add.append(input);
+  parts.push(title, subs, add);
+
+  $("todo-detail").replaceChildren(...parts);
+  if (field) {
+    const again = $("todo-detail").querySelector(`[data-field="${field}"]`);
+    again?.focus();
+    if (caret != null) again?.setSelectionRange?.(caret, caret);
+  }
+}
+
+function renderTodo() {
+  if (!projectOf(todoView) && todoView !== "today" && todoView !== "inbox") todoView = "today";
+  renderProjects();
+  if (todoOpen) renderDetail();
+  else renderList();
+}
+
+// Fetches the tasks and draws them. `quiet` is the timed refresh: it draws nothing when nothing changed or a field is being typed in.
+async function loadTodo(quiet = false) {
+  const seq = ++todoSeq;
+  try {
+    const data = await invoke("todoist_load");
+    if (seq !== todoSeq || screen !== "todo") return;
+    if (data === null) return showTokenForm();
+    const same = JSON.stringify(data) === JSON.stringify(todo);
+    todo = data;
+    if (quiet && (same || $("todo-detail").contains(document.activeElement))) return;
+    renderTodo();
+  } catch (e) {
+    showError(e);
+  }
+}
+
+// Todoist cannot undo a delete, so the button asks twice: the first press changes its label, the second deletes.
+let deleteTimer = 0;
+function resetDelete() {
+  clearTimeout(deleteTimer);
+  const b = $("todo-delete");
+  b.classList.remove("confirm", "danger");
+  b.innerHTML = DELETE_SVG;
+  b.setAttribute("aria-label", "削除");
+}
+
+$("todo-delete").onclick = () => {
+  const b = $("todo-delete");
+  if (!b.classList.contains("confirm")) {
+    b.classList.add("confirm", "danger");
+    b.textContent = "もう一度押すと削除";
+    b.setAttribute("aria-label", "もう一度押すと削除");
+    deleteTimer = setTimeout(resetDelete, 4000);
+    return;
+  }
+  const id = todoOpen;
+  todoOpen = null;
+  // Gone from the list at once; the reload after the call brings it back if Todoist refused.
+  todo.tasks = todo.tasks.filter((t) => t.id !== id);
+  renderTodo();
+  todoCall("todoist_delete", { id });
+};
+$("todo-delete").onblur = resetDelete;
+$("todo-back").onclick = () => {
+  todoOpen = null;
+  renderTodo();
+};
+$("todo-reload").onclick = () => loadTodo();
+$("todo-disconnect").onclick = async () => {
+  $("error").hidden = true;
+  try {
+    await invoke("todoist_disconnect");
+    showTokenForm("Todoist の接続を解除しました");
+  } catch (e) {
+    showError(e);
+  }
+};
+$("todo-token").onsubmit = async (e) => {
+  e.preventDefault();
+  const input = $("todo-token-input");
+  const token = input.value;
+  // The token is never shown: the field is emptied as soon as it is read.
+  input.value = "";
+  $("error").hidden = true;
+  try {
+    await invoke("todoist_save_token", { token });
+  } catch (err) {
+    return showError(err);
+  }
+  await loadTodo();
+  if (todo === null) showTokenForm("トークンを確認できませんでした。もう一度入力してください");
+};
+$("todo-add").onsubmit = async (e) => {
+  e.preventDefault();
+  const input = $("todo-add-input");
+  const text = input.value.trim();
+  if (!text) return;
+  // In "今日" the task goes where Quick Add puts it (the inbox, or the project named in the text).
+  const projectId = todoView === "today" ? null : viewProjectId(todoView);
+  if (await todoCall("todoist_add", { text, projectId }, input)) {
+    input.value = "";
+    toast("タスクを追加しました");
+  }
+  input.focus();
+};
+setInterval(() => screen === "todo" && !document.hidden && loadTodo(true), TODO_REFRESH_MS);
 
 load();
