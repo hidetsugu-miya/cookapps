@@ -249,7 +249,13 @@ pub async fn login(
     auth: State<'_, Auth>,
     login_hint: Option<String>,
 ) -> Result<String, String> {
-    auth.login(&app, login_hint.as_deref()).await
+    auth.login(&app, login_hint.as_deref()).await.map_err(|e| {
+        eprintln!(
+            "cookup: login account={} status=- error={e}",
+            login_hint.as_deref().unwrap_or("-")
+        );
+        e
+    })
 }
 
 fn access_token_of(res: TokenResponse) -> Result<String, String> {

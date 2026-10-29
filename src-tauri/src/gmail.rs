@@ -262,6 +262,17 @@ impl fmt::Display for ApiError {
     }
 }
 
+/// Logs a failed command on stderr and returns the message for the UI. Tokens and mail bodies never reach it.
+fn log_failure(command: &str, account: &str, e: impl Into<ApiError>) -> String {
+    let e = e.into();
+    let status = e.status.map_or("-".to_owned(), |s| s.to_string());
+    eprintln!(
+        "cookup: {command} account={account} status={status} error={}",
+        e.message
+    );
+    e.message
+}
+
 /// Gmail signals its quota with 429, or 403 with a `rateLimitExceeded` / `userRateLimitExceeded` reason.
 fn is_rate_limited(status: u16, body: &str) -> bool {
     status == 429 || (status == 403 && body.to_lowercase().contains("ratelimitexceeded"))
@@ -327,6 +338,10 @@ async fn send_json<T: DeserializeOwned>(
     }
     if !status.is_success() {
         let body = res.text().await.unwrap_or_default();
+        eprintln!(
+            "cookup: gmail api status={} url={url} error={body}",
+            status.as_u16()
+        );
         return Err(ApiError {
             status: Some(status.as_u16()),
             rate_limited: is_rate_limited(status.as_u16(), &body),
@@ -447,7 +462,10 @@ async fn account_threads(
 /// Threads of every account merged; accounts needing login or failing to load are listed, not fatal.
 #[tauri::command]
 pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, String> {
-    let accounts = auth.accounts(&app).await?;
+    let accounts = auth
+        .accounts(&app)
+        .await
+        .map_err(|e| log_failure("inbox", "-", e))?;
     let (mut lists, mut needs_login, mut failed, mut history_ids) =
         (Vec::new(), Vec::new(), HashMap::new(), HashMap::new());
     for account in &accounts {
@@ -458,7 +476,7 @@ pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, Strin
             }
             Ok(None) => needs_login.push(account.clone()),
             Err(e) => {
-                failed.insert(account.clone(), e.into());
+                failed.insert(account.clone(), log_failure("inbox", account, e));
             }
         }
     }
@@ -723,7 +741,7 @@ pub async fn sync(
                 .hit(Instant::now());
             Ok(Sync::Unchanged)
         }
-        Err(e) => Err(e.into()),
+        Err(e) => Err(log_failure("sync", &account, e)),
     }
 }
 
@@ -745,7 +763,8 @@ pub async fn thread(
         &[("format", "full")],
         None,
     )
-    .await?;
+    .await
+    .map_err(|e| log_failure("thread", &account, e))?;
     Ok(thread.map(ThreadDetail::from))
 }
 
@@ -760,7 +779,8 @@ pub async fn trash(
     let url = format!("{THREADS_URL}/{id}/trash");
     let done =
         send_json_refreshing::<IgnoredAny>(&app, &auth, &account, Method::POST, &url, &[], None)
-            .await?;
+            .await
+            .map_err(|e| log_failure("trash", &account, e))?;
     // `true`, not `()`: `Some(())` reaches JS as null, the same as `None` (login required).
     Ok(done.map(|_| true))
 }
@@ -788,7 +808,8 @@ pub async fn archive(
         &[],
         Some(&body),
     )
-    .await?;
+    .await
+    .map_err(|e| log_failure("archive", &account, e))?;
     Ok(done.map(|_| true))
 }
 
@@ -820,7 +841,8 @@ pub async fn set_read(
         &[],
         Some(&body),
     )
-    .await?;
+    .await
+    .map_err(|e| log_failure("set_read", &account, e))?;
     Ok(done.map(|_| true))
 }
 
