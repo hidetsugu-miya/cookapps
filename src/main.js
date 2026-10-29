@@ -46,6 +46,7 @@ const TODO_SVG = $("thread-todo").innerHTML.trim();
 let listScroll = 0;
 
 function show(view) {
+  linkStatus.hidden = true;
   if (!$("threads").hidden) listScroll = $("main").scrollTop;
   // The calendar and Todo screens bring their own header.
   const own = view === "calendar" || view === "todo";
@@ -214,17 +215,47 @@ const queryAll = (doc, selector) => Document.prototype.querySelectorAll.call(doc
 const rootOf = Object.getOwnPropertyDescriptor(Document.prototype, "documentElement").get;
 const listen = (doc, type, handler) => EventTarget.prototype.addEventListener.call(doc, type, handler, true);
 
+// The href getters are called through the prototypes for the same reason; they resolve the value against the document's <base>.
+const hrefGetters = {
+  a: Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, "href").get,
+  area: Object.getOwnPropertyDescriptor(HTMLAreaElement.prototype, "href").get,
+};
+const localNameOf = Object.getOwnPropertyDescriptor(Element.prototype, "localName").get;
+
+// The resolved URL of the link `target` is in: null when it is in none or the link is an in-page anchor (#...), which the frame handles;
+// "" for an empty href, which would reload the frame and lose the images put in.
+// SVG <a> is left out: its href is not a string.
+function linkAt(target) {
+  const a = Element.prototype.closest.call(target, "a[href]:not(svg a), area[href]");
+  if (!a) return null;
+  const raw = Element.prototype.getAttribute.call(a, "href").trim();
+  if (raw.startsWith("#")) return null;
+  if (!raw) return "";
+  return hrefGetters[localNameOf.call(a)].call(a);
+}
+
+// Where a link leads, bottom left like a browser's status bar, so a link whose text says otherwise shows. Outside the frame, so the mail cannot touch it.
+const linkStatus = el("link-status");
+linkStatus.hidden = true;
+document.body.append(linkStatus);
+
 // Opens a link of a mail's document in the default browser. The frame's sandbox allows no navigation, so the click is taken here.
-// In-page anchors (#...) are left to the frame.
+// Only http(s) is handed on; other links (mailto: and the like) do nothing.
 function openLinksInBrowser(doc) {
   listen(doc, "click", (e) => {
-    const a = Element.prototype.closest.call(e.target, "a[href]");
-    if (!a) return;
-    const href = Element.prototype.getAttribute.call(a, "href").trim();
-    if (href.startsWith("#")) return;
+    const url = linkAt(e.target);
+    if (url === null) return;
     Event.prototype.preventDefault.call(e);
-    invoke("open_link", { url: href }).catch(showError);
+    if (/^https?:/i.test(url)) invoke("open_link", { url }).catch(showError);
   });
+  for (const type of ["mouseover", "focusin"]) {
+    listen(doc, type, (e) => {
+      const url = linkAt(e.target);
+      linkStatus.hidden = !url;
+      if (url) linkStatus.textContent = url;
+    });
+  }
+  for (const type of ["mouseout", "focusout"]) listen(doc, type, () => (linkStatus.hidden = true));
 }
 
 // Frames waiting to be sized. All of them are measured first and written after, in one animation frame,
