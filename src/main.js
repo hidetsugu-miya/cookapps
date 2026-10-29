@@ -385,6 +385,10 @@ async function addAccount(hint, button) {
   button.disabled = true;
   try {
     await invoke("login", { loginHint: hint });
+    // The accounts changed: weeks kept so far and the calendar lists behind them are stale.
+    calCache.clear();
+    calEpoch++;
+    calRefresh = true;
     await load();
     if (screen === "calendar") await loadCalendar();
   } catch (e) {
@@ -418,10 +422,19 @@ function el(className, text = "") {
   return div;
 }
 
-// A day of the week on screen, as "YYYY-MM-DD", and the Sunday that week starts on once loaded.
+// A day of the week on screen, as "YYYY-MM-DD", and the week drawn now once loaded.
 let calDate = isoDate(new Date());
-let calWeekStart = null;
+let calShown = null;
 let calSeq = 0;
+// Weeks fetched so far by their Sunday ("YYYY-MM-DD"), oldest first; memory only.
+const calCache = new Map();
+const CAL_CACHE_MAX = 10;
+// Bumped when the cache is dropped, so a fetch that began before cannot put its week back.
+let calEpoch = 0;
+// The next fetch makes the backend list the calendars again.
+let calRefresh = false;
+// Weeks being fetched ahead.
+const calAhead = new Set();
 // The first render after opening the calendar scrolls to the morning; later ones keep the position.
 let calScrolled = false;
 
@@ -450,9 +463,9 @@ function chip(e) {
 // The current-time line in today's column and its label in the time gutter, if the shown week holds today.
 function drawNow() {
   document.querySelectorAll(".cal-now").forEach((n) => n.remove());
-  if (!calWeekStart) return;
+  if (!calShown) return;
   const now = new Date();
-  const day = [0, 1, 2, 3, 4, 5, 6].find((i) => isoDate(addDays(calWeekStart, i)) === isoDate(now));
+  const day = [0, 1, 2, 3, 4, 5, 6].find((i) => isoDate(addDays(calShown.weekStart, i)) === isoDate(now));
   if (day === undefined) return;
   const top = `${((now.getHours() * 60 + now.getMinutes()) / 60) * HOUR_PX}px`;
   const line = el("cal-now cal-now-line");
@@ -464,7 +477,7 @@ function drawNow() {
 }
 
 function renderWeek(w) {
-  calWeekStart = w.weekStart;
+  calShown = w;
   const days = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(w.weekStart, i));
   const todayIndex = days.findIndex((d) => isoDate(d) === isoDate(new Date()));
   const mark = (node, i) => {
@@ -529,14 +542,52 @@ function renderWeek(w) {
   }
 }
 
-// Loads the week of `calDate`; the old week stays (dimmed) until the new one arrives.
-async function loadCalendar() {
+// The Sunday of the week holding the "YYYY-MM-DD" date.
+const weekKey = (iso) => isoDate(addDays(iso, -addDays(iso, 0).getDay()));
+
+// Fetches the week holding `date` and keeps it, dropping the oldest beyond CAL_CACHE_MAX.
+async function fetchWeek(date, refresh) {
+  const epoch = calEpoch;
+  refresh ||= calRefresh;
+  calRefresh = false;
+  const week = await invoke("calendar_week", { date, refresh });
+  if (epoch === calEpoch) {
+    calCache.delete(week.weekStart);
+    calCache.set(week.weekStart, week);
+    while (calCache.size > CAL_CACHE_MAX) calCache.delete(calCache.keys().next().value);
+  }
+  return week;
+}
+
+// Fetches in the background the weeks before and after `key` that are not kept yet; a failure is left to when the week is opened.
+function prefetchAround(key) {
+  for (const k of [isoDate(addDays(key, -7)), isoDate(addDays(key, 7))]) {
+    if (calCache.has(k) || calAhead.has(k)) continue;
+    calAhead.add(k);
+    fetchWeek(k, false)
+      .catch(() => {})
+      .finally(() => calAhead.delete(k));
+  }
+}
+
+// Shows the week of `calDate`: the kept one at once, then the fetched one if it differs, so the scroll position stays.
+// With none kept, the old week stays (dimmed) until the new one arrives.
+async function loadCalendar(refresh = false) {
   const seq = ++calSeq;
+  const key = weekKey(calDate);
+  const kept = calCache.get(key);
   $("error").hidden = true;
-  $("calendar").classList.add("loading");
+  if (kept) {
+    if (calShown?.weekStart !== key) renderWeek(kept);
+  } else {
+    $("calendar").classList.add("loading");
+  }
   try {
-    const week = await invoke("calendar_week", { date: calDate });
-    if (seq === calSeq) renderWeek(week);
+    const week = await fetchWeek(calDate, refresh);
+    if (seq === calSeq) {
+      if (JSON.stringify(week) !== JSON.stringify(calShown)) renderWeek(week);
+      prefetchAround(key);
+    }
   } catch (e) {
     if (seq === calSeq) showError(e);
   } finally {
@@ -570,7 +621,7 @@ $("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));
 $("cal-next").onclick = () => moveWeek(isoDate(addDays(calDate, 7)));
 $("cal-today").onclick = () => moveWeek(isoDate(new Date()));
 $("calendar").style.setProperty("--hour", `${HOUR_PX}px`);
-setInterval(() => screen === "calendar" && !document.hidden && loadCalendar(), CAL_REFRESH_MS);
+setInterval(() => screen === "calendar" && !document.hidden && loadCalendar(true), CAL_REFRESH_MS);
 setInterval(() => screen === "calendar" && drawNow(), 60000);
 
 load();

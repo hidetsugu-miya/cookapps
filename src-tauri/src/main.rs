@@ -8,6 +8,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(auth::Auth::new())
         .manage(gmail::SyncState::default())
+        .manage(calendar::CalendarCache::default())
         .invoke_handler(tauri::generate_handler![
             auth::login,
             calendar::calendar_week,

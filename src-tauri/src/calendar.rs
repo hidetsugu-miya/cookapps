@@ -1,6 +1,8 @@
 use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
+    future::Future,
+    sync::Mutex,
 };
 
 use chrono::{
@@ -9,7 +11,7 @@ use chrono::{
 };
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use url::Url;
 
 use crate::{
@@ -63,7 +65,7 @@ struct EventPage {
     next_page_token: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct CalendarEntry {
     id: String,
@@ -381,19 +383,33 @@ fn events_url(calendar_id: &str) -> Result<String, String> {
     Ok(url.into())
 }
 
-/// Events in `[min, max)` of every selected calendar of one account. `Ok(None)` means that account must log in again.
-async fn account_events(
+/// The selected calendars of each account, kept in memory for the run so a week does not list them again.
+#[derive(Default)]
+pub struct CalendarCache(Mutex<HashMap<String, Vec<CalendarEntry>>>);
+
+/// Runs the futures at once and returns their outputs in input order. A panicked task is an error.
+async fn join_all<T: Send + 'static>(
+    futures: Vec<impl Future<Output = T> + Send + 'static>,
+) -> Result<Vec<T>, ApiError> {
+    let handles: Vec<_> = futures.into_iter().map(tokio::spawn).collect();
+    let mut out = Vec::with_capacity(handles.len());
+    for h in handles {
+        out.push(h.await.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// The selected calendars of one account. `Ok(None)` means that account must log in again.
+async fn selected_calendars(
     app: &AppHandle,
     auth: &Auth,
     account: &str,
-    min: &str,
-    max: &str,
-) -> Result<Option<Vec<RawEvent>>, ApiError> {
+) -> Result<Option<Vec<CalendarEntry>>, ApiError> {
     let list_query = [
         ("maxResults", "250"),
         ("fields", "nextPageToken,items(id,selected,backgroundColor)"),
     ];
-    let Some(calendars) =
+    let Some(pages) =
         fetch_pages::<CalendarPage>(app, auth, account, CALENDAR_LIST_URL, &list_query, |p| {
             p.next_page_token.clone()
         })
@@ -401,6 +417,24 @@ async fn account_events(
     else {
         return Ok(None);
     };
+    Ok(Some(
+        pages
+            .into_iter()
+            .flat_map(|p| p.items)
+            .filter(|c| c.selected)
+            .collect(),
+    ))
+}
+
+/// Events in `[min, max)` of one calendar. `Ok(None)` means `account` must log in again.
+async fn calendar_events(
+    app: &AppHandle,
+    account: &str,
+    cal: &CalendarEntry,
+    min: &str,
+    max: &str,
+) -> Result<Option<Vec<RawEvent>>, ApiError> {
+    let auth = app.state::<Auth>();
     let event_query = [
         ("singleEvents", "true"),
         ("orderBy", "startTime"),
@@ -412,37 +446,81 @@ async fn account_events(
             "nextPageToken,items(summary,iCalUID,start,end,attendees(self,responseStatus))",
         ),
     ];
-    let mut out = Vec::new();
-    for cal in calendars
+    let url = events_url(&cal.id)?;
+    let Some(pages) = fetch_pages::<EventPage>(app, &auth, account, &url, &event_query, |p| {
+        p.next_page_token.clone()
+    })
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(
+        pages
+            .into_iter()
+            .flat_map(|p| p.items)
+            .filter_map(|e| RawEvent::from_api(e, account, cal.background_color.clone()))
+            .collect(),
+    ))
+}
+
+/// Events in `[min, max)` of every selected calendar of one account, the calendars fetched at once.
+/// `refresh` lists the calendars again instead of using the kept list. `Ok(None)` means that account must log in again.
+async fn account_events(
+    app: &AppHandle,
+    account: &str,
+    min: &str,
+    max: &str,
+    refresh: bool,
+) -> Result<Option<Vec<RawEvent>>, ApiError> {
+    let cache = app.state::<CalendarCache>();
+    let kept = if refresh {
+        None
+    } else {
+        cache.0.lock().unwrap().get(account).cloned()
+    };
+    let calendars = match kept {
+        Some(c) => c,
+        None => {
+            let auth = app.state::<Auth>();
+            let Some(c) = selected_calendars(app, &auth, account).await? else {
+                return Ok(None);
+            };
+            cache
+                .0
+                .lock()
+                .unwrap()
+                .insert(account.to_owned(), c.clone());
+            c
+        }
+    };
+    let jobs = calendars
         .into_iter()
-        .flat_map(|p| p.items)
-        .filter(|c| c.selected)
-    {
-        let url = events_url(&cal.id)?;
-        let Some(pages) = fetch_pages::<EventPage>(app, auth, account, &url, &event_query, |p| {
-            p.next_page_token.clone()
+        .map(|cal| {
+            let (app, account) = (app.clone(), account.to_owned());
+            let (min, max) = (min.to_owned(), max.to_owned());
+            async move { calendar_events(&app, &account, &cal, &min, &max).await }
         })
-        .await?
-        else {
-            return Ok(None);
-        };
-        out.extend(
-            pages
-                .into_iter()
-                .flat_map(|p| p.items)
-                .filter_map(|e| RawEvent::from_api(e, account, cal.background_color.clone())),
-        );
+        .collect();
+    let mut out = Vec::new();
+    for found in join_all(jobs).await? {
+        match found? {
+            Some(events) => out.extend(events),
+            None => return Ok(None),
+        }
     }
     Ok(Some(out))
 }
 
-/// The week containing `date` (YYYY-MM-DD, local), Sunday first, with the events of every account.
+/// The week containing `date` (YYYY-MM-DD, local), Sunday first, with the events of every account, the accounts fetched at once.
+/// `refresh` lists each account's calendars again instead of using the kept lists.
 /// Accounts needing login or failing to load are listed, not fatal.
 #[tauri::command]
 pub async fn calendar_week(
     app: AppHandle,
     auth: State<'_, Auth>,
+    cache: State<'_, CalendarCache>,
     date: String,
+    refresh: bool,
 ) -> Result<Week, String> {
     let date: NaiveDate = date
         .parse()
@@ -453,11 +531,27 @@ pub async fn calendar_week(
     let accounts = auth
         .accounts(&app)
         .map_err(|e| log_failure("calendar_week", "-", e))?;
-    for account in accounts {
-        match account_events(&app, &auth, &account, &min, &max).await {
+    let jobs = accounts
+        .iter()
+        .map(|account| {
+            let (app, account) = (app.clone(), account.clone());
+            let (min, max) = (min.clone(), max.clone());
+            async move { account_events(&app, &account, &min, &max, refresh).await }
+        })
+        .collect();
+    let results = join_all(jobs)
+        .await
+        .map_err(|e| log_failure("calendar_week", "-", e))?;
+    for (account, result) in accounts.into_iter().zip(results) {
+        match result {
             Ok(Some(found)) => events.extend(found),
-            Ok(None) => needs_login.push(account),
+            Ok(None) => {
+                cache.0.lock().unwrap().remove(&account);
+                needs_login.push(account);
+            }
             Err(e) => {
+                // The kept calendars may be what failed (e.g. one was deleted), so list them again next time.
+                cache.0.lock().unwrap().remove(&account);
                 let status = e.status;
                 let message = log_failure("calendar_week", &account, e);
                 match classify(status, &message) {
@@ -528,6 +622,25 @@ mod tests {
             },
             ..raw("d")
         }
+    }
+
+    #[test]
+    fn join_all_runs_at_once_and_keeps_input_order() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let sleeps = (0..3u64).map(|i| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150 - i * 50)).await;
+            i
+        });
+        let started = std::time::Instant::now();
+        let got = rt.block_on(join_all(sleeps.collect())).unwrap();
+        assert_eq!(got, vec![0, 1, 2]);
+        // One after another would take 300 ms.
+        assert!(started.elapsed() < std::time::Duration::from_millis(250));
+        let panicked = rt.block_on(join_all(vec![async { panic!("boom") }]));
+        assert!(panicked.is_err());
     }
 
     #[test]
