@@ -4,12 +4,51 @@ const $ = (id) => document.getElementById(id);
 // Gmail snippets arrive HTML-escaped (e.g. &#39;).
 const unescapeHtml = (s) => new DOMParser().parseFromString(s, "text/html").documentElement.textContent;
 
+// Short list date: today "9:05", this year "10月17日", older "2025/10/17".
+function formatDate(ms, now = Date.now()) {
+  const d = new Date(ms);
+  const n = new Date(now);
+  if (d.toDateString() === n.toDateString()) return `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (d.getFullYear() === n.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日`;
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+// Display name of a From header: the Name of `Name <addr>`, else the address.
+function senderName(from) {
+  const m = from.match(/^\s*"?(.*?)"?\s*<([^>]*)>\s*$/);
+  return m ? m[1] || m[2] : from.trim();
+}
+
+// Up to two initials (first letters of the first two words), uppercased.
+function initials(name) {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => Array.from(w)[0])
+      .join("")
+      .toUpperCase() || "?"
+  );
+}
+
+// Same string, same color; no image is fetched from outside.
+function avatarColor(s) {
+  let h = 0;
+  for (const c of s) h = (h * 31 + c.codePointAt(0)) >>> 0;
+  return `hsl(${h % 360} 55% 45%)`;
+}
+
 function show(view) {
   $("login").hidden = view !== "login";
   $("threads").hidden = view !== "list";
   $("reload").hidden = view !== "list";
   $("thread").hidden = view !== "thread";
   $("back").hidden = view !== "thread";
+  $("trash").hidden = view !== "thread";
+  $("archive").hidden = view !== "thread";
+  $("thread-subject").hidden = view !== "thread";
+  $("title").hidden = view === "thread";
 }
 
 function showError(e) {
@@ -29,7 +68,10 @@ function row(t) {
   const subject = cell("subject", t.subject || "(件名なし)");
   subject.append(cell("snippet", ` — ${unescapeHtml(t.snippet)}`));
   li.onclick = () => openThread(t.id, li);
-  li.append(cell("from", t.from), subject, cell("date", new Date(t.dateMs).toLocaleString("ja-JP")));
+  const name = senderName(t.from);
+  const avatar = cell("avatar", initials(name));
+  avatar.style.background = avatarColor(name);
+  li.append(avatar, cell("from", name), subject, cell("date", formatDate(t.dateMs)));
   return li;
 }
 
