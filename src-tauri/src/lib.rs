@@ -49,6 +49,7 @@ fn navigation_of(url: &tauri::Url) -> Navigation {
 
 /// A mail body's frame may navigate the top window only by a user's click (its sandbox has
 /// allow-top-navigation-by-user-activation); that navigation is always cancelled here, and an http(s) URL goes to the browser.
+/// A link of a plain-text body is on the top window itself and comes here the same way.
 fn navigation_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("navigation")
         .on_navigation(|webview, url| {
