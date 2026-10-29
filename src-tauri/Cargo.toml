@@ -1,6 +1,6 @@
 [package]
 name = "cookup"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2021"
 
 [build-dependencies]
@@ -8,6 +8,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.23"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 encoding_rs = "0.8"
 getrandom = "0.4"
 keyring = "4"

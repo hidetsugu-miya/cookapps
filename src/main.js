@@ -46,6 +46,9 @@ let listScroll = 0;
 
 function show(view) {
   if (!$("threads").hidden) listScroll = $("main").scrollTop;
+  $("calendar").hidden = view !== "calendar";
+  $("mail-header").hidden = view === "calendar";
+  $("main").hidden = view === "calendar";
   $("login").hidden = view !== "login";
   $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
   $("threads").hidden = view !== "list";
@@ -214,6 +217,7 @@ async function openThread({ id, account }, li) {
 
 // Sidebar avatars of every account, a re-login row for each account that needs it, and an error row for each that failed to load.
 function renderAccounts({ accounts, needsLogin, failed }) {
+  $("nav-calendar").disabled = accounts.length === 0;
   $("account-list").replaceChildren(
     ...accounts.map((a) => {
       const avatar = document.createElement("span");
@@ -243,6 +247,9 @@ function renderAccounts({ accounts, needsLogin, failed }) {
   );
 }
 
+// Which screen the sidebar selected: "mail" or "calendar". Background work reads it; only the sidebar changes it.
+let screen = "mail";
+
 // Only the latest of overlapping loads may draw the list.
 let loadSeq = 0;
 // Loads in flight; a sync stays out of their way.
@@ -268,7 +275,8 @@ async function load() {
   } finally {
     loading--;
   }
-  show("list");
+  // A load that ends while the calendar is shown (e.g. after a re-login there) must not switch the screen.
+  if (screen === "mail") show("list");
 }
 
 const sameRow = (a, b) => ["from", "subject", "snippet", "dateMs", "unread"].every((k) => a[k] === b[k]);
@@ -378,6 +386,7 @@ async function addAccount(hint, button) {
   try {
     await invoke("login", { loginHint: hint });
     await load();
+    if (screen === "calendar") await loadCalendar();
   } catch (e) {
     showError(e);
   } finally {
@@ -386,5 +395,182 @@ async function addAccount(hint, button) {
 }
 $("login-button").onclick = () => addAccount(null, $("login-button"));
 $("add-account").onclick = () => addAccount(null, $("add-account"));
+
+const HOUR_PX = 64;
+// Keep in step with MIN_MINUTES in calendar.rs.
+const MIN_EVENT_MIN = 20;
+const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
+const CAL_REFRESH_MS = 5 * 60 * 1000;
+
+const pad2 = (n) => String(n).padStart(2, "0");
+const isoDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+// Local midnight of the "YYYY-MM-DD" date, `days` later.
+const addDays = (iso, days) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d + days);
+};
+const hhmm = (min) => `${Math.floor(min / 60)}:${pad2(min % 60)}`;
+
+function el(className, text = "") {
+  const div = document.createElement("div");
+  div.className = className;
+  div.textContent = text;
+  return div;
+}
+
+// A day of the week on screen, as "YYYY-MM-DD", and the Sunday that week starts on once loaded.
+let calDate = isoDate(new Date());
+let calWeekStart = null;
+let calSeq = 0;
+// The first render after opening the calendar scrolls to the morning; later ones keep the position.
+let calScrolled = false;
+
+// The event's own color (its calendar's); events with none take the account's, as the mail list does.
+const eventColor = (e) => e.color || avatarColor(e.account);
+
+function eventBox(e) {
+  const box = el("cal-event" + (e.declined ? " declined" : ""));
+  box.style.top = `${(e.startMin / 60) * HOUR_PX}px`;
+  box.style.height = `${(Math.max(e.endMin - e.startMin, MIN_EVENT_MIN) / 60) * HOUR_PX - 1}px`;
+  box.style.left = `${(e.col / e.cols) * 100}%`;
+  box.style.width = `${100 / e.cols}%`;
+  box.style.setProperty("--c", eventColor(e));
+  box.title = `${e.summary}\n${e.account}`;
+  box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`), el("cal-name", e.summary || "(件名なし)"));
+  return box;
+}
+
+function chip(e) {
+  const c = el("cal-chip" + (e.declined ? " declined" : ""), e.summary || "(件名なし)");
+  c.style.setProperty("--c", eventColor(e));
+  c.title = `${e.summary}\n${e.account}`;
+  return c;
+}
+
+// The current-time line in today's column and its label in the time gutter, if the shown week holds today.
+function drawNow() {
+  document.querySelectorAll(".cal-now").forEach((n) => n.remove());
+  if (!calWeekStart) return;
+  const now = new Date();
+  const day = [0, 1, 2, 3, 4, 5, 6].find((i) => isoDate(addDays(calWeekStart, i)) === isoDate(now));
+  if (day === undefined) return;
+  const top = `${((now.getHours() * 60 + now.getMinutes()) / 60) * HOUR_PX}px`;
+  const line = el("cal-now cal-now-line");
+  const label = el("cal-now cal-now-label", `${now.getHours()}:${pad2(now.getMinutes())}`);
+  line.style.top = label.style.top = top;
+  // Children of #cal-body: the time gutter, then the seven day columns.
+  $("cal-body").children[day + 1].append(line);
+  $("cal-body").firstElementChild.append(label);
+}
+
+function renderWeek(w) {
+  calWeekStart = w.weekStart;
+  const days = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(w.weekStart, i));
+  const todayIndex = days.findIndex((d) => isoDate(d) === isoDate(new Date()));
+  const mark = (node, i) => {
+    if (i === todayIndex) node.classList.add("today");
+    return node;
+  };
+  // The title names the month of the middle of the week.
+  const year = document.createElement("span");
+  year.className = "year";
+  year.textContent = ` ${days[3].getFullYear()}`;
+  $("cal-title").replaceChildren(`${days[3].getMonth() + 1}月`, year);
+  $("cal-head").replaceChildren(
+    el("cal-gutter"),
+    ...days.map((d, i) => {
+      const cell = mark(el("cal-day", `${WEEKDAYS[d.getDay()]} `), i);
+      cell.append(el("cal-date", d.getDate()));
+      return cell;
+    }),
+  );
+  $("cal-allday").replaceChildren(
+    el("cal-allday-label", "終日"),
+    ...days.map((_, i) => {
+      const cell = mark(el("cal-cell"), i);
+      cell.append(...w.allDay.filter((e) => e.day === i).map(chip));
+      return cell;
+    }),
+  );
+  const gutter = el("cal-gutter");
+  for (let h = 1; h < 24; h++) {
+    const label = el("cal-hour", `${h}:00`);
+    label.style.top = `${h * HOUR_PX}px`;
+    gutter.append(label);
+  }
+  $("cal-body").replaceChildren(
+    gutter,
+    ...days.map((_, i) => {
+      const col = mark(el("cal-col"), i);
+      col.append(...w.timed.filter((e) => e.day === i).map(eventBox));
+      return col;
+    }),
+  );
+  drawNow();
+  $("cal-notice").replaceChildren(
+    ...w.needsLogin.map((a) => {
+      const div = document.createElement("div");
+      const button = document.createElement("button");
+      button.textContent = "再ログイン";
+      button.onclick = () => addAccount(a, button);
+      div.append(`${a} はカレンダーを読むため再ログインが必要です`, button);
+      return div;
+    }),
+    ...Object.entries(w.failed).map(([a, message]) => {
+      const div = document.createElement("div");
+      div.textContent = `${a} の予定の読み込みに失敗しました: ${message}`;
+      return div;
+    }),
+  );
+  if (!calScrolled) {
+    // The sticky header sits above the body, so a scroll of 7 hours puts 7:00 right under it (a little less keeps its label whole).
+    $("cal-scroll").scrollTop = 7 * HOUR_PX - 12;
+    calScrolled = true;
+  }
+}
+
+// Loads the week of `calDate`; the old week stays (dimmed) until the new one arrives.
+async function loadCalendar() {
+  const seq = ++calSeq;
+  $("error").hidden = true;
+  $("calendar").classList.add("loading");
+  try {
+    const week = await invoke("calendar_week", { date: calDate });
+    if (seq === calSeq) renderWeek(week);
+  } catch (e) {
+    if (seq === calSeq) showError(e);
+  } finally {
+    if (seq === calSeq) $("calendar").classList.remove("loading");
+  }
+}
+
+function setScreen(name) {
+  screen = name;
+  for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"]]) {
+    if (target === name) $(id).setAttribute("aria-current", "page");
+    else $(id).removeAttribute("aria-current");
+  }
+  $("error").hidden = true;
+  if (name === "calendar") {
+    calScrolled = false;
+    show("calendar");
+    loadCalendar();
+  } else {
+    show("list");
+  }
+}
+
+$("nav-mail").onclick = () => setScreen("mail");
+$("nav-calendar").onclick = () => setScreen("calendar");
+const moveWeek = (date) => {
+  calDate = date;
+  loadCalendar();
+};
+$("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));
+$("cal-next").onclick = () => moveWeek(isoDate(addDays(calDate, 7)));
+$("cal-today").onclick = () => moveWeek(isoDate(new Date()));
+$("calendar").style.setProperty("--hour", `${HOUR_PX}px`);
+setInterval(() => screen === "calendar" && !document.hidden && loadCalendar(), CAL_REFRESH_MS);
+setInterval(() => screen === "calendar" && drawNow(), 60000);
 
 load();

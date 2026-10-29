@@ -226,12 +226,12 @@ impl From<Thread> for ThreadDetail {
     }
 }
 
-/// A failed Gmail call. `status` is `None` when no HTTP response was received.
+/// A failed Google API call. `status` is `None` when no HTTP response was received.
 #[derive(Debug)]
 pub struct ApiError {
-    status: Option<u16>,
+    pub(crate) status: Option<u16>,
     rate_limited: bool,
-    message: String,
+    pub(crate) message: String,
 }
 
 impl From<String> for ApiError {
@@ -263,7 +263,7 @@ impl fmt::Display for ApiError {
 }
 
 /// Logs a failed command on stderr and returns the message for the UI. Tokens and mail bodies never reach it.
-fn log_failure(command: &str, account: &str, e: impl Into<ApiError>) -> String {
+pub(crate) fn log_failure(command: &str, account: &str, e: impl Into<ApiError>) -> String {
     let e = e.into();
     let status = e.status.map_or("-".to_owned(), |s| s.to_string());
     eprintln!(
@@ -279,7 +279,7 @@ fn is_rate_limited(status: u16, body: &str) -> bool {
 }
 
 /// `Ok(None)` means login is required for `account`. Retries once with a refreshed token on 401.
-async fn send_json_refreshing<T: DeserializeOwned>(
+pub(crate) async fn send_json_refreshing<T: DeserializeOwned>(
     app: &AppHandle,
     auth: &Auth,
     account: &str,
@@ -345,7 +345,7 @@ async fn send_json<T: DeserializeOwned>(
         return Err(ApiError {
             status: Some(status.as_u16()),
             rate_limited: is_rate_limited(status.as_u16(), &body),
-            message: format!("Gmail API が {status} を返しました: {body}"),
+            message: format!("Google API が {status} を返しました: {body}"),
         });
     }
     Ok(res.json().await.map(Some).map_err(|e| e.to_string())?)

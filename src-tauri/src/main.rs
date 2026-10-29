@@ -1,5 +1,6 @@
 mod accounts;
 mod auth;
+mod calendar;
 mod gmail;
 
 fn main() {
@@ -9,6 +10,7 @@ fn main() {
         .manage(gmail::SyncState::default())
         .invoke_handler(tauri::generate_handler![
             auth::login,
+            calendar::calendar_week,
             gmail::inbox,
             gmail::thread,
             gmail::trash,

@@ -10,26 +10,24 @@ Tauri v2 と Rust で作っています。
 - スレッドをアーカイブする・ゴミ箱へ移動する（詳細画面のボタン、または一覧の行にマウスを乗せると出るボタン）
 - 一覧のチェックボックスで、スレッドを既読・未読にする（未読の行には水色の点が付く）
 - 約 10 秒ごとに受信トレイを Gmail と同期し、新着や他の端末での既読化・アーカイブを自動で反映する
-
-今後、次の機能を追加する予定です。
-
-- Google Calendar の予定を表示する
+- 全アカウントの Google Calendar の予定を、1 つの週表示にまとめて表示する（閲覧のみ。サイドメニューのカレンダーのアイコンで開く）
 
 ## 必要なもの
 
 - Rust（stable）
 - Node.js
-- Gmail API を有効にした Google Cloud プロジェクト
+- Gmail API と Google Calendar API を有効にした Google Cloud プロジェクト
 
 ## セットアップ
 
-1. Google Cloud で Gmail API を有効にし、OAuth 同意画面を設定します。
+1. Google Cloud で Gmail API と Google Calendar API を有効にし、OAuth 同意画面を設定します。
 2. 種類「デスクトップアプリ」の OAuth クライアントを作り、JSON をダウンロードします。
 3. JSON を `client_secret.json` という名前で、Tauri の `app_config_dir` に置きます。
    - macOS では `~/Library/Application Support/jp.mysis.cookup/client_secret.json` です。
    - ファイルが無いと、ログイン時に配置先の絶対パス付きでエラーが出ます。
 
-要求するスコープは `gmail.modify` です。
+要求するスコープは `gmail.modify` と `calendar.readonly` です。
+カレンダーのスコープが付く前にログインしたアカウントは、カレンダーを開くと「再ログイン」が表示されるので、押して許可し直します。
 同意画面が「外部」かつ「テスト」のままだと、リフレッシュトークンは 7 日で失効します。
 組織の外のアカウントも使う場合は、同意画面を「外部」「本番環境」にします。
 Google の審査を受けていないと、ログイン時に「Google はこのアプリを確認していません」と表示されます。

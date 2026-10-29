@@ -21,14 +21,14 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
 #main { flex: 1; overflow-y: auto; padding: 8px 24px 32px 32px; }
-#main::-webkit-scrollbar { width: 12px; }
-#main::-webkit-scrollbar-track { background: #f4f5f7; }
-#main::-webkit-scrollbar-thumb { background: #c1c5cc; border-radius: 6px; border: 3px solid #f4f5f7; }
-#main::-webkit-scrollbar-thumb:hover { background: #9aa0aa; }
+#main::-webkit-scrollbar, #cal-scroll::-webkit-scrollbar { width: 12px; }
+#main::-webkit-scrollbar-track, #cal-scroll::-webkit-scrollbar-track { background: #f4f5f7; }
+#main::-webkit-scrollbar-thumb, #cal-scroll::-webkit-scrollbar-thumb { background: #c1c5cc; border-radius: 6px; border: 3px solid #f4f5f7; }
+#main::-webkit-scrollbar-thumb:hover, #cal-scroll::-webkit-scrollbar-thumb:hover { background: #9aa0aa; }
 
 #login { display: flex; justify-content: center; padding: 64px; }
 #relogin { margin-bottom: 8px; }
-#relogin > div { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; background: #fff4e5; margin-bottom: 4px; }
+#relogin > div, #cal-notice > div { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; background: #fff4e5; margin-bottom: 4px; }
 #threads { list-style: none; margin: 0; padding: 0; }
 #threads:empty::after { content: "受信トレイにスレッドはありません"; display: block; padding: 48px 0; text-align: center; color: #888; }
 #threads li { display: grid; grid-template-columns: 20px 8px 32px 180px 1fr auto; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 12px; cursor: pointer; }
@@ -66,3 +66,35 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .message-head { padding: 12px 16px; background: #fafafa; border-bottom: 1px solid #eee; }
 .plain { padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
 #messages iframe { display: block; width: 100%; height: 60vh; border: 0; }
+
+/* Calendar: --hour is set from HOUR_PX in main.js. */
+#calendar { flex: 1; min-height: 0; display: flex; flex-direction: column; --gutter: 56px; }
+#cal-bar { flex: none; display: flex; align-items: center; gap: 4px; padding: 20px 32px 12px; }
+#cal-title { font-size: 20px; }
+#cal-title .year { color: #888; font-weight: normal; }
+.text-btn { height: 32px; padding: 0 16px; border: 1px solid #d5d8dd; border-radius: 16px; background: #fff; color: #333; cursor: pointer; }
+.text-btn:hover { background: #eef0f3; }
+#cal-notice:not(:empty) { padding: 0 32px 8px; }
+#calendar.loading #cal-scroll { opacity: .5; }
+#cal-scroll { flex: 1; overflow-y: auto; }
+#cal-top { position: sticky; top: 0; z-index: 3; background: #fff; border-bottom: 1px solid #dfe3e8; }
+.cal-row { display: grid; grid-template-columns: var(--gutter) repeat(7, minmax(0, 1fr)); }
+.cal-day { padding: 8px 12px; font-size: 16px; color: #444; border-left: 1px dashed #e3e6ea; }
+.cal-date { display: inline-flex; width: 28px; height: 28px; margin-left: 4px; border-radius: 50%; align-items: center; justify-content: center; font-weight: bold; }
+.cal-day.today .cal-date { background: #0b5bd3; color: #fff; }
+.cal-allday-label { padding: 4px 8px 0 0; text-align: right; font-size: 11px; color: #888; }
+.cal-cell { min-width: 0; min-height: 24px; padding: 2px 8px 6px; border-left: 1px dashed #e3e6ea; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.cal-cell.today, .cal-col.today { background-color: #eef4fd; }
+.cal-chip { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-chip::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--c); }
+#cal-body { position: relative; display: grid; grid-template-columns: var(--gutter) repeat(7, minmax(0, 1fr)); height: calc(var(--hour) * 24); }
+.cal-gutter { position: relative; }
+.cal-hour { position: absolute; right: 8px; transform: translateY(-50%); font-size: 11px; color: #888; }
+.cal-col { position: relative; border-left: 1px dashed #e3e6ea; background-image: linear-gradient(to bottom, #e8eaed 1px, transparent 1px); background-size: 100% var(--hour); }
+.cal-event { position: absolute; box-sizing: border-box; padding: 2px 6px; overflow: hidden; border: 1px solid #fff; border-radius: 4px; font-size: 12px; line-height: 1.35; background: color-mix(in srgb, var(--c) 22%, #fff); box-shadow: inset 3px 0 0 var(--c); }
+.cal-time { color: #555; }
+.declined { opacity: .5; text-decoration: line-through; }
+.cal-now { position: absolute; z-index: 2; pointer-events: none; }
+.cal-now-line { left: 0; right: 0; border-top: 2px solid #ff9f43; }
+.cal-now-line::before { content: ""; position: absolute; left: -5px; top: -6px; width: 10px; height: 10px; border-radius: 50%; background: #ff9f43; }
+.cal-now-label { right: 6px; transform: translateY(-50%); padding: 1px 8px; border-radius: 10px; background: #ff9f43; color: #fff; font-size: 11px; }

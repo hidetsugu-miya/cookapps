@@ -15,7 +15,7 @@ use crate::accounts;
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
+const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly";
 const KEYRING_SERVICE: &str = "jp.mysis.cookup";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -129,6 +129,8 @@ impl Auth {
             .append_pair("code_challenge_method", "S256")
             .append_pair("state", &state)
             .append_pair("access_type", "offline")
+            // Keeps the scopes granted earlier, so a re-login for the calendar does not drop Gmail's.
+            .append_pair("include_granted_scopes", "true")
             .append_pair("prompt", "select_account consent");
         if let Some(hint) = login_hint {
             url.query_pairs_mut().append_pair("login_hint", hint);

@@ -619,9 +619,10 @@ dependencies = [
 
 [[package]]
 name = "cookup"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "base64 0.23.1",
+ "chrono",
  "encoding_rs",
  "getrandom 0.4.3",
  "keyring",
