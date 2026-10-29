@@ -226,6 +226,8 @@ async fn send_json<T: DeserializeOwned>(
     let res = http
         .request(method, url)
         .bearer_auth(token)
+        // Gmail rejects a bodyless POST without Content-Length (411), and reqwest omits it.
+        .header(reqwest::header::CONTENT_LENGTH, "0")
         .query(query)
         .send()
         .await
