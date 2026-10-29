@@ -23,6 +23,7 @@ pub fn run() {
         .manage(auth::Auth::new())
         .manage(gmail::SyncState::default())
         .manage(calendar::CalendarCache::default())
+        .manage(todoist::TodoistState::default())
         .invoke_handler(tauri::generate_handler![
             auth::login,
             auth::remove_account,
