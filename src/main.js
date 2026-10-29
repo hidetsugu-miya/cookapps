@@ -212,8 +212,8 @@ async function openThread({ id, account }, li) {
   }
 }
 
-// Sidebar avatars of every account, and a re-login row for each account that needs it.
-function renderAccounts({ accounts, needsLogin }) {
+// Sidebar avatars of every account, a re-login row for each account that needs it, and an error row for each that failed to load.
+function renderAccounts({ accounts, needsLogin, failed }) {
   $("account-list").replaceChildren(
     ...accounts.map((a) => {
       const avatar = document.createElement("span");
@@ -233,6 +233,11 @@ function renderAccounts({ accounts, needsLogin }) {
       button.textContent = "再ログイン";
       button.onclick = () => addAccount(a, button);
       div.append(`${a} は再ログインが必要です`, button);
+      return div;
+    }),
+    ...Object.entries(failed).map(([a, message]) => {
+      const div = document.createElement("div");
+      div.textContent = `${a} の読み込みに失敗しました: ${message}`;
       return div;
     }),
   );

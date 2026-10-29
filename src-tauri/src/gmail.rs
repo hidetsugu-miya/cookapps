@@ -343,6 +343,8 @@ pub struct Inbox {
     threads: Vec<ThreadItem>,
     /// Accounts whose threads are missing because they must log in again.
     needs_login: Vec<String>,
+    /// Accounts whose threads are missing because loading them failed, with the error to show.
+    failed: HashMap<String, String>,
     /// Per account, the mailbox history ID as of the full load; the starting point of `sync`.
     history_ids: HashMap<String, String>,
 }
@@ -442,24 +444,29 @@ async fn account_threads(
     }))
 }
 
-/// Threads of every account merged; accounts needing login are listed, not fatal.
+/// Threads of every account merged; accounts needing login or failing to load are listed, not fatal.
 #[tauri::command]
 pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, String> {
     let accounts = auth.accounts(&app).await?;
-    let (mut lists, mut needs_login, mut history_ids) = (Vec::new(), Vec::new(), HashMap::new());
+    let (mut lists, mut needs_login, mut failed, mut history_ids) =
+        (Vec::new(), Vec::new(), HashMap::new(), HashMap::new());
     for account in &accounts {
-        match account_threads(&app, &auth, account).await? {
-            Some(loaded) => {
+        match account_threads(&app, &auth, account).await {
+            Ok(Some(loaded)) => {
                 lists.push(loaded.threads);
                 history_ids.insert(account.clone(), loaded.history_id);
             }
-            None => needs_login.push(account.clone()),
+            Ok(None) => needs_login.push(account.clone()),
+            Err(e) => {
+                failed.insert(account.clone(), e.into());
+            }
         }
     }
     Ok(Inbox {
         accounts,
         threads: merge_inboxes(lists),
         needs_login,
+        failed,
         history_ids,
     })
 }
@@ -877,10 +884,12 @@ mod tests {
             accounts: vec!["a@example.com".into()],
             threads: vec![item_at("t", "a@example.com", 1)],
             needs_login: vec!["b@example.com".into()],
+            failed: HashMap::from([("c@example.com".to_string(), "boom".to_string())]),
             history_ids: HashMap::from([("a@example.com".to_string(), "42".to_string())]),
         };
         let v = serde_json::to_value(&inbox).unwrap();
         assert_eq!(v["needsLogin"][0], "b@example.com");
+        assert_eq!(v["failed"]["c@example.com"], "boom");
         assert_eq!(v["historyIds"]["a@example.com"], "42");
         assert_eq!(v["threads"][0]["account"], "a@example.com");
         assert_eq!(v["threads"][0]["dateMs"], 1);
