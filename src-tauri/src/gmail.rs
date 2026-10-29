@@ -1,7 +1,10 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use encoding_rs::{Encoding, UTF_8};
 use reqwest::Method;
-use serde::{de::{DeserializeOwned, IgnoredAny}, Deserialize, Serialize};
+use serde::{
+    de::{DeserializeOwned, IgnoredAny},
+    Deserialize, Serialize,
+};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
@@ -102,7 +105,9 @@ impl From<Thread> for ThreadItem {
         let first = t.messages.first();
         let last = t.messages.last();
         Self {
-            subject: first.map(|m| header(&m.payload, "Subject")).unwrap_or_default(),
+            subject: first
+                .map(|m| header(&m.payload, "Subject"))
+                .unwrap_or_default(),
             from: last.map(|m| header(&m.payload, "From")).unwrap_or_default(),
             date_ms: last.and_then(|m| m.internal_date.parse().ok()).unwrap_or(0),
             unread: t
@@ -182,7 +187,11 @@ impl From<&Message> for MessageDetail {
             from: header(&m.payload, "From"),
             date_ms: m.internal_date.parse().unwrap_or(0),
             html: is_html,
-            body: if is_html { html.concat() } else { plain.join("\n") },
+            body: if is_html {
+                html.concat()
+            } else {
+                plain.join("\n")
+            },
         }
     }
 }
@@ -192,7 +201,11 @@ impl From<Thread> for ThreadDetail {
         let mut messages: Vec<_> = t.messages.iter().map(MessageDetail::from).collect();
         messages.sort_by_key(|m| m.date_ms);
         Self {
-            subject: t.messages.first().map(|m| header(&m.payload, "Subject")).unwrap_or_default(),
+            subject: t
+                .messages
+                .first()
+                .map(|m| header(&m.payload, "Subject"))
+                .unwrap_or_default(),
             messages,
         }
     }
@@ -272,7 +285,16 @@ pub async fn inbox(
         return Ok(None);
     };
     let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
-    let Some(list) = send_json_refreshing::<ThreadList>(&app, &auth, &mut token, Method::GET, THREADS_URL, &list_query, None).await?
+    let Some(list) = send_json_refreshing::<ThreadList>(
+        &app,
+        &auth,
+        &mut token,
+        Method::GET,
+        THREADS_URL,
+        &list_query,
+        None,
+    )
+    .await?
     else {
         return Ok(None);
     };
@@ -281,11 +303,19 @@ pub async fn inbox(
     for chunk in list.threads.chunks(CONCURRENCY) {
         let mut set = JoinSet::new();
         for t in chunk {
-            let (http, token, url) = (http.clone(), token.clone(), format!("{THREADS_URL}/{}", t.id));
-            set.spawn(async move { send_json::<Thread>(&http, Method::GET, &token, &url, &METADATA_QUERY, None).await });
+            let (http, token, url) = (
+                http.clone(),
+                token.clone(),
+                format!("{THREADS_URL}/{}", t.id),
+            );
+            set.spawn(async move {
+                send_json::<Thread>(&http, Method::GET, &token, &url, &METADATA_QUERY, None).await
+            });
         }
         while let Some(res) = set.join_next().await {
-            let thread = res.map_err(|e| e.to_string())??.ok_or("認証に失敗しました")?;
+            let thread = res
+                .map_err(|e| e.to_string())??
+                .ok_or("認証に失敗しました")?;
             items.push(ThreadItem::from(thread));
         }
     }
@@ -304,18 +334,33 @@ pub async fn thread(
         return Ok(None);
     };
     let url = format!("{THREADS_URL}/{id}");
-    let thread = send_json_refreshing::<Thread>(&app, &auth, &mut token, Method::GET, &url, &[("format", "full")], None).await?;
+    let thread = send_json_refreshing::<Thread>(
+        &app,
+        &auth,
+        &mut token,
+        Method::GET,
+        &url,
+        &[("format", "full")],
+        None,
+    )
+    .await?;
     Ok(thread.map(ThreadDetail::from))
 }
 
 /// Moves the thread to the trash (recoverable in Gmail). `Ok(None)` means login is required.
 #[tauri::command]
-pub async fn trash(app: AppHandle, auth: State<'_, Auth>, id: String) -> Result<Option<()>, String> {
+pub async fn trash(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    id: String,
+) -> Result<Option<()>, String> {
     let Some(mut token) = auth.token(&app).await? else {
         return Ok(None);
     };
     let url = format!("{THREADS_URL}/{id}/trash");
-    let done = send_json_refreshing::<IgnoredAny>(&app, &auth, &mut token, Method::POST, &url, &[], None).await?;
+    let done =
+        send_json_refreshing::<IgnoredAny>(&app, &auth, &mut token, Method::POST, &url, &[], None)
+            .await?;
     Ok(done.map(|_| ()))
 }
 
@@ -325,13 +370,26 @@ fn archive_body() -> Value {
 
 /// Removes the INBOX label from the thread. `Ok(None)` means login is required.
 #[tauri::command]
-pub async fn archive(app: AppHandle, auth: State<'_, Auth>, id: String) -> Result<Option<()>, String> {
+pub async fn archive(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    id: String,
+) -> Result<Option<()>, String> {
     let Some(mut token) = auth.token(&app).await? else {
         return Ok(None);
     };
     let url = format!("{THREADS_URL}/{id}/modify");
     let body = archive_body();
-    let done = send_json_refreshing::<IgnoredAny>(&app, &auth, &mut token, Method::POST, &url, &[], Some(&body)).await?;
+    let done = send_json_refreshing::<IgnoredAny>(
+        &app,
+        &auth,
+        &mut token,
+        Method::POST,
+        &url,
+        &[],
+        Some(&body),
+    )
+    .await?;
     Ok(done.map(|_| ()))
 }
 
@@ -394,12 +452,25 @@ mod tests {
     fn json_request_leaves_content_length_to_reqwest() {
         let http = reqwest::Client::new();
         let body = archive_body();
-        let req = build_request(&http, Method::POST, "t", "https://example.com/x", &[], Some(&body))
-            .build()
-            .unwrap();
+        let req = build_request(
+            &http,
+            Method::POST,
+            "t",
+            "https://example.com/x",
+            &[],
+            Some(&body),
+        )
+        .build()
+        .unwrap();
         assert!(!req.headers().contains_key(reqwest::header::CONTENT_LENGTH));
-        assert_eq!(req.headers()[reqwest::header::CONTENT_TYPE], "application/json");
-        assert_eq!(req.body().unwrap().as_bytes().unwrap(), br#"{"removeLabelIds":["INBOX"]}"#);
+        assert_eq!(
+            req.headers()[reqwest::header::CONTENT_TYPE],
+            "application/json"
+        );
+        assert_eq!(
+            req.body().unwrap().as_bytes().unwrap(),
+            br#"{"removeLabelIds":["INBOX"]}"#
+        );
     }
 
     #[test]
@@ -458,7 +529,10 @@ mod tests {
                 {"mimeType": "text/plain", "body": {"data": b64(b"plain")}},
                 {"mimeType": "text/html", "headers": [{"name": "content-type", "value": "text/html; charset=UTF-8"}],
                  "body": {"data": b64("<p>é</p>".as_bytes())}}]}}]}));
-        assert_eq!((d.messages[0].html, d.messages[0].body.as_str()), (true, "<p>é</p>"));
+        assert_eq!(
+            (d.messages[0].html, d.messages[0].body.as_str()),
+            (true, "<p>é</p>")
+        );
     }
 
     #[test]
@@ -471,7 +545,10 @@ mod tests {
                 {"mimeType": "text/plain", "filename": "a.txt", "body": {"attachmentId": "x", "data": b64(b"attached")}},
                 {"mimeType": "text/plain", "headers": [{"name": "Content-Type", "value": "text/plain; charset=Shift_JIS"}],
                  "body": {"data": b64(&[0x82, 0xb1, 0x82, 0xf1])}}]}}]}));
-        assert_eq!((d.messages[0].html, d.messages[0].body.as_str()), (false, "first\nこん"));
+        assert_eq!(
+            (d.messages[0].html, d.messages[0].body.as_str()),
+            (false, "first\nこん")
+        );
     }
 
     #[test]
@@ -479,7 +556,10 @@ mod tests {
         let d = detail(serde_json::json!({"id": "t", "messages": [
             {"internalDate": "2000", "payload": {"mimeType": "text/plain", "body": {"data": b64(b"b")}}},
             {"internalDate": "1000", "payload": {}}]}));
-        assert_eq!(d.messages.iter().map(|m| m.date_ms).collect::<Vec<_>>(), vec![1000, 2000]);
+        assert_eq!(
+            d.messages.iter().map(|m| m.date_ms).collect::<Vec<_>>(),
+            vec![1000, 2000]
+        );
         assert_eq!(d.messages[0].body, "");
         assert_eq!(d.messages[1].body, "b");
     }

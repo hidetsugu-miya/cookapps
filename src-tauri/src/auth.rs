@@ -95,7 +95,9 @@ impl Auth {
 
     async fn login(&self, app: &AppHandle) -> Result<(), String> {
         let client = load_client(app)?;
-        let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| e.to_string())?;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| e.to_string())?;
         let redirect_uri = format!(
             "http://127.0.0.1:{}",
             listener.local_addr().map_err(|e| e.to_string())?.port()
@@ -210,7 +212,10 @@ async fn receive_code(listener: &TcpListener, state: &str) -> Result<String, Str
         let request = String::from_utf8_lossy(&buf[..n]);
         let line = request.lines().next().unwrap_or("");
         let (status, body) = if line.starts_with("GET /?") {
-            ("200 OK", "ログイン処理が完了しました。このタブは閉じて構いません。")
+            (
+                "200 OK",
+                "ログイン処理が完了しました。このタブは閉じて構いません。",
+            )
         } else {
             ("404 Not Found", "")
         };
@@ -228,7 +233,10 @@ async fn receive_code(listener: &TcpListener, state: &str) -> Result<String, Str
 
 /// Extracts the authorization code from a request line such as `GET /?code=..&state=.. HTTP/1.1`.
 fn code_from_request(line: &str, expected_state: &str) -> Result<String, String> {
-    let path = line.split_whitespace().nth(1).ok_or("不正なリダイレクトです")?;
+    let path = line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("不正なリダイレクトです")?;
     let url = Url::parse(&format!("http://127.0.0.1{path}")).map_err(|e| e.to_string())?;
     let (mut code, mut state, mut error) = (None, None, None);
     for (k, v) in url.query_pairs() {
@@ -269,7 +277,10 @@ mod tests {
     #[test]
     fn rejects_state_mismatch() {
         let line = "GET /?code=abc&state=other HTTP/1.1";
-        assert_eq!(code_from_request(line, "xyz"), Err("state が一致しません".into()));
+        assert_eq!(
+            code_from_request(line, "xyz"),
+            Err("state が一致しません".into())
+        );
     }
 
     #[test]
@@ -282,7 +293,10 @@ mod tests {
     #[test]
     fn rejects_missing_code() {
         let line = "GET /?state=xyz HTTP/1.1";
-        assert_eq!(code_from_request(line, "xyz"), Err("認可コードがありません".into()));
+        assert_eq!(
+            code_from_request(line, "xyz"),
+            Err("認可コードがありません".into())
+        );
     }
 
     #[test]
