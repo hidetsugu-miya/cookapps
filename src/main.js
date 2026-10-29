@@ -46,7 +46,6 @@ const TODO_SVG = $("thread-todo").innerHTML.trim();
 let listScroll = 0;
 
 function show(view) {
-  linkStatus.hidden = true;
   if (!$("threads").hidden) listScroll = $("main").scrollTop;
   // The calendar and Todo screens bring their own header.
   const own = view === "calendar" || view === "todo";
@@ -213,7 +212,6 @@ function row(t) {
 // which hides the real ones (DOM clobbering), so the prototype's are called explicitly.
 const queryAll = (doc, selector) => Document.prototype.querySelectorAll.call(doc, selector);
 const rootOf = Object.getOwnPropertyDescriptor(Document.prototype, "documentElement").get;
-const listen = (doc, type, handler) => EventTarget.prototype.addEventListener.call(doc, type, handler, true);
 
 // The href getters are called through the prototypes for the same reason; they resolve the value against the document's <base>.
 const hrefGetters = {
@@ -222,40 +220,28 @@ const hrefGetters = {
 };
 const localNameOf = Object.getOwnPropertyDescriptor(Element.prototype, "localName").get;
 
-// The resolved URL of the link `target` is in: null when it is in none or the link is an in-page anchor (#...), which the frame handles;
-// "" for an empty href, which would reload the frame and lose the images put in.
+const setAttr = Element.prototype.setAttribute;
+
+// Sends a mail's links to Rust. The frame's sandbox lets only a user's click navigate the top window (allow-top-navigation-by-user-activation),
+// and Rust's on_navigation cancels that and opens an http(s) URL in the default browser. WebKit calls no listener this page adds to the
+// frame's document (the sandbox has no allow-scripts), so the links are rewritten here instead:
+// - http(s): target="_top", with the resolved URL as the title, which the tooltip shows, so a link whose text says otherwise shows;
+// - the rest (mailto:, #anchors, ...): target="_self", so neither the mail's <base target> nor its own target reaches the top window;
+// - an empty href is dropped: it would reload the frame and lose the images put in.
 // SVG <a> is left out: its href is not a string.
-function linkAt(target) {
-  const a = Element.prototype.closest.call(target, "a[href]:not(svg a), area[href]");
-  if (!a) return null;
-  const raw = Element.prototype.getAttribute.call(a, "href").trim();
-  if (raw.startsWith("#")) return null;
-  if (!raw) return "";
-  return hrefGetters[localNameOf.call(a)].call(a);
-}
-
-// Where a link leads, bottom left like a browser's status bar, so a link whose text says otherwise shows. Outside the frame, so the mail cannot touch it.
-const linkStatus = el("link-status");
-linkStatus.hidden = true;
-document.body.append(linkStatus);
-
-// Opens a link of a mail's document in the default browser. The frame's sandbox allows no navigation, so the click is taken here.
-// Only http(s) is handed on; other links (mailto: and the like) do nothing.
-function openLinksInBrowser(doc) {
-  listen(doc, "click", (e) => {
-    const url = linkAt(e.target);
-    if (url === null) return;
-    Event.prototype.preventDefault.call(e);
-    if (/^https?:/i.test(url)) invoke("open_link", { url }).catch(showError);
-  });
-  for (const type of ["mouseover", "focusin"]) {
-    listen(doc, type, (e) => {
-      const url = linkAt(e.target);
-      linkStatus.hidden = !url;
-      if (url) linkStatus.textContent = url;
-    });
+function routeLinks(doc) {
+  for (const a of queryAll(doc, "a[href]:not(svg a), area[href]")) {
+    const raw = Element.prototype.getAttribute.call(a, "href").trim();
+    if (!raw) {
+      Element.prototype.removeAttribute.call(a, "href");
+      continue;
+    }
+    // A #anchor stays in the frame even when the mail's <base href> would resolve it to a web URL.
+    const url = raw.startsWith("#") ? "" : hrefGetters[localNameOf.call(a)].call(a);
+    const web = /^https?:/i.test(url);
+    setAttr.call(a, "target", web ? "_top" : "_self");
+    if (web) setAttr.call(a, "title", url);
   }
-  for (const type of ["mouseout", "focusout"]) listen(doc, type, () => (linkStatus.hidden = true));
 }
 
 // Frames waiting to be sized. All of them are measured first and written after, in one animation frame,
@@ -292,11 +278,20 @@ const frameObserver = new ResizeObserver((entries) => {
   }
 });
 
-// Fits the frame when its document loads and again when an image in it loads or fails, then hands the document to `onLoad`.
+// Fits the frame again once the images in its document have decoded (or failed to). No load listener is added to the document:
+// WebKit does not call one in a frame without allow-scripts. The prototype's decode is called for the same reason as `queryAll`.
+const decodeImage = HTMLImageElement.prototype.decode;
+function fitAfterImages(frame) {
+  const doc = frame.contentDocument;
+  if (!doc) return;
+  Promise.allSettled([...queryAll(doc, "img")].map((img) => decodeImage.call(img))).then(() => fitFrame(frame));
+}
+
+// Fits the frame when its document loads and when its images are in, then hands the document to `onLoad`.
 function autoFit(frame, onLoad) {
   frame.onload = () => {
     fitFrame(frame);
-    for (const type of ["load", "error"]) listen(frame.contentDocument, type, () => fitFrame(frame));
+    fitAfterImages(frame);
     onLoad(frame.contentDocument);
   };
   frameObserver.observe(frame);
@@ -351,6 +346,7 @@ async function showImages(urls, frame, ctx) {
     shown++;
   }
   if (!shown) throw "画像を取得できませんでした";
+  fitAfterImages(frame);
 }
 
 // A bar above a mail's frame with one button. The bar goes when `onClick` succeeds; a failure is shown.
@@ -452,16 +448,20 @@ function message(m, ctx) {
   head.textContent = `${m.from} — ${new Date(m.dateMs).toLocaleString("ja-JP")}`;
   article.append(head);
   if (m.html) {
-    // No allow-scripts: scripts do not run. allow-same-origin only lets this page read the document's height.
-    // Invariant: never add allow-scripts, and never widen the sandbox beyond allow-same-origin. With the page's origin
-    // shared, the missing allow-scripts (backed by the CSP's script-src 'self') is the only guard.
+    // No allow-scripts: scripts do not run. allow-same-origin only lets this page read the document's height and rewrite its links.
+    // allow-top-navigation-by-user-activation lets a click on a link navigate the top window, and only a click; Rust's on_navigation
+    // always cancels that and opens the browser (see `routeLinks`).
+    // Invariant: never add allow-scripts, allow-popups, allow-forms or allow-top-navigation, and never widen the sandbox beyond these two.
+    // With the page's origin shared, the missing allow-scripts (backed by the CSP's script-src 'self') is the only guard.
     const frame = document.createElement("iframe");
-    frame.setAttribute("sandbox", "allow-same-origin");
+    frame.setAttribute("sandbox", "allow-same-origin allow-top-navigation-by-user-activation");
     frame.srcdoc = withBodyCsp(m.body);
     autoFit(frame, (doc) => {
-      openLinksInBrowser(doc);
+      routeLinks(doc);
       ctx.cids.then((byMessage) => {
-        if (!ctx.stale()) showCidImages(doc, byMessage[m.id]);
+        if (ctx.stale()) return;
+        showCidImages(doc, byMessage[m.id]);
+        fitAfterImages(frame);
       });
       const urls = externalImages(doc);
       if (urls.length) offerImages(m, frame, urls, ctx);
