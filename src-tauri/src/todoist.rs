@@ -66,6 +66,8 @@ struct ApiDue {
     date: String,
     #[serde(default)]
     string: String,
+    #[serde(default)]
+    is_recurring: bool,
 }
 
 /// An active or completed task; the completed-tasks endpoint returns the same shape.
@@ -214,6 +216,9 @@ pub struct Due {
     time: Option<String>,
     /// Todoist's human-readable form ("every day", "明日"); what the due chip edits.
     string: String,
+    /// Repeats ("every week"); a day picked from a calendar would replace the repeat, so the due chip only edits its text.
+    #[serde(default)]
+    recurring: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
@@ -502,6 +507,7 @@ fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
         date: date.to_string(),
         time: time.map(|t| t.format("%H:%M").to_string()),
         string: due.string.clone(),
+        recurring: due.is_recurring,
     })
 }
 
@@ -1648,11 +1654,23 @@ mod tests {
             Some(Due {
                 date: "2026-10-30".into(),
                 time: Some("05:30".into()),
-                string: "every day".into()
+                string: "every day".into(),
+                recurring: false
             })
         );
         // Judged against the local date: 05:30 on the 30th is not today (the 29th).
         assert_eq!(t.tasks[0].bucket, Bucket::Upcoming);
+    }
+
+    #[test]
+    fn due_reports_whether_it_recurs() {
+        let t = todo(
+            vec![task(
+                json!({"id": "A", "due": {"date": "2026-10-30", "string": "every day", "is_recurring": true}}),
+            )],
+            vec![],
+        );
+        assert!(t.tasks[0].due.as_ref().unwrap().recurring);
     }
 
     #[test]

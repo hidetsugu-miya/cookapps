@@ -1682,6 +1682,7 @@ function monthPicker(shown, due, pick) {
 }
 
 // The due chip opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
+// A repeating task gets the text field only: a picked day would replace its repeat.
 function dueChip(t) {
   const b = chip(DATE_SVG, t.due ? dueLabel(t.due) : "期限なし", t.bucket === "overdue" ? "over" : "");
   b.onclick = () => {
@@ -1697,13 +1698,14 @@ function dueChip(t) {
       if (input.value.trim() !== (t.due?.string ?? "")) saveTask(t.id, { dueString: input.value });
     };
     const month = t.due ? addDays(t.due.date, 0) : new Date();
-    pop.append(
-      input,
-      monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), t.due, (iso) => {
-        closeMenu();
-        saveTask(t.id, { dueString: t.due?.time ? `${iso} ${t.due.time}` : iso });
-      }),
-    );
+    pop.append(input);
+    if (!t.due?.recurring)
+      pop.append(
+        monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), t.due, (iso) => {
+          closeMenu();
+          saveTask(t.id, { dueString: t.due?.time ? `${iso} ${t.due.time}` : iso });
+        }),
+      );
     showMenu(b, pop);
     input.focus();
     input.select();
