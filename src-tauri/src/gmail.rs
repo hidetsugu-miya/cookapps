@@ -1361,7 +1361,14 @@ pub async fn untrash(
     id: String,
 ) -> Result<Option<bool>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("untrash", &account, e))?;
-    untrash_thread(&dir, &auth, &account, &id)
+    // threads.untrash may not bring INBOX back, so put it on again.
+    let done = untrash_thread(&dir, &auth, &account, &id)
+        .await
+        .map_err(|e| log_failure("untrash", &account, e))?;
+    if done.is_none() {
+        return Ok(None);
+    }
+    unarchive_thread(&dir, &auth, &account, &id)
         .await
         .map_err(|e| log_failure("untrash", &account, e))
 }
