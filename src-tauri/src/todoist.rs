@@ -23,6 +23,8 @@ const WEB_TASK_URL: &str = "https://app.todoist.com/app/task";
 const GMAIL_URL: &str = "https://mail.google.com/mail/u/";
 /// The keychain user name (and the `account=` of the logs) of the personal API token.
 const TOKEN_USER: &str = "todoist";
+/// The token has a service of its own: under the Gmail accounts' one, a name from outside could reach it as an account.
+const TOKEN_SERVICE: &str = "jp.mysis.cookup.todoist";
 const PAGE_LIMIT: &str = "200";
 // shortcut: past these many pages (200 items each) the rest is dropped, upgrade if the lists ever grow that long.
 const MAX_TASK_PAGES: usize = 20;
@@ -436,31 +438,65 @@ fn build_todo<Tz: TimeZone>(
 /// What the commands keep in memory: the token, so the keychain is read once, and the last completed tasks, which a load after an operation reuses.
 #[derive(Default)]
 pub struct TodoistState {
-    token: Mutex<Option<String>>,
+    /// `None` means not loaded: the keychain is read. The lock is held across a read, a save and a disconnect, so they never interleave.
+    token: tokio::sync::Mutex<Option<String>>,
     done: Mutex<Arc<Vec<ApiTask>>>,
 }
 
 impl TodoistState {
     /// The token: the copy in memory, else the keychain's (read off the async threads). `None` means none is stored.
     async fn token(&self) -> Result<Option<String>, String> {
-        let cached = self.token.lock().unwrap().clone();
-        if cached.is_some() {
-            return Ok(cached);
+        let mut cached = self.token.lock().await;
+        if cached.is_none() {
+            *cached = tokio::task::spawn_blocking(read_token)
+                .await
+                .map_err(|e| e.to_string())??;
         }
-        let stored = tokio::task::spawn_blocking(read_token)
-            .await
-            .map_err(|e| e.to_string())??;
-        self.set_token(stored.clone());
-        Ok(stored)
+        Ok(cached.clone())
     }
 
-    fn set_token(&self, token: Option<String>) {
-        *self.token.lock().unwrap() = token;
+    /// Forgets the copy in memory (a rejected token); the keychain keeps the stored one.
+    async fn forget_token(&self) {
+        *self.token.lock().await = None;
     }
 }
 
+fn token_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(TOKEN_SERVICE, TOKEN_USER).map_err(|e| e.to_string())
+}
+
+/// What reading the token does with the entry the first versions kept under the Gmail accounts' service.
+struct Migration {
+    token: Option<String>,
+    /// Copy `token` to the new entry.
+    copy: bool,
+    delete_old: bool,
+}
+
+fn migration(new: Option<String>, old: Option<String>) -> Migration {
+    Migration {
+        copy: new.is_none() && old.is_some(),
+        delete_old: old.is_some(),
+        token: new.or(old),
+    }
+}
+
+/// The stored token. An old entry is moved to the new one and deleted.
 fn read_token() -> Result<Option<String>, String> {
-    match keyring_entry(TOKEN_USER)?.get_password() {
+    let (new, old) = (token_entry()?, keyring_entry(TOKEN_USER)?);
+    let m = migration(read_entry(&new)?, read_entry(&old)?);
+    if let (true, Some(token)) = (m.copy, &m.token) {
+        new.set_password(token)
+            .map_err(|e| format!("キーチェーンへの保存に失敗: {e}"))?;
+    }
+    if m.delete_old {
+        delete_entry(&old)?;
+    }
+    Ok(m.token)
+}
+
+fn read_entry(entry: &keyring::Entry) -> Result<Option<String>, String> {
+    match entry.get_password() {
         Ok(t) => Ok(Some(t)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(format!("キーチェーンの読み取りに失敗: {e}")),
@@ -503,14 +539,19 @@ fn parse<T: DeserializeOwned>(text: &str) -> Result<T, ApiError> {
     serde_json::from_str(text).map_err(|e| format!("Todoist の応答を読めません: {e}").into())
 }
 
-/// Every item of a paginated list, following `next_cursor` for up to `max_pages` pages. `Ok(None)` means the token was rejected.
+/// Whether Todoist rejected the token.
+fn rejected(e: &ApiError) -> bool {
+    e.status == Some(reqwest::StatusCode::UNAUTHORIZED.as_u16())
+}
+
+/// Every item of a paginated list, following `next_cursor` for up to `max_pages` pages. A rejected token is an `Err` ([`rejected`]), so a join of fetches stops at once.
 async fn fetch_all<T: DeserializeOwned>(
     http: &reqwest::Client,
     token: &str,
     path: &'static str,
     query: Vec<(&'static str, String)>,
     max_pages: usize,
-) -> Result<Option<Vec<T>>, ApiError> {
+) -> Result<Vec<T>, ApiError> {
     let mut items = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..max_pages {
@@ -518,7 +559,10 @@ async fn fetch_all<T: DeserializeOwned>(
         q.push(("limit", PAGE_LIMIT.to_owned()));
         q.extend(cursor.map(|c| ("cursor", c)));
         let Some(text) = send(http, Method::GET, token, path, &q, None).await? else {
-            return Ok(None);
+            return Err(ApiError::with_status(
+                reqwest::StatusCode::UNAUTHORIZED.as_u16(),
+                "Todoist がトークンを拒否しました".into(),
+            ));
         };
         let page: Page<T> = parse(&text)?;
         items.extend(page.results);
@@ -527,7 +571,7 @@ async fn fetch_all<T: DeserializeOwned>(
             break;
         }
     }
-    Ok(Some(items))
+    Ok(items)
 }
 
 /// Sends one request with the stored token, logging a failure. `Ok(None)` means a token is needed: none is stored, or Todoist rejected it.
@@ -550,7 +594,7 @@ async fn request(
         .await
         .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let Some(text) = sent else {
-        state.set_token(None);
+        state.forget_token().await;
         return Ok(None);
     };
     // close / reopen / delete answer with null or nothing.
@@ -580,46 +624,51 @@ pub async fn todoist_load(
     };
     let http = auth.http();
     let fetch_done = async {
-        Ok::<_, ApiError>(if with_done {
-            let since =
-                (Utc::now() - Duration::days(DONE_DAYS)).to_rfc3339_opts(SecondsFormat::Secs, true);
-            let until = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-            let query = vec![("since", since), ("until", until)];
-            Some(
-                fetch_all::<ApiTask>(
-                    http,
-                    &token,
-                    "/tasks/completed/by_completion_date",
-                    query,
-                    MAX_DONE_PAGES,
-                )
-                .await,
-            )
-        } else {
-            None
-        })
+        if !with_done {
+            return Ok::<_, ApiError>(None);
+        }
+        let since =
+            (Utc::now() - Duration::days(DONE_DAYS)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let until = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        let query = vec![("since", since), ("until", until)];
+        let fetched = fetch_all::<ApiTask>(
+            http,
+            &token,
+            "/tasks/completed/by_completion_date",
+            query,
+            MAX_DONE_PAGES,
+        )
+        .await;
+        match fetched {
+            // A rejected token stops the whole load; any other failure is left to the caller.
+            Err(e) if rejected(&e) => Err(e),
+            fetched => Ok(Some(fetched)),
+        }
     };
     // Awaited here, not spawned: a failure or a rejected token returns at once and drops the fetches still running.
-    let (tasks, projects, done) = tokio::try_join!(
+    let joined = tokio::try_join!(
         fetch_all::<ApiTask>(http, &token, "/tasks", vec![], MAX_TASK_PAGES),
         fetch_all::<ApiProject>(http, &token, "/projects", vec![], MAX_PROJECT_PAGES),
         fetch_done,
-    )
-    .map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let (Some(tasks), Some(projects)) = (tasks, projects) else {
-        state.set_token(None);
-        return Ok(None);
+    );
+    let (tasks, projects, done) = match joined {
+        Ok(fetched) => fetched,
+        Err(e) if rejected(&e) => {
+            state.forget_token().await;
+            return Ok(None);
+        }
+        Err(e) => return Err(log_failure(command, TOKEN_USER, e)),
     };
     let done = match done {
         Some(fetched) => {
             // The done subtasks only complete the counts, so their failure (e.g. a plan without history) must not hide the tasks.
-            let fetched = Arc::new(match fetched {
-                Ok(d) => d.unwrap_or_default(),
-                Err(e) => {
-                    log_failure(command, TOKEN_USER, e);
-                    Vec::new()
-                }
+            let mut fetched = fetched.unwrap_or_else(|e| {
+                log_failure(command, TOKEN_USER, e);
+                Vec::new()
             });
+            // build_todo reads only the subtasks.
+            fetched.retain(|t| t.parent_id.is_some());
+            let fetched = Arc::new(fetched);
             *state.done.lock().unwrap() = Arc::clone(&fetched);
             fetched
         }
@@ -636,29 +685,45 @@ pub async fn todoist_load(
 
 /// Stores the personal API token in the keychain. It is never logged or returned.
 #[tauri::command]
-pub fn todoist_save_token(state: State<'_, TodoistState>, token: String) -> Result<(), String> {
-    let token = token.trim();
+pub async fn todoist_save_token(
+    state: State<'_, TodoistState>,
+    token: String,
+) -> Result<(), String> {
+    let token = token.trim().to_owned();
     if token.is_empty() {
         return Err("トークンを入力してください".into());
     }
-    keyring_entry(TOKEN_USER)
-        .and_then(|e| {
-            e.set_password(token)
+    let mut cached = state.token.lock().await;
+    let stored = token.clone();
+    tokio::task::spawn_blocking(move || {
+        token_entry().and_then(|e| {
+            e.set_password(&stored)
                 .map_err(|e| format!("キーチェーンへの保存に失敗: {e}"))
         })
-        .map_err(|e| log_failure("todoist_save_token", TOKEN_USER, e))?;
-    state.set_token(Some(token.to_owned()));
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r)
+    .map_err(|e| log_failure("todoist_save_token", TOKEN_USER, e))?;
+    *cached = Some(token);
     Ok(())
 }
 
-/// Removes the stored token.
+/// Removes the stored token (the old entry too, or the next read would move it back) and the completed tasks kept with it.
 #[tauri::command]
-pub fn todoist_disconnect(state: State<'_, TodoistState>) -> Result<(), String> {
-    keyring_entry(TOKEN_USER)
-        .and_then(|e| delete_entry(&e))
-        .map_err(|e| log_failure("todoist_disconnect", TOKEN_USER, e))?;
-    state.set_token(None);
-    Ok(())
+pub async fn todoist_disconnect(state: State<'_, TodoistState>) -> Result<(), String> {
+    let mut cached = state.token.lock().await;
+    let cleared = tokio::task::spawn_blocking(|| {
+        delete_entry(&token_entry()?)?;
+        delete_entry(&keyring_entry(TOKEN_USER)?)
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    // Forgotten even when a delete failed: the next read then shows what the keychain really holds.
+    *cached = None;
+    *state.done.lock().unwrap() = Arc::default();
+    cleared.map_err(|e| log_failure("todoist_disconnect", TOKEN_USER, e))
 }
 
 /// Adds a task from natural language (Quick Add). Inside a project (`project_id`) the task is moved there.
@@ -848,6 +913,28 @@ mod tests {
 
     fn date(s: &str) -> NaiveDate {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn migration_moves_the_old_entry_only_when_the_new_one_is_empty() {
+        let (old, new) = (Some("o".to_owned()), Some("n".to_owned()));
+        let m = migration(None, old.clone());
+        assert_eq!(
+            (m.token.as_deref(), m.copy, m.delete_old),
+            (Some("o"), true, true)
+        );
+        let m = migration(new.clone(), old);
+        assert_eq!(
+            (m.token.as_deref(), m.copy, m.delete_old),
+            (Some("n"), false, true)
+        );
+        let m = migration(new, None);
+        assert_eq!(
+            (m.token.as_deref(), m.copy, m.delete_old),
+            (Some("n"), false, false)
+        );
+        let m = migration(None, None);
+        assert_eq!((m.token, m.copy, m.delete_old), (None, false, false));
     }
 
     fn accounts() -> Vec<String> {

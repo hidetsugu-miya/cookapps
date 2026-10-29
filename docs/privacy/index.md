@@ -73,6 +73,7 @@ Gmail のメールそのものは消えません。
 
 本アプリへのアクセス権は、Google アカウントの「[サードパーティ製のアプリとサービス](https://myaccount.google.com/connections)」からいつでも取り消せます。
 保存したリフレッシュトークンは、macOS のキーチェーンアクセスで「jp.mysis.cookup」の項目を削除すると消せます。
+Todoist のトークンは、Todo 画面の「Todoist の接続を解除」か、キーチェーンアクセスで「jp.mysis.cookup.todoist」の項目を削除すると消せます。
 
 ## お問い合わせ
 

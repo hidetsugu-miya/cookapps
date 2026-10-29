@@ -220,13 +220,14 @@ function message(m) {
 // The thread shown in the detail view and its list row.
 let current = null;
 
-async function openThread({ id, account }, li) {
+async function openThread({ id, account }, li, origin = "mail") {
   $("error").hidden = true;
   try {
     const t = await invoke("thread", { account, id });
     // null: that account must log in again, which the list shows.
     if (t === null) return load();
     current = { id, account, li };
+    threadOrigin = origin;
     $("thread-subject").textContent = t.subject || "(件名なし)";
     $("messages").replaceChildren(...t.messages.map(message));
     show("thread");
@@ -423,6 +424,9 @@ document.addEventListener("keydown", (e) => e.key === "Escape" && hideTip());
 // Which screen the sidebar selected: "mail", "calendar" or "todo". Background work reads it; only the sidebar changes it.
 let screen = "mail";
 
+// The screen the open thread was opened from ("mail" or "todo"): where "戻る" goes.
+let threadOrigin = "mail";
+
 // Only the latest of overlapping loads may draw the list.
 let loadSeq = 0;
 // Loads in flight; a sync stays out of their way.
@@ -545,7 +549,8 @@ document.addEventListener("visibilitychange", syncAll);
 $("reload").onclick = load;
 $("back").onclick = () => {
   $("error").hidden = true;
-  show("list");
+  if (threadOrigin === "todo") setScreen("todo");
+  else show("list");
 };
 // Detail view "trash" / "archive": back to the list at once, the work runs in the background.
 function removeCurrent(command) {
@@ -826,7 +831,8 @@ function setScreen(name) {
     loadCalendar();
   } else if (name === "todo") {
     show("todo");
-    loadTodo();
+    // The backend keeps the completed tasks of the last load; they are fetched again only on the first one.
+    loadTodo(false, todo === null);
   } else {
     show("list");
   }
@@ -943,8 +949,9 @@ function todoMode(mode) {
 }
 
 function showTokenForm(note = "") {
-  // No reload is due: the form is what the screen shows now.
+  // No reload is due: the form is what the screen shows now, and a load still in flight must not draw over it.
   clearTimeout(todoReloadTimer);
+  todoSeq++;
   todo = null;
   todoOpen = null;
   todoMode("token");
@@ -1066,7 +1073,7 @@ function renderList() {
 // Opens the thread of a task's mail link in the mail screen.
 async function openMailFromTodo({ account, threadId }) {
   setScreen("mail");
-  await openThread({ id: threadId, account }, rows.get(`${account}/${threadId}`)?.li ?? null);
+  await openThread({ id: threadId, account }, rows.get(`${account}/${threadId}`)?.li ?? null, "todo");
 }
 
 // Reloads shortly after the last call, so a run of changes costs one load. Completed tasks are fetched again only when asked for by one of them.
@@ -1161,8 +1168,10 @@ function dueChip(t) {
     const finish = (save) => {
       if (finished) return;
       finished = true;
-      if (save && input.value.trim() !== (t.due?.string ?? "")) saveTask(t.id, { dueString: input.value });
-      else input.replaceWith(b);
+      // Back to the chip either way: the field left in place would keep the focus, and the reload after the save would not redraw.
+      const dueString = input.value;
+      input.replaceWith(b);
+      if (save && dueString.trim() !== (t.due?.string ?? "")) saveTask(t.id, { dueString });
     };
     input.onkeydown = (e) => {
       if (composing(e)) return;
@@ -1226,6 +1235,14 @@ function subtaskRow(s) {
     li.classList.toggle("done", box.checked);
     todoCall("todoist_set_done", { id: s.id, done: box.checked }, box);
   };
+  // A subtask with subtasks of its own has a row among the tasks, so it opens like one; otherwise nothing could reach its subtasks.
+  if (todo.tasks.some((x) => x.id === s.id)) {
+    li.onclick = () => {
+      todoOpen = s.id;
+      renderTodo();
+    };
+    box.onclick = (e) => e.stopPropagation();
+  }
   const body = tag("div", "body");
   body.append(tag("div", "t", s.content));
   const trail = tag("div", "trail");
@@ -1334,6 +1351,9 @@ function editingDetail() {
   return $("todo-detail").contains(a) && a.matches("textarea, input:not([type=checkbox])") && (a.dataset.field !== "sub" || a.value !== "");
 }
 
+// The data of the last quiet load as text, to tell a refresh that changed nothing; null after any other load, since the screen may differ from it then.
+let todoText = null;
+
 // Set when a load updated `todo` without drawing it (a field was being typed in), so the next quiet refresh draws it even if nothing else changed.
 let todoUndrawn = false;
 
@@ -1349,7 +1369,9 @@ async function loadTodo(quiet = false, withDone = true) {
       showTokenForm();
       return true;
     }
-    const same = JSON.stringify(data) === JSON.stringify(todo);
+    const text = quiet ? JSON.stringify(data) : null;
+    const same = text !== null && text === todoText;
+    todoText = text;
     todo = data;
     projectById = new Map(data.projects.map((p) => [p.id, p]));
     // A field being typed in keeps what was typed; the detail is drawn after the focus leaves, by the next save's load or the next refresh.
@@ -1436,6 +1458,7 @@ $("todo-add").onsubmit = async (e) => {
   }
   input.focus();
 };
-setInterval(() => screen === "todo" && !document.hidden && loadTodo(true), TODO_REFRESH_MS);
+// Not while the token form is up: a load would read the keychain and draw the form again, dropping what is typed in it.
+setInterval(() => screen === "todo" && $("todo-token").hidden && !document.hidden && loadTodo(true), TODO_REFRESH_MS);
 
 load();
