@@ -1,3 +1,10 @@
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use encoding_rs::{Encoding, UTF_8};
 use reqwest::Method;
@@ -12,6 +19,8 @@ use tokio::task::JoinSet;
 use crate::auth::Auth;
 
 const THREADS_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
+const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
+const HISTORY_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/history";
 const METADATA_QUERY: [(&str, &str); 4] = [
     ("format", "metadata"),
     ("metadataHeaders", "From"),
@@ -20,6 +29,9 @@ const METADATA_QUERY: [(&str, &str); 4] = [
 ];
 // Keeps the burst of threads.get calls small enough for Gmail's per-second quota.
 const CONCURRENCY: usize = 10;
+// Past these a differential sync costs about as much as a full reload (50 threads), so reload instead.
+const MAX_SYNC_THREADS: usize = 50;
+const MAX_HISTORY_PAGES: usize = 10;
 
 #[derive(Deserialize)]
 struct ThreadList {
@@ -214,6 +226,47 @@ impl From<Thread> for ThreadDetail {
     }
 }
 
+/// A failed Gmail call. `status` is `None` when no HTTP response was received.
+#[derive(Debug)]
+pub struct ApiError {
+    status: Option<u16>,
+    rate_limited: bool,
+    message: String,
+}
+
+impl From<String> for ApiError {
+    fn from(message: String) -> Self {
+        Self {
+            status: None,
+            rate_limited: false,
+            message,
+        }
+    }
+}
+
+impl From<&str> for ApiError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+impl From<ApiError> for String {
+    fn from(e: ApiError) -> Self {
+        e.message
+    }
+}
+
+impl fmt::Display for ApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// Gmail signals its quota with 429, or 403 with a `rateLimitExceeded` / `userRateLimitExceeded` reason.
+fn is_rate_limited(status: u16, body: &str) -> bool {
+    status == 429 || (status == 403 && body.to_lowercase().contains("ratelimitexceeded"))
+}
+
 /// `Ok(None)` means login is required for `account`. Retries once with a refreshed token on 401.
 async fn send_json_refreshing<T: DeserializeOwned>(
     app: &AppHandle,
@@ -223,7 +276,7 @@ async fn send_json_refreshing<T: DeserializeOwned>(
     url: &str,
     query: &[(&str, &str)],
     body: Option<&Value>,
-) -> Result<Option<T>, String> {
+) -> Result<Option<T>, ApiError> {
     let Some(token) = auth.token(app, account).await? else {
         return Ok(None);
     };
@@ -235,7 +288,7 @@ async fn send_json_refreshing<T: DeserializeOwned>(
     };
     send_json(auth.http(), method, &refreshed, url, query, body)
         .await?
-        .ok_or("認証に失敗しました".to_string())
+        .ok_or("認証に失敗しました".into())
         .map(Some)
 }
 
@@ -263,7 +316,7 @@ async fn send_json<T: DeserializeOwned>(
     url: &str,
     query: &[(&str, &str)],
     body: Option<&Value>,
-) -> Result<Option<T>, String> {
+) -> Result<Option<T>, ApiError> {
     let res = build_request(http, method, token, url, query, body)
         .send()
         .await
@@ -274,9 +327,13 @@ async fn send_json<T: DeserializeOwned>(
     }
     if !status.is_success() {
         let body = res.text().await.unwrap_or_default();
-        return Err(format!("Gmail API が {status} を返しました: {body}"));
+        return Err(ApiError {
+            status: Some(status.as_u16()),
+            rate_limited: is_rate_limited(status.as_u16(), &body),
+            message: format!("Gmail API が {status} を返しました: {body}"),
+        });
     }
-    res.json().await.map(Some).map_err(|e| e.to_string())
+    Ok(res.json().await.map(Some).map_err(|e| e.to_string())?)
 }
 
 #[derive(Serialize)]
@@ -286,6 +343,8 @@ pub struct Inbox {
     threads: Vec<ThreadItem>,
     /// Accounts whose threads are missing because they must log in again.
     needs_login: Vec<String>,
+    /// Per account, the mailbox history ID as of the full load; the starting point of `sync`.
+    history_ids: HashMap<String, String>,
 }
 
 /// Newest first across all accounts.
@@ -295,12 +354,62 @@ fn merge_inboxes(lists: Vec<Vec<ThreadItem>>) -> Vec<ThreadItem> {
     items
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Profile {
+    history_id: String,
+}
+
+struct AccountInbox {
+    threads: Vec<ThreadItem>,
+    history_id: String,
+}
+
+/// threads.get(metadata) for each ID, in chunks. `None` means 404: the thread no longer exists.
+async fn get_threads(
+    http: &reqwest::Client,
+    token: &str,
+    ids: &[String],
+) -> Result<Vec<(String, Option<Thread>)>, ApiError> {
+    let mut out = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(CONCURRENCY) {
+        let mut set = JoinSet::new();
+        for id in chunk {
+            let (http, token, id) = (http.clone(), token.to_owned(), id.clone());
+            set.spawn(async move {
+                let url = format!("{THREADS_URL}/{id}");
+                let res =
+                    send_json::<Thread>(&http, Method::GET, &token, &url, &METADATA_QUERY, None)
+                        .await;
+                (id, res)
+            });
+        }
+        while let Some(joined) = set.join_next().await {
+            let (id, res) = joined.map_err(|e| e.to_string())?;
+            match res {
+                Ok(Some(thread)) => out.push((id, Some(thread))),
+                Ok(None) => return Err("認証に失敗しました".into()),
+                Err(e) if e.status == Some(404) => out.push((id, None)),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Inbox threads of one account. `Ok(None)` means that account must log in again.
 async fn account_threads(
     app: &AppHandle,
     auth: &Auth,
     account: &str,
-) -> Result<Option<Vec<ThreadItem>>, String> {
+) -> Result<Option<AccountInbox>, ApiError> {
+    // Read before the list: changes landing in between are replayed by the next sync, which is harmless.
+    let Some(profile) =
+        send_json_refreshing::<Profile>(app, auth, account, Method::GET, PROFILE_URL, &[], None)
+            .await?
+    else {
+        return Ok(None);
+    };
     let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
     let Some(list) = send_json_refreshing::<ThreadList>(
         app,
@@ -320,38 +429,30 @@ async fn account_threads(
         return Ok(None);
     };
 
-    let http = auth.http();
-    let mut items = Vec::with_capacity(list.threads.len());
-    for chunk in list.threads.chunks(CONCURRENCY) {
-        let mut set = JoinSet::new();
-        for t in chunk {
-            let (http, token, url) = (
-                http.clone(),
-                token.clone(),
-                format!("{THREADS_URL}/{}", t.id),
-            );
-            set.spawn(async move {
-                send_json::<Thread>(&http, Method::GET, &token, &url, &METADATA_QUERY, None).await
-            });
-        }
-        while let Some(res) = set.join_next().await {
-            let thread = res
-                .map_err(|e| e.to_string())??
-                .ok_or("認証に失敗しました")?;
-            items.push(ThreadItem::new(thread, account));
-        }
-    }
-    Ok(Some(items))
+    let ids: Vec<_> = list.threads.into_iter().map(|t| t.id).collect();
+    let threads = get_threads(auth.http(), &token, &ids)
+        .await?
+        .into_iter()
+        .filter_map(|(_, t)| t)
+        .map(|t| ThreadItem::new(t, account))
+        .collect();
+    Ok(Some(AccountInbox {
+        threads,
+        history_id: profile.history_id,
+    }))
 }
 
 /// Threads of every account merged; accounts needing login are listed, not fatal.
 #[tauri::command]
 pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, String> {
     let accounts = auth.accounts(&app).await?;
-    let (mut lists, mut needs_login) = (Vec::new(), Vec::new());
+    let (mut lists, mut needs_login, mut history_ids) = (Vec::new(), Vec::new(), HashMap::new());
     for account in &accounts {
         match account_threads(&app, &auth, account).await? {
-            Some(items) => lists.push(items),
+            Some(loaded) => {
+                lists.push(loaded.threads);
+                history_ids.insert(account.clone(), loaded.history_id);
+            }
             None => needs_login.push(account.clone()),
         }
     }
@@ -359,7 +460,264 @@ pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, Strin
         accounts,
         threads: merge_inboxes(lists),
         needs_login,
+        history_ids,
     })
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct HistoryList {
+    #[serde(default)]
+    history: Vec<HistoryRecord>,
+    next_page_token: Option<String>,
+    #[serde(default)]
+    history_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryRecord {
+    #[serde(default)]
+    messages_added: Vec<HistoryMessage>,
+    #[serde(default)]
+    messages_deleted: Vec<HistoryMessage>,
+    #[serde(default)]
+    labels_added: Vec<HistoryMessage>,
+    #[serde(default)]
+    labels_removed: Vec<HistoryMessage>,
+}
+
+#[derive(Deserialize)]
+struct HistoryMessage {
+    message: HistoryMessageRef,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryMessageRef {
+    thread_id: String,
+}
+
+/// Threads touched by any added / deleted message or added / removed label, each once, in record order.
+/// Which of them still belong in the inbox is settled by refetching, not by reading the labels here.
+fn changed_thread_ids(records: &[HistoryRecord]) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for r in records {
+        let touched = [
+            &r.messages_added,
+            &r.messages_deleted,
+            &r.labels_added,
+            &r.labels_removed,
+        ];
+        for m in touched.into_iter().flatten() {
+            if !ids.contains(&m.message.thread_id) {
+                ids.push(m.message.thread_id.clone());
+            }
+        }
+    }
+    ids
+}
+
+/// A thread is listed while one of its messages is in the inbox and not in the trash.
+fn in_inbox(t: &Thread) -> bool {
+    t.messages.iter().any(|m| {
+        m.label_ids.iter().any(|l| l == "INBOX") && !m.label_ids.iter().any(|l| l == "TRASH")
+    })
+}
+
+/// Refetched threads → (rows to put in the list, IDs to take out of it). A 404 thread is taken out.
+fn split_fetched(
+    fetched: Vec<(String, Option<Thread>)>,
+    account: &str,
+) -> (Vec<ThreadItem>, Vec<String>) {
+    let (mut threads, mut removed) = (Vec::new(), Vec::new());
+    for (id, thread) in fetched {
+        match thread {
+            Some(t) if in_inbox(&t) => threads.push(ThreadItem::new(t, account)),
+            _ => removed.push(id),
+        }
+    }
+    (threads, removed)
+}
+
+/// History records since `start`, all pages merged. A leftover `next_page_token` means the page cap was hit.
+/// `Ok(None)` means `account` must log in again.
+async fn list_history(
+    app: &AppHandle,
+    auth: &Auth,
+    account: &str,
+    start: &str,
+) -> Result<Option<HistoryList>, ApiError> {
+    let mut all = HistoryList::default();
+    for _ in 0..MAX_HISTORY_PAGES {
+        let mut query = vec![("startHistoryId", start), ("maxResults", "500")];
+        if let Some(token) = all.next_page_token.as_deref() {
+            query.push(("pageToken", token));
+        }
+        let Some(page) = send_json_refreshing::<HistoryList>(
+            app,
+            auth,
+            account,
+            Method::GET,
+            HISTORY_URL,
+            &query,
+            None,
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        all.history.extend(page.history);
+        all.history_id = page.history_id;
+        all.next_page_token = page.next_page_token;
+        if all.next_page_token.is_none() {
+            break;
+        }
+    }
+    Ok(Some(all))
+}
+
+/// What one `sync` found, to apply to the list of that account.
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum Sync {
+    /// Nothing changed, or the account is backing off after a rate limit.
+    Unchanged,
+    /// Put `threads` in the list (add or replace) and take `removed` out.
+    Changed {
+        threads: Vec<ThreadItem>,
+        removed: Vec<String>,
+        history_id: String,
+    },
+    /// The history was too old or too large: `threads` is the whole inbox of the account.
+    Reloaded {
+        threads: Vec<ThreadItem>,
+        history_id: String,
+    },
+    NeedsLogin,
+}
+
+async fn reload(app: &AppHandle, auth: &Auth, account: &str) -> Result<Sync, ApiError> {
+    Ok(match account_threads(app, auth, account).await? {
+        Some(l) => Sync::Reloaded {
+            threads: l.threads,
+            history_id: l.history_id,
+        },
+        None => Sync::NeedsLogin,
+    })
+}
+
+async fn sync_account(
+    app: &AppHandle,
+    auth: &Auth,
+    account: &str,
+    start: &str,
+) -> Result<Sync, ApiError> {
+    // One cheap call tells whether anything changed at all.
+    let Some(profile) =
+        send_json_refreshing::<Profile>(app, auth, account, Method::GET, PROFILE_URL, &[], None)
+            .await?
+    else {
+        return Ok(Sync::NeedsLogin);
+    };
+    if profile.history_id == start {
+        return Ok(Sync::Unchanged);
+    }
+    // No `labelId=INBOX` filter: the docs do not say whether a removal of that very label (archive) still
+    // matches it, and missing an archive is worse than refetching a few extra threads.
+    let list = match list_history(app, auth, account, start).await {
+        Ok(Some(list)) => list,
+        Ok(None) => return Ok(Sync::NeedsLogin),
+        // startHistoryId too old: Gmail asks for a full sync.
+        Err(e) if e.status == Some(404) => return reload(app, auth, account).await,
+        Err(e) => return Err(e),
+    };
+    let ids = changed_thread_ids(&list.history);
+    if list.next_page_token.is_some() || ids.len() > MAX_SYNC_THREADS {
+        return reload(app, auth, account).await;
+    }
+    let Some(token) = auth.token(app, account).await? else {
+        return Ok(Sync::NeedsLogin);
+    };
+    let (threads, removed) = split_fetched(get_threads(auth.http(), &token, &ids).await?, account);
+    let history_id = if list.history_id.is_empty() {
+        profile.history_id
+    } else {
+        list.history_id
+    };
+    Ok(Sync::Changed {
+        threads,
+        removed,
+        history_id,
+    })
+}
+
+/// Seconds to leave an account alone after its `fails`-th rate limit in a row: 20, 40, 80, ... up to 5 minutes.
+fn backoff(fails: u32) -> Duration {
+    Duration::from_secs((20u64 << fails.saturating_sub(1).min(4)).min(300))
+}
+
+#[derive(Default)]
+struct Throttle {
+    fails: u32,
+    until: Option<Instant>,
+}
+
+impl Throttle {
+    fn blocked(&self, now: Instant) -> bool {
+        self.until.is_some_and(|until| now < until)
+    }
+
+    fn hit(&mut self, now: Instant) {
+        self.fails += 1;
+        self.until = Some(now + backoff(self.fails));
+    }
+}
+
+/// Per-account backoff after rate limits, kept here so every caller of `sync` is thinned the same way.
+#[derive(Default)]
+pub struct SyncState(Mutex<HashMap<String, Throttle>>);
+
+/// Differential sync of one account from `start_history_id` (see `Inbox::history_ids` and `Sync`).
+#[tauri::command]
+pub async fn sync(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    state: State<'_, SyncState>,
+    account: String,
+    start_history_id: String,
+) -> Result<Sync, String> {
+    let blocked = state
+        .0
+        .lock()
+        .unwrap()
+        .get(&account)
+        .is_some_and(|t| t.blocked(Instant::now()));
+    if blocked {
+        return Ok(Sync::Unchanged);
+    }
+    match sync_account(&app, &auth, &account, &start_history_id).await {
+        Ok(result) => {
+            state.0.lock().unwrap().remove(&account);
+            Ok(result)
+        }
+        // Expected under quota pressure, so it is thinned out silently rather than reported as an error.
+        Err(e) if e.rate_limited => {
+            state
+                .0
+                .lock()
+                .unwrap()
+                .entry(account)
+                .or_default()
+                .hit(Instant::now());
+            Ok(Sync::Unchanged)
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// `Ok(None)` means `account` must log in again.
@@ -519,9 +877,11 @@ mod tests {
             accounts: vec!["a@example.com".into()],
             threads: vec![item_at("t", "a@example.com", 1)],
             needs_login: vec!["b@example.com".into()],
+            history_ids: HashMap::from([("a@example.com".to_string(), "42".to_string())]),
         };
         let v = serde_json::to_value(&inbox).unwrap();
         assert_eq!(v["needsLogin"][0], "b@example.com");
+        assert_eq!(v["historyIds"]["a@example.com"], "42");
         assert_eq!(v["threads"][0]["account"], "a@example.com");
         assert_eq!(v["threads"][0]["dateMs"], 1);
     }
@@ -709,5 +1069,135 @@ mod tests {
                 {"mimeType": "text/plain", "headers": [{"name": "Content-Type", "value": "text/plain; charset=nope"}],
                  "body": {"data": b64(b"ok")}}]}}]}));
         assert_eq!(d.messages[0].body, "ok");
+    }
+
+    fn thread_with_labels(id: &str, labels: &[&[&str]]) -> Thread {
+        let messages: Vec<_> = labels
+            .iter()
+            .map(|l| json!({"labelIds": l, "internalDate": "1"}))
+            .collect();
+        serde_json::from_value(json!({"id": id, "messages": messages})).unwrap()
+    }
+
+    #[test]
+    fn backoff_doubles_from_20_seconds_up_to_5_minutes() {
+        let secs: Vec<_> = [1, 2, 3, 4, 5, 6, 40].map(|n| backoff(n).as_secs()).into();
+        assert_eq!(secs, vec![20, 40, 80, 160, 300, 300, 300]);
+    }
+
+    #[test]
+    fn throttle_blocks_until_the_backoff_passes_and_grows_on_repeat() {
+        let t0 = Instant::now();
+        let mut t = Throttle::default();
+        assert!(!t.blocked(t0));
+        t.hit(t0);
+        assert!(t.blocked(t0 + Duration::from_secs(19)));
+        assert!(!t.blocked(t0 + Duration::from_secs(20)));
+        t.hit(t0);
+        assert!(t.blocked(t0 + Duration::from_secs(39)));
+        assert!(!t.blocked(t0 + Duration::from_secs(40)));
+    }
+
+    #[test]
+    fn detects_rate_limit_responses() {
+        assert!(is_rate_limited(429, ""));
+        assert!(is_rate_limited(
+            403,
+            r#"{"error":{"errors":[{"reason":"rateLimitExceeded"}]}}"#
+        ));
+        assert!(is_rate_limited(
+            403,
+            r#"{"reason":"userRateLimitExceeded"}"#
+        ));
+        assert!(!is_rate_limited(
+            403,
+            r#"{"reason":"insufficientPermissions"}"#
+        ));
+        assert!(!is_rate_limited(500, "rateLimitExceeded"));
+    }
+
+    #[test]
+    fn collects_changed_thread_ids_once_in_order_from_every_record_kind() {
+        let list: HistoryList = serde_json::from_value(json!({
+            "history": [
+                {"id": "1", "messages": [{"id": "m0", "threadId": "t0"}],
+                 "messagesAdded": [{"message": {"id": "m1", "threadId": "t1"}}]},
+                {"id": "2", "labelsRemoved": [{"message": {"id": "m2", "threadId": "t2"}, "labelIds": ["INBOX"]}]},
+                {"id": "3", "labelsAdded": [{"message": {"id": "m1", "threadId": "t1"}, "labelIds": ["UNREAD"]}],
+                 "messagesDeleted": [{"message": {"id": "m3", "threadId": "t3"}}]},
+                {"id": "4"}
+            ],
+            "historyId": "9"
+        }))
+        .unwrap();
+        assert_eq!(changed_thread_ids(&list.history), vec!["t1", "t2", "t3"]);
+        assert_eq!(list.history_id, "9");
+        assert!(list.next_page_token.is_none());
+    }
+
+    #[test]
+    fn history_without_changes_is_empty() {
+        let list: HistoryList = serde_json::from_str(r#"{"historyId": "5"}"#).unwrap();
+        assert!(changed_thread_ids(&list.history).is_empty());
+    }
+
+    #[test]
+    fn split_keeps_inbox_threads_and_removes_the_rest() {
+        let fetched = vec![
+            (
+                "kept".to_string(),
+                Some(thread_with_labels("kept", &[&["INBOX", "UNREAD"]])),
+            ),
+            (
+                "mixed".to_string(),
+                Some(thread_with_labels("mixed", &[&["SENT"], &["INBOX"]])),
+            ),
+            (
+                "archived".to_string(),
+                Some(thread_with_labels("archived", &[&["UNREAD"]])),
+            ),
+            (
+                "trashed".to_string(),
+                Some(thread_with_labels("trashed", &[&["TRASH"]])),
+            ),
+            ("gone".to_string(), None),
+        ];
+        let (threads, removed) = split_fetched(fetched, "a@example.com");
+        let kept: Vec<_> = threads
+            .iter()
+            .map(|t| (t.id.as_str(), t.account.as_str()))
+            .collect();
+        assert_eq!(
+            kept,
+            vec![("kept", "a@example.com"), ("mixed", "a@example.com")]
+        );
+        assert_eq!(removed, vec!["archived", "trashed", "gone"]);
+    }
+
+    #[test]
+    fn sync_serializes_with_kind_tag_in_camel_case() {
+        let v = serde_json::to_value(Sync::Changed {
+            threads: vec![item_at("t", "a@example.com", 1)],
+            removed: vec!["r".into()],
+            history_id: "7".into(),
+        })
+        .unwrap();
+        assert_eq!(v["kind"], "changed");
+        assert_eq!(v["historyId"], "7");
+        assert_eq!(v["removed"][0], "r");
+        assert_eq!(v["threads"][0]["dateMs"], 1);
+        let v = serde_json::to_value(Sync::NeedsLogin).unwrap();
+        assert_eq!(v["kind"], "needsLogin");
+        let v = serde_json::to_value(Sync::Unchanged).unwrap();
+        assert_eq!(v["kind"], "unchanged");
+        let v = serde_json::to_value(Sync::Reloaded {
+            threads: vec![],
+            history_id: "8".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            (v["kind"].as_str(), v["historyId"].as_str()),
+            (Some("reloaded"), Some("8"))
+        );
     }
 }

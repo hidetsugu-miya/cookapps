@@ -114,8 +114,12 @@ function rowButton(className, label, svg, action) {
   return button;
 }
 
-// Threads being archived / trashed ("account/id"); a list reload must not bring them back meanwhile.
+// Threads being archived / trashed ("account/id"); a list reload or sync must not bring them back meanwhile.
 const pending = new Set();
+
+// The rows on screen by "account/id": the thread data and its <li>.
+let rows = new Map();
+const rowKey = (t) => `${t.account}/${t.id}`;
 
 // Takes the row out at once and runs "archive" / "trash" in the background; on failure the row comes back.
 async function removeRow(command, account, id, li) {
@@ -128,6 +132,7 @@ async function removeRow(command, account, id, li) {
   try {
     const done = await invoke(command, { account, id });
     if (done === null) return load();
+    rows.delete(key);
   } catch (e) {
     list.insertBefore(li, next && next.parentNode === list ? next : null);
     showError(e);
@@ -138,6 +143,7 @@ async function removeRow(command, account, id, li) {
 
 function row(t) {
   const li = document.createElement("li");
+  li.dataset.dateMs = t.dateMs;
   const cell = (cls, text) => {
     const span = document.createElement("span");
     span.className = cls;
@@ -234,22 +240,119 @@ function renderAccounts({ accounts, needsLogin }) {
 
 // Only the latest of overlapping loads may draw the list.
 let loadSeq = 0;
+// Loads in flight; a sync stays out of their way.
+let loading = 0;
+// Per account, the mailbox history ID as of the last load or sync: where the next sync starts.
+let historyIds = new Map();
 
 async function load() {
   const seq = ++loadSeq;
+  loading++;
   $("error").hidden = true;
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
     renderAccounts(inbox);
     if (inbox.accounts.length === 0) return show("login");
-    const shown = inbox.threads.filter((t) => !pending.has(`${t.account}/${t.id}`));
-    $("threads").replaceChildren(...shown.map(row));
+    historyIds = new Map(Object.entries(inbox.historyIds));
+    const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
+    rows = new Map(shown.map((t) => [rowKey(t), { t, li: row(t) }]));
+    $("threads").replaceChildren(...[...rows.values()].map((r) => r.li));
   } catch (e) {
     showError(e);
+  } finally {
+    loading--;
   }
   show("list");
 }
+
+const sameRow = (a, b) => ["from", "subject", "snippet", "dateMs", "unread"].every((k) => a[k] === b[k]);
+
+// Adds the row of `t` in date order, or swaps it for the one on screen; the rest of the list is left alone.
+function upsert(t) {
+  const key = rowKey(t);
+  const old = rows.get(key);
+  if (pending.has(key) || (old && sameRow(old.t, t))) return;
+  // shortcut: a row whose read toggle is in flight keeps its optimistic state, upgrade if that ever shows stale.
+  if (old && old.li.querySelector(".read-box").disabled) return;
+  const li = row(t);
+  rows.set(key, { t, li });
+  const focused = old && old.li.contains(document.activeElement) ? document.activeElement.classList : null;
+  if (old && old.li.dataset.dateMs === li.dataset.dateMs) {
+    old.li.replaceWith(li);
+  } else {
+    if (old) old.li.remove();
+    const next = [...$("threads").children].find((c) => Number(c.dataset.dateMs) < t.dateMs);
+    $("threads").insertBefore(li, next || null);
+  }
+  if (old && current && current.li === old.li) current.li = li;
+  if (focused) li.querySelector(`.${[...focused].join(".")}`)?.focus();
+}
+
+// Applies one account's changes in place: the first visible row stays where it is on screen.
+// shortcut: with the detail view open the list cannot be measured, so rows added above shift it, upgrade if that bothers.
+function applyChanges(threads, removedKeys) {
+  const main = $("main");
+  const top = main.getBoundingClientRect().top;
+  const anchor = [...$("threads").children].find((li) => li.getBoundingClientRect().bottom > top);
+  const before = anchor && anchor.getBoundingClientRect().top;
+  for (const key of removedKeys) {
+    const r = rows.get(key);
+    if (r) r.li.remove();
+    rows.delete(key);
+  }
+  threads.forEach(upsert);
+  if (anchor && anchor.isConnected && main.scrollTop > 0) main.scrollTop += anchor.getBoundingClientRect().top - before;
+}
+
+function applySync(account, r) {
+  if (r.kind === "changed") {
+    applyChanges(r.threads, r.removed.map((id) => `${account}/${id}`));
+  } else if (r.kind === "reloaded") {
+    const keep = new Set(r.threads.map(rowKey));
+    applyChanges(r.threads, [...rows.keys()].filter((k) => k.startsWith(`${account}/`) && !keep.has(k)));
+  } else if (r.kind === "needsLogin") {
+    // The detail view stays; the list shows the re-login row at the next load.
+    historyIds.delete(account);
+    if (!$("threads").hidden) load();
+    return;
+  } else {
+    return;
+  }
+  historyIds.set(account, r.historyId);
+}
+
+const SYNC_MS = 10000;
+// Consecutive sync rounds with an error; one failure is not worth the user's attention.
+let syncFails = 0;
+let syncing = false;
+
+// Brings the list up to date with Gmail through `sync`, without leaving the current view.
+async function syncAll() {
+  if (syncing || loading || document.hidden || historyIds.size === 0) return;
+  syncing = true;
+  const seq = loadSeq;
+  let failure = null;
+  try {
+    for (const [account, startHistoryId] of [...historyIds]) {
+      try {
+        const r = await invoke("sync", { account, startHistoryId });
+        // A load that started meanwhile redraws everything from a newer state.
+        if (seq !== loadSeq || loading) return;
+        applySync(account, r);
+      } catch (e) {
+        failure = e;
+      }
+    }
+  } finally {
+    syncing = false;
+  }
+  syncFails = failure ? syncFails + 1 : 0;
+  if (syncFails === 3) showError(`自動同期に失敗しています: ${failure}`);
+}
+
+setInterval(syncAll, SYNC_MS);
+document.addEventListener("visibilitychange", syncAll);
 
 $("reload").onclick = load;
 $("back").onclick = () => {
