@@ -13,6 +13,9 @@
     <button id="nav-calendar" class="nav-item" aria-label="カレンダー" disabled>
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
     </button>
+    <button id="nav-todo" class="nav-item" aria-label="Todo">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>
+    </button>
     <div id="accounts">
       <div id="account-list"></div>
       <div id="account-popup" role="dialog" aria-label="アカウントの情報" hidden></div>
@@ -30,6 +33,9 @@
       <h2 id="thread-subject" hidden></h2>
       <button id="reload" class="icon-btn" aria-label="再読み込み" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+      </button>
+      <button id="thread-todo" class="icon-btn" aria-label="Todo にする" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
       </button>
       <button id="trash" class="icon-btn" aria-label="ゴミ箱へ移動" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
@@ -67,6 +73,42 @@
           <div id="cal-allday" class="cal-row"></div>
         </div>
         <div id="cal-body"></div>
+      </div>
+    </section>
+    <section id="todo" hidden>
+      <aside id="projects"></aside>
+      <div id="todo-body">
+        <header>
+          <button id="todo-back" class="icon-btn" aria-label="戻る" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
+          </button>
+          <h1 id="todo-title">今日</h1>
+          <button id="todo-delete" class="icon-btn" aria-label="削除" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>
+          </button>
+          <button id="todo-disconnect" class="icon-btn" aria-label="Todoist の接続を解除" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 15l6-6"/><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"/><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"/></svg>
+          </button>
+          <button id="todo-reload" class="icon-btn" aria-label="再読み込み">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+          </button>
+        </header>
+        <div id="todo-main">
+          <form id="todo-token" hidden>
+            <p>Todoist の設定の「連携」にある個人 API トークンを入力してください。トークンは macOS のキーチェーンに保存し、画面には表示しません。</p>
+            <p id="todo-token-note"></p>
+            <div class="row">
+              <input id="todo-token-input" type="password" autocomplete="off" aria-label="Todoist の API トークン" placeholder="API トークン">
+              <button class="text-btn">保存</button>
+            </div>
+          </form>
+          <form id="todo-add">
+            <input id="todo-add-input" placeholder="タスクを追加（例: 資料を読む 明日 15時）" autocomplete="off">
+            <button class="text-btn">追加</button>
+          </form>
+          <div id="todo-list"></div>
+          <section id="todo-detail" hidden></section>
+        </div>
       </div>
     </section>
   </div>
