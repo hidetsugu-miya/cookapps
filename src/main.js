@@ -1642,7 +1642,8 @@ function openMenu(anchor, items) {
 document.addEventListener("pointerdown", (e) => {
   if (menuEl && !e.target.closest(".menu")) closeMenu();
 });
-document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
+// An Escape that cancels IME conversion is the field's, not the menu's.
+document.addEventListener("keydown", (e) => e.key === "Escape" && !composing(e) && closeMenu());
 
 function chip(svg, text, className = "") {
   const b = tag("button", `chip ${className}`.trim());
@@ -1654,7 +1655,12 @@ function chip(svg, text, className = "") {
 // A month of days to pick from, Sunday first; `shown` is the 1st of the month, `due` and today are marked.
 function monthPicker(shown, due, pick) {
   const box = tag("div", "dp");
-  const move = (n) => box.replaceWith(monthPicker(new Date(shown.getFullYear(), shown.getMonth() + n, 1), due, pick));
+  // The pressed arrow is replaced with the month, so the focus moves to the new one.
+  const move = (n) => {
+    const moved = monthPicker(new Date(shown.getFullYear(), shown.getMonth() + n, 1), due, pick);
+    box.replaceWith(moved);
+    moved.querySelectorAll(".dp-nav")[n < 0 ? 0 : 1].focus();
+  };
   const head = tag("div", "dp-head");
   const prev = tag("button", "dp-nav", "‹");
   const next = tag("button", "dp-nav", "›");
@@ -1703,6 +1709,7 @@ function dueChip(t) {
       pop.append(
         monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), t.due, (iso) => {
           closeMenu();
+          if (iso === t.due?.date) return;
           saveTask(t.id, { dueString: t.due?.time ? `${iso} ${t.due.time}` : iso });
         }),
       );
