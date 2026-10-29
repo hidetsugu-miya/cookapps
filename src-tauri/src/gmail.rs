@@ -1,3 +1,5 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use encoding_rs::{Encoding, UTF_8};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
@@ -46,9 +48,24 @@ struct Message {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct Payload {
     #[serde(default)]
+    mime_type: String,
+    #[serde(default)]
+    filename: String,
+    #[serde(default)]
     headers: Vec<Header>,
+    #[serde(default)]
+    body: PartBody,
+    #[serde(default)]
+    parts: Vec<Payload>,
+}
+
+#[derive(Deserialize, Default)]
+struct PartBody {
+    #[serde(default)]
+    data: String,
 }
 
 #[derive(Deserialize)]
@@ -68,9 +85,8 @@ pub struct ThreadItem {
     unread: bool,
 }
 
-fn header(message: &Message, name: &str) -> String {
-    message
-        .payload
+fn header(payload: &Payload, name: &str) -> String {
+    payload
         .headers
         .iter()
         .find(|h| h.name.eq_ignore_ascii_case(name))
@@ -84,8 +100,8 @@ impl From<Thread> for ThreadItem {
         let first = t.messages.first();
         let last = t.messages.last();
         Self {
-            subject: first.map(|m| header(m, "Subject")).unwrap_or_default(),
-            from: last.map(|m| header(m, "From")).unwrap_or_default(),
+            subject: first.map(|m| header(&m.payload, "Subject")).unwrap_or_default(),
+            from: last.map(|m| header(&m.payload, "From")).unwrap_or_default(),
             date_ms: last.and_then(|m| m.internal_date.parse().ok()).unwrap_or(0),
             unread: t
                 .messages
@@ -95,6 +111,106 @@ impl From<Thread> for ThreadItem {
             snippet: t.snippet,
         }
     }
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadDetail {
+    subject: String,
+    messages: Vec<MessageDetail>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageDetail {
+    from: String,
+    date_ms: i64,
+    /// `body` is HTML when true, plain text otherwise.
+    html: bool,
+    body: String,
+}
+
+/// Gmail hands back each part's bytes as stored (transfer encoding removed), so the
+/// Content-Type charset decides how to read them.
+fn decode_part(p: &Payload) -> String {
+    // shortcut: undecodable base64 yields an empty part, upgrade if Gmail ever sends such data.
+    let bytes = URL_SAFE_NO_PAD
+        .decode(p.body.data.trim_end_matches('='))
+        .unwrap_or_default();
+    let encoding = header(p, "Content-Type")
+        .split(';')
+        .filter_map(|s| s.trim().split_once('='))
+        .find(|(k, _)| k.trim().eq_ignore_ascii_case("charset"))
+        .and_then(|(_, v)| Encoding::for_label(v.trim().trim_matches('"').as_bytes()))
+        .unwrap_or(UTF_8);
+    encoding.decode(&bytes).0.into_owned()
+}
+
+/// Collects the text of every non-attachment text/html and text/plain part in the MIME tree.
+fn collect_text(p: &Payload, html: &mut Vec<String>, plain: &mut Vec<String>) {
+    if !p.filename.is_empty() {
+        return;
+    }
+    let list = match p.mime_type.as_str() {
+        "text/html" => Some(&mut *html),
+        "text/plain" => Some(&mut *plain),
+        _ => None,
+    };
+    if let Some(list) = list {
+        let text = decode_part(p);
+        if !text.is_empty() {
+            list.push(text);
+        }
+    }
+    for part in &p.parts {
+        collect_text(part, html, plain);
+    }
+}
+
+impl From<&Message> for MessageDetail {
+    fn from(m: &Message) -> Self {
+        let (mut html, mut plain) = (Vec::new(), Vec::new());
+        collect_text(&m.payload, &mut html, &mut plain);
+        let is_html = !html.is_empty();
+        Self {
+            from: header(&m.payload, "From"),
+            date_ms: m.internal_date.parse().unwrap_or(0),
+            html: is_html,
+            body: if is_html { html.concat() } else { plain.join("\n") },
+        }
+    }
+}
+
+impl From<Thread> for ThreadDetail {
+    fn from(t: Thread) -> Self {
+        let mut messages: Vec<_> = t.messages.iter().map(MessageDetail::from).collect();
+        messages.sort_by_key(|m| m.date_ms);
+        Self {
+            subject: t.messages.first().map(|m| header(&m.payload, "Subject")).unwrap_or_default(),
+            messages,
+        }
+    }
+}
+
+/// `Ok(None)` means login is required. Retries once with a refreshed token (kept in `token`) on 401.
+async fn get_json_refreshing<T: DeserializeOwned>(
+    app: &AppHandle,
+    auth: &Auth,
+    token: &mut String,
+    url: &str,
+    query: &[(&str, &str)],
+) -> Result<Option<T>, String> {
+    if let Some(v) = get_json(auth.http(), token, url, query).await? {
+        return Ok(Some(v));
+    }
+    let Some(refreshed) = auth.refresh(app).await? else {
+        return Ok(None);
+    };
+    *token = refreshed;
+    get_json(auth.http(), token, url, query)
+        .await?
+        .ok_or("認証に失敗しました".to_string())
+        .map(Some)
 }
 
 /// `Ok(None)` means the token was rejected with 401.
@@ -133,17 +249,9 @@ pub async fn inbox(
         return Ok(None);
     };
     let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
-    let list: ThreadList = match get_json(http, &token, THREADS_URL, &list_query).await? {
-        Some(list) => list,
-        None => {
-            let Some(refreshed) = auth.refresh(&app).await? else {
-                return Ok(None);
-            };
-            token = refreshed;
-            get_json(http, &token, THREADS_URL, &list_query)
-                .await?
-                .ok_or("認証に失敗しました")?
-        }
+    let Some(list) = get_json_refreshing::<ThreadList>(&app, &auth, &mut token, THREADS_URL, &list_query).await?
+    else {
+        return Ok(None);
     };
 
     let mut items = Vec::with_capacity(list.threads.len());
@@ -160,6 +268,21 @@ pub async fn inbox(
     }
     items.sort_by_key(|i| std::cmp::Reverse(i.date_ms));
     Ok(Some(items))
+}
+
+/// `Ok(None)` means login is required.
+#[tauri::command]
+pub async fn thread(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    id: String,
+) -> Result<Option<ThreadDetail>, String> {
+    let Some(mut token) = auth.token(&app).await? else {
+        return Ok(None);
+    };
+    let url = format!("{THREADS_URL}/{id}");
+    let thread = get_json_refreshing::<Thread>(&app, &auth, &mut token, &url, &[("format", "full")]).await?;
+    Ok(thread.map(ThreadDetail::from))
 }
 
 #[cfg(test)]
@@ -211,5 +334,82 @@ mod tests {
     fn empty_list_response_has_no_threads() {
         let list: ThreadList = serde_json::from_str(r#"{"resultSizeEstimate": 0}"#).unwrap();
         assert!(list.threads.is_empty());
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(bytes)
+    }
+
+    fn detail(json: serde_json::Value) -> ThreadDetail {
+        ThreadDetail::from(serde_json::from_value::<Thread>(json).unwrap())
+    }
+
+    // "こんにちは" in ISO-2022-JP
+    const JIS_KONNICHIWA: &[u8] = b"\x1b$B$3$s$K$A$O\x1b(B";
+
+    #[test]
+    fn decodes_iso_2022_jp_plain_part() {
+        let d = detail(serde_json::json!({"id": "t", "messages": [{
+            "internalDate": "1",
+            "payload": {"mimeType": "text/plain",
+                "headers": [{"name": "Content-Type", "value": "text/plain; charset=\"ISO-2022-JP\""},
+                            {"name": "From", "value": "A <a@example.com>"},
+                            {"name": "Subject", "value": "件名"}],
+                "body": {"size": 16, "data": b64(JIS_KONNICHIWA)}}}]}));
+        assert_eq!(d.subject, "件名");
+        assert_eq!(
+            d.messages,
+            vec![MessageDetail {
+                from: "A <a@example.com>".into(),
+                date_ms: 1,
+                html: false,
+                body: "こんにちは".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn prefers_html_in_multipart_alternative() {
+        let d = detail(serde_json::json!({"id": "t", "messages": [{
+            "internalDate": "1",
+            "payload": {"mimeType": "multipart/alternative", "body": {"size": 0}, "parts": [
+                {"mimeType": "text/plain", "body": {"data": b64(b"plain")}},
+                {"mimeType": "text/html", "headers": [{"name": "content-type", "value": "text/html; charset=UTF-8"}],
+                 "body": {"data": b64("<p>é</p>".as_bytes())}}]}}]}));
+        assert_eq!((d.messages[0].html, d.messages[0].body.as_str()), (true, "<p>é</p>"));
+    }
+
+    #[test]
+    fn walks_nested_mixed_and_skips_attachments() {
+        let d = detail(serde_json::json!({"id": "t", "messages": [{
+            "internalDate": "1",
+            "payload": {"mimeType": "multipart/mixed", "parts": [
+                {"mimeType": "multipart/alternative", "parts": [
+                    {"mimeType": "text/plain", "body": {"data": b64(b"first")}}]},
+                {"mimeType": "text/plain", "filename": "a.txt", "body": {"attachmentId": "x", "data": b64(b"attached")}},
+                {"mimeType": "text/plain", "headers": [{"name": "Content-Type", "value": "text/plain; charset=Shift_JIS"}],
+                 "body": {"data": b64(&[0x82, 0xb1, 0x82, 0xf1])}}]}}]}));
+        assert_eq!((d.messages[0].html, d.messages[0].body.as_str()), (false, "first\nこん"));
+    }
+
+    #[test]
+    fn orders_messages_oldest_first_and_tolerates_empty_payload() {
+        let d = detail(serde_json::json!({"id": "t", "messages": [
+            {"internalDate": "2000", "payload": {"mimeType": "text/plain", "body": {"data": b64(b"b")}}},
+            {"internalDate": "1000", "payload": {}}]}));
+        assert_eq!(d.messages.iter().map(|m| m.date_ms).collect::<Vec<_>>(), vec![1000, 2000]);
+        assert_eq!(d.messages[0].body, "");
+        assert_eq!(d.messages[1].body, "b");
+    }
+
+    #[test]
+    fn invalid_base64_and_unknown_charset_do_not_panic() {
+        let d = detail(serde_json::json!({"id": "t", "messages": [{
+            "internalDate": "1",
+            "payload": {"mimeType": "multipart/mixed", "parts": [
+                {"mimeType": "text/plain", "body": {"data": "***"}},
+                {"mimeType": "text/plain", "headers": [{"name": "Content-Type", "value": "text/plain; charset=nope"}],
+                 "body": {"data": b64(b"ok")}}]}}]}));
+        assert_eq!(d.messages[0].body, "ok");
     }
 }

@@ -9,12 +9,17 @@
   <header>
     <h1>受信トレイ</h1>
     <button id="reload" hidden>再読み込み</button>
+    <button id="back" hidden>戻る</button>
   </header>
   <p id="error" hidden></p>
   <section id="login" hidden>
     <button id="login-button">Google でログイン</button>
   </section>
   <ul id="threads" hidden></ul>
+  <section id="thread" hidden>
+    <h2 id="thread-subject"></h2>
+    <div id="messages"></div>
+  </section>
   <script src="main.js"></script>
 </body>
 </html>

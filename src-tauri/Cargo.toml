@@ -1,6 +1,6 @@
 [package]
 name = "cookup"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [build-dependencies]
@@ -8,6 +8,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.23"
+encoding_rs = "0.8"
 getrandom = "0.4"
 keyring = "4"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query"] }
