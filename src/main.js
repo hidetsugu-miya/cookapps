@@ -471,6 +471,25 @@ async function offerImages(m, frame, urls, ctx) {
   frame.before(entry.bar);
 }
 
+// A plain-text body as text nodes and links to its http(s) URLs. A click navigates this page, which Rust's on_navigation
+// cancels and opens in the default browser. A URL ends at a non-ASCII character or whitespace; trailing punctuation is left out.
+const URL_IN_TEXT = /https?:\/\/[!-~]+/gi;
+function linkify(text) {
+  const nodes = [];
+  let last = 0;
+  for (const match of text.matchAll(URL_IN_TEXT)) {
+    const url = match[0].replace(/[.,;:!?'")\]>]+$/, "");
+    nodes.push(text.slice(last, match.index));
+    const a = document.createElement("a");
+    a.href = url;
+    a.textContent = url;
+    nodes.push(a);
+    last = match.index + url.length;
+  }
+  nodes.push(text.slice(last));
+  return nodes;
+}
+
 // `ctx` is the open thread's: `cids` resolves to the cid: images Rust fetched after the body, by message ID;
 // `senders` to the Set of its senders Rust remembers (`froms` asked about); `stale()` tells another thread was opened since.
 function message(m, ctx) {
@@ -503,7 +522,7 @@ function message(m, ctx) {
   } else {
     const body = document.createElement("div");
     body.className = "plain";
-    body.textContent = m.body;
+    body.append(...linkify(m.body));
     article.append(body);
   }
   return article;
