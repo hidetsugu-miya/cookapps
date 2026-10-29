@@ -1284,6 +1284,7 @@ function showTokenForm(note = "") {
   clearTimeout(todoReloadTimer);
   todoSeq++;
   todo = null;
+  setTodoCount(0);
   todoOpen = null;
   $("todo-notice").replaceChildren();
   todoMode("token");
