@@ -1609,10 +1609,19 @@ function closeMenu() {
   menuEl = null;
 }
 
-function openMenu(anchor, items) {
+// Shows `node` as the open menu, under `anchor` and inside the window.
+function showMenu(anchor, node) {
   closeMenu();
-  menuEl = tag("div", "menu");
-  menuEl.setAttribute("role", "menu");
+  menuEl = node;
+  document.body.append(node);
+  const r = anchor.getBoundingClientRect();
+  node.style.left = `${Math.max(8, Math.min(r.left, innerWidth - node.offsetWidth - 8))}px`;
+  node.style.top = `${Math.max(8, Math.min(r.bottom + 4, innerHeight - node.offsetHeight - 8))}px`;
+}
+
+function openMenu(anchor, items) {
+  const menu = tag("div", "menu");
+  menu.setAttribute("role", "menu");
   for (const item of items) {
     const b = tag("button");
     b.setAttribute("role", "menuitem");
@@ -1624,13 +1633,10 @@ function openMenu(anchor, items) {
       closeMenu();
       item.pick();
     };
-    menuEl.append(b);
+    menu.append(b);
   }
-  document.body.append(menuEl);
-  const r = anchor.getBoundingClientRect();
-  menuEl.style.left = `${Math.max(8, Math.min(r.left, innerWidth - menuEl.offsetWidth - 8))}px`;
-  menuEl.style.top = `${Math.max(8, Math.min(r.bottom + 4, innerHeight - menuEl.offsetHeight - 8))}px`;
-  menuEl.querySelector("button").focus();
+  showMenu(anchor, menu);
+  menu.querySelector("button").focus();
 }
 
 document.addEventListener("pointerdown", (e) => {
@@ -1645,32 +1651,62 @@ function chip(svg, text, className = "") {
   return b;
 }
 
-// The due chip turns into a text field taking Todoist's natural language ("明日 15時", "毎週月曜"); empty clears the due date.
+// A month of days to pick from, Sunday first; `shown` is the 1st of the month, `due` and today are marked.
+function monthPicker(shown, due, pick) {
+  const box = tag("div", "dp");
+  const move = (n) => box.replaceWith(monthPicker(new Date(shown.getFullYear(), shown.getMonth() + n, 1), due, pick));
+  const head = tag("div", "dp-head");
+  const prev = tag("button", "dp-nav", "‹");
+  const next = tag("button", "dp-nav", "›");
+  prev.setAttribute("aria-label", "前の月");
+  next.setAttribute("aria-label", "次の月");
+  prev.onclick = () => move(-1);
+  next.onclick = () => move(1);
+  head.append(prev, `${shown.getFullYear()}年${shown.getMonth() + 1}月`, next);
+  const grid = tag("div", "dp-grid");
+  for (const w of WEEKDAYS) grid.append(tag("span", "dp-wd", w));
+  const today = isoDate(new Date());
+  const first = isoDate(shown);
+  for (let i = -shown.getDay(); i < 42 - shown.getDay(); i++) {
+    const day = addDays(first, i);
+    const iso = isoDate(day);
+    const b = tag("button", "dp-day", String(day.getDate()));
+    if (day.getMonth() !== shown.getMonth()) b.classList.add("other");
+    if (iso === today) b.classList.add("today");
+    if (iso === due?.date) b.classList.add("current");
+    b.onclick = () => pick(iso);
+    grid.append(b);
+  }
+  box.append(head, grid);
+  return box;
+}
+
+// The due chip opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
 function dueChip(t) {
   const b = chip(DATE_SVG, t.due ? dueLabel(t.due) : "期限なし", t.bucket === "overdue" ? "over" : "");
   b.onclick = () => {
+    const pop = tag("div", "menu due-pop");
     const input = tag("input", "chip-input");
     input.value = t.due?.string ?? "";
     input.placeholder = "例: 明日 15時";
     input.setAttribute("aria-label", "期限（空欄で期限なし）");
-    b.replaceWith(input);
-    input.focus();
-    input.select();
-    let finished = false;
-    const finish = (save) => {
-      if (finished) return;
-      finished = true;
-      // Back to the chip either way: the field left in place would keep the focus, and the reload after the save would not redraw.
-      const dueString = input.value;
-      input.replaceWith(b);
-      if (save && dueString.trim() !== (t.due?.string ?? "")) saveTask(t.id, { dueString });
-    };
     input.onkeydown = (e) => {
       if (composing(e)) return;
-      if (e.key === "Enter") finish(true);
-      else if (e.key === "Escape") finish(false);
+      if (e.key !== "Enter") return;
+      closeMenu();
+      if (input.value.trim() !== (t.due?.string ?? "")) saveTask(t.id, { dueString: input.value });
     };
-    input.onblur = () => finish(true);
+    const month = t.due ? addDays(t.due.date, 0) : new Date();
+    pop.append(
+      input,
+      monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), t.due, (iso) => {
+        closeMenu();
+        saveTask(t.id, { dueString: t.due?.time ? `${iso} ${t.due.time}` : iso });
+      }),
+    );
+    showMenu(b, pop);
+    input.focus();
+    input.select();
   };
   return b;
 }
