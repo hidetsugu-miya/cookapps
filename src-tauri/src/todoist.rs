@@ -28,10 +28,10 @@ const TOKEN_USER: &str = "todoist";
 /// The token has a service of its own: under the Gmail accounts' one, a name from outside could reach it as an account.
 const TOKEN_SERVICE: &str = "jp.mysis.cookup.todoist";
 const PAGE_LIMIT: &str = "200";
-// shortcut: past these many pages (200 items each) the rest is dropped, upgrade if the lists ever grow that long.
-const MAX_TASK_PAGES: usize = 20;
-const MAX_PROJECT_PAGES: usize = 5;
+// shortcut: past these many pages (200 items each) the rest is dropped, upgrade if the list ever grows that long.
 const MAX_DONE_PAGES: usize = 5;
+/// The Sync API's `resource_types`: the active tasks and the projects.
+const SYNC_RESOURCES: &str = r#"["items","projects"]"#;
 /// The completed-tasks endpoint takes a range of up to 3 months; completed subtasks older than that are not counted.
 const DONE_DAYS: i64 = 90;
 /// Todoist's `charcoal`, which a client shows for a color name it does not know.
@@ -84,13 +84,18 @@ struct ApiTask {
     due: Option<ApiDue>,
     #[serde(default)]
     child_order: i64,
+    /// Completed. The Sync API sends a task that was completed or deleted since the last sync.
+    #[serde(default)]
+    checked: bool,
+    #[serde(default)]
+    is_deleted: bool,
 }
 
 fn natural_priority() -> u8 {
     1
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct ApiProject {
     id: String,
     #[serde(default)]
@@ -101,6 +106,83 @@ struct ApiProject {
     inbox_project: bool,
     #[serde(default)]
     child_order: i64,
+    #[serde(default)]
+    is_archived: bool,
+    #[serde(default)]
+    is_deleted: bool,
+}
+
+/// The Sync API's answer: with `full_sync` everything active, otherwise only what changed since the `sync_token` that was sent.
+#[derive(Deserialize)]
+struct SyncResponse {
+    sync_token: String,
+    #[serde(default)]
+    full_sync: bool,
+    #[serde(default)]
+    items: Vec<ApiTask>,
+    #[serde(default)]
+    projects: Vec<ApiProject>,
+}
+
+/// The active tasks and the projects as the last sync left them.
+#[derive(Default)]
+struct SyncData {
+    /// The token the data was fetched with: another one means another account, whose data this is not.
+    owner: Option<String>,
+    /// `None` asks for a full sync.
+    sync_token: Option<String>,
+    tasks: Vec<ApiTask>,
+    projects: Vec<ApiProject>,
+}
+
+/// Puts `changed` into `list` by id: a known one is replaced in place (so the order stays), an unknown one is added, and one that is `gone` is removed.
+fn upsert<T>(
+    list: &mut Vec<T>,
+    changed: Vec<T>,
+    id: impl Fn(&T) -> &str,
+    gone: impl Fn(&T) -> bool,
+) {
+    for c in changed {
+        let at = list.iter().position(|t| id(t) == id(&c));
+        match (at, gone(&c)) {
+            (Some(i), true) => {
+                list.remove(i);
+            }
+            (Some(i), false) => list[i] = c,
+            (None, false) => list.push(c),
+            (None, true) => {}
+        }
+    }
+}
+
+/// Brings `data` up to date with a sync answer. Completed and deleted tasks and archived and deleted projects drop out.
+/// `done` (the completed subtasks) follows the tasks that were completed, reopened or deleted since.
+fn apply_sync(data: &mut SyncData, done: &mut Vec<ApiTask>, res: SyncResponse) {
+    if res.full_sync {
+        data.tasks.clear();
+        data.projects.clear();
+    }
+    done.retain(|d| !res.items.iter().any(|t| t.id == d.id));
+    // build_todo reads only the subtasks.
+    done.extend(
+        res.items
+            .iter()
+            .filter(|t| t.checked && !t.is_deleted && t.parent_id.is_some())
+            .cloned(),
+    );
+    upsert(
+        &mut data.tasks,
+        res.items,
+        |t| &t.id,
+        |t| t.checked || t.is_deleted,
+    );
+    upsert(
+        &mut data.projects,
+        res.projects,
+        |p| &p.id,
+        |p| p.is_archived || p.is_deleted,
+    );
+    data.sync_token = Some(res.sync_token);
 }
 
 /// One page of a cursor-paginated list; the completed-tasks endpoint calls its list `items`.
@@ -521,6 +603,9 @@ pub struct TodoistState {
     /// `None` means not loaded: the keychain is read. The lock is held across a read, a save and a disconnect, so they never interleave.
     token: tokio::sync::Mutex<Option<String>>,
     done: Mutex<Arc<Vec<ApiTask>>>,
+    /// What the Sync API has told so far. A load holds the lock from its request to its end, so two loads never share a `sync_token`.
+    /// Taken before `token`, and never while `token` is held.
+    sync: tokio::sync::Mutex<SyncData>,
     /// The last saved or read cache, so an offline spell reads the file once. Touched only while `token` is locked, in order with a save and a disconnect.
     cache: Mutex<Option<CacheFile>>,
 }
@@ -615,7 +700,11 @@ async fn send(
         Some(body) => req.json(body),
         None => req.header(reqwest::header::CONTENT_LENGTH, "0"),
     };
-    let res = req.send().await.map_err(|e| e.to_string())?;
+    answer(req.send().await.map_err(|e| e.to_string())?).await
+}
+
+/// The response body. `Ok(None)` means the token was rejected with 401.
+async fn answer(res: reqwest::Response) -> Result<Option<String>, ApiError> {
     let status = res.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Ok(None);
@@ -628,6 +717,34 @@ async fn send(
         ));
     }
     Ok(Some(text))
+}
+
+fn token_rejected() -> ApiError {
+    ApiError::with_status(
+        reqwest::StatusCode::UNAUTHORIZED.as_u16(),
+        "Todoist がトークンを拒否しました".into(),
+    )
+}
+
+/// The Sync API's active tasks and projects: all of them for a `None` `sync_token`, else what changed since it.
+async fn fetch_sync(
+    http: &reqwest::Client,
+    token: &str,
+    sync_token: Option<&str>,
+) -> Result<SyncResponse, ApiError> {
+    // The Sync API reads a form, and `resource_types` is JSON text inside it.
+    let form = [
+        ("sync_token", sync_token.unwrap_or("*")),
+        ("resource_types", SYNC_RESOURCES),
+    ];
+    let res = http
+        .post(format!("{API_URL}/sync"))
+        .bearer_auth(token)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    parse(&answer(res).await?.ok_or_else(token_rejected)?)
 }
 
 fn parse<T: DeserializeOwned>(text: &str) -> Result<T, ApiError> {
@@ -654,10 +771,7 @@ async fn fetch_all<T: DeserializeOwned>(
         q.push(("limit", PAGE_LIMIT.to_owned()));
         q.extend(cursor.map(|c| ("cursor", c)));
         let Some(text) = send(http, Method::GET, token, path, &q, None).await? else {
-            return Err(ApiError::with_status(
-                reqwest::StatusCode::UNAUTHORIZED.as_u16(),
-                "Todoist がトークンを拒否しました".into(),
-            ));
+            return Err(token_rejected());
         };
         let page: Page<T> = parse(&text)?;
         items.extend(page.results);
@@ -701,8 +815,8 @@ async fn request(
         .map_err(|e| log_failure(command, TOKEN_USER, e))
 }
 
-/// The active tasks, the projects, and the recently completed tasks, fetched at once. `None` means a token is needed.
-/// Without `with_done` the completed tasks of the last load are reused: they only change when a task is completed or reopened.
+/// The active tasks and the projects (through the Sync API: all of them the first time, then only what changed), and the recently completed tasks. `None` means a token is needed.
+/// Without `with_done` the completed tasks of the last load are reused, brought up to date by the changes the sync reports.
 /// A fetch that succeeds is kept in `todoist-cache.json`; when one fails, the kept content comes back marked `offline`, if there is any.
 #[tauri::command]
 pub async fn todoist_load(
@@ -720,6 +834,13 @@ pub async fn todoist_load(
         return Ok(None);
     };
     let http = auth.http();
+    let mut sync = state.sync.lock().await;
+    if sync.owner.as_deref() != Some(token.as_str()) {
+        *sync = SyncData {
+            owner: Some(token.clone()),
+            ..SyncData::default()
+        };
+    }
     let fetch_done = async {
         if !with_done {
             return Ok::<_, ApiError>(None);
@@ -742,15 +863,15 @@ pub async fn todoist_load(
             fetched => Ok(Some(fetched)),
         }
     };
-    // Awaited here, not spawned: a failure or a rejected token returns at once and drops the fetches still running.
+    // Awaited here, not spawned: a failure or a rejected token returns at once and drops the fetch still running.
     let joined = tokio::try_join!(
-        fetch_all::<ApiTask>(http, &token, "/tasks", vec![], MAX_TASK_PAGES),
-        fetch_all::<ApiProject>(http, &token, "/projects", vec![], MAX_PROJECT_PAGES),
+        fetch_sync(http, &token, sync.sync_token.as_deref()),
         fetch_done,
     );
-    let (tasks, projects, done) = match joined {
+    let (res, done) = match joined {
         Ok(fetched) => fetched,
         Err(e) if rejected(&e) => {
+            *sync = SyncData::default();
             state.forget_token().await;
             return Ok(None);
         }
@@ -766,26 +887,31 @@ pub async fn todoist_load(
             return offline_todo(cached, reason, Local::now().date_naive()).map(Some);
         }
     };
-    let done = match done {
-        Some(fetched) => {
-            match fetched {
-                Ok(mut fetched) => {
-                    // build_todo reads only the subtasks.
-                    fetched.retain(|t| t.parent_id.is_some());
-                    let fetched = Arc::new(fetched);
-                    *state.done.lock().unwrap() = Arc::clone(&fetched);
-                    fetched
-                }
-                // The done subtasks only complete the counts, so their failure (e.g. a plan without history) must not hide the tasks; the last ones stay.
-                Err(e) => {
-                    log_failure(command, TOKEN_USER, e);
-                    Arc::clone(&state.done.lock().unwrap())
-                }
-            }
+    match done {
+        Some(Ok(mut fetched)) => {
+            // build_todo reads only the subtasks.
+            fetched.retain(|t| t.parent_id.is_some());
+            *state.done.lock().unwrap() = Arc::new(fetched);
         }
-        None => Arc::clone(&state.done.lock().unwrap()),
+        // The done subtasks only complete the counts, so their failure (e.g. a plan without history) must not hide the tasks; the last ones stay.
+        Some(Err(e)) => {
+            log_failure(command, TOKEN_USER, e);
+        }
+        None => {}
+    }
+    // After the fetched ones are in, so a change the sync reports since wins over them.
+    let done = {
+        let mut kept = state.done.lock().unwrap();
+        apply_sync(&mut sync, Arc::make_mut(&mut kept), res);
+        Arc::clone(&kept)
     };
-    let todo = build_todo(projects, tasks, &done, Local::now().date_naive(), &Local);
+    let todo = build_todo(
+        sync.projects.clone(),
+        sync.tasks.clone(),
+        &done,
+        Local::now().date_naive(),
+        &Local,
+    );
     // The token lock is held through the write: a disconnect in between would otherwise leave the cache behind.
     let current = state.token.lock().await;
     // Another token than the fetch used (disconnected, or connected again meanwhile): this content is not that connection's.
@@ -837,7 +963,7 @@ pub async fn todoist_save_token(
     Ok(())
 }
 
-/// Removes the stored token (the old entry too, or the next read would move it back), and the completed tasks and the cache file kept with it.
+/// Removes the stored token (the old entry too, or the next read would move it back), and the sync data, the completed tasks and the cache file kept with it.
 #[tauri::command]
 pub async fn todoist_disconnect(
     app: AppHandle,
@@ -863,6 +989,9 @@ pub async fn todoist_disconnect(
     *cached = None;
     *state.done.lock().unwrap() = Arc::default();
     *state.cache.lock().unwrap() = None;
+    // `sync` is never waited for while `token` is held: a load holds the one and wants the other.
+    drop(cached);
+    *state.sync.lock().await = SyncData::default();
     cleared.map_err(|e| log_failure("todoist_disconnect", TOKEN_USER, e))
 }
 
@@ -1092,6 +1221,8 @@ mod tests {
             color: color.into(),
             inbox_project: inbox,
             child_order: order,
+            is_archived: false,
+            is_deleted: false,
         }
     }
 
@@ -1560,6 +1691,179 @@ mod tests {
         )
         .unwrap();
         assert_eq!((b.results.len(), b.next_cursor), (2, None));
+    }
+
+    fn sync_res(v: Value) -> SyncResponse {
+        serde_json::from_value(v).unwrap()
+    }
+
+    fn ids(data: &SyncData) -> Vec<&str> {
+        data.tasks.iter().map(|t| t.id.as_str()).collect()
+    }
+
+    fn synced(v: Value) -> (SyncData, Vec<ApiTask>) {
+        let (mut data, mut done) = (SyncData::default(), vec![]);
+        apply_sync(&mut data, &mut done, sync_res(v));
+        (data, done)
+    }
+
+    #[test]
+    fn a_full_sync_replaces_what_was_kept() {
+        let (mut data, mut done) = synced(json!({
+            "sync_token": "t1", "full_sync": true,
+            "items": [{"id": "A"}, {"id": "B"}],
+            "projects": [{"id": "p1", "name": "古い"}],
+        }));
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t2", "full_sync": true,
+                "items": [{"id": "C"}],
+                "projects": [{"id": "p2", "name": "新しい"}],
+            })),
+        );
+        assert_eq!(ids(&data), ["C"]);
+        assert_eq!(data.projects.len(), 1);
+        assert_eq!(data.projects[0].id, "p2");
+        assert_eq!(data.sync_token.as_deref(), Some("t2"));
+    }
+
+    #[test]
+    fn an_incremental_sync_overwrites_by_id_in_place_and_adds() {
+        let (mut data, mut done) = synced(json!({
+            "sync_token": "t1", "full_sync": true,
+            "items": [{"id": "A", "content": "a"}, {"id": "B", "content": "b"}],
+            "projects": [{"id": "p1", "name": "古い"}, {"id": "p2", "name": "別"}],
+        }));
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t2",
+                "items": [{"id": "A", "content": "直した"}, {"id": "C", "content": "c"}],
+                "projects": [{"id": "p1", "name": "新しい"}],
+            })),
+        );
+        assert_eq!(ids(&data), ["A", "B", "C"]);
+        assert_eq!(data.tasks[0].content, "直した");
+        assert_eq!(data.projects.len(), 2);
+        assert_eq!(data.projects[0].name, "新しい");
+    }
+
+    #[test]
+    fn an_answer_without_a_full_sync_flag_is_incremental() {
+        let r = sync_res(json!({"sync_token": "t"}));
+        assert!(!r.full_sync && r.items.is_empty() && r.projects.is_empty());
+    }
+
+    #[test]
+    fn deleted_and_completed_tasks_drop_out() {
+        let (mut data, mut done) = synced(json!({
+            "sync_token": "t1", "full_sync": true,
+            "items": [{"id": "A"}, {"id": "B"}, {"id": "C"}],
+        }));
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t2",
+                "items": [
+                    {"id": "A", "is_deleted": true},
+                    {"id": "B", "checked": true},
+                    {"id": "Z", "checked": true},
+                ],
+            })),
+        );
+        assert_eq!(ids(&data), ["C"]);
+    }
+
+    #[test]
+    fn archived_and_deleted_projects_drop_out() {
+        let (mut data, mut done) = synced(json!({
+            "sync_token": "t1", "full_sync": true,
+            "projects": [{"id": "p1"}, {"id": "p2"}, {"id": "p3"}],
+        }));
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t2",
+                "projects": [{"id": "p1", "is_archived": true}, {"id": "p2", "is_deleted": true}],
+            })),
+        );
+        assert_eq!(data.projects.len(), 1);
+        assert_eq!(data.projects[0].id, "p3");
+    }
+
+    #[test]
+    fn a_completed_subtask_is_done_until_it_is_reopened() {
+        let (mut data, mut done) = synced(json!({
+            "sync_token": "t1",
+            "items": [
+                {"id": "S", "parent_id": "A", "checked": true},
+                {"id": "T", "checked": true},
+            ],
+        }));
+        assert_eq!(done.iter().map(|t| &t.id[..]).collect::<Vec<_>>(), ["S"]);
+        assert!(data.tasks.is_empty());
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t2",
+                "items": [{"id": "S", "parent_id": "A", "checked": false}],
+            })),
+        );
+        assert!(done.is_empty());
+        assert_eq!(ids(&data), ["S"]);
+    }
+
+    #[test]
+    fn a_deleted_completed_subtask_is_no_longer_done() {
+        let (mut data, mut done) = synced(json!({
+            "sync_token": "t1",
+            "items": [{"id": "S", "parent_id": "A", "checked": true}],
+        }));
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t2",
+                "items": [{"id": "S", "parent_id": "A", "checked": true, "is_deleted": true}],
+            })),
+        );
+        assert!(done.is_empty());
+    }
+
+    #[test]
+    fn a_completed_subtask_reported_again_is_kept_once() {
+        let (mut data, mut done) = synced(json!({
+            "sync_token": "t1",
+            "items": [{"id": "S", "parent_id": "A", "checked": true, "content": "前"}],
+        }));
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t2",
+                "items": [{"id": "S", "parent_id": "A", "checked": true, "content": "後"}],
+            })),
+        );
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].content, "後");
+    }
+
+    #[test]
+    fn the_subtasks_a_sync_completes_count_in_the_todo() {
+        let (data, done) = synced(json!({
+            "sync_token": "t",
+            "full_sync": true,
+            "items": [{"id": "A", "content": "親"}, {"id": "S", "parent_id": "A", "checked": true}],
+        }));
+        let t = build_todo(vec![], data.tasks, &done, date("2026-10-29"), &jst());
+        assert_eq!(t.tasks.len(), 1);
+        assert_eq!((t.tasks[0].sub_done, t.tasks[0].sub_total), (1, 1));
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {

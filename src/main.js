@@ -1236,7 +1236,7 @@ async function makeTodo(account, id, subject, button) {
   }
 }
 
-const TODO_REFRESH_MS = 5 * 60 * 1000;
+const TODO_REFRESH_MS = 10 * 1000;
 // The Todoist apps' colors for priorities 1 to 4.
 const PRIORITY_COLORS = { 1: "#d1453b", 2: "#eb8909", 3: "#246fe0", 4: "#b4b9c2" };
 const TODO_GROUPS = [["overdue", "期限切れ"], ["today", "今日"], ["upcoming", "明日以降"], ["none", "期限なし"]];
@@ -1847,8 +1847,6 @@ $("todo-add").onsubmit = async (e) => {
   }
   input.focus();
 };
-// Not while the token form is up: a load would read the keychain and draw the form again, dropping what is typed in it.
-setInterval(() => screen === "todo" && $("todo-token").hidden && !document.hidden && loadTodo(true), TODO_REFRESH_MS);
 
 // Fetches only for the Todo count on the sidebar while another screen is shown: `todo` and the Todo screen stay as they are, and a missing token or a failure shows no count and no message.
 async function loadTodoCount() {
@@ -1864,7 +1862,16 @@ async function loadTodoCount() {
   // The Todo screen sets the count itself, and its data is newer than this fetch.
   if (screen !== "todo") setTodoCount(count);
 }
-setInterval(loadTodoCount, TODO_REFRESH_MS);
 loadTodoCount();
+
+// The timed refresh, also when the window comes back. The backend asks Todoist for the changes only, so it is cheap; the completed tasks are not fetched again.
+function refreshTodo() {
+  if (document.hidden) return;
+  if (screen !== "todo") loadTodoCount();
+  // Not while the token form is up: a load would read the keychain and draw the form again, dropping what is typed in it.
+  else if ($("todo-token").hidden) loadTodo(true, false);
+}
+setInterval(refreshTodo, TODO_REFRESH_MS);
+document.addEventListener("visibilitychange", refreshTodo);
 
 load();
