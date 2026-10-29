@@ -393,12 +393,13 @@ struct AccountInbox {
     history_id: String,
 }
 
-/// threads.get(metadata) for each ID, in chunks. `None` means 404: the thread no longer exists.
+/// threads.get(metadata) for each ID, in chunks. A `None` thread means 404: it no longer exists.
+/// `Ok(None)` means the token was rejected with 401.
 async fn get_threads(
     http: &reqwest::Client,
     token: &str,
     ids: &[String],
-) -> Result<Vec<(String, Option<Thread>)>, ApiError> {
+) -> Result<Option<Vec<(String, Option<Thread>)>>, ApiError> {
     let mut out = Vec::with_capacity(ids.len());
     for chunk in ids.chunks(CONCURRENCY) {
         let mut set = JoinSet::new();
@@ -416,13 +417,36 @@ async fn get_threads(
             let (id, res) = joined.map_err(|e| e.to_string())?;
             match res {
                 Ok(Some(thread)) => out.push((id, Some(thread))),
-                Ok(None) => return Err("認証に失敗しました".into()),
+                Ok(None) => return Ok(None),
                 Err(e) if e.status == Some(404) => out.push((id, None)),
                 Err(e) => return Err(e),
             }
         }
     }
-    Ok(out)
+    Ok(Some(out))
+}
+
+/// `get_threads` with the account's token; a 401 (expired mid-run) refreshes it and fetches once more.
+/// `Ok(None)` means `account` must log in again.
+async fn get_threads_refreshing(
+    app: &AppHandle,
+    auth: &Auth,
+    account: &str,
+    ids: &[String],
+) -> Result<Option<Vec<(String, Option<Thread>)>>, ApiError> {
+    let Some(token) = auth.token(app, account).await? else {
+        return Ok(None);
+    };
+    if let Some(found) = get_threads(auth.http(), &token, ids).await? {
+        return Ok(Some(found));
+    }
+    let Some(refreshed) = auth.refresh(app, account).await? else {
+        return Ok(None);
+    };
+    get_threads(auth.http(), &refreshed, ids)
+        .await?
+        .ok_or("認証に失敗しました".into())
+        .map(Some)
 }
 
 /// Inbox threads of one account. `Ok(None)` means that account must log in again.
@@ -452,14 +476,11 @@ async fn account_threads(
     else {
         return Ok(None);
     };
-    // The list call may have refreshed the token; the cache holds the current one.
-    let Some(token) = auth.token(app, account).await? else {
+    let ids: Vec<_> = list.threads.into_iter().map(|t| t.id).collect();
+    let Some(fetched) = get_threads_refreshing(app, auth, account, &ids).await? else {
         return Ok(None);
     };
-
-    let ids: Vec<_> = list.threads.into_iter().map(|t| t.id).collect();
-    let threads = get_threads(auth.http(), &token, &ids)
-        .await?
+    let threads = fetched
         .into_iter()
         .filter_map(|(_, t)| t)
         .map(|t| ThreadItem::new(t, account))
@@ -675,10 +696,10 @@ async fn sync_account(
     if list.next_page_token.is_some() || ids.len() > MAX_SYNC_THREADS {
         return reload(app, auth, account).await;
     }
-    let Some(token) = auth.token(app, account).await? else {
+    let Some(fetched) = get_threads_refreshing(app, auth, account, &ids).await? else {
         return Ok(Sync::NeedsLogin);
     };
-    let (threads, removed) = split_fetched(get_threads(auth.http(), &token, &ids).await?, account);
+    let (threads, removed) = split_fetched(fetched, account);
     let history_id = if list.history_id.is_empty() {
         profile.history_id
     } else {
