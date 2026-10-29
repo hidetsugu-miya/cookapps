@@ -918,7 +918,7 @@ function eventBox(e) {
   return box;
 }
 
-function chip(e) {
+function allDayChip(e) {
   const c = el("cal-chip" + (e.declined ? " declined" : ""), e.summary || "(件名なし)");
   c.style.setProperty("--c", eventColor(e));
   c.title = `${e.summary}\n${e.account}`;
@@ -966,7 +966,7 @@ function renderWeek(w) {
     el("cal-allday-label", "終日"),
     ...days.map((_, i) => {
       const cell = mark(el("cal-cell"), i);
-      cell.append(...w.allDay.filter((e) => e.day === i).map(chip));
+      cell.append(...w.allDay.filter((e) => e.day === i).map(allDayChip));
       return cell;
     }),
   );
