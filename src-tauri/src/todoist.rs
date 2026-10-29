@@ -754,17 +754,20 @@ pub async fn todoist_load(
     let todo = build_todo(projects, tasks, &done, Local::now().date_naive(), &Local);
     // The token lock is held through the write: a disconnect in between would otherwise leave the cache behind.
     let cached = state.token.lock().await;
-    if cached.is_some() {
-        let saved = config_dir(&app).and_then(|dir| {
-            save_cache(
-                &dir,
-                &todo,
-                &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-            )
-        });
-        if let Err(e) = saved {
-            log_failure("todoist_cache", TOKEN_USER, e);
-        }
+    if cached.is_none() {
+        return Ok(Some(todo));
+    }
+    let dir = config_dir(&app);
+    let fetched_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    // The write and its fsync run off the async threads; the todo goes along and comes back.
+    let (todo, saved) = tokio::task::spawn_blocking(move || {
+        let saved = dir.and_then(|dir| save_cache(&dir, &todo, &fetched_at));
+        (todo, saved)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Err(e) = saved {
+        log_failure("todoist_cache", TOKEN_USER, e);
     }
     Ok(Some(todo))
 }
