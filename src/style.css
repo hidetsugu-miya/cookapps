@@ -6,6 +6,9 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #sidebar { width: 56px; flex: none; background: #1f2126; display: flex; flex-direction: column; align-items: center; padding-top: 40px; gap: 8px; }
 .nav-item { width: 40px; height: 40px; border: 0; border-radius: 10px; background: transparent; color: #9aa0aa; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .nav-item:hover { background: #2c2f36; }
+.nav-item:disabled { opacity: .4; cursor: default; }
+#accounts { margin-top: auto; padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+#account-list { display: flex; flex-direction: column; gap: 8px; }
 .nav-item[aria-current="page"] { background: #0b5bd3; color: #fff; }
 
 #content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -24,6 +27,8 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 #main::-webkit-scrollbar-thumb:hover { background: #9aa0aa; }
 
 #login { display: flex; justify-content: center; padding: 64px; }
+#relogin { margin-bottom: 8px; }
+#relogin > div { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; background: #fff4e5; margin-bottom: 4px; }
 #threads { list-style: none; margin: 0; padding: 0; }
 #threads:empty::after { content: "受信トレイにスレッドはありません"; display: block; padding: 48px 0; text-align: center; color: #888; }
 #threads li { display: grid; grid-template-columns: 32px 180px 1fr auto; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 12px; cursor: pointer; }
@@ -31,6 +36,8 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 #threads li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #threads li.unread { font-weight: bold; }
 .avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; }
+#threads li > .avatar { position: relative; overflow: visible; }
+.account-dot { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; }
 .snippet { color: #666; font-weight: normal; }
 .date { text-align: right; white-space: nowrap; padding-right: 8px; color: #666; font-size: 12px; }
 

@@ -83,6 +83,8 @@ struct Header {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadItem {
     id: String,
+    /// Email address of the account the thread belongs to.
+    account: String,
     from: String,
     subject: String,
     snippet: String,
@@ -99,12 +101,13 @@ fn header(payload: &Payload, name: &str) -> String {
         .unwrap_or_default()
 }
 
-impl From<Thread> for ThreadItem {
+impl ThreadItem {
     /// Subject comes from the first message, sender and date from the latest one.
-    fn from(t: Thread) -> Self {
+    fn new(t: Thread, account: &str) -> Self {
         let first = t.messages.first();
         let last = t.messages.last();
         Self {
+            account: account.to_owned(),
             subject: first
                 .map(|m| header(&m.payload, "Subject"))
                 .unwrap_or_default(),
@@ -211,24 +214,26 @@ impl From<Thread> for ThreadDetail {
     }
 }
 
-/// `Ok(None)` means login is required. Retries once with a refreshed token (kept in `token`) on 401.
+/// `Ok(None)` means login is required for `account`. Retries once with a refreshed token on 401.
 async fn send_json_refreshing<T: DeserializeOwned>(
     app: &AppHandle,
     auth: &Auth,
-    token: &mut String,
+    account: &str,
     method: Method,
     url: &str,
     query: &[(&str, &str)],
     body: Option<&Value>,
 ) -> Result<Option<T>, String> {
-    if let Some(v) = send_json(auth.http(), method.clone(), token, url, query, body).await? {
-        return Ok(Some(v));
-    }
-    let Some(refreshed) = auth.refresh(app).await? else {
+    let Some(token) = auth.token(app, account).await? else {
         return Ok(None);
     };
-    *token = refreshed;
-    send_json(auth.http(), method, token, url, query, body)
+    if let Some(v) = send_json(auth.http(), method.clone(), &token, url, query, body).await? {
+        return Ok(Some(v));
+    }
+    let Some(refreshed) = auth.refresh(app, account).await? else {
+        return Ok(None);
+    };
+    send_json(auth.http(), method, &refreshed, url, query, body)
         .await?
         .ok_or("認証に失敗しました".to_string())
         .map(Some)
@@ -274,21 +279,33 @@ async fn send_json<T: DeserializeOwned>(
     res.json().await.map(Some).map_err(|e| e.to_string())
 }
 
-/// `Ok(None)` means login is required.
-#[tauri::command]
-pub async fn inbox(
-    app: AppHandle,
-    auth: State<'_, Auth>,
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Inbox {
+    accounts: Vec<String>,
+    threads: Vec<ThreadItem>,
+    /// Accounts whose threads are missing because they must log in again.
+    needs_login: Vec<String>,
+}
+
+/// Newest first across all accounts.
+fn merge_inboxes(lists: Vec<Vec<ThreadItem>>) -> Vec<ThreadItem> {
+    let mut items: Vec<_> = lists.into_iter().flatten().collect();
+    items.sort_by_key(|i| std::cmp::Reverse(i.date_ms));
+    items
+}
+
+/// Inbox threads of one account. `Ok(None)` means that account must log in again.
+async fn account_threads(
+    app: &AppHandle,
+    auth: &Auth,
+    account: &str,
 ) -> Result<Option<Vec<ThreadItem>>, String> {
-    let http = auth.http();
-    let Some(mut token) = auth.token(&app).await? else {
-        return Ok(None);
-    };
     let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
     let Some(list) = send_json_refreshing::<ThreadList>(
-        &app,
-        &auth,
-        &mut token,
+        app,
+        auth,
+        account,
         Method::GET,
         THREADS_URL,
         &list_query,
@@ -298,7 +315,12 @@ pub async fn inbox(
     else {
         return Ok(None);
     };
+    // The list call may have refreshed the token; the cache holds the current one.
+    let Some(token) = auth.token(app, account).await? else {
+        return Ok(None);
+    };
 
+    let http = auth.http();
     let mut items = Vec::with_capacity(list.threads.len());
     for chunk in list.threads.chunks(CONCURRENCY) {
         let mut set = JoinSet::new();
@@ -316,28 +338,43 @@ pub async fn inbox(
             let thread = res
                 .map_err(|e| e.to_string())??
                 .ok_or("認証に失敗しました")?;
-            items.push(ThreadItem::from(thread));
+            items.push(ThreadItem::new(thread, account));
         }
     }
-    items.sort_by_key(|i| std::cmp::Reverse(i.date_ms));
     Ok(Some(items))
 }
 
-/// `Ok(None)` means login is required.
+/// Threads of every account merged; accounts needing login are listed, not fatal.
+#[tauri::command]
+pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, String> {
+    let accounts = auth.accounts(&app).await?;
+    let (mut lists, mut needs_login) = (Vec::new(), Vec::new());
+    for account in &accounts {
+        match account_threads(&app, &auth, account).await? {
+            Some(items) => lists.push(items),
+            None => needs_login.push(account.clone()),
+        }
+    }
+    Ok(Inbox {
+        accounts,
+        threads: merge_inboxes(lists),
+        needs_login,
+    })
+}
+
+/// `Ok(None)` means `account` must log in again.
 #[tauri::command]
 pub async fn thread(
     app: AppHandle,
     auth: State<'_, Auth>,
+    account: String,
     id: String,
 ) -> Result<Option<ThreadDetail>, String> {
-    let Some(mut token) = auth.token(&app).await? else {
-        return Ok(None);
-    };
     let url = format!("{THREADS_URL}/{id}");
     let thread = send_json_refreshing::<Thread>(
         &app,
         &auth,
-        &mut token,
+        &account,
         Method::GET,
         &url,
         &[("format", "full")],
@@ -347,19 +384,17 @@ pub async fn thread(
     Ok(thread.map(ThreadDetail::from))
 }
 
-/// Moves the thread to the trash (recoverable in Gmail). `Ok(None)` means login is required.
+/// Moves the thread to the trash (recoverable in Gmail). `Ok(None)` means `account` must log in again.
 #[tauri::command]
 pub async fn trash(
     app: AppHandle,
     auth: State<'_, Auth>,
+    account: String,
     id: String,
 ) -> Result<Option<()>, String> {
-    let Some(mut token) = auth.token(&app).await? else {
-        return Ok(None);
-    };
     let url = format!("{THREADS_URL}/{id}/trash");
     let done =
-        send_json_refreshing::<IgnoredAny>(&app, &auth, &mut token, Method::POST, &url, &[], None)
+        send_json_refreshing::<IgnoredAny>(&app, &auth, &account, Method::POST, &url, &[], None)
             .await?;
     Ok(done.map(|_| ()))
 }
@@ -368,22 +403,20 @@ fn archive_body() -> Value {
     json!({"removeLabelIds": ["INBOX"]})
 }
 
-/// Removes the INBOX label from the thread. `Ok(None)` means login is required.
+/// Removes the INBOX label from the thread. `Ok(None)` means `account` must log in again.
 #[tauri::command]
 pub async fn archive(
     app: AppHandle,
     auth: State<'_, Auth>,
+    account: String,
     id: String,
 ) -> Result<Option<()>, String> {
-    let Some(mut token) = auth.token(&app).await? else {
-        return Ok(None);
-    };
     let url = format!("{THREADS_URL}/{id}/modify");
     let body = archive_body();
     let done = send_json_refreshing::<IgnoredAny>(
         &app,
         &auth,
-        &mut token,
+        &account,
         Method::POST,
         &url,
         &[],
@@ -396,6 +429,69 @@ pub async fn archive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(json: &str, account: &str) -> ThreadItem {
+        ThreadItem::new(serde_json::from_str::<Thread>(json).unwrap(), account)
+    }
+
+    fn item_at(id: &str, account: &str, date_ms: i64) -> ThreadItem {
+        ThreadItem {
+            id: id.into(),
+            account: account.into(),
+            from: String::new(),
+            subject: String::new(),
+            snippet: String::new(),
+            date_ms,
+            unread: false,
+        }
+    }
+
+    #[test]
+    fn merges_accounts_newest_first_keeping_each_account() {
+        let merged = merge_inboxes(vec![
+            vec![
+                item_at("a2", "a@example.com", 3000),
+                item_at("a1", "a@example.com", 1000),
+            ],
+            vec![],
+            vec![
+                item_at("b2", "b@example.com", 4000),
+                item_at("b1", "b@example.com", 2000),
+            ],
+        ]);
+        let order: Vec<_> = merged
+            .iter()
+            .map(|i| (i.id.as_str(), i.account.as_str()))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("b2", "b@example.com"),
+                ("a2", "a@example.com"),
+                ("b1", "b@example.com"),
+                ("a1", "a@example.com"),
+            ]
+        );
+    }
+
+    #[test]
+    fn merging_nothing_gives_nothing() {
+        assert!(merge_inboxes(vec![]).is_empty());
+        assert!(merge_inboxes(vec![vec![], vec![]]).is_empty());
+    }
+
+    #[test]
+    fn inbox_serializes_in_camel_case() {
+        let inbox = Inbox {
+            accounts: vec!["a@example.com".into()],
+            threads: vec![item_at("t", "a@example.com", 1)],
+            needs_login: vec!["b@example.com".into()],
+        };
+        let v = serde_json::to_value(&inbox).unwrap();
+        assert_eq!(v["needsLogin"][0], "b@example.com");
+        assert_eq!(v["threads"][0]["account"], "a@example.com");
+        assert_eq!(v["threads"][0]["dateMs"], 1);
+    }
 
     #[test]
     fn converts_metadata_thread_to_item() {
@@ -414,11 +510,12 @@ mod tests {
                     {"name": "Subject", "value": "Re: Hello"}]}}
             ]
         }"#;
-        let item = ThreadItem::from(serde_json::from_str::<Thread>(json).unwrap());
+        let item = item(json, "me@example.com");
         assert_eq!(
             item,
             ThreadItem {
                 id: "t1".into(),
+                account: "me@example.com".into(),
                 from: "Bob <b@example.com>".into(),
                 subject: "Hello".into(),
                 snippet: "latest reply".into(),
@@ -431,7 +528,7 @@ mod tests {
     #[test]
     fn read_thread_without_headers_gets_defaults() {
         let json = r#"{"id": "t2", "messages": [{"id": "m1", "labelIds": ["INBOX"]}]}"#;
-        let item = ThreadItem::from(serde_json::from_str::<Thread>(json).unwrap());
+        let item = item(json, "me@example.com");
         assert_eq!(item.subject, "");
         assert_eq!(item.from, "");
         assert_eq!(item.date_ms, 0);

@@ -10,6 +10,12 @@
     <button class="nav-item" title="受信トレイ" aria-label="受信トレイ" aria-current="page">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 3h6l1-3h5"/></svg>
     </button>
+    <div id="accounts">
+      <div id="account-list"></div>
+      <button id="add-account" class="nav-item" title="アカウントを追加" aria-label="アカウントを追加">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
   </nav>
   <div id="content">
     <header>
@@ -33,6 +39,7 @@
       <section id="login" hidden>
         <button id="login-button">Google でログイン</button>
       </section>
+      <div id="relogin" hidden></div>
       <ul id="threads" hidden></ul>
       <section id="thread" hidden>
         <div id="messages"></div>

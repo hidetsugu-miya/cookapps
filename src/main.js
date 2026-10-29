@@ -45,6 +45,7 @@ let listScroll = 0;
 function show(view) {
   if (!$("threads").hidden) listScroll = $("main").scrollTop;
   $("login").hidden = view !== "login";
+  $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
   $("threads").hidden = view !== "list";
   $("reload").hidden = view !== "list";
   $("thread").hidden = view !== "thread";
@@ -72,10 +73,15 @@ function row(t) {
   };
   const subject = cell("subject", t.subject || "(件名なし)");
   subject.append(cell("snippet", ` — ${unescapeHtml(t.snippet)}`));
-  li.onclick = () => openThread(t.id, li);
+  li.onclick = () => openThread(t, li);
   const name = senderName(t.from);
   const avatar = cell("avatar", initials(name));
   avatar.style.background = avatarColor(name);
+  // Marks which account the thread belongs to.
+  const dot = cell("account-dot", "");
+  dot.style.background = avatarColor(t.account);
+  dot.title = t.account;
+  avatar.append(dot);
   li.append(avatar, cell("from", name), subject, cell("date", formatDate(t.dateMs)));
   return li;
 }
@@ -103,12 +109,13 @@ function message(m) {
 // The thread shown in the detail view and its list row.
 let current = null;
 
-async function openThread(id, li) {
+async function openThread({ id, account }, li) {
   $("error").hidden = true;
   try {
-    const t = await invoke("thread", { id });
-    if (t === null) return show("login");
-    current = { id, li };
+    const t = await invoke("thread", { account, id });
+    // null: that account must log in again, which the list shows.
+    if (t === null) return load();
+    current = { id, account, li };
     $("thread-subject").textContent = t.subject || "(件名なし)";
     $("messages").replaceChildren(...t.messages.map(message));
     show("thread");
@@ -117,12 +124,39 @@ async function openThread(id, li) {
   }
 }
 
+// Sidebar avatars of every account, and a re-login row for each account that needs it.
+function renderAccounts({ accounts, needsLogin }) {
+  $("account-list").replaceChildren(
+    ...accounts.map((a) => {
+      const avatar = document.createElement("span");
+      avatar.className = "avatar";
+      avatar.textContent = initials(a);
+      avatar.style.background = avatarColor(a);
+      avatar.title = a;
+      avatar.setAttribute("role", "img");
+      avatar.setAttribute("aria-label", a);
+      return avatar;
+    }),
+  );
+  $("relogin").replaceChildren(
+    ...needsLogin.map((a) => {
+      const div = document.createElement("div");
+      const button = document.createElement("button");
+      button.textContent = "再ログイン";
+      button.onclick = () => addAccount(a, button);
+      div.append(`${a} は再ログインが必要です`, button);
+      return div;
+    }),
+  );
+}
+
 async function load() {
   $("error").hidden = true;
   try {
-    const threads = await invoke("inbox");
-    if (threads === null) return show("login");
-    $("threads").replaceChildren(...threads.map(row));
+    const inbox = await invoke("inbox");
+    renderAccounts(inbox);
+    if (inbox.accounts.length === 0) return show("login");
+    $("threads").replaceChildren(...inbox.threads.map(row));
   } catch (e) {
     showError(e);
   }
@@ -140,8 +174,8 @@ async function removeCurrent(command) {
   $("error").hidden = true;
   buttons.forEach((b) => (b.disabled = true));
   try {
-    const done = await invoke(command, { id: current.id });
-    if (done === null) return show("login");
+    const done = await invoke(command, { account: current.account, id: current.id });
+    if (done === null) return load();
     current.li.remove();
     show("list");
   } catch (e) {
@@ -152,17 +186,20 @@ async function removeCurrent(command) {
 }
 $("trash").onclick = () => removeCurrent("trash");
 $("archive").onclick = () => removeCurrent("archive");
-$("login-button").onclick = async () => {
+// Logs in (the account chosen in the browser, or `hint` preselected) and reloads the list.
+async function addAccount(hint, button) {
   $("error").hidden = true;
-  $("login-button").disabled = true;
+  button.disabled = true;
   try {
-    await invoke("login");
+    await invoke("login", { loginHint: hint });
     await load();
   } catch (e) {
     showError(e);
   } finally {
-    $("login-button").disabled = false;
+    button.disabled = false;
   }
-};
+}
+$("login-button").onclick = () => addAccount(null, $("login-button"));
+$("add-account").onclick = () => addAccount(null, $("add-account"));
 
 load();
