@@ -86,7 +86,7 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 #mail-header.detail #thread-todo { margin-left: auto; }
 #thread-head { margin: 16px 0 20px 56px; font-size: 22px; line-height: 1.35; }
 #thread-subject { display: inline; margin: 0; font-size: inherit; font-weight: normal; color: #1f1f1f; white-space: normal; overflow-wrap: anywhere; }
-#thread-head .label { margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: #e1e3e1; color: #444746; font-size: 11px; vertical-align: middle; }
+#thread-head .label { display: inline-block; white-space: nowrap; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: #e1e3e1; color: #444746; font-size: 11px; vertical-align: middle; }
 #messages article { margin-bottom: 20px; }
 #messages article.folded { margin-bottom: 0; border-bottom: 1px solid #eceef1; }
 #messages article.folded + article { margin-top: 16px; }
