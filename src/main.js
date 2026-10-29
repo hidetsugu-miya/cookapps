@@ -112,7 +112,7 @@ function row(t) {
   dot.style.background = avatarColor(t.account);
   dot.title = t.account;
   avatar.append(dot);
-  li.append(readBox(t, li), avatar, cell("from", name), subject, cell("date", formatDate(t.dateMs)));
+  li.append(readBox(t, li), cell("unread-dot", ""), avatar, cell("from", name), subject, cell("date", formatDate(t.dateMs)));
   return li;
 }
 
