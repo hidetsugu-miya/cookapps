@@ -68,6 +68,11 @@ Developer ID での署名と公証はしていません。
 自分のマシンで作った `.app` を、そのマシンで使う想定です。
 `client_secret.json`、`accounts.json`、キーチェーンの保存先は `tauri dev` と同じなので、設定やログインはそのまま使えます。
 
+## Claude との連携
+
+Claude Code から受信トレイと予定を扱う MCP サーバー `cookup-mcp` があります。
+設定の手順は [docs/mcp.md](docs/mcp.md) にあります。
+
 ## テスト
 
 ```sh
