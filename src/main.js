@@ -28,7 +28,7 @@ function row(t) {
   };
   const subject = cell("subject", t.subject || "(件名なし)");
   subject.append(cell("snippet", ` — ${unescapeHtml(t.snippet)}`));
-  li.onclick = () => openThread(t.id);
+  li.onclick = () => openThread(t.id, li);
   li.append(cell("from", t.from), subject, cell("date", new Date(t.dateMs).toLocaleString("ja-JP")));
   return li;
 }
@@ -53,11 +53,15 @@ function message(m) {
   return article;
 }
 
-async function openThread(id) {
+// The thread shown in the detail view and its list row.
+let current = null;
+
+async function openThread(id, li) {
   $("error").hidden = true;
   try {
     const t = await invoke("thread", { id });
     if (t === null) return show("login");
+    current = { id, li };
     $("thread-subject").textContent = t.subject || "(件名なし)";
     $("messages").replaceChildren(...t.messages.map(message));
     show("thread");
@@ -82,6 +86,20 @@ $("reload").onclick = load;
 $("back").onclick = () => {
   $("error").hidden = true;
   show("list");
+};
+$("trash").onclick = async () => {
+  $("error").hidden = true;
+  $("trash").disabled = true;
+  try {
+    const done = await invoke("trash", { id: current.id });
+    if (done === null) return show("login");
+    current.li.remove();
+    show("list");
+  } catch (e) {
+    showError(e);
+  } finally {
+    $("trash").disabled = false;
+  }
 };
 $("login-button").onclick = async () => {
   $("error").hidden = true;

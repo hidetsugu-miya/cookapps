@@ -1,6 +1,7 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use encoding_rs::{Encoding, UTF_8};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use reqwest::Method;
+use serde::{de::{DeserializeOwned, IgnoredAny}, Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
 
@@ -193,35 +194,37 @@ impl From<Thread> for ThreadDetail {
 }
 
 /// `Ok(None)` means login is required. Retries once with a refreshed token (kept in `token`) on 401.
-async fn get_json_refreshing<T: DeserializeOwned>(
+async fn send_json_refreshing<T: DeserializeOwned>(
     app: &AppHandle,
     auth: &Auth,
     token: &mut String,
+    method: Method,
     url: &str,
     query: &[(&str, &str)],
 ) -> Result<Option<T>, String> {
-    if let Some(v) = get_json(auth.http(), token, url, query).await? {
+    if let Some(v) = send_json(auth.http(), method.clone(), token, url, query).await? {
         return Ok(Some(v));
     }
     let Some(refreshed) = auth.refresh(app).await? else {
         return Ok(None);
     };
     *token = refreshed;
-    get_json(auth.http(), token, url, query)
+    send_json(auth.http(), method, token, url, query)
         .await?
         .ok_or("認証に失敗しました".to_string())
         .map(Some)
 }
 
 /// `Ok(None)` means the token was rejected with 401.
-async fn get_json<T: DeserializeOwned>(
+async fn send_json<T: DeserializeOwned>(
     http: &reqwest::Client,
+    method: Method,
     token: &str,
     url: &str,
     query: &[(&str, &str)],
 ) -> Result<Option<T>, String> {
     let res = http
-        .get(url)
+        .request(method, url)
         .bearer_auth(token)
         .query(query)
         .send()
@@ -249,7 +252,7 @@ pub async fn inbox(
         return Ok(None);
     };
     let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
-    let Some(list) = get_json_refreshing::<ThreadList>(&app, &auth, &mut token, THREADS_URL, &list_query).await?
+    let Some(list) = send_json_refreshing::<ThreadList>(&app, &auth, &mut token, Method::GET, THREADS_URL, &list_query).await?
     else {
         return Ok(None);
     };
@@ -259,7 +262,7 @@ pub async fn inbox(
         let mut set = JoinSet::new();
         for t in chunk {
             let (http, token, url) = (http.clone(), token.clone(), format!("{THREADS_URL}/{}", t.id));
-            set.spawn(async move { get_json::<Thread>(&http, &token, &url, &METADATA_QUERY).await });
+            set.spawn(async move { send_json::<Thread>(&http, Method::GET, &token, &url, &METADATA_QUERY).await });
         }
         while let Some(res) = set.join_next().await {
             let thread = res.map_err(|e| e.to_string())??.ok_or("認証に失敗しました")?;
@@ -281,8 +284,19 @@ pub async fn thread(
         return Ok(None);
     };
     let url = format!("{THREADS_URL}/{id}");
-    let thread = get_json_refreshing::<Thread>(&app, &auth, &mut token, &url, &[("format", "full")]).await?;
+    let thread = send_json_refreshing::<Thread>(&app, &auth, &mut token, Method::GET, &url, &[("format", "full")]).await?;
     Ok(thread.map(ThreadDetail::from))
+}
+
+/// Moves the thread to the trash (recoverable in Gmail). `Ok(None)` means login is required.
+#[tauri::command]
+pub async fn trash(app: AppHandle, auth: State<'_, Auth>, id: String) -> Result<Option<()>, String> {
+    let Some(mut token) = auth.token(&app).await? else {
+        return Ok(None);
+    };
+    let url = format!("{THREADS_URL}/{id}/trash");
+    let done = send_json_refreshing::<IgnoredAny>(&app, &auth, &mut token, Method::POST, &url, &[]).await?;
+    Ok(done.map(|_| ()))
 }
 
 #[cfg(test)]
