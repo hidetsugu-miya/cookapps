@@ -89,6 +89,7 @@ async function sendRead(t, li, read, control) {
     showError(e);
   } finally {
     control.disabled = false;
+    updateBadge();
   }
 }
 
@@ -124,6 +125,18 @@ const pending = new Set();
 let rows = new Map();
 const rowKey = (t) => `${t.account}/${t.id}`;
 
+// Unread threads among `rows`, minus those being archived / trashed.
+const countUnread = (rows, pending) => [...rows].filter(([key, r]) => r.t.unread && !pending.has(key)).length;
+
+// Dock badge shows the unread count of the list; the call is skipped when the count is unchanged.
+let badge = 0;
+function updateBadge() {
+  const count = countUnread(rows, pending);
+  if (count === badge) return;
+  badge = count;
+  invoke("set_badge", { count }).catch(() => {});
+}
+
 // Takes the row out at once and runs "archive" / "trash" in the background; on failure the row comes back.
 async function removeRow(command, account, id, li) {
   const key = `${account}/${id}`;
@@ -131,6 +144,7 @@ async function removeRow(command, account, id, li) {
   const next = li.nextSibling;
   pending.add(key);
   li.remove();
+  updateBadge();
   $("error").hidden = true;
   try {
     const done = await invoke(command, { account, id });
@@ -141,6 +155,7 @@ async function removeRow(command, account, id, li) {
     showError(e);
   } finally {
     pending.delete(key);
+    updateBadge();
   }
 }
 
@@ -347,6 +362,7 @@ async function load() {
     const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
     rows = new Map(shown.map((t) => [rowKey(t), { t, li: row(t) }]));
     $("threads").replaceChildren(...[...rows.values()].map((r) => r.li));
+    updateBadge();
   } catch (e) {
     showError(e);
   } finally {
@@ -393,6 +409,7 @@ function applyChanges(threads, removedKeys) {
   }
   threads.forEach(upsert);
   if (anchor && anchor.isConnected && main.scrollTop > 0) main.scrollTop += anchor.getBoundingClientRect().top - before;
+  updateBadge();
 }
 
 function applySync(account, r) {
