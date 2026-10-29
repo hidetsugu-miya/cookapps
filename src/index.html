@@ -50,7 +50,11 @@
         <button id="login-button">Google でログイン</button>
       </section>
       <div id="relogin" hidden></div>
-      <ul id="threads" hidden></ul>
+      <div id="threads" hidden>
+        <ul id="unread-threads"></ul>
+        <h2 id="read-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>既読</h2>
+        <ul id="read-threads"></ul>
+      </div>
       <section id="thread" hidden>
         <div id="messages"></div>
       </section>

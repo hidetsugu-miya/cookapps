@@ -72,10 +72,19 @@ function showError(e) {
   $("error").hidden = false;
 }
 
-// Reflects the read state in the row: bold, dot, and checkbox.
+// Puts the row in its section, unread above read, in date order.
+function place(li, unread) {
+  const list = $(unread ? "unread-threads" : "read-threads");
+  const next = [...list.children].find((c) => Number(c.dataset.dateMs) < Number(li.dataset.dateMs));
+  list.insertBefore(li, next || null);
+}
+
+// Reflects the read state in the row: bold, dot, checkbox, and its section.
 function setReadState(t, li, read) {
+  const moves = li.isConnected && li.classList.contains("unread") === read;
   t.unread = !read;
   li.classList.toggle("unread", !read);
+  if (moves) place(li, !read);
   const box = li.querySelector(".read-box");
   box.checked = read;
   box.setAttribute("aria-label", read ? "未読にする" : "既読にする");
@@ -84,6 +93,8 @@ function setReadState(t, li, read) {
 // Updates UNREAD in Gmail; `control` is disabled while sending. On failure the row returns to its last known state.
 async function sendRead(t, li, read, control) {
   $("error").hidden = true;
+  // The row moves to the other section, which drops the focus; keyboard users keep it on the control.
+  const focused = document.activeElement === control;
   control.disabled = true;
   try {
     const done = await invoke("set_read", { account: t.account, id: t.id, read });
@@ -94,6 +105,7 @@ async function sendRead(t, li, read, control) {
     showError(e);
   } finally {
     control.disabled = false;
+    if (focused && control.isConnected) control.focus();
     updateBadge();
   }
 }
@@ -680,7 +692,9 @@ async function load() {
     historyIds = new Map(Object.entries(inbox.historyIds));
     const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
     rows = new Map(shown.map((t) => [rowKey(t), { t, li: row(t) }]));
-    $("threads").replaceChildren(...[...rows.values()].map((r) => r.li));
+    const all = [...rows.values()];
+    $("unread-threads").replaceChildren(...all.filter((r) => r.t.unread).map((r) => r.li));
+    $("read-threads").replaceChildren(...all.filter((r) => !r.t.unread).map((r) => r.li));
     updateBadge();
   } catch (e) {
     showError(e);
@@ -703,12 +717,11 @@ function upsert(t) {
   const li = row(t);
   rows.set(key, { t, li });
   const focused = old && old.li.contains(document.activeElement) ? document.activeElement.classList : null;
-  if (old && old.li.dataset.dateMs === li.dataset.dateMs) {
+  if (old && old.li.dataset.dateMs === li.dataset.dateMs && old.t.unread === t.unread) {
     old.li.replaceWith(li);
   } else {
     if (old) old.li.remove();
-    const next = [...$("threads").children].find((c) => Number(c.dataset.dateMs) < t.dateMs);
-    $("threads").insertBefore(li, next || null);
+    place(li, t.unread);
   }
   if (old && current && current.li === old.li) current.li = li;
   if (focused) li.querySelector(`.${[...focused].join(".")}`)?.focus();
@@ -719,7 +732,7 @@ function upsert(t) {
 function applyChanges(threads, removedKeys) {
   const main = $("main");
   const top = main.getBoundingClientRect().top;
-  const anchor = [...$("threads").children].find((li) => li.getBoundingClientRect().bottom > top);
+  const anchor = [...$("threads").querySelectorAll("li")].find((li) => li.getBoundingClientRect().bottom > top);
   const before = anchor && anchor.getBoundingClientRect().top;
   for (const key of removedKeys) {
     const r = rows.get(key);
