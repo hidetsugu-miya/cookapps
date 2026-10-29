@@ -156,8 +156,6 @@ function updateBadge() {
 // Takes the row out at once and runs "archive" / "trash" in the background; on failure the row comes back.
 async function removeRow(command, account, id, li) {
   const key = `${account}/${id}`;
-  const list = li.parentNode;
-  const next = li.nextSibling;
   pending.add(key);
   li.remove();
   updateBadge();
@@ -167,7 +165,8 @@ async function removeRow(command, account, id, li) {
     if (done === null) return load();
     rows.delete(key);
   } catch (e) {
-    list.insertBefore(li, next && next.parentNode === list ? next : null);
+    // Back by the state it has now: a mark-as-read meanwhile moves it to the read section.
+    place(li, li.classList.contains("unread"));
     showError(e);
   } finally {
     pending.delete(key);
@@ -1611,11 +1610,16 @@ let todoUndrawn = false;
 // Says that the list is the last one fetched (`offline` is set by the backend), or clears the notice.
 function drawTodoNotice(offline) {
   const notice = $("todo-notice");
-  if (!offline) return notice.replaceChildren();
-  const d = new Date(offline.fetchedAt);
+  let text = "";
+  if (offline) {
+    const d = new Date(offline.fetchedAt);
+    text = `Todoist に接続できません（${offline.reason}）。${d.getMonth() + 1}月${d.getDate()}日 ${pad2(d.getHours())}:${pad2(d.getMinutes())} 時点の内容を表示しています。`;
+  }
+  // Drawn again only when the words change.
+  if (notice.textContent === text) return;
   const div = document.createElement("div");
-  div.textContent = `Todoist に接続できません（${offline.reason}）。${d.getMonth() + 1}月${d.getDate()}日 ${pad2(d.getHours())}:${pad2(d.getMinutes())} 時点の内容を表示しています。`;
-  notice.replaceChildren(div);
+  div.textContent = text;
+  notice.replaceChildren(...(text ? [div] : []));
 }
 
 // Fetches the tasks and draws them. `quiet` is the timed refresh: it fetches nothing while a field is being typed in, and draws nothing when nothing changed.
