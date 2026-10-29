@@ -407,6 +407,12 @@ fn events_url(calendar_id: &str) -> Result<String, String> {
 #[derive(Default)]
 pub struct CalendarCache(Mutex<HashMap<String, Vec<CalendarEntry>>>);
 
+impl CalendarCache {
+    pub fn forget(&self, account: &str) {
+        self.0.lock().unwrap().remove(account);
+    }
+}
+
 /// Runs the futures at once and returns their outputs in input order. A panicked task is an error.
 async fn join_all<T: Send + 'static>(
     futures: Vec<impl Future<Output = T> + Send + 'static>,

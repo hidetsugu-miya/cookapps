@@ -16,6 +16,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #account-popup .avatar { width: 48px; height: 48px; font-size: 16px; }
 .popup-email { font-weight: bold; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .popup-status { padding: 8px 12px; border-radius: 8px; background: #fff4e5; }
+.popup-actions { display: flex; gap: 8px; }
+.danger { color: #b00020; }
 .popup-unread { color: #666; }
 .nav-item[aria-current="page"] { background: #0b5bd3; color: #fff; }
 

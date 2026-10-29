@@ -829,6 +829,12 @@ impl Throttle {
 #[derive(Default)]
 pub struct SyncState(Mutex<HashMap<String, Throttle>>);
 
+impl SyncState {
+    pub fn forget(&self, account: &str) {
+        self.0.lock().unwrap().remove(account);
+    }
+}
+
 /// Differential sync of one account from `start_history_id` (see `Inbox::history_ids` and `Sync`).
 #[tauri::command]
 pub async fn sync(

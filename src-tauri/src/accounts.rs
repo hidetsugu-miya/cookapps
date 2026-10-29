@@ -57,9 +57,26 @@ pub fn with_account(mut accounts: Vec<String>, email: &str) -> Vec<String> {
     accounts
 }
 
+/// Drops `email`; an address not listed leaves the list as it is.
+pub fn without_account(accounts: Vec<String>, email: &str) -> Vec<String> {
+    accounts.into_iter().filter(|a| a != email).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn without_account_drops_only_that_account_and_it_can_be_added_again() {
+        let list = vec!["a@example.com".to_string(), "b@example.com".to_string()];
+        let list = without_account(list, "a@example.com");
+        assert_eq!(list, vec!["b@example.com"]);
+        assert_eq!(without_account(list.clone(), "x@example.com"), list);
+        assert_eq!(
+            with_account(without_account(list, "b@example.com"), "b@example.com"),
+            vec!["b@example.com"]
+        );
+    }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("cookup-test-{}-{name}", std::process::id()));

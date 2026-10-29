@@ -234,6 +234,8 @@ async function openThread({ id, account }, li) {
 let inboxIssues = { needsLogin: [], failed: {} };
 // The account whose popup is open, or null.
 let popupAccount = null;
+// The account whose removal the popup is asking to confirm, or null.
+let confirmingRemoval = null;
 // What the popup shows now; it is redrawn only when this changes, so a sync does not drop a text selection.
 let popupKey = "";
 
@@ -278,6 +280,7 @@ function renderAccounts({ accounts, needsLogin, failed }) {
 
 function closePopup() {
   popupAccount = null;
+  confirmingRemoval = null;
   $("account-popup").hidden = true;
   accountButtons().forEach((b) => b.setAttribute("aria-expanded", "false"));
 }
@@ -285,6 +288,7 @@ function closePopup() {
 function togglePopup(account) {
   if (popupAccount === account) return closePopup();
   popupAccount = account;
+  confirmingRemoval = null;
   popupKey = "";
   $("account-popup").hidden = false;
   accountButtons().forEach((b) => b.setAttribute("aria-expanded", String(b.dataset.account === account)));
@@ -305,20 +309,41 @@ function refreshPopup() {
   if (calShown?.needsLogin.includes(a)) lines.push("カレンダーの再ログインが必要です");
   const relogin = lines.some((l) => l.includes("再ログイン"));
   const unread = [...rows.values()].filter((r) => r.t.account === a && r.t.unread && r.li.isConnected).length;
-  const key = JSON.stringify([a, lines, relogin, unread]);
+  const confirming = confirmingRemoval === a;
+  const key = JSON.stringify([a, lines, relogin, unread, confirming]);
   if (key !== popupKey) {
     popupKey = key;
     const hadFocus = popup.contains(document.activeElement);
     const avatar = el("avatar", initials(a));
     avatar.style.background = avatarColor(a);
-    popup.replaceChildren(avatar, el("popup-email", a), ...lines.map((l) => el("popup-status", l)), el("popup-unread", `未読 ${unread} 件`));
-    if (relogin) {
-      const login = document.createElement("button");
-      login.textContent = "再ログイン";
-      login.onclick = () => addAccount(a, login);
-      popup.append(login);
+    const textButton = (text, onclick) => {
+      const b = document.createElement("button");
+      b.textContent = text;
+      b.onclick = () => onclick(b);
+      return b;
+    };
+    if (confirming) {
+      const cancel = textButton("キャンセル", () => {
+        confirmingRemoval = null;
+        refreshPopup();
+      });
+      const remove = textButton("削除", (b) => removeAccount(a, b));
+      remove.className = "danger";
+      const actions = el("popup-actions");
+      actions.append(remove, cancel);
+      popup.replaceChildren(avatar, el("popup-email", a), el("popup-status", `${a} を cookup から削除します。Gmail のメールは消えません。`), actions);
+      cancel.focus();
+    } else {
+      popup.replaceChildren(avatar, el("popup-email", a), ...lines.map((l) => el("popup-status", l)), el("popup-unread", `未読 ${unread} 件`));
+      if (relogin) popup.append(textButton("再ログイン", (b) => addAccount(a, b)));
+      popup.append(
+        textButton("このアカウントを削除", () => {
+          confirmingRemoval = a;
+          refreshPopup();
+        }),
+      );
+      if (hadFocus) button.focus();
     }
-    if (hadFocus) button.focus();
   }
   popup.style.left = `${$("sidebar").getBoundingClientRect().right + 8}px`;
   popup.style.top = `${Math.max(8, Math.min(button.getBoundingClientRect().top, innerHeight - popup.offsetHeight - 8))}px`;
@@ -491,6 +516,40 @@ async function addAccount(hint, button) {
     showError(e);
   } finally {
     button.disabled = false;
+  }
+}
+// Removes the account in the backend (revokes Google's grant, deletes its token), then drops what the screen kept of it.
+async function removeAccount(account, button) {
+  $("error").hidden = true;
+  button.disabled = true;
+  try {
+    await invoke("remove_account", { account });
+  } catch (e) {
+    confirmingRemoval = null;
+    popupKey = "";
+    refreshPopup();
+    return showError(e);
+  }
+  closePopup();
+  for (const [key, r] of rows) {
+    if (r.t.account !== account) continue;
+    r.li.remove();
+    rows.delete(key);
+  }
+  historyIds.delete(account);
+  calCache.clear();
+  calEpoch++;
+  calRefresh = true;
+  calShown = null;
+  updateBadge();
+  await load();
+  if (screen !== "calendar") return;
+  // With no account left there is no calendar to show: back to the mail screen, which shows the login.
+  if (accountButtons().length === 0) {
+    setScreen("mail");
+    show("login");
+  } else {
+    await loadCalendar();
   }
 }
 $("login-button").onclick = () => addAccount(null, $("login-button"));

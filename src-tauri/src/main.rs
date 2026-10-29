@@ -24,6 +24,7 @@ fn main() {
         .manage(calendar::CalendarCache::default())
         .invoke_handler(tauri::generate_handler![
             auth::login,
+            auth::remove_account,
             calendar::calendar_week,
             gmail::inbox,
             gmail::thread,

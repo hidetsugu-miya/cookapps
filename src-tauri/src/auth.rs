@@ -11,13 +11,14 @@ use tokio::{
 };
 use url::Url;
 
-use crate::accounts;
+use crate::{accounts, calendar::CalendarCache, gmail::SyncState};
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly";
 // Existing refresh tokens live under this name, so it must stay equal to `identifier` in tauri.conf.json.
 const KEYRING_SERVICE: &str = "jp.mysis.cookup";
+const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -105,6 +106,25 @@ impl Auth {
     /// Registered accounts.
     pub fn accounts(&self, app: &AppHandle) -> Result<Vec<String>, String> {
         Ok(accounts::load(&config_dir(app)?)?.unwrap_or_default())
+    }
+
+    /// Revokes the account's grant at Google (a failure is logged, not fatal), then forgets its token and its listing.
+    async fn remove(&self, app: &AppHandle, account: &str) -> Result<(), String> {
+        let entry = keyring_entry(account)?;
+        match entry.get_password() {
+            Ok(token) => {
+                if let Err(e) = revoke(&self.http, REVOKE_URL, &token).await {
+                    eprintln!("cookup: revoke account={account} status=- error={e}");
+                }
+            }
+            Err(keyring::Error::NoEntry) => {}
+            Err(e) => return Err(format!("キーチェーンの読み取りに失敗: {e}")),
+        }
+        delete_entry(&entry)?;
+        self.access.lock().unwrap().remove(account);
+        let dir = config_dir(app)?;
+        let list = accounts::load(&dir)?.unwrap_or_default();
+        accounts::save(&dir, &accounts::without_account(list, account))
     }
 
     /// Returns the logged-in account's email address.
@@ -233,6 +253,39 @@ pub async fn login(
         );
         e
     })
+}
+
+/// Removes an account from cookup: revokes its grant at Google and drops every trace of it kept here.
+#[tauri::command]
+pub async fn remove_account(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    sync: State<'_, SyncState>,
+    calendar: State<'_, CalendarCache>,
+    account: String,
+) -> Result<(), String> {
+    sync.forget(&account);
+    calendar.forget(&account);
+    auth.remove(&app, &account).await.map_err(|e| {
+        eprintln!("cookup: remove_account account={account} status=- error={e}");
+        e
+    })
+}
+
+/// Asks Google to revoke the token (a refresh token also ends its access tokens).
+async fn revoke(http: &reqwest::Client, url: &str, token: &str) -> Result<(), String> {
+    let res = http
+        .post(url)
+        .form(&[("token", token)])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let body = res.text().await.unwrap_or_default();
+    Err(format!("Google が {status} を返しました: {body}"))
 }
 
 fn access_token_of(res: TokenResponse) -> Result<String, String> {
@@ -397,6 +450,53 @@ mod tests {
         assert_eq!(ignore_missing(Err(keyring::Error::NoEntry)), Ok(()));
         let err = ignore_missing(Err(keyring::Error::Invalid("k".into(), "v".into())));
         assert!(err.unwrap_err().contains("キーチェーンの削除に失敗"));
+    }
+
+    /// Answers one request with `response`, then hands back the request it received.
+    fn serve_once(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/revoke", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        (url, handle)
+    }
+
+    fn revoke_at(url: &str) -> Result<(), String> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(revoke(&reqwest::Client::new(), url, "4/a b"))
+    }
+
+    #[test]
+    fn revoke_posts_the_token_as_a_form_body() {
+        let (url, server) =
+            serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        assert_eq!(revoke_at(&url), Ok(()));
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /revoke "));
+        assert!(request.contains("application/x-www-form-urlencoded"));
+        assert!(request.ends_with("token=4%2Fa+b"));
+    }
+
+    #[test]
+    fn revoke_reports_a_rejection_with_its_status() {
+        let (url, server) = serve_once(
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"error\":\"invalid_token\"}\n",
+        );
+        let err = revoke_at(&url).unwrap_err();
+        server.join().unwrap();
+        assert!(
+            err.contains("400") && err.contains("invalid_token"),
+            "{err}"
+        );
     }
 
     #[test]
