@@ -289,7 +289,27 @@ fn is_rate_limited(status: u16, body: &str) -> bool {
     status == 429 || (status == 403 && body.to_lowercase().contains("ratelimitexceeded"))
 }
 
-/// `Ok(None)` means login is required for `account`. Retries once with a refreshed token on 401.
+/// How often an interactive command sends a rate-limited request again. `sync` sends none again:
+/// `SyncState` already thins it out, and waiting here as well would stall every poll.
+const MAX_RETRIES: usize = 2;
+const NO_RETRIES: usize = 0;
+/// Upper bound of one wait, in step with the client's own 30 s timeout.
+const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
+
+/// Wait before retry number `attempt` (from 0): the server's `Retry-After`, else 1 s, then 2 s.
+fn retry_wait(attempt: usize, retry_after: Option<Duration>) -> Duration {
+    retry_after
+        .unwrap_or(Duration::from_secs(1 << attempt))
+        .min(MAX_RETRY_WAIT)
+}
+
+// shortcut: only the delta-seconds form; the HTTP-date form falls back to the fixed waits.
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    value.trim().parse().ok().map(Duration::from_secs)
+}
+
+/// `Ok(None)` means login is required for `account`. Retries once with a refreshed token on 401,
+/// and up to `MAX_RETRIES` times on a rate limit.
 pub(crate) async fn send_json_refreshing<T: DeserializeOwned>(
     app: &AppHandle,
     auth: &Auth,
@@ -299,16 +319,41 @@ pub(crate) async fn send_json_refreshing<T: DeserializeOwned>(
     query: &[(&str, &str)],
     body: Option<&Value>,
 ) -> Result<Option<T>, ApiError> {
+    send_json_refreshing_with(app, auth, account, MAX_RETRIES, method, url, query, body).await
+}
+
+/// `send_json_refreshing` with the number of rate-limit retries given.
+#[allow(clippy::too_many_arguments)]
+async fn send_json_refreshing_with<T: DeserializeOwned>(
+    app: &AppHandle,
+    auth: &Auth,
+    account: &str,
+    retries: usize,
+    method: Method,
+    url: &str,
+    query: &[(&str, &str)],
+    body: Option<&Value>,
+) -> Result<Option<T>, ApiError> {
     let Some(token) = auth.token(app, account).await? else {
         return Ok(None);
     };
-    if let Some(v) = send_json(auth.http(), method.clone(), &token, url, query, body).await? {
+    if let Some(v) = send_json(
+        auth.http(),
+        method.clone(),
+        &token,
+        url,
+        query,
+        body,
+        retries,
+    )
+    .await?
+    {
         return Ok(Some(v));
     }
     let Some(refreshed) = auth.refresh(app, account).await? else {
         return Ok(None);
     };
-    send_json(auth.http(), method, &refreshed, url, query, body)
+    send_json(auth.http(), method, &refreshed, url, query, body, retries)
         .await?
         .ok_or("認証に失敗しました".into())
         .map(Some)
@@ -330,7 +375,7 @@ fn build_request(
     }
 }
 
-/// `Ok(None)` means the token was rejected with 401.
+/// `Ok(None)` means the token was rejected with 401. A rate-limited request is sent again up to `retries` times.
 async fn send_json<T: DeserializeOwned>(
     http: &reqwest::Client,
     method: Method,
@@ -338,28 +383,43 @@ async fn send_json<T: DeserializeOwned>(
     url: &str,
     query: &[(&str, &str)],
     body: Option<&Value>,
+    retries: usize,
 ) -> Result<Option<T>, ApiError> {
-    let res = build_request(http, method, token, url, query, body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let status = res.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Ok(None);
-    }
-    if !status.is_success() {
-        let body = res.text().await.unwrap_or_default();
+    let mut attempt = 0;
+    loop {
+        let res = build_request(http, method.clone(), token, url, query, body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = res.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Ok(None);
+        }
+        if status.is_success() {
+            return Ok(res.json().await.map(Some).map_err(|e| e.to_string())?);
+        }
+        let retry_after = res
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(parse_retry_after);
+        let text = res.text().await.unwrap_or_default();
+        let rate_limited = is_rate_limited(status.as_u16(), &text);
+        if rate_limited && attempt < retries {
+            tokio::time::sleep(retry_wait(attempt, retry_after)).await;
+            attempt += 1;
+            continue;
+        }
         eprintln!(
-            "cookup: gmail api status={} url={url} error={body}",
+            "cookup: gmail api status={} url={url} error={text}",
             status.as_u16()
         );
         return Err(ApiError {
             status: Some(status.as_u16()),
-            rate_limited: is_rate_limited(status.as_u16(), &body),
-            message: format!("Google API が {status} を返しました: {body}"),
+            rate_limited,
+            message: format!("Google API が {status} を返しました: {text}"),
         });
     }
-    Ok(res.json().await.map(Some).map_err(|e| e.to_string())?)
 }
 
 #[derive(Serialize)]
@@ -399,6 +459,7 @@ async fn get_threads(
     http: &reqwest::Client,
     token: &str,
     ids: &[String],
+    retries: usize,
 ) -> Result<Option<Vec<(String, Option<Thread>)>>, ApiError> {
     let mut out = Vec::with_capacity(ids.len());
     for chunk in ids.chunks(CONCURRENCY) {
@@ -407,9 +468,16 @@ async fn get_threads(
             let (http, token, id) = (http.clone(), token.to_owned(), id.clone());
             set.spawn(async move {
                 let url = format!("{THREADS_URL}/{id}");
-                let res =
-                    send_json::<Thread>(&http, Method::GET, &token, &url, &METADATA_QUERY, None)
-                        .await;
+                let res = send_json::<Thread>(
+                    &http,
+                    Method::GET,
+                    &token,
+                    &url,
+                    &METADATA_QUERY,
+                    None,
+                    retries,
+                )
+                .await;
                 (id, res)
             });
         }
@@ -433,40 +501,52 @@ async fn get_threads_refreshing(
     auth: &Auth,
     account: &str,
     ids: &[String],
+    retries: usize,
 ) -> Result<Option<Vec<(String, Option<Thread>)>>, ApiError> {
     let Some(token) = auth.token(app, account).await? else {
         return Ok(None);
     };
-    if let Some(found) = get_threads(auth.http(), &token, ids).await? {
+    if let Some(found) = get_threads(auth.http(), &token, ids, retries).await? {
         return Ok(Some(found));
     }
     let Some(refreshed) = auth.refresh(app, account).await? else {
         return Ok(None);
     };
-    get_threads(auth.http(), &refreshed, ids)
+    get_threads(auth.http(), &refreshed, ids, retries)
         .await?
         .ok_or("認証に失敗しました".into())
         .map(Some)
 }
 
-/// Inbox threads of one account. `Ok(None)` means that account must log in again.
+/// Inbox threads of one account, each request retried `retries` times on a rate limit.
+/// `Ok(None)` means that account must log in again.
 async fn account_threads(
     app: &AppHandle,
     auth: &Auth,
     account: &str,
+    retries: usize,
 ) -> Result<Option<AccountInbox>, ApiError> {
     // Read before the list: changes landing in between are replayed by the next sync, which is harmless.
-    let Some(profile) =
-        send_json_refreshing::<Profile>(app, auth, account, Method::GET, PROFILE_URL, &[], None)
-            .await?
+    let Some(profile) = send_json_refreshing_with::<Profile>(
+        app,
+        auth,
+        account,
+        retries,
+        Method::GET,
+        PROFILE_URL,
+        &[],
+        None,
+    )
+    .await?
     else {
         return Ok(None);
     };
     let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
-    let Some(list) = send_json_refreshing::<ThreadList>(
+    let Some(list) = send_json_refreshing_with::<ThreadList>(
         app,
         auth,
         account,
+        retries,
         Method::GET,
         THREADS_URL,
         &list_query,
@@ -477,7 +557,7 @@ async fn account_threads(
         return Ok(None);
     };
     let ids: Vec<_> = list.threads.into_iter().map(|t| t.id).collect();
-    let Some(fetched) = get_threads_refreshing(app, auth, account, &ids).await? else {
+    let Some(fetched) = get_threads_refreshing(app, auth, account, &ids, retries).await? else {
         return Ok(None);
     };
     let threads = fetched
@@ -500,7 +580,7 @@ pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, Strin
     let (mut lists, mut needs_login, mut failed, mut history_ids) =
         (Vec::new(), Vec::new(), HashMap::new(), HashMap::new());
     for account in &accounts {
-        match account_threads(&app, &auth, account).await {
+        match account_threads(&app, &auth, account, MAX_RETRIES).await {
             Ok(Some(loaded)) => {
                 lists.push(loaded.threads);
                 history_ids.insert(account.clone(), loaded.history_id);
@@ -610,10 +690,11 @@ async fn list_history(
         if let Some(token) = all.next_page_token.as_deref() {
             query.push(("pageToken", token));
         }
-        let Some(page) = send_json_refreshing::<HistoryList>(
+        let Some(page) = send_json_refreshing_with::<HistoryList>(
             app,
             auth,
             account,
+            NO_RETRIES,
             Method::GET,
             HISTORY_URL,
             &query,
@@ -658,13 +739,15 @@ pub enum Sync {
 }
 
 async fn reload(app: &AppHandle, auth: &Auth, account: &str) -> Result<Sync, ApiError> {
-    Ok(match account_threads(app, auth, account).await? {
-        Some(l) => Sync::Reloaded {
-            threads: l.threads,
-            history_id: l.history_id,
+    Ok(
+        match account_threads(app, auth, account, NO_RETRIES).await? {
+            Some(l) => Sync::Reloaded {
+                threads: l.threads,
+                history_id: l.history_id,
+            },
+            None => Sync::NeedsLogin,
         },
-        None => Sync::NeedsLogin,
-    })
+    )
 }
 
 async fn sync_account(
@@ -674,9 +757,17 @@ async fn sync_account(
     start: &str,
 ) -> Result<Sync, ApiError> {
     // One cheap call tells whether anything changed at all.
-    let Some(profile) =
-        send_json_refreshing::<Profile>(app, auth, account, Method::GET, PROFILE_URL, &[], None)
-            .await?
+    let Some(profile) = send_json_refreshing_with::<Profile>(
+        app,
+        auth,
+        account,
+        NO_RETRIES,
+        Method::GET,
+        PROFILE_URL,
+        &[],
+        None,
+    )
+    .await?
     else {
         return Ok(Sync::NeedsLogin);
     };
@@ -696,7 +787,7 @@ async fn sync_account(
     if list.next_page_token.is_some() || ids.len() > MAX_SYNC_THREADS {
         return reload(app, auth, account).await;
     }
-    let Some(fetched) = get_threads_refreshing(app, auth, account, &ids).await? else {
+    let Some(fetched) = get_threads_refreshing(app, auth, account, &ids, NO_RETRIES).await? else {
         return Ok(Sync::NeedsLogin);
     };
     let (threads, removed) = split_fetched(fetched, account);
@@ -1177,6 +1268,97 @@ mod tests {
         for id in ["", "../labels", "a/trash", "a?x=1", "a#b", "a b", "ａ"] {
             assert_eq!(thread_url(id, None), Err("スレッド ID が不正です".into()));
         }
+    }
+
+    #[test]
+    fn retry_waits_follow_retry_after_else_one_then_two_seconds() {
+        let s = Duration::from_secs;
+        assert_eq!(retry_wait(0, None), s(1));
+        assert_eq!(retry_wait(1, None), s(2));
+        assert_eq!(retry_wait(0, Some(s(7))), s(7));
+        assert_eq!(retry_wait(1, Some(Duration::ZERO)), Duration::ZERO);
+        // A long Retry-After must not freeze the UI past the client's own timeout.
+        assert_eq!(retry_wait(0, Some(s(3600))), MAX_RETRY_WAIT);
+    }
+
+    #[test]
+    fn retry_after_reads_delta_seconds_only() {
+        assert_eq!(parse_retry_after("3"), Some(Duration::from_secs(3)));
+        assert_eq!(parse_retry_after(" 0 "), Some(Duration::ZERO));
+        assert_eq!(parse_retry_after("Wed, 21 Oct 2026 07:28:00 GMT"), None);
+        assert_eq!(parse_retry_after("-1"), None);
+        assert_eq!(parse_retry_after(""), None);
+    }
+
+    /// Serves one canned response per connection on a local port; returns its URL.
+    /// Dropping the listener afterwards makes any extra request fail to connect.
+    fn serve(responses: Vec<&'static str>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (url, handle)
+    }
+
+    const LIMITED: &str = "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    const LIMITED_403: &str = "HTTP/1.1 403 Forbidden\r\nRetry-After: 0\r\nContent-Length: 30\r\nConnection: close\r\n\r\n{\"reason\":\"rateLimitExceeded\"}";
+    const OK: &str = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+
+    fn send_to(url: &str, retries: usize) -> Result<Option<Value>, ApiError> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(send_json(
+                &reqwest::Client::new(),
+                Method::GET,
+                "token",
+                url,
+                &[],
+                None,
+                retries,
+            ))
+    }
+
+    #[test]
+    fn rate_limited_requests_are_sent_again_until_they_succeed() {
+        let (url, server) = serve(vec![LIMITED, LIMITED_403, OK]);
+        assert_eq!(send_to(&url, 2).unwrap(), Some(json!({})));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn rate_limit_after_the_last_retry_is_an_error() {
+        let (url, server) = serve(vec![LIMITED, LIMITED, LIMITED]);
+        let e = send_to(&url, 2).unwrap_err();
+        assert!(e.rate_limited);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn without_retries_a_rate_limit_is_returned_at_once() {
+        let (url, server) = serve(vec![LIMITED]);
+        let e = send_to(&url, 0).unwrap_err();
+        assert!(e.rate_limited);
+        assert_eq!(e.status, Some(429));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn other_errors_are_not_retried() {
+        let (url, server) = serve(vec![
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        ]);
+        let e = send_to(&url, 2).unwrap_err();
+        assert_eq!(e.status, Some(500));
+        server.join().unwrap();
     }
 
     #[test]
