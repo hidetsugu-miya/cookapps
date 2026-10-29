@@ -41,6 +41,10 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .read-box:checked::after { content: ""; width: 5px; height: 9px; margin-top: -2px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .read-box:focus-visible { outline: 2px solid #0b5bd3; outline-offset: 2px; }
 .read-box:disabled { opacity: .4; cursor: default; }
+/* The checkbox appears only on hover or focus; otherwise unread rows show a light-blue dot in its place. */
+#threads li:not(:hover):not(:focus-within) .read-box { border-color: transparent; background: transparent; }
+#threads li:not(:hover):not(:focus-within) .read-box::after { display: none; }
+#threads li.unread:not(:hover):not(:focus-within) .read-box { background: radial-gradient(circle, #3db4f2 0 4px, transparent 4.5px); }
 .avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; }
 #threads li > .avatar { position: relative; overflow: visible; }
 .account-dot { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; }
