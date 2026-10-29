@@ -552,11 +552,16 @@ function span(className, text) {
   return el;
 }
 
-// The header of an open message: avatar, sender, recipients and date. A button when the message can be folded.
+// The header of an open message: avatar, sender, recipients and date. A div, so the address can be selected;
+// when the message can be folded it acts as a button (`message` adds the click).
 function openHead(m, account, foldable) {
   const { name, address } = splitAddress(m.from);
-  const head = document.createElement(foldable ? "button" : "div");
+  const head = document.createElement("div");
   head.className = "msg-head";
+  if (foldable) {
+    head.setAttribute("role", "button");
+    head.tabIndex = 0;
+  }
   const avatar = span("msg-avatar", "");
   avatar.innerHTML = PERSON_SVG;
   const who = span("who", "");
@@ -590,49 +595,66 @@ function message(m, ctx, account, folded, foldable) {
   const body = document.createElement("div");
   body.className = "msg-body";
   article.append(open, body);
+  // A folded message is built when it is first opened, so its images are not fetched while it is out of sight.
+  const build = () => {
+    if (m.html) {
+      // No allow-scripts: scripts do not run. allow-same-origin only lets this page read the document's height and rewrite its links.
+      // allow-top-navigation-by-user-activation lets a click on a link navigate the top window, and only a click; Rust's on_navigation
+      // always cancels that and opens the browser (see `routeLinks`).
+      // Invariant: never add allow-scripts, allow-popups, allow-forms or allow-top-navigation, and never widen the sandbox beyond these two.
+      // With the page's origin shared, the missing allow-scripts (backed by the CSP's script-src 'self') is the only guard.
+      const frame = document.createElement("iframe");
+      frame.setAttribute("sandbox", "allow-same-origin allow-top-navigation-by-user-activation");
+      frame.srcdoc = withBodyCsp(plainBody(m.body));
+      autoFit(frame, (doc) => {
+        routeLinks(doc);
+        ctx.cids.then((byMessage) => {
+          if (ctx.stale()) return;
+          if (!byMessage[m.id]) return;
+          showCidImages(doc, byMessage[m.id]);
+          fitAfterImages(frame);
+        });
+        const urls = externalImages(doc);
+        if (urls.length) offerImages(m, frame, urls, ctx);
+      });
+      body.append(frame);
+    } else {
+      const text = document.createElement("div");
+      text.className = "plain";
+      text.append(...linkify(m.body));
+      body.append(text);
+    }
+  };
   if (foldable) {
     const line = foldedHead(m);
     article.prepend(line);
     open.setAttribute("aria-expanded", "true");
     line.setAttribute("aria-expanded", "false");
-    // A frame in a folded message is 0 wide; `frameObserver` fits it when the message opens.
+    // A frame folded after it was fitted is 0 wide when the message reopens; `frameObserver` fits it again.
     const fold = (folded) => {
       article.classList.toggle("folded", folded);
       line.hidden = !folded;
       open.hidden = folded;
       body.hidden = folded;
+      if (!folded && !body.firstChild) build();
     };
     // The head that was clicked goes away, so the focus moves to its counterpart.
     line.onclick = () => (fold(false), open.focus());
-    open.onclick = () => (fold(true), line.focus());
+    // Dragging over the address to copy it ends in a click; it must not fold the message.
+    open.onclick = () => {
+      if (getSelection().toString()) return;
+      fold(true);
+      line.focus();
+    };
+    open.onkeydown = (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      fold(true);
+      line.focus();
+    };
     fold(folded);
-  }
-  if (m.html) {
-    // No allow-scripts: scripts do not run. allow-same-origin only lets this page read the document's height and rewrite its links.
-    // allow-top-navigation-by-user-activation lets a click on a link navigate the top window, and only a click; Rust's on_navigation
-    // always cancels that and opens the browser (see `routeLinks`).
-    // Invariant: never add allow-scripts, allow-popups, allow-forms or allow-top-navigation, and never widen the sandbox beyond these two.
-    // With the page's origin shared, the missing allow-scripts (backed by the CSP's script-src 'self') is the only guard.
-    const frame = document.createElement("iframe");
-    frame.setAttribute("sandbox", "allow-same-origin allow-top-navigation-by-user-activation");
-    frame.srcdoc = withBodyCsp(plainBody(m.body));
-    autoFit(frame, (doc) => {
-      routeLinks(doc);
-      ctx.cids.then((byMessage) => {
-        if (ctx.stale()) return;
-        if (!byMessage[m.id]) return;
-        showCidImages(doc, byMessage[m.id]);
-        fitAfterImages(frame);
-      });
-      const urls = externalImages(doc);
-      if (urls.length) offerImages(m, frame, urls, ctx);
-    });
-    body.append(frame);
   } else {
-    const text = document.createElement("div");
-    text.className = "plain";
-    text.append(...linkify(m.body));
-    body.append(text);
+    build();
   }
   return article;
 }
@@ -686,7 +708,7 @@ async function openThread({ id, account }, li, origin = "mail") {
     );
     show("thread");
     // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
-    $("trash").hidden = $("archive").hidden = !li;
+    $("trash").hidden = $("archive").hidden = $("thread-label").hidden = !li;
     if (t.unread) markRead(account, id);
   } catch (e) {
     showError(e);

@@ -91,13 +91,14 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 #messages article.folded { margin-bottom: 0; border-bottom: 1px solid #eceef1; }
 #messages article.folded + article { margin-top: 16px; }
 .msg-head { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; column-gap: 16px; align-items: start; width: 100%; box-sizing: border-box; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; }
-button.msg-head { cursor: pointer; }
+.msg-head[role="button"] { cursor: pointer; }
 .msg-head:focus-visible { outline: 2px solid #0b5bd3; outline-offset: 2px; border-radius: 8px; }
 .msg-avatar { width: 40px; height: 40px; border-radius: 50%; background: #a8c7fa; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .msg-avatar svg { width: 26px; height: 26px; margin-top: 6px; fill: #fff; stroke: none; }
 .msg-head .name { color: #1f1f1f; font-weight: 600; }
 .msg-head .addr, .msg-head .to, .msg-head .when { color: #5e5e5e; font-size: 12px; }
 .msg-head .to { display: block; margin-top: 2px; }
+.msg-head .addr, .msg-head .to { user-select: text; -webkit-user-select: text; }
 .msg-head .when { padding-top: 2px; white-space: nowrap; }
 .msg-head.folded { align-items: center; padding: 10px 0; border-radius: 8px; }
 .msg-head.folded:hover { background: #f6f7f9; }
