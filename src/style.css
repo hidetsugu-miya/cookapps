@@ -9,6 +9,14 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .nav-item:disabled { opacity: .4; cursor: default; }
 #accounts { margin-top: auto; padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 #account-list { display: flex; flex-direction: column; gap: 8px; }
+.account-btn { padding: 0; border: 0; font-family: inherit; cursor: pointer; }
+.account-btn[aria-expanded="true"] { box-shadow: 0 0 0 2px #0b5bd3; }
+.account-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+#account-popup { position: fixed; z-index: 10; box-sizing: border-box; width: 280px; padding: 16px; border: 1px solid #dfe3e8; border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+#account-popup .avatar { width: 48px; height: 48px; font-size: 16px; }
+.popup-email { font-weight: bold; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.popup-status { padding: 8px 12px; border-radius: 8px; background: #fff4e5; }
+.popup-unread { color: #666; }
 .nav-item[aria-current="page"] { background: #0b5bd3; color: #fff; }
 
 #content { flex: 1; min-width: 0; display: flex; flex-direction: column; }

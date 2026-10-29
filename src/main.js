@@ -215,21 +215,35 @@ async function openThread({ id, account }, li) {
   }
 }
 
+// Per account, what the last load could not do; the account popup reads it.
+let inboxIssues = { needsLogin: [], failed: {} };
+// The account whose popup is open, or null.
+let popupAccount = null;
+// What the popup shows now; it is redrawn only when this changes, so a sync does not drop a text selection.
+let popupKey = "";
+
+const accountButtons = () => [...$("account-list").children];
+
 // Sidebar avatars of every account, a re-login row for each account that needs it, and an error row for each that failed to load.
 function renderAccounts({ accounts, needsLogin, failed }) {
+  inboxIssues = { needsLogin, failed };
   $("nav-calendar").disabled = accounts.length === 0;
   $("account-list").replaceChildren(
     ...accounts.map((a) => {
-      const avatar = document.createElement("span");
-      avatar.className = "avatar";
+      const avatar = document.createElement("button");
+      avatar.className = "avatar account-btn";
+      avatar.dataset.account = a;
       avatar.textContent = initials(a);
       avatar.style.background = avatarColor(a);
-      avatar.title = a;
-      avatar.setAttribute("role", "img");
       avatar.setAttribute("aria-label", a);
+      avatar.setAttribute("aria-haspopup", "dialog");
+      avatar.setAttribute("aria-controls", "account-popup");
+      avatar.setAttribute("aria-expanded", String(a === popupAccount));
+      avatar.onclick = () => togglePopup(a);
       return avatar;
     }),
   );
+  refreshPopup();
   $("relogin").replaceChildren(
     ...needsLogin.map((a) => {
       const div = document.createElement("div");
@@ -246,6 +260,69 @@ function renderAccounts({ accounts, needsLogin, failed }) {
     }),
   );
 }
+
+function closePopup() {
+  popupAccount = null;
+  $("account-popup").hidden = true;
+  accountButtons().forEach((b) => b.setAttribute("aria-expanded", "false"));
+}
+
+function togglePopup(account) {
+  if (popupAccount === account) return closePopup();
+  popupAccount = account;
+  popupKey = "";
+  $("account-popup").hidden = false;
+  accountButtons().forEach((b) => b.setAttribute("aria-expanded", String(b.dataset.account === account)));
+  refreshPopup();
+}
+
+// Redraws the open popup from the latest state and puts it right of the sidebar at its avatar's height, inside the window.
+// The avatars are rebuilt on every render, so the popup finds its avatar again by the account.
+function refreshPopup() {
+  if (popupAccount === null) return;
+  const a = popupAccount;
+  const button = accountButtons().find((b) => b.dataset.account === a);
+  if (!button) return closePopup();
+  const popup = $("account-popup");
+  const lines = [];
+  if (a in inboxIssues.failed) lines.push(`受信トレイの読み込みに失敗しました: ${inboxIssues.failed[a]}`);
+  if (inboxIssues.needsLogin.includes(a)) lines.push("再ログインが必要です");
+  if (calShown?.needsLogin.includes(a)) lines.push("カレンダーの再ログインが必要です");
+  const relogin = lines.some((l) => l.includes("再ログイン"));
+  const unread = [...rows.values()].filter((r) => r.t.account === a && r.t.unread && r.li.isConnected).length;
+  const key = JSON.stringify([a, lines, relogin, unread]);
+  if (key !== popupKey) {
+    popupKey = key;
+    const hadFocus = popup.contains(document.activeElement);
+    const avatar = el("avatar", initials(a));
+    avatar.style.background = avatarColor(a);
+    popup.replaceChildren(avatar, el("popup-email", a), ...lines.map((l) => el("popup-status", l)), el("popup-unread", `未読 ${unread} 件`));
+    if (relogin) {
+      const login = document.createElement("button");
+      login.textContent = "再ログイン";
+      login.onclick = () => addAccount(a, login);
+      popup.append(login);
+    }
+    if (hadFocus) button.focus();
+  }
+  popup.style.left = `${$("sidebar").getBoundingClientRect().right + 8}px`;
+  popup.style.top = `${Math.max(8, Math.min(button.getBoundingClientRect().top, innerHeight - popup.offsetHeight - 8))}px`;
+}
+
+// Another avatar or the popup handles its own click.
+document.addEventListener("pointerdown", (e) => {
+  if (popupAccount !== null && !e.target.closest("#account-popup, .account-btn")) closePopup();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || popupAccount === null) return;
+  const inside = $("account-popup").contains(document.activeElement);
+  const button = accountButtons().find((b) => b.dataset.account === popupAccount);
+  closePopup();
+  if (inside) button?.focus();
+});
+window.addEventListener("resize", refreshPopup);
+// The unread count follows every change of the list: load, sync, read toggle, removal.
+new MutationObserver(refreshPopup).observe($("threads"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
 
 // Which screen the sidebar selected: "mail" or "calendar". Background work reads it; only the sidebar changes it.
 let screen = "mail";
@@ -389,6 +466,8 @@ async function addAccount(hint, button) {
     calCache.clear();
     calEpoch++;
     calRefresh = true;
+    // The login may have fixed the calendar too; the popup must not keep the old state until the calendar is opened.
+    calShown = null;
     await load();
     if (screen === "calendar") await loadCalendar();
   } catch (e) {
@@ -535,6 +614,7 @@ function renderWeek(w) {
       return div;
     }),
   );
+  refreshPopup();
   if (!calScrolled) {
     // Three hours before now at the top (11:00 shows from 8:00); a little less keeps the hour label whole.
     $("cal-scroll").scrollTop = Math.max(0, (new Date().getHours() - 3) * HOUR_PX - 12);
