@@ -1339,6 +1339,72 @@ pub async fn archive(
         .map_err(|e| log_failure("archive", &account, e))
 }
 
+/// Takes the thread out of the trash again. `Ok(None)` means `account` must log in again.
+pub async fn untrash_thread(
+    dir: &Path,
+    auth: &Auth,
+    account: &str,
+    id: &str,
+) -> Result<Option<bool>, ApiError> {
+    let url = thread_url(id, Some("untrash"))?;
+    let done =
+        send_json_refreshing::<IgnoredAny>(dir, auth, account, Method::POST, &url, &[], None)
+            .await?;
+    Ok(done.map(|_| true))
+}
+
+#[tauri::command]
+pub async fn untrash(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    account: String,
+    id: String,
+) -> Result<Option<bool>, String> {
+    let dir = config_dir(&app).map_err(|e| log_failure("untrash", &account, e))?;
+    untrash_thread(&dir, &auth, &account, &id)
+        .await
+        .map_err(|e| log_failure("untrash", &account, e))
+}
+
+fn unarchive_body() -> Value {
+    json!({"addLabelIds": ["INBOX"]})
+}
+
+/// Puts the INBOX label back on the thread. `Ok(None)` means `account` must log in again.
+pub async fn unarchive_thread(
+    dir: &Path,
+    auth: &Auth,
+    account: &str,
+    id: &str,
+) -> Result<Option<bool>, ApiError> {
+    let url = thread_url(id, Some("modify"))?;
+    let body = unarchive_body();
+    let done = send_json_refreshing::<IgnoredAny>(
+        dir,
+        auth,
+        account,
+        Method::POST,
+        &url,
+        &[],
+        Some(&body),
+    )
+    .await?;
+    Ok(done.map(|_| true))
+}
+
+#[tauri::command]
+pub async fn unarchive(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    account: String,
+    id: String,
+) -> Result<Option<bool>, String> {
+    let dir = config_dir(&app).map_err(|e| log_failure("unarchive", &account, e))?;
+    unarchive_thread(&dir, &auth, &account, &id)
+        .await
+        .map_err(|e| log_failure("unarchive", &account, e))
+}
+
 fn read_body(read: bool) -> Value {
     if read {
         json!({"removeLabelIds": ["UNREAD"]})
@@ -1505,6 +1571,19 @@ mod tests {
             .unwrap();
         assert_eq!(req.headers()[reqwest::header::CONTENT_LENGTH], "0");
         assert!(req.body().is_none());
+    }
+
+    #[test]
+    fn unarchive_body_adds_inbox() {
+        assert_eq!(unarchive_body(), json!({"addLabelIds": ["INBOX"]}));
+    }
+
+    #[test]
+    fn untrash_url_is_the_thread_untrash_action() {
+        assert_eq!(
+            thread_url("18c3fA09", Some("untrash")).unwrap(),
+            format!("{THREADS_URL}/18c3fA09/untrash")
+        );
     }
 
     #[test]
