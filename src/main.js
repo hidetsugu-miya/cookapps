@@ -144,12 +144,22 @@ const rowKey = (t) => `${t.account}/${t.id}`;
 // Unread threads among `rows`, minus those being archived / trashed.
 const countUnread = (rows, pending) => [...rows].filter(([key, r]) => r.t.unread && !pending.has(key)).length;
 
-// Dock badge shows the unread count of the list; the call is skipped when the count is unchanged.
+// The count on a sidebar button (99+ from 100; none for 0). The label carries it too: the tooltip shows the label, e.g. "受信トレイ（未読 3 件）".
+function setNavCount(id, count, name, kind) {
+  const b = $(id);
+  const badge = b.querySelector(".nav-count");
+  badge.hidden = count === 0;
+  badge.textContent = count > 99 ? "99+" : String(count);
+  b.setAttribute("aria-label", count === 0 ? name : `${name}（${kind} ${count} 件）`);
+}
+
+// Dock badge and the inbox button show the unread count of the list; the calls are skipped when the count is unchanged.
 let badge = 0;
 function updateBadge() {
   const count = countUnread(rows, pending);
   if (count === badge) return;
   badge = count;
+  setNavCount("nav-mail", count, "受信トレイ", "未読");
   invoke("set_badge", { count }).catch(() => {});
 }
 
@@ -1207,7 +1217,7 @@ const OPEN_SVG = svgOf('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 
 const DAY_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M12 14v3"/>');
 const DATE_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/>');
 const FLAG_SVG = svgOf('<path d="M5 21V4h11l-2 4 2 4H5"/>');
-const INBOX_SVG = $("nav-mail").innerHTML.trim();
+const INBOX_SVG = $("nav-mail").querySelector("svg").outerHTML;
 const PLUS_SVG = $("add-account").innerHTML.trim();
 const DELETE_SVG = $("todo-delete").innerHTML.trim();
 
@@ -1217,6 +1227,10 @@ function tag(name, className = "", text = "") {
   node.textContent = text;
   return node;
 }
+
+// Open tasks that "今日" lists: overdue or due today.
+const isDueToday = (t) => t.bucket === "overdue" || t.bucket === "today";
+const setTodoCount = (count) => setNavCount("nav-todo", count, "Todo", "今日");
 
 // The last data from the backend, or null while a token is needed.
 let todo = null;
@@ -1302,9 +1316,10 @@ function renderProjects() {
   const counts = new Map();
   let today = 0;
   for (const t of todo.tasks) {
-    if (t.bucket === "overdue" || t.bucket === "today") today++;
+    if (isDueToday(t)) today++;
     if (!t.parent) counts.set(t.projectId, (counts.get(t.projectId) ?? 0) + 1);
   }
+  setTodoCount(today);
   $("projects").replaceChildren(
     projectButton("today", DAY_SVG, "今日", today),
     projectButton("inbox", INBOX_SVG, "受信箱", counts.get(inbox?.id) ?? 0),
@@ -1796,5 +1811,19 @@ $("todo-add").onsubmit = async (e) => {
 };
 // Not while the token form is up: a load would read the keychain and draw the form again, dropping what is typed in it.
 setInterval(() => screen === "todo" && $("todo-token").hidden && !document.hidden && loadTodo(true), TODO_REFRESH_MS);
+
+// Fetches only for the Todo count on the sidebar while another screen is shown: `todo` and the Todo screen stay as they are, and a missing token or a failure shows no count and no message.
+async function loadTodoCount() {
+  if (screen === "todo" || document.hidden) return;
+  let count = 0;
+  try {
+    const data = await invoke("todoist_load", { withDone: false });
+    if (data) count = data.tasks.filter(isDueToday).length;
+  } catch {}
+  // The Todo screen sets the count itself, and its data is newer than this fetch.
+  if (screen !== "todo") setTodoCount(count);
+}
+setInterval(loadTodoCount, TODO_REFRESH_MS);
+loadTodoCount();
 
 load();
