@@ -11,7 +11,8 @@ fn main() {
             gmail::inbox,
             gmail::thread,
             gmail::trash,
-            gmail::archive
+            gmail::archive,
+            gmail::set_read
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri application");

@@ -426,6 +426,38 @@ pub async fn archive(
     Ok(done.map(|_| ()))
 }
 
+fn read_body(read: bool) -> Value {
+    if read {
+        json!({"removeLabelIds": ["UNREAD"]})
+    } else {
+        json!({"addLabelIds": ["UNREAD"]})
+    }
+}
+
+/// Marks the thread read (removes UNREAD) or unread (adds it). `Ok(None)` means `account` must log in again.
+#[tauri::command]
+pub async fn set_read(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    account: String,
+    id: String,
+    read: bool,
+) -> Result<Option<()>, String> {
+    let url = format!("{THREADS_URL}/{id}/modify");
+    let body = read_body(read);
+    let done = send_json_refreshing::<IgnoredAny>(
+        &app,
+        &auth,
+        &account,
+        Method::POST,
+        &url,
+        &[],
+        Some(&body),
+    )
+    .await?;
+    Ok(done.map(|_| ()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,6 +575,12 @@ mod tests {
             .unwrap();
         assert_eq!(req.headers()[reqwest::header::CONTENT_LENGTH], "0");
         assert!(req.body().is_none());
+    }
+
+    #[test]
+    fn read_body_removes_or_adds_unread() {
+        assert_eq!(read_body(true), json!({"removeLabelIds": ["UNREAD"]}));
+        assert_eq!(read_body(false), json!({"addLabelIds": ["UNREAD"]}));
     }
 
     #[test]

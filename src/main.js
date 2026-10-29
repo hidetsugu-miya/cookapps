@@ -62,6 +62,36 @@ function showError(e) {
   $("error").hidden = false;
 }
 
+// Round checkbox mirroring the read state: checked = read. Toggling it updates UNREAD in Gmail.
+function readBox(t, li) {
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.className = "read-box";
+  box.checked = !t.unread;
+  const label = () => box.setAttribute("aria-label", box.checked ? "未読にする" : "既読にする");
+  label();
+  // The row opens the thread on click; the checkbox must not.
+  box.onclick = (e) => e.stopPropagation();
+  box.onchange = async () => {
+    const read = box.checked;
+    $("error").hidden = true;
+    box.disabled = true;
+    try {
+      const done = await invoke("set_read", { account: t.account, id: t.id, read });
+      if (done === null) return load();
+      t.unread = !read;
+      li.classList.toggle("unread", !read);
+    } catch (e) {
+      box.checked = !read;
+      showError(e);
+    } finally {
+      box.disabled = false;
+      label();
+    }
+  };
+  return box;
+}
+
 function row(t) {
   const li = document.createElement("li");
   li.className = t.unread ? "unread" : "";
@@ -82,7 +112,7 @@ function row(t) {
   dot.style.background = avatarColor(t.account);
   dot.title = t.account;
   avatar.append(dot);
-  li.append(avatar, cell("from", name), subject, cell("date", formatDate(t.dateMs)));
+  li.append(readBox(t, li), avatar, cell("from", name), subject, cell("date", formatDate(t.dateMs)));
   return li;
 }
 
