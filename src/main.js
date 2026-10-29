@@ -39,6 +39,8 @@ function avatarColor(s) {
   return `hsl(${h % 360} 55% 45%)`;
 }
 
+const CHECK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>';
+
 // #main scrolls both the list and the thread, so each view keeps its own position.
 let listScroll = 0;
 
@@ -62,39 +64,73 @@ function showError(e) {
   $("error").hidden = false;
 }
 
+// Reflects the read state in the row: bold, dot, checkbox, and the hover "mark read" button (unread rows only).
+function setReadState(t, li, read) {
+  t.unread = !read;
+  li.classList.toggle("unread", !read);
+  const box = li.querySelector(".read-box");
+  box.checked = read;
+  box.setAttribute("aria-label", read ? "未読にする" : "既読にする");
+  li.querySelector(".mark-read").hidden = read;
+}
+
+// Updates UNREAD in Gmail; `control` is disabled while sending. On failure the row returns to its last known state.
+async function sendRead(t, li, read, control) {
+  $("error").hidden = true;
+  control.disabled = true;
+  try {
+    const done = await invoke("set_read", { account: t.account, id: t.id, read });
+    if (done === null) return load();
+    setReadState(t, li, read);
+  } catch (e) {
+    setReadState(t, li, !t.unread);
+    showError(e);
+  } finally {
+    control.disabled = false;
+  }
+}
+
 // Round checkbox mirroring the read state: checked = read. Toggling it updates UNREAD in Gmail.
 function readBox(t, li) {
   const box = document.createElement("input");
   box.type = "checkbox";
   box.className = "read-box";
-  box.checked = !t.unread;
-  const label = () => box.setAttribute("aria-label", box.checked ? "未読にする" : "既読にする");
-  label();
   // The row opens the thread on click; the checkbox must not.
   box.onclick = (e) => e.stopPropagation();
-  box.onchange = async () => {
-    const read = box.checked;
-    $("error").hidden = true;
-    box.disabled = true;
-    try {
-      const done = await invoke("set_read", { account: t.account, id: t.id, read });
-      if (done === null) return load();
-      t.unread = !read;
-      li.classList.toggle("unread", !read);
-    } catch (e) {
-      box.checked = !read;
-      showError(e);
-    } finally {
-      box.disabled = false;
-      label();
-    }
-  };
+  box.onchange = () => sendRead(t, li, box.checked, box);
   return box;
+}
+
+// Icon button shown in place of the date on hover; it must not open the thread.
+function rowButton(className, label, svg, action) {
+  const button = document.createElement("button");
+  button.className = `row-btn ${className}`;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = svg;
+  button.onclick = (e) => {
+    e.stopPropagation();
+    action(button);
+  };
+  return button;
+}
+
+async function trashRow(t, li, button) {
+  $("error").hidden = true;
+  button.disabled = true;
+  try {
+    const done = await invoke("trash", { account: t.account, id: t.id });
+    if (done === null) return load();
+    li.remove();
+  } catch (e) {
+    showError(e);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function row(t) {
   const li = document.createElement("li");
-  li.className = t.unread ? "unread" : "";
   const cell = (cls, text) => {
     const span = document.createElement("span");
     span.className = cls;
@@ -112,7 +148,16 @@ function row(t) {
   dot.style.background = avatarColor(t.account);
   dot.title = t.account;
   avatar.append(dot);
-  li.append(readBox(t, li), cell("unread-dot", ""), avatar, cell("from", name), subject, cell("date", formatDate(t.dateMs)));
+  // The date and the hover buttons share one grid cell.
+  const trail = cell("trail", "");
+  const actions = cell("row-actions", "");
+  actions.append(
+    rowButton("mark-read", "既読にする", CHECK_SVG, (b) => sendRead(t, li, true, b)),
+    rowButton("trash-row", "ゴミ箱へ移動", $("trash").innerHTML, (b) => trashRow(t, li, b)),
+  );
+  trail.append(cell("date", formatDate(t.dateMs)), actions);
+  li.append(readBox(t, li), cell("unread-dot", ""), avatar, cell("from", name), subject, trail);
+  setReadState(t, li, !t.unread);
   return li;
 }
 
