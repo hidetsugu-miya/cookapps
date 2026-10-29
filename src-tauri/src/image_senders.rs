@@ -1,9 +1,10 @@
 //! The senders whose external images are shown without asking: a list of addresses in the settings folder.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
+use tokio::{sync::Mutex, task::spawn_blocking};
 
 use crate::{accounts::write_synced, auth::config_dir};
 
@@ -73,24 +74,77 @@ fn save(dir: &Path, senders: Vec<String>) -> Result<(), String> {
         .map_err(|e| format!("{} を書けません: {e}", path.display()))
 }
 
-/// Whether the sender of `from` is remembered. Not `async`: commands without it run one at a time, so the writes below do not race.
+/// The remembered senders, read from the file on first use. The lock is held through a write, so changes keep their order.
+#[derive(Default)]
+pub struct ImageSenders(Mutex<Option<Vec<String>>>);
+
+/// Runs the file work off the async threads.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    spawn_blocking(work).await.map_err(|e| e.to_string())?
+}
+
+impl ImageSenders {
+    async fn loaded(
+        &self,
+        dir: &Path,
+    ) -> Result<tokio::sync::MutexGuard<'_, Option<Vec<String>>>, String> {
+        let mut senders = self.0.lock().await;
+        if senders.is_none() {
+            let dir: PathBuf = dir.to_owned();
+            *senders = Some(blocking(move || load(&dir)).await?);
+        }
+        Ok(senders)
+    }
+
+    /// Replaces the list with `change` of it and saves it; the list in memory changes only once the file did.
+    async fn update(
+        &self,
+        dir: PathBuf,
+        from: String,
+        change: fn(Vec<String>, &str) -> Vec<String>,
+    ) -> Result<(), String> {
+        let mut senders = self.loaded(&dir).await?;
+        let new = change(senders.clone().unwrap_or_default(), &from);
+        let to_save = new.clone();
+        blocking(move || save(&dir, to_save)).await?;
+        *senders = Some(new);
+        Ok(())
+    }
+}
+
+/// Whether the sender of `from` is remembered.
 #[tauri::command]
-pub fn image_sender_known(app: AppHandle, from: String) -> Result<bool, String> {
-    Ok(is_known(&load(&config_dir(&app)?)?, &from))
+pub async fn image_sender_known(
+    app: AppHandle,
+    senders: State<'_, ImageSenders>,
+    from: String,
+) -> Result<bool, String> {
+    let list = senders.loaded(&config_dir(&app)?).await?;
+    Ok(is_known(list.as_deref().unwrap_or_default(), &from))
 }
 
 /// Remembers the sender of `from`.
 #[tauri::command]
-pub fn remember_image_sender(app: AppHandle, from: String) -> Result<(), String> {
-    let dir = config_dir(&app)?;
-    save(&dir, with_sender(load(&dir)?, &from))
+pub async fn remember_image_sender(
+    app: AppHandle,
+    senders: State<'_, ImageSenders>,
+    from: String,
+) -> Result<(), String> {
+    senders.update(config_dir(&app)?, from, with_sender).await
 }
 
 /// Forgets the sender of `from`.
 #[tauri::command]
-pub fn forget_image_sender(app: AppHandle, from: String) -> Result<(), String> {
-    let dir = config_dir(&app)?;
-    save(&dir, without_sender(load(&dir)?, &from))
+pub async fn forget_image_sender(
+    app: AppHandle,
+    senders: State<'_, ImageSenders>,
+    from: String,
+) -> Result<(), String> {
+    senders
+        .update(config_dir(&app)?, from, without_sender)
+        .await
 }
 
 #[cfg(test)]
