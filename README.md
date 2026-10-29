@@ -45,6 +45,11 @@ npx tauri dev
 リフレッシュトークンはアカウントごとに OS のキーチェーンへ保存されるので、次回からはログインが要りません。
 アカウントの一覧（メールアドレスのみ）は、`app_config_dir` の `accounts.json` に保存されます。
 
+## Claude との連携
+
+Claude Code から受信トレイと予定を扱う MCP サーバー `cookup-mcp` があります。
+設定の手順は [docs/mcp.md](docs/mcp.md) にあります。
+
 ## テスト
 
 ```sh
