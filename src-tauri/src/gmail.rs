@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt,
     path::Path,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -285,8 +285,17 @@ fn inline_images<'a>(p: &'a Payload, out: &mut Vec<InlineImage<'a>>) {
     }
 }
 
-/// Where an attachment image lives: (account, message ID, attachment ID).
+/// Which image of which message: (account, message ID, Content-ID).
+/// Not the attachment ID: Gmail may hand out a new one on every `threads.get`, which would miss the cache each time.
 type InlineKey = (String, String, String);
+
+fn inline_key(account: &str, message_id: &str, image: &InlineImage) -> InlineKey {
+    (
+        account.to_owned(),
+        message_id.to_owned(),
+        image.cid.to_owned(),
+    )
+}
 
 /// Cap of `InlineCache`, in bytes of data: URI. One thread holds up to 20 MB of images (27 MB as base64).
 const INLINE_CACHE_BYTES: usize = 64 * 1024 * 1024;
@@ -294,14 +303,14 @@ const INLINE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 /// The data: URIs of fetched attachment images, kept in memory for the run so reopening a thread does not fetch them again.
 /// When a new one does not fit, the cache starts over.
 #[derive(Default)]
-pub struct InlineCache(Mutex<(usize, HashMap<InlineKey, String>)>);
+pub struct InlineCache(Mutex<(usize, HashMap<InlineKey, Arc<str>>)>);
 
 impl InlineCache {
-    fn get(&self, key: &InlineKey) -> Option<String> {
+    fn get(&self, key: &InlineKey) -> Option<Arc<str>> {
         self.0.lock().unwrap().1.get(key).cloned()
     }
 
-    fn put(&self, limit: usize, key: InlineKey, uri: String) {
+    fn put(&self, limit: usize, key: InlineKey, uri: Arc<str>) {
         let (bytes, uris) = &mut *self.0.lock().unwrap();
         if uri.len() > limit {
             return;
@@ -319,14 +328,20 @@ impl InlineCache {
     pub fn forget(&self, account: &str) {
         let (bytes, uris) = &mut *self.0.lock().unwrap();
         uris.retain(|k, _| k.0 != account);
-        *bytes = uris.values().map(String::len).sum();
+        *bytes = uris.values().map(|u| u.len()).sum();
     }
 }
 
 /// The data: URI of an attachment image fetched from Gmail. `None` leaves the reference as it is.
 /// An image is not worth waiting out a rate limit for, so nothing is sent again.
-async fn attachment_uri(dir: &Path, auth: &Auth, key: &InlineKey, mime: &str) -> Option<String> {
-    let (account, message_id, attachment_id) = key;
+async fn attachment_uri(
+    dir: &Path,
+    auth: &Auth,
+    key: &InlineKey,
+    attachment_id: &str,
+    mime: &str,
+) -> Option<Arc<str>> {
+    let (account, message_id, _) = key;
     let mut url = reqwest::Url::parse(MESSAGES_URL).ok()?;
     url.path_segments_mut()
         .ok()?
@@ -343,7 +358,7 @@ async fn attachment_uri(dir: &Path, auth: &Auth, key: &InlineKey, mime: &str) ->
     )
     .await
     .ok()??;
-    inline_data_uri(mime, &body.data)
+    inline_data_uri(mime, &body.data).map(Arc::from)
 }
 
 /// Replaces the `cid:` references in the HTML messages of `detail` with the data: URIs of their own images.
@@ -369,29 +384,26 @@ async fn inline_thread_cids(
             let cid = image.cid.to_owned();
             if !image.data.is_empty() {
                 if let Some(uri) = inline_data_uri(&image.mime, image.data) {
-                    uris[n].insert(cid, uri);
+                    uris[n].insert(cid, Arc::from(uri));
                 }
                 continue;
             }
-            let key = (
-                account.to_owned(),
-                m.id.clone(),
-                image.attachment_id.to_owned(),
-            );
+            let key = inline_key(account, &m.id, image);
             if let Some(uri) = cache.get(&key) {
                 uris[n].insert(cid, uri);
                 continue;
             }
             let (dir, auth, mime) = (dir.to_owned(), auth.clone(), image.mime.clone());
+            let attachment_id = image.attachment_id.to_owned();
             jobs.push(async move {
-                let uri = attachment_uri(&dir, &auth, &key, &mime).await;
+                let uri = attachment_uri(&dir, &auth, &key, &attachment_id, &mime).await;
                 (n, cid, key, uri)
             });
         }
     }
     for (n, cid, key, uri) in run_limited(jobs, crate::images::CONCURRENCY).await {
         if let Some(uri) = uri {
-            cache.put(INLINE_CACHE_BYTES, key, uri.clone());
+            cache.put(INLINE_CACHE_BYTES, key, Arc::clone(&uri));
             uris[n].insert(cid, uri);
         }
     }
@@ -1425,8 +1437,23 @@ mod tests {
         assert!(!unread(&[]));
     }
 
-    fn key(account: &str, attachment: &str) -> InlineKey {
-        (account.into(), "m".into(), attachment.into())
+    fn key(account: &str, cid: &str) -> InlineKey {
+        (account.into(), "m".into(), cid.into())
+    }
+
+    #[test]
+    fn inline_key_ignores_the_attachment_id_that_changes_between_fetches() {
+        let image = |attachment_id| InlineImage {
+            cid: "logo@x",
+            mime: "image/png".into(),
+            size: 1,
+            attachment_id,
+            data: "",
+        };
+        let key = inline_key("a", "m1", &image("first"));
+        assert_eq!(key, inline_key("a", "m1", &image("second")));
+        assert_eq!(key, ("a".into(), "m1".into(), "logo@x".into()));
+        assert_ne!(key, inline_key("a", "m2", &image("first")));
     }
 
     #[test]
@@ -1439,7 +1466,7 @@ mod tests {
         assert_eq!(cache.get(&key("a", "1")), None);
         assert_eq!(cache.get(&key("a", "2")), Some("abcdef".into()));
         // One bigger than the limit is not kept, and the rest stays.
-        cache.put(10, key("a", "3"), "x".repeat(11));
+        cache.put(10, key("a", "3"), "x".repeat(11).into());
         assert_eq!(cache.get(&key("a", "3")), None);
         assert_eq!(cache.get(&key("a", "2")), Some("abcdef".into()));
         // Putting the same key again counts it once: 6 + 4 fits the limit, so nothing is dropped.

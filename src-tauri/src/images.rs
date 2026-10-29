@@ -3,8 +3,11 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    net::{IpAddr, Ipv4Addr},
-    sync::OnceLock,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::{
+        atomic::{AtomicU64, Ordering::SeqCst},
+        Arc, OnceLock,
+    },
     time::Duration,
 };
 
@@ -12,7 +15,11 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine,
 };
-use reqwest::{header::CONTENT_TYPE, redirect, Url};
+use reqwest::{
+    dns::{Addrs, Name, Resolve, Resolving},
+    header::CONTENT_TYPE,
+    redirect, Url,
+};
 use tokio::task::JoinSet;
 
 const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
@@ -34,6 +41,26 @@ pub(crate) fn image_mime(value: &str) -> Option<String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)))
     .then_some(mime)
+}
+
+/// What is left of `MAX_TOTAL_BYTES` for one `fetch_images` call, shared by the fetches in flight and spent as they read.
+struct Budget(AtomicU64);
+
+impl Budget {
+    /// Takes `n` bytes, or nothing when fewer are left.
+    fn take(&self, n: u64) -> bool {
+        self.0
+            .try_update(SeqCst, SeqCst, |left| left.checked_sub(n))
+            .is_ok()
+    }
+
+    fn give_back(&self, n: u64) {
+        self.0.fetch_add(n, SeqCst);
+    }
+
+    fn is_spent(&self) -> bool {
+        self.0.load(SeqCst) == 0
+    }
 }
 
 /// Counts an image of `size` bytes into `total` when it is within the per-image and the total limit.
@@ -116,6 +143,7 @@ fn cid_refs(html: &str) -> Vec<(usize, usize, String)> {
 /// The images `html` refers to by `cid:` and that may be inlined: each once, in order, at most `max`,
 /// within the size limits. `total` counts the bytes already taken, so one budget can span a whole thread.
 /// An image over a limit is left out and its reference stays as it is.
+/// An image is counted by its declared size when chosen, so one that then fails to be fetched still uses up its share of the limits.
 pub(crate) fn wanted_images<'a, 'b>(
     html: &str,
     images: &'b [InlineImage<'a>],
@@ -137,13 +165,13 @@ pub(crate) fn wanted_images<'a, 'b>(
 }
 
 /// Replaces each `cid:{id}` that has a URI in `uris` (by id); the others stay.
-pub(crate) fn replace_cids(html: &str, uris: &HashMap<String, String>) -> String {
+pub(crate) fn replace_cids<V: AsRef<str>>(html: &str, uris: &HashMap<String, V>) -> String {
     let mut out = String::with_capacity(html.len());
     let mut at = 0;
     for (start, end, id) in cid_refs(html) {
         if let Some(uri) = uris.get(&id) {
             out.push_str(&html[at..start]);
-            out.push_str(uri);
+            out.push_str(uri.as_ref());
             at = end;
         }
     }
@@ -186,7 +214,7 @@ fn is_public(ip: IpAddr) -> bool {
 
 /// Whether an external image may be fetched: https on the default port, no credentials,
 /// and a host that is not this machine or the local network.
-// shortcut: only host names and IP literals are checked, not what a name resolves to; upgrade with a resolving connector.
+/// A host name is checked by `PublicResolver` when it is resolved.
 fn fetchable(url: &Url) -> bool {
     if url.scheme() != "https"
         || url.port().is_some()
@@ -214,9 +242,36 @@ fn response_mime(content_type: Option<&str>, content_length: Option<u64>) -> Opt
     image_mime(content_type?)
 }
 
+/// Reads the body, taking each chunk from `budget` and counting what it took in `taken`.
+/// `None` when it is over the per-image limit, the budget runs out, or the read fails.
+async fn read_body(
+    res: &mut reqwest::Response,
+    budget: &Budget,
+    taken: &mut u64,
+) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = res.chunk().await.ok()? {
+        let n = chunk.len() as u64;
+        if bytes.len() as u64 + n > MAX_IMAGE_BYTES || !budget.take(n) {
+            return None;
+        }
+        *taken += n;
+        bytes.extend_from_slice(&chunk);
+    }
+    Some(bytes)
+}
+
 /// `(url, mime, bytes)`, or `None` for anything that is not a small image fetched over https.
-async fn fetch_image(http: reqwest::Client, url: String) -> Option<(String, String, Vec<u8>)> {
+/// Only an image that is kept stays counted in `budget`. A fetch is not started once the budget is spent.
+async fn fetch_image(
+    http: reqwest::Client,
+    budget: Arc<Budget>,
+    url: String,
+) -> Option<(String, String, Vec<u8>)> {
     let parsed = Url::parse(&url).ok().filter(fetchable)?;
+    if budget.is_spent() {
+        return None;
+    }
     let mut res = http
         .get(parsed)
         .send()
@@ -230,13 +285,11 @@ async fn fetch_image(http: reqwest::Client, url: String) -> Option<(String, Stri
             .and_then(|v| v.to_str().ok()),
         res.content_length(),
     )?;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = res.chunk().await.ok()? {
-        bytes.extend_from_slice(&chunk);
-        if bytes.len() as u64 > MAX_IMAGE_BYTES {
-            return None;
-        }
-    }
+    let mut taken = 0;
+    let Some(bytes) = read_body(&mut res, &budget, &mut taken).await else {
+        budget.give_back(taken);
+        return None;
+    };
     Some((url, mime, bytes))
 }
 
@@ -261,11 +314,34 @@ where
     }
 }
 
+/// The addresses of `addrs` that are public.
+fn public_addrs(addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    addrs.into_iter().filter(|a| is_public(a.ip())).collect()
+}
+
+/// The system resolver with the answers narrowed to public addresses, so a name that points
+/// inside is refused where the connection is made. That covers redirects and a name that changes its answer.
+struct PublicResolver;
+
+impl Resolve for PublicResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        Box::pin(async move {
+            let found = tokio::net::lookup_host((name.as_str(), 0)).await?;
+            let public = public_addrs(found.collect());
+            if public.is_empty() {
+                return Err("no public address".into());
+            }
+            Ok(Box::new(public.into_iter()) as Addrs)
+        })
+    }
+}
+
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(FETCH_TIMEOUT)
+            .dns_resolver(PublicResolver)
             // A redirect must not lead away from https or to the local network.
             .redirect(redirect::Policy::custom(|attempt| {
                 if attempt.previous().len() < MAX_REDIRECTS && fetchable(attempt.url()) {
@@ -288,15 +364,16 @@ pub async fn fetch_images(urls: Vec<String>) -> Result<HashMap<String, String>, 
         .filter(|u| seen.insert(u.clone()))
         .take(MAX_FETCHES)
         .collect();
+    let budget = Arc::new(Budget(AtomicU64::new(MAX_TOTAL_BYTES)));
     let jobs = urls
         .into_iter()
-        .map(|url| fetch_image(http_client().clone(), url));
-    let (mut total, mut out) = (0, HashMap::new());
-    for (url, mime, bytes) in run_limited(jobs, CONCURRENCY).await.into_iter().flatten() {
-        if admit(&mut total, bytes.len() as u64) {
-            out.insert(url, data_uri(&mime, &bytes));
-        }
-    }
+        .map(|url| fetch_image(http_client().clone(), budget.clone(), url));
+    let out = run_limited(jobs, CONCURRENCY)
+        .await
+        .into_iter()
+        .flatten()
+        .map(|(url, mime, bytes)| (url, data_uri(&mime, &bytes)))
+        .collect();
     Ok(out)
 }
 
@@ -344,6 +421,38 @@ mod tests {
         // The total is full, so even one byte is refused, and a refusal counts nothing.
         assert!(!admit(&mut total, 1));
         assert_eq!(total, MAX_TOTAL_BYTES);
+    }
+
+    #[test]
+    fn budget_hands_out_its_total_once_and_takes_back_what_is_returned() {
+        let budget = Budget(AtomicU64::new(10));
+        assert!(budget.take(6));
+        // A refusal takes nothing.
+        assert!(!budget.take(5));
+        assert!(budget.take(4));
+        assert!(budget.is_spent());
+        assert!(!budget.take(1));
+        // An image that failed gives its bytes back for the others.
+        budget.give_back(6);
+        assert!(!budget.is_spent());
+        assert!(budget.take(6));
+    }
+
+    #[test]
+    fn public_addrs_drops_the_addresses_of_the_local_network() {
+        let addr = |s: &str| s.parse::<SocketAddr>().unwrap();
+        let found = vec![
+            addr("127.0.0.1:0"),
+            addr("93.184.216.34:0"),
+            addr("[fd00::1]:0"),
+            addr("[2606:2800:220:1::1]:0"),
+            addr("169.254.169.254:0"),
+        ];
+        assert_eq!(
+            public_addrs(found),
+            [addr("93.184.216.34:0"), addr("[2606:2800:220:1::1]:0")]
+        );
+        assert!(public_addrs(vec![addr("10.0.0.1:0")]).is_empty());
     }
 
     #[test]

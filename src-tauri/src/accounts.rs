@@ -31,7 +31,7 @@ pub fn save(dir: &Path, accounts: &[String]) -> Result<(), String> {
         .map_err(|e| format!("{} を書けません: {e}", path.display()))
 }
 
-fn write_synced(path: &Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_synced(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut file = std::fs::File::create(path)?;
     file.write_all(text.as_bytes())?;

@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod auth;
 pub mod calendar;
 pub mod gmail;
+pub mod image_senders;
 pub mod images;
 pub mod todoist;
 
@@ -37,6 +38,9 @@ pub fn run() {
             gmail::set_read,
             gmail::sync,
             images::fetch_images,
+            image_senders::image_sender_known,
+            image_senders::remember_image_sender,
+            image_senders::forget_image_sender,
             todoist::todoist_load,
             todoist::todoist_save_token,
             todoist::todoist_disconnect,
