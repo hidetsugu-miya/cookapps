@@ -24,6 +24,8 @@ jobs:
           else
             scripts/check-version.sh
           fi
+      - name: Check JS syntax
+        run: node --check src/main.js
       - name: Format
         working-directory: src-tauri
         run: cargo fmt --check
