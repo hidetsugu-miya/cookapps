@@ -55,7 +55,11 @@ pub struct Auth {
 impl Auth {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            // A stalled connection must not leave a command waiting forever.
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("reqwest client"),
             access: Mutex::new(HashMap::new()),
         }
     }

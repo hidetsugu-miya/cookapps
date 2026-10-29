@@ -391,12 +391,13 @@ pub async fn trash(
     auth: State<'_, Auth>,
     account: String,
     id: String,
-) -> Result<Option<()>, String> {
+) -> Result<Option<bool>, String> {
     let url = format!("{THREADS_URL}/{id}/trash");
     let done =
         send_json_refreshing::<IgnoredAny>(&app, &auth, &account, Method::POST, &url, &[], None)
             .await?;
-    Ok(done.map(|_| ()))
+    // `true`, not `()`: `Some(())` reaches JS as null, the same as `None` (login required).
+    Ok(done.map(|_| true))
 }
 
 fn archive_body() -> Value {
@@ -410,7 +411,7 @@ pub async fn archive(
     auth: State<'_, Auth>,
     account: String,
     id: String,
-) -> Result<Option<()>, String> {
+) -> Result<Option<bool>, String> {
     let url = format!("{THREADS_URL}/{id}/modify");
     let body = archive_body();
     let done = send_json_refreshing::<IgnoredAny>(
@@ -423,7 +424,7 @@ pub async fn archive(
         Some(&body),
     )
     .await?;
-    Ok(done.map(|_| ()))
+    Ok(done.map(|_| true))
 }
 
 fn read_body(read: bool) -> Value {
@@ -442,7 +443,7 @@ pub async fn set_read(
     account: String,
     id: String,
     read: bool,
-) -> Result<Option<()>, String> {
+) -> Result<Option<bool>, String> {
     let url = format!("{THREADS_URL}/{id}/modify");
     let body = read_body(read);
     let done = send_json_refreshing::<IgnoredAny>(
@@ -455,7 +456,7 @@ pub async fn set_read(
         Some(&body),
     )
     .await?;
-    Ok(done.map(|_| ()))
+    Ok(done.map(|_| true))
 }
 
 #[cfg(test)]

@@ -114,10 +114,15 @@ function rowButton(className, label, svg, action) {
   return button;
 }
 
+// Threads being archived / trashed ("account/id"); a list reload must not bring them back meanwhile.
+const pending = new Set();
+
 // Takes the row out at once and runs "archive" / "trash" in the background; on failure the row comes back.
 async function removeRow(command, account, id, li) {
+  const key = `${account}/${id}`;
   const list = li.parentNode;
   const next = li.nextSibling;
+  pending.add(key);
   li.remove();
   $("error").hidden = true;
   try {
@@ -126,6 +131,8 @@ async function removeRow(command, account, id, li) {
   } catch (e) {
     list.insertBefore(li, next && next.parentNode === list ? next : null);
     showError(e);
+  } finally {
+    pending.delete(key);
   }
 }
 
@@ -225,13 +232,19 @@ function renderAccounts({ accounts, needsLogin }) {
   );
 }
 
+// Only the latest of overlapping loads may draw the list.
+let loadSeq = 0;
+
 async function load() {
+  const seq = ++loadSeq;
   $("error").hidden = true;
   try {
     const inbox = await invoke("inbox");
+    if (seq !== loadSeq) return;
     renderAccounts(inbox);
     if (inbox.accounts.length === 0) return show("login");
-    $("threads").replaceChildren(...inbox.threads.map(row));
+    const shown = inbox.threads.filter((t) => !pending.has(`${t.account}/${t.id}`));
+    $("threads").replaceChildren(...shown.map(row));
   } catch (e) {
     showError(e);
   }
