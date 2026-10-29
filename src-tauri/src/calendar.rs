@@ -816,19 +816,25 @@ mod tests {
 
     #[test]
     fn join_all_runs_at_once_and_keeps_input_order() {
+        // A paused clock jumps to the next timer, so the elapsed time is exact and load cannot sway it.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_time()
+            .start_paused(true)
             .build()
             .unwrap();
         let sleeps = (0..3u64).map(|i| async move {
             tokio::time::sleep(std::time::Duration::from_millis(150 - i * 50)).await;
             i
         });
-        let started = std::time::Instant::now();
-        let got = rt.block_on(join_all(sleeps.collect())).unwrap();
+        // The paused clock exists only inside the runtime, so the start is read there too.
+        let (got, elapsed) = rt.block_on(async {
+            let started = tokio::time::Instant::now();
+            let got = join_all(sleeps.collect()).await.unwrap();
+            (got, started.elapsed())
+        });
         assert_eq!(got, vec![0, 1, 2]);
-        // One after another would take 300 ms.
-        assert!(started.elapsed() < std::time::Duration::from_millis(250));
+        // At once: the longest sleep, 150 ms. One after another would take 300 ms.
+        assert_eq!(elapsed, std::time::Duration::from_millis(150));
         let panicked = rt.block_on(join_all(vec![async { panic!("boom") }]));
         assert!(panicked.is_err());
     }

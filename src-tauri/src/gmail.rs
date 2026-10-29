@@ -18,10 +18,12 @@ use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
 
 use crate::auth::{config_dir, Auth};
+use crate::images::{image_mime, inline_data_uri, replace_cids, wanted_images, InlineImage};
 
 const THREADS_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const HISTORY_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/history";
+const MESSAGES_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 const METADATA_QUERY: [(&str, &str); 4] = [
     ("format", "metadata"),
     ("metadataHeaders", "From"),
@@ -58,6 +60,8 @@ struct Thread {
 #[serde(rename_all = "camelCase")]
 struct Message {
     #[serde(default)]
+    id: String,
+    #[serde(default)]
     label_ids: Vec<String>,
     #[serde(default)]
     internal_date: String,
@@ -81,7 +85,19 @@ struct Payload {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct PartBody {
+    #[serde(default)]
+    data: String,
+    #[serde(default)]
+    attachment_id: String,
+    #[serde(default)]
+    size: u64,
+}
+
+/// The response of `messages.attachments.get`.
+#[derive(Deserialize)]
+struct AttachmentBody {
     #[serde(default)]
     data: String,
 }
@@ -140,12 +156,17 @@ impl ThreadItem {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetail {
     subject: String,
+    /// Some message of the thread carries the UNREAD label.
+    unread: bool,
     messages: Vec<MessageDetail>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageDetail {
+    /// Gmail's message ID, to find the message again; not sent to the frontend.
+    #[serde(skip)]
+    id: String,
     from: String,
     date_ms: i64,
     /// `body` is HTML when true, plain text otherwise.
@@ -201,6 +222,7 @@ impl MessageDetail {
         collect_text(&m.payload, &mut html, &mut plain);
         let is_html = !html.is_empty() && !(prefer_plain && !plain.is_empty());
         Self {
+            id: m.id.clone(),
             from: header(&m.payload, "From"),
             date_ms: m.internal_date.parse().unwrap_or(0),
             html: is_html,
@@ -214,7 +236,7 @@ impl MessageDetail {
 }
 
 impl ThreadDetail {
-    fn new(t: Thread, prefer_plain: bool) -> Self {
+    fn new(t: &Thread, prefer_plain: bool) -> Self {
         let mut messages: Vec<_> = t
             .messages
             .iter()
@@ -227,9 +249,75 @@ impl ThreadDetail {
                 .first()
                 .map(|m| header(&m.payload, "Subject"))
                 .unwrap_or_default(),
+            unread: t
+                .messages
+                .iter()
+                .any(|m| m.label_ids.iter().any(|l| l == "UNREAD")),
             messages,
         }
     }
+}
+
+/// Every image part with a Content-ID in the MIME tree: the targets of `cid:` references.
+fn inline_images(p: &Payload, out: &mut Vec<InlineImage>) {
+    let cid = header(p, "Content-ID");
+    let cid = cid.trim().trim_start_matches('<').trim_end_matches('>');
+    if let (false, Some(mime)) = (cid.is_empty(), image_mime(&p.mime_type)) {
+        out.push(InlineImage {
+            cid: cid.to_owned(),
+            mime,
+            size: p.body.size.max(p.body.data.len() as u64 / 4 * 3),
+            attachment_id: p.body.attachment_id.clone(),
+            data: p.body.data.clone(),
+        });
+    }
+    for part in &p.parts {
+        inline_images(part, out);
+    }
+}
+
+/// The data: URI of an inline image: its own data, else the attachment fetched from Gmail. `None` leaves the reference as it is.
+async fn inline_uri(
+    dir: &Path,
+    auth: &Auth,
+    account: &str,
+    message_id: &str,
+    image: &InlineImage,
+) -> Option<String> {
+    let data = if image.data.is_empty() {
+        let mut url = reqwest::Url::parse(MESSAGES_URL).ok()?;
+        url.path_segments_mut()
+            .ok()?
+            .extend([message_id, "attachments", &image.attachment_id]);
+        send_json_refreshing::<AttachmentBody>(
+            dir,
+            auth,
+            account,
+            Method::GET,
+            url.as_str(),
+            &[],
+            None,
+        )
+        .await
+        .ok()??
+        .data
+    } else {
+        image.data.clone()
+    };
+    inline_data_uri(&image.mime, &data)
+}
+
+/// Replaces the `cid:` references in `html` with the data: URIs of the message's own images.
+async fn inline_cids(dir: &Path, auth: &Auth, account: &str, m: &Message, html: &str) -> String {
+    let mut images = Vec::new();
+    inline_images(&m.payload, &mut images);
+    let mut uris = HashMap::new();
+    for image in wanted_images(html, &images) {
+        if let Some(uri) = inline_uri(dir, auth, account, &m.id, image).await {
+            uris.insert(image.cid.clone(), uri);
+        }
+    }
+    replace_cids(html, &uris)
 }
 
 /// A failed Google API call. `status` is `None` when no HTTP response was received.
@@ -917,7 +1005,19 @@ pub async fn fetch_thread(
         None,
     )
     .await?;
-    Ok(thread.map(|t| ThreadDetail::new(t, prefer_plain)))
+    let Some(t) = thread else {
+        return Ok(None);
+    };
+    let mut detail = ThreadDetail::new(&t, prefer_plain);
+    // A text consumer (prefer_plain, the MCP server) gets no image data.
+    if !prefer_plain {
+        for d in detail.messages.iter_mut().filter(|d| d.html) {
+            if let Some(m) = t.messages.iter().find(|m| m.id == d.id) {
+                d.body = inline_cids(dir, auth, account, m, &d.body).await;
+            }
+        }
+    }
+    Ok(Some(detail))
 }
 
 /// `Ok(None)` means `account` must log in again.
@@ -1211,7 +1311,7 @@ mod tests {
     }
 
     fn detail(json: serde_json::Value) -> ThreadDetail {
-        ThreadDetail::new(serde_json::from_value::<Thread>(json).unwrap(), false)
+        ThreadDetail::new(&serde_json::from_value::<Thread>(json).unwrap(), false)
     }
 
     // "こんにちは" in ISO-2022-JP
@@ -1240,6 +1340,7 @@ mod tests {
         assert_eq!(
             d.messages,
             vec![MessageDetail {
+                id: String::new(),
                 from: "A <a@example.com>".into(),
                 date_ms: 1,
                 html: false,
@@ -1267,7 +1368,7 @@ mod tests {
             "internalDate": "1",
             "payload": {"mimeType": "multipart/alternative", "parts": parts}}]}))
         .unwrap();
-        ThreadDetail::new(thread, true)
+        ThreadDetail::new(&thread, true)
             .messages
             .into_iter()
             .map(|m| (m.html, m.body))

@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod auth;
 pub mod calendar;
 pub mod gmail;
+pub mod images;
 pub mod todoist;
 
 // tao's macOS backend shows `Some(0)` as "0", so no unread must be `None`.
@@ -34,6 +35,7 @@ pub fn run() {
             gmail::archive,
             gmail::set_read,
             gmail::sync,
+            images::fetch_images,
             todoist::todoist_load,
             todoist::todoist_save_token,
             todoist::todoist_disconnect,
