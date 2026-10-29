@@ -70,6 +70,8 @@ struct Message {
     #[serde(default)]
     internal_date: String,
     #[serde(default)]
+    snippet: String,
+    #[serde(default)]
     payload: Payload,
 }
 
@@ -177,7 +179,11 @@ pub struct MessageDetail {
     /// Gmail's message ID. The frontend finds the message's images by it.
     id: String,
     from: String,
+    /// The To header as sent; empty when the message has none.
+    to: String,
     date_ms: i64,
+    /// Gmail's own summary of the message, HTML-escaped.
+    snippet: String,
     /// `body` is HTML when true, plain text otherwise.
     html: bool,
     body: String,
@@ -244,7 +250,9 @@ impl MessageDetail {
             id: m.id.clone(),
             authenticated: authenticated(&results, &from),
             from,
+            to: header(&m.payload, "To"),
             date_ms: m.internal_date.parse().unwrap_or(0),
+            snippet: m.snippet.clone(),
             html: is_html,
             body: if is_html {
                 html.concat()
@@ -1696,6 +1704,22 @@ mod tests {
     }
 
     #[test]
+    fn message_carries_its_to_header_and_snippet() {
+        let d = detail(
+            json!({"id": "t", "messages": [{"id": "m", "internalDate": "1",
+            "snippet": "hello &#39;you&#39;",
+            "payload": {"mimeType": "text/plain",
+                "headers": [{"name": "to", "value": "Me <me@example.com>, B <b@example.com>"}],
+                "body": {"data": "AAAA"}}}]}),
+        );
+        assert_eq!(d.messages[0].to, "Me <me@example.com>, B <b@example.com>");
+        assert_eq!(d.messages[0].snippet, "hello &#39;you&#39;");
+        let value = serde_json::to_value(&d).unwrap();
+        assert_eq!(value["messages"][0]["to"], d.messages[0].to);
+        assert_eq!(value["messages"][0]["snippet"], d.messages[0].snippet);
+    }
+
+    #[test]
     fn message_is_authenticated_by_gmails_authentication_results() {
         let message = |headers: serde_json::Value| {
             detail(json!({"id": "t", "messages": [{"id": "m", "internalDate": "1",
@@ -1849,7 +1873,9 @@ mod tests {
                 date_ms: 1,
                 html: false,
                 body: "こんにちは".into(),
-                authenticated: false
+                authenticated: false,
+                to: String::new(),
+                snippet: String::new()
             }]
         );
     }

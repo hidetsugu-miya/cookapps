@@ -13,10 +13,52 @@ function formatDate(ms, now = Date.now()) {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+// A From header or one To entry as {name, address}: `Name <addr>` splits; anything else is an address with no name.
+function splitAddress(s) {
+  const m = s.match(/^\s*"?(.*?)"?\s*<([^>]*)>\s*$/);
+  return m ? { name: m[1], address: m[2] } : { name: "", address: s.trim() };
+}
+
 // Display name of a From header: the Name of `Name <addr>`, else the address.
 function senderName(from) {
-  const m = from.match(/^\s*"?(.*?)"?\s*<([^>]*)>\s*$/);
-  return m ? m[1] || m[2] : from.trim();
+  const { name, address } = splitAddress(from);
+  return name || address;
+}
+
+// The entries of a To header, split at commas outside double quotes.
+// shortcut: a backslash-escaped quote inside a quoted name is not understood, upgrade if such a header shows up.
+function splitRecipients(to) {
+  const entries = [];
+  let entry = "";
+  let quoted = false;
+  for (const c of to) {
+    if (c === '"') quoted = !quoted;
+    if (c === "," && !quoted) {
+      entries.push(entry);
+      entry = "";
+    } else {
+      entry += c;
+    }
+  }
+  entries.push(entry);
+  return entries.map((e) => e.trim()).filter(Boolean);
+}
+
+// The To line of a message: "To 自分" when `account` is among the recipients, else the recipients' names (or addresses); "" with no To.
+function recipientsLabel(to, account) {
+  const people = splitRecipients(to).map(splitAddress);
+  if (!people.length) return "";
+  if (people.some((p) => p.address.toLowerCase() === account.toLowerCase())) return "To 自分";
+  return `To ${people.map((p) => p.name || p.address).join(", ")}`;
+}
+
+// Date of a message in the detail view: today "7:12（30 分前）", this year "10月29日 13:05", older "2025/10/17 13:05".
+function formatDetailDate(ms, now = Date.now()) {
+  const d = new Date(ms);
+  const clock = `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (d.toDateString() !== new Date(now).toDateString()) return `${formatDate(ms, now)} ${clock}`;
+  const minutes = Math.max(1, Math.floor((now - ms) / 60000));
+  return `${clock}（${minutes < 60 ? `${minutes} 分前` : `${Math.floor(minutes / 60)} 時間前`}）`;
 }
 
 // Up to two initials (first letters of the first two words), uppercased.
@@ -62,7 +104,7 @@ function show(view) {
   $("thread-todo").hidden = view !== "thread";
   $("trash").hidden = view !== "thread";
   $("archive").hidden = view !== "thread";
-  $("thread-subject").hidden = view !== "thread";
+  $("mail-header").classList.toggle("detail", view === "thread");
   $("title").hidden = view === "thread";
   $("main").scrollTop = view === "list" ? listScroll : 0;
 }
@@ -501,14 +543,70 @@ function linkify(text) {
   return nodes;
 }
 
+const PERSON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="5"/><path d="M2 24c0-6 4.5-9 10-9s10 3 10 9z"/></svg>';
+
+function span(className, text) {
+  const el = document.createElement("span");
+  el.className = className;
+  el.textContent = text;
+  return el;
+}
+
+// The header of an open message: avatar, sender, recipients and date. A button when the message can be folded.
+function openHead(m, account, foldable) {
+  const { name, address } = splitAddress(m.from);
+  const head = document.createElement(foldable ? "button" : "div");
+  head.className = "msg-head";
+  const avatar = span("msg-avatar", "");
+  avatar.innerHTML = PERSON_SVG;
+  const who = span("who", "");
+  who.append(span("name", name || address));
+  if (name) who.append(" ", span("addr", `<${address}>`));
+  const to = recipientsLabel(m.to, account);
+  if (to) who.append(span("to", to));
+  head.append(avatar, who, span("when", formatDetailDate(m.dateMs)));
+  return head;
+}
+
+// The one line an earlier message of a thread is folded to: small avatar, sender, snippet and date.
+function foldedHead(m) {
+  const name = senderName(m.from);
+  const head = document.createElement("button");
+  head.className = "msg-head folded";
+  const avatar = span("avatar", initials(name));
+  avatar.style.background = avatarColor(name);
+  const snip = span("snip", "");
+  snip.append(span("name", name), ` ${unescapeHtml(m.snippet)}`);
+  head.append(avatar, snip, span("when", formatDate(m.dateMs)));
+  return head;
+}
+
 // `ctx` is the open thread's: `cids` resolves to the cid: images Rust fetched after the body, by message ID;
 // `senders` to the Set of its senders Rust remembers (`froms` asked about); `stale()` tells another thread was opened since.
-function message(m, ctx) {
+// `folded` starts the message as one line; the head toggles it. A thread's only message has no toggle.
+function message(m, ctx, account, folded, foldable) {
   const article = document.createElement("article");
-  const head = document.createElement("div");
-  head.className = "message-head";
-  head.textContent = `${m.from} — ${new Date(m.dateMs).toLocaleString("ja-JP")}`;
-  article.append(head);
+  const open = openHead(m, account, foldable);
+  const body = document.createElement("div");
+  body.className = "msg-body";
+  article.append(open, body);
+  if (foldable) {
+    const line = foldedHead(m);
+    article.prepend(line);
+    open.setAttribute("aria-expanded", "true");
+    line.setAttribute("aria-expanded", "false");
+    // A frame in a folded message is 0 wide; `frameObserver` fits it when the message opens.
+    const fold = (folded) => {
+      article.classList.toggle("folded", folded);
+      line.hidden = !folded;
+      open.hidden = folded;
+      body.hidden = folded;
+    };
+    // The head that was clicked goes away, so the focus moves to its counterpart.
+    line.onclick = () => (fold(false), open.focus());
+    open.onclick = () => (fold(true), line.focus());
+    fold(folded);
+  }
   if (m.html) {
     // No allow-scripts: scripts do not run. allow-same-origin only lets this page read the document's height and rewrite its links.
     // allow-top-navigation-by-user-activation lets a click on a link navigate the top window, and only a click; Rust's on_navigation
@@ -529,12 +627,12 @@ function message(m, ctx) {
       const urls = externalImages(doc);
       if (urls.length) offerImages(m, frame, urls, ctx);
     });
-    article.append(frame);
+    body.append(frame);
   } else {
-    const body = document.createElement("div");
-    body.className = "plain";
-    body.append(...linkify(m.body));
-    article.append(body);
+    const text = document.createElement("div");
+    text.className = "plain";
+    text.append(...linkify(m.body));
+    body.append(text);
   }
   return article;
 }
@@ -581,7 +679,11 @@ async function openThread({ id, account }, li, origin = "mail") {
     frameObserver.disconnect();
     waiting.clear();
     forgettable.clear();
-    $("messages").replaceChildren(...t.messages.map((m) => message(m, ctx)));
+    // Only the latest message is open when the thread has several.
+    const several = t.messages.length > 1;
+    $("messages").replaceChildren(
+      ...t.messages.map((m, i) => message(m, ctx, account, several && i < t.messages.length - 1, several)),
+    );
     show("thread");
     // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
     $("trash").hidden = $("archive").hidden = !li;
