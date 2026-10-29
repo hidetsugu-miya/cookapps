@@ -214,6 +214,19 @@ const queryAll = (doc, selector) => Document.prototype.querySelectorAll.call(doc
 const rootOf = Object.getOwnPropertyDescriptor(Document.prototype, "documentElement").get;
 const listen = (doc, type, handler) => EventTarget.prototype.addEventListener.call(doc, type, handler, true);
 
+// Opens a link of a mail's document in the default browser. The frame's sandbox allows no navigation, so the click is taken here.
+// In-page anchors (#...) are left to the frame.
+function openLinksInBrowser(doc) {
+  listen(doc, "click", (e) => {
+    const a = Element.prototype.closest.call(e.target, "a[href]");
+    if (!a) return;
+    const href = Element.prototype.getAttribute.call(a, "href").trim();
+    if (href.startsWith("#")) return;
+    Event.prototype.preventDefault.call(e);
+    invoke("open_link", { url: href }).catch(showError);
+  });
+}
+
 // Frames waiting to be sized. All of them are measured first and written after, in one animation frame,
 // so a mail of many images does not force a layout per image.
 const fitting = new Set();
@@ -415,6 +428,7 @@ function message(m, ctx) {
     frame.setAttribute("sandbox", "allow-same-origin");
     frame.srcdoc = withBodyCsp(m.body);
     autoFit(frame, (doc) => {
+      openLinksInBrowser(doc);
       ctx.cids.then((byMessage) => {
         if (!ctx.stale()) showCidImages(doc, byMessage[m.id]);
       });
