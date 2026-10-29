@@ -43,7 +43,8 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .read-box:disabled { opacity: .4; cursor: default; }
 /* The checkbox and the row buttons appear only on hover or focus (opacity keeps them reachable by keyboard); the buttons replace the date. */
 #threads li:not(:hover):not(:focus-within) .read-box, #threads li:not(:hover):not(:focus-within) .row-actions { opacity: 0; }
-#threads li:hover .date, #threads li:focus-within .date { opacity: 0; }
+/* visibility, not opacity: an opacity < 1 layer paints above the buttons and would take their clicks. */
+#threads li:hover .date, #threads li:focus-within .date { visibility: hidden; }
 .unread-dot { width: 8px; height: 8px; border-radius: 50%; }
 #threads li.unread .unread-dot { background: #3db4f2; }
 .avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; }
