@@ -124,6 +124,13 @@ struct SyncResponse {
     projects: Vec<ApiProject>,
 }
 
+impl SyncResponse {
+    /// Whether the answer reports no change: applying it leaves the tasks and projects as they were.
+    fn is_unchanged(&self) -> bool {
+        !self.full_sync && self.items.is_empty() && self.projects.is_empty()
+    }
+}
+
 /// The active tasks and the projects as the last sync left them.
 #[derive(Default)]
 struct SyncData {
@@ -899,6 +906,8 @@ pub async fn todoist_load(
         }
         None => {}
     }
+    // Taken before apply_sync consumes the answer.
+    let unchanged = res.is_unchanged();
     // After the fetched ones are in, so a change the sync reports since wins over them.
     let done = {
         let mut kept = state.done.lock().unwrap();
@@ -916,6 +925,10 @@ pub async fn todoist_load(
     let current = state.token.lock().await;
     // Another token than the fetch used (disconnected, or connected again meanwhile): this content is not that connection's.
     if current.as_deref() != Some(token.as_str()) {
+        return Ok(Some(todo));
+    }
+    // Nothing changed and no completed tasks came in: the kept file and cache are still right, so the timed refresh writes nothing.
+    if unchanged && !with_done {
         return Ok(Some(todo));
     }
     let dir = config_dir(&app);
@@ -1755,6 +1768,14 @@ mod tests {
     fn an_answer_without_a_full_sync_flag_is_incremental() {
         let r = sync_res(json!({"sync_token": "t"}));
         assert!(!r.full_sync && r.items.is_empty() && r.projects.is_empty());
+    }
+
+    #[test]
+    fn only_an_empty_incremental_answer_is_unchanged() {
+        assert!(sync_res(json!({"sync_token": "t"})).is_unchanged());
+        assert!(!sync_res(json!({"sync_token": "t", "full_sync": true})).is_unchanged());
+        assert!(!sync_res(json!({"sync_token": "t", "items": [{"id": "A"}]})).is_unchanged());
+        assert!(!sync_res(json!({"sync_token": "t", "projects": [{"id": "P"}]})).is_unchanged());
     }
 
     #[test]

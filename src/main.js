@@ -1865,11 +1865,18 @@ async function loadTodoCount() {
 loadTodoCount();
 
 // The timed refresh, also when the window comes back. The backend asks Todoist for the changes only, so it is cheap; the completed tasks are not fetched again.
-function refreshTodo() {
-  if (document.hidden) return;
-  if (screen !== "todo") loadTodoCount();
-  // Not while the token form is up: a load would read the keychain and draw the form again, dropping what is typed in it.
-  else if ($("todo-token").hidden) loadTodo(true, false);
+// One at a time: while Todoist does not answer, the next rounds are skipped instead of piling up behind the backend's lock.
+let refreshingTodo = false;
+async function refreshTodo() {
+  if (refreshingTodo || document.hidden) return;
+  refreshingTodo = true;
+  try {
+    if (screen !== "todo") await loadTodoCount();
+    // Not while the token form is up: a load would read the keychain and draw the form again, dropping what is typed in it.
+    else if ($("todo-token").hidden) await loadTodo(true, false);
+  } finally {
+    refreshingTodo = false;
+  }
 }
 setInterval(refreshTodo, TODO_REFRESH_MS);
 document.addEventListener("visibilitychange", refreshTodo);
