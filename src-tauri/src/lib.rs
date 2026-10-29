@@ -25,6 +25,8 @@ pub fn run() {
         .manage(auth::Auth::new())
         .manage(gmail::SyncState::default())
         .manage(gmail::InlineCache::default())
+        .manage(images::ImageCache::default())
+        .manage(image_senders::ImageSenders::default())
         .manage(calendar::CalendarCache::default())
         .manage(todoist::TodoistState::default())
         .invoke_handler(tauri::generate_handler![
@@ -33,6 +35,7 @@ pub fn run() {
             calendar::calendar_week,
             gmail::inbox,
             gmail::thread,
+            gmail::thread_images,
             gmail::trash,
             gmail::archive,
             gmail::set_read,

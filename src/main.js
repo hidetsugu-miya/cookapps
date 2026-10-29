@@ -260,6 +260,25 @@ const externalImages = (doc) => [
   ),
 ];
 
+// The cid: images Rust had to fetch after the body was shown: swaps each reference in the loaded document's
+// src, background and style attributes and <style> text for its data: URI. `uris` is {reference as written: URI}.
+const CID_REF = /cid:[^"')<>\\\s]+/gi;
+function showCidImages(doc, uris) {
+  if (!uris) return;
+  const swap = (text) => text.replace(CID_REF, (ref) => uris[ref] ?? ref);
+  for (const el of queryAll(doc, "[src], [background], [style]")) {
+    for (const name of ["src", "background", "style"]) {
+      const value = Element.prototype.getAttribute.call(el, name);
+      const swapped = value === null ? value : swap(value);
+      if (swapped !== value) Element.prototype.setAttribute.call(el, name, swapped);
+    }
+  }
+  for (const style of queryAll(doc, "style")) {
+    const swapped = swap(style.textContent);
+    if (swapped !== style.textContent) style.textContent = swapped;
+  }
+}
+
 // Rust fetches the images, and the loaded document's images get them as data: URIs. Throws when none could be shown.
 async function showImages(urls, frame) {
   const images = await invoke("fetch_images", { urls });
@@ -301,8 +320,11 @@ function imagesBar(label, onClick) {
   return bar;
 }
 
+// The "画像を表示" bars of the open thread that are still up.
+const waiting = new Set();
+
 // Shows the mail's external images: at once when its sender is remembered, with a bar to forget the sender;
-// otherwise behind a bar whose button shows them and remembers the sender.
+// otherwise, or when that fetch fails, behind a bar whose button shows them and remembers the sender.
 async function offerImages(m, frame, urls) {
   let known = false;
   try {
@@ -310,21 +332,36 @@ async function offerImages(m, frame, urls) {
   } catch (e) {
     showError(e);
   }
-  if (!known) {
-    frame.before(
-      imagesBar("画像を表示", async () => {
-        await showImages(urls, frame);
-        // The images are shown, so a failure to remember is only reported.
-        invoke("remember_image_sender", { from: m.from }).catch(showError);
-      }),
-    );
-    return;
+  if (known) {
+    try {
+      await showImages(urls, frame);
+      frame.before(imagesBar("この送信者の画像を自動で表示しない", () => invoke("forget_image_sender", { from: m.from })));
+      return;
+    } catch {
+      // No error: the bar below fetches again.
+    }
   }
-  frame.before(imagesBar("この送信者の画像を自動で表示しない", () => invoke("forget_image_sender", { from: m.from })));
-  showImages(urls, frame).catch(showError);
+  const entry = { m, frame, urls };
+  entry.bar = imagesBar("画像を表示", async () => {
+    await showImages(urls, frame);
+    waiting.delete(entry);
+    // The images are shown, so a failure to remember is only reported. The thread's other messages may be from this sender too.
+    invoke("remember_image_sender", { from: m.from })
+      .then(() =>
+        [...waiting].forEach((w) => {
+          w.bar.remove();
+          waiting.delete(w);
+          offerImages(w.m, w.frame, w.urls);
+        }),
+      )
+      .catch(showError);
+  });
+  waiting.add(entry);
+  frame.before(entry.bar);
 }
 
-function message(m) {
+// `cids` resolves to the cid: images Rust fetched after the body, by message ID.
+function message(m, cids) {
   const article = document.createElement("article");
   const head = document.createElement("div");
   head.className = "message-head";
@@ -336,6 +373,7 @@ function message(m) {
     frame.setAttribute("sandbox", "allow-same-origin");
     frame.srcdoc = withBodyCsp(m.body);
     autoFit(frame, (doc) => {
+      cids.then((byMessage) => showCidImages(doc, byMessage[m.id]));
       const urls = externalImages(doc);
       if (urls.length) offerImages(m, frame, urls);
     });
@@ -353,7 +391,8 @@ function message(m) {
 async function markRead(account, id) {
   try {
     const done = await invoke("set_read", { account, id, read: true });
-    if (done === null) return load();
+    // The detail view stays, as for a sync; the list shows the re-login row at the next load.
+    if (done === null) return applySync(account, { kind: "needsLogin" });
     const r = rows.get(`${account}/${id}`);
     if (done && r) setReadState(r.t, r.li, true);
   } catch (e) {
@@ -375,7 +414,13 @@ async function openThread({ id, account }, li, origin = "mail") {
     current = { id, account, li };
     threadOrigin = origin;
     $("thread-subject").textContent = t.subject || "(件名なし)";
-    $("messages").replaceChildren(...t.messages.map(message));
+    // The images that had to be fetched come separately, so the body is not held up by them.
+    const cids = t.messages.some((m) => m.html && /cid:/i.test(m.body))
+      ? invoke("thread_images", { account, id }).catch(() => ({}))
+      : Promise.resolve({});
+    frameObserver.disconnect();
+    waiting.clear();
+    $("messages").replaceChildren(...t.messages.map((m) => message(m, cids)));
     show("thread");
     // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
     $("trash").hidden = $("archive").hidden = !li;
