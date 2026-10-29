@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use chrono::{
     DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, TimeZone, Utc,
@@ -11,7 +14,7 @@ use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 use crate::{
-    auth::{delete_entry, keyring_entry, Auth},
+    auth::{config_dir, delete_entry, keyring_entry, Auth},
     gmail::{log_failure, ApiError},
 };
 
@@ -231,8 +234,11 @@ fn bucket_of(due: Option<NaiveDate>, today: NaiveDate) -> Bucket {
     }
 }
 
-/// The URL cookup writes into a task's description to point at a thread.
-fn gmail_url(account: &str, thread_id: &str) -> Result<String, String> {
+/// The URL cookup writes into a task's description to point at a thread. The account must be one of `accounts`, the registered ones.
+fn gmail_url(accounts: &[String], account: &str, thread_id: &str) -> Result<String, String> {
+    if !accounts.iter().any(|a| a == account) {
+        return Err("登録されていないアカウントです".into());
+    }
     valid_id(thread_id, "スレッド ID")?;
     Ok(format!("{GMAIL_URL}{account}/#all/{thread_id}"))
 }
@@ -329,7 +335,7 @@ fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
 fn build_todo<Tz: TimeZone>(
     projects: Vec<ApiProject>,
     tasks: Vec<ApiTask>,
-    completed: Vec<ApiTask>,
+    completed: &[ApiTask],
     today: NaiveDate,
     tz: &Tz,
 ) -> Todo {
@@ -338,7 +344,7 @@ fn build_todo<Tz: TimeZone>(
     let by_id: HashMap<&str, &ApiTask> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
     // Subtasks by parent: the active ones, then the completed ones (a recurring one is in both; the active one stands).
     let mut subs: HashMap<&str, Vec<(&ApiTask, bool)>> = HashMap::new();
-    for (list, done) in [(&tasks, false), (&completed, true)] {
+    for (list, done) in [(&tasks[..], false), (completed, true)] {
         let mut list: Vec<_> = list.iter().collect();
         list.sort_by_key(|t| t.child_order);
         for t in list {
@@ -431,7 +437,7 @@ fn build_todo<Tz: TimeZone>(
 #[derive(Default)]
 pub struct TodoistState {
     token: Mutex<Option<String>>,
-    done: Mutex<Vec<ApiTask>>,
+    done: Mutex<Arc<Vec<ApiTask>>>,
 }
 
 impl TodoistState {
@@ -461,7 +467,7 @@ fn read_token() -> Result<Option<String>, String> {
     }
 }
 
-/// `Ok(None)` means the token was rejected with 401.
+/// The response body. `Ok(None)` means the token was rejected with 401.
 async fn send(
     http: &reqwest::Client,
     method: Method,
@@ -469,7 +475,7 @@ async fn send(
     path: &str,
     query: &[(&str, String)],
     body: Option<&Value>,
-) -> Result<Option<Value>, ApiError> {
+) -> Result<Option<String>, ApiError> {
     let req = http
         .request(method, format!("{API_URL}{path}"))
         .bearer_auth(token)
@@ -490,19 +496,17 @@ async fn send(
             format!("Todoist が {status} を返しました: {text}"),
         ));
     }
-    // close / reopen / delete answer with null or nothing.
-    if text.trim().is_empty() {
-        return Ok(Some(Value::Null));
-    }
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|e| format!("Todoist の応答を読めません: {e}").into())
+    Ok(Some(text))
+}
+
+fn parse<T: DeserializeOwned>(text: &str) -> Result<T, ApiError> {
+    serde_json::from_str(text).map_err(|e| format!("Todoist の応答を読めません: {e}").into())
 }
 
 /// Every item of a paginated list, following `next_cursor` for up to `max_pages` pages. `Ok(None)` means the token was rejected.
 async fn fetch_all<T: DeserializeOwned>(
-    http: reqwest::Client,
-    token: String,
+    http: &reqwest::Client,
+    token: &str,
     path: &'static str,
     query: Vec<(&'static str, String)>,
     max_pages: usize,
@@ -513,11 +517,10 @@ async fn fetch_all<T: DeserializeOwned>(
         let mut q = query.clone();
         q.push(("limit", PAGE_LIMIT.to_owned()));
         q.extend(cursor.map(|c| ("cursor", c)));
-        let Some(page) = send(&http, Method::GET, &token, path, &q, None).await? else {
+        let Some(text) = send(http, Method::GET, token, path, &q, None).await? else {
             return Ok(None);
         };
-        let page: Page<T> =
-            serde_json::from_value(page).map_err(|e| format!("Todoist の応答を読めません: {e}"))?;
+        let page: Page<T> = parse(&text)?;
         items.extend(page.results);
         cursor = page.next_cursor;
         if cursor.is_none() {
@@ -546,10 +549,17 @@ async fn request(
     let sent = send(auth.http(), method, &token, path, &[], body.as_ref())
         .await
         .map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    if sent.is_none() {
+    let Some(text) = sent else {
         state.set_token(None);
+        return Ok(None);
+    };
+    // close / reopen / delete answer with null or nothing.
+    if text.trim().is_empty() {
+        return Ok(Some(Value::Null));
     }
-    Ok(sent)
+    parse(&text)
+        .map(Some)
+        .map_err(|e| log_failure(command, TOKEN_USER, e))
 }
 
 /// The active tasks, the projects, and the recently completed tasks, fetched at once. `None` means a token is needed.
@@ -569,61 +579,56 @@ pub async fn todoist_load(
         return Ok(None);
     };
     let http = auth.http();
-    let tasks = tokio::spawn(fetch_all::<ApiTask>(
-        http.clone(),
-        token.clone(),
-        "/tasks",
-        vec![],
-        MAX_TASK_PAGES,
-    ));
-    let projects = tokio::spawn(fetch_all::<ApiProject>(
-        http.clone(),
-        token.clone(),
-        "/projects",
-        vec![],
-        MAX_PROJECT_PAGES,
-    ));
-    let done = with_done.then(|| {
-        let since =
-            (Utc::now() - Duration::days(DONE_DAYS)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let until = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-        tokio::spawn(fetch_all::<ApiTask>(
-            http.clone(),
-            token,
-            "/tasks/completed/by_completion_date",
-            vec![("since", since), ("until", until)],
-            MAX_DONE_PAGES,
-        ))
-    });
-    let joined = |e: tokio::task::JoinError| log_failure(command, TOKEN_USER, e.to_string());
-    let tasks = tasks.await.map_err(joined)?;
-    let projects = projects.await.map_err(joined)?;
-    let (Some(tasks), Some(projects)) = (
-        tasks.map_err(|e| log_failure(command, TOKEN_USER, e))?,
-        projects.map_err(|e| log_failure(command, TOKEN_USER, e))?,
-    ) else {
+    let fetch_done = async {
+        Ok::<_, ApiError>(if with_done {
+            let since =
+                (Utc::now() - Duration::days(DONE_DAYS)).to_rfc3339_opts(SecondsFormat::Secs, true);
+            let until = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+            let query = vec![("since", since), ("until", until)];
+            Some(
+                fetch_all::<ApiTask>(
+                    http,
+                    &token,
+                    "/tasks/completed/by_completion_date",
+                    query,
+                    MAX_DONE_PAGES,
+                )
+                .await,
+            )
+        } else {
+            None
+        })
+    };
+    // Awaited here, not spawned: a failure or a rejected token returns at once and drops the fetches still running.
+    let (tasks, projects, done) = tokio::try_join!(
+        fetch_all::<ApiTask>(http, &token, "/tasks", vec![], MAX_TASK_PAGES),
+        fetch_all::<ApiProject>(http, &token, "/projects", vec![], MAX_PROJECT_PAGES),
+        fetch_done,
+    )
+    .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let (Some(tasks), Some(projects)) = (tasks, projects) else {
         state.set_token(None);
         return Ok(None);
     };
     let done = match done {
-        Some(fetching) => {
+        Some(fetched) => {
             // The done subtasks only complete the counts, so their failure (e.g. a plan without history) must not hide the tasks.
-            let fetched = match fetching.await.map_err(joined)? {
+            let fetched = Arc::new(match fetched {
                 Ok(d) => d.unwrap_or_default(),
                 Err(e) => {
                     log_failure(command, TOKEN_USER, e);
                     Vec::new()
                 }
-            };
-            state.done.lock().unwrap().clone_from(&fetched);
+            });
+            *state.done.lock().unwrap() = Arc::clone(&fetched);
             fetched
         }
-        None => state.done.lock().unwrap().clone(),
+        None => Arc::clone(&state.done.lock().unwrap()),
     };
     Ok(Some(build_todo(
         projects,
         tasks,
-        done,
+        &done,
         Local::now().date_naive(),
         &Local,
     )))
@@ -733,6 +738,7 @@ pub async fn todoist_add_subtask(
 /// Adds a task to the inbox that points at a Gmail thread: the subject is its name, the thread's URL its description.
 #[tauri::command]
 pub async fn todoist_task_from_mail(
+    app: AppHandle,
     auth: State<'_, Auth>,
     state: State<'_, TodoistState>,
     account: String,
@@ -740,7 +746,11 @@ pub async fn todoist_task_from_mail(
     subject: String,
 ) -> Result<Option<bool>, String> {
     let command = "todoist_task_from_mail";
-    let url = gmail_url(&account, &thread_id).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let accounts = config_dir(&app)
+        .and_then(|dir| auth.accounts(&dir))
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let url = gmail_url(&accounts, &account, &thread_id)
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let subject = subject.trim();
     let content = if subject.is_empty() {
         "(件名なし)"
@@ -840,6 +850,10 @@ mod tests {
         s.parse().unwrap()
     }
 
+    fn accounts() -> Vec<String> {
+        vec!["a@example.com".into()]
+    }
+
     fn task(v: Value) -> ApiTask {
         serde_json::from_value(v).unwrap()
     }
@@ -855,7 +869,7 @@ mod tests {
     }
 
     fn todo(tasks: Vec<ApiTask>, completed: Vec<ApiTask>) -> Todo {
-        build_todo(vec![], tasks, completed, date("2026-10-29"), &jst())
+        build_todo(vec![], tasks, &completed, date("2026-10-29"), &jst())
     }
 
     #[test]
@@ -932,20 +946,26 @@ mod tests {
     #[test]
     fn gmail_url_names_the_account_and_thread() {
         assert_eq!(
-            gmail_url("a@example.com", "18c3f0a1b2").unwrap(),
+            gmail_url(&accounts(), "a@example.com", "18c3f0a1b2").unwrap(),
             "https://mail.google.com/mail/u/a@example.com/#all/18c3f0a1b2"
         );
     }
 
     #[test]
     fn gmail_url_refuses_a_bad_thread_id() {
-        assert!(gmail_url("a@example.com", "").is_err());
-        assert!(gmail_url("a@example.com", "x/y").is_err());
+        assert!(gmail_url(&accounts(), "a@example.com", "").is_err());
+        assert!(gmail_url(&accounts(), "a@example.com", "x/y").is_err());
+    }
+
+    #[test]
+    fn gmail_url_refuses_an_unregistered_account() {
+        assert!(gmail_url(&accounts(), "b@example.com", "18c3f0a1b2").is_err());
+        assert!(gmail_url(&[], "a@example.com", "18c3f0a1b2").is_err());
     }
 
     #[test]
     fn mail_is_read_back_from_the_description() {
-        let url = gmail_url("a@example.com", "18c3f0a1b2").unwrap();
+        let url = gmail_url(&accounts(), "a@example.com", "18c3f0a1b2").unwrap();
         for description in [
             url.clone(),
             format!("メモ\n{url}\n続き"),
@@ -1256,7 +1276,7 @@ mod tests {
 
     #[test]
     fn task_fields_carry_priority_and_mail() {
-        let url = gmail_url("a@example.com", "abc123").unwrap();
+        let url = gmail_url(&accounts(), "a@example.com", "abc123").unwrap();
         let t = todo(
             vec![task(
                 json!({"id": "A", "content": "件名", "priority": 4, "description": url, "project_id": "p"}),
@@ -1284,7 +1304,7 @@ mod tests {
                 project("a", "A", "berry_red", false, 1),
             ],
             vec![],
-            vec![],
+            &[],
             date("2026-10-29"),
             &jst(),
         );
