@@ -39,7 +39,11 @@ function avatarColor(s) {
   return `hsl(${h % 360} 55% 45%)`;
 }
 
+// #main scrolls both the list and the thread, so each view keeps its own position.
+let listScroll = 0;
+
 function show(view) {
+  if (!$("threads").hidden) listScroll = $("main").scrollTop;
   $("login").hidden = view !== "login";
   $("threads").hidden = view !== "list";
   $("reload").hidden = view !== "list";
@@ -49,6 +53,7 @@ function show(view) {
   $("archive").hidden = view !== "thread";
   $("thread-subject").hidden = view !== "thread";
   $("title").hidden = view === "thread";
+  $("main").scrollTop = view === "list" ? listScroll : 0;
 }
 
 function showError(e) {
