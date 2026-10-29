@@ -368,6 +368,19 @@ async fn fetch_pages<T: DeserializeOwned>(
     Ok(Some(pages))
 }
 
+/// The ID (an email address, or `…#holiday@group.v.calendar.google.com`) is one path segment, escaped as such.
+fn events_url(calendar_id: &str) -> Result<String, String> {
+    if matches!(calendar_id, "" | "." | "..") {
+        return Err("カレンダー ID が不正です".into());
+    }
+    let mut url = Url::parse(CALENDARS_URL).map_err(|e| e.to_string())?;
+    url.path_segments_mut()
+        .map_err(|_| "URL が不正です")?
+        .push(calendar_id)
+        .push("events");
+    Ok(url.into())
+}
+
 /// Events in `[min, max)` of every selected calendar of one account. `Ok(None)` means that account must log in again.
 async fn account_events(
     app: &AppHandle,
@@ -405,17 +418,11 @@ async fn account_events(
         .flat_map(|p| p.items)
         .filter(|c| c.selected)
     {
-        // The ID (an email address, or `…#holiday@group.v.calendar.google.com`) is one path segment.
-        let mut url = Url::parse(CALENDARS_URL).map_err(|e| e.to_string())?;
-        url.path_segments_mut()
-            .map_err(|_| "URL が不正です")?
-            .push(&cal.id)
-            .push("events");
-        let Some(pages) =
-            fetch_pages::<EventPage>(app, auth, account, url.as_str(), &event_query, |p| {
-                p.next_page_token.clone()
-            })
-            .await?
+        let url = events_url(&cal.id)?;
+        let Some(pages) = fetch_pages::<EventPage>(app, auth, account, &url, &event_query, |p| {
+            p.next_page_token.clone()
+        })
+        .await?
         else {
             return Ok(None);
         };
@@ -745,6 +752,26 @@ mod tests {
             classify(Some(403), "forbidden"),
             Failure::Message("forbidden".into())
         );
+    }
+
+    #[test]
+    fn events_url_keeps_a_calendar_id_in_one_path_segment() {
+        assert_eq!(
+            events_url("a@example.com").unwrap(),
+            format!("{CALENDARS_URL}/a@example.com/events")
+        );
+        assert_eq!(
+            events_url("en.japanese#holiday@group.v.calendar.google.com").unwrap(),
+            format!("{CALENDARS_URL}/en.japanese%23holiday@group.v.calendar.google.com/events")
+        );
+        assert_eq!(
+            events_url("x/../y?z").unwrap(),
+            format!("{CALENDARS_URL}/x%2F..%2Fy%3Fz/events")
+        );
+        // `push` would treat these as dot segments and drop the ID from the path.
+        for id in ["", ".", ".."] {
+            assert_eq!(events_url(id), Err("カレンダー ID が不正です".into()));
+        }
     }
 
     #[test]

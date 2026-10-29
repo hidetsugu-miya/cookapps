@@ -273,6 +273,17 @@ pub(crate) fn log_failure(command: &str, account: &str, e: impl Into<ApiError>) 
     e.message
 }
 
+/// `…/threads/{id}` (plus `/{action}`). The ID comes from the frontend; Gmail's are alphanumeric, so anything else is refused.
+fn thread_url(id: &str, action: Option<&str>) -> Result<String, String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("スレッド ID が不正です".into());
+    }
+    Ok(match action {
+        Some(action) => format!("{THREADS_URL}/{id}/{action}"),
+        None => format!("{THREADS_URL}/{id}"),
+    })
+}
+
 /// Gmail signals its quota with 429, or 403 with a `rateLimitExceeded` / `userRateLimitExceeded` reason.
 fn is_rate_limited(status: u16, body: &str) -> bool {
     status == 429 || (status == 403 && body.to_lowercase().contains("ratelimitexceeded"))
@@ -752,7 +763,7 @@ pub async fn thread(
     account: String,
     id: String,
 ) -> Result<Option<ThreadDetail>, String> {
-    let url = format!("{THREADS_URL}/{id}");
+    let url = thread_url(&id, None).map_err(|e| log_failure("thread", &account, e))?;
     let thread = send_json_refreshing::<Thread>(
         &app,
         &auth,
@@ -775,7 +786,7 @@ pub async fn trash(
     account: String,
     id: String,
 ) -> Result<Option<bool>, String> {
-    let url = format!("{THREADS_URL}/{id}/trash");
+    let url = thread_url(&id, Some("trash")).map_err(|e| log_failure("trash", &account, e))?;
     let done =
         send_json_refreshing::<IgnoredAny>(&app, &auth, &account, Method::POST, &url, &[], None)
             .await
@@ -796,7 +807,7 @@ pub async fn archive(
     account: String,
     id: String,
 ) -> Result<Option<bool>, String> {
-    let url = format!("{THREADS_URL}/{id}/modify");
+    let url = thread_url(&id, Some("modify")).map_err(|e| log_failure("archive", &account, e))?;
     let body = archive_body();
     let done = send_json_refreshing::<IgnoredAny>(
         &app,
@@ -829,7 +840,7 @@ pub async fn set_read(
     id: String,
     read: bool,
 ) -> Result<Option<bool>, String> {
-    let url = format!("{THREADS_URL}/{id}/modify");
+    let url = thread_url(&id, Some("modify")).map_err(|e| log_failure("set_read", &account, e))?;
     let body = read_body(read);
     let done = send_json_refreshing::<IgnoredAny>(
         &app,
@@ -1126,6 +1137,25 @@ mod tests {
         t.hit(t0);
         assert!(t.blocked(t0 + Duration::from_secs(39)));
         assert!(!t.blocked(t0 + Duration::from_secs(40)));
+    }
+
+    #[test]
+    fn thread_url_accepts_alphanumeric_ids_with_an_optional_action() {
+        assert_eq!(
+            thread_url("18c3fA09", None).unwrap(),
+            format!("{THREADS_URL}/18c3fA09")
+        );
+        assert_eq!(
+            thread_url("18c3fA09", Some("modify")).unwrap(),
+            format!("{THREADS_URL}/18c3fA09/modify")
+        );
+    }
+
+    #[test]
+    fn thread_url_rejects_ids_that_could_change_the_path() {
+        for id in ["", "../labels", "a/trash", "a?x=1", "a#b", "a b", "ａ"] {
+            assert_eq!(thread_url(id, None), Err("スレッド ID が不正です".into()));
+        }
     }
 
     #[test]
