@@ -1,7 +1,7 @@
 //! Images in HTML mail: `cid:` references to the message's own parts, and external images fetched on request.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
     hash::Hash,
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -12,10 +12,7 @@ use std::{
     time::Duration,
 };
 
-use base64::{
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-    Engine,
-};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::{
     dns::{Addrs, Name, Resolve, Resolving},
     header::CONTENT_TYPE,
@@ -36,38 +33,54 @@ const MAX_REDIRECTS: usize = 5;
 /// Cap of `ImageCache`, in bytes of data: URI.
 const IMAGE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
-/// Data: URIs kept in memory for the run, capped in bytes of URI. When a new one does not fit, the cache starts over.
+/// What `UriCache` holds: the URIs, their total size, and the order they came in.
 #[derive(Default)]
-pub struct UriCache<K>(Mutex<(usize, HashMap<K, Arc<str>>)>);
+struct Entries<K> {
+    bytes: usize,
+    uris: HashMap<K, Arc<str>>,
+    order: VecDeque<K>,
+}
+
+/// Data: URIs kept in memory for the run, capped in bytes of URI. When a new one does not fit, the oldest go first.
+#[derive(Default)]
+pub struct UriCache<K>(Mutex<Entries<K>>);
 
 /// The external images fetched so far, by URL.
 pub type ImageCache = UriCache<String>;
 
-impl<K: Eq + Hash> UriCache<K> {
+impl<K: Eq + Hash + Clone> UriCache<K> {
     pub(crate) fn get(&self, key: &K) -> Option<Arc<str>> {
-        self.0.lock().unwrap().1.get(key).cloned()
+        self.0.lock().unwrap().uris.get(key).cloned()
     }
 
     pub(crate) fn put(&self, limit: usize, key: K, uri: Arc<str>) {
-        let (bytes, uris) = &mut *self.0.lock().unwrap();
+        let e = &mut *self.0.lock().unwrap();
         if uri.len() > limit {
             return;
         }
-        if *bytes + uri.len() > limit {
-            uris.clear();
-            *bytes = 0;
+        if let Some(old) = e.uris.remove(&key) {
+            e.bytes -= old.len();
+            e.order.retain(|k| *k != key);
         }
-        *bytes += uri.len();
-        if let Some(old) = uris.insert(key, uri) {
-            *bytes -= old.len();
+        while e.bytes + uri.len() > limit {
+            let Some(oldest) = e.order.pop_front() else {
+                break;
+            };
+            if let Some(gone) = e.uris.remove(&oldest) {
+                e.bytes -= gone.len();
+            }
         }
+        e.bytes += uri.len();
+        e.order.push_back(key.clone());
+        e.uris.insert(key, uri);
     }
 
     /// Keeps the entries whose key `keep` accepts.
     pub(crate) fn retain(&self, keep: impl Fn(&K) -> bool) {
-        let (bytes, uris) = &mut *self.0.lock().unwrap();
-        uris.retain(|k, _| keep(k));
-        *bytes = uris.values().map(|u| u.len()).sum();
+        let e = &mut *self.0.lock().unwrap();
+        e.uris.retain(|k, _| keep(k));
+        e.order.retain(|k| e.uris.contains_key(k));
+        e.bytes = e.uris.values().map(|u| u.len()).sum();
     }
 }
 
@@ -120,10 +133,22 @@ fn data_uri(mime: &str, bytes: &[u8]) -> String {
     format!("data:{mime};base64,{}", STANDARD.encode(bytes))
 }
 
-/// The data: URI of Gmail's base64url `data`. `None` when it is not valid base64 or is over the per-image limit.
+/// The data: URI of Gmail's base64url `data`, converted to base64 without decoding it. `None` when it holds a character
+/// outside base64url, cannot be a base64 length, or is over the per-image limit.
 pub(crate) fn inline_data_uri(mime: &str, data: &str) -> Option<String> {
-    let bytes = URL_SAFE_NO_PAD.decode(data.trim_end_matches('=')).ok()?;
-    (bytes.len() as u64 <= MAX_IMAGE_BYTES).then(|| data_uri(mime, &bytes))
+    let data = data.trim_end_matches('=');
+    let valid = data
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    // base64 has 4 characters per 3 bytes, so a remainder of 1 character is impossible.
+    if !valid || data.len() % 4 == 1 || data.len() * 3 / 4 > MAX_IMAGE_BYTES as usize {
+        return None;
+    }
+    let base64 = data.replace('-', "+").replace('_', "/");
+    Some(format!(
+        "data:{mime};base64,{base64}{}",
+        "=".repeat((4 - data.len() % 4) % 4)
+    ))
 }
 
 /// An image part of a message that a `cid:` reference can point at, borrowing from the message.
@@ -230,18 +255,16 @@ pub(crate) fn replace_cids<V: AsRef<str>>(
     out
 }
 
-/// The URI of each of `refs` (of `html`) whose id is in `uris`, by the reference as written (`cid:foo%40bar`).
-pub(crate) fn uris_by_reference<V: AsRef<str>>(
-    html: &str,
-    refs: &[CidRef],
-    uris: &HashMap<String, V>,
-) -> HashMap<String, String> {
-    refs.iter()
-        .filter_map(|(start, end, id)| {
-            let uri = uris.get(id)?;
-            Some((html[*start..*end].to_owned(), uri.as_ref().to_owned()))
-        })
-        .collect()
+/// The references in `refs` (of `html`) to the image `id`, each once, as written (`cid:foo%40bar`).
+pub(crate) fn references_to(html: &str, refs: &[CidRef], id: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (start, end, _) in refs.iter().filter(|r| r.2 == id) {
+        let reference = &html[*start..*end];
+        if !out.iter().any(|r| r == reference) {
+            out.push(reference.to_owned());
+        }
+    }
+    out
 }
 
 fn is_public_v4(ip: Ipv4Addr) -> bool {
@@ -419,6 +442,8 @@ fn http_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(FETCH_TIMEOUT)
+            // An environment variable must not route the fetch through a proxy, which would resolve the host itself.
+            .no_proxy()
             .dns_resolver(PublicResolver)
             // A redirect must not lead away from https or to the local network.
             .redirect(redirect::Policy::custom(|attempt| {
@@ -439,14 +464,14 @@ fn split_cached(
     cache: &ImageCache,
     urls: Vec<String>,
     total: &mut u64,
-) -> (HashMap<String, String>, Vec<String>) {
+) -> (HashMap<String, Arc<str>>, Vec<String>) {
     let (mut cached, mut missing) = (HashMap::new(), Vec::new());
     for url in urls {
         match cache.get(&url) {
             Some(uri) => {
                 // The data: URI is base64, a third longer than the image.
                 if admit(total, uri.len() as u64 / 4 * 3) {
-                    cached.insert(url, uri.to_string());
+                    cached.insert(url, uri);
                 }
             }
             None => missing.push(url),
@@ -461,7 +486,7 @@ fn split_cached(
 pub async fn fetch_images(
     cache: State<'_, ImageCache>,
     urls: Vec<String>,
-) -> Result<HashMap<String, String>, String> {
+) -> Result<HashMap<String, Arc<str>>, String> {
     let mut seen = HashSet::new();
     let urls: Vec<_> = urls
         .into_iter()
@@ -477,7 +502,7 @@ pub async fn fetch_images(
     for (url, mime, bytes) in run_limited(jobs, CONCURRENCY).await.into_iter().flatten() {
         let uri: Arc<str> = data_uri(&mime, &bytes).into();
         cache.put(IMAGE_CACHE_BYTES, url.clone(), Arc::clone(&uri));
-        out.insert(url, uri.to_string());
+        out.insert(url, uri);
     }
     Ok(out)
 }
@@ -485,6 +510,7 @@ pub async fn fetch_images(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     fn image(cid: &str, size: u64) -> InlineImage<'_> {
         InlineImage {
@@ -576,7 +602,7 @@ mod tests {
         let mut total = 0;
         let (cached, missing) = split_cached(&cache, urls.clone(), &mut total);
         assert_eq!(cached.len(), 2);
-        assert_eq!(cached["https://a/1"], "data:a");
+        assert_eq!(&*cached["https://a/1"], "data:a");
         assert_eq!(missing, ["https://a/new"]);
         assert_eq!(total, 3 + 6);
         // With no room left a cached image is left out, not fetched again.
@@ -587,16 +613,58 @@ mod tests {
     }
 
     #[test]
-    fn uris_by_reference_keys_by_the_reference_as_written() {
-        let uris = HashMap::from([("a@x".to_owned(), "data:A".to_owned())]);
-        let html = r#"<img src="cid:a%40x"><img src="CID:a@x"><img src="cid:b">"#;
-        assert_eq!(
-            uris_by_reference(html, &cid_refs(html), &uris),
-            HashMap::from([
-                ("cid:a%40x".to_owned(), "data:A".to_owned()),
-                ("CID:a@x".to_owned(), "data:A".to_owned()),
-            ])
-        );
+    fn references_to_lists_each_written_form_of_an_id_once() {
+        let html =
+            r#"<img src="cid:a%40x"><img src="CID:a@x"><img src="cid:b"><img src="cid:a%40x">"#;
+        let refs = cid_refs(html);
+        assert_eq!(references_to(html, &refs, "a@x"), ["cid:a%40x", "CID:a@x"]);
+        assert_eq!(references_to(html, &refs, "b"), ["cid:b"]);
+        assert!(references_to(html, &refs, "none").is_empty());
+    }
+
+    fn put_all(cache: &ImageCache, limit: usize, entries: &[(&str, &str)]) {
+        for (k, v) in entries {
+            cache.put(limit, (*k).into(), (*v).into());
+        }
+    }
+
+    #[test]
+    fn uri_cache_drops_the_oldest_entries_until_the_new_one_fits() {
+        let cache = ImageCache::default();
+        put_all(&cache, 10, &[("a", "1111"), ("b", "2222"), ("c", "3333")]);
+        // 4 + 4 + 4 > 10: only the oldest goes.
+        assert_eq!(cache.get(&"a".into()), None);
+        assert_eq!(cache.get(&"b".into()).as_deref(), Some("2222"));
+        assert_eq!(cache.get(&"c".into()).as_deref(), Some("3333"));
+        // 9 needs both older ones gone.
+        put_all(&cache, 10, &[("d", "444444444")]);
+        assert_eq!(cache.get(&"b".into()), None);
+        assert_eq!(cache.get(&"c".into()), None);
+        assert_eq!(cache.get(&"d".into()).as_deref(), Some("444444444"));
+    }
+
+    #[test]
+    fn uri_cache_counts_a_replaced_entry_once_and_refreshes_its_age() {
+        let cache = ImageCache::default();
+        put_all(&cache, 10, &[("a", "1111"), ("b", "2222"), ("a", "5555")]);
+        // `a` was put again after `b`, so `b` is the oldest.
+        put_all(&cache, 10, &[("c", "3333")]);
+        assert_eq!(cache.get(&"b".into()), None);
+        assert_eq!(cache.get(&"a".into()).as_deref(), Some("5555"));
+        // One over the limit is refused and evicts nothing.
+        put_all(&cache, 10, &[("big", "12345678901")]);
+        assert_eq!(cache.get(&"a".into()).as_deref(), Some("5555"));
+    }
+
+    #[test]
+    fn uri_cache_retain_frees_the_bytes_of_what_it_drops() {
+        let cache = ImageCache::default();
+        put_all(&cache, 10, &[("a", "111111"), ("b", "22")]);
+        cache.retain(|k| k != "a");
+        assert_eq!(cache.get(&"a".into()), None);
+        put_all(&cache, 10, &[("c", "33333333")]);
+        assert_eq!(cache.get(&"b".into()).as_deref(), Some("22"));
+        assert_eq!(cache.get(&"c".into()).as_deref(), Some("33333333"));
     }
 
     #[test]
@@ -627,7 +695,25 @@ mod tests {
             inline_data_uri("image/png", "-_8="),
             inline_data_uri("image/png", "-_8")
         );
-        assert_eq!(inline_data_uri("image/png", "***"), None);
+        assert_eq!(
+            inline_data_uri("image/png", "AAAA"),
+            Some("data:image/png;base64,AAAA".into())
+        );
+        assert_eq!(
+            inline_data_uri("image/png", "AA"),
+            Some("data:image/png;base64,AA==".into())
+        );
+        assert_eq!(
+            inline_data_uri("image/png", ""),
+            Some("data:image/png;base64,".into())
+        );
+    }
+
+    #[test]
+    fn inline_data_uri_refuses_what_is_not_base64url() {
+        for bad in ["***", "AB+/", "A", "AAAAA", "AA AA", "AA=A"] {
+            assert_eq!(inline_data_uri("image/png", bad), None, "{bad}");
+        }
     }
 
     #[test]
@@ -635,7 +721,12 @@ mod tests {
         let big = URL_SAFE_NO_PAD.encode(vec![0u8; MAX_IMAGE_BYTES as usize + 1]);
         assert_eq!(inline_data_uri("image/png", &big), None);
         let ok = URL_SAFE_NO_PAD.encode(vec![0u8; MAX_IMAGE_BYTES as usize]);
-        assert!(inline_data_uri("image/png", &ok).is_some());
+        let uri = inline_data_uri("image/png", &ok).unwrap();
+        // The same bytes as a standard base64 encoding.
+        assert_eq!(
+            uri,
+            data_uri("image/png", &vec![0u8; MAX_IMAGE_BYTES as usize])
+        );
     }
 
     #[test]

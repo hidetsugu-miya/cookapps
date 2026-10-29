@@ -280,11 +280,11 @@ function showCidImages(doc, uris) {
 }
 
 // Rust fetches the images, and the loaded document's images get them as data: URIs. Throws when none could be shown.
-async function showImages(urls, frame) {
+async function showImages(urls, frame, ctx) {
   const images = await invoke("fetch_images", { urls });
+  // Another thread was opened meanwhile, and this frame is gone.
+  if (ctx.stale()) return;
   const doc = frame.contentDocument;
-  // null: the thread was left meanwhile, and its frame is gone.
-  if (!doc) return;
   let shown = 0;
   for (const img of queryAll(doc, "img[src]")) {
     const data = images[img.getAttribute("src").trim()];
@@ -322,46 +322,75 @@ function imagesBar(label, onClick) {
 
 // The "画像を表示" bars of the open thread that are still up.
 const waiting = new Set();
+// The "この送信者の画像を自動で表示しない" bars of the open thread that are still up.
+const forgettable = new Set();
 
-// Shows the mail's external images: at once when its sender is remembered, with a bar to forget the sender;
-// otherwise, or when that fetch fails, behind a bar whose button shows them and remembers the sender.
-async function offerImages(m, frame, urls) {
-  let known = false;
+// The ones of `froms` whose sender Rust remembers, as a Set.
+async function knownSenders(froms) {
+  if (!froms.length) return new Set();
   try {
-    known = await invoke("image_sender_known", { from: m.from });
+    return new Set(await invoke("image_sender_known", { froms }));
   } catch (e) {
     showError(e);
+    return new Set();
   }
-  if (known) {
+}
+
+// Asks Rust again after a sender was remembered or forgotten. Rust matches by address, so the display name does not matter.
+const refreshSenders = (ctx) => (ctx.senders = knownSenders(ctx.froms));
+
+// Shows the mail's external images: at once when its sender is remembered and Gmail vouches for the sender (a forged From
+// can name a remembered one), with a bar to forget the sender; otherwise, or when that fetch fails, behind a bar whose
+// button shows them and remembers the sender.
+async function offerImages(m, frame, urls, ctx) {
+  if (m.authenticated && (await ctx.senders).has(m.from)) {
     try {
-      await showImages(urls, frame);
-      frame.before(imagesBar("この送信者の画像を自動で表示しない", () => invoke("forget_image_sender", { from: m.from })));
+      await showImages(urls, frame, ctx);
+      if (ctx.stale()) return;
+      const entry = { m };
+      entry.bar = imagesBar("この送信者の画像を自動で表示しない", async () => {
+        await invoke("forget_image_sender", { from: m.from });
+        // The thread's other messages from this sender no longer show theirs by themselves either.
+        const known = await refreshSenders(ctx);
+        forgettable.forEach((f) => {
+          if (!known.has(f.m.from)) {
+            f.bar.remove();
+            forgettable.delete(f);
+          }
+        });
+      });
+      forgettable.add(entry);
+      frame.before(entry.bar);
       return;
     } catch {
       // No error: the bar below fetches again.
     }
   }
+  if (ctx.stale()) return;
   const entry = { m, frame, urls };
   entry.bar = imagesBar("画像を表示", async () => {
-    await showImages(urls, frame);
+    await showImages(urls, frame, ctx);
     waiting.delete(entry);
     // The images are shown, so a failure to remember is only reported. The thread's other messages may be from this sender too.
     invoke("remember_image_sender", { from: m.from })
-      .then(() =>
+      .then(() => refreshSenders(ctx))
+      .then(() => {
+        if (ctx.stale()) return;
         [...waiting].forEach((w) => {
           w.bar.remove();
           waiting.delete(w);
-          offerImages(w.m, w.frame, w.urls);
-        }),
-      )
+          offerImages(w.m, w.frame, w.urls, ctx);
+        });
+      })
       .catch(showError);
   });
   waiting.add(entry);
   frame.before(entry.bar);
 }
 
-// `cids` resolves to the cid: images Rust fetched after the body, by message ID.
-function message(m, cids) {
+// `ctx` is the open thread's: `cids` resolves to the cid: images Rust fetched after the body, by message ID;
+// `senders` to the Set of its senders Rust remembers (`froms` asked about); `stale()` tells another thread was opened since.
+function message(m, ctx) {
   const article = document.createElement("article");
   const head = document.createElement("div");
   head.className = "message-head";
@@ -369,13 +398,17 @@ function message(m, cids) {
   article.append(head);
   if (m.html) {
     // No allow-scripts: scripts do not run. allow-same-origin only lets this page read the document's height.
+    // Invariant: never add allow-scripts, and never widen the sandbox beyond allow-same-origin. With the page's origin
+    // shared, the missing allow-scripts (backed by the CSP's script-src 'self') is the only guard.
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-same-origin");
     frame.srcdoc = withBodyCsp(m.body);
     autoFit(frame, (doc) => {
-      cids.then((byMessage) => showCidImages(doc, byMessage[m.id]));
+      ctx.cids.then((byMessage) => {
+        if (!ctx.stale()) showCidImages(doc, byMessage[m.id]);
+      });
       const urls = externalImages(doc);
-      if (urls.length) offerImages(m, frame, urls);
+      if (urls.length) offerImages(m, frame, urls, ctx);
     });
     article.append(frame);
   } else {
@@ -405,22 +438,31 @@ async function markRead(account, id) {
 // The thread shown in the detail view and its list row.
 let current = null;
 
+// Bumped by every openThread: a result that arrives for an earlier thread sees the number has moved on and leaves the page alone.
+let openCount = 0;
+
 async function openThread({ id, account }, li, origin = "mail") {
   $("error").hidden = true;
+  const opened = ++openCount;
   try {
     const t = await invoke("thread", { account, id });
+    if (opened !== openCount) return;
     // null: that account must log in again, which the list shows.
     if (t === null) return load();
     current = { id, account, li };
     threadOrigin = origin;
     $("thread-subject").textContent = t.subject || "(件名なし)";
     // The images that had to be fetched come separately, so the body is not held up by them.
-    const cids = t.messages.some((m) => m.html && /cid:/i.test(m.body))
-      ? invoke("thread_images", { account, id }).catch(() => ({}))
+    const cids = t.pendingImages?.length
+      ? invoke("thread_images", { account, id, images: t.pendingImages }).catch(() => ({}))
       : Promise.resolve({});
+    // Only a message Gmail vouches for can show its images by itself, so only its sender is asked about.
+    const froms = [...new Set(t.messages.filter((m) => m.html && m.authenticated).map((m) => m.from))];
+    const ctx = { cids, froms, senders: knownSenders(froms), stale: () => opened !== openCount };
     frameObserver.disconnect();
     waiting.clear();
-    $("messages").replaceChildren(...t.messages.map((m) => message(m, cids)));
+    forgettable.clear();
+    $("messages").replaceChildren(...t.messages.map((m) => message(m, ctx)));
     show("thread");
     // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
     $("trash").hidden = $("archive").hidden = !li;
