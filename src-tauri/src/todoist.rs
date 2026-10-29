@@ -142,6 +142,15 @@ pub struct MailRef {
     thread_id: String,
 }
 
+/// What a subtask row of the "today" list points at.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct ParentRef {
+    /// The top-level task whose detail holds the subtask.
+    id: String,
+    /// The name of the subtask's own parent.
+    content: String,
+}
+
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskItem {
@@ -158,6 +167,8 @@ pub struct TaskItem {
     sub_done: usize,
     sub_total: usize,
     mail: Option<MailRef>,
+    /// Set on the row of a subtask that is overdue or due today; `None` on a top-level task.
+    parent: Option<ParentRef>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -173,7 +184,7 @@ pub struct ProjectItem {
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Todo {
     projects: Vec<ProjectItem>,
-    /// Top-level active tasks, by due date.
+    /// Top-level active tasks, then the overdue or due-today subtasks as rows of their own, by due date.
     tasks: Vec<TaskItem>,
 }
 
@@ -314,6 +325,48 @@ fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
     })
 }
 
+/// A row for each active subtask (at any depth) that is overdue or due today, so the "today" list shows it although its parent is not due.
+fn due_subtask_items<Tz: TimeZone>(tasks: &[ApiTask], today: NaiveDate, tz: &Tz) -> Vec<TaskItem> {
+    let by_id: HashMap<&str, &ApiTask> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+    tasks
+        .iter()
+        .filter(|t| t.parent_id.is_some())
+        .filter_map(|t| {
+            let due = due_of(tz, &t.due);
+            let bucket = bucket_of(due.as_ref().and_then(|d| d.date.parse().ok()), today);
+            if !matches!(bucket, Bucket::Overdue | Bucket::Today) {
+                return None;
+            }
+            let parent = *by_id.get(t.parent_id.as_deref()?)?;
+            // The top-level ancestor; the walk is bounded in case the data loops.
+            let mut root = parent;
+            for _ in 0..by_id.len() {
+                match root.parent_id.as_deref() {
+                    Some(id) => root = by_id.get(id)?,
+                    None => break,
+                }
+            }
+            Some(TaskItem {
+                id: t.id.clone(),
+                content: t.content.clone(),
+                description: t.description.clone(),
+                project_id: t.project_id.clone(),
+                priority: flip_priority(t.priority),
+                bucket,
+                subtasks: vec![],
+                sub_done: 0,
+                sub_total: 0,
+                mail: mail_of(&t.description),
+                due,
+                parent: Some(ParentRef {
+                    id: root.id.clone(),
+                    content: parent.content.clone(),
+                }),
+            })
+        })
+        .collect()
+}
+
 /// Top-level active tasks with their subtasks and counts. `completed` are the recently completed tasks: those under an active
 /// top-level task count as its done subtasks. Dates are judged in `tz`.
 fn build_todo<Tz: TimeZone>(
@@ -368,9 +421,11 @@ fn build_todo<Tz: TimeZone>(
                 subtasks,
                 mail: mail_of(&t.description),
                 due,
+                parent: None,
             }
         })
         .collect();
+    items.extend(due_subtask_items(&tasks, today, tz));
     // Stable, so tasks of the same moment keep Todoist's order; no due date goes last.
     items.sort_by(|a, b| {
         let key = |t: &TaskItem| t.due.as_ref().map(|d| (d.date.clone(), d.time.clone()));
@@ -567,6 +622,8 @@ pub fn todoist_disconnect() -> Result<(), String> {
 }
 
 /// Adds a task from natural language (Quick Add). Inside a project (`project_id`) the task is moved there.
+/// `Some(false)` means the task was created but the move failed (logged), so it stays where Quick Add put it; the caller must not retry.
+/// `None` means a token is needed.
 #[tauri::command]
 pub async fn todoist_add(
     auth: State<'_, Auth>,
@@ -584,7 +641,10 @@ pub async fn todoist_add(
         return Ok(None);
     };
     if let Some(id) = task_to_move(&created, project_id.as_deref()) {
-        return move_task(&auth, command, &id, project_id.as_deref()).await;
+        // A rejected token (`Ok(None)`) goes back to the token form; any other failure is logged and leaves the task where Quick Add put it.
+        return Ok(move_task(&auth, command, &id, project_id.as_deref())
+            .await
+            .unwrap_or(Some(false)));
     }
     Ok(Some(true))
 }
@@ -972,6 +1032,80 @@ mod tests {
             vec![task(json!({"id": "B", "parent_id": "A"}))],
         );
         assert_eq!((t.tasks[0].sub_done, t.tasks[0].sub_total), (0, 1));
+    }
+
+    #[test]
+    fn a_subtask_due_today_or_overdue_is_also_a_row_of_its_own() {
+        let t = todo(
+            vec![
+                task(json!({"id": "A", "content": "親", "project_id": "p"})),
+                task(
+                    json!({"id": "B", "parent_id": "A", "content": "今日", "project_id": "p", "priority": 4,
+                            "due": {"date": "2026-10-29T09:00:00"}}),
+                ),
+                task(json!({"id": "C", "parent_id": "A", "due": {"date": "2026-10-27"}})),
+                task(json!({"id": "D", "parent_id": "A", "due": {"date": "2026-10-30"}})),
+                task(json!({"id": "E", "parent_id": "A"})),
+            ],
+            vec![],
+        );
+        let got: Vec<_> = t.tasks.iter().map(|t| (t.id.as_str(), t.bucket)).collect();
+        assert_eq!(
+            got,
+            [
+                ("C", Bucket::Overdue),
+                ("B", Bucket::Today),
+                ("A", Bucket::NoDue)
+            ]
+        );
+        let b = &t.tasks[1];
+        assert_eq!(b.project_id, "p");
+        assert_eq!(b.priority, 1);
+        assert_eq!(
+            b.parent,
+            Some(ParentRef {
+                id: "A".into(),
+                content: "親".into()
+            })
+        );
+        assert!(b.subtasks.is_empty());
+        // The parent still lists all its subtasks and is not itself a subtask row.
+        assert_eq!(t.tasks[2].parent, None);
+        assert_eq!(t.tasks[2].sub_total, 4);
+    }
+
+    #[test]
+    fn a_due_grandchild_points_at_its_top_level_task_and_its_own_parent() {
+        let t = todo(
+            vec![
+                task(json!({"id": "A", "content": "親"})),
+                task(json!({"id": "B", "parent_id": "A", "content": "子"})),
+                task(json!({"id": "C", "parent_id": "B", "due": {"date": "2026-10-29"}})),
+                // Its parent is not among the active tasks: nothing opens it, so it is not a row.
+                task(json!({"id": "D", "parent_id": "Z", "due": {"date": "2026-10-29"}})),
+            ],
+            vec![],
+        );
+        let c = t.tasks.iter().find(|t| t.id == "C").unwrap();
+        assert_eq!(
+            c.parent,
+            Some(ParentRef {
+                id: "A".into(),
+                content: "子".into()
+            })
+        );
+        assert!(t.tasks.iter().all(|t| t.id != "D"));
+    }
+
+    #[test]
+    fn completed_subtasks_are_not_rows() {
+        let t = todo(
+            vec![task(json!({"id": "A"}))],
+            vec![task(
+                json!({"id": "B", "parent_id": "A", "due": {"date": "2026-10-29"}}),
+            )],
+        );
+        assert_eq!(t.tasks.len(), 1);
     }
 
     #[test]

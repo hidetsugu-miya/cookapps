@@ -913,7 +913,7 @@ const viewProjectId = (view) => (view === "inbox" ? inboxOf()?.id : view);
 function viewTasks(view) {
   if (view === "today") return todo.tasks.filter((t) => t.bucket === "overdue" || t.bucket === "today");
   const id = viewProjectId(view);
-  return todo.tasks.filter((t) => t.projectId === id);
+  return todo.tasks.filter((t) => t.projectId === id && !t.parent);
 }
 
 // "今日" for today (or its time), else "10/27", with the time if there is one.
@@ -987,7 +987,8 @@ function checkBox(color, checked, label) {
 function taskRow(t, showProject) {
   const li = tag("li", `task${showProject ? "" : " single"}`);
   li.onclick = () => {
-    todoOpen = t.id;
+    // A subtask row opens the top-level task that holds it.
+    todoOpen = t.parent?.id ?? t.id;
     renderTodo();
   };
   const box = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
@@ -1000,6 +1001,7 @@ function taskRow(t, showProject) {
   const line = tag("div", "t");
   if (t.mail) line.insertAdjacentHTML("beforeend", MAIL_SVG);
   line.append(tag("span", "", t.content));
+  if (t.parent) line.append(tag("span", "parent", t.parent.content));
   if (t.subTotal) {
     const count = tag("span", "subcount");
     count.innerHTML = SUB_SVG;
@@ -1049,20 +1051,19 @@ async function openMailFromTodo({ account, threadId }) {
 }
 
 // Runs a change, then reloads whether it worked or not, so the screen shows what Todoist has.
-// A null answer (a token is needed) shows up in that reload. Returns whether the change worked.
+// A null answer (a token is needed) shows up in that reload. Returns the command's answer: null when it failed or a token is needed.
 async function todoCall(command, args, control) {
   $("error").hidden = true;
   if (control) control.disabled = true;
-  let ok = true;
+  let answer = null;
   try {
-    await invoke(command, args);
+    answer = await invoke(command, args);
   } catch (e) {
-    ok = false;
     showError(e);
   }
   if (control) control.disabled = false;
   await loadTodo();
-  return ok;
+  return answer;
 }
 
 const saveTask = (id, fields) => todoCall("todoist_update", { id, ...fields });
@@ -1130,7 +1131,7 @@ function dueChip(t) {
       else input.replaceWith(b);
     };
     input.onkeydown = (e) => {
-      if (e.isComposing) return;
+      if (composing(e)) return;
       if (e.key === "Enter") finish(true);
       else if (e.key === "Escape") finish(false);
     };
@@ -1174,10 +1175,13 @@ function priorityChip(t) {
   return b;
 }
 
+// WebKit fires compositionend before the keydown of the Enter that confirms a conversion, so isComposing is already false then; keyCode is 229.
+const composing = (e) => e.isComposing || e.keyCode === 229;
+
 // Pressing Enter in a field commits it; Enter that confirms an IME conversion does not.
 const onEnter = (input, action) => {
   input.onkeydown = (e) => {
-    if (e.key === "Enter" && !e.isComposing) action();
+    if (e.key === "Enter" && !composing(e)) action();
   };
 };
 
@@ -1206,6 +1210,8 @@ function renderDetail() {
   const active = document.activeElement;
   const field = $("todo-detail").contains(active) ? active.dataset.field : null;
   const caret = active.selectionStart;
+  // What was typed into the subtask field of this task is not lost to the redraw.
+  const typed = $("todo-detail").dataset.task === t.id ? $("todo-detail").querySelector('[data-field="sub"]')?.value ?? "" : "";
   todoMode("detail");
   $("todo-title").textContent = projectOf(t.projectId)?.name ?? "";
 
@@ -1256,14 +1262,20 @@ function renderDetail() {
   const input = tag("input");
   input.placeholder = "サブタスクを追加";
   input.dataset.field = "sub";
+  input.value = typed;
   input.setAttribute("aria-label", "サブタスクを追加");
   onEnter(input, () => {
-    if (input.value.trim()) todoCall("todoist_add_subtask", { parentId: t.id, content: input.value }, input);
+    const content = input.value;
+    if (!content.trim()) return;
+    // Emptied before the call, or the redraw after it would restore the text.
+    input.value = "";
+    todoCall("todoist_add_subtask", { parentId: t.id, content }, input);
   });
   add.append(input);
   parts.push(title, subs, add);
 
   $("todo-detail").replaceChildren(...parts);
+  $("todo-detail").dataset.task = t.id;
   if (field) {
     const again = $("todo-detail").querySelector(`[data-field="${field}"]`);
     again?.focus();
@@ -1285,9 +1297,11 @@ async function loadTodo(quiet = false) {
     const data = await invoke("todoist_load");
     if (seq !== todoSeq || screen !== "todo") return;
     if (data === null) return showTokenForm();
+    // While a field is being typed in, `todo` stays as drawn, so the next refresh sees the change and draws it.
+    if (quiet && $("todo-detail").contains(document.activeElement)) return;
     const same = JSON.stringify(data) === JSON.stringify(todo);
     todo = data;
-    if (quiet && (same || $("todo-detail").contains(document.activeElement))) return;
+    if (quiet && same) return;
     renderTodo();
   } catch (e) {
     showError(e);
@@ -1357,9 +1371,11 @@ $("todo-add").onsubmit = async (e) => {
   if (!text) return;
   // In "今日" the task goes where Quick Add puts it (the inbox, or the project named in the text).
   const projectId = todoView === "today" ? null : viewProjectId(todoView);
-  if (await todoCall("todoist_add", { text, projectId }, input)) {
+  const added = await todoCall("todoist_add", { text, projectId }, input);
+  if (added !== null) {
     input.value = "";
-    toast("タスクを追加しました");
+    // false: created, but the move into the project failed; it is in the inbox.
+    toast(added ? "タスクを追加しました" : "タスクを追加しましたが、プロジェクトへ移せませんでした。受信箱にあります");
   }
   input.focus();
 };

@@ -160,6 +160,7 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .task:hover .due, .task:focus-within .due { visibility: hidden; }
 .subcount { display: inline-flex; align-items: center; gap: 3px; color: #888; font-size: 12px; margin-left: 6px; }
 .subcount svg { width: 13px; height: 13px; }
+.body .parent { color: #888; font-size: 12px; flex: none; }
 
 #todo-detail { max-width: 760px; }
 #todo-detail .head { display: flex; gap: 14px; align-items: flex-start; padding: 4px 16px 0; }
