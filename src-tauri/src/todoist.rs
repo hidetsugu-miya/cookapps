@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -165,11 +165,10 @@ fn upsert<T>(
 /// Brings `data` up to date with a sync answer. Completed and deleted tasks and archived and deleted projects drop out.
 /// `done` (the completed subtasks) follows the tasks that were completed, reopened or deleted since.
 fn apply_sync(data: &mut SyncData, done: &mut Vec<ApiTask>, res: SyncResponse) {
-    if res.full_sync {
-        data.tasks.clear();
-        data.projects.clear();
-    }
-    done.retain(|d| !res.items.iter().any(|t| t.id == d.id));
+    let task_gone = |t: &ApiTask| t.checked || t.is_deleted;
+    let project_gone = |p: &ApiProject| p.is_archived || p.is_deleted;
+    let changed: HashSet<&str> = res.items.iter().map(|t| t.id.as_str()).collect();
+    done.retain(|d| !changed.contains(d.id.as_str()));
     // build_todo reads only the subtasks.
     done.extend(
         res.items
@@ -177,18 +176,25 @@ fn apply_sync(data: &mut SyncData, done: &mut Vec<ApiTask>, res: SyncResponse) {
             .filter(|t| t.checked && !t.is_deleted && t.parent_id.is_some())
             .cloned(),
     );
-    upsert(
-        &mut data.tasks,
-        res.items,
-        |t| &t.id,
-        |t| t.checked || t.is_deleted,
-    );
-    upsert(
-        &mut data.projects,
-        res.projects,
-        |p| &p.id,
-        |p| p.is_archived || p.is_deleted,
-    );
+    if res.full_sync {
+        data.tasks = res.items.into_iter().filter(|t| !task_gone(t)).collect();
+        data.projects = res
+            .projects
+            .into_iter()
+            .filter(|p| !project_gone(p))
+            .collect();
+    } else {
+        upsert(&mut data.tasks, res.items, |t| &t.id, task_gone);
+        // The tasks of a project that is gone are not reported again.
+        let gone: HashSet<&str> = res
+            .projects
+            .iter()
+            .filter(|p| project_gone(p))
+            .map(|p| p.id.as_str())
+            .collect();
+        data.tasks.retain(|t| !gone.contains(t.project_id.as_str()));
+        upsert(&mut data.projects, res.projects, |p| &p.id, project_gone);
+    }
     data.sync_token = Some(res.sync_token);
 }
 
@@ -929,6 +935,10 @@ pub async fn todoist_load(
     }
     // Nothing changed and no completed tasks came in: the kept file and cache are still right, so the timed refresh writes nothing.
     if unchanged && !with_done {
+        // Only the time in memory moves, so the offline notice names the latest successful fetch.
+        if let Some(cache) = state.cache.lock().unwrap().as_mut() {
+            cache.fetched_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        }
         return Ok(Some(todo));
     }
     let dir = config_dir(&app);
@@ -1815,6 +1825,28 @@ mod tests {
         );
         assert_eq!(data.projects.len(), 1);
         assert_eq!(data.projects[0].id, "p3");
+    }
+
+    #[test]
+    fn the_tasks_of_an_archived_or_deleted_project_drop_out() {
+        let (mut data, mut done) = synced(json!({
+            "sync_token": "t1", "full_sync": true,
+            "items": [
+                {"id": "A", "project_id": "p1"},
+                {"id": "B", "project_id": "p2"},
+                {"id": "C", "project_id": "p3"},
+            ],
+            "projects": [{"id": "p1"}, {"id": "p2"}, {"id": "p3"}],
+        }));
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t2",
+                "projects": [{"id": "p1", "is_archived": true}, {"id": "p2", "is_deleted": true}],
+            })),
+        );
+        assert_eq!(ids(&data), ["C"]);
     }
 
     #[test]
