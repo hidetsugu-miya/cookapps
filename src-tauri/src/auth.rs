@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex, time::Duration};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::Deserialize;
@@ -47,9 +52,11 @@ struct Profile {
 }
 
 /// Holds the access tokens (per account) in memory only; refresh tokens live in the keychain.
+/// Clones share the tokens, so a spawned task can own one.
+#[derive(Clone)]
 pub struct Auth {
     http: reqwest::Client,
-    access: Mutex<HashMap<String, String>>,
+    access: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl Auth {
@@ -60,7 +67,7 @@ impl Auth {
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("reqwest client"),
-            access: Mutex::new(HashMap::new()),
+            access: Arc::default(),
         }
     }
 
@@ -69,23 +76,23 @@ impl Auth {
     }
 
     /// Cached access token, else a refreshed one. `None` means login is required.
-    pub async fn token(&self, app: &AppHandle, account: &str) -> Result<Option<String>, String> {
+    pub async fn token(&self, dir: &Path, account: &str) -> Result<Option<String>, String> {
         let cached = self.access.lock().unwrap().get(account).cloned();
         match cached {
             Some(t) => Ok(Some(t)),
-            None => self.refresh(app, account).await,
+            None => self.refresh(dir, account).await,
         }
     }
 
     /// `None` means login is required (no stored token, or Google rejected it with invalid_grant).
-    pub async fn refresh(&self, app: &AppHandle, account: &str) -> Result<Option<String>, String> {
+    pub async fn refresh(&self, dir: &Path, account: &str) -> Result<Option<String>, String> {
         let entry = keyring_entry(account)?;
         let refresh_token = match entry.get_password() {
             Ok(p) => p,
             Err(keyring::Error::NoEntry) => return Ok(None),
             Err(e) => return Err(format!("キーチェーンの読み取りに失敗: {e}")),
         };
-        let client = load_client(app)?;
+        let client = load_client(dir)?;
         match self.refresh_access(&client, &refresh_token).await? {
             Some(access) => {
                 self.access
@@ -103,14 +110,15 @@ impl Auth {
     }
 
     /// Registered accounts.
-    pub fn accounts(&self, app: &AppHandle) -> Result<Vec<String>, String> {
-        Ok(accounts::load(&config_dir(app)?)?.unwrap_or_default())
+    pub fn accounts(&self, dir: &Path) -> Result<Vec<String>, String> {
+        Ok(accounts::load(dir)?.unwrap_or_default())
     }
 
     /// Returns the logged-in account's email address.
     async fn login(&self, app: &AppHandle, login_hint: Option<&str>) -> Result<String, String> {
-        let existing = self.accounts(app)?;
-        let client = load_client(app)?;
+        let dir = config_dir(app)?;
+        let existing = self.accounts(&dir)?;
+        let client = load_client(&dir)?;
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|e| e.to_string())?;
@@ -162,7 +170,7 @@ impl Auth {
         keyring_entry(&email)?
             .set_password(&refresh_token)
             .map_err(|e| format!("キーチェーンへの保存に失敗: {e}"))?;
-        accounts::save(&config_dir(app)?, &accounts::with_account(existing, &email))?;
+        accounts::save(&dir, &accounts::with_account(existing, &email))?;
         self.access.lock().unwrap().insert(email.clone(), access);
         Ok(email)
     }
@@ -219,6 +227,12 @@ impl Auth {
     }
 }
 
+impl Default for Auth {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Returns the email address of the account that logged in.
 #[tauri::command]
 pub async fn login(
@@ -261,12 +275,12 @@ fn ignore_missing(result: Result<(), keyring::Error>) -> Result<(), String> {
     }
 }
 
-fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_config_dir().map_err(|e| e.to_string())
 }
 
-fn load_client(app: &AppHandle) -> Result<Client, String> {
-    let path = config_dir(app)?.join("client_secret.json");
+fn load_client(dir: &Path) -> Result<Client, String> {
+    let path = dir.join("client_secret.json");
     let text = std::fs::read_to_string(&path).map_err(|e| {
         format!(
             "OAuth クライアント JSON を読めません。{} に配置してください: {e}",

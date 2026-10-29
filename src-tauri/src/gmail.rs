@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fmt,
+    path::Path,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -16,7 +17,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
 
-use crate::auth::Auth;
+use crate::auth::{config_dir, Auth};
 
 const THREADS_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
@@ -193,11 +194,12 @@ fn collect_text(p: &Payload, html: &mut Vec<String>, plain: &mut Vec<String>) {
     }
 }
 
-impl From<&Message> for MessageDetail {
-    fn from(m: &Message) -> Self {
+impl MessageDetail {
+    /// HTML wins unless `prefer_plain` is set and a plain-text part exists.
+    fn new(m: &Message, prefer_plain: bool) -> Self {
         let (mut html, mut plain) = (Vec::new(), Vec::new());
         collect_text(&m.payload, &mut html, &mut plain);
-        let is_html = !html.is_empty();
+        let is_html = !html.is_empty() && !(prefer_plain && !plain.is_empty());
         Self {
             from: header(&m.payload, "From"),
             date_ms: m.internal_date.parse().unwrap_or(0),
@@ -211,9 +213,13 @@ impl From<&Message> for MessageDetail {
     }
 }
 
-impl From<Thread> for ThreadDetail {
-    fn from(t: Thread) -> Self {
-        let mut messages: Vec<_> = t.messages.iter().map(MessageDetail::from).collect();
+impl ThreadDetail {
+    fn new(t: Thread, prefer_plain: bool) -> Self {
+        let mut messages: Vec<_> = t
+            .messages
+            .iter()
+            .map(|m| MessageDetail::new(m, prefer_plain))
+            .collect();
         messages.sort_by_key(|m| m.date_ms);
         Self {
             subject: t
@@ -263,7 +269,7 @@ impl fmt::Display for ApiError {
 }
 
 /// Logs a failed command on stderr and returns the message for the UI. Tokens and mail bodies never reach it.
-pub(crate) fn log_failure(command: &str, account: &str, e: impl Into<ApiError>) -> String {
+pub fn log_failure(command: &str, account: &str, e: impl Into<ApiError>) -> String {
     let e = e.into();
     let status = e.status.map_or("-".to_owned(), |s| s.to_string());
     eprintln!(
@@ -311,7 +317,7 @@ fn parse_retry_after(value: &str) -> Option<Duration> {
 /// `Ok(None)` means login is required for `account`. Retries once with a refreshed token on 401,
 /// and up to `MAX_RETRIES` times on a rate limit.
 pub(crate) async fn send_json_refreshing<T: DeserializeOwned>(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     account: &str,
     method: Method,
@@ -319,13 +325,13 @@ pub(crate) async fn send_json_refreshing<T: DeserializeOwned>(
     query: &[(&str, &str)],
     body: Option<&Value>,
 ) -> Result<Option<T>, ApiError> {
-    send_json_refreshing_with(app, auth, account, MAX_RETRIES, method, url, query, body).await
+    send_json_refreshing_with(dir, auth, account, MAX_RETRIES, method, url, query, body).await
 }
 
 /// `send_json_refreshing` with the number of rate-limit retries given.
 #[allow(clippy::too_many_arguments)]
 async fn send_json_refreshing_with<T: DeserializeOwned>(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     account: &str,
     retries: usize,
@@ -334,7 +340,7 @@ async fn send_json_refreshing_with<T: DeserializeOwned>(
     query: &[(&str, &str)],
     body: Option<&Value>,
 ) -> Result<Option<T>, ApiError> {
-    let Some(token) = auth.token(app, account).await? else {
+    let Some(token) = auth.token(dir, account).await? else {
         return Ok(None);
     };
     if let Some(v) = send_json(
@@ -350,7 +356,7 @@ async fn send_json_refreshing_with<T: DeserializeOwned>(
     {
         return Ok(Some(v));
     }
-    let Some(refreshed) = auth.refresh(app, account).await? else {
+    let Some(refreshed) = auth.refresh(dir, account).await? else {
         return Ok(None);
     };
     send_json(auth.http(), method, &refreshed, url, query, body, retries)
@@ -497,19 +503,19 @@ async fn get_threads(
 /// `get_threads` with the account's token; a 401 (expired mid-run) refreshes it and fetches once more.
 /// `Ok(None)` means `account` must log in again.
 async fn get_threads_refreshing(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     account: &str,
     ids: &[String],
     retries: usize,
 ) -> Result<Option<Vec<(String, Option<Thread>)>>, ApiError> {
-    let Some(token) = auth.token(app, account).await? else {
+    let Some(token) = auth.token(dir, account).await? else {
         return Ok(None);
     };
     if let Some(found) = get_threads(auth.http(), &token, ids, retries).await? {
         return Ok(Some(found));
     }
-    let Some(refreshed) = auth.refresh(app, account).await? else {
+    let Some(refreshed) = auth.refresh(dir, account).await? else {
         return Ok(None);
     };
     get_threads(auth.http(), &refreshed, ids, retries)
@@ -521,14 +527,14 @@ async fn get_threads_refreshing(
 /// Inbox threads of one account, each request retried `retries` times on a rate limit.
 /// `Ok(None)` means that account must log in again.
 async fn account_threads(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     account: &str,
     retries: usize,
 ) -> Result<Option<AccountInbox>, ApiError> {
     // Read before the list: changes landing in between are replayed by the next sync, which is harmless.
     let Some(profile) = send_json_refreshing_with::<Profile>(
-        app,
+        dir,
         auth,
         account,
         retries,
@@ -543,7 +549,7 @@ async fn account_threads(
     };
     let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
     let Some(list) = send_json_refreshing_with::<ThreadList>(
-        app,
+        dir,
         auth,
         account,
         retries,
@@ -557,7 +563,7 @@ async fn account_threads(
         return Ok(None);
     };
     let ids: Vec<_> = list.threads.into_iter().map(|t| t.id).collect();
-    let Some(fetched) = get_threads_refreshing(app, auth, account, &ids, retries).await? else {
+    let Some(fetched) = get_threads_refreshing(dir, auth, account, &ids, retries).await? else {
         return Ok(None);
     };
     let threads = fetched
@@ -572,22 +578,22 @@ async fn account_threads(
 }
 
 /// Threads of every account merged; accounts needing login or failing to load are listed, not fatal.
-#[tauri::command]
-pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, String> {
+/// `command` names the caller in the failure log.
+pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox, String> {
     let accounts = auth
-        .accounts(&app)
-        .map_err(|e| log_failure("inbox", "-", e))?;
+        .accounts(dir)
+        .map_err(|e| log_failure(command, "-", e))?;
     let (mut lists, mut needs_login, mut failed, mut history_ids) =
         (Vec::new(), Vec::new(), HashMap::new(), HashMap::new());
     for account in &accounts {
-        match account_threads(&app, &auth, account, MAX_RETRIES).await {
+        match account_threads(dir, auth, account, MAX_RETRIES).await {
             Ok(Some(loaded)) => {
                 lists.push(loaded.threads);
                 history_ids.insert(account.clone(), loaded.history_id);
             }
             Ok(None) => needs_login.push(account.clone()),
             Err(e) => {
-                failed.insert(account.clone(), log_failure("inbox", account, e));
+                failed.insert(account.clone(), log_failure(command, account, e));
             }
         }
     }
@@ -598,6 +604,12 @@ pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, Strin
         failed,
         history_ids,
     })
+}
+
+#[tauri::command]
+pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, String> {
+    let dir = config_dir(&app).map_err(|e| log_failure("inbox", "-", e))?;
+    load_inbox(&dir, &auth, "inbox").await
 }
 
 #[derive(Deserialize, Default)]
@@ -679,7 +691,7 @@ fn split_fetched(
 /// History records since `start`, all pages merged. A leftover `next_page_token` means the page cap was hit.
 /// `Ok(None)` means `account` must log in again.
 async fn list_history(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     account: &str,
     start: &str,
@@ -691,7 +703,7 @@ async fn list_history(
             query.push(("pageToken", token));
         }
         let Some(page) = send_json_refreshing_with::<HistoryList>(
-            app,
+            dir,
             auth,
             account,
             NO_RETRIES,
@@ -738,9 +750,9 @@ pub enum Sync {
     NeedsLogin,
 }
 
-async fn reload(app: &AppHandle, auth: &Auth, account: &str) -> Result<Sync, ApiError> {
+async fn reload(dir: &Path, auth: &Auth, account: &str) -> Result<Sync, ApiError> {
     Ok(
-        match account_threads(app, auth, account, NO_RETRIES).await? {
+        match account_threads(dir, auth, account, NO_RETRIES).await? {
             Some(l) => Sync::Reloaded {
                 threads: l.threads,
                 history_id: l.history_id,
@@ -751,14 +763,14 @@ async fn reload(app: &AppHandle, auth: &Auth, account: &str) -> Result<Sync, Api
 }
 
 async fn sync_account(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     account: &str,
     start: &str,
 ) -> Result<Sync, ApiError> {
     // One cheap call tells whether anything changed at all.
     let Some(profile) = send_json_refreshing_with::<Profile>(
-        app,
+        dir,
         auth,
         account,
         NO_RETRIES,
@@ -776,18 +788,18 @@ async fn sync_account(
     }
     // No `labelId=INBOX` filter: the docs do not say whether a removal of that very label (archive) still
     // matches it, and missing an archive is worse than refetching a few extra threads.
-    let list = match list_history(app, auth, account, start).await {
+    let list = match list_history(dir, auth, account, start).await {
         Ok(Some(list)) => list,
         Ok(None) => return Ok(Sync::NeedsLogin),
         // startHistoryId too old: Gmail asks for a full sync.
-        Err(e) if e.status == Some(404) => return reload(app, auth, account).await,
+        Err(e) if e.status == Some(404) => return reload(dir, auth, account).await,
         Err(e) => return Err(e),
     };
     let ids = changed_thread_ids(&list.history);
     if list.next_page_token.is_some() || ids.len() > MAX_SYNC_THREADS {
-        return reload(app, auth, account).await;
+        return reload(dir, auth, account).await;
     }
-    let Some(fetched) = get_threads_refreshing(app, auth, account, &ids, NO_RETRIES).await? else {
+    let Some(fetched) = get_threads_refreshing(dir, auth, account, &ids, NO_RETRIES).await? else {
         return Ok(Sync::NeedsLogin);
     };
     let (threads, removed) = split_fetched(fetched, account);
@@ -847,7 +859,8 @@ pub async fn sync(
     if blocked {
         return Ok(Sync::Unchanged);
     }
-    match sync_account(&app, &auth, &account, &start_history_id).await {
+    let dir = config_dir(&app).map_err(|e| log_failure("sync", &account, e))?;
+    match sync_account(&dir, &auth, &account, &start_history_id).await {
         Ok(result) => {
             state.0.lock().unwrap().remove(&account);
             Ok(result)
@@ -867,6 +880,29 @@ pub async fn sync(
     }
 }
 
+/// One thread with its messages. `prefer_plain` picks the plain-text part over the HTML one when both exist.
+/// `Ok(None)` means `account` must log in again.
+pub async fn fetch_thread(
+    dir: &Path,
+    auth: &Auth,
+    account: &str,
+    id: &str,
+    prefer_plain: bool,
+) -> Result<Option<ThreadDetail>, ApiError> {
+    let url = thread_url(id, None)?;
+    let thread = send_json_refreshing::<Thread>(
+        dir,
+        auth,
+        account,
+        Method::GET,
+        &url,
+        &[("format", "full")],
+        None,
+    )
+    .await?;
+    Ok(thread.map(|t| ThreadDetail::new(t, prefer_plain)))
+}
+
 /// `Ok(None)` means `account` must log in again.
 #[tauri::command]
 pub async fn thread(
@@ -875,22 +911,27 @@ pub async fn thread(
     account: String,
     id: String,
 ) -> Result<Option<ThreadDetail>, String> {
-    let url = thread_url(&id, None).map_err(|e| log_failure("thread", &account, e))?;
-    let thread = send_json_refreshing::<Thread>(
-        &app,
-        &auth,
-        &account,
-        Method::GET,
-        &url,
-        &[("format", "full")],
-        None,
-    )
-    .await
-    .map_err(|e| log_failure("thread", &account, e))?;
-    Ok(thread.map(ThreadDetail::from))
+    let dir = config_dir(&app).map_err(|e| log_failure("thread", &account, e))?;
+    fetch_thread(&dir, &auth, &account, &id, false)
+        .await
+        .map_err(|e| log_failure("thread", &account, e))
 }
 
 /// Moves the thread to the trash (recoverable in Gmail). `Ok(None)` means `account` must log in again.
+pub async fn trash_thread(
+    dir: &Path,
+    auth: &Auth,
+    account: &str,
+    id: &str,
+) -> Result<Option<bool>, ApiError> {
+    let url = thread_url(id, Some("trash"))?;
+    let done =
+        send_json_refreshing::<IgnoredAny>(dir, auth, account, Method::POST, &url, &[], None)
+            .await?;
+    // `true`, not `()`: `Some(())` reaches JS as null, the same as `None` (login required).
+    Ok(done.map(|_| true))
+}
+
 #[tauri::command]
 pub async fn trash(
     app: AppHandle,
@@ -898,13 +939,10 @@ pub async fn trash(
     account: String,
     id: String,
 ) -> Result<Option<bool>, String> {
-    let url = thread_url(&id, Some("trash")).map_err(|e| log_failure("trash", &account, e))?;
-    let done =
-        send_json_refreshing::<IgnoredAny>(&app, &auth, &account, Method::POST, &url, &[], None)
-            .await
-            .map_err(|e| log_failure("trash", &account, e))?;
-    // `true`, not `()`: `Some(())` reaches JS as null, the same as `None` (login required).
-    Ok(done.map(|_| true))
+    let dir = config_dir(&app).map_err(|e| log_failure("trash", &account, e))?;
+    trash_thread(&dir, &auth, &account, &id)
+        .await
+        .map_err(|e| log_failure("trash", &account, e))
 }
 
 fn archive_body() -> Value {
@@ -912,6 +950,27 @@ fn archive_body() -> Value {
 }
 
 /// Removes the INBOX label from the thread. `Ok(None)` means `account` must log in again.
+pub async fn archive_thread(
+    dir: &Path,
+    auth: &Auth,
+    account: &str,
+    id: &str,
+) -> Result<Option<bool>, ApiError> {
+    let url = thread_url(id, Some("modify"))?;
+    let body = archive_body();
+    let done = send_json_refreshing::<IgnoredAny>(
+        dir,
+        auth,
+        account,
+        Method::POST,
+        &url,
+        &[],
+        Some(&body),
+    )
+    .await?;
+    Ok(done.map(|_| true))
+}
+
 #[tauri::command]
 pub async fn archive(
     app: AppHandle,
@@ -919,20 +978,10 @@ pub async fn archive(
     account: String,
     id: String,
 ) -> Result<Option<bool>, String> {
-    let url = thread_url(&id, Some("modify")).map_err(|e| log_failure("archive", &account, e))?;
-    let body = archive_body();
-    let done = send_json_refreshing::<IgnoredAny>(
-        &app,
-        &auth,
-        &account,
-        Method::POST,
-        &url,
-        &[],
-        Some(&body),
-    )
-    .await
-    .map_err(|e| log_failure("archive", &account, e))?;
-    Ok(done.map(|_| true))
+    let dir = config_dir(&app).map_err(|e| log_failure("archive", &account, e))?;
+    archive_thread(&dir, &auth, &account, &id)
+        .await
+        .map_err(|e| log_failure("archive", &account, e))
 }
 
 fn read_body(read: bool) -> Value {
@@ -944,6 +993,28 @@ fn read_body(read: bool) -> Value {
 }
 
 /// Marks the thread read (removes UNREAD) or unread (adds it). `Ok(None)` means `account` must log in again.
+pub async fn set_thread_read(
+    dir: &Path,
+    auth: &Auth,
+    account: &str,
+    id: &str,
+    read: bool,
+) -> Result<Option<bool>, ApiError> {
+    let url = thread_url(id, Some("modify"))?;
+    let body = read_body(read);
+    let done = send_json_refreshing::<IgnoredAny>(
+        dir,
+        auth,
+        account,
+        Method::POST,
+        &url,
+        &[],
+        Some(&body),
+    )
+    .await?;
+    Ok(done.map(|_| true))
+}
+
 #[tauri::command]
 pub async fn set_read(
     app: AppHandle,
@@ -952,20 +1023,10 @@ pub async fn set_read(
     id: String,
     read: bool,
 ) -> Result<Option<bool>, String> {
-    let url = thread_url(&id, Some("modify")).map_err(|e| log_failure("set_read", &account, e))?;
-    let body = read_body(read);
-    let done = send_json_refreshing::<IgnoredAny>(
-        &app,
-        &auth,
-        &account,
-        Method::POST,
-        &url,
-        &[],
-        Some(&body),
-    )
-    .await
-    .map_err(|e| log_failure("set_read", &account, e))?;
-    Ok(done.map(|_| true))
+    let dir = config_dir(&app).map_err(|e| log_failure("set_read", &account, e))?;
+    set_thread_read(&dir, &auth, &account, &id, read)
+        .await
+        .map_err(|e| log_failure("set_read", &account, e))
 }
 
 #[cfg(test)]
@@ -1133,7 +1194,7 @@ mod tests {
     }
 
     fn detail(json: serde_json::Value) -> ThreadDetail {
-        ThreadDetail::from(serde_json::from_value::<Thread>(json).unwrap())
+        ThreadDetail::new(serde_json::from_value::<Thread>(json).unwrap(), false)
     }
 
     // "こんにちは" in ISO-2022-JP
@@ -1181,6 +1242,36 @@ mod tests {
         assert_eq!(
             (d.messages[0].html, d.messages[0].body.as_str()),
             (true, "<p>é</p>")
+        );
+    }
+
+    fn prefer_plain_bodies(parts: serde_json::Value) -> Vec<(bool, String)> {
+        let thread = serde_json::from_value::<Thread>(serde_json::json!({"id": "t", "messages": [{
+            "internalDate": "1",
+            "payload": {"mimeType": "multipart/alternative", "parts": parts}}]}))
+        .unwrap();
+        ThreadDetail::new(thread, true)
+            .messages
+            .into_iter()
+            .map(|m| (m.html, m.body))
+            .collect()
+    }
+
+    #[test]
+    fn prefer_plain_takes_the_plain_part_when_both_exist() {
+        let both = serde_json::json!([
+            {"mimeType": "text/plain", "body": {"data": b64(b"plain")}},
+            {"mimeType": "text/html", "body": {"data": b64(b"<p>html</p>")}}]);
+        assert_eq!(prefer_plain_bodies(both), [(false, "plain".to_owned())]);
+    }
+
+    #[test]
+    fn prefer_plain_falls_back_to_html_without_a_plain_part() {
+        let html_only = serde_json::json!([
+            {"mimeType": "text/html", "body": {"data": b64(b"<p>html</p>")}}]);
+        assert_eq!(
+            prefer_plain_bodies(html_only),
+            [(true, "<p>html</p>".to_owned())]
         );
     }
 

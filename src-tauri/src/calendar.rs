@@ -2,7 +2,8 @@ use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
     future::Future,
-    sync::Mutex,
+    path::Path,
+    sync::{Arc, Mutex},
 };
 
 use chrono::{
@@ -11,11 +12,11 @@ use chrono::{
 };
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use url::Url;
 
 use crate::{
-    auth::Auth,
+    auth::{config_dir, Auth},
     gmail::{log_failure, send_json_refreshing, ApiError},
 };
 
@@ -197,12 +198,71 @@ pub struct Week {
     failed: HashMap<String, String>,
 }
 
+/// An event as `list_events` returns it.
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventItem {
+    account: String,
+    summary: String,
+    declined: bool,
+    all_day: bool,
+    /// A local date for an all-day event, else an RFC 3339 time.
+    start: String,
+    /// Same form as `start`; the last day for an all-day event.
+    end: String,
+}
+
+impl From<&RawEvent> for EventItem {
+    fn from(e: &RawEvent) -> Self {
+        let (all_day, start, end) = match &e.when {
+            // The API's end date is exclusive.
+            When::AllDay { start, end } => (
+                true,
+                start.to_string(),
+                (*end - Duration::days(1)).max(*start).to_string(),
+            ),
+            When::Timed { start, end } => (false, start.to_rfc3339(), end.to_rfc3339()),
+        };
+        Self {
+            account: e.account.clone(),
+            summary: e.summary.clone(),
+            declined: e.declined,
+            all_day,
+            start,
+            end,
+        }
+    }
+}
+
+/// Earliest first, each event once.
+/// shortcut: sorted by the text of `start`, so events with different UTC offsets can be off by the offset, upgrade if that shows.
+fn flat_events(events: &[RawEvent]) -> Vec<EventItem> {
+    let mut seen = HashSet::new();
+    let mut items: Vec<_> = events
+        .iter()
+        .filter(|e| !is_duplicate(&mut seen, e))
+        .map(EventItem::from)
+        .collect();
+    items.sort_by(|a, b| a.start.cmp(&b.start));
+    items
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Events {
+    events: Vec<EventItem>,
+    /// Accounts whose events are missing because they must log in again.
+    needs_login: Vec<String>,
+    /// Accounts whose events are missing because loading them failed, with the error.
+    failed: HashMap<String, String>,
+}
+
 fn week_start(date: NaiveDate) -> NaiveDate {
     date - Duration::days(date.weekday().num_days_from_sunday().into())
 }
 
-/// `timeMin` / `timeMax` of the week from `start`: local midnights as UTC RFC 3339.
-fn week_bounds<Tz: TimeZone>(tz: &Tz, start: NaiveDate) -> Option<(String, String)> {
+/// `timeMin` / `timeMax` of `[from, to)`: local midnights as UTC RFC 3339.
+fn range_bounds<Tz: TimeZone>(tz: &Tz, from: NaiveDate, to: NaiveDate) -> Option<(String, String)> {
     let midnight = |d: NaiveDate| {
         let t = tz
             .from_local_datetime(&d.and_time(NaiveTime::MIN))
@@ -212,7 +272,30 @@ fn week_bounds<Tz: TimeZone>(tz: &Tz, start: NaiveDate) -> Option<(String, Strin
                 .to_rfc3339_opts(SecondsFormat::Secs, true),
         )
     };
-    Some((midnight(start)?, midnight(start + Duration::days(7))?))
+    Some((midnight(from)?, midnight(to)?))
+}
+
+/// `timeMin` / `timeMax` of the week from `start`.
+fn week_bounds<Tz: TimeZone>(tz: &Tz, start: NaiveDate) -> Option<(String, String)> {
+    range_bounds(tz, start, start + Duration::days(7))
+}
+
+/// `timeMin` / `timeMax` of the local dates `from` to `to` (YYYY-MM-DD), `to` included.
+fn parse_range<Tz: TimeZone>(tz: &Tz, from: &str, to: &str) -> Result<(String, String), String> {
+    let date = |d: &str| {
+        d.parse::<NaiveDate>()
+            .map_err(|_| format!("日付が不正です: {d}"))
+    };
+    let (from, to) = (date(from)?, date(to)?);
+    if to < from {
+        return Err("to は from 以降の日付にしてください".into());
+    }
+    range_bounds(tz, from, to + Duration::days(1)).ok_or("日付の範囲を求められません".into())
+}
+
+/// Whether `e` repeats an event already seen: the same event on several accounts has one iCalUID and time.
+fn is_duplicate(seen: &mut HashSet<(String, When)>, e: &RawEvent) -> bool {
+    !e.ical_uid.is_empty() && !seen.insert((e.ical_uid.clone(), e.when.clone()))
 }
 
 /// Column of each span, and the number of columns of the cluster of chained overlapping spans it belongs to.
@@ -265,7 +348,7 @@ fn build_week<Tz: TimeZone>(
     let mut seen = HashSet::new();
     let (mut all_day, mut timed) = (vec![], vec![]);
     for e in &events {
-        if !e.ical_uid.is_empty() && !seen.insert((e.ical_uid.clone(), e.when.clone())) {
+        if is_duplicate(&mut seen, e) {
             continue;
         }
         for day in 0..7 {
@@ -342,7 +425,7 @@ fn classify(status: Option<u16>, message: &str) -> Failure {
 
 /// All pages of one list call. `Ok(None)` means `account` must log in again.
 async fn fetch_pages<T: DeserializeOwned>(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     account: &str,
     url: &str,
@@ -357,7 +440,7 @@ async fn fetch_pages<T: DeserializeOwned>(
             q.push(("pageToken", t));
         }
         let Some(page) =
-            send_json_refreshing::<T>(app, auth, account, Method::GET, url, &q, None).await?
+            send_json_refreshing::<T>(dir, auth, account, Method::GET, url, &q, None).await?
         else {
             return Ok(None);
         };
@@ -384,8 +467,9 @@ fn events_url(calendar_id: &str) -> Result<String, String> {
 }
 
 /// The selected calendars of each account, kept in memory for the run so a week does not list them again.
-#[derive(Default)]
-pub struct CalendarCache(Mutex<HashMap<String, Vec<CalendarEntry>>>);
+/// Clones share the same map, so the clones a spawned task owns see the same cache.
+#[derive(Default, Clone)]
+pub struct CalendarCache(Arc<Mutex<HashMap<String, Vec<CalendarEntry>>>>);
 
 /// Runs the futures at once and returns their outputs in input order. A panicked task is an error.
 async fn join_all<T: Send + 'static>(
@@ -401,7 +485,7 @@ async fn join_all<T: Send + 'static>(
 
 /// The selected calendars of one account. `Ok(None)` means that account must log in again.
 async fn selected_calendars(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     account: &str,
 ) -> Result<Option<Vec<CalendarEntry>>, ApiError> {
@@ -410,7 +494,7 @@ async fn selected_calendars(
         ("fields", "nextPageToken,items(id,selected,backgroundColor)"),
     ];
     let Some(pages) =
-        fetch_pages::<CalendarPage>(app, auth, account, CALENDAR_LIST_URL, &list_query, |p| {
+        fetch_pages::<CalendarPage>(dir, auth, account, CALENDAR_LIST_URL, &list_query, |p| {
             p.next_page_token.clone()
         })
         .await?
@@ -428,13 +512,13 @@ async fn selected_calendars(
 
 /// Events in `[min, max)` of one calendar. `Ok(None)` means `account` must log in again.
 async fn calendar_events(
-    app: &AppHandle,
+    dir: &Path,
+    auth: &Auth,
     account: &str,
     cal: &CalendarEntry,
     min: &str,
     max: &str,
 ) -> Result<Option<Vec<RawEvent>>, ApiError> {
-    let auth = app.state::<Auth>();
     let event_query = [
         ("singleEvents", "true"),
         ("orderBy", "startTime"),
@@ -447,7 +531,7 @@ async fn calendar_events(
         ),
     ];
     let url = events_url(&cal.id)?;
-    let Some(pages) = fetch_pages::<EventPage>(app, &auth, account, &url, &event_query, |p| {
+    let Some(pages) = fetch_pages::<EventPage>(dir, auth, account, &url, &event_query, |p| {
         p.next_page_token.clone()
     })
     .await?
@@ -466,13 +550,14 @@ async fn calendar_events(
 /// Events in `[min, max)` of every selected calendar of one account, the calendars fetched at once.
 /// `refresh` lists the calendars again instead of using the kept list. `Ok(None)` means that account must log in again.
 async fn account_events(
-    app: &AppHandle,
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
     account: &str,
     min: &str,
     max: &str,
     refresh: bool,
 ) -> Result<Option<Vec<RawEvent>>, ApiError> {
-    let cache = app.state::<CalendarCache>();
     let kept = if refresh {
         None
     } else {
@@ -481,8 +566,7 @@ async fn account_events(
     let calendars = match kept {
         Some(c) => c,
         None => {
-            let auth = app.state::<Auth>();
-            let Some(c) = selected_calendars(app, &auth, account).await? else {
+            let Some(c) = selected_calendars(dir, auth, account).await? else {
                 return Ok(None);
             };
             cache
@@ -496,9 +580,9 @@ async fn account_events(
     let jobs = calendars
         .into_iter()
         .map(|cal| {
-            let (app, account) = (app.clone(), account.to_owned());
+            let (dir, auth, account) = (dir.to_owned(), auth.clone(), account.to_owned());
             let (min, max) = (min.to_owned(), max.to_owned());
-            async move { calendar_events(&app, &account, &cal, &min, &max).await }
+            async move { calendar_events(&dir, &auth, &account, &cal, &min, &max).await }
         })
         .collect();
     let mut out = Vec::new();
@@ -509,6 +593,77 @@ async fn account_events(
         }
     }
     Ok(Some(out))
+}
+
+/// Events in `[min, max)` of every account, the accounts fetched at once. Accounts needing login or failing to load
+/// are listed, not fatal. `command` names the caller in the failure log.
+async fn collect_events(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    command: &str,
+    min: &str,
+    max: &str,
+    refresh: bool,
+) -> Result<(Vec<RawEvent>, Vec<String>, HashMap<String, String>), String> {
+    let (mut events, mut needs_login, mut failed) = (Vec::new(), Vec::new(), HashMap::new());
+    let accounts = auth
+        .accounts(dir)
+        .map_err(|e| log_failure(command, "-", e))?;
+    let jobs = accounts
+        .iter()
+        .map(|account| {
+            let (dir, auth, cache) = (dir.to_owned(), auth.clone(), cache.clone());
+            let (account, min, max) = (account.clone(), min.to_owned(), max.to_owned());
+            async move { account_events(&dir, &auth, &cache, &account, &min, &max, refresh).await }
+        })
+        .collect();
+    let results = join_all(jobs)
+        .await
+        .map_err(|e| log_failure(command, "-", e))?;
+    for (account, result) in accounts.into_iter().zip(results) {
+        match result {
+            Ok(Some(found)) => events.extend(found),
+            Ok(None) => {
+                cache.0.lock().unwrap().remove(&account);
+                needs_login.push(account);
+            }
+            Err(e) => {
+                // The kept calendars may be what failed (e.g. one was deleted), so list them again next time.
+                cache.0.lock().unwrap().remove(&account);
+                let status = e.status;
+                let message = log_failure(command, &account, e);
+                match classify(status, &message) {
+                    Failure::NeedsLogin => needs_login.push(account),
+                    Failure::Message(m) => {
+                        failed.insert(account, m);
+                    }
+                }
+            }
+        }
+    }
+    Ok((events, needs_login, failed))
+}
+
+/// The events of the local dates `from` to `to` (YYYY-MM-DD), `to` included, flat and without a layout.
+/// The calendars are listed on every call (no kept list), as the caller is a long-lived process.
+pub async fn list_events(dir: &Path, auth: &Auth, from: &str, to: &str) -> Result<Events, String> {
+    let (min, max) = parse_range(&Local, from, to)?;
+    let (events, needs_login, failed) = collect_events(
+        dir,
+        auth,
+        &CalendarCache::default(),
+        "list_events",
+        &min,
+        &max,
+        true,
+    )
+    .await?;
+    Ok(Events {
+        events: flat_events(&events),
+        needs_login,
+        failed,
+    })
 }
 
 /// The week containing `date` (YYYY-MM-DD, local), Sunday first, with the events of every account, the accounts fetched at once.
@@ -527,42 +682,9 @@ pub async fn calendar_week(
         .map_err(|_| format!("日付が不正です: {date}"))?;
     let start = week_start(date);
     let (min, max) = week_bounds(&Local, start).ok_or("週の範囲を求められません")?;
-    let (mut events, mut needs_login, mut failed) = (Vec::new(), Vec::new(), HashMap::new());
-    let accounts = auth
-        .accounts(&app)
-        .map_err(|e| log_failure("calendar_week", "-", e))?;
-    let jobs = accounts
-        .iter()
-        .map(|account| {
-            let (app, account) = (app.clone(), account.clone());
-            let (min, max) = (min.clone(), max.clone());
-            async move { account_events(&app, &account, &min, &max, refresh).await }
-        })
-        .collect();
-    let results = join_all(jobs)
-        .await
-        .map_err(|e| log_failure("calendar_week", "-", e))?;
-    for (account, result) in accounts.into_iter().zip(results) {
-        match result {
-            Ok(Some(found)) => events.extend(found),
-            Ok(None) => {
-                cache.0.lock().unwrap().remove(&account);
-                needs_login.push(account);
-            }
-            Err(e) => {
-                // The kept calendars may be what failed (e.g. one was deleted), so list them again next time.
-                cache.0.lock().unwrap().remove(&account);
-                let status = e.status;
-                let message = log_failure("calendar_week", &account, e);
-                match classify(status, &message) {
-                    Failure::NeedsLogin => needs_login.push(account),
-                    Failure::Message(m) => {
-                        failed.insert(account, m);
-                    }
-                }
-            }
-        }
-    }
+    let dir = config_dir(&app).map_err(|e| log_failure("calendar_week", "-", e))?;
+    let (events, needs_login, failed) =
+        collect_events(&dir, &auth, &cache, "calendar_week", &min, &max, refresh).await?;
     let (all_day, timed) = build_week(&Local, start, events);
     Ok(Week {
         week_start: start.to_string(),
@@ -655,6 +777,59 @@ mod tests {
         let (min, max) = week_bounds(&jst(), date("2026-10-25")).unwrap();
         assert_eq!(min, "2026-10-24T15:00:00Z");
         assert_eq!(max, "2026-10-31T15:00:00Z");
+    }
+
+    #[test]
+    fn range_includes_the_last_day() {
+        let (min, max) = parse_range(&jst(), "2026-10-29", "2026-10-30").unwrap();
+        assert_eq!(min, "2026-10-28T15:00:00Z");
+        assert_eq!(max, "2026-10-30T15:00:00Z");
+        // One day: from == to.
+        let (min, max) = parse_range(&jst(), "2026-10-29", "2026-10-29").unwrap();
+        assert_eq!(
+            (min.as_str(), max.as_str()),
+            ("2026-10-28T15:00:00Z", "2026-10-29T15:00:00Z")
+        );
+    }
+
+    #[test]
+    fn range_rejects_bad_dates_and_reversed_order() {
+        let bad = parse_range(&jst(), "2026-13-01", "2026-10-29").unwrap_err();
+        assert!(bad.contains("2026-13-01"));
+        assert!(parse_range(&jst(), "2026-10-29", "x").is_err());
+        let reversed = parse_range(&jst(), "2026-10-30", "2026-10-29").unwrap_err();
+        assert!(reversed.contains("以降"));
+    }
+
+    #[test]
+    fn flat_events_are_sorted_deduplicated_and_all_day_ends_on_the_last_day() {
+        let late = timed("2026-10-29T10:00:00+09:00", "2026-10-29T11:00:00+09:00");
+        let mut dup = timed("2026-10-29T09:00:00+09:00", "2026-10-29T09:30:00+09:00");
+        dup.ical_uid = "uid".into();
+        let mut dup_other_account = dup.clone();
+        dup_other_account.account = "b@example.com".into();
+        let days = all_day("2026-10-29", "2026-10-31");
+        let items = flat_events(&[late, dup, dup_other_account, days]);
+        let shape: Vec<_> = items
+            .iter()
+            .map(|i| (i.all_day, i.start.as_str(), i.end.as_str()))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (true, "2026-10-29", "2026-10-30"),
+                (
+                    false,
+                    "2026-10-29T09:00:00+09:00",
+                    "2026-10-29T09:30:00+09:00"
+                ),
+                (
+                    false,
+                    "2026-10-29T10:00:00+09:00",
+                    "2026-10-29T11:00:00+09:00"
+                ),
+            ]
+        );
     }
 
     #[test]
