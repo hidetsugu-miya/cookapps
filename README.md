@@ -47,6 +47,17 @@ npx tauri dev
 cd src-tauri && cargo test
 ```
 
+CI（`.github/workflows/ci.yml`）と同じチェックは、次のコマンドでローカルでも流せます。
+
+```sh
+cd src-tauri
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cd ..
+scripts/check-version.sh        # タグ名を渡すと、そのタグとも照合します（例: scripts/check-version.sh v0.4.2）
+```
+
 ## ライセンス
 
 [MIT](LICENSE)
