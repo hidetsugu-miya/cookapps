@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -14,6 +15,7 @@ use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 use crate::{
+    accounts::write_synced,
     auth::{config_dir, delete_entry, keyring_entry, Auth},
     gmail::{log_failure, ApiError},
 };
@@ -109,7 +111,7 @@ struct Page<T> {
     next_cursor: Option<String>,
 }
 
-#[derive(Serialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Due {
     /// Local date, `YYYY-MM-DD`.
     date: String,
@@ -119,7 +121,7 @@ pub struct Due {
     string: String,
 }
 
-#[derive(Serialize, Debug, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum Bucket {
     Overdue,
@@ -130,7 +132,7 @@ pub enum Bucket {
     NoDue,
 }
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Subtask {
     id: String,
@@ -140,7 +142,7 @@ pub struct Subtask {
 }
 
 /// The Gmail thread a task's description links to.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MailRef {
     account: String,
@@ -148,13 +150,13 @@ pub struct MailRef {
 }
 
 /// The task whose detail lists a subtask row: the subtask's own parent.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ParentRef {
     id: String,
     content: String,
 }
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskItem {
     id: String,
@@ -174,7 +176,7 @@ pub struct TaskItem {
     parent: Option<ParentRef>,
 }
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectItem {
     id: String,
@@ -184,11 +186,70 @@ pub struct ProjectItem {
     inbox: bool,
 }
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Todo {
     projects: Vec<ProjectItem>,
     /// Top-level active tasks, then the subtasks that are overdue, due today, or have subtasks of their own as rows of their own, by due date.
     tasks: Vec<TaskItem>,
+    /// Set only when Todoist could not be reached and this is the last fetched content; never stored in the cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    offline: Option<Offline>,
+}
+
+/// Why and since when a `Todo` is the cached one.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Offline {
+    /// RFC 3339, UTC: when the content was fetched.
+    fetched_at: String,
+    /// The failure shown to the user.
+    reason: String,
+}
+
+/// What `todoist-cache.json` holds: the last successfully fetched `Todo` and when.
+#[derive(Serialize, Deserialize)]
+struct CacheFile {
+    fetched_at: String,
+    todo: Todo,
+}
+
+const CACHE_FILE: &str = "todoist-cache.json";
+const CACHE_TMP_FILE: &str = "todoist-cache.json.tmp";
+
+fn save_cache(dir: &Path, todo: &Todo, fetched_at: &str) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let (path, tmp) = (dir.join(CACHE_FILE), dir.join(CACHE_TMP_FILE));
+    let text = serde_json::to_string(&json!({"fetched_at": fetched_at, "todo": todo}))
+        .map_err(|e| e.to_string())?;
+    // Rename over the target so a crash mid-write leaves the old file, not a truncated one.
+    write_synced(&tmp, &text)
+        .and_then(|()| std::fs::rename(&tmp, &path))
+        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+}
+
+/// `None` when the file is missing or unreadable: the cache is only a fallback, so a broken one is as good as none.
+fn load_cache(dir: &Path) -> Option<CacheFile> {
+    serde_json::from_str(&std::fs::read_to_string(dir.join(CACHE_FILE)).ok()?).ok()
+}
+
+fn remove_cache(dir: &Path) -> Result<(), String> {
+    match std::fs::remove_file(dir.join(CACHE_FILE)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("キャッシュを消せません: {e}"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The answer to a failed fetch: the cached `Todo` marked with `reason`, or the failure itself when nothing is cached.
+fn offline_todo(cached: Option<CacheFile>, reason: String) -> Result<Todo, String> {
+    match cached {
+        Some(CacheFile { fetched_at, todo }) => Ok(Todo {
+            offline: Some(Offline { fetched_at, reason }),
+            ..todo
+        }),
+        None => Err(reason),
+    }
 }
 
 /// Todoist's IDs are alphanumeric; anything else (it comes from the frontend or a description) is refused.
@@ -432,6 +493,7 @@ fn build_todo<Tz: TimeZone>(
             })
             .collect(),
         tasks: items,
+        offline: None,
     }
 }
 
@@ -608,8 +670,10 @@ async fn request(
 
 /// The active tasks, the projects, and the recently completed tasks, fetched at once. `None` means a token is needed.
 /// Without `with_done` the completed tasks of the last load are reused: they only change when a task is completed or reopened.
+/// A fetch that succeeds is kept in `todoist-cache.json`; when one fails, the kept content comes back marked `offline`, if there is any.
 #[tauri::command]
 pub async fn todoist_load(
+    app: AppHandle,
     auth: State<'_, Auth>,
     state: State<'_, TodoistState>,
     with_done: bool,
@@ -657,7 +721,16 @@ pub async fn todoist_load(
             state.forget_token().await;
             return Ok(None);
         }
-        Err(e) => return Err(log_failure(command, TOKEN_USER, e)),
+        Err(e) => {
+            let reason = log_failure(command, TOKEN_USER, e);
+            let cached = match config_dir(&app) {
+                Ok(dir) => tokio::task::spawn_blocking(move || load_cache(&dir))
+                    .await
+                    .map_err(|e| e.to_string())?,
+                Err(_) => None,
+            };
+            return offline_todo(cached, reason).map(Some);
+        }
     };
     let done = match done {
         Some(fetched) => {
@@ -678,13 +751,22 @@ pub async fn todoist_load(
         }
         None => Arc::clone(&state.done.lock().unwrap()),
     };
-    Ok(Some(build_todo(
-        projects,
-        tasks,
-        &done,
-        Local::now().date_naive(),
-        &Local,
-    )))
+    let todo = build_todo(projects, tasks, &done, Local::now().date_naive(), &Local);
+    // The token lock is held through the write: a disconnect in between would otherwise leave the cache behind.
+    let cached = state.token.lock().await;
+    if cached.is_some() {
+        let saved = config_dir(&app).and_then(|dir| {
+            save_cache(
+                &dir,
+                &todo,
+                &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            )
+        });
+        if let Err(e) = saved {
+            log_failure("todoist_cache", TOKEN_USER, e);
+        }
+    }
+    Ok(Some(todo))
 }
 
 /// Stores the personal API token in the keychain. It is never logged or returned.
@@ -713,13 +795,18 @@ pub async fn todoist_save_token(
     Ok(())
 }
 
-/// Removes the stored token (the old entry too, or the next read would move it back) and the completed tasks kept with it.
+/// Removes the stored token (the old entry too, or the next read would move it back), and the completed tasks and the cache file kept with it.
 #[tauri::command]
-pub async fn todoist_disconnect(state: State<'_, TodoistState>) -> Result<(), String> {
+pub async fn todoist_disconnect(
+    app: AppHandle,
+    state: State<'_, TodoistState>,
+) -> Result<(), String> {
+    let dir = config_dir(&app);
     let mut cached = state.token.lock().await;
-    let cleared = tokio::task::spawn_blocking(|| {
+    let cleared = tokio::task::spawn_blocking(move || {
         delete_entry(&token_entry()?)?;
-        delete_entry(&keyring_entry(TOKEN_USER)?)
+        delete_entry(&keyring_entry(TOKEN_USER)?)?;
+        remove_cache(&dir?)
     })
     .await
     .map_err(|e| e.to_string())
@@ -1424,5 +1511,91 @@ mod tests {
         )
         .unwrap();
         assert_eq!((b.results.len(), b.next_cursor), (2, None));
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("cookup-todoist-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn cached_todo() -> Todo {
+        let projects = vec![project("p1", "Inbox", "red", true, 1)];
+        let tasks = vec![task(
+            json!({"id": "t1", "content": "a", "project_id": "p1", "priority": 4, "due": {"date": "2026-10-29", "string": "today"}}),
+        )];
+        build_todo(projects, tasks, &[], date("2026-10-29"), &jst())
+    }
+
+    #[test]
+    fn cache_round_trips_and_leaves_no_temporary_file() {
+        let dir = temp_dir("cache");
+        assert!(load_cache(&dir).is_none());
+        let todo = cached_todo();
+        save_cache(&dir, &todo, "2026-10-29T01:02:03Z").unwrap();
+        let loaded = load_cache(&dir).unwrap();
+        assert_eq!(loaded.fetched_at, "2026-10-29T01:02:03Z");
+        assert_eq!(loaded.todo, todo);
+        assert!(!dir.join(CACHE_TMP_FILE).exists());
+        remove_cache(&dir).unwrap();
+        assert!(load_cache(&dir).is_none());
+        // Removing what is not there is not a failure.
+        remove_cache(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn failed_cache_save_leaves_the_existing_file_untouched() {
+        let dir = temp_dir("atomic");
+        let todo = cached_todo();
+        save_cache(&dir, &todo, "old").unwrap();
+        // A directory in the temporary file's place makes the write fail before the rename.
+        std::fs::create_dir(dir.join(CACHE_TMP_FILE)).unwrap();
+        assert!(save_cache(&dir, &todo, "new").is_err());
+        assert_eq!(load_cache(&dir).unwrap().fetched_at, "old");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn broken_cache_is_none() {
+        let dir = temp_dir("broken");
+        std::fs::create_dir_all(&dir).unwrap();
+        for text in ["", "not json", r#"{"fetched_at": "x"}"#] {
+            std::fs::write(dir.join(CACHE_FILE), text).unwrap();
+            assert!(load_cache(&dir).is_none(), "{text}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_fetch_returns_the_cache_with_when_and_why() {
+        let cached = CacheFile {
+            fetched_at: "2026-10-29T01:02:03Z".into(),
+            todo: cached_todo(),
+        };
+        let todo = offline_todo(Some(cached), "503".into()).unwrap();
+        assert_eq!(
+            todo.offline,
+            Some(Offline {
+                fetched_at: "2026-10-29T01:02:03Z".into(),
+                reason: "503".into()
+            })
+        );
+        assert_eq!(todo.tasks, cached_todo().tasks);
+        let sent = serde_json::to_value(&todo).unwrap();
+        assert_eq!(sent["offline"]["fetchedAt"], "2026-10-29T01:02:03Z");
+        assert_eq!(sent["offline"]["reason"], "503");
+    }
+
+    #[test]
+    fn a_failed_fetch_without_a_cache_is_the_failure() {
+        assert_eq!(offline_todo(None, "503".into()).unwrap_err(), "503");
+    }
+
+    #[test]
+    fn a_fetched_todo_does_not_mention_offline() {
+        let sent = serde_json::to_value(cached_todo()).unwrap();
+        assert!(sent.get("offline").is_none());
     }
 }
