@@ -47,6 +47,27 @@ npx tauri dev
 リフレッシュトークンはアカウントごとに OS のキーチェーンへ保存されるので、次回からはログインが要りません。
 アカウントの一覧（メールアドレスのみ）は、`app_config_dir` の `accounts.json` に保存されます。
 
+## アプリとして入れる
+
+`/Applications` に `cookup.app` として入れると、`tauri dev` なしで起動できます。
+macOS で、キーチェーンに Apple Development 証明書（Apple ID で作れる無料のもので足ります）が入っている前提です。
+
+```sh
+npm install
+scripts/install-app.sh
+```
+
+スクリプトは `npx tauri build --bundles app` で `.app` を作り、署名を確かめてから `/Applications/cookup.app` に置きます。
+cookup が起動中のときは、終了してからやり直します。
+古い版はゴミ箱へ移します。
+署名の証明書は、キーチェーンの最初の Apple Development 証明書を使います。
+別の証明書を使うときは、環境変数 `APPLE_SIGNING_IDENTITY` に証明書の名前かハッシュを渡します。
+`--no-install` を付けると、ビルドと署名の確認だけをして `/Applications` には置きません。
+
+Developer ID での署名と公証はしていません。
+自分のマシンで作った `.app` を、そのマシンで使う想定です。
+`client_secret.json`、`accounts.json`、キーチェーンの保存先は `tauri dev` と同じなので、設定やログインはそのまま使えます。
+
 ## テスト
 
 ```sh
