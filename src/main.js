@@ -1204,6 +1204,7 @@ function showTokenForm(note = "") {
   todoSeq++;
   todo = null;
   todoOpen = null;
+  $("todo-notice").replaceChildren();
   todoMode("token");
   $("todo-title").textContent = "Todo";
   $("todo-token-note").textContent = note;
@@ -1607,6 +1608,16 @@ let todoText = null;
 // Set when a load updated `todo` without drawing it (a field was being typed in), so the next quiet refresh draws it even if nothing else changed.
 let todoUndrawn = false;
 
+// Says that the list is the last one fetched (`offline` is set by the backend), or clears the notice.
+function drawTodoNotice(offline) {
+  const notice = $("todo-notice");
+  if (!offline) return notice.replaceChildren();
+  const d = new Date(offline.fetchedAt);
+  const div = document.createElement("div");
+  div.textContent = `Todoist に接続できません（${offline.reason}）。${d.getMonth() + 1}月${d.getDate()}日 ${pad2(d.getHours())}:${pad2(d.getMinutes())} 時点の内容を表示しています。`;
+  notice.replaceChildren(div);
+}
+
 // Fetches the tasks and draws them. `quiet` is the timed refresh: it fetches nothing while a field is being typed in, and draws nothing when nothing changed.
 // Without `withDone` the backend reuses the completed tasks it fetched last. Returns true when a token is needed (the token form is shown).
 async function loadTodo(quiet = false, withDone = true) {
@@ -1625,6 +1636,7 @@ async function loadTodo(quiet = false, withDone = true) {
     todo = data;
     projectById = new Map(data.projects.map((p) => [p.id, p]));
     taskById = new Map(data.tasks.map((t) => [t.id, t]));
+    drawTodoNotice(data.offline);
     // A field being typed in keeps what was typed; the detail is drawn after the focus leaves, by the next save's load or the next refresh.
     if (editingDetail()) {
       todoUndrawn = true;
