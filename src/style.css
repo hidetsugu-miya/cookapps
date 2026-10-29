@@ -1,6 +1,6 @@
 [hidden] { display: none !important; }
 html, body { height: 100%; }
-body { font-family: -apple-system, sans-serif; margin: 0; display: flex; }
+body { font-family: -apple-system, sans-serif; font-size: 14px; margin: 0; display: flex; }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 #sidebar { width: 56px; flex: none; background: #1f2126; display: flex; flex-direction: column; align-items: center; padding-top: 40px; gap: 8px; }
@@ -10,7 +10,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 
 #content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 header { flex: none; display: flex; align-items: center; gap: 4px; padding: 20px 32px 12px; }
-h1, h2 { flex: 1; font-size: 16px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: #444; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .icon-btn:hover:not(:disabled) { background: #eef0f3; }
 .icon-btn:disabled { opacity: .4; cursor: default; }
@@ -30,9 +30,9 @@ h1, h2 { flex: 1; font-size: 16px; margin: 0; overflow: hidden; text-overflow: e
 #threads li:hover { background: #f1f3f5; }
 #threads li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #threads li.unread { font-weight: bold; }
-.avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; }
 .snippet { color: #666; font-weight: normal; }
-.date { text-align: right; white-space: nowrap; padding-right: 8px; color: #666; font-size: 13px; }
+.date { text-align: right; white-space: nowrap; padding-right: 8px; color: #666; font-size: 12px; }
 
 #messages article { border: 1px solid #ddd; border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
 .message-head { padding: 12px 16px; background: #fafafa; border-bottom: 1px solid #eee; }
