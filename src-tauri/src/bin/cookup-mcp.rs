@@ -74,7 +74,9 @@ impl Cookup {
         annotations(read_only_hint = true)
     )]
     async fn get_thread(&self, Parameters(a): Parameters<ThreadArgs>) -> Result<String, String> {
-        let thread = gmail::fetch_thread(&self.dir, &self.auth, &a.account, &a.id, true)
+        // A text consumer gets no image data, so nothing is ever kept in this cache.
+        let images = gmail::InlineCache::default();
+        let thread = gmail::fetch_thread(&self.dir, &self.auth, &images, &a.account, &a.id, true)
             .await
             .map_err(|e| gmail::log_failure("get_thread", &a.account, e))?
             .ok_or_else(|| relogin(&a.account))?;

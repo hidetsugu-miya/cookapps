@@ -198,30 +198,42 @@ function row(t) {
 }
 
 // Sizes the frame to its document. The frame goes to 0 first, or the viewport would floor the height.
+// Requests within a frame are folded into one fit, so a mail of many images does not force a layout per image.
 function fitFrame(frame) {
-  frame.style.height = "0";
-  frame.style.height = `${frame.contentDocument.documentElement.scrollHeight}px`;
+  if (frame.fitting) return;
+  frame.fitting = requestAnimationFrame(() => {
+    frame.fitting = 0;
+    frame.style.height = "0";
+    frame.style.height = `${frame.contentDocument.documentElement.scrollHeight}px`;
+  });
 }
 
-// Fits the frame when its document loads and again when an image in it loads or fails. A frame in a hidden view is 0 wide,
-// so the observer fits it once the view is shown (and after a window resize).
-function autoFit(frame) {
+// Fits the frame when its document loads and again when an image in it loads or fails, then hands the document to `onLoad`.
+// A frame in a hidden view is 0 wide, so the observer fits it once the view is shown (and after a window resize).
+function autoFit(frame, onLoad) {
   frame.onload = () => {
     fitFrame(frame);
     for (const type of ["load", "error"]) frame.contentDocument.addEventListener(type, () => fitFrame(frame), true);
+    onLoad(frame.contentDocument);
   };
   new ResizeObserver(() => fitFrame(frame)).observe(frame);
 }
 
-// The https image URLs of a parsed HTML mail, once each. DOMParser's document is inert: nothing is fetched.
+// Limits a mail to inline styles and data: images. The frame's sandbox has allow-same-origin, so with no scripts allowed
+// here the missing allow-scripts would be the only guard. It goes after a leading DOCTYPE, which must stay first for standards mode.
+const BODY_CSP =
+  `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">`;
+const withBodyCsp = (html) => (/^\s*<!doctype[^>]*>/i.test(html) ? html.replace(/^(\s*<!doctype[^>]*>)/i, `$1${BODY_CSP}`) : BODY_CSP + html);
+
+// The https image URLs of a loaded mail, once each. The images are not fetched: the frame's CSP allows data: only.
 const externalImages = (doc) => [
   ...new Set(
     [...doc.querySelectorAll("img[src]")].map((i) => i.getAttribute("src").trim()).filter((s) => /^https:\/\//i.test(s)),
   ),
 ];
 
-// The "show images" bar: Rust fetches the images, and the document is rebuilt with them as data: URIs.
-function imagesBar(doc, urls, frame) {
+// The "show images" bar: Rust fetches the images, and the loaded document's images get them as data: URIs.
+function imagesBar(urls, frame) {
   const bar = document.createElement("div");
   bar.className = "images-bar";
   const button = document.createElement("button");
@@ -232,11 +244,20 @@ function imagesBar(doc, urls, frame) {
     button.disabled = true;
     try {
       const images = await invoke("fetch_images", { urls });
+      const doc = frame.contentDocument;
+      // null: the thread was left meanwhile, and its frame is gone.
+      if (!doc) return;
+      let shown = 0;
       for (const img of doc.querySelectorAll("img[src]")) {
         const data = images[img.getAttribute("src").trim()];
-        if (data) img.setAttribute("src", data);
+        if (!data) continue;
+        // The browser prefers srcset, and a <picture>'s <source>, over src.
+        img.removeAttribute("srcset");
+        img.closest("picture")?.querySelectorAll("source").forEach((source) => source.remove());
+        img.setAttribute("src", data);
+        shown++;
       }
-      frame.srcdoc = `<!DOCTYPE html>${doc.documentElement.outerHTML}`;
+      if (!shown) throw "画像を取得できませんでした";
       bar.remove();
     } catch (e) {
       button.disabled = false;
@@ -257,11 +278,11 @@ function message(m) {
     // No allow-scripts: scripts do not run. allow-same-origin only lets this page read the document's height.
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-same-origin");
-    frame.srcdoc = m.body;
-    autoFit(frame);
-    const doc = new DOMParser().parseFromString(m.body, "text/html");
-    const urls = externalImages(doc);
-    if (urls.length) article.append(imagesBar(doc, urls, frame));
+    frame.srcdoc = withBodyCsp(m.body);
+    autoFit(frame, (doc) => {
+      const urls = externalImages(doc);
+      if (urls.length) frame.before(imagesBar(urls, frame));
+    });
     article.append(frame);
   } else {
     const body = document.createElement("div");
@@ -276,6 +297,7 @@ function message(m) {
 async function markRead(account, id) {
   try {
     const done = await invoke("set_read", { account, id, read: true });
+    if (done === null) return load();
     const r = rows.get(`${account}/${id}`);
     if (done && r) setReadState(r.t, r.li, true);
   } catch (e) {

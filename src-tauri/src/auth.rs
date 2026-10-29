@@ -16,7 +16,11 @@ use tokio::{
 };
 use url::Url;
 
-use crate::{accounts, calendar::CalendarCache, gmail::SyncState};
+use crate::{
+    accounts,
+    calendar::CalendarCache,
+    gmail::{InlineCache, SyncState},
+};
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
@@ -282,10 +286,12 @@ pub async fn remove_account(
     auth: State<'_, Auth>,
     sync: State<'_, SyncState>,
     calendar: State<'_, CalendarCache>,
+    images: State<'_, InlineCache>,
     account: String,
 ) -> Result<(), String> {
     sync.forget(&account);
     calendar.forget(&account);
+    images.forget(&account);
     let removed = match config_dir(&app) {
         Ok(dir) => auth.remove(&dir, &account).await,
         Err(e) => Err(e),
