@@ -523,8 +523,8 @@ function renderWeek(w) {
     }),
   );
   if (!calScrolled) {
-    // The sticky header sits above the body, so a scroll of 7 hours puts 7:00 right under it (a little less keeps its label whole).
-    $("cal-scroll").scrollTop = 7 * HOUR_PX - 12;
+    // Three hours before now at the top (11:00 shows from 8:00); a little less keeps the hour label whole.
+    $("cal-scroll").scrollTop = Math.max(0, (new Date().getHours() - 3) * HOUR_PX - 12);
     calScrolled = true;
   }
 }
