@@ -208,6 +208,8 @@ function updateBadge() {
 // What the last archive / trash did, for "元に戻す" and Cmd+Z: the command that reverses it and the thread data to put back.
 // One only; a newer removal replaces it.
 let lastRemoved = null;
+let removeSeq = 0; // taken when a removal starts, so a slower older one cannot replace a newer one
+let rememberedSeq = 0;
 const REMOVALS = {
   archive: { undo: "unarchive", message: "アーカイブしました" },
   trash: { undo: "untrash", message: "ゴミ箱へ移動しました" },
@@ -217,6 +219,7 @@ const REMOVALS = {
 async function removeRow(command, account, id, li) {
   const key = `${account}/${id}`;
   const t = rows.get(key)?.t;
+  const seq = ++removeSeq;
   pending.add(key);
   li.remove();
   updateBadge();
@@ -225,7 +228,8 @@ async function removeRow(command, account, id, li) {
     const done = await invoke(command, { account, id });
     if (done === null) return load();
     rows.delete(key);
-    if (t) {
+    if (t && seq > rememberedSeq) {
+      rememberedSeq = seq;
       lastRemoved = { undo: REMOVALS[command].undo, account, id, t };
       toast(REMOVALS[command].message, { label: "元に戻す", run: undoRemove });
     }
@@ -1117,6 +1121,7 @@ async function removeAccount(account, button) {
     rows.delete(key);
   }
   historyIds.delete(account);
+  if (lastRemoved?.account === account) lastRemoved = null;
   calCache.clear();
   calEpoch++;
   calRefresh = true;
