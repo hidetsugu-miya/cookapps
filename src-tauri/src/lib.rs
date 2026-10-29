@@ -31,10 +31,16 @@ enum Navigation {
     Cancel,
 }
 
+// wry asks about the navigations of every frame, not only the top window's, and cannot tell a click from a load.
+// A WKWebView check found no load without a click that gets here: a mail's nested iframe, frame, object, embed (stopped by the CSP)
+// and meta refresh (stopped by the sandbox) never reached the delegate.
 fn navigation_of(url: &tauri::Url) -> Navigation {
     match (url.scheme(), url.host_str()) {
-        ("about", _) | ("tauri", Some("localhost")) => Navigation::Allow,
-        // Windows and Android serve the app from this origin.
+        // Only the mail frames' own document; any other about: page would blank the window or a frame.
+        ("about", _) if url.path() == "srcdoc" => Navigation::Allow,
+        ("tauri", Some("localhost")) => Navigation::Allow,
+        // Windows and Android serve the app from this origin; on macOS it is no page of the app.
+        #[cfg(any(windows, target_os = "android"))]
         ("http" | "https", Some("tauri.localhost")) => Navigation::Allow,
         ("http" | "https", _) => Navigation::Browser,
         _ => Navigation::Cancel,
@@ -127,10 +133,7 @@ mod tests {
         for ok in [
             "tauri://localhost/index.html",
             "tauri://localhost",
-            "http://tauri.localhost/",
-            "https://tauri.localhost/index.html",
             "about:srcdoc",
-            "about:blank",
         ] {
             assert_eq!(navigation_of(&url(ok)), Navigation::Allow, "{ok}");
         }
@@ -157,8 +160,19 @@ mod tests {
             "mailto:a@example.com",
             "tauri://example.com/",
             "ftp://example.com/",
+            "about:blank",
         ] {
             assert_eq!(navigation_of(&url(bad)), Navigation::Cancel, "{bad}");
         }
+    }
+
+    #[test]
+    fn tauri_localhost_is_the_app_only_where_it_serves_the_app() {
+        let expected = if cfg!(any(windows, target_os = "android")) {
+            Navigation::Allow
+        } else {
+            Navigation::Browser
+        };
+        assert_eq!(navigation_of(&url("http://tauri.localhost/")), expected);
     }
 }
