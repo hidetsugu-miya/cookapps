@@ -64,14 +64,13 @@ function showError(e) {
   $("error").hidden = false;
 }
 
-// Reflects the read state in the row: bold, dot, checkbox, and the hover "mark read" button (unread rows only).
+// Reflects the read state in the row: bold, dot, and checkbox.
 function setReadState(t, li, read) {
   t.unread = !read;
   li.classList.toggle("unread", !read);
   const box = li.querySelector(".read-box");
   box.checked = read;
   box.setAttribute("aria-label", read ? "未読にする" : "既読にする");
-  li.querySelector(".mark-read").hidden = read;
 }
 
 // Updates UNREAD in Gmail; `control` is disabled while sending. On failure the row returns to its last known state.
@@ -115,11 +114,12 @@ function rowButton(className, label, svg, action) {
   return button;
 }
 
-async function trashRow(t, li, button) {
+// Runs "archive" / "trash" on the row's thread; on success the row leaves the list.
+async function removeRow(command, t, li, button) {
   $("error").hidden = true;
   button.disabled = true;
   try {
-    const done = await invoke("trash", { account: t.account, id: t.id });
+    const done = await invoke(command, { account: t.account, id: t.id });
     if (done === null) return load();
     li.remove();
   } catch (e) {
@@ -152,8 +152,8 @@ function row(t) {
   const trail = cell("trail", "");
   const actions = cell("row-actions", "");
   actions.append(
-    rowButton("mark-read", "既読にする", CHECK_SVG, (b) => sendRead(t, li, true, b)),
-    rowButton("trash-row", "ゴミ箱へ移動", $("trash").innerHTML, (b) => trashRow(t, li, b)),
+    rowButton("archive-row", "アーカイブ", CHECK_SVG, (b) => removeRow("archive", t, li, b)),
+    rowButton("trash-row", "ゴミ箱へ移動", $("trash").innerHTML, (b) => removeRow("trash", t, li, b)),
   );
   trail.append(cell("date", formatDate(t.dateMs)), actions);
   li.append(readBox(t, li), cell("unread-dot", ""), avatar, cell("from", name), subject, trail);
