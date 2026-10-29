@@ -16,6 +16,7 @@ use crate::accounts;
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly";
+// Existing refresh tokens live under this name, so it must stay equal to `identifier` in tauri.conf.json.
 const KEYRING_SERVICE: &str = "jp.mysis.cookup";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -343,6 +344,13 @@ fn code_from_request(line: &str, expected_state: &str) -> Result<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyring_service_is_the_app_identifier() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], KEYRING_SERVICE);
+    }
 
     #[test]
     fn pkce_challenge_matches_rfc7636_appendix_b() {
