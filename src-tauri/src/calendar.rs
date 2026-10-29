@@ -119,6 +119,8 @@ struct RawEvent {
     account: String,
     /// Background color of the calendar the event is on.
     color: Option<String>,
+    /// Name of the calendar the event is on.
+    calendar: String,
     summary: String,
     declined: bool,
     ical_uid: String,
@@ -126,7 +128,7 @@ struct RawEvent {
 }
 
 impl RawEvent {
-    fn from_api(e: ApiEvent, account: &str, color: Option<String>) -> Option<Self> {
+    fn from_api(e: ApiEvent, account: &str, cal: &CalendarEntry) -> Option<Self> {
         Some(Self {
             when: when(&e.start, &e.end)?,
             declined: e
@@ -134,7 +136,8 @@ impl RawEvent {
                 .iter()
                 .any(|a| a.is_self && a.response_status == "declined"),
             account: account.to_owned(),
-            color,
+            color: cal.background_color.clone(),
+            calendar: cal.summary.clone().unwrap_or_else(|| cal.id.clone()),
             summary: e.summary,
             ical_uid: e.ical_uid,
         })
@@ -207,6 +210,7 @@ pub struct Week {
 #[serde(rename_all = "camelCase")]
 pub struct EventItem {
     account: String,
+    calendar: String,
     summary: String,
     declined: bool,
     all_day: bool,
@@ -229,6 +233,7 @@ impl From<&RawEvent> for EventItem {
         };
         Self {
             account: e.account.clone(),
+            calendar: e.calendar.clone(),
             summary: e.summary.clone(),
             declined: e.declined,
             all_day,
@@ -574,7 +579,7 @@ async fn calendar_events(
         pages
             .into_iter()
             .flat_map(|p| p.items)
-            .filter_map(|e| RawEvent::from_api(e, account, cal.background_color.clone()))
+            .filter_map(|e| RawEvent::from_api(e, account, cal))
             .collect(),
     ))
 }
@@ -704,6 +709,8 @@ async fn collect_events(
             }
         }
     }
+    // A calendar shared as free/busy only gives its events no title; keep the titled copy of an event seen twice.
+    events.sort_by_key(|e| e.summary.is_empty());
     Ok(Collected {
         events,
         needs_login,
@@ -780,6 +787,7 @@ mod tests {
         RawEvent {
             account: "a@example.com".into(),
             color: None,
+            calendar: "c".into(),
             summary: summary.into(),
             declined: false,
             ical_uid: String::new(),
@@ -787,6 +795,15 @@ mod tests {
                 start: date("2026-01-01"),
                 end: date("2026-01-02"),
             },
+        }
+    }
+
+    fn cal(color: Option<&str>) -> CalendarEntry {
+        CalendarEntry {
+            id: "id@example.com".into(),
+            selected: true,
+            background_color: color.map(Into::into),
+            summary: Some("仕事".into()),
         }
     }
 
@@ -1059,8 +1076,9 @@ mod tests {
                 "attendees":[{"responseStatus":"accepted"},{"self":true,"responseStatus":"declined"}]}"#,
         )
         .unwrap();
-        let r = RawEvent::from_api(ev, "a@example.com", Some("#fff".into())).unwrap();
+        let r = RawEvent::from_api(ev, "a@example.com", &cal(Some("#fff"))).unwrap();
         assert!(r.declined);
+        assert_eq!(r.calendar, "仕事");
         assert_eq!(r.ical_uid, "u");
         assert_eq!(r.color.as_deref(), Some("#fff"));
         // Someone else's declined does not count.
@@ -1070,7 +1088,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !RawEvent::from_api(ev, "a@example.com", None)
+            !RawEvent::from_api(ev, "a@example.com", &cal(None))
                 .unwrap()
                 .declined
         );
@@ -1079,7 +1097,7 @@ mod tests {
     #[test]
     fn event_without_a_usable_time_is_skipped() {
         let ev: ApiEvent = serde_json::from_str(r#"{"summary":"s"}"#).unwrap();
-        assert!(RawEvent::from_api(ev, "a@example.com", None).is_none());
+        assert!(RawEvent::from_api(ev, "a@example.com", &cal(None)).is_none());
     }
 
     #[test]
