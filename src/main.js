@@ -906,8 +906,12 @@ let todoOpen = null;
 // Only the latest of overlapping loads may draw.
 let todoSeq = 0;
 
+// The projects by ID, rebuilt on each load.
+let projectById = new Map();
+
 const inboxOf = () => todo.projects.find((p) => p.inbox);
-const projectOf = (id) => todo.projects.find((p) => p.id === id);
+const projectOf = (id) => projectById.get(id);
+const projectName = (p) => (p?.inbox ? "受信箱" : p?.name ?? "");
 const viewProjectId = (view) => (view === "inbox" ? inboxOf()?.id : view);
 
 function viewTasks(view) {
@@ -939,6 +943,8 @@ function todoMode(mode) {
 }
 
 function showTokenForm(note = "") {
+  // No reload is due: the form is what the screen shows now.
+  clearTimeout(todoReloadTimer);
   todo = null;
   todoOpen = null;
   todoMode("token");
@@ -967,11 +973,18 @@ function projectButton(view, icon, name, count) {
 
 function renderProjects() {
   const inbox = inboxOf();
+  // One pass over the tasks counts what each list shows (the same tasks as viewTasks).
+  const counts = new Map();
+  let today = 0;
+  for (const t of todo.tasks) {
+    if (t.bucket === "overdue" || t.bucket === "today") today++;
+    if (!t.parent) counts.set(t.projectId, (counts.get(t.projectId) ?? 0) + 1);
+  }
   $("projects").replaceChildren(
-    projectButton("today", DAY_SVG, "今日", viewTasks("today").length),
-    projectButton("inbox", INBOX_SVG, "受信箱", viewTasks("inbox").length),
+    projectButton("today", DAY_SVG, "今日", today),
+    projectButton("inbox", INBOX_SVG, "受信箱", counts.get(inbox?.id) ?? 0),
     tag("h3", "", "プロジェクト"),
-    ...todo.projects.filter((p) => p !== inbox).map((p) => projectButton(p.id, p.color, p.name, viewTasks(p.id).length)),
+    ...todo.projects.filter((p) => p !== inbox).map((p) => projectButton(p.id, p.color, p.name, counts.get(p.id) ?? 0)),
   );
 }
 
@@ -984,10 +997,14 @@ function checkBox(color, checked, label) {
   return box;
 }
 
+// The thread a task links to, only when it is of an account cookup has: a description can name any address.
+const linkedMail = (t) => (t.mail && accountButtons().some((b) => b.dataset.account === t.mail.account) ? t.mail : null);
+
 function taskRow(t, showProject) {
+  const mail = linkedMail(t);
   const li = tag("li", `task${showProject ? "" : " single"}`);
   li.onclick = () => {
-    // A subtask row opens the top-level task that holds it.
+    // A subtask row opens the task that holds it.
     todoOpen = t.parent?.id ?? t.id;
     renderTodo();
   };
@@ -999,7 +1016,7 @@ function taskRow(t, showProject) {
     todoCall("todoist_set_done", { id: t.id, done: true }, box);
   };
   const line = tag("div", "t");
-  if (t.mail) line.insertAdjacentHTML("beforeend", MAIL_SVG);
+  if (mail) line.insertAdjacentHTML("beforeend", MAIL_SVG);
   line.append(tag("span", "", t.content));
   if (t.parent) line.append(tag("span", "parent", t.parent.content));
   if (t.subTotal) {
@@ -1016,12 +1033,12 @@ function taskRow(t, showProject) {
     const tagEl = tag("div", "ptag");
     const dot = tag("span", "pdot");
     dot.style.background = p?.color;
-    tagEl.append(dot, p?.name ?? "");
+    tagEl.append(dot, projectName(p));
     li.append(tagEl);
   }
   const trail = tag("div", "trail");
   const actions = tag("div", "row-actions");
-  if (t.mail) actions.append(rowButton("mail-row", "メールを開く", MAIL_SVG, () => openMailFromTodo(t.mail)));
+  if (mail) actions.append(rowButton("mail-row", "メールを開く", MAIL_SVG, () => openMailFromTodo(mail)));
   actions.append(rowButton("open-row", "Todoist で開く", OPEN_SVG, () => invoke("todoist_open", { id: t.id }).catch(showError)));
   trail.append(tag("span", `due${t.bucket === "overdue" ? " over" : ""}`, t.due ? dueLabel(t.due) : ""), actions);
   li.append(trail);
@@ -1050,6 +1067,20 @@ async function openMailFromTodo({ account, threadId }) {
   await openThread({ id: threadId, account }, rows.get(`${account}/${threadId}`)?.li ?? null);
 }
 
+// Reloads shortly after the last call, so a run of changes costs one load. Completed tasks are fetched again only when asked for by one of them.
+let todoReloadTimer = 0;
+let todoReloadDone = false;
+
+function scheduleTodoReload(withDone) {
+  todoReloadDone ||= withDone;
+  clearTimeout(todoReloadTimer);
+  todoReloadTimer = setTimeout(() => {
+    const done = todoReloadDone;
+    todoReloadDone = false;
+    loadTodo(false, done);
+  }, 300);
+}
+
 // Runs a change, then reloads whether it worked or not, so the screen shows what Todoist has.
 // A null answer (a token is needed) shows up in that reload. Returns the command's answer: null when it failed or a token is needed.
 async function todoCall(command, args, control) {
@@ -1062,7 +1093,8 @@ async function todoCall(command, args, control) {
     showError(e);
   }
   if (control) control.disabled = false;
-  await loadTodo();
+  // Only completing or reopening a task changes the completed ones.
+  scheduleTodoReload(command === "todoist_set_done");
   return answer;
 }
 
@@ -1145,12 +1177,12 @@ function projectChip(t) {
   const b = tag("button", "chip");
   const dot = tag("span", "pdot");
   dot.style.background = p?.color;
-  b.append(dot, p?.name ?? "");
+  b.append(dot, projectName(p));
   b.onclick = () =>
     openMenu(
       b,
       todo.projects.map((x) => ({
-        label: x.inbox ? "受信箱" : x.name,
+        label: projectName(x),
         color: x.color,
         current: x.id === t.projectId,
         pick: () => x.id !== t.projectId && todoCall("todoist_move", { id: t.id, projectId: x.id }),
@@ -1213,7 +1245,7 @@ function renderDetail() {
   // What was typed into the subtask field of this task is not lost to the redraw.
   const typed = $("todo-detail").dataset.task === t.id ? $("todo-detail").querySelector('[data-field="sub"]')?.value ?? "" : "";
   todoMode("detail");
-  $("todo-title").textContent = projectOf(t.projectId)?.name ?? "";
+  $("todo-title").textContent = projectName(projectOf(t.projectId));
 
   const box = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
   box.onchange = () => todoCall("todoist_set_done", { id: t.id, done: true }, box);
@@ -1237,13 +1269,14 @@ function renderDetail() {
   desc.onblur = () => desc.value !== t.description && saveTask(t.id, { description: desc.value });
 
   const parts = [head, meta, desc];
-  if (t.mail) {
+  const mail = linkedMail(t);
+  if (mail) {
     const card = tag("div", "mail-link");
     card.insertAdjacentHTML("beforeend", MAIL_SVG);
     const text = tag("span");
-    text.append(tag("b", "", t.content), ` — ${t.mail.account}`);
+    text.append(tag("b", "", t.content), ` — ${mail.account}`);
     card.append(text, tag("span", "go", "メールを開く"));
-    card.onclick = () => openMailFromTodo(t.mail);
+    card.onclick = () => openMailFromTodo(mail);
     parts.push(card);
   }
 
@@ -1269,7 +1302,8 @@ function renderDetail() {
     if (!content.trim()) return;
     // Emptied before the call, or the redraw after it would restore the text.
     input.value = "";
-    todoCall("todoist_add_subtask", { parentId: t.id, content }, input);
+    // No control is passed: disabling the field would drop its focus, and the next subtask could not be typed at once.
+    todoCall("todoist_add_subtask", { parentId: t.id, content });
   });
   add.append(input);
   parts.push(title, subs, add);
@@ -1291,21 +1325,27 @@ function renderTodo() {
 }
 
 // Fetches the tasks and draws them. `quiet` is the timed refresh: it draws nothing when nothing changed or a field is being typed in.
-async function loadTodo(quiet = false) {
+// Without `withDone` the backend reuses the completed tasks it fetched last. Returns true when a token is needed (the token form is shown).
+async function loadTodo(quiet = false, withDone = true) {
   const seq = ++todoSeq;
   try {
-    const data = await invoke("todoist_load");
-    if (seq !== todoSeq || screen !== "todo") return;
-    if (data === null) return showTokenForm();
+    const data = await invoke("todoist_load", { withDone });
+    if (seq !== todoSeq || screen !== "todo") return false;
+    if (data === null) {
+      showTokenForm();
+      return true;
+    }
     // While a field is being typed in, `todo` stays as drawn, so the next refresh sees the change and draws it.
-    if (quiet && $("todo-detail").contains(document.activeElement)) return;
+    if (quiet && $("todo-detail").contains(document.activeElement)) return false;
     const same = JSON.stringify(data) === JSON.stringify(todo);
     todo = data;
-    if (quiet && same) return;
+    projectById = new Map(data.projects.map((p) => [p.id, p]));
+    if (quiet && same) return false;
     renderTodo();
   } catch (e) {
     showError(e);
   }
+  return false;
 }
 
 // Todoist cannot undo a delete, so the button asks twice: the first press changes its label, the second deletes.
@@ -1361,8 +1401,8 @@ $("todo-token").onsubmit = async (e) => {
   } catch (err) {
     return showError(err);
   }
-  await loadTodo();
-  if (todo === null) showTokenForm("トークンを確認できませんでした。もう一度入力してください");
+  // Only a rejected token says so; a failed load (network, 5xx) shows its own error.
+  if (await loadTodo()) showTokenForm("トークンを確認できませんでした。もう一度入力してください");
 };
 $("todo-add").onsubmit = async (e) => {
   e.preventDefault();

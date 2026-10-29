@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::{collections::HashMap, sync::Mutex};
 
 use chrono::{
     DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, TimeZone, Utc,
@@ -54,7 +54,7 @@ const COLORS: [(&str, &str); 20] = [
     ("taupe", "#8F7A69"),
 ];
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct ApiDue {
     date: String,
     #[serde(default)]
@@ -62,7 +62,7 @@ struct ApiDue {
 }
 
 /// An active or completed task; the completed-tasks endpoint returns the same shape.
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct ApiTask {
     id: String,
     #[serde(default)]
@@ -104,7 +104,7 @@ struct Page<T> {
     next_cursor: Option<String>,
 }
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Debug, PartialEq, Clone)]
 pub struct Due {
     /// Local date, `YYYY-MM-DD`.
     date: String,
@@ -142,12 +142,10 @@ pub struct MailRef {
     thread_id: String,
 }
 
-/// What a subtask row of the "today" list points at.
+/// The task whose detail lists a subtask row: the subtask's own parent.
 #[derive(Serialize, Debug, PartialEq)]
 pub struct ParentRef {
-    /// The top-level task whose detail holds the subtask.
     id: String,
-    /// The name of the subtask's own parent.
     content: String,
 }
 
@@ -167,7 +165,7 @@ pub struct TaskItem {
     sub_done: usize,
     sub_total: usize,
     mail: Option<MailRef>,
-    /// Set on the row of a subtask that is overdue or due today; `None` on a top-level task.
+    /// Set on the row of a subtask (one that is overdue, due today, or has subtasks of its own); `None` on a top-level task.
     parent: Option<ParentRef>,
 }
 
@@ -184,7 +182,7 @@ pub struct ProjectItem {
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Todo {
     projects: Vec<ProjectItem>,
-    /// Top-level active tasks, then the overdue or due-today subtasks as rows of their own, by due date.
+    /// Top-level active tasks, then the subtasks that are overdue, due today, or have subtasks of their own as rows of their own, by due date.
     tasks: Vec<TaskItem>,
 }
 
@@ -325,50 +323,9 @@ fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
     })
 }
 
-/// A row for each active subtask (at any depth) that is overdue or due today, so the "today" list shows it although its parent is not due.
-fn due_subtask_items<Tz: TimeZone>(tasks: &[ApiTask], today: NaiveDate, tz: &Tz) -> Vec<TaskItem> {
-    let by_id: HashMap<&str, &ApiTask> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
-    tasks
-        .iter()
-        .filter(|t| t.parent_id.is_some())
-        .filter_map(|t| {
-            let due = due_of(tz, &t.due);
-            let bucket = bucket_of(due.as_ref().and_then(|d| d.date.parse().ok()), today);
-            if !matches!(bucket, Bucket::Overdue | Bucket::Today) {
-                return None;
-            }
-            let parent = *by_id.get(t.parent_id.as_deref()?)?;
-            // The top-level ancestor; the walk is bounded in case the data loops.
-            let mut root = parent;
-            for _ in 0..by_id.len() {
-                match root.parent_id.as_deref() {
-                    Some(id) => root = by_id.get(id)?,
-                    None => break,
-                }
-            }
-            Some(TaskItem {
-                id: t.id.clone(),
-                content: t.content.clone(),
-                description: t.description.clone(),
-                project_id: t.project_id.clone(),
-                priority: flip_priority(t.priority),
-                bucket,
-                subtasks: vec![],
-                sub_done: 0,
-                sub_total: 0,
-                mail: mail_of(&t.description),
-                due,
-                parent: Some(ParentRef {
-                    id: root.id.clone(),
-                    content: parent.content.clone(),
-                }),
-            })
-        })
-        .collect()
-}
-
-/// Top-level active tasks with their subtasks and counts. `completed` are the recently completed tasks: those under an active
-/// top-level task count as its done subtasks. Dates are judged in `tz`.
+/// Top-level active tasks with their subtasks and counts. A subtask that is overdue, due today, or has subtasks of its own is also a row
+/// (with `parent` set), so the "today" list shows it and its detail can open. `completed` are the recently completed tasks: those under an
+/// active task count as its done subtasks. Dates are judged in `tz`.
 fn build_todo<Tz: TimeZone>(
     projects: Vec<ApiProject>,
     tasks: Vec<ApiTask>,
@@ -378,7 +335,7 @@ fn build_todo<Tz: TimeZone>(
 ) -> Todo {
     let mut projects = projects;
     projects.sort_by_key(|p| p.child_order);
-    let active: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+    let by_id: HashMap<&str, &ApiTask> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
     // Subtasks by parent: the active ones, then the completed ones (a recurring one is in both; the active one stands).
     let mut subs: HashMap<&str, Vec<(&ApiTask, bool)>> = HashMap::new();
     for (list, done) in [(&tasks, false), (&completed, true)] {
@@ -386,55 +343,75 @@ fn build_todo<Tz: TimeZone>(
         list.sort_by_key(|t| t.child_order);
         for t in list {
             if let Some(parent) = t.parent_id.as_deref() {
-                if !(done && active.contains(t.id.as_str())) {
+                if !(done && by_id.contains_key(t.id.as_str())) {
                     subs.entry(parent).or_default().push((t, done));
                 }
             }
         }
     }
+    // The due of each active subtask, read once for its parent's list and for its own row.
+    let dues: HashMap<&str, Option<Due>> = tasks
+        .iter()
+        .filter(|t| t.parent_id.is_some())
+        .map(|t| (t.id.as_str(), due_of(tz, &t.due)))
+        .collect();
+    let item = |t: &ApiTask, due: Option<Due>, parent: Option<ParentRef>| {
+        let subtasks: Vec<_> = subs
+            .get(t.id.as_str())
+            .into_iter()
+            .flatten()
+            .map(|&(s, done)| Subtask {
+                id: s.id.clone(),
+                content: s.content.clone(),
+                done,
+                due: dues
+                    .get(s.id.as_str())
+                    .map_or_else(|| due_of(tz, &s.due), Clone::clone),
+            })
+            .collect();
+        TaskItem {
+            id: t.id.clone(),
+            content: t.content.clone(),
+            description: t.description.clone(),
+            project_id: t.project_id.clone(),
+            priority: flip_priority(t.priority),
+            bucket: bucket_of(due.as_ref().and_then(|d| d.date.parse().ok()), today),
+            sub_done: subtasks.iter().filter(|s| s.done).count(),
+            sub_total: subtasks.len(),
+            subtasks,
+            mail: mail_of(&t.description),
+            due,
+            parent,
+        }
+    };
     let mut items: Vec<_> = tasks
         .iter()
         .filter(|t| t.parent_id.is_none())
-        .map(|t| {
-            let due = due_of(tz, &t.due);
-            let day = due.as_ref().and_then(|d| d.date.parse().ok());
-            let subtasks: Vec<_> = subs
-                .remove(t.id.as_str())
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(s, done)| Subtask {
-                    id: s.id.clone(),
-                    content: s.content.clone(),
-                    done,
-                    due: due_of(tz, &s.due),
-                })
-                .collect();
-            TaskItem {
-                id: t.id.clone(),
-                content: t.content.clone(),
-                description: t.description.clone(),
-                project_id: t.project_id.clone(),
-                priority: flip_priority(t.priority),
-                bucket: bucket_of(day, today),
-                sub_done: subtasks.iter().filter(|s| s.done).count(),
-                sub_total: subtasks.len(),
-                subtasks,
-                mail: mail_of(&t.description),
-                due,
-                parent: None,
-            }
-        })
+        .map(|t| item(t, due_of(tz, &t.due), None))
         .collect();
-    items.extend(due_subtask_items(&tasks, today, tz));
-    // Stable, so tasks of the same moment keep Todoist's order; no due date goes last.
-    items.sort_by(|a, b| {
-        let key = |t: &TaskItem| t.due.as_ref().map(|d| (d.date.clone(), d.time.clone()));
-        match (key(a), key(b)) {
-            (Some(x), Some(y)) => x.cmp(&y),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
+    items.extend(tasks.iter().filter_map(|t| {
+        // A subtask whose parent is not among the active tasks is not a row: nothing opens it.
+        let parent = by_id.get(t.parent_id.as_deref()?)?;
+        let due = dues.get(t.id.as_str())?;
+        let bucket = bucket_of(due.as_ref().and_then(|d| d.date.parse().ok()), today);
+        if !matches!(bucket, Bucket::Overdue | Bucket::Today) && !subs.contains_key(t.id.as_str()) {
+            return None;
         }
+        let parent = ParentRef {
+            id: parent.id.clone(),
+            content: parent.content.clone(),
+        };
+        Some(item(t, due.clone(), Some(parent)))
+    }));
+    // Stable, so tasks of the same moment keep Todoist's order; no due date goes last.
+    fn key(t: &TaskItem) -> Option<(&String, &Option<String>)> {
+        t.due.as_ref().map(|d| (&d.date, &d.time))
+    }
+    items.sort_by(|a, b| match (key(a), key(b)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
     });
     Todo {
         projects: projects
@@ -447,6 +424,32 @@ fn build_todo<Tz: TimeZone>(
             })
             .collect(),
         tasks: items,
+    }
+}
+
+/// What the commands keep in memory: the token, so the keychain is read once, and the last completed tasks, which a load after an operation reuses.
+#[derive(Default)]
+pub struct TodoistState {
+    token: Mutex<Option<String>>,
+    done: Mutex<Vec<ApiTask>>,
+}
+
+impl TodoistState {
+    /// The token: the copy in memory, else the keychain's (read off the async threads). `None` means none is stored.
+    async fn token(&self) -> Result<Option<String>, String> {
+        let cached = self.token.lock().unwrap().clone();
+        if cached.is_some() {
+            return Ok(cached);
+        }
+        let stored = tokio::task::spawn_blocking(read_token)
+            .await
+            .map_err(|e| e.to_string())??;
+        self.set_token(stored.clone());
+        Ok(stored)
+    }
+
+    fn set_token(&self, token: Option<String>) {
+        *self.token.lock().unwrap() = token;
     }
 }
 
@@ -527,29 +530,45 @@ async fn fetch_all<T: DeserializeOwned>(
 /// Sends one request with the stored token, logging a failure. `Ok(None)` means a token is needed: none is stored, or Todoist rejected it.
 async fn request(
     auth: &Auth,
+    state: &TodoistState,
     command: &str,
     method: Method,
     path: &str,
     body: Option<Value>,
 ) -> Result<Option<Value>, String> {
-    let Some(token) = read_token().map_err(|e| log_failure(command, TOKEN_USER, e))? else {
+    let Some(token) = state
+        .token()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+    else {
         return Ok(None);
     };
-    send(auth.http(), method, &token, path, &[], body.as_ref())
+    let sent = send(auth.http(), method, &token, path, &[], body.as_ref())
         .await
-        .map_err(|e| log_failure(command, TOKEN_USER, e))
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    if sent.is_none() {
+        state.set_token(None);
+    }
+    Ok(sent)
 }
 
 /// The active tasks, the projects, and the recently completed tasks, fetched at once. `None` means a token is needed.
+/// Without `with_done` the completed tasks of the last load are reused: they only change when a task is completed or reopened.
 #[tauri::command]
-pub async fn todoist_load(auth: State<'_, Auth>) -> Result<Option<Todo>, String> {
+pub async fn todoist_load(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    with_done: bool,
+) -> Result<Option<Todo>, String> {
     let command = "todoist_load";
-    let Some(token) = read_token().map_err(|e| log_failure(command, TOKEN_USER, e))? else {
+    let Some(token) = state
+        .token()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+    else {
         return Ok(None);
     };
     let http = auth.http();
-    let since = (Utc::now() - Duration::days(DONE_DAYS)).to_rfc3339_opts(SecondsFormat::Secs, true);
-    let until = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let tasks = tokio::spawn(fetch_all::<ApiTask>(
         http.clone(),
         token.clone(),
@@ -564,30 +583,42 @@ pub async fn todoist_load(auth: State<'_, Auth>) -> Result<Option<Todo>, String>
         vec![],
         MAX_PROJECT_PAGES,
     ));
-    let done = tokio::spawn(fetch_all::<ApiTask>(
-        http.clone(),
-        token,
-        "/tasks/completed/by_completion_date",
-        vec![("since", since), ("until", until)],
-        MAX_DONE_PAGES,
-    ));
+    let done = with_done.then(|| {
+        let since =
+            (Utc::now() - Duration::days(DONE_DAYS)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let until = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        tokio::spawn(fetch_all::<ApiTask>(
+            http.clone(),
+            token,
+            "/tasks/completed/by_completion_date",
+            vec![("since", since), ("until", until)],
+            MAX_DONE_PAGES,
+        ))
+    });
     let joined = |e: tokio::task::JoinError| log_failure(command, TOKEN_USER, e.to_string());
     let tasks = tasks.await.map_err(joined)?;
     let projects = projects.await.map_err(joined)?;
-    let done = done.await.map_err(joined)?;
     let (Some(tasks), Some(projects)) = (
         tasks.map_err(|e| log_failure(command, TOKEN_USER, e))?,
         projects.map_err(|e| log_failure(command, TOKEN_USER, e))?,
     ) else {
+        state.set_token(None);
         return Ok(None);
     };
-    // The done subtasks only complete the counts, so their failure (e.g. a plan without history) must not hide the tasks.
     let done = match done {
-        Ok(d) => d.unwrap_or_default(),
-        Err(e) => {
-            log_failure(command, TOKEN_USER, e);
-            Vec::new()
+        Some(fetching) => {
+            // The done subtasks only complete the counts, so their failure (e.g. a plan without history) must not hide the tasks.
+            let fetched = match fetching.await.map_err(joined)? {
+                Ok(d) => d.unwrap_or_default(),
+                Err(e) => {
+                    log_failure(command, TOKEN_USER, e);
+                    Vec::new()
+                }
+            };
+            state.done.lock().unwrap().clone_from(&fetched);
+            fetched
         }
+        None => state.done.lock().unwrap().clone(),
     };
     Ok(Some(build_todo(
         projects,
@@ -600,7 +631,7 @@ pub async fn todoist_load(auth: State<'_, Auth>) -> Result<Option<Todo>, String>
 
 /// Stores the personal API token in the keychain. It is never logged or returned.
 #[tauri::command]
-pub fn todoist_save_token(token: String) -> Result<(), String> {
+pub fn todoist_save_token(state: State<'_, TodoistState>, token: String) -> Result<(), String> {
     let token = token.trim();
     if token.is_empty() {
         return Err("トークンを入力してください".into());
@@ -610,23 +641,28 @@ pub fn todoist_save_token(token: String) -> Result<(), String> {
             e.set_password(token)
                 .map_err(|e| format!("キーチェーンへの保存に失敗: {e}"))
         })
-        .map_err(|e| log_failure("todoist_save_token", TOKEN_USER, e))
+        .map_err(|e| log_failure("todoist_save_token", TOKEN_USER, e))?;
+    state.set_token(Some(token.to_owned()));
+    Ok(())
 }
 
 /// Removes the stored token.
 #[tauri::command]
-pub fn todoist_disconnect() -> Result<(), String> {
+pub fn todoist_disconnect(state: State<'_, TodoistState>) -> Result<(), String> {
     keyring_entry(TOKEN_USER)
         .and_then(|e| delete_entry(&e))
-        .map_err(|e| log_failure("todoist_disconnect", TOKEN_USER, e))
+        .map_err(|e| log_failure("todoist_disconnect", TOKEN_USER, e))?;
+    state.set_token(None);
+    Ok(())
 }
 
 /// Adds a task from natural language (Quick Add). Inside a project (`project_id`) the task is moved there.
-/// `Some(false)` means the task was created but the move failed (logged), so it stays where Quick Add put it; the caller must not retry.
-/// `None` means a token is needed.
+/// `Some(false)` means the task was created but the move failed (logged, a rejected token included), so it stays where Quick Add put it;
+/// the caller must not retry. `None` means a token is needed and nothing was created.
 #[tauri::command]
 pub async fn todoist_add(
     auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
     text: String,
     project_id: Option<String>,
 ) -> Result<Option<bool>, String> {
@@ -636,28 +672,41 @@ pub async fn todoist_add(
         return Err("タスクの内容を入力してください".into());
     }
     let body = json!({ "text": text });
-    let Some(created) = request(&auth, command, Method::POST, "/tasks/quick", Some(body)).await?
+    let Some(created) = request(
+        &auth,
+        &state,
+        command,
+        Method::POST,
+        "/tasks/quick",
+        Some(body),
+    )
+    .await?
     else {
         return Ok(None);
     };
     if let Some(id) = task_to_move(&created, project_id.as_deref()) {
-        // A rejected token (`Ok(None)`) goes back to the token form; any other failure is logged and leaves the task where Quick Add put it.
-        return Ok(move_task(&auth, command, &id, project_id.as_deref())
-            .await
-            .unwrap_or(Some(false)));
+        let result = move_task(&auth, &state, command, &id, project_id.as_deref()).await;
+        return Ok(Some(moved(result)));
     }
     Ok(Some(true))
 }
 
+/// Whether the move into the project worked. The task exists either way, so a failure or a rejected token is not an answer for the caller
+/// to retry; the load that follows shows that a token is needed.
+fn moved(result: Result<Option<bool>, String>) -> bool {
+    matches!(result, Ok(Some(true)))
+}
+
 async fn move_task(
     auth: &Auth,
+    state: &TodoistState,
     command: &str,
     id: &str,
     project_id: Option<&str>,
 ) -> Result<Option<bool>, String> {
     let url = task_api_url(id, Some("move")).map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let body = json!({ "project_id": project_id });
-    let done = request(auth, command, Method::POST, &url, Some(body)).await?;
+    let done = request(auth, state, command, Method::POST, &url, Some(body)).await?;
     // `true`, not `()`: `Some(())` reaches JS as null, the same as `None` (a token is needed).
     Ok(done.map(|_| true))
 }
@@ -666,6 +715,7 @@ async fn move_task(
 #[tauri::command]
 pub async fn todoist_add_subtask(
     auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
     parent_id: String,
     content: String,
 ) -> Result<Option<bool>, String> {
@@ -676,7 +726,7 @@ pub async fn todoist_add_subtask(
         return Err("サブタスクの名前を入力してください".into());
     }
     let body = json!({ "content": content, "parent_id": parent_id });
-    let done = request(&auth, command, Method::POST, "/tasks", Some(body)).await?;
+    let done = request(&auth, &state, command, Method::POST, "/tasks", Some(body)).await?;
     Ok(done.map(|_| true))
 }
 
@@ -684,6 +734,7 @@ pub async fn todoist_add_subtask(
 #[tauri::command]
 pub async fn todoist_task_from_mail(
     auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
     account: String,
     thread_id: String,
     subject: String,
@@ -697,7 +748,7 @@ pub async fn todoist_task_from_mail(
         subject
     };
     let body = json!({ "content": content, "description": url });
-    let done = request(&auth, command, Method::POST, "/tasks", Some(body)).await?;
+    let done = request(&auth, &state, command, Method::POST, "/tasks", Some(body)).await?;
     Ok(done.map(|_| true))
 }
 
@@ -705,13 +756,14 @@ pub async fn todoist_task_from_mail(
 #[tauri::command]
 pub async fn todoist_set_done(
     auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
     id: String,
     done: bool,
 ) -> Result<Option<bool>, String> {
     let command = "todoist_set_done";
     let action = if done { "close" } else { "reopen" };
     let url = task_api_url(&id, Some(action)).map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let sent = request(&auth, command, Method::POST, &url, None).await?;
+    let sent = request(&auth, &state, command, Method::POST, &url, None).await?;
     Ok(sent.map(|_| true))
 }
 
@@ -719,6 +771,7 @@ pub async fn todoist_set_done(
 #[tauri::command]
 pub async fn todoist_update(
     auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
     id: String,
     content: Option<String>,
     description: Option<String>,
@@ -734,25 +787,30 @@ pub async fn todoist_update(
         priority,
     )
     .map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let done = request(&auth, command, Method::POST, &url, Some(body)).await?;
+    let done = request(&auth, &state, command, Method::POST, &url, Some(body)).await?;
     Ok(done.map(|_| true))
 }
 
 #[tauri::command]
 pub async fn todoist_move(
     auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
     id: String,
     project_id: String,
 ) -> Result<Option<bool>, String> {
-    move_task(&auth, "todoist_move", &id, Some(&project_id)).await
+    move_task(&auth, &state, "todoist_move", &id, Some(&project_id)).await
 }
 
 /// Deletes a task for good; Todoist cannot undo it, so the screen asks twice.
 #[tauri::command]
-pub async fn todoist_delete(auth: State<'_, Auth>, id: String) -> Result<Option<bool>, String> {
+pub async fn todoist_delete(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    id: String,
+) -> Result<Option<bool>, String> {
     let command = "todoist_delete";
     let url = task_api_url(&id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let done = request(&auth, command, Method::DELETE, &url, None).await?;
+    let done = request(&auth, &state, command, Method::DELETE, &url, None).await?;
     Ok(done.map(|_| true))
 }
 
@@ -979,6 +1037,14 @@ mod tests {
     }
 
     #[test]
+    fn a_created_task_is_never_reported_as_needing_a_token() {
+        assert!(moved(Ok(Some(true))));
+        // The move was rejected with 401 or failed: the task exists all the same.
+        assert!(!moved(Ok(None)));
+        assert!(!moved(Err("x".into())));
+    }
+
+    #[test]
     fn quick_add_answer_without_an_id_moves_nothing() {
         assert_eq!(task_to_move(&json!({}), Some("p1")), None);
     }
@@ -993,12 +1059,38 @@ mod tests {
             ],
             vec![],
         );
-        assert_eq!(t.tasks.len(), 1);
-        let a = &t.tasks[0];
+        let tops: Vec<_> = t.tasks.iter().filter(|t| t.parent.is_none()).collect();
+        assert_eq!(tops.len(), 1);
+        let a = tops[0];
         assert_eq!((a.sub_done, a.sub_total), (0, 1));
         assert_eq!(a.subtasks.len(), 1);
         assert_eq!(a.subtasks[0].id, "B");
         assert!(!a.subtasks[0].done);
+    }
+
+    #[test]
+    fn a_subtask_with_subtasks_is_a_row_so_its_detail_can_open() {
+        let t = todo(
+            vec![
+                task(json!({"id": "A", "content": "親"})),
+                task(json!({"id": "B", "parent_id": "A", "content": "子"})),
+                task(json!({"id": "C", "parent_id": "B", "content": "孫"})),
+            ],
+            vec![task(json!({"id": "D", "parent_id": "B", "content": "済"}))],
+        );
+        let ids: Vec<_> = t.tasks.iter().map(|t| t.id.as_str()).collect();
+        // C has no subtasks and is not due: no row.
+        assert_eq!(ids, ["A", "B"]);
+        let b = &t.tasks[1];
+        assert_eq!(b.bucket, Bucket::NoDue);
+        assert_eq!((b.sub_done, b.sub_total), (1, 2));
+        assert_eq!(
+            b.parent,
+            Some(ParentRef {
+                id: "A".into(),
+                content: "親".into()
+            })
+        );
     }
 
     #[test]
@@ -1075,7 +1167,7 @@ mod tests {
     }
 
     #[test]
-    fn a_due_grandchild_points_at_its_top_level_task_and_its_own_parent() {
+    fn a_due_grandchild_points_at_its_own_parent() {
         let t = todo(
             vec![
                 task(json!({"id": "A", "content": "親"})),
@@ -1090,7 +1182,7 @@ mod tests {
         assert_eq!(
             c.parent,
             Some(ParentRef {
-                id: "A".into(),
+                id: "B".into(),
                 content: "子".into()
             })
         );
