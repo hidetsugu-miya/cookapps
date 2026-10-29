@@ -236,9 +236,14 @@ function routeLinks(doc) {
       Element.prototype.removeAttribute.call(a, "href");
       continue;
     }
-    // A #anchor stays in the frame even when the mail's <base href> would resolve it to a web URL.
+    // A #anchor stays an in-page jump in the frame.
     const url = raw.startsWith("#") ? "" : hrefGetters[localNameOf.call(a)].call(a);
     const web = /^https?:/i.test(url);
+    // Anything else but an anchor (mailto:, a relative link resolved against the app's page, about:) would navigate the frame away from the mail.
+    if (!web && !raw.startsWith("#")) {
+      Element.prototype.removeAttribute.call(a, "href");
+      continue;
+    }
     setAttr.call(a, "target", web ? "_top" : "_self");
     if (web) setAttr.call(a, "title", url);
   }
