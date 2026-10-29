@@ -630,6 +630,11 @@ function renderWeek(w) {
       div.textContent = `${a} の予定の読み込みに失敗しました: ${message}`;
       return div;
     }),
+    ...w.calendarFailed.map((message) => {
+      const div = document.createElement("div");
+      div.textContent = message;
+      return div;
+    }),
   );
   refreshPopup();
   if (!calScrolled) {

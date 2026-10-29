@@ -72,6 +72,7 @@ struct CalendarEntry {
     #[serde(default)]
     selected: bool,
     background_color: Option<String>,
+    summary: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -195,6 +196,9 @@ pub struct Week {
     needs_login: Vec<String>,
     /// Accounts whose events are missing because loading them failed, with the error to show.
     failed: HashMap<String, String>,
+    /// Calendars whose events are missing because loading them failed, each as a whole message to show.
+    /// The other calendars of the same account are still in the week.
+    calendar_failed: Vec<String>,
 }
 
 fn week_start(date: NaiveDate) -> NaiveDate {
@@ -340,6 +344,22 @@ fn classify(status: Option<u16>, message: &str) -> Failure {
     Failure::Message(message.to_owned())
 }
 
+/// Whether a failure concerns the whole account (re-login, Calendar API off) rather than the one calendar that hit it.
+/// `classify` rewrites exactly those.
+fn is_account_wide(status: Option<u16>, message: &str) -> bool {
+    classify(status, message) != Failure::Message(message.to_owned())
+}
+
+/// The message for a calendar that could not be loaded; the calendar is named by its summary, or its ID without one.
+fn calendar_failure(account: &str, cal: &CalendarEntry, message: &str) -> String {
+    let name = cal
+        .summary
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&cal.id);
+    format!("{account} のカレンダー「{name}」の予定を読み込めませんでした: {message}")
+}
+
 /// All pages of one list call. `Ok(None)` means `account` must log in again.
 async fn fetch_pages<T: DeserializeOwned>(
     app: &AppHandle,
@@ -407,7 +427,10 @@ async fn selected_calendars(
 ) -> Result<Option<Vec<CalendarEntry>>, ApiError> {
     let list_query = [
         ("maxResults", "250"),
-        ("fields", "nextPageToken,items(id,selected,backgroundColor)"),
+        (
+            "fields",
+            "nextPageToken,items(id,selected,backgroundColor,summary)",
+        ),
     ];
     let Some(pages) =
         fetch_pages::<CalendarPage>(app, auth, account, CALENDAR_LIST_URL, &list_query, |p| {
@@ -463,15 +486,22 @@ async fn calendar_events(
     ))
 }
 
+/// The events of one account, and a message for each calendar that failed to load.
+struct AccountEvents {
+    events: Vec<RawEvent>,
+    failed: Vec<String>,
+}
+
 /// Events in `[min, max)` of every selected calendar of one account, the calendars fetched at once.
 /// `refresh` lists the calendars again instead of using the kept list. `Ok(None)` means that account must log in again.
+/// A failure of the whole account is an `Err`; a failure of one calendar leaves that calendar out and is listed in `failed`.
 async fn account_events(
     app: &AppHandle,
     account: &str,
     min: &str,
     max: &str,
     refresh: bool,
-) -> Result<Option<Vec<RawEvent>>, ApiError> {
+) -> Result<Option<AccountEvents>, ApiError> {
     let cache = app.state::<CalendarCache>();
     let kept = if refresh {
         None
@@ -494,18 +524,29 @@ async fn account_events(
         }
     };
     let jobs = calendars
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|cal| {
             let (app, account) = (app.clone(), account.to_owned());
             let (min, max) = (min.to_owned(), max.to_owned());
             async move { calendar_events(&app, &account, &cal, &min, &max).await }
         })
         .collect();
-    let mut out = Vec::new();
-    for found in join_all(jobs).await? {
-        match found? {
-            Some(events) => out.extend(events),
-            None => return Ok(None),
+    let mut out = AccountEvents {
+        events: Vec::new(),
+        failed: Vec::new(),
+    };
+    for (cal, found) in calendars.iter().zip(join_all(jobs).await?) {
+        match found {
+            Ok(Some(events)) => out.events.extend(events),
+            Ok(None) => return Ok(None),
+            Err(e) if is_account_wide(e.status, &e.message) => return Err(e),
+            Err(e) => {
+                // The kept calendars may be what failed (e.g. one was deleted), so list them again next time.
+                cache.0.lock().unwrap().remove(account);
+                let message = log_failure("calendar_week", account, e);
+                out.failed.push(calendar_failure(account, cal, &message));
+            }
         }
     }
     Ok(Some(out))
@@ -513,7 +554,7 @@ async fn account_events(
 
 /// The week containing `date` (YYYY-MM-DD, local), Sunday first, with the events of every account, the accounts fetched at once.
 /// `refresh` lists each account's calendars again instead of using the kept lists.
-/// Accounts needing login or failing to load are listed, not fatal.
+/// Accounts needing login or failing to load, and calendars failing to load, are listed, not fatal.
 #[tauri::command]
 pub async fn calendar_week(
     app: AppHandle,
@@ -528,6 +569,7 @@ pub async fn calendar_week(
     let start = week_start(date);
     let (min, max) = week_bounds(&Local, start).ok_or("週の範囲を求められません")?;
     let (mut events, mut needs_login, mut failed) = (Vec::new(), Vec::new(), HashMap::new());
+    let mut calendar_failed = Vec::new();
     let accounts = auth
         .accounts(&app)
         .map_err(|e| log_failure("calendar_week", "-", e))?;
@@ -544,7 +586,10 @@ pub async fn calendar_week(
         .map_err(|e| log_failure("calendar_week", "-", e))?;
     for (account, result) in accounts.into_iter().zip(results) {
         match result {
-            Ok(Some(found)) => events.extend(found),
+            Ok(Some(found)) => {
+                events.extend(found.events);
+                calendar_failed.extend(found.failed);
+            }
             Ok(None) => {
                 cache.0.lock().unwrap().remove(&account);
                 needs_login.push(account);
@@ -570,6 +615,7 @@ pub async fn calendar_week(
         timed,
         needs_login,
         failed,
+        calendar_failed,
     })
 }
 
@@ -868,6 +914,42 @@ mod tests {
     }
 
     #[test]
+    fn only_account_wide_failures_stop_the_whole_account() {
+        assert!(is_account_wide(
+            Some(403),
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
+        ));
+        assert!(is_account_wide(Some(403), "accessNotConfigured"));
+        assert!(is_account_wide(Some(403), "SERVICE_DISABLED"));
+        // A deleted calendar, a forbidden one, a server error and a network error concern one calendar.
+        assert!(!is_account_wide(Some(404), "notFound"));
+        assert!(!is_account_wide(Some(410), "deleted"));
+        assert!(!is_account_wide(Some(403), "forbidden"));
+        assert!(!is_account_wide(Some(500), "boom"));
+        assert!(!is_account_wide(None, "network"));
+    }
+
+    #[test]
+    fn calendar_failure_names_the_calendar_or_falls_back_to_its_id() {
+        let cal = |id: &str, summary: Option<&str>| CalendarEntry {
+            id: id.into(),
+            selected: true,
+            background_color: None,
+            summary: summary.map(Into::into),
+        };
+        assert_eq!(
+            calendar_failure("a@example.com", &cal("id1", Some("仕事")), "boom"),
+            "a@example.com のカレンダー「仕事」の予定を読み込めませんでした: boom"
+        );
+        for summary in [None, Some("")] {
+            assert_eq!(
+                calendar_failure("a@example.com", &cal("id1", summary), "boom"),
+                "a@example.com のカレンダー「id1」の予定を読み込めませんでした: boom"
+            );
+        }
+    }
+
+    #[test]
     fn events_url_keeps_a_calendar_id_in_one_path_segment() {
         assert_eq!(
             events_url("a@example.com").unwrap(),
@@ -903,11 +985,13 @@ mod tests {
             timed: vec![],
             needs_login: vec!["b@example.com".into()],
             failed: Default::default(),
+            calendar_failed: vec!["x".into()],
         };
         let v = serde_json::to_value(&w).unwrap();
         assert_eq!(v["weekStart"], "2026-10-25");
         assert_eq!(v["allDay"][0]["day"], 1);
         assert_eq!(v["allDay"][0]["declined"], true);
         assert_eq!(v["needsLogin"][0], "b@example.com");
+        assert_eq!(v["calendarFailed"][0], "x");
     }
 }
