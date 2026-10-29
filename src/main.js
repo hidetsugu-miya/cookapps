@@ -197,26 +197,54 @@ function row(t) {
   return li;
 }
 
-// Sizes the frame to its document. The frame goes to 0 first, or the viewport would floor the height.
-// Requests within a frame are folded into one fit, so a mail of many images does not force a layout per image.
+// The mail's document can name elements after Document's own members (<img name="querySelectorAll">),
+// which hides the real ones (DOM clobbering), so the prototype's are called explicitly.
+const queryAll = (doc, selector) => Document.prototype.querySelectorAll.call(doc, selector);
+const rootOf = Object.getOwnPropertyDescriptor(Document.prototype, "documentElement").get;
+const listen = (doc, type, handler) => EventTarget.prototype.addEventListener.call(doc, type, handler, true);
+
+// Frames waiting to be sized. All of them are measured first and written after, in one animation frame,
+// so a mail of many images does not force a layout per image.
+const fitting = new Set();
 function fitFrame(frame) {
-  if (frame.fitting) return;
-  frame.fitting = requestAnimationFrame(() => {
-    frame.fitting = 0;
-    frame.style.height = "0";
-    frame.style.height = `${frame.contentDocument.documentElement.scrollHeight}px`;
-  });
+  if (!fitting.size) {
+    requestAnimationFrame(() => {
+      const frames = [...fitting];
+      fitting.clear();
+      const heights = frames.map((frame) => {
+        // null: the frame left the page before this frame.
+        const root = frame.contentDocument && rootOf.call(frame.contentDocument);
+        if (!root) return null;
+        // Content taller than the frame overflows it, which scrollHeight reports; otherwise the root's own height is the content's.
+        return Math.ceil(root.scrollHeight > root.clientHeight ? root.scrollHeight : root.getBoundingClientRect().height);
+      });
+      frames.forEach((frame, i) => {
+        if (heights[i] !== null && frame.style.height !== `${heights[i]}px`) frame.style.height = `${heights[i]}px`;
+      });
+    });
+  }
+  fitting.add(frame);
 }
 
+// A frame in a hidden view is 0 wide, so a width change fits it once the view is shown (and after a window resize).
+// Its own height changes are not acted on.
+const frameObserver = new ResizeObserver((entries) => {
+  for (const { target, contentRect } of entries) {
+    if (target.fitWidth !== contentRect.width) {
+      target.fitWidth = contentRect.width;
+      fitFrame(target);
+    }
+  }
+});
+
 // Fits the frame when its document loads and again when an image in it loads or fails, then hands the document to `onLoad`.
-// A frame in a hidden view is 0 wide, so the observer fits it once the view is shown (and after a window resize).
 function autoFit(frame, onLoad) {
   frame.onload = () => {
     fitFrame(frame);
-    for (const type of ["load", "error"]) frame.contentDocument.addEventListener(type, () => fitFrame(frame), true);
+    for (const type of ["load", "error"]) listen(frame.contentDocument, type, () => fitFrame(frame));
     onLoad(frame.contentDocument);
   };
-  new ResizeObserver(() => fitFrame(frame)).observe(frame);
+  frameObserver.observe(frame);
 }
 
 // Limits a mail to inline styles and data: images. The frame's sandbox has allow-same-origin, so with no scripts allowed
@@ -228,36 +256,41 @@ const withBodyCsp = (html) => (/^\s*<!doctype[^>]*>/i.test(html) ? html.replace(
 // The https image URLs of a loaded mail, once each. The images are not fetched: the frame's CSP allows data: only.
 const externalImages = (doc) => [
   ...new Set(
-    [...doc.querySelectorAll("img[src]")].map((i) => i.getAttribute("src").trim()).filter((s) => /^https:\/\//i.test(s)),
+    [...queryAll(doc, "img[src]")].map((i) => i.getAttribute("src").trim()).filter((s) => /^https:\/\//i.test(s)),
   ),
 ];
 
-// The "show images" bar: Rust fetches the images, and the loaded document's images get them as data: URIs.
-function imagesBar(urls, frame) {
+// Rust fetches the images, and the loaded document's images get them as data: URIs. Throws when none could be shown.
+async function showImages(urls, frame) {
+  const images = await invoke("fetch_images", { urls });
+  const doc = frame.contentDocument;
+  // null: the thread was left meanwhile, and its frame is gone.
+  if (!doc) return;
+  let shown = 0;
+  for (const img of queryAll(doc, "img[src]")) {
+    const data = images[img.getAttribute("src").trim()];
+    if (!data) continue;
+    // The browser prefers srcset, and a <picture>'s <source>, over src.
+    img.removeAttribute("srcset");
+    img.closest("picture")?.querySelectorAll("source").forEach((source) => source.remove());
+    img.setAttribute("src", data);
+    shown++;
+  }
+  if (!shown) throw "画像を取得できませんでした";
+}
+
+// A bar above a mail's frame with one button. The bar goes when `onClick` succeeds; a failure is shown.
+function imagesBar(label, onClick) {
   const bar = document.createElement("div");
   bar.className = "images-bar";
   const button = document.createElement("button");
   button.className = "text-btn";
-  button.textContent = "画像を表示";
+  button.textContent = label;
   button.onclick = async () => {
     $("error").hidden = true;
     button.disabled = true;
     try {
-      const images = await invoke("fetch_images", { urls });
-      const doc = frame.contentDocument;
-      // null: the thread was left meanwhile, and its frame is gone.
-      if (!doc) return;
-      let shown = 0;
-      for (const img of doc.querySelectorAll("img[src]")) {
-        const data = images[img.getAttribute("src").trim()];
-        if (!data) continue;
-        // The browser prefers srcset, and a <picture>'s <source>, over src.
-        img.removeAttribute("srcset");
-        img.closest("picture")?.querySelectorAll("source").forEach((source) => source.remove());
-        img.setAttribute("src", data);
-        shown++;
-      }
-      if (!shown) throw "画像を取得できませんでした";
+      await onClick();
       bar.remove();
     } catch (e) {
       button.disabled = false;
@@ -266,6 +299,29 @@ function imagesBar(urls, frame) {
   };
   bar.append(button);
   return bar;
+}
+
+// Shows the mail's external images: at once when its sender is remembered, with a bar to forget the sender;
+// otherwise behind a bar whose button shows them and remembers the sender.
+async function offerImages(m, frame, urls) {
+  let known = false;
+  try {
+    known = await invoke("image_sender_known", { from: m.from });
+  } catch (e) {
+    showError(e);
+  }
+  if (!known) {
+    frame.before(
+      imagesBar("画像を表示", async () => {
+        await showImages(urls, frame);
+        // The images are shown, so a failure to remember is only reported.
+        invoke("remember_image_sender", { from: m.from }).catch(showError);
+      }),
+    );
+    return;
+  }
+  frame.before(imagesBar("この送信者の画像を自動で表示しない", () => invoke("forget_image_sender", { from: m.from })));
+  showImages(urls, frame).catch(showError);
 }
 
 function message(m) {
@@ -281,7 +337,7 @@ function message(m) {
     frame.srcdoc = withBodyCsp(m.body);
     autoFit(frame, (doc) => {
       const urls = externalImages(doc);
-      if (urls.length) frame.before(imagesBar(urls, frame));
+      if (urls.length) offerImages(m, frame, urls);
     });
     article.append(frame);
   } else {
