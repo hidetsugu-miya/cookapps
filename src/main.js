@@ -1573,7 +1573,7 @@ function taskRow(t, showProject, accounts) {
   box.onclick = (e) => e.stopPropagation();
   box.onchange = () => {
     li.classList.add("done");
-    todoCall("todoist_set_done", { id: t.id, done: true }, box);
+    setTaskDone(t.id, true, box);
   };
   const line = tag("div", "t");
   if (mail) line.insertAdjacentHTML("beforeend", MAIL_SVG);
@@ -1674,7 +1674,7 @@ function gripOf(li, t) {
       const swallow = (e) => e.stopPropagation();
       document.addEventListener("click", swallow, true);
       setTimeout(() => document.removeEventListener("click", swallow, true));
-      if (projectId) todoCall("todoist_move", { id: t.id, projectId });
+      if (projectId) moveTask(t.id, projectId);
       // Only a redraw held back during the drag; the next refresh fetches.
       else if (todoUndrawn) renderTodo();
     };
@@ -1745,30 +1745,93 @@ function scheduleTodoReload(withDone) {
   todoReloadDone ||= withDone;
   clearTimeout(todoReloadTimer);
   todoReloadTimer = setTimeout(() => {
+    // The end of the last change in flight schedules it again.
+    if (todoWrites) return;
     const done = todoReloadDone;
     todoReloadDone = false;
     loadTodo(false, done);
   }, 300);
 }
 
+// Changes in flight (todoCall's writes). While any is, a load draws nothing: it could hold the state from before the change and put it back.
+let todoWrites = 0;
+
 // Runs a change, then reloads whether it worked or not, so the screen shows what Todoist has.
+// `apply` first changes `todo` and draws it, so the screen does not wait for Todoist; a failed call is undone by the reload, as a removed mail row comes back.
+// A load sent before a change started or ended is dropped (todoSeq): it could hold the state from before the change.
 // A null answer (a token is needed) shows up in that reload. Returns the command's answer: null when it failed or a token is needed.
-async function todoCall(command, args, control) {
+async function todoCall(command, args, control, apply) {
   $("error").hidden = true;
   if (control) control.disabled = true;
+  todoWrites++;
+  todoSeq++;
+  if (apply) {
+    apply();
+    taskById = new Map(todo.tasks.map((t) => [t.id, t]));
+    setTodoCount(todo.tasks.filter(isDueToday).length);
+    // Like a load: a field being typed in keeps what was typed, and the redraw waits.
+    if (editingField()) todoUndrawn = true;
+    else renderTodo();
+  }
   let answer = null;
   try {
     answer = await invoke(command, args);
   } catch (e) {
     showError(e);
   }
+  todoWrites--;
+  todoSeq++;
   if (control) control.disabled = false;
   // Only completing or reopening a task changes the completed ones.
   scheduleTodoReload(command === "todoist_set_done");
   return answer;
 }
 
-const saveTask = (id, fields) => todoCall("todoist_update", { id, ...fields });
+// What the screen shows for a due text the calendar picked (`YYYY-MM-DD`, with ` HH:MM` for a task with a time), or an empty one (no due date).
+// Other text is Todoist's to read, so the task stays as it is until the reload.
+const PICKED_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
+
+function patchTask(id, { dueString, ...fields }) {
+  const t = taskById.get(id);
+  if (!t) return;
+  Object.assign(t, fields);
+  if (dueString === undefined) return;
+  const text = dueString.trim();
+  const m = PICKED_DUE.exec(text);
+  if (m) {
+    const today = isoDate(new Date());
+    t.due = { date: m[1], time: m[2] ?? null, string: text, recurring: false };
+    t.bucket = m[1] < today ? "overdue" : m[1] === today ? "today" : "upcoming";
+  } else if (text === "") {
+    t.due = null;
+    t.bucket = "none";
+  }
+}
+
+// A task and the rows of its subtasks, which Todoist moves with it.
+function moveLocal(id, projectId) {
+  for (const t of todo.tasks) if (t.id === id || t.parent?.id === id) t.projectId = projectId;
+}
+
+// Completes (`done` true), reopens (false) or deletes (null) a task. In the subtask list of the task holding it, it turns done, open or goes, and the counts follow.
+// A completed or deleted one leaves the list with the rows of its subtasks. A reopened one has no row until the reload, which has the data for it.
+function settleLocal(id, done) {
+  for (const p of todo.tasks) {
+    const s = p.subtasks.find((s) => s.id === id);
+    if (!s) continue;
+    if (done === null) p.subtasks = p.subtasks.filter((x) => x !== s);
+    else s.done = done;
+    // Active subtasks first, then the completed ones.
+    p.subtasks.sort((a, b) => a.done - b.done);
+    p.subDone = p.subtasks.filter((x) => x.done).length;
+    p.subTotal = p.subtasks.length;
+  }
+  if (done !== false) todo.tasks = todo.tasks.filter((t) => t.id !== id && t.parent?.id !== id);
+}
+
+const saveTask = (id, fields) => todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields));
+const moveTask = (id, projectId) => todoCall("todoist_move", { id, projectId }, null, () => moveLocal(id, projectId));
+const setTaskDone = (id, done, box) => todoCall("todoist_set_done", { id, done }, box, () => settleLocal(id, done));
 
 // The menu under `anchor`; one at a time, closed by a pick, a click elsewhere, or Escape.
 let menuEl = null;
@@ -1898,7 +1961,7 @@ function openProjectMenu(anchor, t) {
       label: projectName(x),
       color: x.color,
       current: x.id === t.projectId,
-      pick: () => x.id !== t.projectId && todoCall("todoist_move", { id: t.id, projectId: x.id }),
+      pick: () => x.id !== t.projectId && moveTask(t.id, x.id),
     })),
   );
 }
@@ -1944,7 +2007,7 @@ function subtaskRow(s) {
   const box = checkBox(PRIORITY_COLORS[4], s.done, s.done ? "未完了に戻す" : "完了にする");
   box.onchange = () => {
     li.classList.toggle("done", box.checked);
-    todoCall("todoist_set_done", { id: s.id, done: box.checked }, box);
+    setTaskDone(s.id, box.checked, box);
   };
   // A subtask with subtasks of its own has a row among the tasks, so it opens like one; otherwise nothing could reach its subtasks.
   if (taskById.has(s.id)) {
@@ -1978,7 +2041,7 @@ function renderDetail() {
   $("todo-title").textContent = projectName(projectOf(t.projectId));
 
   const box = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
-  box.onchange = () => todoCall("todoist_set_done", { id: t.id, done: true }, box);
+  box.onchange = () => setTaskDone(t.id, true, box);
   const name = tag("input", "name");
   name.value = t.content;
   name.dataset.field = "name";
@@ -2092,7 +2155,8 @@ async function loadTodo(quiet = false, withDone = true) {
   const seq = ++todoSeq;
   try {
     const data = await invoke("todoist_load", { withDone });
-    if (seq !== todoSeq || screen !== "todo") return false;
+    // Not while a change is in flight: the reload after the last one draws.
+    if (seq !== todoSeq || screen !== "todo" || todoWrites) return false;
     if (data === null) {
       showTokenForm();
       return true;
@@ -2142,10 +2206,7 @@ $("todo-delete").onclick = () => {
   const id = todoOpen;
   todoOpen = null;
   // Gone from the list at once; the reload after the call brings it back if Todoist refused.
-  todo.tasks = todo.tasks.filter((t) => t.id !== id);
-  taskById.delete(id);
-  renderTodo();
-  todoCall("todoist_delete", { id });
+  todoCall("todoist_delete", { id }, null, () => settleLocal(id, null));
 };
 $("todo-delete").onblur = resetDelete;
 $("todo-back").onclick = () => {
@@ -2212,7 +2273,7 @@ async function loadTodoCount() {
     } else todoCountOff = true;
   } catch {}
   // The Todo screen sets the count itself, and its data is newer than this fetch.
-  if (screen !== "todo") setTodoCount(count);
+  if (screen !== "todo" && !todoWrites) setTodoCount(count);
 }
 loadTodoCount();
 
