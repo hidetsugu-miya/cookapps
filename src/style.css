@@ -82,7 +82,7 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .date { text-align: right; white-space: nowrap; padding-right: 8px; color: #666; font-size: 12px; }
 
 /* Detail view: the toolbar is tinted, the subject sits above the messages, and each message lines its body up with the sender's name (avatar 40px + gap 16px). */
-#mail-header.detail { background: #eef3fb; border-bottom: 1px solid #d3e3fd; }
+#mail-header.detail { padding: 14px 32px 8px; background: #eef3fb; border-bottom: 1px solid #d3e3fd; }
 #mail-header.detail .icon-btn { color: #444746; border-radius: 50%; }
 #mail-header.detail #thread-slack { margin-left: auto; }
 #thread-head { margin: 16px 0 20px 56px; font-size: 22px; line-height: 1.35; }

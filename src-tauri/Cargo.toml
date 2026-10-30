@@ -28,5 +28,11 @@ tauri-plugin-opener = "2"
 tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "sync", "time"] }
 url = "2"
 
+# External images on macOS are fetched through NSURLSession (see `images/macos.rs`).
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSData", "NSDate", "NSDictionary", "NSError", "NSHTTPCookieStorage", "NSObject", "NSOperation", "NSString", "NSURL", "NSURLCache", "NSURLCredentialStorage", "NSURLRequest", "NSURLResponse", "NSURLSession"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
