@@ -123,7 +123,7 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 #cal-title { font-size: 20px; }
 #cal-title .year { color: #888; font-weight: normal; }
 .text-btn { height: 32px; padding: 0 16px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; color: #333; cursor: pointer; }
-.text-btn:hover { background: var(--hover); }
+.text-btn:hover { background: var(--soft); }
 #cal-notice:not(:empty), #todo-notice:not(:empty) { padding: 0 32px 8px; }
 #calendar.loading #cal-scroll { opacity: .5; }
 #cal-scroll { flex: 1; overflow-y: auto; }
