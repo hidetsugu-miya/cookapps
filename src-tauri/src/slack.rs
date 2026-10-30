@@ -13,7 +13,7 @@ use url::Url;
 use crate::{
     accounts::write_synced,
     auth::{config_dir, delete_entry, Auth},
-    gmail::{log_failure, parse_retry_after, retry_wait, MAX_RETRIES},
+    gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
 };
 
 /// Every request goes here and nowhere else: nothing from outside is put into the URL.
@@ -32,6 +32,8 @@ const RECENT_MAX: usize = 8;
 /// `users.conversations` answers in pages of 200 channels; the channels past this many pages are left out.
 const CHANNEL_PAGES: usize = 50;
 const CHANNELS_TTL: Duration = Duration::from_secs(10 * 60);
+/// After a move of v0.11.0's token failed for a reason that may pass (offline, 5xx), the next try waits this long.
+const MIGRATE_RETRY: Duration = Duration::from_secs(5 * 60);
 /// Characters of a channel name that are remembered.
 const NAME_LIMIT: usize = 80;
 /// Characters of the mail's text that are posted.
@@ -88,11 +90,19 @@ pub struct SlackLoad {
     recent: Vec<Recent>,
 }
 
+#[derive(Default)]
+struct Migration {
+    done: bool,
+    tried: Option<Instant>,
+}
+
 /// What the commands share.
 #[derive(Default)]
 pub struct SlackState {
-    /// Whether v0.11.0's token has been dealt with in this run. The lock is held through the move.
-    migrated: tokio::sync::Mutex<bool>,
+    /// Whether v0.11.0's token has been dealt with in this run, and when it was last tried. The lock is held through the move.
+    migrated: tokio::sync::Mutex<Migration>,
+    /// Held while the keychain and `slack-workspaces.json` are updated together.
+    files: tokio::sync::Mutex<()>,
     /// Each workspace's channel list, in memory only.
     channels: Mutex<HashMap<String, (Instant, Vec<Channel>)>>,
 }
@@ -216,6 +226,19 @@ fn next_cursor(reply: &Value) -> Option<String> {
 
 fn channels_fresh(age: Duration) -> bool {
     age < CHANNELS_TTL
+}
+
+/// Whether the move of v0.11.0's token is tried now: it was never tried, or the last try is old enough.
+fn migrate_due(since_last_try: Option<Duration>) -> bool {
+    since_last_try.is_none_or(|age| age >= MIGRATE_RETRY)
+}
+
+/// The Slack error codes that say the token itself is no good, now and later.
+fn token_is_dead(code: &str) -> bool {
+    matches!(
+        code,
+        "invalid_auth" | "not_authed" | "token_revoked" | "account_inactive"
+    )
 }
 
 /// The channel and the parent message's `thread_ts` of a Slack link, and the link's host.
@@ -365,6 +388,33 @@ fn check_reply(reply: &Value) -> Result<(), String> {
     ))
 }
 
+/// A failed Web API call. `token_dead` says Slack refused the token itself, which retrying cannot fix.
+struct SlackError {
+    message: String,
+    token_dead: bool,
+}
+
+impl From<String> for SlackError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            token_dead: false,
+        }
+    }
+}
+
+impl From<SlackError> for String {
+    fn from(e: SlackError) -> Self {
+        e.message
+    }
+}
+
+impl From<SlackError> for ApiError {
+    fn from(e: SlackError) -> Self {
+        e.message.into()
+    }
+}
+
 /// What a Web API call sends. The methods that read (`users.conversations`, `conversations.info`) take a form, not JSON.
 enum Payload<'a> {
     Empty,
@@ -378,7 +428,7 @@ async fn call(
     token: &str,
     method: &str,
     payload: Payload<'_>,
-) -> Result<Value, String> {
+) -> Result<Value, SlackError> {
     let mut attempt = 0;
     loop {
         let req = http.post(format!("{API_URL}/{method}")).bearer_auth(token);
@@ -403,13 +453,16 @@ async fn call(
             continue;
         }
         if !status.is_success() {
-            return Err(format!("Slack が {status} を返しました"));
+            return Err(format!("Slack が {status} を返しました").into());
         }
         let reply: Value = res
             .json()
             .await
             .map_err(|e| format!("Slack の返答を読めません: {e}"))?;
-        check_reply(&reply)?;
+        check_reply(&reply).map_err(|message| SlackError {
+            message,
+            token_dead: token_is_dead(reply["error"].as_str().unwrap_or_default()),
+        })?;
         return Ok(reply);
     }
 }
@@ -459,9 +512,13 @@ async fn token_of(team_id: &str) -> Result<String, String> {
 }
 
 /// `auth.test` with `token`: which workspace and user the token is.
-async fn identify(http: &reqwest::Client, token: &str) -> Result<Workspace, String> {
+async fn identify(http: &reqwest::Client, token: &str) -> Result<Workspace, SlackError> {
     let reply = call(http, token, "auth.test", Payload::Empty).await?;
-    workspace_of(&reply).ok_or_else(|| "Slack の返答にワークスペースの ID がありません".into())
+    workspace_of(&reply).ok_or_else(|| {
+        "Slack の返答にワークスペースの ID がありません"
+            .to_owned()
+            .into()
+    })
 }
 
 fn load_list<T: DeserializeOwned>(dir: &Path, file: &str, key: &str) -> Result<Vec<T>, String> {
@@ -515,28 +572,43 @@ fn remove_legacy_file(dir: PathBuf) -> Result<(), String> {
 }
 
 /// The first load of a run moves v0.11.0's token to its workspace's key and drops that version's destinations.
-/// A token that cannot be moved now (offline, refused) stays, and the next load tries again.
+/// A token Slack refuses is dropped. One that cannot be moved for another reason (offline, 5xx) stays,
+/// and a later load tries again once `MIGRATE_RETRY` has passed.
 async fn migrate(dir: &Path, http: &reqwest::Client, state: &SlackState) {
-    let mut done = state.migrated.lock().await;
-    if *done {
+    let mut migration = state.migrated.lock().await;
+    if migration.done || !migrate_due(migration.tried.map(|at| at.elapsed())) {
         return;
     }
+    migration.tried = Some(Instant::now());
     if let Err(e) = remove_legacy_file(dir.to_owned()) {
         log_failure("slack_migrate", LEGACY_USER, e);
     }
-    match move_legacy_token(dir, http).await {
-        Ok(()) => *done = true,
+    match move_legacy_token(dir, http, &state.files).await {
+        Ok(()) => migration.done = true,
         Err(e) => {
             log_failure("slack_migrate", LEGACY_USER, e);
         }
     }
 }
 
-async fn move_legacy_token(dir: &Path, http: &reqwest::Client) -> Result<(), String> {
+async fn move_legacy_token(
+    dir: &Path,
+    http: &reqwest::Client,
+    files: &tokio::sync::Mutex<()>,
+) -> Result<(), String> {
     let Some(token) = read_secret(LEGACY_USER.into()).await? else {
         return Ok(());
     };
-    let workspace = identify(http, &token).await?;
+    let workspace = match identify(http, &token).await {
+        Ok(workspace) => workspace,
+        // Slack will not take this token later either: drop it instead of asking again.
+        Err(e) if e.token_dead => {
+            log_failure("slack_migrate", LEGACY_USER, e);
+            return delete_secret(LEGACY_USER.into()).await;
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let _files = files.lock().await;
     if moves_legacy_token(&load_workspaces(dir).await?, &workspace.team_id) {
         register(dir, token, workspace).await?;
     }
@@ -572,7 +644,7 @@ pub async fn slack_load(
 #[tauri::command]
 pub async fn slack_check(auth: State<'_, Auth>, team_id: String) -> Result<Workspace, String> {
     let result = match token_of(&team_id).await {
-        Ok(token) => identify(auth.http(), &token).await,
+        Ok(token) => identify(auth.http(), &token).await.map_err(String::from),
         Err(e) => Err(e),
     };
     result.map_err(|e| log_failure("slack_check", &team_id, e))
@@ -597,12 +669,14 @@ pub async fn slack_add_workspace(
     let team_id = workspace.team_id.clone();
     // The new token may reach channels the old one did not.
     state.channels.lock().unwrap().remove(&team_id);
+    let _files = state.files.lock().await;
     register(&config_dir(&app)?, token, workspace)
         .await
         .map_err(|e| log_failure("slack_add_workspace", &team_id, e))
 }
 
-/// Revokes the workspace's token at Slack (a failure is logged, not fatal), removes it from the keychain, and forgets the workspace and its recent destinations.
+/// Forgets the workspace and its recent destinations, then revokes its token at Slack (a failure is logged, not fatal) and removes it from the keychain.
+/// The lists are saved first: if that fails, the token is left alone and the workspace stays usable.
 #[tauri::command]
 pub async fn slack_remove_workspace(
     app: AppHandle,
@@ -612,38 +686,35 @@ pub async fn slack_remove_workspace(
 ) -> Result<Vec<Workspace>, String> {
     let command = "slack_remove_workspace";
     let user = token_key(&team_id).map_err(|e| log_failure(command, &team_id, e))?;
-    match read_secret(user.clone()).await {
-        Ok(Some(token)) => {
-            if let Err(e) = call(auth.http(), &token, "auth.revoke", Payload::Empty).await {
-                log_failure("slack_revoke", &team_id, e);
-            }
-        }
-        Ok(None) => {}
-        Err(e) => {
-            log_failure(command, &team_id, e);
-        }
-    }
-    delete_secret(user)
-        .await
-        .map_err(|e| log_failure(command, &team_id, e))?;
-    state.channels.lock().unwrap().remove(&team_id);
+    let _files = state.files.lock().await;
+    let token = read_secret(user.clone()).await.unwrap_or_else(|e| {
+        log_failure(command, &team_id, e);
+        None
+    });
     let dir = config_dir(&app)?;
-    blocking(move || {
-        let list = without_workspace(load_list(&dir, WORKSPACES_FILE, WORKSPACES_KEY)?, &team_id);
+    let gone = team_id.clone();
+    let list = blocking(move || {
+        let list = without_workspace(load_list(&dir, WORKSPACES_FILE, WORKSPACES_KEY)?, &gone);
         save_list(&dir, WORKSPACES_FILE, WORKSPACES_KEY, &list)?;
         // The recent list is a convenience: a broken file is not worth failing the removal for.
         if let Ok(recent) = load_list::<Recent>(&dir, RECENT_FILE, RECENT_KEY) {
-            save_list(
-                &dir,
-                RECENT_FILE,
-                RECENT_KEY,
-                &without_team(recent, &team_id),
-            )?;
+            save_list(&dir, RECENT_FILE, RECENT_KEY, &without_team(recent, &gone))?;
         }
         Ok(list)
     })
     .await
-    .map_err(|e| log_failure(command, "-", e))
+    .map_err(|e| log_failure(command, &team_id, e))?;
+    state.channels.lock().unwrap().remove(&team_id);
+    if let Some(token) = token {
+        if let Err(e) = call(auth.http(), &token, "auth.revoke", Payload::Empty).await {
+            log_failure("slack_revoke", &team_id, e);
+        }
+    }
+    // The workspace is gone from the list already: a token left in the keychain is only logged.
+    if let Err(e) = delete_secret(user).await {
+        log_failure(command, &team_id, e);
+    }
+    Ok(list)
 }
 
 /// All the channels the token's user is in, page by page.
@@ -673,9 +744,6 @@ pub async fn slack_channels(
     refresh: bool,
 ) -> Result<Vec<Channel>, String> {
     let command = "slack_channels";
-    let token = token_of(&team_id)
-        .await
-        .map_err(|e| log_failure(command, &team_id, e))?;
     if !refresh {
         let cache = state.channels.lock().unwrap();
         if let Some((_, list)) = cache
@@ -685,6 +753,9 @@ pub async fn slack_channels(
             return Ok(list.clone());
         }
     }
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
     let list = fetch_channels(auth.http(), &token)
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
@@ -1132,6 +1203,35 @@ mod tests {
             Err("トークンが無効です。設定で貼り直してください".into())
         );
         assert!(check_reply(&json!({})).unwrap_err().contains("unknown"));
+    }
+
+    #[test]
+    fn only_codes_that_refuse_the_token_are_permanent() {
+        for code in [
+            "invalid_auth",
+            "not_authed",
+            "token_revoked",
+            "account_inactive",
+        ] {
+            assert!(token_is_dead(code), "{code}");
+        }
+        for code in [
+            "ratelimited",
+            "missing_scope",
+            "internal_error",
+            "unknown",
+            "",
+        ] {
+            assert!(!token_is_dead(code), "{code}");
+        }
+    }
+
+    #[test]
+    fn the_legacy_token_is_tried_again_only_after_the_wait() {
+        assert!(migrate_due(None));
+        assert!(!migrate_due(Some(Duration::ZERO)));
+        assert!(!migrate_due(Some(MIGRATE_RETRY - Duration::from_secs(1))));
+        assert!(migrate_due(Some(MIGRATE_RETRY)));
     }
 
     #[test]
