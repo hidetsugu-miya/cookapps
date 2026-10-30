@@ -1195,7 +1195,9 @@ function eventBox(e) {
   box.style.setProperty("--c", eventColor(e));
   box.title = `${e.summary}\n${e.account}`;
   const name = e.summary || "(件名なし)";
-  box.append(el("cal-name", name.length > CAL_NAME_MAX ? name.slice(0, CAL_NAME_MAX) + "…" : name));
+  // Counted by code point, so an emoji is never split in half.
+  const chars = [...name];
+  box.append(el("cal-name", chars.length > CAL_NAME_MAX ? chars.slice(0, CAL_NAME_MAX).join("") + "…" : name));
   // Under 45 minutes has no room for a second line, so the title takes the only one.
   if (e.endMin - e.startMin < 45) box.classList.add("short");
   // Side-by-side boxes are too narrow for the time; a long title would push it out of sight anyway.
