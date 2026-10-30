@@ -80,6 +80,7 @@ pub fn run() {
         .manage(image_senders::ImageSenders::default())
         .manage(calendar::CalendarCache::default())
         .manage(todoist::TodoistState::default())
+        .manage(slack::SlackState::default())
         .invoke_handler(tauri::generate_handler![
             auth::login,
             auth::remove_account,
@@ -110,10 +111,10 @@ pub fn run() {
             todoist::todoist_open,
             slack::slack_load,
             slack::slack_check,
-            slack::slack_save_token,
-            slack::slack_disconnect,
-            slack::slack_add_destination,
-            slack::slack_remove_destination,
+            slack::slack_add_workspace,
+            slack::slack_remove_workspace,
+            slack::slack_channels,
+            slack::slack_link,
             slack::slack_preview,
             slack::slack_post,
             set_badge
