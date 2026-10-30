@@ -195,6 +195,8 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .task:hover .due, .task:focus-within .due { visibility: hidden; }
 .subcount { display: inline-flex; align-items: center; gap: 3px; color: #888; font-size: 12px; margin-left: 6px; }
 .subcount svg { width: 13px; height: 13px; }
+.row-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 1px 6px; border: 1px solid #0b5bd3; border-radius: 6px; font: inherit; }
+.row-edit:focus { outline: none; }
 .body .parent { color: #888; font-size: 12px; flex: none; }
 
 #todo-detail { max-width: 760px; }
