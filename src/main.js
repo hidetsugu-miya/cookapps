@@ -738,10 +738,10 @@ async function openThread({ id, account }, li, origin = "mail") {
     frameObserver.disconnect();
     waiting.clear();
     forgettable.clear();
-    // Only the latest message is open when the thread has several.
+    // Newest first. Only the latest message (the first) is open when the thread has several.
     const several = t.messages.length > 1;
     $("messages").replaceChildren(
-      ...t.messages.map((m, i) => message(m, ctx, account, several && i < t.messages.length - 1, several)),
+      ...[...t.messages].reverse().map((m, i) => message(m, ctx, account, several && i > 0, several)),
     );
     show("thread");
     // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
@@ -2411,7 +2411,7 @@ $("slack-token").onsubmit = async (e) => {
 function latestText() {
   const m = current.latest;
   if (!m.html) return m.body;
-  const doc = $("messages").lastElementChild?.querySelector("iframe")?.contentDocument;
+  const doc = $("messages").firstElementChild?.querySelector("iframe")?.contentDocument;
   return doc?.body?.innerText.trim() || unescapeHtml(m.snippet);
 }
 const slackDate = (ms) => {
