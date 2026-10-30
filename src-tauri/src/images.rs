@@ -29,7 +29,7 @@ mod macos;
 use macos::Session;
 #[cfg(not(target_os = "macos"))]
 #[derive(Default)]
-struct Session;
+struct Session {}
 
 const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
