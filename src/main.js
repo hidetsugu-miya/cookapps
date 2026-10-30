@@ -1871,7 +1871,10 @@ function showMenu(anchor, node) {
   document.body.append(node);
   const r = anchor.getBoundingClientRect();
   node.style.left = `${Math.max(8, Math.min(r.left, innerWidth - node.offsetWidth - 8))}px`;
-  node.style.top = `${Math.max(8, Math.min(r.bottom + 4, innerHeight - node.offsetHeight - 8))}px`;
+  const top = Math.max(8, Math.min(r.bottom + 4, innerHeight - node.offsetHeight - 8));
+  node.style.top = `${top}px`;
+  // The top stays where it is when the menu grows later (the channel list), so the growth stops at the window's edge.
+  node.style.maxHeight = `${innerHeight - top - 8}px`;
 }
 
 function openMenu(anchor, items) {
@@ -2322,7 +2325,25 @@ document.addEventListener("visibilitychange", refreshTodo);
 // Settings: the Slack workspaces. A token is never shown; Rust keeps it in the keychain.
 let settingsSeq = 0;
 
-// Draws the workspaces, then asks Slack about each token: a row says why when its token is not usable.
+// teamId -> the last `slack_check` of that workspace's token. A redraw after an add or a removal reuses it,
+// except for a workspace that is new, has a different user (its token was replaced), or was not usable.
+const wsChecks = new Map();
+function checkWorkspace(w) {
+  const prev = wsChecks.get(w.teamId);
+  if (prev && !prev.bad && prev.user === w.user) return prev;
+  const c = { user: w.user, bad: false };
+  c.done = invoke("slack_check", { teamId: w.teamId }).then(
+    (r) => ({ text: `${r.user} ・ 接続済み`, bad: false }),
+    (e) => {
+      c.bad = true;
+      return { text: `確認できません: ${e}`, bad: true };
+    },
+  );
+  wsChecks.set(w.teamId, c);
+  return c;
+}
+
+// Draws the workspaces, then asks Slack about each token that has not been asked: a row says why when its token is not usable.
 function renderWorkspaces(list) {
   const seq = ++settingsSeq;
   $("slack-workspaces").replaceChildren(
@@ -2338,22 +2359,19 @@ function renderWorkspaces(list) {
       del.onclick = async () => {
         $("error").hidden = true;
         try {
-          renderWorkspaces(await invoke("slack_remove_workspace", { teamId: w.teamId }));
+          const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
+          wsChecks.delete(w.teamId);
+          renderWorkspaces(left);
         } catch (e) {
           showError(e);
         }
       };
       li.append(tag("span", "ws-name", w.team), meta, del);
-      invoke("slack_check", { teamId: w.teamId }).then(
-        (c) => {
-          if (seq === settingsSeq) meta.textContent = `${c.user} ・ 接続済み`;
-        },
-        (e) => {
-          if (seq !== settingsSeq) return;
-          meta.textContent = `確認できません: ${e}`;
-          meta.classList.add("bad");
-        },
-      );
+      checkWorkspace(w).done.then((r) => {
+        if (seq !== settingsSeq) return;
+        meta.textContent = r.text;
+        meta.classList.toggle("bad", r.bad);
+      });
       return li;
     }),
   );
@@ -2368,7 +2386,10 @@ async function loadSettings() {
   } catch (e) {
     return showError(e);
   }
-  if (seq === settingsSeq) renderWorkspaces(loaded.workspaces);
+  if (seq !== settingsSeq) return;
+  // Opening the settings asks about every token again.
+  wsChecks.clear();
+  renderWorkspaces(loaded.workspaces);
 }
 
 $("slack-token").onsubmit = async (e) => {
