@@ -187,10 +187,12 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .body .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
 .body .t svg { width: 14px; height: 14px; color: #888; flex: none; }
 .ptag { display: flex; align-items: center; gap: 6px; color: #666; font-size: 12px; overflow: hidden; white-space: nowrap; }
-.task .trail { min-width: 76px; }
+.task .trail { min-width: 76px; position: relative; }
+/* Over the name, so the column is only as wide as the due date. */
+.task .row-actions { position: absolute; right: 0; top: 50%; transform: translateY(-50%); padding-left: 8px; background: #f1f3f5; }
 .due { color: #666; font-size: 12px; white-space: nowrap; padding-right: 8px; }
 .due.over { color: #b00020; }
-.task:not(:hover):not(:focus-within) .row-actions { opacity: 0; }
+.task:not(:hover):not(:focus-within) .row-actions { visibility: hidden; }
 /* visibility, not opacity: an opacity < 1 layer paints above the buttons and would take their clicks. */
 .task:hover .due, .task:focus-within .due { visibility: hidden; }
 .subcount { display: inline-flex; align-items: center; gap: 3px; color: #888; font-size: 12px; margin-left: 6px; }
