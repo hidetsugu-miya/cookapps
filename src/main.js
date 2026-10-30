@@ -2110,7 +2110,12 @@ let descEdit = null;
 
 // Only http(s) links stay: a relative link would resolve to the app's own origin, which Rust's on_navigation allows, and replace the screen.
 // An http(s) link navigates this page and on_navigation opens it in the default browser, as a plain-text mail body's links do.
-const DESC_SANITIZE = { ALLOWED_URI_REGEXP: /^https?:/i };
+// No form controls or styles: they could draw a fake field over the screen. No id or name: they could shadow the screen's own elements for $().
+const DESC_SANITIZE = {
+  ALLOWED_URI_REGEXP: /^https?:/i,
+  FORBID_TAGS: ["form", "input", "button", "textarea", "select", "style"],
+  FORBID_ATTR: ["style", "id", "name"],
+};
 
 function growDesc(area) {
   area.style.height = "auto";
@@ -2129,7 +2134,8 @@ function descParts(t) {
     view.dataset.field = "desc";
     view.tabIndex = 0;
     view.setAttribute("role", "button");
-    view.setAttribute("aria-label", "説明を編集");
+    // Not aria-label: it would replace the description itself for a screen reader.
+    view.setAttribute("aria-description", "押すと編集");
     const edit = () => {
       descEdit = { id: t.id, value: t.description };
       renderDetail();
@@ -2166,8 +2172,13 @@ function descParts(t) {
   save.onclick = () => {
     const value = area.value;
     descEdit = null;
-    if (value !== t.description) saveTask(t.id, { description: value });
-    else renderDetail();
+    if (value === t.description) return renderDetail();
+    // A failed save reopens the editor with what was typed, so a long description is not lost to the reload.
+    saveTask(t.id, { description: value }).then((answer) => {
+      if (answer !== null || todoOpen !== t.id || descEdit) return;
+      descEdit = { id: t.id, value };
+      renderDetail();
+    });
   };
   const actions = tag("div", "desc-actions");
   actions.append(cancel, save);
