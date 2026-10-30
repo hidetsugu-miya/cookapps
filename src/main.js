@@ -1287,8 +1287,8 @@ function renderWeek(w) {
   );
   refreshPopup();
   if (!calScrolled) {
-    // Three hours before now at the top (11:00 shows from 8:00); a little less keeps the hour label whole.
-    $("cal-scroll").scrollTop = Math.max(0, (new Date().getHours() - 3) * HOUR_PX - 12);
+    // Two hours before now at the top (11:00 shows from 9:00); a little less keeps the hour label whole.
+    $("cal-scroll").scrollTop = Math.max(0, (new Date().getHours() - 2) * HOUR_PX - 12);
     calScrolled = true;
   }
 }
