@@ -2060,13 +2060,20 @@ $("todo-add").onsubmit = async (e) => {
   const input = $("todo-add-input");
   const text = input.value.trim();
   if (!text) return;
-  // In "今日" the task goes where Quick Add puts it (the inbox, or the project named in the text).
-  const projectId = todoView === "today" ? null : viewProjectId(todoView);
-  const added = await todoCall("todoist_add", { text, projectId }, input);
+  // In "今日" the task goes where Quick Add puts it (the inbox, or the project named in the text), and a text with no date is due today.
+  const inToday = todoView === "today";
+  const projectId = inToday ? null : viewProjectId(todoView);
+  const added = await todoCall("todoist_add", { text, projectId, today: inToday }, input);
   if (added !== null) {
     input.value = "";
-    // false: created, but the move into the project failed; it is in the inbox.
-    toast(added ? "タスクを追加しました" : "タスクを追加しましたが、プロジェクトへ移せませんでした。受信箱にあります");
+    // false: created, but the move into the project failed (it is in the inbox) or, in "今日", the due date could not be set.
+    toast(
+      added
+        ? "タスクを追加しました"
+        : inToday
+          ? "タスクを追加しましたが、期限を今日にできませんでした"
+          : "タスクを追加しましたが、プロジェクトへ移せませんでした。受信箱にあります",
+    );
   }
   input.focus();
 };
