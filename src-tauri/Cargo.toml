@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+dirs = "7"
 encoding_rs = "0.8"
 getrandom = "0.4"
 keyring = "4"

@@ -122,7 +122,7 @@ impl Auth {
         let refresh_token = match entry.get_password() {
             Ok(p) => p,
             Err(keyring::Error::NoEntry) => return Ok(None),
-            Err(e) => return Err(format!("キーチェーンの読み取りに失敗: {e}")),
+            Err(e) => return Err(format!("資格情報の読み取りに失敗: {e}")),
         };
         let client = load_client(dir)?;
         match self.refresh_access(&client, &refresh_token).await? {
@@ -160,7 +160,7 @@ impl Auth {
                 }
             }
             Err(keyring::Error::NoEntry) => {}
-            Err(e) => return Err(format!("キーチェーンの読み取りに失敗: {e}")),
+            Err(e) => return Err(format!("資格情報の読み取りに失敗: {e}")),
         }
         delete_entry(&entry)?;
         self.access.lock().unwrap().remove(account);
@@ -222,7 +222,7 @@ impl Auth {
         let email = self.fetch_email(&access).await?;
         keyring_entry(&email)?
             .set_password(&refresh_token)
-            .map_err(|e| format!("キーチェーンへの保存に失敗: {e}"))?;
+            .map_err(|e| format!("資格情報の保存に失敗: {e}"))?;
         accounts::save(&dir, &accounts::with_account(existing, &email))?;
         self.access.lock().unwrap().insert(email.clone(), access);
         Ok(email)
@@ -367,7 +367,7 @@ pub(crate) fn delete_entry(entry: &keyring::Entry) -> Result<(), String> {
 fn ignore_missing(result: Result<(), keyring::Error>) -> Result<(), String> {
     match result {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("キーチェーンの削除に失敗: {e}")),
+        Err(e) => Err(format!("資格情報の削除に失敗: {e}")),
     }
 }
 
@@ -506,7 +506,23 @@ mod tests {
         assert_eq!(ignore_missing(Ok(())), Ok(()));
         assert_eq!(ignore_missing(Err(keyring::Error::NoEntry)), Ok(()));
         let err = ignore_missing(Err(keyring::Error::Invalid("k".into(), "v".into())));
-        assert!(err.unwrap_err().contains("キーチェーンの削除に失敗"));
+        assert!(err.unwrap_err().contains("資格情報の削除に失敗"));
+    }
+
+    /// Writes, reads and deletes a real Windows Credential Manager entry under a service name only this test uses.
+    #[cfg(windows)]
+    #[test]
+    fn credential_manager_round_trip() {
+        let user = format!("round-trip-{}", std::process::id());
+        let entry = keyring::Entry::new("jp.mysis.cookup.test", &user).unwrap();
+        let written = entry.set_password("secret-value");
+        let read = entry.get_password();
+        // Deleted before any assertion, so a failed assertion leaves nothing behind.
+        let deleted = entry.delete_credential();
+        written.unwrap();
+        assert_eq!(read.unwrap(), "secret-value");
+        deleted.unwrap();
+        assert!(matches!(entry.get_password(), Err(keyring::Error::NoEntry)));
     }
 
     /// Answers one request with `response`, then hands back the request it received.

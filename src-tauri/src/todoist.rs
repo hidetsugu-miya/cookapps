@@ -695,7 +695,7 @@ fn read_token() -> Result<Option<String>, String> {
     let m = migration(read_entry(&new)?, read_entry(&old)?);
     if let (true, Some(token)) = (m.copy, &m.token) {
         new.set_password(token)
-            .map_err(|e| format!("キーチェーンへの保存に失敗: {e}"))?;
+            .map_err(|e| format!("資格情報の保存に失敗: {e}"))?;
     }
     if m.delete_old {
         delete_entry(&old)?;
@@ -707,7 +707,7 @@ fn read_entry(entry: &keyring::Entry) -> Result<Option<String>, String> {
     match entry.get_password() {
         Ok(t) => Ok(Some(t)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("キーチェーンの読み取りに失敗: {e}")),
+        Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
     }
 }
 
@@ -990,7 +990,7 @@ pub async fn todoist_save_token(
     tokio::task::spawn_blocking(move || {
         token_entry().and_then(|e| {
             e.set_password(&stored)
-                .map_err(|e| format!("キーチェーンへの保存に失敗: {e}"))
+                .map_err(|e| format!("資格情報の保存に失敗: {e}"))
         })
     })
     .await
