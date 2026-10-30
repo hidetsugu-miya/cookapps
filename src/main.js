@@ -1560,6 +1560,8 @@ function taskRow(t, showProject, accounts) {
   const mail = linkedMail(t, accounts);
   const li = tag("li", `task${showProject ? "" : " single"}`);
   li.onclick = () => {
+    // A drag that starts in the name field and ends elsewhere on the row clicks the row; the edit keeps it.
+    if (li.querySelector(".row-edit")) return;
     // A subtask row opens the task that holds it.
     todoOpen = t.parent?.id ?? t.id;
     renderTodo();
@@ -1607,7 +1609,7 @@ function taskRow(t, showProject, accounts) {
   return li;
 }
 
-// Turns a row's name into a text field: Enter saves, Escape or leaving the field puts the name back.
+// Turns a row's name into a text field: Enter or leaving the field saves, Escape puts the name back.
 function editRowName(name, t) {
   const input = tag("input", "row-edit");
   input.value = t.content;
@@ -1627,7 +1629,7 @@ function editRowName(name, t) {
     if (e.key === "Enter") finish(true);
     else if (e.key === "Escape") finish(false);
   };
-  input.onblur = () => finish(false);
+  input.onblur = () => finish(true);
   // The row opens the task on click; the field must not.
   input.onclick = (e) => e.stopPropagation();
   name.replaceWith(input);
