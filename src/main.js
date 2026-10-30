@@ -2319,41 +2319,40 @@ async function refreshTodo() {
 setInterval(refreshTodo, TODO_REFRESH_MS);
 document.addEventListener("visibilitychange", refreshTodo);
 
-// Settings: the Slack token and where mails are posted. The token is never shown; Rust keeps it in the keychain.
+// Settings: the Slack workspaces. A token is never shown; Rust keeps it in the keychain.
 let settingsSeq = 0;
 
-// `broken`: the stored token was refused or could not be checked, so the form takes a new one.
-function setSlackState(text, connected, broken = false) {
-  $("slack-state").textContent = text;
-  $("slack-token").hidden = connected && !broken;
-  $("slack-disconnect").hidden = !connected;
-}
-
-const slackWho = (c) => `接続済み: ${c.team} ・ ${c.user}`;
-
-function renderDestinations(list) {
-  $("slack-dests").replaceChildren(
-    ...(list.length ? list : [null]).map((d, i) => {
+// Draws the workspaces, then asks Slack about each token: a row says why when its token is not usable.
+function renderWorkspaces(list) {
+  const seq = ++settingsSeq;
+  $("slack-workspaces").replaceChildren(
+    ...(list.length ? list : [null]).map((w) => {
       const li = tag("li");
-      if (!d) {
-        li.append(tag("span", "dest-meta", "貼り付け先はまだありません"));
+      if (!w) {
+        li.append(tag("span", "ws-meta", "ワークスペースはまだありません"));
         return li;
       }
-      const del = tag("button", "icon-btn");
-      del.innerHTML = DELETE_SVG;
-      del.setAttribute("aria-label", `${d.name} を削除`);
+      const meta = tag("span", "ws-meta", `${w.user} ・ 確認しています…`);
+      const del = tag("button", "text-btn danger", "接続を解除");
+      del.setAttribute("aria-label", `${w.team} の接続を解除`);
       del.onclick = async () => {
         $("error").hidden = true;
         try {
-          renderDestinations(await invoke("slack_remove_destination", { index: i }));
+          renderWorkspaces(await invoke("slack_remove_workspace", { teamId: w.teamId }));
         } catch (e) {
           showError(e);
         }
       };
-      li.append(
-        tag("span", "dest-name", d.name),
-        tag("span", "dest-meta", `${d.channel} ・ ${d.threadTs ? "スレッドに返信" : "チャンネルに投稿"}`),
-        del,
+      li.append(tag("span", "ws-name", w.team), meta, del);
+      invoke("slack_check", { teamId: w.teamId }).then(
+        (c) => {
+          if (seq === settingsSeq) meta.textContent = `${c.user} ・ 接続済み`;
+        },
+        (e) => {
+          if (seq !== settingsSeq) return;
+          meta.textContent = `確認できません: ${e}`;
+          meta.classList.add("bad");
+        },
       );
       return li;
     }),
@@ -2369,16 +2368,7 @@ async function loadSettings() {
   } catch (e) {
     return showError(e);
   }
-  if (seq !== settingsSeq) return;
-  renderDestinations(loaded.destinations);
-  setSlackState(loaded.connected ? "確認しています…" : "未接続", loaded.connected);
-  if (!loaded.connected) return;
-  try {
-    const c = await invoke("slack_check");
-    if (seq === settingsSeq) setSlackState(slackWho(c), true);
-  } catch (e) {
-    if (seq === settingsSeq) setSlackState(`確認できません: ${e}`, true, true);
-  }
+  if (seq === settingsSeq) renderWorkspaces(loaded.workspaces);
 }
 
 $("slack-token").onsubmit = async (e) => {
@@ -2389,27 +2379,7 @@ $("slack-token").onsubmit = async (e) => {
   input.value = "";
   $("error").hidden = true;
   try {
-    setSlackState(slackWho(await invoke("slack_save_token", { token })), true);
-  } catch (err) {
-    showError(err);
-  }
-};
-$("slack-disconnect").onclick = async () => {
-  $("error").hidden = true;
-  try {
-    await invoke("slack_disconnect");
-    setSlackState("未接続", false);
-  } catch (e) {
-    showError(e);
-  }
-};
-$("slack-dest-add").onsubmit = async (e) => {
-  e.preventDefault();
-  const [name, url] = [$("slack-dest-name"), $("slack-dest-url")];
-  $("error").hidden = true;
-  try {
-    renderDestinations(await invoke("slack_add_destination", { name: name.value, url: url.value }));
-    name.value = url.value = "";
+    renderWorkspaces(await invoke("slack_add_workspace", { token }));
   } catch (err) {
     showError(err);
   }
@@ -2435,8 +2405,9 @@ $("thread-slack").onclick = async () => {
   } catch (e) {
     return showError(e);
   }
-  if (!loaded.connected || !loaded.destinations.length)
-    return toast("Slack のトークンと貼り付け先を設定で登録してください", { label: "設定を開く", run: () => setScreen("settings") });
+  const { workspaces, recent } = loaded;
+  if (!workspaces.length)
+    return toast("Slack のワークスペースを設定で追加してください", { label: "設定を開く", run: () => setScreen("settings") });
   const mail = {
     subject: current.subject || "(件名なし)",
     from: current.latest.from,
@@ -2449,10 +2420,22 @@ $("thread-slack").onclick = async () => {
   } catch (e) {
     return showError(e);
   }
+  const wsName = (teamId) => workspaces.find((w) => w.teamId === teamId)?.team ?? "";
+  const label = (t) => `#${t.name}${t.threadTs ? "（スレッド）" : ""}`;
   const pop = tag("div", "menu slack-pop");
-  const select = tag("select");
-  select.setAttribute("aria-label", "貼り付け先");
-  loaded.destinations.forEach((d, i) => select.append(new Option(`${d.name}${d.threadTs ? "（スレッド）" : ""}`, i)));
+  const input = (name, placeholder) => {
+    const node = tag("input");
+    node.setAttribute("aria-label", name);
+    node.placeholder = placeholder;
+    node.autocomplete = "off";
+    return node;
+  };
+
+  // The workspace whose channels are searched; with one workspace it is not shown.
+  const wsSelect = tag("select");
+  wsSelect.setAttribute("aria-label", "ワークスペース");
+  workspaces.forEach((w) => wsSelect.append(new Option(w.team, w.teamId)));
+  const chosenEl = tag("p", "chosen", "貼り付け先を選んでください");
   const note = tag("textarea");
   note.rows = 2;
   note.placeholder = "ひとこと（任意）";
@@ -2461,23 +2444,105 @@ $("thread-slack").onclick = async () => {
   err.setAttribute("role", "alert");
   err.hidden = true;
   const post = tag("button", "text-btn", "貼る");
+  post.disabled = true;
+
+  // Where the mail goes: set by a recent destination, a channel, or a link.
+  let chosen = null;
+  const choose = (t) => {
+    chosen = t;
+    chosenEl.textContent = `貼り付け先: ${wsName(t.teamId)} ・ ${label(t)}`;
+    err.hidden = true;
+    post.disabled = false;
+    if (wsSelect.value !== t.teamId) {
+      wsSelect.value = t.teamId;
+      loadChannels(false);
+    }
+  };
+
+  const recentList = tag("div", "pick-list");
+  recentList.append(
+    ...recent.map((r) => {
+      const b = tag("button", "", label(r));
+      b.append(tag("span", "ws", wsName(r.teamId)));
+      b.onclick = () => choose(r);
+      return b;
+    }),
+  );
+
+  const search = input("チャンネルを検索", "チャンネルを検索");
+  const reload = tag("button", "text-btn", "更新");
+  reload.setAttribute("aria-label", "チャンネルの一覧を取り直す");
+  const channelList = tag("div", "pick-list");
+  let channels = [];
+  let channelsSeq = 0;
+  const drawChannels = () => {
+    const q = search.value.trim().toLowerCase();
+    const hits = channels.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 50);
+    channelList.replaceChildren(
+      ...(hits.length
+        ? hits.map((c) => {
+            const b = tag("button", "", `#${c.name}`);
+            b.onclick = () => choose({ teamId: wsSelect.value, channel: c.id, name: c.name, threadTs: null });
+            return b;
+          })
+        : [tag("p", "empty", "該当するチャンネルがありません")]),
+    );
+  };
+  const loadChannels = async (refresh) => {
+    const seq = ++channelsSeq;
+    channels = [];
+    channelList.replaceChildren(tag("p", "empty", "読み込んでいます…"));
+    try {
+      const got = await invoke("slack_channels", { teamId: wsSelect.value, refresh });
+      if (seq !== channelsSeq) return;
+      channels = got;
+      drawChannels();
+    } catch (e) {
+      if (seq === channelsSeq) channelList.replaceChildren(tag("p", "err", String(e)));
+    }
+  };
+  search.oninput = drawChannels;
+  wsSelect.onchange = () => loadChannels(false);
+  reload.onclick = () => loadChannels(true);
+
+  const link = tag("form", "row");
+  const url = input("Slack のリンク", "https://…slack.com/archives/…");
+  link.append(url, tag("button", "text-btn", "選ぶ"));
+  link.onsubmit = async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    try {
+      choose(await invoke("slack_link", { url: url.value }));
+    } catch (error) {
+      err.textContent = String(error);
+      err.hidden = false;
+    }
+  };
+
   post.onclick = async () => {
-    const d = loaded.destinations[select.value];
+    const t = chosen;
     err.hidden = true;
     post.disabled = true;
     try {
-      await invoke("slack_post", { channel: d.channel, threadTs: d.threadTs, note: note.value, ...mail });
+      await invoke("slack_post", { teamId: t.teamId, channel: t.channel, threadTs: t.threadTs, name: t.name, note: note.value, ...mail });
       closeMenu();
-      toast(`${d.name} に貼りました`);
+      toast(`${wsName(t.teamId)} の ${label(t)} に貼りました`);
     } catch (e) {
       err.textContent = String(e);
       err.hidden = false;
       post.disabled = false;
     }
   };
-  pop.append(select, tag("pre", "preview", preview), note, err, post);
+
+  const searchRow = tag("div", "row");
+  searchRow.append(search, reload);
+  if (workspaces.length > 1) pop.append(wsSelect);
+  if (recent.length) pop.append(tag("h3", "", "最近使った先"), recentList);
+  pop.append(tag("h3", "", "チャンネルを探す"), searchRow, channelList, tag("h3", "", "リンクから選ぶ"), link, chosenEl);
+  pop.append(tag("pre", "preview", preview), note, err, post);
   showMenu($("thread-slack"), pop);
-  note.focus();
+  loadChannels(false);
+  search.focus();
 };
 
 
