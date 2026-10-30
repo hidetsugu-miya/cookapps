@@ -106,8 +106,10 @@ fn escape_mrkdwn(s: &str) -> String {
 }
 
 /// The mail's text without trailing spaces and runs of blank lines, cut at `BODY_LIMIT` characters with "…".
+/// Only the first `2 * BODY_LIMIT` characters are tidied, so a huge mail costs no more than a long one.
 fn clip_body(body: &str) -> String {
-    let mut text = body
+    let window = body.char_indices().nth(BODY_LIMIT * 2).map(|(end, _)| end);
+    let mut text = body[..window.unwrap_or(body.len())]
         .lines()
         .map(str::trim_end)
         .collect::<Vec<_>>()
@@ -118,6 +120,7 @@ fn clip_body(body: &str) -> String {
     let text = text.trim();
     match text.char_indices().nth(BODY_LIMIT) {
         Some((end, _)) => format!("{}…", &text[..end]),
+        None if window.is_some() => format!("{text}…"),
         None => text.to_owned(),
     }
 }
@@ -207,7 +210,10 @@ async fn call(
         if !status.is_success() {
             return Err(format!("Slack が {status} を返しました"));
         }
-        let reply: Value = res.json().await.map_err(|e| e.to_string())?;
+        let reply: Value = res
+            .json()
+            .await
+            .map_err(|e| format!("Slack の返答を読めません: {e}"))?;
         check_reply(&reply)?;
         return Ok(reply);
     }
@@ -324,9 +330,20 @@ pub async fn slack_save_token(auth: State<'_, Auth>, token: String) -> Result<Co
     Ok(connection)
 }
 
-/// Removes the stored token.
+/// Revokes the stored token at Slack (a failure is logged, not fatal), then removes it from the keychain.
 #[tauri::command]
-pub async fn slack_disconnect() -> Result<(), String> {
+pub async fn slack_disconnect(auth: State<'_, Auth>) -> Result<(), String> {
+    match read_token().await {
+        Ok(Some(token)) => {
+            if let Err(e) = call(auth.http(), &token, "auth.revoke", None).await {
+                log_failure("slack_revoke", TOKEN_USER, e);
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            log_failure("slack_disconnect", TOKEN_USER, e);
+        }
+    }
     tokio::task::spawn_blocking(|| token_entry().and_then(|e| delete_entry(&e)))
         .await
         .map_err(|e| e.to_string())
@@ -504,6 +521,11 @@ mod tests {
         assert_eq!(clip_body(&"あ".repeat(BODY_LIMIT)), "あ".repeat(BODY_LIMIT));
         let cut = clip_body(&"あ".repeat(BODY_LIMIT + 1));
         assert_eq!(cut, format!("{}…", "あ".repeat(BODY_LIMIT)));
+        // Past the tidy window: cut all the same, and blank runs beyond it are never read.
+        let huge = clip_body(&"あ".repeat(BODY_LIMIT * 3));
+        assert_eq!(huge, format!("{}…", "あ".repeat(BODY_LIMIT)));
+        let sparse = format!("a{}b", "\n".repeat(BODY_LIMIT * 2));
+        assert_eq!(clip_body(&sparse), "a…");
     }
 
     #[test]
