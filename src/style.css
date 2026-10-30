@@ -105,7 +105,7 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .msg-head.folded .avatar { justify-self: center; }
 .msg-head.folded .snip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5e5e5e; }
 .msg-body { margin: 12px 0 0 56px; }
-.plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+.plain { white-space: pre-wrap; overflow-wrap: anywhere; font-family: "HackGen Console NF", ui-monospace, Menlo, monospace; font-size: 13px; }
 #messages iframe { display: block; width: 100%; border: 0; }
 /* The images switch is one small line of text above the body, its button drawn as a link. */
 .images-bar { margin-bottom: 8px; font-size: 12px; }
