@@ -2139,7 +2139,12 @@ function descParts(t) {
     };
     // A click on a link opens it, not the editor.
     view.onclick = (e) => e.target.closest("a") || edit();
-    view.onkeydown = (e) => e.key === "Enter" && e.target === view && edit();
+    view.onkeydown = (e) => {
+      if (e.key !== "Enter" || e.target !== view) return;
+      // Without this the Enter reaches the textarea that edit() focuses, and adds a newline.
+      e.preventDefault();
+      edit();
+    };
     return [view];
   }
   const area = tag("textarea", "desc-edit");

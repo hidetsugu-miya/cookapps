@@ -237,6 +237,7 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .desc > :last-child { margin-bottom: 0; }
 #todo-detail .desc p, #todo-detail .desc ul, #todo-detail .desc ol, #todo-detail .desc pre, #todo-detail .desc blockquote { margin: 0 0 8px; }
 #todo-detail .desc h1, #todo-detail .desc h2, #todo-detail .desc h3 { margin: 12px 0 6px; font-size: 15px; }
+#todo-detail .desc ul { list-style: disc; }
 #todo-detail .desc ul, #todo-detail .desc ol { padding-left: 22px; }
 #todo-detail .desc a { color: #0b57d0; }
 #todo-detail .desc code { padding: 1px 4px; border-radius: 4px; background: #f0f2f5; font-family: ui-monospace, monospace; font-size: 12px; }
