@@ -4,6 +4,7 @@ pub mod calendar;
 pub mod gmail;
 pub mod image_senders;
 pub mod images;
+pub mod slack;
 pub mod todoist;
 
 use tauri_plugin_opener::OpenerExt;
@@ -107,6 +108,14 @@ pub fn run() {
             todoist::todoist_move,
             todoist::todoist_delete,
             todoist::todoist_open,
+            slack::slack_load,
+            slack::slack_check,
+            slack::slack_save_token,
+            slack::slack_disconnect,
+            slack::slack_add_destination,
+            slack::slack_remove_destination,
+            slack::slack_preview,
+            slack::slack_post,
             set_badge
         ])
         .run(tauri::generate_context!())

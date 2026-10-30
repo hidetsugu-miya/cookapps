@@ -18,6 +18,9 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>
       <span class="nav-count" aria-hidden="true" hidden></span>
     </button>
+    <button id="nav-settings" class="nav-item" aria-label="設定">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.5l1.6 2.6 3-.7.9 2.9 2.9.9-.7 3 2.6 1.6-2.6 1.6.7 3-2.9.9-.9 2.9-3-.7-1.6 2.6-1.6-2.6-3 .7-.9-2.9-2.9-.9.7-3L2.5 12l2.6-1.6-.7-3 2.9-.9.9-2.9 3 .7z"/></svg>
+    </button>
     <div id="accounts">
       <div id="account-list"></div>
       <div id="account-popup" role="dialog" aria-label="アカウントの情報" hidden></div>
@@ -34,6 +37,9 @@
       <h1 id="title">受信トレイ</h1>
       <button id="reload" class="icon-btn" aria-label="再読み込み" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+      </button>
+      <button id="thread-slack" class="icon-btn" aria-label="Slack に貼る" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/></svg>
       </button>
       <button id="thread-todo" class="icon-btn" aria-label="Todo にする" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
@@ -117,6 +123,33 @@
           <section id="todo-detail" hidden></section>
         </div>
       </div>
+    </section>
+    <section id="settings" hidden>
+      <h1>設定</h1>
+      <section class="setting">
+        <h2>Slack</h2>
+        <p id="slack-state"></p>
+        <form id="slack-token" hidden>
+          <p>Slack アプリの User OAuth Token（xoxp-）を入力してください。トークンは macOS のキーチェーンに保存し、画面には表示しません。</p>
+          <div class="row">
+            <input id="slack-token-input" type="password" autocomplete="off" aria-label="Slack の User OAuth Token" placeholder="xoxp-...">
+            <button class="text-btn">保存</button>
+          </div>
+        </form>
+        <button id="slack-disconnect" class="text-btn danger" hidden>接続を解除</button>
+      </section>
+      <section class="setting">
+        <h2>メールの貼り付け先</h2>
+        <ul id="slack-dests"></ul>
+        <form id="slack-dest-add">
+          <p>メッセージのリンクを入れるとそのスレッドに返信し、チャンネルのリンクを入れるとチャンネルに新しく投稿します。</p>
+          <div class="row">
+            <input id="slack-dest-name" autocomplete="off" aria-label="貼り付け先の名前" placeholder="名前">
+            <input id="slack-dest-url" autocomplete="off" aria-label="Slack のリンク" placeholder="https://…slack.com/archives/…">
+            <button class="text-btn">追加</button>
+          </div>
+        </form>
+      </section>
     </section>
   </div>
   <script src="main.js"></script>

@@ -594,20 +594,20 @@ fn is_rate_limited(status: u16, body: &str) -> bool {
 
 /// How often an interactive command sends a rate-limited request again. `sync` sends none again:
 /// `SyncState` already thins it out, and waiting here as well would stall every poll.
-const MAX_RETRIES: usize = 2;
+pub(crate) const MAX_RETRIES: usize = 2;
 const NO_RETRIES: usize = 0;
 /// Upper bound of one wait, in step with the client's own 30 s timeout.
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
 
 /// Wait before retry number `attempt` (from 0): the server's `Retry-After`, else 1 s, then 2 s.
-fn retry_wait(attempt: usize, retry_after: Option<Duration>) -> Duration {
+pub(crate) fn retry_wait(attempt: usize, retry_after: Option<Duration>) -> Duration {
     retry_after
         .unwrap_or(Duration::from_secs(1 << attempt))
         .min(MAX_RETRY_WAIT)
 }
 
 // shortcut: only the delta-seconds form; the HTTP-date form falls back to the fixed waits.
-fn parse_retry_after(value: &str) -> Option<Duration> {
+pub(crate) fn parse_retry_after(value: &str) -> Option<Duration> {
     value.trim().parse().ok().map(Duration::from_secs)
 }
 

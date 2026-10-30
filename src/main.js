@@ -90,9 +90,10 @@ let listScroll = 0;
 function show(view) {
   if (!$("threads").hidden) listScroll = $("main").scrollTop;
   // The calendar and Todo screens bring their own header.
-  const own = view === "calendar" || view === "todo";
+  const own = view === "calendar" || view === "todo" || view === "settings";
   $("calendar").hidden = view !== "calendar";
   $("todo").hidden = view !== "todo";
+  $("settings").hidden = view !== "settings";
   $("mail-header").hidden = own;
   $("main").hidden = own;
   $("login").hidden = view !== "login";
@@ -101,6 +102,7 @@ function show(view) {
   $("reload").hidden = view !== "list";
   $("thread").hidden = view !== "thread";
   $("back").hidden = view !== "thread";
+  $("thread-slack").hidden = view !== "thread";
   $("thread-todo").hidden = view !== "thread";
   $("trash").hidden = view !== "thread";
   $("archive").hidden = view !== "thread";
@@ -723,7 +725,7 @@ async function openThread({ id, account }, li, origin = "mail") {
     if (opened !== openCount) return;
     // null: that account must log in again, which the list shows.
     if (t === null) return load();
-    current = { id, account, li };
+    current = { id, account, li, latest: t.messages.at(-1), subject: t.subject };
     threadOrigin = origin;
     $("thread-subject").textContent = t.subject || "(件名なし)";
     // The images that had to be fetched come separately, so the body is not held up by them.
@@ -933,7 +935,7 @@ document.addEventListener("click", hideTip);
 document.addEventListener("scroll", hideTip, true);
 document.addEventListener("keydown", (e) => e.key === "Escape" && hideTip());
 
-// Which screen the sidebar selected: "mail", "calendar" or "todo". Background work reads it; only the sidebar changes it.
+// Which screen the sidebar selected: "mail", "calendar", "todo" or "settings". Background work reads it; only the sidebar changes it.
 let screen = "mail";
 
 // The screen the open thread was opened from ("mail" or "todo"): where "戻る" goes.
@@ -1346,7 +1348,7 @@ async function loadCalendar(refresh = false) {
 
 function setScreen(name) {
   screen = name;
-  for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"], ["nav-todo", "todo"]]) {
+  for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"], ["nav-todo", "todo"], ["nav-settings", "settings"]]) {
     if (target === name) $(id).setAttribute("aria-current", "page");
     else $(id).removeAttribute("aria-current");
   }
@@ -1359,6 +1361,9 @@ function setScreen(name) {
     show("todo");
     // The backend keeps the completed tasks of the last load; they are fetched again only on the first one.
     loadTodo(false, todo === null);
+  } else if (name === "settings") {
+    show("settings");
+    loadSettings();
   } else {
     show("list");
   }
@@ -1367,6 +1372,7 @@ function setScreen(name) {
 $("nav-mail").onclick = () => setScreen("mail");
 $("nav-calendar").onclick = () => setScreen("calendar");
 $("nav-todo").onclick = () => setScreen("todo");
+$("nav-settings").onclick = () => setScreen("settings");
 const moveWeek = (date) => {
   calDate = date;
   loadCalendar();
@@ -2312,5 +2318,167 @@ async function refreshTodo() {
 }
 setInterval(refreshTodo, TODO_REFRESH_MS);
 document.addEventListener("visibilitychange", refreshTodo);
+
+// Settings: the Slack token and where mails are posted. The token is never shown; Rust keeps it in the keychain.
+let settingsSeq = 0;
+
+// `broken`: the stored token was refused or could not be checked, so the form takes a new one.
+function setSlackState(text, connected, broken = false) {
+  $("slack-state").textContent = text;
+  $("slack-token").hidden = connected && !broken;
+  $("slack-disconnect").hidden = !connected;
+}
+
+const slackWho = (c) => `接続済み: ${c.team} ・ ${c.user}`;
+
+function renderDestinations(list) {
+  $("slack-dests").replaceChildren(
+    ...(list.length ? list : [null]).map((d, i) => {
+      const li = tag("li");
+      if (!d) {
+        li.append(tag("span", "dest-meta", "貼り付け先はまだありません"));
+        return li;
+      }
+      const del = tag("button", "icon-btn");
+      del.innerHTML = DELETE_SVG;
+      del.setAttribute("aria-label", `${d.name} を削除`);
+      del.onclick = async () => {
+        $("error").hidden = true;
+        try {
+          renderDestinations(await invoke("slack_remove_destination", { index: i }));
+        } catch (e) {
+          showError(e);
+        }
+      };
+      li.append(
+        tag("span", "dest-name", d.name),
+        tag("span", "dest-meta", `${d.channel} ・ ${d.threadTs ? "スレッドに返信" : "チャンネルに投稿"}`),
+        del,
+      );
+      return li;
+    }),
+  );
+}
+
+async function loadSettings() {
+  const seq = ++settingsSeq;
+  $("error").hidden = true;
+  let loaded;
+  try {
+    loaded = await invoke("slack_load");
+  } catch (e) {
+    return showError(e);
+  }
+  if (seq !== settingsSeq) return;
+  renderDestinations(loaded.destinations);
+  setSlackState(loaded.connected ? "確認しています…" : "未接続", loaded.connected);
+  if (!loaded.connected) return;
+  try {
+    const c = await invoke("slack_check");
+    if (seq === settingsSeq) setSlackState(slackWho(c), true);
+  } catch (e) {
+    if (seq === settingsSeq) setSlackState(`確認できません: ${e}`, true, true);
+  }
+}
+
+$("slack-token").onsubmit = async (e) => {
+  e.preventDefault();
+  const input = $("slack-token-input");
+  const token = input.value;
+  // The token is never shown: the field is emptied as soon as it is read.
+  input.value = "";
+  $("error").hidden = true;
+  try {
+    setSlackState(slackWho(await invoke("slack_save_token", { token })), true);
+  } catch (err) {
+    showError(err);
+  }
+};
+$("slack-disconnect").onclick = async () => {
+  $("error").hidden = true;
+  try {
+    await invoke("slack_disconnect");
+    setSlackState("未接続", false);
+  } catch (e) {
+    showError(e);
+  }
+};
+$("slack-dest-add").onsubmit = async (e) => {
+  e.preventDefault();
+  const [name, url] = [$("slack-dest-name"), $("slack-dest-url")];
+  $("error").hidden = true;
+  try {
+    renderDestinations(await invoke("slack_add_destination", { name: name.value, url: url.value }));
+    name.value = url.value = "";
+  } catch (err) {
+    showError(err);
+  }
+};
+
+// "Slack に貼る": posts the open thread's latest message. The text of an HTML message is read from its frame (allow-same-origin).
+function latestText() {
+  const m = current.latest;
+  if (!m.html) return m.body;
+  const doc = $("messages").lastElementChild?.querySelector("iframe")?.contentDocument;
+  return doc?.body?.innerText ?? unescapeHtml(m.snippet);
+}
+const slackDate = (ms) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+$("thread-slack").onclick = async () => {
+  $("error").hidden = true;
+  let loaded;
+  try {
+    loaded = await invoke("slack_load");
+  } catch (e) {
+    return showError(e);
+  }
+  if (!loaded.connected || !loaded.destinations.length)
+    return toast("Slack のトークンと貼り付け先を設定で登録してください", { label: "設定を開く", run: () => setScreen("settings") });
+  const mail = {
+    subject: current.subject || "(件名なし)",
+    from: current.latest.from,
+    date: slackDate(current.latest.dateMs),
+    body: latestText(),
+  };
+  let preview;
+  try {
+    preview = await invoke("slack_preview", mail);
+  } catch (e) {
+    return showError(e);
+  }
+  const pop = tag("div", "menu slack-pop");
+  const select = tag("select");
+  select.setAttribute("aria-label", "貼り付け先");
+  loaded.destinations.forEach((d, i) => select.append(new Option(`${d.name}${d.threadTs ? "（スレッド）" : ""}`, i)));
+  const note = tag("textarea");
+  note.rows = 2;
+  note.placeholder = "ひとこと（任意）";
+  note.setAttribute("aria-label", "ひとこと");
+  const err = tag("p", "err");
+  err.setAttribute("role", "alert");
+  err.hidden = true;
+  const post = tag("button", "text-btn", "貼る");
+  post.onclick = async () => {
+    const d = loaded.destinations[select.value];
+    err.hidden = true;
+    post.disabled = true;
+    try {
+      await invoke("slack_post", { channel: d.channel, threadTs: d.threadTs, note: note.value, ...mail });
+      closeMenu();
+      toast(`${d.name} に貼りました`);
+    } catch (e) {
+      err.textContent = String(e);
+      err.hidden = false;
+      post.disabled = false;
+    }
+  };
+  pop.append(select, tag("pre", "preview", preview), note, err, post);
+  showMenu($("thread-slack"), pop);
+  note.focus();
+};
+
 
 load();
