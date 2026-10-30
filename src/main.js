@@ -1189,7 +1189,10 @@ function eventBox(e) {
   box.style.width = `${100 / e.cols}%`;
   box.style.setProperty("--c", eventColor(e));
   box.title = `${e.summary}\n${e.account}`;
-  box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`), el("cal-name", e.summary || "(件名なし)"));
+  box.append(el("cal-name", e.summary || "(件名なし)"));
+  // 30 minutes or shorter has room for one line only, so the title takes it.
+  if (e.endMin - e.startMin <= 30) box.classList.add("short");
+  else box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`));
   return box;
 }
 
