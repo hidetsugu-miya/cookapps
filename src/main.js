@@ -2420,7 +2420,7 @@ function latestText() {
   const m = current.latest;
   if (!m.html) return m.body;
   const doc = $("messages").lastElementChild?.querySelector("iframe")?.contentDocument;
-  return doc?.body?.innerText ?? unescapeHtml(m.snippet);
+  return doc?.body?.innerText.trim() || unescapeHtml(m.snippet);
 }
 const slackDate = (ms) => {
   const d = new Date(ms);
