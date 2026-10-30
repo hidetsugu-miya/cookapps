@@ -1760,7 +1760,8 @@ let todoWrites = 0;
 // `apply` first changes `todo` and draws it, so the screen does not wait for Todoist; a failed call is undone by the reload, as a removed mail row comes back.
 // A load sent before a change started or ended is dropped (todoSeq): it could hold the state from before the change.
 // A null answer (a token is needed) shows up in that reload. Returns the command's answer: null when it failed or a token is needed.
-async function todoCall(command, args, control, apply) {
+// `redraw` false (a name or description saved on blur) keeps the screen: a redraw there would drop the click or focus move that ended the edit.
+async function todoCall(command, args, control, apply, redraw = true) {
   $("error").hidden = true;
   if (control) control.disabled = true;
   todoWrites++;
@@ -1769,8 +1770,10 @@ async function todoCall(command, args, control, apply) {
     apply();
     taskById = new Map(todo.tasks.map((t) => [t.id, t]));
     setTodoCount(todo.tasks.filter(isDueToday).length);
+    // The screen no longer matches the last load, so a quiet reload must not skip drawing as unchanged.
+    todoText = null;
     // Like a load: a field being typed in keeps what was typed, and the redraw waits.
-    if (editingField()) todoUndrawn = true;
+    if (!redraw || editingField()) todoUndrawn = true;
     else renderTodo();
   }
   let answer = null;
@@ -1829,7 +1832,8 @@ function settleLocal(id, done) {
   if (done !== false) todo.tasks = todo.tasks.filter((t) => t.id !== id && t.parent?.id !== id);
 }
 
-const saveTask = (id, fields) => todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields));
+const saveTask = (id, fields) =>
+  todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields), !("content" in fields || "description" in fields));
 const moveTask = (id, projectId) => todoCall("todoist_move", { id, projectId }, null, () => moveLocal(id, projectId));
 const setTaskDone = (id, done, box) => todoCall("todoist_set_done", { id, done }, box, () => settleLocal(id, done));
 
