@@ -128,25 +128,12 @@
       <h1>設定</h1>
       <section class="setting">
         <h2>Slack</h2>
-        <p id="slack-state"></p>
-        <form id="slack-token" hidden>
-          <p>Slack アプリの User OAuth Token（xoxp-）を入力してください。トークンは macOS のキーチェーンに保存し、画面には表示しません。</p>
+        <ul id="slack-workspaces"></ul>
+        <form id="slack-token">
+          <p>ワークスペースごとに Slack アプリを作り（User Token Scopes は chat:write・channels:read・groups:read）、その User OAuth Token（xoxp-）を入力してください。トークンは macOS のキーチェーンに保存し、画面には表示しません。</p>
           <div class="row">
             <input id="slack-token-input" type="password" autocomplete="off" aria-label="Slack の User OAuth Token" placeholder="xoxp-...">
-            <button class="text-btn">保存</button>
-          </div>
-        </form>
-        <button id="slack-disconnect" class="text-btn danger" hidden>接続を解除</button>
-      </section>
-      <section class="setting">
-        <h2>メールの貼り付け先</h2>
-        <ul id="slack-dests"></ul>
-        <form id="slack-dest-add">
-          <p>メッセージのリンクを入れるとそのスレッドに返信し、チャンネルのリンクを入れるとチャンネルに新しく投稿します。</p>
-          <div class="row">
-            <input id="slack-dest-name" autocomplete="off" aria-label="貼り付け先の名前" placeholder="名前">
-            <input id="slack-dest-url" autocomplete="off" aria-label="Slack のリンク" placeholder="https://…slack.com/archives/…">
-            <button class="text-btn">追加</button>
+            <button class="text-btn">ワークスペースを追加</button>
           </div>
         </form>
       </section>
