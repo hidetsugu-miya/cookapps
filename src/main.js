@@ -954,6 +954,11 @@ let inboxLoaded = false;
 function drawThreads(inbox) {
   const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
   rows = new Map(shown.map((t) => [rowKey(t), { t, li: row(t) }]));
+  // The open thread's row is rebuilt too: removing it must take the row now on screen.
+  if (current) {
+    const now = rows.get(rowKey(current));
+    if (now) current.li = now.li;
+  }
   const all = [...rows.values()];
   $("unread-threads").replaceChildren(...all.filter((r) => r.t.unread).map((r) => r.li));
   $("read-threads").replaceChildren(...all.filter((r) => !r.t.unread).map((r) => r.li));
@@ -989,8 +994,8 @@ async function load() {
   } finally {
     loading--;
   }
-  // A load that ends while the calendar is shown (e.g. after a re-login there) must not switch the screen.
-  if (screen === "mail") show("list");
+  // A load that ends while the calendar is shown (e.g. after a re-login there) must not switch the screen; nor must it close an open thread.
+  if (screen === "mail" && $("thread").hidden) show("list");
 }
 
 const sameRow = (a, b) => ["from", "subject", "snippet", "dateMs", "unread"].every((k) => a[k] === b[k]);
