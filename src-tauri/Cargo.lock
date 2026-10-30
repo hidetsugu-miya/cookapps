@@ -622,11 +622,14 @@ name = "cookup"
 version = "0.13.0"
 dependencies = [
  "base64 0.23.1",
+ "block2",
  "chrono",
  "dirs",
  "encoding_rs",
  "getrandom 0.4.3",
  "keyring",
+ "objc2",
+ "objc2-foundation",
  "reqwest",
  "rmcp",
  "schemars 1.2.3",
