@@ -24,6 +24,12 @@ use tokio::task::JoinSet;
 /// macOS fetches external images with the system's own HTTP stack: reqwest times out against some CDNs there.
 #[cfg(target_os = "macos")]
 mod macos;
+/// What the platform's `get` shares across the images of one `fetch_images` call: on macOS one NSURLSession.
+#[cfg(target_os = "macos")]
+use macos::Session;
+#[cfg(not(target_os = "macos"))]
+#[derive(Default)]
+struct Session;
 
 const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
@@ -376,24 +382,20 @@ fn failed(why: impl Into<String>) -> Failed {
     (None, why.into())
 }
 
-/// `url` without the query and the fragment, which can carry a recipient's identity.
+/// Only `scheme://host` of `url`: the path, the query and the fragment can carry a recipient's identity.
 fn log_url(url: &Url) -> String {
-    format!(
-        "{}://{}{}",
-        url.scheme(),
-        url.host_str().unwrap_or("-"),
-        url.path()
-    )
+    format!("{}://{}", url.scheme(), url.host_str().unwrap_or("-"))
 }
 
 /// The platform's fetch of one image, after `fetchable` and the budget were checked.
-async fn get(url: Url, budget: &Arc<Budget>) -> Result<Fetched, Failed> {
+async fn get(url: Url, budget: &Arc<Budget>, session: &Session) -> Result<Fetched, Failed> {
     #[cfg(target_os = "macos")]
     {
-        macos::get(url, budget).await
+        macos::get(url, budget, session).await
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = session;
         get_reqwest(url, budget).await
     }
 }
@@ -427,13 +429,17 @@ async fn get_reqwest(url: Url, budget: &Budget) -> Result<Fetched, Failed> {
 
 /// `(url, mime, bytes)`, or `None` for anything that is not a small image fetched over https; the reason goes to stderr.
 /// Only an image that is kept stays counted in `budget`. A fetch is not started once the budget is spent.
-async fn fetch_image(budget: Arc<Budget>, url: String) -> Option<(String, String, Vec<u8>)> {
+async fn fetch_image(
+    budget: Arc<Budget>,
+    session: Arc<Session>,
+    url: String,
+) -> Option<(String, String, Vec<u8>)> {
     let parsed = Url::parse(&url).ok();
     let shown = parsed.as_ref().map_or_else(|| "-".to_owned(), log_url);
     let got = match parsed.filter(fetchable) {
         None => Err(failed("not a public https URL")),
         Some(_) if budget.is_spent() => Err(failed("total size limit reached")),
-        Some(parsed) => get(parsed, &budget).await,
+        Some(parsed) => get(parsed, &budget, &session).await,
     };
     match got {
         Ok((mime, bytes)) => Some((url, mime, bytes)),
@@ -548,9 +554,10 @@ pub async fn fetch_images(
     let mut used = 0;
     let (mut out, missing) = split_cached(&cache, urls, &mut used);
     let budget = Arc::new(Budget(AtomicU64::new(MAX_TOTAL_BYTES - used)));
+    let session = Arc::new(Session::default());
     let jobs = missing
         .into_iter()
-        .map(|url| fetch_image(budget.clone(), url));
+        .map(|url| fetch_image(budget.clone(), session.clone(), url));
     for (url, mime, bytes) in run_limited(jobs, CONCURRENCY).await.into_iter().flatten() {
         let uri: Arc<str> = data_uri(&mime, &bytes).into();
         cache.put(IMAGE_CACHE_BYTES, url.clone(), Arc::clone(&uri));
