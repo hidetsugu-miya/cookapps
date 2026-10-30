@@ -1190,8 +1190,8 @@ function eventBox(e) {
   box.style.setProperty("--c", eventColor(e));
   box.title = `${e.summary}\n${e.account}`;
   box.append(el("cal-name", e.summary || "(件名なし)"));
-  // 30 minutes or shorter has room for one line only, so the title takes it.
-  if (e.endMin - e.startMin <= 30) box.classList.add("short");
+  // Under 45 minutes has no room for a second line, so the title takes the only one.
+  if (e.endMin - e.startMin < 45) box.classList.add("short");
   else box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`));
   return box;
 }
@@ -1243,7 +1243,7 @@ function renderWeek(w) {
   $("cal-allday").replaceChildren(
     el("cal-allday-label", "終日"),
     ...days.map((_, i) => {
-      const cell = mark(el("cal-cell"), i);
+      const cell = el("cal-cell");
       cell.append(...w.allDay.filter((e) => e.day === i).map(allDayChip));
       return cell;
     }),
@@ -1257,7 +1257,7 @@ function renderWeek(w) {
   $("cal-body").replaceChildren(
     gutter,
     ...days.map((_, i) => {
-      const col = mark(el("cal-col"), i);
+      const col = el("cal-col");
       col.append(...w.timed.filter((e) => e.day === i).map(eventBox));
       return col;
     }),
