@@ -1766,24 +1766,25 @@ async function todoCall(command, args, control, apply, redraw = true) {
   if (control) control.disabled = true;
   todoWrites++;
   todoSeq++;
-  if (apply) {
-    apply();
-    taskById = new Map(todo.tasks.map((t) => [t.id, t]));
-    setTodoCount(todo.tasks.filter(isDueToday).length);
-    // The screen no longer matches the last load, so a quiet reload must not skip drawing as unchanged.
-    todoText = null;
-    // Like a load: a field being typed in keeps what was typed, and the redraw waits.
-    if (!redraw || editingField()) todoUndrawn = true;
-    else renderTodo();
-  }
   let answer = null;
   try {
+    if (apply) {
+      apply();
+      taskById = new Map(todo.tasks.map((t) => [t.id, t]));
+      setTodoCount(todo.tasks.filter(isDueToday).length);
+      // The screen no longer matches the last load, so a quiet reload must not skip drawing as unchanged.
+      todoText = null;
+      // Like a load: a field being typed in keeps what was typed, and the redraw waits.
+      if (!redraw || editingField()) todoUndrawn = true;
+      else renderTodo();
+    }
     answer = await invoke(command, args);
   } catch (e) {
     showError(e);
+  } finally {
+    todoWrites--;
+    todoSeq++;
   }
-  todoWrites--;
-  todoSeq++;
   if (control) control.disabled = false;
   // Only completing or reopening a task changes the completed ones.
   scheduleTodoReload(command === "todoist_set_done");
@@ -1794,6 +1795,7 @@ async function todoCall(command, args, control, apply, redraw = true) {
 // Other text is Todoist's to read, so the task stays as it is until the reload.
 const PICKED_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
 
+// shortcut: the list is not re-sorted after a due date change; the next reload fixes it.
 function patchTask(id, { dueString, ...fields }) {
   const t = taskById.get(id);
   if (!t) return;
@@ -1811,9 +1813,16 @@ function patchTask(id, { dueString, ...fields }) {
   }
 }
 
+// Whether `t` is below the task `id`, through any number of parents.
+function isUnder(t, id) {
+  for (let p = t.parent; p; p = taskById.get(p.id)?.parent) if (p.id === id) return true;
+  return false;
+}
+
 // A task and the rows of its subtasks, which Todoist moves with it.
+// shortcut: a subtask that has a row, moved to another project, is not redrawn as a task there, and the parent's subtasks[] keeps its content and due; the next reload fixes them.
 function moveLocal(id, projectId) {
-  for (const t of todo.tasks) if (t.id === id || t.parent?.id === id) t.projectId = projectId;
+  for (const t of todo.tasks) if (t.id === id || isUnder(t, id)) t.projectId = projectId;
 }
 
 // Completes (`done` true), reopens (false) or deletes (null) a task. In the subtask list of the task holding it, it turns done, open or goes, and the counts follow.
@@ -1829,7 +1838,8 @@ function settleLocal(id, done) {
     p.subDone = p.subtasks.filter((x) => x.done).length;
     p.subTotal = p.subtasks.length;
   }
-  if (done !== false) todo.tasks = todo.tasks.filter((t) => t.id !== id && t.parent?.id !== id);
+  // shortcut: a reopened subtask keeps its place among the done ones, and has no row; the next reload fixes it.
+  if (done !== false) todo.tasks = todo.tasks.filter((t) => t.id !== id && !isUnder(t, id));
 }
 
 const saveTask = (id, fields) =>
@@ -2155,7 +2165,7 @@ function drawTodoNotice(offline) {
 // Fetches the tasks and draws them. `quiet` is the timed refresh: it fetches nothing while a field is being typed in, and draws nothing when nothing changed.
 // Without `withDone` the backend reuses the completed tasks it fetched last. Returns true when a token is needed (the token form is shown).
 async function loadTodo(quiet = false, withDone = true) {
-  if (quiet && editingField()) return false;
+  if (quiet && (editingField() || todoWrites)) return false;
   const seq = ++todoSeq;
   try {
     const data = await invoke("todoist_load", { withDone });
@@ -2267,7 +2277,9 @@ $("todo-add").onsubmit = async (e) => {
 
 // Fetches only for the Todo count on the sidebar while another screen is shown: `todo` and the Todo screen stay as they are, and a missing token or a failure shows no count and no message.
 async function loadTodoCount() {
-  if (screen === "todo" || document.hidden || todoCountOff) return;
+  if (screen === "todo" || document.hidden || todoCountOff || todoWrites) return;
+  // A change that started or ended while fetching makes the answer older than the screen's count.
+  const seq = todoSeq;
   let count = 0;
   try {
     const data = await invoke("todoist_load", { withDone: countWithDone });
@@ -2277,7 +2289,7 @@ async function loadTodoCount() {
     } else todoCountOff = true;
   } catch {}
   // The Todo screen sets the count itself, and its data is newer than this fetch.
-  if (screen !== "todo" && !todoWrites) setTodoCount(count);
+  if (screen !== "todo" && !todoWrites && seq === todoSeq) setTodoCount(count);
 }
 loadTodoCount();
 
