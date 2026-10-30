@@ -137,7 +137,7 @@ macOS では、最初にツールを呼んだとき、キーチェーンへの�
 
 | 症状 | 対処 |
 |---|---|
-| `claude mcp get cookup` が `Failed to connect` になる | 1 のインストールを済ませたか、`command -v cookup-mcp` でパスが出るかを確かめる |
+| `claude mcp get cookup` が `Failed to connect` になる | 1 のインストールを済ませたか、`command -v cookup-mcp`（Windows の PowerShell では `Get-Command cookup-mcp`）でパスが出るかを確かめる |
 | 「再ログインが必要です」と返る | cookup アプリでそのアカウントに再ログインする |
 | 「OAuth クライアント JSON を読めません」と返る | アプリの [README](https://github.com/hidetsugu-miya/cookup#セットアップ) のセットアップを済ませる |
 | macOS で、ツールを呼ぶたびにキーチェーンの許可を求められる | 許可のダイアログで「常に許可」を選ぶ |

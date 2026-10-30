@@ -49,12 +49,12 @@ jobs:
         working-directory: src-tauri
         run: cargo test
       - name: Build installer
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-latest' && github.ref_type == 'tag'
         run: |
           npm ci
           npx tauri build --bundles nsis
       - name: Upload installer
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-latest' && github.ref_type == 'tag'
         uses: actions/upload-artifact@v7
         with:
           name: cookup-windows-installer
