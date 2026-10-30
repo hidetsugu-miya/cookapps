@@ -1183,6 +1183,8 @@ let calScrolled = false;
 
 // The event's own color (its calendar's); events with none take the account's, as the mail list does.
 const eventColor = (e) => e.color || avatarColor(e.account);
+// Longer titles are cut with "…"; the full one stays in the tooltip.
+const CAL_NAME_MAX = 20;
 
 function eventBox(e) {
   const box = el("cal-event" + (e.declined ? " declined" : ""));
@@ -1192,10 +1194,12 @@ function eventBox(e) {
   box.style.width = `${100 / e.cols}%`;
   box.style.setProperty("--c", eventColor(e));
   box.title = `${e.summary}\n${e.account}`;
-  box.append(el("cal-name", e.summary || "(件名なし)"));
+  const name = e.summary || "(件名なし)";
+  box.append(el("cal-name", name.length > CAL_NAME_MAX ? name.slice(0, CAL_NAME_MAX) + "…" : name));
   // Under 45 minutes has no room for a second line, so the title takes the only one.
   if (e.endMin - e.startMin < 45) box.classList.add("short");
-  else box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`));
+  // Side-by-side boxes are too narrow for the time; a long title would push it out of sight anyway.
+  else if (e.cols === 1) box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`));
   return box;
 }
 
