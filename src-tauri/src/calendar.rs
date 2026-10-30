@@ -17,6 +17,7 @@ use url::Url;
 
 use crate::{
     auth::{config_dir, Auth},
+    disk_cache,
     gmail::{log_failure, send_json_refreshing, ApiError},
 };
 
@@ -145,7 +146,7 @@ impl RawEvent {
 }
 
 /// What the screen needs of an event besides where it goes.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Info {
     summary: String,
@@ -168,7 +169,7 @@ impl From<&RawEvent> for Info {
 }
 
 /// An all-day event on one day of the week (0 = Sunday). A multi-day event gets one item per day.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AllDayItem {
     day: usize,
@@ -177,7 +178,7 @@ pub struct AllDayItem {
 }
 
 /// A timed event on one day of the week, in minutes from local midnight, with its column among overlapping events.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TimedItem {
     day: usize,
@@ -189,7 +190,7 @@ pub struct TimedItem {
     info: Info,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Week {
     /// Local date (YYYY-MM-DD) of the Sunday the week starts on.
@@ -765,14 +766,66 @@ pub async fn calendar_week(
     let dir = config_dir(&app).map_err(|e| log_failure("calendar_week", "-", e))?;
     let found = collect_events(&dir, &auth, &cache, "calendar_week", &min, &max, refresh).await?;
     let (all_day, timed) = build_week(&Local, start, found.events);
-    Ok(Week {
+    let week = Week {
         week_start: start.to_string(),
         all_day,
         timed,
         needs_login: found.needs_login,
         failed: found.failed,
         calendar_failed: found.calendar_failed,
-    })
+    };
+    if worth_caching(&week) {
+        // Off the reply: the screen does not wait for the write and its fsync.
+        let kept = week.clone();
+        tokio::task::spawn_blocking(move || {
+            let saved = disk_cache::update(&dir, CACHE_FILE, |c: Cached| Cached {
+                weeks: with_week(c.weeks, kept, MAX_CACHED_WEEKS),
+            });
+            if let Err(e) = saved {
+                log_failure("calendar_cache", "-", e);
+            }
+        });
+    }
+    Ok(week)
+}
+
+/// The file the last complete weeks are kept in.
+pub(crate) const CACHE_FILE: &str = "calendar-cache.json";
+/// Keep in step with `CAL_CACHE_MAX` in `src/main.js`.
+const MAX_CACHED_WEEKS: usize = 10;
+
+/// What `calendar-cache.json` holds: the weeks fetched last, oldest first.
+#[derive(Serialize, Deserialize, Default)]
+struct Cached {
+    weeks: Vec<Week>,
+}
+
+/// Only a week that got every account and calendar is kept: a partial one would draw the missing events as gone.
+fn worth_caching(week: &Week) -> bool {
+    week.needs_login.is_empty() && week.failed.is_empty() && week.calendar_failed.is_empty()
+}
+
+/// `week` as the newest of `weeks`, in place of the kept week with the same start; the oldest beyond `max` are dropped.
+fn with_week(mut weeks: Vec<Week>, week: Week, max: usize) -> Vec<Week> {
+    weeks.retain(|w| w.week_start != week.week_start);
+    weeks.push(week);
+    let extra = weeks.len().saturating_sub(max);
+    weeks.drain(..extra);
+    weeks
+}
+
+/// The kept week of the week containing `date`, to draw before `calendar_week` answers. `None` when it is not kept.
+#[tauri::command]
+pub async fn calendar_cached(app: AppHandle, date: String) -> Result<Option<Week>, String> {
+    let date: NaiveDate = date
+        .parse()
+        .map_err(|_| format!("日付が不正です: {date}"))?;
+    let start = week_start(date).to_string();
+    let dir = config_dir(&app)?;
+    let cached = tokio::task::spawn_blocking(move || disk_cache::load::<Cached>(&dir, CACHE_FILE))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(cached.and_then(|c| c.weeks.into_iter().find(|w| w.week_start == start)))
 }
 
 #[cfg(test)]
@@ -1239,5 +1292,84 @@ mod tests {
         assert_eq!(v["allDay"][0]["declined"], true);
         assert_eq!(v["needsLogin"][0], "b@example.com");
         assert_eq!(v["calendarFailed"][0], "x");
+    }
+
+    fn week_of(start: &str) -> Week {
+        Week {
+            week_start: start.into(),
+            all_day: vec![],
+            timed: vec![TimedItem {
+                day: 2,
+                start_min: 60,
+                end_min: 120,
+                col: 0,
+                cols: 1,
+                info: Info {
+                    summary: start.into(),
+                    color: Some("#fff".into()),
+                    account: "a@example.com".into(),
+                    declined: false,
+                },
+            }],
+            needs_login: vec![],
+            failed: Default::default(),
+            calendar_failed: vec![],
+        }
+    }
+
+    fn starts(weeks: &[Week]) -> Vec<&str> {
+        weeks.iter().map(|w| w.week_start.as_str()).collect()
+    }
+
+    #[test]
+    fn week_round_trips_through_json() {
+        let w = week_of("2026-10-25");
+        let back: Week = serde_json::from_str(&serde_json::to_string(&w).unwrap()).unwrap();
+        assert_eq!(back, w);
+    }
+
+    #[test]
+    fn only_a_complete_week_is_kept() {
+        assert!(worth_caching(&week_of("2026-10-25")));
+        let needs_login = Week {
+            needs_login: vec!["a@example.com".into()],
+            ..week_of("2026-10-25")
+        };
+        assert!(!worth_caching(&needs_login));
+        let failed = Week {
+            failed: [("a@example.com".to_string(), "boom".to_string())].into(),
+            ..week_of("2026-10-25")
+        };
+        assert!(!worth_caching(&failed));
+        let calendar_failed = Week {
+            calendar_failed: vec!["x".into()],
+            ..week_of("2026-10-25")
+        };
+        assert!(!worth_caching(&calendar_failed));
+    }
+
+    #[test]
+    fn a_new_week_is_the_newest_and_the_oldest_beyond_the_limit_go() {
+        let weeks = vec![week_of("w1"), week_of("w2"), week_of("w3")];
+        assert_eq!(
+            starts(&with_week(weeks.clone(), week_of("w4"), 3)),
+            ["w2", "w3", "w4"]
+        );
+        assert_eq!(
+            starts(&with_week(weeks.clone(), week_of("w4"), 4)),
+            ["w1", "w2", "w3", "w4"]
+        );
+        assert_eq!(starts(&with_week(vec![], week_of("w1"), 3)), ["w1"]);
+    }
+
+    #[test]
+    fn a_fetched_week_replaces_the_kept_one_and_becomes_the_newest() {
+        let weeks = vec![week_of("w1"), week_of("w2"), week_of("w3")];
+        let mut fresh = week_of("w1");
+        fresh.calendar_failed = vec![];
+        fresh.timed.clear();
+        let out = with_week(weeks, fresh, 3);
+        assert_eq!(starts(&out), ["w2", "w3", "w1"]);
+        assert!(out[2].timed.is_empty());
     }
 }

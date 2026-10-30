@@ -19,8 +19,9 @@ use url::Url;
 
 use crate::{
     accounts,
-    calendar::CalendarCache,
-    gmail::{InlineCache, SyncState},
+    calendar::{self, CalendarCache},
+    disk_cache,
+    gmail::{self, InlineCache, SyncState},
 };
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -316,7 +317,15 @@ pub async fn remove_account(
     calendar.forget(&account);
     images.forget(&account);
     let removed = match config_dir(&app) {
-        Ok(dir) => auth.remove(&dir, &account).await,
+        Ok(dir) => {
+            let removed = auth.remove(&dir, &account).await;
+            // The kept mail list and calendar hold this account's subjects and events.
+            let cleared = [gmail::CACHE_FILE, calendar::CACHE_FILE]
+                .into_iter()
+                .map(|file| disk_cache::remove(&dir, file))
+                .find_map(Result::err);
+            removed.and_then(|()| cleared.map_or(Ok(()), Err))
+        }
         Err(e) => Err(e),
     };
     removed.map_err(|e| {
