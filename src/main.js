@@ -238,6 +238,8 @@ async function removeRow(command, account, id, li) {
   } catch (e) {
     // Back by the state it has now: a mark-as-read meanwhile moves it to the read section.
     place(li, li.classList.contains("unread"));
+    // A row drawn from the kept list before the load answered is not in rows; without it the next sync adds the thread again.
+    if (t && !rows.has(key)) rows.set(key, { t, li });
     showError(e);
   } finally {
     pending.delete(key);
@@ -1150,6 +1152,9 @@ async function removeAccount(account, button) {
   }
   historyIds.delete(account);
   if (lastRemoved?.account === account) lastRemoved = null;
+  // An open thread of this account cannot be acted on any more.
+  if (!$("thread").hidden && current?.account === account) $("back").onclick();
+  keptWeeks = Promise.resolve([]);
   calCache.clear();
   calEpoch++;
   calRefresh = true;
@@ -1197,6 +1202,8 @@ let calSeq = 0;
 // Weeks fetched so far by their Sunday ("YYYY-MM-DD"), oldest first; memory only.
 const calCache = new Map();
 const CAL_CACHE_MAX = 10;
+// The weeks the last run kept, read once and then drawn from here; not fetched weeks, so a draw from it is always followed by a fetch.
+let keptWeeks = null;
 // Bumped when the cache is dropped, so a fetch that began before cannot put its week back.
 let calEpoch = 0;
 // The next fetch makes the backend list the calendars again.
@@ -1355,10 +1362,8 @@ function prefetchAround(key) {
 
 // Draws the week the last run kept for `key` while the fetch is on its way, unless the fetch got there first or another week was asked for; a missing or failed read leaves the screen to the fetch.
 async function showKeptWeek(key, seq) {
-  let kept = null;
-  try {
-    kept = await invoke("calendar_cached", { date: key });
-  } catch {}
+  keptWeeks ??= invoke("calendar_cached").catch(() => []);
+  const kept = (await keptWeeks).find((w) => w.weekStart === key);
   if (!kept || seq !== calSeq || calShown?.weekStart === key) return;
   renderWeek(kept);
   $("calendar").classList.remove("loading");

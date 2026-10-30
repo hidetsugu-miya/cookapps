@@ -147,7 +147,7 @@ impl Auth {
         Ok(accounts::load(dir)?.unwrap_or_default())
     }
 
-    /// Revokes the account's grant at Google (a failure is logged, not fatal), then forgets its token and its listing.
+    /// Revokes the account's grant at Google (a failure is logged, not fatal), then forgets its token, its listing and the data kept of it.
     async fn remove(&self, dir: &Path, account: &str) -> Result<(), String> {
         let list = self.accounts(dir)?;
         if !is_registered(&list, account) {
@@ -165,7 +165,14 @@ impl Auth {
         }
         delete_entry(&entry)?;
         self.access.lock().unwrap().remove(account);
-        accounts::save(dir, &accounts::without_account(list, account))
+        // Under the cache lock, so a save that began before cannot write this account's data back after the delete.
+        disk_cache::exclusive(|| {
+            accounts::save(dir, &accounts::without_account(list, account))?;
+            // The kept mail list and calendar hold this account's subjects and events.
+            [gmail::CACHE_FILE, calendar::CACHE_FILE]
+                .into_iter()
+                .try_for_each(|file| disk_cache::remove(dir, file))
+        })
     }
 
     /// Returns the logged-in account's email address.
@@ -317,15 +324,7 @@ pub async fn remove_account(
     calendar.forget(&account);
     images.forget(&account);
     let removed = match config_dir(&app) {
-        Ok(dir) => {
-            let removed = auth.remove(&dir, &account).await;
-            // The kept mail list and calendar hold this account's subjects and events.
-            let cleared = [gmail::CACHE_FILE, calendar::CACHE_FILE]
-                .into_iter()
-                .map(|file| disk_cache::remove(&dir, file))
-                .find_map(Result::err);
-            removed.and_then(|()| cleared.map_or(Ok(()), Err))
-        }
+        Ok(dir) => auth.remove(&dir, &account).await,
         Err(e) => Err(e),
     };
     removed.map_err(|e| {
