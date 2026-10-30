@@ -1424,6 +1424,7 @@ const SUB_SVG = svgOf('<path d="M6 4v10a3 3 0 0 0 3 3h9"/><path d="M15 14l3 3-3 
 const OPEN_SVG = svgOf('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>');
 const DAY_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M12 14v3"/>');
 const DATE_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/>');
+const GRIP_SVG = svgOf('<path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01"/>');
 const FLAG_SVG = svgOf('<path d="M5 21V4h11l-2 4 2 4H5"/>');
 const EDIT_SVG = svgOf('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>');
 const FOLDER_SVG = svgOf('<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>');
@@ -1510,6 +1511,7 @@ function showTokenForm(note = "") {
 function projectButton(view, icon, name, count) {
   const b = tag("button", "proj");
   b.setAttribute("aria-current", String(view === todoView));
+  b.dataset.view = view;
   if (typeof icon === "string" && icon.startsWith("<")) b.innerHTML = icon;
   else {
     const dot = tag("span", "pdot");
@@ -1586,7 +1588,7 @@ function taskRow(t, showProject, accounts) {
   }
   const body = tag("div", "body");
   body.append(line);
-  li.append(box, body);
+  li.append(box, body, gripOf(li, t));
   if (showProject) {
     const p = projectOf(t.projectId);
     const tagEl = tag("div", "ptag");
@@ -1607,6 +1609,69 @@ function taskRow(t, showProject, accounts) {
   trail.append(tag("span", `due${t.bucket === "overdue" ? " over" : ""}`, t.due ? dueLabel(t.due) : ""), actions);
   li.append(trail);
   return li;
+}
+
+// True while a row is dragged by its grip, so the timed refresh does not redraw the list under it.
+let todoDragging = false;
+
+// The grip at a row's left edge: drag it onto a project in the side list to move the task there.
+// Pointer events, not HTML5 drag and drop, which clashes with the window's file drop.
+function gripOf(li, t) {
+  const grip = tag("span", "grip");
+  grip.setAttribute("role", "img");
+  grip.setAttribute("aria-label", "ドラッグしてプロジェクトへ移動");
+  grip.innerHTML = GRIP_SVG;
+  // The row opens the task on click; the grip must not, nor the click that ends a drag.
+  grip.onclick = (e) => e.stopPropagation();
+  grip.onpointerdown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const [x0, y0] = [e.clientX, e.clientY];
+    let ghost = null;
+    let over = null;
+    const end = (drop) => {
+      grip.onpointermove = grip.onpointerup = grip.onpointercancel = null;
+      document.removeEventListener("keydown", onKey);
+      if (!ghost) return;
+      const projectId = drop && over ? viewProjectId(over.dataset.view) : null;
+      ghost.remove();
+      over?.classList.remove("drop");
+      li.classList.remove("dragging");
+      document.body.classList.remove("dragging-task");
+      todoDragging = false;
+      // The click that ends a drag may go to what is under the pointer (a project button); it must not act.
+      const swallow = (e) => e.stopPropagation();
+      document.addEventListener("click", swallow, true);
+      setTimeout(() => document.removeEventListener("click", swallow, true));
+      if (projectId) todoCall("todoist_move", { id: t.id, projectId });
+      else scheduleTodoReload();
+    };
+    const onKey = (e) => e.key === "Escape" && end(false);
+    document.addEventListener("keydown", onKey);
+    grip.onpointermove = (e) => {
+      if (!ghost) {
+        // A press that hardly moves is not a drag.
+        if (Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
+        todoDragging = true;
+        ghost = tag("div", "drag-ghost", t.content);
+        document.body.append(ghost);
+        li.classList.add("dragging");
+        document.body.classList.add("dragging-task");
+      }
+      ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`;
+      const b = document.elementFromPoint(e.clientX, e.clientY)?.closest("#projects .proj");
+      // Not the "today" list, nor the project the task is in.
+      const next = b && b.dataset.view !== "today" && viewProjectId(b.dataset.view) !== t.projectId ? b : null;
+      if (next === over) return;
+      over?.classList.remove("drop");
+      next?.classList.add("drop");
+      over = next;
+    };
+    grip.onpointerup = () => end(true);
+    grip.onpointercancel = () => end(false);
+  };
+  return grip;
 }
 
 // Turns a row's name into a text field: Enter or leaving the field saves, Escape puts the name back.
@@ -1981,6 +2046,7 @@ function renderTodo() {
 // Whether a text field holds what the user is typing (a field of the open task, or a name being edited in the list); a redraw would replace it with Todoist's older value.
 // The subtask field counts only while it has text: it is emptied on Enter, and the redraw must show the subtask just added.
 function editingField() {
+  if (todoDragging) return true;
   const a = document.activeElement;
   if ($("todo-list").contains(a)) return a.matches(".row-edit");
   return $("todo-detail").contains(a) && a.matches("textarea, input:not([type=checkbox])") && (a.dataset.field !== "sub" || a.value !== "");
