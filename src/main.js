@@ -1626,30 +1626,15 @@ function gripOf(li, t) {
   grip.onpointerdown = (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    grip.setPointerCapture(e.pointerId);
+    const pointer = e.pointerId;
+    // Keeps the events coming outside the window; if a redraw takes the grip out, they still reach the document.
+    grip.setPointerCapture(pointer);
     const [x0, y0] = [e.clientX, e.clientY];
     let ghost = null;
     let over = null;
-    const end = (drop) => {
-      grip.onpointermove = grip.onpointerup = grip.onpointercancel = null;
-      document.removeEventListener("keydown", onKey);
-      if (!ghost) return;
-      const projectId = drop && over ? viewProjectId(over.dataset.view) : null;
-      ghost.remove();
-      over?.classList.remove("drop");
-      li.classList.remove("dragging");
-      document.body.classList.remove("dragging-task");
-      todoDragging = false;
-      // The click that ends a drag may go to what is under the pointer (a project button); it must not act.
-      const swallow = (e) => e.stopPropagation();
-      document.addEventListener("click", swallow, true);
-      setTimeout(() => document.removeEventListener("click", swallow, true));
-      if (projectId) todoCall("todoist_move", { id: t.id, projectId });
-      else scheduleTodoReload();
-    };
-    const onKey = (e) => e.key === "Escape" && end(false);
-    document.addEventListener("keydown", onKey);
-    grip.onpointermove = (e) => {
+    // On the document, not the grip: a redraw during the drag takes the grip out, and its events would stop.
+    const mine = (f) => (e) => e.pointerId === pointer && f(e);
+    const move = mine((e) => {
       if (!ghost) {
         // A press that hardly moves is not a drag.
         if (Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
@@ -1659,17 +1644,44 @@ function gripOf(li, t) {
         li.classList.add("dragging");
         document.body.classList.add("dragging-task");
       }
-      ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`;
+      // Read before the ghost moves, so the move does not force a style recalculation each time.
       const b = document.elementFromPoint(e.clientX, e.clientY)?.closest("#projects .proj");
+      ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`;
       // Not the "today" list, nor the project the task is in.
       const next = b && b.dataset.view !== "today" && viewProjectId(b.dataset.view) !== t.projectId ? b : null;
       if (next === over) return;
       over?.classList.remove("drop");
       next?.classList.add("drop");
       over = next;
+    });
+    const up = mine(() => end(true));
+    const cancel = mine(() => end(false));
+    const onKey = (e) => e.key === "Escape" && end(false);
+    const end = (drop) => {
+      document.removeEventListener("pointermove", move, true);
+      document.removeEventListener("pointerup", up, true);
+      document.removeEventListener("pointercancel", cancel, true);
+      document.removeEventListener("keydown", onKey);
+      if (!ghost) return;
+      const projectId = drop && over ? viewProjectId(over.dataset.view) : null;
+      ghost.remove();
+      ghost = null;
+      over?.classList.remove("drop");
+      li.classList.remove("dragging");
+      document.body.classList.remove("dragging-task");
+      todoDragging = false;
+      // The click that ends a drag may go to what is under the pointer (a project button); it must not act.
+      const swallow = (e) => e.stopPropagation();
+      document.addEventListener("click", swallow, true);
+      setTimeout(() => document.removeEventListener("click", swallow, true));
+      if (projectId) todoCall("todoist_move", { id: t.id, projectId });
+      // Only a redraw held back during the drag; the next refresh fetches.
+      else if (todoUndrawn) renderTodo();
     };
-    grip.onpointerup = () => end(true);
-    grip.onpointercancel = () => end(false);
+    document.addEventListener("pointermove", move, true);
+    document.addEventListener("pointerup", up, true);
+    document.addEventListener("pointercancel", cancel, true);
+    document.addEventListener("keydown", onKey);
   };
   return grip;
 }
