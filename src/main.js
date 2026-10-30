@@ -948,6 +948,30 @@ let loading = 0;
 // Per account, the mailbox history ID as of the last load or sync: where the next sync starts.
 let historyIds = new Map();
 
+// Set when a load answers; the kept list of the last run, which is drawn first at startup, must not come after it.
+let inboxLoaded = false;
+
+function drawThreads(inbox) {
+  const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
+  rows = new Map(shown.map((t) => [rowKey(t), { t, li: row(t) }]));
+  const all = [...rows.values()];
+  $("unread-threads").replaceChildren(...all.filter((r) => r.t.unread).map((r) => r.li));
+  $("read-threads").replaceChildren(...all.filter((r) => !r.t.unread).map((r) => r.li));
+  updateBadge();
+}
+
+// Draws the list the last run kept while the first load is still on its way; a missing or failed read leaves the screen to the load. Its rows work like the loaded ones.
+async function showKeptInbox() {
+  let kept = null;
+  try {
+    kept = await invoke("inbox_cached");
+  } catch {}
+  if (!kept || inboxLoaded) return;
+  renderAccounts(kept);
+  drawThreads(kept);
+  if (screen === "mail") show("list");
+}
+
 async function load() {
   const seq = ++loadSeq;
   loading++;
@@ -955,15 +979,11 @@ async function load() {
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
+    inboxLoaded = true;
     renderAccounts(inbox);
     if (inbox.accounts.length === 0) return show("login");
     historyIds = new Map(Object.entries(inbox.historyIds));
-    const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
-    rows = new Map(shown.map((t) => [rowKey(t), { t, li: row(t) }]));
-    const all = [...rows.values()];
-    $("unread-threads").replaceChildren(...all.filter((r) => r.t.unread).map((r) => r.li));
-    $("read-threads").replaceChildren(...all.filter((r) => !r.t.unread).map((r) => r.li));
-    updateBadge();
+    drawThreads(inbox);
   } catch (e) {
     showError(e);
   } finally {
@@ -1328,6 +1348,17 @@ function prefetchAround(key) {
   }
 }
 
+// Draws the week the last run kept for `key` while the fetch is on its way, unless the fetch got there first or another week was asked for; a missing or failed read leaves the screen to the fetch.
+async function showKeptWeek(key, seq) {
+  let kept = null;
+  try {
+    kept = await invoke("calendar_cached", { date: key });
+  } catch {}
+  if (!kept || seq !== calSeq || calShown?.weekStart === key) return;
+  renderWeek(kept);
+  $("calendar").classList.remove("loading");
+}
+
 // Shows the week of `calDate`: the kept one at once, then the fetched one if it differs, so the scroll position stays.
 // With none kept, the old week stays (dimmed) until the new one arrives.
 async function loadCalendar(refresh = false) {
@@ -1339,6 +1370,7 @@ async function loadCalendar(refresh = false) {
     if (calShown?.weekStart !== key) renderWeek(kept);
   } else {
     $("calendar").classList.add("loading");
+    showKeptWeek(key, seq);
   }
   try {
     const week = await fetchWeek(calDate, refresh);
@@ -1366,8 +1398,9 @@ function setScreen(name) {
     loadCalendar();
   } else if (name === "todo") {
     show("todo");
+    if (todoKept) renderTodo();
     // The backend keeps the completed tasks of the last load; they are fetched again only on the first one.
-    loadTodo(false, todo === null);
+    loadTodo(false, todo === null || todoKept);
   } else if (name === "settings") {
     show("settings");
     loadSettings();
@@ -1465,6 +1498,8 @@ let countWithDone = true;
 
 // The last data from the backend, or null while a token is needed.
 let todo = null;
+// Set while `todo` is the content the last run kept (drawn at startup), not a fetch of this run: the first load still takes the completed tasks.
+let todoKept = false;
 // "today", "inbox", or a project's ID.
 let todoView = "today";
 // The ID of the task shown in the detail view, or null for the list.
@@ -1515,6 +1550,7 @@ function showTokenForm(note = "") {
   clearTimeout(todoReloadTimer);
   todoSeq++;
   todo = null;
+  todoKept = false;
   setTodoCount(0);
   todoOpen = null;
   $("todo-notice").replaceChildren();
@@ -2198,6 +2234,7 @@ async function loadTodo(quiet = false, withDone = true) {
     const same = text !== null && text === todoText;
     todoText = text;
     todo = data;
+    todoKept = false;
     todoCountOff = false;
     // Also while a field is being typed in, when nothing is drawn below.
     setTodoCount(data.tasks.filter(isDueToday).length);
@@ -2294,6 +2331,22 @@ $("todo-add").onsubmit = async (e) => {
   input.focus();
 };
 
+// Draws the content the last run kept, on the sidebar's count and, if it is open, the Todo screen, while the first fetch is on its way.
+// A fetch that answered first, a missing token (no kept content) or a failed read leaves everything to the fetch. The kept content carries no offline notice.
+async function showKeptTodo() {
+  let kept = null;
+  try {
+    kept = await invoke("todoist_cached");
+  } catch {}
+  if (!kept || todo !== null || todoSeq !== 0) return;
+  todo = kept;
+  todoKept = true;
+  projectById = new Map(kept.projects.map((p) => [p.id, p]));
+  taskById = new Map(kept.tasks.map((t) => [t.id, t]));
+  setTodoCount(kept.tasks.filter(isDueToday).length);
+  if (screen === "todo") renderTodo();
+}
+
 // Fetches only for the Todo count on the sidebar while another screen is shown: `todo` and the Todo screen stay as they are, and a missing token or a failure shows no count and no message.
 async function loadTodoCount() {
   if (screen === "todo" || document.hidden || todoCountOff || todoWrites) return;
@@ -2310,6 +2363,7 @@ async function loadTodoCount() {
   // The Todo screen sets the count itself, and its data is newer than this fetch.
   if (screen !== "todo" && !todoWrites && seq === todoSeq) setTodoCount(count);
 }
+showKeptTodo();
 loadTodoCount();
 
 // The timed refresh, also when the window comes back. The backend asks Todoist for the changes only, so it is cheap; the completed tasks are not fetched again.
@@ -2574,4 +2628,5 @@ $("thread-slack").onclick = async () => {
 };
 
 
+showKeptInbox();
 load();

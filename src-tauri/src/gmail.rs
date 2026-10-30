@@ -18,6 +18,7 @@ use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
 
 use crate::auth::{config_dir, Auth};
+use crate::disk_cache;
 use crate::image_senders::authenticated;
 use crate::images::{
     cid_refs, image_mime, inline_data_uri, references_to, replace_cids, run_limited, wanted_images,
@@ -114,7 +115,7 @@ struct Header {
     value: String,
 }
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadItem {
     id: String,
@@ -725,7 +726,7 @@ async fn send_json<T: DeserializeOwned>(
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Inbox {
     accounts: Vec<String>,
@@ -903,10 +904,38 @@ pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox,
     })
 }
 
+/// The file the last complete load is kept in.
+pub(crate) const CACHE_FILE: &str = "inbox-cache.json";
+
+/// Only a load that got every account is kept: a partial one would draw the missing accounts' mail as gone.
+fn worth_caching(inbox: &Inbox) -> bool {
+    !inbox.accounts.is_empty() && inbox.needs_login.is_empty() && inbox.failed.is_empty()
+}
+
+/// A load that succeeds is kept in `inbox-cache.json` for `inbox_cached`.
 #[tauri::command]
 pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("inbox", "-", e))?;
-    load_inbox(&dir, &auth, "inbox").await
+    let inbox = load_inbox(&dir, &auth, "inbox").await?;
+    if worth_caching(&inbox) {
+        // Off the reply: the screen does not wait for the write and its fsync.
+        let kept = inbox.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = disk_cache::save(&dir, CACHE_FILE, &kept) {
+                log_failure("inbox_cache", "-", e);
+            }
+        });
+    }
+    Ok(inbox)
+}
+
+/// The inbox of the last complete load, to draw before `inbox` answers. `None` when none is kept.
+#[tauri::command]
+pub async fn inbox_cached(app: AppHandle) -> Option<Inbox> {
+    let dir = config_dir(&app).ok()?;
+    tokio::task::spawn_blocking(move || disk_cache::load(&dir, CACHE_FILE))
+        .await
+        .ok()?
 }
 
 #[derive(Deserialize, Default)]
@@ -1526,6 +1555,48 @@ mod tests {
         assert_eq!(v["historyIds"]["a@example.com"], "42");
         assert_eq!(v["threads"][0]["account"], "a@example.com");
         assert_eq!(v["threads"][0]["dateMs"], 1);
+    }
+
+    #[test]
+    fn inbox_round_trips_through_json() {
+        let inbox = Inbox {
+            accounts: vec!["a@example.com".into()],
+            threads: vec![item_at("t", "a@example.com", 1)],
+            needs_login: vec![],
+            failed: HashMap::new(),
+            history_ids: HashMap::from([("a@example.com".to_string(), "42".to_string())]),
+        };
+        let back: Inbox = serde_json::from_str(&serde_json::to_string(&inbox).unwrap()).unwrap();
+        assert_eq!(back.accounts, inbox.accounts);
+        assert_eq!(back.threads, inbox.threads);
+        assert_eq!(back.history_ids, inbox.history_ids);
+    }
+
+    #[test]
+    fn only_a_complete_load_is_kept() {
+        let complete = Inbox {
+            accounts: vec!["a@example.com".into()],
+            threads: vec![],
+            needs_login: vec![],
+            failed: HashMap::new(),
+            history_ids: HashMap::new(),
+        };
+        assert!(worth_caching(&complete));
+        let no_accounts = Inbox {
+            accounts: vec![],
+            ..complete.clone()
+        };
+        assert!(!worth_caching(&no_accounts));
+        let needs_login = Inbox {
+            needs_login: vec!["a@example.com".into()],
+            ..complete.clone()
+        };
+        assert!(!worth_caching(&needs_login));
+        let failed = Inbox {
+            failed: HashMap::from([("a@example.com".to_string(), "boom".to_string())]),
+            ..complete
+        };
+        assert!(!worth_caching(&failed));
     }
 
     #[test]

@@ -975,6 +975,21 @@ pub async fn todoist_load(
     Ok(Some(todo))
 }
 
+/// The content `todoist_load` kept last, to draw before it answers: fetches nothing, and is not marked `offline`. `None` when none is kept.
+#[tauri::command]
+pub async fn todoist_cached(app: AppHandle) -> Result<Option<Todo>, String> {
+    let Ok(dir) = config_dir(&app) else {
+        return Ok(None);
+    };
+    let cached = tokio::task::spawn_blocking(move || load_cache(&dir))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(cached.map(|CacheFile { mut todo, .. }| {
+        rebucket(&mut todo, Local::now().date_naive());
+        todo
+    }))
+}
+
 /// Stores the personal API token in the keychain. It is never logged or returned.
 #[tauri::command]
 pub async fn todoist_save_token(

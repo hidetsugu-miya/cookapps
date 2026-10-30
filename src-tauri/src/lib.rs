@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod auth;
 pub mod calendar;
+mod disk_cache;
 pub mod gmail;
 pub mod image_senders;
 pub mod images;
@@ -85,7 +86,9 @@ pub fn run() {
             auth::login,
             auth::remove_account,
             calendar::calendar_week,
+            calendar::calendar_cached,
             gmail::inbox,
+            gmail::inbox_cached,
             gmail::thread,
             gmail::thread_images,
             gmail::trash,
@@ -99,6 +102,7 @@ pub fn run() {
             image_senders::remember_image_sender,
             image_senders::forget_image_sender,
             todoist::todoist_load,
+            todoist::todoist_cached,
             todoist::todoist_save_token,
             todoist::todoist_disconnect,
             todoist::todoist_add,
