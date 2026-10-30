@@ -5,7 +5,7 @@ use std::{path::Path, sync::Mutex};
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::accounts::write_synced;
+use crate::accounts::{self, write_synced};
 
 // One writer at a time: two saves would otherwise share the temporary file, and an update reads what the other wrote.
 static WRITING: Mutex<()> = Mutex::new(());
@@ -20,19 +20,53 @@ fn write<T: Serialize>(dir: &Path, file: &str, value: &T) -> Result<(), String> 
         .map_err(|e| format!("{} を書けません: {e}", path.display()))
 }
 
-pub(crate) fn save<T: Serialize>(dir: &Path, file: &str, value: &T) -> Result<(), String> {
+/// Whether every account in `used` is in `listed`.
+fn all_listed<'a>(listed: &[String], used: impl IntoIterator<Item = &'a str>) -> bool {
+    used.into_iter().all(|u| listed.iter().any(|l| l == u))
+}
+
+/// Whether `used` are all registered now. Called under the lock: a save that began before `remove_account` must not bring a removed account's data back.
+/// An unreadable account list counts as no.
+fn registered<'a>(dir: &Path, used: impl IntoIterator<Item = &'a str>) -> bool {
+    matches!(accounts::load(dir), Ok(Some(listed)) if all_listed(&listed, used))
+}
+
+/// Keeps `value`, unless an account in `used` has been removed meanwhile.
+pub(crate) fn save<'a, T: Serialize>(
+    dir: &Path,
+    file: &str,
+    value: &T,
+    used: impl IntoIterator<Item = &'a str>,
+) -> Result<(), String> {
     let _writing = WRITING.lock().unwrap_or_else(|e| e.into_inner());
+    if !registered(dir, used) {
+        return Ok(());
+    }
     write(dir, file, value)
 }
 
-/// Replaces the kept value (a default one when none is readable) with `change` of it.
-pub(crate) fn update<T: Serialize + DeserializeOwned + Default>(
+/// Replaces the kept value (a default one when none is readable) with `change` of it; `None` leaves the file alone.
+/// Nothing is kept when an account in `used` has been removed meanwhile.
+pub(crate) fn update<'a, T: Serialize + DeserializeOwned + Default>(
     dir: &Path,
     file: &str,
-    change: impl FnOnce(T) -> T,
+    used: impl IntoIterator<Item = &'a str>,
+    change: impl FnOnce(T) -> Option<T>,
 ) -> Result<(), String> {
     let _writing = WRITING.lock().unwrap_or_else(|e| e.into_inner());
-    write(dir, file, &change(load(dir, file).unwrap_or_default()))
+    if !registered(dir, used) {
+        return Ok(());
+    }
+    match change(load(dir, file).unwrap_or_default()) {
+        Some(value) => write(dir, file, &value),
+        None => Ok(()),
+    }
+}
+
+/// Runs `f` while no save or update runs, so each of them sees the account list either before `f` or after it.
+pub(crate) fn exclusive<R>(f: impl FnOnce() -> R) -> R {
+    let _writing = WRITING.lock().unwrap_or_else(|e| e.into_inner());
+    f()
 }
 
 /// `None` when the file is missing or unreadable.
@@ -61,11 +95,53 @@ mod tests {
         dir
     }
 
+    const A: &str = "a@example.com";
+
+    fn register(dir: &Path, listed: &[&str]) {
+        accounts::save(
+            dir,
+            &listed.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn all_listed_needs_every_used_account_in_the_list() {
+        let listed = vec![A.to_string(), "b@example.com".to_string()];
+        assert!(all_listed(&listed, [A, "b@example.com"]));
+        assert!(all_listed(&listed, []));
+        assert!(!all_listed(&listed, [A, "c@example.com"]));
+        assert!(!all_listed(&[], [A]));
+    }
+
+    #[test]
+    fn nothing_is_kept_for_a_removed_account_or_without_an_account_list() {
+        let dir = temp_dir("removed");
+        save(&dir, "a.json", &vec![1], [A]).unwrap();
+        assert_eq!(load::<Vec<u32>>(&dir, "a.json"), None);
+        register(&dir, &["b@example.com"]);
+        save(&dir, "a.json", &vec![1], [A]).unwrap();
+        update(&dir, "a.json", [A], |v: Vec<u32>| Some(v)).unwrap();
+        assert_eq!(load::<Vec<u32>>(&dir, "a.json"), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn update_that_returns_none_leaves_the_file_alone() {
+        let dir = temp_dir("none");
+        register(&dir, &[A]);
+        save(&dir, "a.json", &vec![1], [A]).unwrap();
+        update(&dir, "a.json", [A], |_: Vec<u32>| None).unwrap();
+        assert_eq!(load::<Vec<u32>>(&dir, "a.json"), Some(vec![1]));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn saved_value_loads_back_and_leaves_no_temporary_file() {
         let dir = temp_dir("round-trip");
+        register(&dir, &[A]);
         assert_eq!(load::<Vec<u32>>(&dir, "a.json"), None);
-        save(&dir, "a.json", &vec![1, 2]).unwrap();
+        save(&dir, "a.json", &vec![1, 2], [A]).unwrap();
         assert_eq!(load::<Vec<u32>>(&dir, "a.json"), Some(vec![1, 2]));
         assert!(!dir.join("a.json.tmp").exists());
         remove(&dir, "a.json").unwrap();
@@ -89,22 +165,23 @@ mod tests {
     #[test]
     fn update_starts_from_the_kept_value_or_the_default() {
         let dir = temp_dir("update");
-        update(&dir, "a.json", |mut v: Vec<u32>| {
+        register(&dir, &[A]);
+        update(&dir, "a.json", [A], |mut v: Vec<u32>| {
             v.push(1);
-            v
+            Some(v)
         })
         .unwrap();
-        update(&dir, "a.json", |mut v: Vec<u32>| {
+        update(&dir, "a.json", [A], |mut v: Vec<u32>| {
             v.push(2);
-            v
+            Some(v)
         })
         .unwrap();
         assert_eq!(load::<Vec<u32>>(&dir, "a.json"), Some(vec![1, 2]));
         // A file that cannot be read starts over from the default.
         std::fs::write(dir.join("a.json"), "{").unwrap();
-        update(&dir, "a.json", |mut v: Vec<u32>| {
+        update(&dir, "a.json", [A], |mut v: Vec<u32>| {
             v.push(3);
-            v
+            Some(v)
         })
         .unwrap();
         assert_eq!(load::<Vec<u32>>(&dir, "a.json"), Some(vec![3]));

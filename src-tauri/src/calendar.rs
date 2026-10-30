@@ -778,9 +778,15 @@ pub async fn calendar_week(
         // Off the reply: the screen does not wait for the write and its fsync.
         let kept = week.clone();
         tokio::task::spawn_blocking(move || {
-            let saved = disk_cache::update(&dir, CACHE_FILE, |c: Cached| Cached {
-                weeks: with_week(c.weeks, kept, MAX_CACHED_WEEKS),
-            });
+            let used: Vec<String> = kept.accounts().map(str::to_owned).collect();
+            let saved = disk_cache::update(
+                &dir,
+                CACHE_FILE,
+                used.iter().map(String::as_str),
+                |c: Cached| {
+                    with_week(c.weeks, kept, MAX_CACHED_WEEKS).map(|weeks| Cached { weeks })
+                },
+            );
             if let Err(e) = saved {
                 log_failure("calendar_cache", "-", e);
             }
@@ -800,32 +806,40 @@ struct Cached {
     weeks: Vec<Week>,
 }
 
+impl Week {
+    /// The accounts whose events are in the week.
+    fn accounts(&self) -> impl Iterator<Item = &str> {
+        let all_day = self.all_day.iter().map(|i| i.info.account.as_str());
+        all_day.chain(self.timed.iter().map(|i| i.info.account.as_str()))
+    }
+}
+
 /// Only a week that got every account and calendar is kept: a partial one would draw the missing events as gone.
 fn worth_caching(week: &Week) -> bool {
     week.needs_login.is_empty() && week.failed.is_empty() && week.calendar_failed.is_empty()
 }
 
 /// `week` as the newest of `weeks`, in place of the kept week with the same start; the oldest beyond `max` are dropped.
-fn with_week(mut weeks: Vec<Week>, week: Week, max: usize) -> Vec<Week> {
+/// `None` when that kept week is already the same, so nothing needs writing.
+fn with_week(mut weeks: Vec<Week>, week: Week, max: usize) -> Option<Vec<Week>> {
+    if weeks.contains(&week) {
+        return None;
+    }
     weeks.retain(|w| w.week_start != week.week_start);
     weeks.push(week);
     let extra = weeks.len().saturating_sub(max);
     weeks.drain(..extra);
-    weeks
+    Some(weeks)
 }
 
-/// The kept week of the week containing `date`, to draw before `calendar_week` answers. `None` when it is not kept.
+/// The kept weeks, to draw before `calendar_week` answers. Empty when none is kept.
 #[tauri::command]
-pub async fn calendar_cached(app: AppHandle, date: String) -> Result<Option<Week>, String> {
-    let date: NaiveDate = date
-        .parse()
-        .map_err(|_| format!("日付が不正です: {date}"))?;
-    let start = week_start(date).to_string();
+pub async fn calendar_cached(app: AppHandle) -> Result<Vec<Week>, String> {
     let dir = config_dir(&app)?;
     let cached = tokio::task::spawn_blocking(move || disk_cache::load::<Cached>(&dir, CACHE_FILE))
         .await
         .map_err(|e| e.to_string())?;
-    Ok(cached.and_then(|c| c.weeks.into_iter().find(|w| w.week_start == start)))
+    Ok(cached.map(|c| c.weeks).unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -1352,14 +1366,17 @@ mod tests {
     fn a_new_week_is_the_newest_and_the_oldest_beyond_the_limit_go() {
         let weeks = vec![week_of("w1"), week_of("w2"), week_of("w3")];
         assert_eq!(
-            starts(&with_week(weeks.clone(), week_of("w4"), 3)),
+            starts(&with_week(weeks.clone(), week_of("w4"), 3).unwrap()),
             ["w2", "w3", "w4"]
         );
         assert_eq!(
-            starts(&with_week(weeks.clone(), week_of("w4"), 4)),
+            starts(&with_week(weeks.clone(), week_of("w4"), 4).unwrap()),
             ["w1", "w2", "w3", "w4"]
         );
-        assert_eq!(starts(&with_week(vec![], week_of("w1"), 3)), ["w1"]);
+        assert_eq!(
+            starts(&with_week(vec![], week_of("w1"), 3).unwrap()),
+            ["w1"]
+        );
     }
 
     #[test]
@@ -1368,8 +1385,33 @@ mod tests {
         let mut fresh = week_of("w1");
         fresh.calendar_failed = vec![];
         fresh.timed.clear();
-        let out = with_week(weeks, fresh, 3);
+        let out = with_week(weeks, fresh, 3).unwrap();
         assert_eq!(starts(&out), ["w2", "w3", "w1"]);
         assert!(out[2].timed.is_empty());
+    }
+
+    #[test]
+    fn a_week_equal_to_the_kept_one_is_not_written_again() {
+        let weeks = vec![week_of("w1"), week_of("w2")];
+        assert_eq!(with_week(weeks.clone(), week_of("w1"), 3), None);
+        let mut changed = week_of("w1");
+        changed.timed.clear();
+        assert!(with_week(weeks, changed, 3).is_some());
+    }
+
+    #[test]
+    fn a_week_names_the_accounts_of_its_events() {
+        let mut week = week_of("w1");
+        let mut other = week.timed[0].clone();
+        other.info.account = "b@example.com".into();
+        week.timed.push(other);
+        week.all_day.push(AllDayItem {
+            day: 0,
+            info: week.timed[0].info.clone(),
+        });
+        let mut accounts: Vec<_> = week.accounts().collect();
+        accounts.sort_unstable();
+        accounts.dedup();
+        assert_eq!(accounts, ["a@example.com", "b@example.com"]);
     }
 }

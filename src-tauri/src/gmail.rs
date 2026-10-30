@@ -921,7 +921,12 @@ pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, Strin
         // Off the reply: the screen does not wait for the write and its fsync.
         let kept = inbox.clone();
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = disk_cache::save(&dir, CACHE_FILE, &kept) {
+            if let Err(e) = disk_cache::save(
+                &dir,
+                CACHE_FILE,
+                &kept,
+                kept.accounts.iter().map(String::as_str),
+            ) {
                 log_failure("inbox_cache", "-", e);
             }
         });
