@@ -486,7 +486,7 @@ async fn read_secret(user: String) -> Result<Option<String>, String> {
     blocking(move || match entry(&user)?.get_password() {
         Ok(t) => Ok(Some(t)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("キーチェーンの読み取りに失敗: {e}")),
+        Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
     })
     .await
 }
@@ -495,7 +495,7 @@ async fn write_secret(user: String, token: String) -> Result<(), String> {
     blocking(move || {
         entry(&user)?
             .set_password(&token)
-            .map_err(|e| format!("キーチェーンへの保存に失敗: {e}"))
+            .map_err(|e| format!("資格情報の保存に失敗: {e}"))
     })
     .await
 }

@@ -207,7 +207,7 @@ function updateBadge() {
   invoke("set_badge", { count }).catch(() => {});
 }
 
-// What the last archive / trash did, for "元に戻す" and Cmd+Z: the command that reverses it and the thread data to put back.
+// What the last archive / trash did, for "元に戻す" and Cmd+Z (Ctrl+Z off macOS): the command that reverses it and the thread data to put back.
 // One only; a newer removal replaces it.
 let lastRemoved = null;
 let removeSeq = 0; // taken when a removal starts, so a slower older one cannot replace a newer one
@@ -1076,9 +1076,10 @@ function removeCurrent(command) {
 $("thread-todo").onclick = () => makeTodo(current.account, current.id, $("thread-subject").textContent, $("thread-todo"));
 $("trash").onclick = () => removeCurrent("trash");
 $("archive").onclick = () => removeCurrent("archive");
-// Cmd+Z undoes the last removal; in a text field it stays that field's own undo.
+// Cmd+Z (Ctrl+Z off macOS) undoes the last removal; in a text field it stays that field's own undo.
+const isMac = /Mac/.test(navigator.platform);
 document.addEventListener("keydown", (e) => {
-  if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.key !== "z" || composing(e) || !lastRemoved) return;
+  if (e.metaKey !== isMac || e.ctrlKey === isMac || e.altKey || e.shiftKey || e.key !== "z" || composing(e) || !lastRemoved) return;
   const a = document.activeElement;
   if (a?.isContentEditable || a?.closest?.("input, textarea")) return;
   e.preventDefault();

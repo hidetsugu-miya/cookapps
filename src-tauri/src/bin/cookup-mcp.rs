@@ -1,17 +1,17 @@
 //! stdio MCP server over the same Gmail / Calendar code as the app. Login is done in the app, not here.
 
-use std::{env, path::PathBuf};
+use std::path::PathBuf;
 
 use cookup_lib::{auth::Auth, calendar, gmail};
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, transport::stdio, ServiceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Tauri's `app_config_dir` for the app's identifier.
-/// shortcut: macOS only, upgrade if the app ever runs elsewhere.
+/// Tauri's `app_config_dir` for the app's identifier: `dirs::config_dir()` (as Tauri resolves it) joined with the identifier.
 fn config_dir() -> Result<PathBuf, String> {
-    let home = env::var_os("HOME").ok_or("HOME が設定されていません")?;
-    Ok(PathBuf::from(home).join("Library/Application Support/jp.mysis.cookup"))
+    dirs::config_dir()
+        .map(|dir| dir.join("jp.mysis.cookup"))
+        .ok_or_else(|| "設定フォルダの場所を特定できません".to_string())
 }
 
 fn relogin(account: &str) -> String {
@@ -145,4 +145,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             server.serve(stdio()).await?.waiting().await?;
             Ok::<_, Box<dyn std::error::Error>>(())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_dir;
+
+    #[test]
+    fn config_dir_is_the_apps_folder_under_the_users_config_dir() {
+        let dir = config_dir().unwrap();
+        assert!(dir.is_absolute());
+        assert!(dir.ends_with("jp.mysis.cookup"));
+    }
 }

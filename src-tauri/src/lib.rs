@@ -14,7 +14,7 @@ fn badge_of(count: u32) -> Option<i64> {
     (count > 0).then_some(i64::from(count))
 }
 
-/// Shows the unread count as the Dock badge; 0 removes it.
+/// Shows the unread count as the Dock badge; 0 removes it. Windows has no badge count (tao ignores it), so this does nothing there.
 #[tauri::command]
 fn set_badge(window: tauri::WebviewWindow, count: u32) -> Result<(), String> {
     window

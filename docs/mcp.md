@@ -12,12 +12,13 @@ cookup アプリが起動していなくても使えます。
 
 ## 前提
 
-- macOS で動かすこと。
+- macOS か Windows で動かすこと。
 - cookup アプリで、使いたいアカウントにログイン済みであること。
-  - `cookup-mcp` は、アプリと同じ `~/Library/Application Support/jp.mysis.cookup/` の `client_secret.json` と `accounts.json` を読みます。
-  - リフレッシュトークンもアプリと同じキーチェーンの項目（サービス名 `jp.mysis.cookup`）から読みます。
+  - `cookup-mcp` は、アプリと同じ設定フォルダの `client_secret.json` と `accounts.json` を読みます。
+    macOS では `~/Library/Application Support/jp.mysis.cookup/`、Windows では `%APPDATA%\jp.mysis.cookup\` です。
+  - リフレッシュトークンもアプリと同じ OS の資格情報の保管場所の項目（サービス名 `jp.mysis.cookup`。macOS ではキーチェーン、Windows では資格情報マネージャー）から読みます。
 - `cookup-mcp` はログインを行いません。アカウントの追加と再ログインは、アプリで行います。
-- `~/.cargo/bin` が `PATH` に入っていること。
+- `~/.cargo/bin`（Windows では `%USERPROFILE%\.cargo\bin`）が `PATH` に入っていること。
 
 ## 手順
 
@@ -29,8 +30,8 @@ cookup アプリが起動していなくても使えます。
 cargo install --path src-tauri --bin cookup-mcp --locked
 ```
 
-`~/.cargo/bin/cookup-mcp` ができれば完了です。
-`command -v cookup-mcp` で、パスが出ることを確かめます。
+`~/.cargo/bin/cookup-mcp` ができれば完了です（Windows では `%USERPROFILE%\.cargo\bin\cookup-mcp.exe`）。
+`command -v cookup-mcp`（Windows の PowerShell では `Get-Command cookup-mcp`）で、パスが出ることを確かめます。
 コードを更新したときも、同じコマンドで入れ直します。
 
 ### 2. Claude Code に登録する
@@ -64,6 +65,23 @@ claude mcp add --scope user cookup -- cookup-mcp
 
 ユーザーのスコープで登録したら、`.mcp.json` の承認は不要です。
 
+#### Claude Desktop に登録する場合
+
+Claude Desktop の設定ファイルの `mcpServers` に、`cookup-mcp` の絶対パスで登録します。
+設定ファイルの場所は、macOS が `~/Library/Application Support/Claude/claude_desktop_config.json`、Windows が `%APPDATA%\Claude\claude_desktop_config.json` です。
+
+```json
+{
+  "mcpServers": {
+    "cookup": {
+      "command": "C:\\Users\\{ユーザー名}\\.cargo\\bin\\cookup-mcp.exe"
+    }
+  }
+}
+```
+
+macOS では `command` に `/Users/{ユーザー名}/.cargo/bin/cookup-mcp` を指定します。
+
 ### 3. 読み取りのツールだけを許可する
 
 Claude Code の設定ファイル（`~/.claude/settings.json` など）の `permissions.allow` に、次の 3 つを足します。
@@ -93,7 +111,7 @@ claude mcp get cookup
 `Status` が `✔ Connected` なら完了です。
 Claude Code の中では、`/mcp` で `cookup` の 6 つのツールが見えます。
 
-最初にツールを呼んだとき、キーチェーンへのアクセスの許可を macOS が求めることがあります。
+macOS では、最初にツールを呼んだとき、キーチェーンへのアクセスの許可を求められることがあります。
 「常に許可」を選びます。
 `cookup-mcp` を入れ直すと、また求められることがあります。
 
@@ -122,4 +140,4 @@ Claude Code の中では、`/mcp` で `cookup` の 6 つのツールが見えま
 | `claude mcp get cookup` が `Failed to connect` になる | 1 のインストールを済ませたか、`command -v cookup-mcp` でパスが出るかを確かめる |
 | 「再ログインが必要です」と返る | cookup アプリでそのアカウントに再ログインする |
 | 「OAuth クライアント JSON を読めません」と返る | アプリの [README](https://github.com/hidetsugu-miya/cookup#セットアップ) のセットアップを済ませる |
-| ツールを呼ぶたびにキーチェーンの許可を求められる | 許可のダイアログで「常に許可」を選ぶ |
+| macOS で、ツールを呼ぶたびにキーチェーンの許可を求められる | 許可のダイアログで「常に許可」を選ぶ |
