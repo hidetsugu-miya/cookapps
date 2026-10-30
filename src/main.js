@@ -1425,6 +1425,8 @@ const OPEN_SVG = svgOf('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 
 const DAY_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M12 14v3"/>');
 const DATE_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/>');
 const FLAG_SVG = svgOf('<path d="M5 21V4h11l-2 4 2 4H5"/>');
+const EDIT_SVG = svgOf('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>');
+const FOLDER_SVG = svgOf('<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>');
 const INBOX_SVG = $("nav-mail").querySelector("svg").outerHTML;
 const PLUS_SVG = $("add-account").innerHTML.trim();
 const DELETE_SVG = $("todo-delete").innerHTML.trim();
@@ -1571,7 +1573,8 @@ function taskRow(t, showProject, accounts) {
   };
   const line = tag("div", "t");
   if (mail) line.insertAdjacentHTML("beforeend", MAIL_SVG);
-  line.append(tag("span", "", t.content));
+  const name = tag("span", "", t.content);
+  line.append(name);
   if (t.parent) line.append(tag("span", "parent", t.parent.content));
   if (t.subTotal) {
     const count = tag("span", "subcount");
@@ -1592,11 +1595,44 @@ function taskRow(t, showProject, accounts) {
   }
   const trail = tag("div", "trail");
   const actions = tag("div", "row-actions");
+  actions.append(
+    rowButton("edit-row", "名前を変更", EDIT_SVG, () => editRowName(name, t)),
+    rowButton("due-row", "期限を変更", DATE_SVG, (button) => openDuePop(button, t)),
+    rowButton("project-row", "プロジェクトを移動", FOLDER_SVG, (button) => openProjectMenu(button, t)),
+  );
   if (mail) actions.append(rowButton("mail-row", "メールを開く", MAIL_SVG, () => openMailFromTodo(mail)));
   actions.append(rowButton("open-row", "Todoist で開く", OPEN_SVG, () => invoke("todoist_open", { id: t.id }).catch(showError)));
   trail.append(tag("span", `due${t.bucket === "overdue" ? " over" : ""}`, t.due ? dueLabel(t.due) : ""), actions);
   li.append(trail);
   return li;
+}
+
+// Turns a row's name into a text field: Enter saves, Escape or leaving the field puts the name back.
+function editRowName(name, t) {
+  const input = tag("input", "row-edit");
+  input.value = t.content;
+  input.setAttribute("aria-label", "タスクの名前");
+  let finished = false;
+  const finish = (save) => {
+    if (finished) return;
+    finished = true;
+    if (save && input.value.trim() && input.value !== t.content) {
+      name.textContent = input.value;
+      saveTask(t.id, { content: input.value });
+    }
+    input.replaceWith(name);
+  };
+  input.onkeydown = (e) => {
+    if (composing(e)) return;
+    if (e.key === "Enter") finish(true);
+    else if (e.key === "Escape") finish(false);
+  };
+  input.onblur = () => finish(false);
+  // The row opens the task on click; the field must not.
+  input.onclick = (e) => e.stopPropagation();
+  name.replaceWith(input);
+  input.focus();
+  input.select();
 }
 
 function renderList() {
@@ -1741,37 +1777,51 @@ function monthPicker(shown, due, pick) {
   return box;
 }
 
-// The due chip opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
+// The due popover opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
 // A repeating task gets the text field only: a picked day would replace its repeat.
+function openDuePop(anchor, t) {
+  const pop = tag("div", "menu due-pop");
+  const input = tag("input", "chip-input");
+  input.value = t.due?.string ?? "";
+  input.placeholder = "例: 明日 15時";
+  input.setAttribute("aria-label", "期限（空欄で期限なし）");
+  input.onkeydown = (e) => {
+    if (composing(e)) return;
+    if (e.key !== "Enter") return;
+    closeMenu();
+    if (input.value.trim() !== (t.due?.string ?? "")) saveTask(t.id, { dueString: input.value });
+  };
+  const month = t.due ? addDays(t.due.date, 0) : new Date();
+  pop.append(input);
+  if (!t.due?.recurring)
+    pop.append(
+      monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), t.due, (iso) => {
+        closeMenu();
+        if (iso === t.due?.date) return;
+        saveTask(t.id, { dueString: t.due?.time ? `${iso} ${t.due.time}` : iso });
+      }),
+    );
+  showMenu(anchor, pop);
+  input.focus();
+  input.select();
+}
+
 function dueChip(t) {
   const b = chip(DATE_SVG, t.due ? dueLabel(t.due) : "期限なし", t.bucket === "overdue" ? "over" : "");
-  b.onclick = () => {
-    const pop = tag("div", "menu due-pop");
-    const input = tag("input", "chip-input");
-    input.value = t.due?.string ?? "";
-    input.placeholder = "例: 明日 15時";
-    input.setAttribute("aria-label", "期限（空欄で期限なし）");
-    input.onkeydown = (e) => {
-      if (composing(e)) return;
-      if (e.key !== "Enter") return;
-      closeMenu();
-      if (input.value.trim() !== (t.due?.string ?? "")) saveTask(t.id, { dueString: input.value });
-    };
-    const month = t.due ? addDays(t.due.date, 0) : new Date();
-    pop.append(input);
-    if (!t.due?.recurring)
-      pop.append(
-        monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), t.due, (iso) => {
-          closeMenu();
-          if (iso === t.due?.date) return;
-          saveTask(t.id, { dueString: t.due?.time ? `${iso} ${t.due.time}` : iso });
-        }),
-      );
-    showMenu(b, pop);
-    input.focus();
-    input.select();
-  };
+  b.onclick = () => openDuePop(b, t);
   return b;
+}
+
+function openProjectMenu(anchor, t) {
+  openMenu(
+    anchor,
+    todo.projects.map((x) => ({
+      label: projectName(x),
+      color: x.color,
+      current: x.id === t.projectId,
+      pick: () => x.id !== t.projectId && todoCall("todoist_move", { id: t.id, projectId: x.id }),
+    })),
+  );
 }
 
 function projectChip(t) {
@@ -1780,16 +1830,7 @@ function projectChip(t) {
   const dot = tag("span", "pdot");
   dot.style.background = p?.color;
   b.append(dot, projectName(p));
-  b.onclick = () =>
-    openMenu(
-      b,
-      todo.projects.map((x) => ({
-        label: projectName(x),
-        color: x.color,
-        current: x.id === t.projectId,
-        pick: () => x.id !== t.projectId && todoCall("todoist_move", { id: t.id, projectId: x.id }),
-      })),
-    );
+  b.onclick = () => openProjectMenu(b, t);
   return b;
 }
 
@@ -1935,10 +1976,11 @@ function renderTodo() {
   else renderList();
 }
 
-// Whether a text field of the open task holds what the user is typing; a redraw would replace it with Todoist's older value.
+// Whether a text field holds what the user is typing (a field of the open task, or a name being edited in the list); a redraw would replace it with Todoist's older value.
 // The subtask field counts only while it has text: it is emptied on Enter, and the redraw must show the subtask just added.
-function editingDetail() {
+function editingField() {
   const a = document.activeElement;
+  if ($("todo-list").contains(a)) return a.matches(".row-edit");
   return $("todo-detail").contains(a) && a.matches("textarea, input:not([type=checkbox])") && (a.dataset.field !== "sub" || a.value !== "");
 }
 
@@ -1966,7 +2008,7 @@ function drawTodoNotice(offline) {
 // Fetches the tasks and draws them. `quiet` is the timed refresh: it fetches nothing while a field is being typed in, and draws nothing when nothing changed.
 // Without `withDone` the backend reuses the completed tasks it fetched last. Returns true when a token is needed (the token form is shown).
 async function loadTodo(quiet = false, withDone = true) {
-  if (quiet && editingDetail()) return false;
+  if (quiet && editingField()) return false;
   const seq = ++todoSeq;
   try {
     const data = await invoke("todoist_load", { withDone });
@@ -1986,7 +2028,7 @@ async function loadTodo(quiet = false, withDone = true) {
     taskById = new Map(data.tasks.map((t) => [t.id, t]));
     drawTodoNotice(data.offline);
     // A field being typed in keeps what was typed; the detail is drawn after the focus leaves, by the next save's load or the next refresh.
-    if (editingDetail()) {
+    if (editingField()) {
       todoUndrawn = true;
       return false;
     }
