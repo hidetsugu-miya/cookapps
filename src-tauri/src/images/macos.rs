@@ -3,9 +3,10 @@
 //! The session is ephemeral: no cookies, credentials, cache or proxy.
 
 use std::{
+    collections::HashMap,
     mem,
-    net::SocketAddr,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex, PoisonError},
 };
 
 use block2::DynBlock;
@@ -20,7 +21,7 @@ use objc2_foundation::{
     NSMutableURLRequest, NSString, NSURLRequest, NSURLRequestCachePolicy, NSURLResponse,
     NSURLSession, NSURLSessionConfiguration, NSURLSessionDataDelegate, NSURLSessionDataTask,
     NSURLSessionDelegate, NSURLSessionResponseDisposition, NSURLSessionTask,
-    NSURLSessionTaskDelegate, NSURL,
+    NSURLSessionTaskDelegate, NSURLSessionTaskMetrics, NSURL,
 };
 use reqwest::Url;
 use tokio::sync::oneshot;
@@ -35,6 +36,19 @@ use super::{
 /// Whether `addrs` are all public. An empty list is not: the name did not resolve.
 fn all_public(addrs: &[SocketAddr]) -> bool {
     !addrs.is_empty() && addrs.iter().all(|a| is_public(a.ip()))
+}
+
+/// Whether every peer a task connected to is a public IP address. `None` is a transaction whose peer is unknown.
+/// No transaction at all is not public: nothing was verified.
+fn peers_public(peers: &[Option<String>]) -> bool {
+    !peers.is_empty()
+        && peers.iter().all(|peer| {
+            // An IPv6 address can carry a zone: `fe80::1%en0`.
+            peer.as_deref()
+                .and_then(|p| p.split('%').next())
+                .and_then(|p| p.parse::<IpAddr>().ok())
+                .is_some_and(is_public)
+        })
 }
 
 /// Whether the host of `url` resolves, and only to public addresses. Blocks while it resolves.
@@ -59,6 +73,10 @@ struct Fetch {
     body: Vec<u8>,
     /// Why the fetch was stopped on purpose. NSURLSession then only reports "cancelled".
     stopped: Option<String>,
+    /// The end of the task (its error, if any) and whether all its peers were public. The result waits for both,
+    /// whichever NSURLSession reports first.
+    completed: Option<Option<String>>,
+    peers_public: Option<bool>,
     done: Option<oneshot::Sender<Result<Fetched, Failed>>>,
 }
 
@@ -81,6 +99,8 @@ impl Fetch {
         if length.is_some_and(|n| !self.budget.has(n)) {
             return self.stop("total size limit reached");
         }
+        // `response_mime` refused a length over `MAX_IMAGE_BYTES`, so this is within the limit.
+        self.body.reserve(length.map_or(0, |n| n as usize));
         self.mime = Some(mime);
         true
     }
@@ -96,10 +116,37 @@ impl Fetch {
         true
     }
 
+    /// The task ended, with `error` if it failed.
+    fn complete(&mut self, error: Option<String>) {
+        self.completed = Some(error);
+        self.finish_when_ready();
+    }
+
+    /// NSURLSession reported the peers of all the task's transactions, redirects included.
+    fn metered(&mut self, public: bool) {
+        self.peers_public = Some(public);
+        self.finish_when_ready();
+    }
+
+    fn finish_when_ready(&mut self) {
+        let Some(public) = self.peers_public else {
+            return;
+        };
+        let Some(error) = self.completed.take() else {
+            return;
+        };
+        self.finish(error, public);
+    }
+
     /// Hands the result over once. A failed image gives its bytes back to the budget.
-    fn finish(&mut self, error: Option<String>) {
+    /// An image from a non-public peer is dropped: the connection was made, but its answer is not read.
+    fn finish(&mut self, error: Option<String>, public: bool) {
         let Some(done) = self.done.take() else { return };
-        let result = match (self.stopped.take(), error, self.mime.take()) {
+        let stopped = self
+            .stopped
+            .take()
+            .or_else(|| (!public).then(|| "connected to an address that is not public".to_owned()));
+        let result = match (stopped, error, self.mime.take()) {
             (Some(why), ..) | (None, Some(why), _) => Err(why),
             (None, None, Some(mime)) => Ok((mime, mem::take(&mut self.body))),
             (None, None, None) => Err("no response".to_owned()),
@@ -113,7 +160,7 @@ impl Fetch {
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[ivars = Mutex<Fetch>]
+    #[ivars = Mutex<HashMap<usize, Fetch>>]
     struct Delegate;
 
     unsafe impl NSObjectProtocol for Delegate {}
@@ -125,7 +172,7 @@ define_class!(
         fn redirect(
             &self,
             _session: &NSURLSession,
-            _task: &NSURLSessionTask,
+            task: &NSURLSessionTask,
             _response: &NSHTTPURLResponse,
             request: &NSURLRequest,
             handler: &DynBlock<dyn Fn(*mut NSURLRequest)>,
@@ -134,30 +181,46 @@ define_class!(
                 .URL()
                 .and_then(|u| u.absoluteString())
                 .and_then(|u| Url::parse(&u.to_string()).ok());
-            let followed = self.fetch().redirects;
+            let followed = self.with(task, |f| f.redirects);
             // The name is resolved outside the lock: it can take a while.
-            let follow = to
-                .as_ref()
-                .is_some_and(|to| redirect_allowed(followed, to) && resolves_public(to));
+            let follow = followed.zip(to.as_ref()).is_some_and(|(followed, to)| {
+                redirect_allowed(followed, to) && resolves_public(to)
+            });
             if follow {
-                self.fetch().redirects += 1;
+                self.with(task, |f| f.redirects += 1);
                 handler.call((std::ptr::from_ref(request).cast_mut(),));
             } else {
                 // The redirect response itself then arrives as the response, and `response` ends the fetch.
-                self.fetch().stop("redirect refused");
+                self.with(task, |f| f.stop("redirect refused"));
                 handler.call((std::ptr::null_mut(),));
             }
+        }
+
+        #[unsafe(method(URLSession:task:didFinishCollectingMetrics:))]
+        fn metrics(
+            &self,
+            _session: &NSURLSession,
+            task: &NSURLSessionTask,
+            metrics: &NSURLSessionTaskMetrics,
+        ) {
+            let peers: Vec<_> = metrics
+                .transactionMetrics()
+                .iter()
+                .map(|t| t.remoteAddress().map(|a| a.to_string()))
+                .collect();
+            self.with(task, |f| f.metered(peers_public(&peers)));
         }
 
         #[unsafe(method(URLSession:task:didCompleteWithError:))]
         fn complete(
             &self,
             _session: &NSURLSession,
-            _task: &NSURLSessionTask,
+            task: &NSURLSessionTask,
             error: Option<&NSError>,
         ) {
-            self.fetch()
-                .finish(error.map(|e| e.localizedDescription().to_string()));
+            self.with(task, |f| {
+                f.complete(error.map(|e| e.localizedDescription().to_string()));
+            });
         }
     }
 
@@ -166,7 +229,7 @@ define_class!(
         fn response(
             &self,
             _session: &NSURLSession,
-            _task: &NSURLSessionDataTask,
+            task: &NSURLSessionDataTask,
             response: &NSURLResponse,
             handler: &DynBlock<dyn Fn(NSURLSessionResponseDisposition)>,
         ) {
@@ -177,15 +240,12 @@ define_class!(
                         .map(|v| v.to_string());
                     // -1 is "unknown".
                     let length = u64::try_from(http.expectedContentLength()).ok();
-                    self.fetch().response(
-                        http.statusCode().try_into().unwrap_or(0),
-                        content_type.as_deref(),
-                        length,
-                    )
+                    let status = http.statusCode().try_into().unwrap_or(0);
+                    self.with(task, |f| f.response(status, content_type.as_deref(), length))
                 }
-                None => self.fetch().stop("not an HTTP response"),
+                None => self.with(task, |f| f.stop("not an HTTP response")),
             };
-            handler.call((if go {
+            handler.call((if go == Some(true) {
                 NSURLSessionResponseDisposition::Allow
             } else {
                 NSURLSessionResponseDisposition::Cancel
@@ -194,7 +254,10 @@ define_class!(
 
         #[unsafe(method(URLSession:dataTask:didReceiveData:))]
         fn data(&self, _session: &NSURLSession, task: &NSURLSessionDataTask, data: &NSData) {
-            if !self.fetch().data(&data.to_vec()) {
+            // Safety: the bytes are only read inside this call, the one time the delegate method has them,
+            // and nothing here mutates the NSData.
+            let chunk = unsafe { data.as_bytes_unchecked() };
+            if self.with(task, |f| f.data(chunk)) != Some(true) {
                 task.cancel();
             }
         }
@@ -202,74 +265,130 @@ define_class!(
 );
 
 impl Delegate {
-    fn fetch(&self) -> MutexGuard<'_, Fetch> {
-        self.ivars().lock().unwrap_or_else(PoisonError::into_inner)
+    /// Runs `f` on the fetch of `task`, and forgets the fetch once its result was handed over.
+    /// `None` when there is no such fetch.
+    fn with<R>(&self, task: &NSURLSessionTask, f: impl FnOnce(&mut Fetch) -> R) -> Option<R> {
+        let id = task.taskIdentifier();
+        let mut fetches = self.ivars().lock().unwrap_or_else(PoisonError::into_inner);
+        let fetch = fetches.get_mut(&id)?;
+        let out = f(fetch);
+        if fetch.done.is_none() {
+            fetches.remove(&id);
+        }
+        Some(out)
     }
 }
 
-/// Starts the request. The result arrives on the returned channel when NSURLSession is done.
-fn start(
-    url: &Url,
-    budget: Arc<Budget>,
-) -> Result<oneshot::Receiver<Result<Fetched, Failed>>, Failed> {
-    let ns_url = NSURL::URLWithString(&NSString::from_str(url.as_str()))
-        .ok_or_else(|| failed("not a URL"))?;
-    let request = NSMutableURLRequest::requestWithURL(&ns_url);
-    request.setHTTPShouldHandleCookies(false);
+/// One NSURLSession for the images of one `fetch_images` call, so they share connections.
+pub(super) struct Session {
+    session: Retained<NSURLSession>,
+    delegate: Retained<Delegate>,
+}
 
-    let config = NSURLSessionConfiguration::ephemeralSessionConfiguration();
-    config.setHTTPShouldSetCookies(false);
-    config.setHTTPCookieAcceptPolicy(NSHTTPCookieAcceptPolicy::Never);
-    config.setHTTPCookieStorage(None);
-    config.setURLCredentialStorage(None);
-    config.setURLCache(None);
-    config.setRequestCachePolicy(NSURLRequestCachePolicy::ReloadIgnoringLocalCacheData);
-    config.setTimeoutIntervalForRequest(FETCH_TIMEOUT.as_secs_f64());
-    config.setTimeoutIntervalForResource(FETCH_TIMEOUT.as_secs_f64());
-    // An empty dictionary turns the system's proxy settings off: a proxy would resolve the host itself.
-    // Safety: the dictionary is empty, so its key and value types do not matter.
-    unsafe { config.setConnectionProxyDictionary(Some(&NSDictionary::new())) };
+// Safety: NSURLSession is documented as thread-safe, and the delegate's only state is behind its Mutex.
+unsafe impl Send for Session {}
+unsafe impl Sync for Session {}
 
-    let (tx, rx) = oneshot::channel();
-    let delegate = Delegate::alloc().set_ivars(Mutex::new(Fetch {
-        budget,
-        taken: 0,
-        redirects: 0,
-        status: None,
-        mime: None,
-        body: Vec::new(),
-        stopped: None,
-        done: Some(tx),
-    }));
-    let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
-    // Safety: with no queue given, the session runs the delegate's methods one at a time on a queue of its own.
-    let session = unsafe {
-        NSURLSession::sessionWithConfiguration_delegate_delegateQueue(
-            &config,
-            Some(ProtocolObject::from_ref(&*delegate)),
-            None,
-        )
-    };
-    session.dataTaskWithRequest(&request).resume();
-    // The session lives until the task is done, then lets go of the delegate.
-    session.finishTasksAndInvalidate();
-    Ok(rx)
+impl Default for Session {
+    fn default() -> Self {
+        let config = NSURLSessionConfiguration::ephemeralSessionConfiguration();
+        config.setHTTPShouldSetCookies(false);
+        config.setHTTPCookieAcceptPolicy(NSHTTPCookieAcceptPolicy::Never);
+        config.setHTTPCookieStorage(None);
+        config.setURLCredentialStorage(None);
+        config.setURLCache(None);
+        config.setRequestCachePolicy(NSURLRequestCachePolicy::ReloadIgnoringLocalCacheData);
+        config.setTimeoutIntervalForRequest(FETCH_TIMEOUT.as_secs_f64());
+        config.setTimeoutIntervalForResource(FETCH_TIMEOUT.as_secs_f64());
+        // An empty dictionary turns the system's proxy settings off: a proxy would resolve the host itself.
+        // Safety: the dictionary is empty, so its key and value types do not matter.
+        unsafe { config.setConnectionProxyDictionary(Some(&NSDictionary::new())) };
+
+        let delegate = Delegate::alloc().set_ivars(Mutex::new(HashMap::new()));
+        let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
+        // Safety: with no queue given, the session runs the delegate's methods one at a time on a queue of its own.
+        let session = unsafe {
+            NSURLSession::sessionWithConfiguration_delegate_delegateQueue(
+                &config,
+                Some(ProtocolObject::from_ref(&*delegate)),
+                None,
+            )
+        };
+        Self { session, delegate }
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Every `get` has waited for its task, so nothing is cut off; this makes the session let go of its delegate.
+        self.session.finishTasksAndInvalidate();
+    }
+}
+
+impl Session {
+    /// Starts the request. The result arrives on the returned channel when NSURLSession is done.
+    fn start(
+        &self,
+        url: &Url,
+        budget: Arc<Budget>,
+    ) -> Result<oneshot::Receiver<Result<Fetched, Failed>>, Failed> {
+        let ns_url = NSURL::URLWithString(&NSString::from_str(url.as_str()))
+            .ok_or_else(|| failed("not a URL"))?;
+        let request = NSMutableURLRequest::requestWithURL(&ns_url);
+        request.setHTTPShouldHandleCookies(false);
+
+        let (tx, rx) = oneshot::channel();
+        let task = self.session.dataTaskWithRequest(&request);
+        // Before `resume`, so the delegate finds the fetch from its first call.
+        self.delegate
+            .ivars()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                task.taskIdentifier(),
+                Fetch {
+                    budget,
+                    taken: 0,
+                    redirects: 0,
+                    status: None,
+                    mime: None,
+                    body: Vec::new(),
+                    stopped: None,
+                    completed: None,
+                    peers_public: None,
+                    done: Some(tx),
+                },
+            );
+        task.resume();
+        Ok(rx)
+    }
 }
 
 /// Fetches one image whose URL passed `fetchable`.
 ///
-/// shortcut: the name is resolved here to check the addresses and again by NSURLSession to connect, so a name that
-/// changes its answer in between (DNS rebinding) can still reach a private address with this one GET, whose response
-/// is then read. Upgrade by checking `NSURLSessionTaskTransactionMetrics.remoteAddress` before reading the body.
-pub(super) async fn get(url: Url, budget: &Arc<Budget>) -> Result<Fetched, Failed> {
+/// shortcut: the name is resolved here and again by NSURLSession to connect, so a name that changes its answer in
+/// between (DNS rebinding) can still make this one GET reach a private address. The check of the peers' addresses
+/// after the connection (`Fetch::metered`) only discards the response; it cannot stop the GET from arriving. Upgrade
+/// by connecting to the address checked here (a connection of our own, e.g. `NWConnection`).
+pub(super) async fn get(
+    url: Url,
+    budget: &Arc<Budget>,
+    session: &Session,
+) -> Result<Fetched, Failed> {
     let checked = url.clone();
-    if !tokio::task::spawn_blocking(move || resolves_public(&checked))
-        .await
-        .unwrap_or(false)
-    {
-        return Err(failed("host does not resolve to public addresses only"));
+    // The lookup runs on a blocking thread that cannot be cancelled; the timeout only stops the wait for it.
+    let lookup = tokio::time::timeout(
+        FETCH_TIMEOUT,
+        tokio::task::spawn_blocking(move || resolves_public(&checked)),
+    )
+    .await;
+    match lookup {
+        Ok(Ok(true)) => {}
+        Err(_) => return Err(failed("host lookup timed out")),
+        Ok(_) => return Err(failed("host does not resolve to public addresses only")),
     }
-    start(&url, budget.clone())?
+    session
+        .start(&url, budget.clone())?
         .await
         .unwrap_or_else(|_| Err(failed("session ended without a result")))
 }
@@ -289,6 +408,8 @@ mod tests {
             mime: None,
             body: Vec::new(),
             stopped: None,
+            completed: None,
+            peers_public: None,
             done: Some(tx),
         };
         (f, rx)
@@ -303,7 +424,8 @@ mod tests {
         let (mut f, mut rx) = fetch(100);
         assert!(f.response(200, Some("image/PNG; x=y"), Some(6)));
         assert!(f.data(b"abc") && f.data(b"def"));
-        f.finish(None);
+        f.complete(None);
+        f.metered(true);
         assert_eq!(
             rx.try_recv().unwrap(),
             Ok(("image/png".to_owned(), b"abcdef".to_vec()))
@@ -334,7 +456,8 @@ mod tests {
             let (mut f, mut rx) = fetch(10);
             assert!(!f.response(status, content_type, length));
             // NSURLSession then reports a cancelled task, which must not hide the reason.
-            f.finish(Some("cancelled".into()));
+            f.complete(Some("cancelled".into()));
+            f.metered(true);
             assert_eq!(rx.try_recv().unwrap(), Err((Some(status), why.to_owned())));
         }
     }
@@ -347,7 +470,8 @@ mod tests {
         assert!(!f.budget.has(3));
         // 8 + 8 is over what the budget holds.
         assert!(!f.data(&[0; 8]));
-        f.finish(Some("cancelled".into()));
+        f.complete(Some("cancelled".into()));
+        f.metered(true);
         assert_eq!(
             rx.try_recv().unwrap(),
             Err((Some(200), "body over the size limit".to_owned()))
@@ -362,13 +486,14 @@ mod tests {
     #[test]
     fn a_transport_error_without_a_stop_reports_the_error() {
         let (mut f, mut rx) = fetch(10);
-        f.finish(Some("The request timed out.".into()));
+        f.metered(true);
+        f.complete(Some("The request timed out.".into()));
         assert_eq!(
             rx.try_recv().unwrap(),
             Err((None, "The request timed out.".to_owned()))
         );
         // Finishing again sends nothing.
-        f.finish(None);
+        f.complete(None);
     }
 
     #[test]
@@ -402,9 +527,10 @@ mod tests {
         let budget = Arc::new(Budget(AtomicU64::new(MAX_IMAGE_BYTES)));
         for refused in ["https://localhost/a.png", "https://127.0.0.1/a.png"] {
             let got = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
                 .build()
                 .unwrap()
-                .block_on(get(url(refused), &budget));
+                .block_on(get(url(refused), &budget, &Session::default()));
             assert!(got.is_err(), "{refused}");
         }
     }
@@ -421,6 +547,7 @@ mod tests {
             .block_on(get(
                 url("https://booking.flypeach.com/images/email/default/new_img/logo-peach.png"),
                 &budget,
+                &Session::default(),
             ))
             .unwrap();
         println!("{mime} {} bytes", bytes.len());
