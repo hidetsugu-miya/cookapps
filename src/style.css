@@ -213,8 +213,8 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .head { display: flex; gap: 14px; align-items: flex-start; padding: 4px 16px 0; }
 #todo-detail .head .check { margin-top: 4px; }
 #todo-detail .name { flex: 1; font-size: 18px; font-weight: bold; border: 0; padding: 2px 4px; border-radius: 6px; font-family: inherit; }
-#todo-detail .name:hover, #todo-detail textarea:hover { background: #f6f7f9; }
-#todo-detail textarea:focus, #todo-detail .name:focus { outline: 2px solid #0b5bd3; background: #fff; }
+#todo-detail .name:hover { background: #f6f7f9; }
+#todo-detail .name:focus { outline: 2px solid #0b5bd3; background: #fff; }
 .meta { display: flex; gap: 8px; padding: 12px 16px 4px 50px; flex-wrap: wrap; }
 .chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid #d5d8dd; border-radius: 14px; background: #fff; font: inherit; font-size: 12px; color: #444; cursor: pointer; }
 .chip svg { width: 14px; height: 14px; }
@@ -231,7 +231,23 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .dp-day.today { color: #0b5bd3; font-weight: bold; }
 .due-pop button.dp-day.current { background: #0b5bd3; color: #fff; }
 .chip-input:focus { outline: none; }
-#todo-detail textarea { display: block; box-sizing: border-box; width: calc(100% - 66px); margin: 8px 16px 0 46px; min-height: 96px; padding: 8px; border: 0; border-radius: 8px; font: inherit; color: #333; resize: vertical; line-height: 1.6; }
+/* The description: Markdown shown in full, or a textarea that grows with its text. */
+#todo-detail .desc { box-sizing: border-box; width: calc(100% - 66px); margin: 8px 16px 0 46px; padding: 8px; border-radius: 8px; color: #333; line-height: 1.6; overflow-wrap: anywhere; cursor: text; }
+#todo-detail .desc > :first-child { margin-top: 0; }
+#todo-detail .desc > :last-child { margin-bottom: 0; }
+#todo-detail .desc p, #todo-detail .desc ul, #todo-detail .desc ol, #todo-detail .desc pre, #todo-detail .desc blockquote { margin: 0 0 8px; }
+#todo-detail .desc h1, #todo-detail .desc h2, #todo-detail .desc h3 { margin: 12px 0 6px; font-size: 15px; }
+#todo-detail .desc ul, #todo-detail .desc ol { padding-left: 22px; }
+#todo-detail .desc a { color: #0b57d0; }
+#todo-detail .desc code { padding: 1px 4px; border-radius: 4px; background: #f0f2f5; font-family: ui-monospace, monospace; font-size: 12px; }
+#todo-detail .desc pre { padding: 8px 10px; border-radius: 6px; background: #f0f2f5; overflow-x: auto; }
+#todo-detail .desc pre code { padding: 0; background: none; }
+#todo-detail .desc blockquote { padding-left: 10px; border-left: 3px solid #d5d8dd; color: #666; }
+#todo-detail .desc:hover { background: #f6f7f9; }
+#todo-detail .desc:focus-visible { outline: 2px solid #0b5bd3; }
+#todo-detail .desc.empty { color: #999; }
+#todo-detail .desc-edit { display: block; box-sizing: border-box; width: calc(100% - 66px); margin: 8px 16px 0 46px; min-height: 96px; padding: 8px; border: 0; border-radius: 8px; outline: 2px solid #0b5bd3; font: inherit; color: #333; line-height: 1.6; resize: none; overflow: hidden; }
+#todo-detail .desc-actions { display: flex; justify-content: flex-end; gap: 8px; width: calc(100% - 66px); margin: 8px 16px 0 46px; }
 .mail-link { display: flex; align-items: center; gap: 10px; margin: 12px 16px 0 50px; padding: 10px 14px; border: 1px solid #e3e6ea; border-radius: 10px; color: #333; cursor: pointer; }
 .mail-link:hover { background: #f6f7f9; }
 .mail-link svg { width: 16px; height: 16px; color: #888; flex: none; }

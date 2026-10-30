@@ -1777,6 +1777,7 @@ function editRowName(name, t) {
 }
 
 function renderList() {
+  descEdit = null;
   todoMode("list");
   const showProject = todoView === "today";
   const tasks = viewTasks(todoView);
@@ -1822,7 +1823,7 @@ let todoWrites = 0;
 // `apply` first changes `todo` and draws it, so the screen does not wait for Todoist; a failed call is undone by the reload, as a removed mail row comes back.
 // A load sent before a change started or ended is dropped (todoSeq): it could hold the state from before the change.
 // A null answer (a token is needed) shows up in that reload. Returns the command's answer: null when it failed or a token is needed.
-// `redraw` false (a name or description saved on blur) keeps the screen: a redraw there would drop the click or focus move that ended the edit.
+// `redraw` false (a name saved on blur) keeps the screen: a redraw there would drop the click or focus move that ended the edit.
 async function todoCall(command, args, control, apply, redraw = true) {
   $("error").hidden = true;
   if (control) control.disabled = true;
@@ -1905,7 +1906,7 @@ function settleLocal(id, done) {
 }
 
 const saveTask = (id, fields) =>
-  todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields), !("content" in fields || "description" in fields));
+  todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields), !("content" in fields));
 const moveTask = (id, projectId) => todoCall("todoist_move", { id, projectId }, null, () => moveLocal(id, projectId));
 const setTaskDone = (id, done, box) => todoCall("todoist_set_done", { id, done }, box, () => settleLocal(id, done));
 
@@ -2104,6 +2105,70 @@ function subtaskRow(s) {
   return li;
 }
 
+// The description being edited ({ id, value }), or null. It outlives a redraw, so a refresh keeps the mode and the text; the textarea's own caret is restored by renderDetail.
+let descEdit = null;
+
+// Only http(s) links stay: a relative link would resolve to the app's own origin, which Rust's on_navigation allows, and replace the screen.
+// An http(s) link navigates this page and on_navigation opens it in the default browser, as a plain-text mail body's links do.
+const DESC_SANITIZE = { ALLOWED_URI_REGEXP: /^https?:/i };
+
+function growDesc(area) {
+  area.style.height = "auto";
+  area.style.height = `${area.scrollHeight}px`;
+}
+
+// The description of `t`: its Markdown shown in full, or, while it is edited, the textarea and its buttons.
+function descParts(t) {
+  if (descEdit?.id !== t.id) {
+    // Another task was opened: what was typed for the old one is dropped.
+    descEdit = null;
+    const view = tag("div", t.description ? "desc" : "desc empty");
+    // breaks: a single newline is a line break, as Todoist descriptions are written line by line.
+    if (t.description) view.innerHTML = DOMPurify.sanitize(marked.parse(t.description, { breaks: true }), DESC_SANITIZE);
+    else view.textContent = "説明を追加";
+    view.dataset.field = "desc";
+    view.tabIndex = 0;
+    view.setAttribute("role", "button");
+    view.setAttribute("aria-label", "説明を編集");
+    const edit = () => {
+      descEdit = { id: t.id, value: t.description };
+      renderDetail();
+      const area = $("todo-detail").querySelector("textarea");
+      area.focus();
+      area.setSelectionRange(area.value.length, area.value.length);
+    };
+    // A click on a link opens it, not the editor.
+    view.onclick = (e) => e.target.closest("a") || edit();
+    view.onkeydown = (e) => e.key === "Enter" && e.target === view && edit();
+    return [view];
+  }
+  const area = tag("textarea", "desc-edit");
+  area.value = descEdit.value;
+  area.placeholder = "説明を追加";
+  area.dataset.field = "desc";
+  area.setAttribute("aria-label", "説明");
+  area.oninput = () => {
+    descEdit.value = area.value;
+    growDesc(area);
+  };
+  const close = () => {
+    descEdit = null;
+    renderDetail();
+  };
+  const cancel = tag("button", "text-btn", "キャンセル");
+  cancel.onclick = close;
+  const save = tag("button", "text-btn", "保存");
+  save.onclick = () => {
+    const value = area.value;
+    descEdit = null;
+    if (value !== t.description) saveTask(t.id, { description: value });
+    else renderDetail();
+  };
+  const actions = tag("div", "desc-actions");
+  actions.append(cancel, save);
+  return [area, actions];
+}
+
 function renderDetail() {
   const t = taskById.get(todoOpen);
   if (!t) {
@@ -2133,14 +2198,7 @@ function renderDetail() {
   const meta = tag("div", "meta");
   meta.append(dueChip(t), projectChip(t), priorityChip(t));
 
-  const desc = tag("textarea");
-  desc.value = t.description;
-  desc.placeholder = "説明を追加";
-  desc.dataset.field = "desc";
-  desc.setAttribute("aria-label", "説明");
-  desc.onblur = () => desc.value !== t.description && saveTask(t.id, { description: desc.value });
-
-  const parts = [head, meta, desc];
+  const parts = [head, meta, ...descParts(t)];
   const mail = linkedMail(t, accountSet());
   if (mail) {
     const card = tag("div", "mail-link");
@@ -2182,6 +2240,8 @@ function renderDetail() {
 
   $("todo-detail").replaceChildren(...parts);
   $("todo-detail").dataset.task = t.id;
+  const area = $("todo-detail").querySelector("textarea");
+  if (area) growDesc(area);
   if (field) {
     const again = $("todo-detail").querySelector(`[data-field="${field}"]`);
     again?.focus();
