@@ -500,6 +500,15 @@ fn task_to_move(created: &Value, wanted: Option<&str>) -> Option<String> {
     (created.get("project_id")?.as_str()? != wanted).then(|| id.to_owned())
 }
 
+/// The ID of a task Quick Add created with no due date (`due` missing or null).
+fn task_without_due(created: &Value) -> Option<String> {
+    let id = created.get("id")?.as_str()?;
+    created
+        .get("due")
+        .is_none_or(Value::is_null)
+        .then(|| id.to_owned())
+}
+
 fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
     let due = due.as_ref()?;
     let (date, time) = parse_due(tz, &due.date)?;
@@ -1025,7 +1034,8 @@ pub async fn todoist_disconnect(
 }
 
 /// Adds a task from natural language (Quick Add). Inside a project (`project_id`) the task is moved there.
-/// `Some(false)` means the task was created but the move failed (logged, a rejected token included), so it stays where Quick Add put it;
+/// With `today`, a task the text gave no date gets today as its due date; a date in the text is kept.
+/// `Some(false)` means the task was created but the move or the due date failed (logged, a rejected token included), so it stays as Quick Add left it;
 /// the caller must not retry. `None` means a token is needed and nothing was created.
 #[tauri::command]
 pub async fn todoist_add(
@@ -1033,6 +1043,7 @@ pub async fn todoist_add(
     state: State<'_, TodoistState>,
     text: String,
     project_id: Option<String>,
+    today: bool,
 ) -> Result<Option<bool>, String> {
     let command = "todoist_add";
     let text = text.trim();
@@ -1056,10 +1067,27 @@ pub async fn todoist_add(
         let result = move_task(&auth, &state, command, &id, project_id.as_deref()).await;
         return Ok(Some(moved(result)));
     }
+    if let Some(id) = task_without_due(&created).filter(|_| today) {
+        let result = set_due_today(&auth, &state, command, &id).await;
+        return Ok(Some(moved(result)));
+    }
     Ok(Some(true))
 }
 
-/// Whether the move into the project worked. The task exists either way, so a failure or a rejected token is not an answer for the caller
+async fn set_due_today(
+    auth: &Auth,
+    state: &TodoistState,
+    command: &str,
+    id: &str,
+) -> Result<Option<bool>, String> {
+    let url = task_api_url(id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let body = update_body(None, None, Some("today"), None)
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let done = request(auth, state, command, Method::POST, &url, Some(body)).await?;
+    Ok(done.map(|_| true))
+}
+
+/// Whether the move into the project (or the due date) worked. The task exists either way, so a failure or a rejected token is not an answer for the caller
 /// to retry; the load that follows shows that a token is needed.
 fn moved(result: Result<Option<bool>, String>) -> bool {
     matches!(result, Ok(Some(true)))
@@ -1441,6 +1469,18 @@ mod tests {
         assert_eq!(task_to_move(&created, Some("p1")), Some("T1".into()));
         assert_eq!(task_to_move(&created, Some("inbox")), None);
         assert_eq!(task_to_move(&created, None), None);
+    }
+
+    #[test]
+    fn quick_add_task_without_a_due_date_is_found() {
+        let due = json!({"date": "2026-10-31", "string": "tomorrow"});
+        assert_eq!(task_without_due(&json!({"id": "T1"})), Some("T1".into()));
+        assert_eq!(
+            task_without_due(&json!({"id": "T1", "due": null})),
+            Some("T1".into())
+        );
+        assert_eq!(task_without_due(&json!({"id": "T1", "due": due})), None);
+        assert_eq!(task_without_due(&json!({"due": null})), None);
     }
 
     #[test]
