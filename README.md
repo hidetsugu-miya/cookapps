@@ -144,7 +144,7 @@ npm ci
 npm run lint                    # Biome（lint のみ）
 npm run build:ts                # フロントエンドの型の確認とビルド
 npm run e2e:check               # E2E の型の確認
-scripts/check-version.sh        # タグ名を渡すと、そのタグとも照合します（例: scripts/check-version.sh v0.4.2）
+scripts/check-version.sh        # Cargo.toml・tauri.conf.json・Cargo.lock のバージョンの一致を確かめます
 cd src-tauri
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings

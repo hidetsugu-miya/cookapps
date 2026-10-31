@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Cargo.toml / tauri.conf.json / Cargo.lock のバージョン（と、引数のタグ名）が一致することを確かめる。
-# 使い方: scripts/check-version.sh [v0.4.2]
+# Cargo.toml / tauri.conf.json / Cargo.lock のバージョンが一致することを確かめる。
+# 使い方: scripts/check-version.sh
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,9 +13,6 @@ tauri_conf=$(python3 -c 'import json; print(json.load(open("tauri.conf.json"))["
 cargo_lock=$(awk '$0 == "name = \"cookapps\"" { getline; print; exit }' Cargo.lock | sed -E 's/^[^"]*"([^"]*)".*/\1/')
 
 versions=("Cargo.toml=$cargo_toml" "tauri.conf.json=$tauri_conf" "Cargo.lock=$cargo_lock")
-if [ $# -ge 1 ]; then
-  versions+=("tag($1)=${1#v}")
-fi
 
 expected=${cargo_toml}
 status=0

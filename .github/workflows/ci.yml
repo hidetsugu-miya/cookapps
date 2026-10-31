@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Runs of the same ref go one at a time, so two pushes of one version cannot race to make its tag.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
 # One job per layer of checks (static, unit, E2E); no check runs in two jobs.
 # A push to main whose version has no tag yet is a release: tag makes the tag after the checks pass, then installer and release run in the same run.
 jobs:
