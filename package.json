@@ -22,6 +22,6 @@
     "@wdio/tauri-service": "^1.5.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "webdriverio": "^9.32.0"
+    "webdriverio": "^10.1.0"
   }
 }
