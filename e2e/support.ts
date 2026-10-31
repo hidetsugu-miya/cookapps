@@ -151,13 +151,29 @@ export const task = (id: string, content: string, projectId: string, bucket: "ov
   parent: null,
 });
 
-export const todoData = (): Todo => ({
-  projects: [
-    { id: "p0", name: "Inbox", color: "#808080", inbox: true },
-    { id: "p1", name: "Work", color: "#1e7b52", inbox: false },
-  ],
-  tasks: [task("k1", "Write report", "p1", "today"), task("k2", "Plan trip", "p1", "none")],
-});
+// The task `t` as a row under `parent`, and as an entry of the parent's subtask list.
+const under = (parent: TaskItem, t: TaskItem): TaskItem => {
+  parent.subtasks.push({ id: t.id, content: t.content, done: false, due: t.due });
+  parent.subTotal++;
+  return { ...t, parent: { id: parent.id, content: parent.content } };
+};
+
+// Work holds Design, which holds Sketch; Home is at the top. "Plan trip" has the subtask "Book flights", which has "Pick seat".
+export const todoData = (): Todo => {
+  const trip = task("k2", "Plan trip", "p1", "none");
+  const flights = under(trip, task("k3", "Book flights", "p1", "none"));
+  const seat = under(flights, task("k4", "Pick seat", "p1", "none"));
+  return {
+    projects: [
+      { id: "p0", name: "Inbox", color: "#808080", inbox: true, parentId: null },
+      { id: "p1", name: "Work", color: "#1e7b52", inbox: false, parentId: null },
+      { id: "p2", name: "Design", color: "#246fe0", inbox: false, parentId: "p1" },
+      { id: "p3", name: "Sketch", color: "#eb8909", inbox: false, parentId: "p2" },
+      { id: "p4", name: "Home", color: "#d1453b", inbox: false, parentId: null },
+    ],
+    tasks: [task("k1", "Write report", "p1", "today"), trip, flights, seat],
+  };
+};
 
 // ---- Slack and Claude ----
 

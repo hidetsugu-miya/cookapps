@@ -4,4 +4,8 @@ export type ProjectItem = { id: string, name: string,
 /**
  * `#RRGGBB`.
  */
-color: string, inbox: boolean, };
+color: string, inbox: boolean, 
+/**
+ * The project this one is nested in; `None` at the top.
+ */
+parentId: string | null, };

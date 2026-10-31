@@ -5,7 +5,7 @@ import type { TaskItem } from "./TaskItem";
 
 export type Todo = { projects: Array<ProjectItem>, 
 /**
- * Top-level active tasks, then the subtasks that are overdue, due today, or have subtasks of their own as rows of their own, by due date.
+ * Every active task whose parent is active too (a subtask has `parent` set), by due date.
  */
 tasks: Array<TaskItem>, 
 /**
