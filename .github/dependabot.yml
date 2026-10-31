@@ -4,11 +4,16 @@ updates:
     directory: /src-tauri
     schedule:
       interval: weekly
+    # The Rust side of the wdio Tauri plugin; keep it at the same version as @wdio/tauri-* of npm by hand (Dependabot cannot group across ecosystems).
+    groups:
+      wdio:
+        patterns:
+          - tauri-plugin-wdio*
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
-    # The wdio packages must move together: a PR that mixes v9 and v10 breaks the types and the E2E.
+    # The npm wdio packages must move together: a PR that mixes v9 and v10 breaks the types and the E2E.
     groups:
       wdio:
         patterns:
