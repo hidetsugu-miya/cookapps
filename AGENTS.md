@@ -75,7 +75,7 @@ User-facing text is in `README.md` and `docs/`.
   - It is enough to trash and archive.
   - A permanent delete (one that skips the trash) needs `https://mail.google.com/`.
 - The Calendar scope is `calendar.readonly`.
-- Updates use `tauri-plugin-updater`. A tag push makes `cookapps.app.tar.gz`, its `.sig` and `latest.json` (`scripts/make-latest-json.sh`) in the `release` job and puts them in a GitHub Release.
+- Updates use `tauri-plugin-updater`. A push to main that raises the version makes CI tag it `v{version}`, and then the `release` job makes `cookapps.app.tar.gz`, its `.sig` and `latest.json` (`scripts/make-latest-json.sh`) and puts them in a GitHub Release.
   The app reads `releases/latest/download/latest.json` (`plugins.updater.endpoints` in `tauri.conf.json`) and verifies the download with the public key `plugins.updater.pubkey`.
   `bundle.createUpdaterArtifacts` is not in `tauri.conf.json`; the `release` job passes it with `--config`, so a local build needs no signing key.
 - The refresh token is stored locally so the user does not log in at every start.
@@ -157,7 +157,7 @@ cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 cd src-tauri && cargo test --all-features    # also writes the ts-rs types to ts/bindings/
 npm run e2e:build   # build the app for E2E (feature e2e)
 npm run e2e         # WebdriverIO
-scripts/check-version.sh [tag]   # the version in Cargo.toml, tauri.conf.json and Cargo.lock matches the tag
+scripts/check-version.sh   # the version in Cargo.toml, tauri.conf.json and Cargo.lock matches
 ```
 
 ## CI
@@ -169,9 +169,9 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 | `static` | macos-latest | version match, `npm run lint`, `npm run build:ts`, `npm run e2e:check`, cargo fmt |
 | `test` | macos-latest, windows-latest | clippy (`--all-targets --all-features`), cargo test (`--all-features`), bindings diff (macOS only) |
 | `e2e` | macos-latest, windows-latest | `npm run e2e:build`, `npm run e2e` |
-| `main-ci` | ubuntu-latest (tags only) | the version match with the tag, and waiting until the CI of the push of main at the same commit succeeds (a tag push does not run `static`, `test` and `e2e` again) |
-| `installer` | windows-latest (tags only; after `main-ci`) | the nsis installer artifact |
-| `release` | macos-latest (tags only; after `main-ci`) | the signed `.app`, its updater files and `latest.json`, put in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| `tag` | ubuntu-latest (main pushes only; after `static`, `test` and `e2e`) | the annotated tag `v{version}` of `src-tauri/Cargo.toml`, made unless it already exists (a push that does not raise the version is not a release) |
+| `installer` | windows-latest (main pushes with a new version tag only; after `tag`) | the nsis installer artifact |
+| `release` | macos-latest (main pushes with a new version tag only; after `tag`) | the signed `.app`, its updater files and `latest.json`, put in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
 ## Known limitations
 

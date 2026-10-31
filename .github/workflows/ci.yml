@@ -3,18 +3,16 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
 
 permissions:
   contents: read
 
 # One job per layer of checks (static, unit, E2E); no check runs in two jobs.
-# A tag push does not run them again: the push of main made the same commit pass them, and main-ci waits for that run.
+# A push to main whose version has no tag yet is a release: tag makes the tag after the checks pass, then installer and release run in the same run.
 jobs:
   # Static: nothing runs the app.
   static:
-    if: github.ref_type != 'tag'
     runs-on: macos-latest
     defaults:
       run:
@@ -44,7 +42,6 @@ jobs:
 
   # Unit: Rust only; clippy sits here because it compiles every target of the OS it runs on.
   test:
-    if: github.ref_type != 'tag'
     strategy:
       fail-fast: false
       matrix:
@@ -83,7 +80,6 @@ jobs:
 
   # E2E: the real WebView (WKWebView, WebView2) with the commands mocked.
   e2e:
-    if: github.ref_type != 'tag'
     strategy:
       fail-fast: false
       matrix:
@@ -108,41 +104,41 @@ jobs:
       - name: E2E
         run: npm run e2e
 
-  # Tags only: wait for the CI run of the push of main at the same commit, then let installer and release go.
-  main-ci:
-    if: github.ref_type == 'tag'
+  # Tags the commit with the version of Cargo.toml unless that tag exists already (a push that is not a release).
+  # A tag pushed with GITHUB_TOKEN starts no workflow, so this run is the only one for the release.
+  tag:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [static, test, e2e]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
-      actions: read
-      contents: read
+      contents: write
     defaults:
       run:
         shell: bash
+    outputs:
+      release: ${{ steps.tag.outputs.release }}
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
-      # The tag name is only known on a tag run, so this check moved here from static.
-      - name: Check version
-        run: scripts/check-version.sh "$GITHUB_REF_NAME"
-      - name: Wait for the CI of main
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+      - name: Tag the version
+        id: tag
         run: |
-          while true; do
-            run=$(gh run list --workflow ci.yml --branch main --event push --commit "$GITHUB_SHA" --limit 1 \
-              --json status,conclusion --jq '.[0] // empty | "\(.status) \(.conclusion)"')
-            case "$run" in
-              "completed success") exit 0 ;;
-              completed*) echo "CI of main at $GITHUB_SHA: $run" >&2; exit 1 ;;
-              *) echo "waiting for the CI of main at $GITHUB_SHA: ${run:-no run yet}" ;;
-            esac
-            sleep 30
-          done
+          version=$(awk '/^\[/ { in_pkg = ($0 == "[package]") } in_pkg && /^version[[:space:]]*=/ { print; exit }' src-tauri/Cargo.toml | sed -E 's/^[^"]*"([^"]*)".*/\1/')
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+          echo "release=true" >> "$GITHUB_OUTPUT"
 
   installer:
-    if: github.ref_type == 'tag'
-    needs: [main-ci]
+    needs: [tag]
+    if: needs.tag.outputs.release == 'true'
     runs-on: windows-latest
     defaults:
       run:
@@ -169,8 +165,8 @@ jobs:
 
   # Release: the signed macOS app and the files the installed app updates itself from (latest.json, read by the updater plugin).
   release:
-    if: github.ref_type == 'tag'
-    needs: [main-ci]
+    needs: [tag]
+    if: needs.tag.outputs.release == 'true'
     runs-on: macos-latest
     permissions:
       contents: write
@@ -199,8 +195,9 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag.outputs.tag }}
         run: |
           dir=src-tauri/target/release/bundle/macos
-          scripts/make-latest-json.sh "$GITHUB_REF_NAME" "$dir/cookapps.app.tar.gz.sig" "$GITHUB_REPOSITORY" > latest.json
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "cookapps $GITHUB_REF_NAME" \
+          scripts/make-latest-json.sh "$TAG" "$dir/cookapps.app.tar.gz.sig" "$GITHUB_REPOSITORY" > latest.json
+          gh release create "$TAG" --title "$TAG" --notes "cookapps $TAG" \
             "$dir/cookapps.app.tar.gz" "$dir/cookapps.app.tar.gz.sig" latest.json
