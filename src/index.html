@@ -23,6 +23,9 @@
     </button>
     <div id="accounts">
       <div id="account-list"></div>
+      <button id="claude-btn" class="avatar account-btn claude" aria-label="Claude" aria-haspopup="dialog" aria-controls="account-popup" aria-expanded="false" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+      </button>
       <div id="account-popup" role="dialog" aria-label="アカウントの情報" hidden></div>
       <button id="add-account" class="nav-item" aria-label="アカウントを追加">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
@@ -117,8 +120,10 @@
           </form>
           <form id="todo-add">
             <input id="todo-add-input" placeholder="タスクを追加（例: 資料を読む 明日 15時）" autocomplete="off">
-            <button class="text-btn">追加</button>
+            <button id="todo-add-button" class="text-btn">追加</button>
+            <p id="todo-add-hint" hidden></p>
           </form>
+          <div id="todo-pending"></div>
           <div id="todo-list"></div>
           <section id="todo-detail" hidden></section>
         </div>
@@ -126,16 +131,34 @@
     </section>
     <section id="settings" hidden>
       <h1>設定</h1>
-      <section class="setting">
-        <h2>Slack</h2>
-        <ul id="slack-workspaces"></ul>
-        <form id="slack-token">
-          <p>ワークスペースごとに Slack アプリを作り（User Token Scopes は chat:write・channels:read・groups:read）、その User OAuth Token（xoxp-）を入力してください。トークンは OS の資格情報の保管場所（macOS はキーチェーン、Windows は資格情報マネージャー）に保存し、画面には表示しません。</p>
-          <div class="row">
-            <input id="slack-token-input" type="password" autocomplete="off" aria-label="Slack の User OAuth Token" placeholder="xoxp-...">
-            <button class="text-btn">ワークスペースを追加</button>
-          </div>
+      <section class="card">
+        <div class="card-head">
+          <h2>
+            <span class="logo slack"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/></svg></span>Slack
+          </h2>
+          <button id="slack-help" class="icon-btn" data-hint aria-label="Slack の設定方法" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4"/><path d="M12 17h.01"/></svg>
+          </button>
+        </div>
+        <div id="slack-workspaces"></div>
+        <form id="slack-token" class="card-add">
+          <input id="slack-token-input" type="password" autocomplete="off" aria-label="Slack の User OAuth Token" placeholder="User OAuth Token（xoxp-…）">
+          <button class="text-btn">追加</button>
         </form>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>
+            <span class="logo claude"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span>Claude
+          </h2>
+          <button id="claude-recheck" class="icon-btn" aria-label="状態を確かめ直す">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+          </button>
+          <button id="claude-help" class="icon-btn" data-hint aria-label="Claude の設定方法" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4"/><path d="M12 17h.01"/></svg>
+          </button>
+        </div>
+        <div id="claude-items"></div>
       </section>
     </section>
   </div>

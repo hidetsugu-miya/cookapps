@@ -38,10 +38,14 @@ const MIGRATE_RETRY: Duration = Duration::from_secs(5 * 60);
 const NAME_LIMIT: usize = 80;
 /// Characters of the mail's text that are posted.
 const BODY_LIMIT: usize = 3000;
+/// Characters of a thread's first message that reach the summary (`claude::INPUT_LIMIT` caps the whole input).
+const PARENT_LIMIT: usize = 2000;
 const NO_TOKEN: &str =
     "Slack のトークンが保存されていません。設定でワークスペースを追加してください";
 const BAD_URL: &str = "Slack のメッセージかチャンネルのリンクを入力してください";
 const BAD_TARGET: &str = "貼り付け先が不正です";
+const BAD_MESSAGE_URL: &str = "Slack のメッセージのリンクを入力してください";
+const NO_MESSAGE: &str = "リンク先のメッセージが見つかりません";
 const NO_WORKSPACE: &str = "このリンクのワークスペースは接続されていません。設定で追加してください";
 
 /// A connected workspace. Its token is in the keychain under `team_id`.
@@ -242,11 +246,13 @@ fn token_is_dead(code: &str) -> bool {
 }
 
 /// The channel and the parent message's `thread_ts` of a Slack link, and the link's host.
+/// `message_ts` is the linked message's own timestamp, which `thread_ts` replaces when the link names a parent.
 #[derive(Debug, PartialEq)]
 struct Link {
     host: String,
     channel: String,
     thread_ts: Option<String>,
+    message_ts: Option<String>,
 }
 
 /// `https://{ws}.slack.com/archives/{channel}` posts to the channel,
@@ -286,6 +292,7 @@ fn parse_url(raw: &str) -> Result<Link, String> {
             )
         }
     };
+    let message_ts = thread_ts.clone();
     if let Some((_, ts)) = url.query_pairs().find(|(k, _)| k == "thread_ts") {
         if !valid_ts(&ts) {
             return Err(BAD_URL.into());
@@ -296,7 +303,70 @@ fn parse_url(raw: &str) -> Result<Link, String> {
         host: host.to_owned(),
         channel: channel.to_owned(),
         thread_ts,
+        message_ts,
     })
+}
+
+/// Whether an `x-oauth-scopes` header lists the scopes that reading a channel's messages needs, public and private.
+fn reads_messages(scopes: &str) -> bool {
+    let has = |wanted: &str| scopes.split(',').any(|s| s.trim() == wanted);
+    has("channels:history") && has("groups:history")
+}
+
+/// The message for a failed `conversations.replies`: a missing scope says which workspace's token to replace.
+fn read_error(e: SlackError, team: &str) -> String {
+    match e.code.as_deref() {
+        Some("missing_scope") => format!(
+            "{team} のトークンにメッセージを読む権限がありません。設定でトークンを貼り直してください"
+        ),
+        _ => e.message,
+    }
+}
+
+/// The form of a `conversations.replies` request for one message of the thread `ts`: the thread's first message, or with `only`
+/// (a reply's `ts`) that reply alone. `oldest` and `latest` leave the first message out of the range, so it is asked for on its own.
+fn replies_params(channel: &str, ts: &str, only: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut params = vec![
+        ("channel", channel.to_owned()),
+        ("ts", ts.to_owned()),
+        ("limit", "1".to_owned()),
+    ];
+    if let Some(only) = only {
+        params.extend([
+            ("oldest", only.to_owned()),
+            ("latest", only.to_owned()),
+            ("inclusive", "true".to_owned()),
+        ]);
+    }
+    params
+}
+
+/// The text of a message as sent to the summary: who wrote it (an ID: names need a scope the app does not ask for) and what.
+fn message_line(m: &Value) -> String {
+    format!(
+        "{}: {}",
+        m["user"].as_str().unwrap_or("?"),
+        m["text"].as_str().unwrap_or_default().trim()
+    )
+}
+
+/// What the summary reads: the thread's first message (the head of `first`) when the link is to a reply, cut at `PARENT_LIMIT`
+/// characters so the linked message stays within the summary's input, then the linked message itself, found in `found`.
+/// `None` when the linked message is not among `found`.
+fn thread_context(first: &[Value], found: &[Value], message_ts: &str) -> Option<String> {
+    let target = found.iter().find(|m| m["ts"] == message_ts)?;
+    let mut parts = Vec::new();
+    if let Some(parent) = first.first().filter(|p| p["ts"] != message_ts) {
+        parts.push(format!(
+            "[スレッドの最初のメッセージ]\n{}",
+            message_line(parent)
+                .chars()
+                .take(PARENT_LIMIT)
+                .collect::<String>()
+        ));
+    }
+    parts.push(format!("[対象のメッセージ]\n{}", message_line(target)));
+    Some(parts.join("\n\n"))
 }
 
 /// Slack's mrkdwn treats these three characters as markup.
@@ -392,6 +462,8 @@ fn check_reply(reply: &Value) -> Result<(), String> {
 struct SlackError {
     message: String,
     token_dead: bool,
+    /// Slack's `error` code, when Slack answered with one.
+    code: Option<String>,
 }
 
 impl From<String> for SlackError {
@@ -399,6 +471,7 @@ impl From<String> for SlackError {
         Self {
             message,
             token_dead: false,
+            code: None,
         }
     }
 }
@@ -429,6 +502,18 @@ async fn call(
     method: &str,
     payload: Payload<'_>,
 ) -> Result<Value, SlackError> {
+    call_scoped(http, token, method, payload)
+        .await
+        .map(|(reply, _)| reply)
+}
+
+/// `call`, and the `x-oauth-scopes` header of the answer (every Web API response has it: the scopes the token has).
+async fn call_scoped(
+    http: &reqwest::Client,
+    token: &str,
+    method: &str,
+    payload: Payload<'_>,
+) -> Result<(Value, Option<String>), SlackError> {
     let mut attempt = 0;
     loop {
         let req = http.post(format!("{API_URL}/{method}")).bearer_auth(token);
@@ -455,6 +540,11 @@ async fn call(
         if !status.is_success() {
             return Err(format!("Slack が {status} を返しました").into());
         }
+        let scopes = res
+            .headers()
+            .get("x-oauth-scopes")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
         let reply: Value = res
             .json()
             .await
@@ -462,8 +552,9 @@ async fn call(
         check_reply(&reply).map_err(|message| SlackError {
             message,
             token_dead: token_is_dead(reply["error"].as_str().unwrap_or_default()),
+            code: reply["error"].as_str().map(str::to_owned),
         })?;
-        return Ok(reply);
+        return Ok((reply, scopes));
     }
 }
 
@@ -511,14 +602,21 @@ async fn token_of(team_id: &str) -> Result<String, String> {
         .ok_or_else(|| NO_TOKEN.to_owned())
 }
 
+/// `auth.test` with `token`: which workspace and user the token is, and whether it can read messages (`None` when Slack did not say).
+async fn identify_scoped(
+    http: &reqwest::Client,
+    token: &str,
+) -> Result<(Workspace, Option<bool>), SlackError> {
+    let (reply, scopes) = call_scoped(http, token, "auth.test", Payload::Empty).await?;
+    let workspace = workspace_of(&reply).ok_or_else(|| {
+        SlackError::from("Slack の返答にワークスペースの ID がありません".to_owned())
+    })?;
+    Ok((workspace, scopes.as_deref().map(reads_messages)))
+}
+
 /// `auth.test` with `token`: which workspace and user the token is.
 async fn identify(http: &reqwest::Client, token: &str) -> Result<Workspace, SlackError> {
-    let reply = call(http, token, "auth.test", Payload::Empty).await?;
-    workspace_of(&reply).ok_or_else(|| {
-        "Slack の返答にワークスペースの ID がありません"
-            .to_owned()
-            .into()
-    })
+    identify_scoped(http, token).await.map(|(w, _)| w)
 }
 
 fn load_list<T: DeserializeOwned>(dir: &Path, file: &str, key: &str) -> Result<Vec<T>, String> {
@@ -640,11 +738,26 @@ pub async fn slack_load(
     Ok(SlackLoad { workspaces, recent })
 }
 
+/// A workspace as `auth.test` describes it now. `reads_messages` is `None` when Slack sent no scopes to judge by.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Checked {
+    #[serde(flatten)]
+    workspace: Workspace,
+    reads_messages: Option<bool>,
+}
+
 /// Asks Slack who the stored token of the workspace is; an error says why it is not usable.
 #[tauri::command]
-pub async fn slack_check(auth: State<'_, Auth>, team_id: String) -> Result<Workspace, String> {
+pub async fn slack_check(auth: State<'_, Auth>, team_id: String) -> Result<Checked, String> {
     let result = match token_of(&team_id).await {
-        Ok(token) => identify(auth.http(), &token).await.map_err(String::from),
+        Ok(token) => identify_scoped(auth.http(), &token)
+            .await
+            .map(|(workspace, reads_messages)| Checked {
+                workspace,
+                reads_messages,
+            })
+            .map_err(String::from),
         Err(e) => Err(e),
     };
     result.map_err(|e| log_failure("slack_check", &team_id, e))
@@ -808,6 +921,38 @@ pub async fn slack_link(
         channel: link.channel,
         thread_ts: link.thread_ts,
     })
+}
+
+/// The text of the Slack message `url` points at, with its thread's first message when it is a reply, read with the token of the link's workspace.
+/// A reply is read on its own, so one deep in a long thread is found; two requests of one message each, not the whole thread.
+pub async fn message_context(
+    dir: &Path,
+    http: &reqwest::Client,
+    url: &str,
+) -> Result<String, String> {
+    let link = parse_url(url)?;
+    let message_ts = link.message_ts.ok_or(BAD_MESSAGE_URL)?;
+    let thread_ts = link.thread_ts.unwrap_or_else(|| message_ts.clone());
+    let workspaces = load_workspaces(dir).await?;
+    let workspace = workspace_for_host(&workspaces, &link.host).ok_or(NO_WORKSPACE)?;
+    let token = token_of(&workspace.team_id).await?;
+    let read = |only: Option<&str>| {
+        let params = replies_params(&link.channel, &thread_ts, only);
+        let token = &token;
+        async move {
+            let reply = call(http, token, "conversations.replies", Payload::Form(&params))
+                .await
+                .map_err(|e| read_error(e, &workspace.team))?;
+            Ok::<_, String>(reply["messages"].as_array().cloned().unwrap_or_default())
+        }
+    };
+    let first = read(None).await?;
+    let found = if message_ts == thread_ts {
+        first.clone()
+    } else {
+        read(Some(&message_ts)).await?
+    };
+    thread_context(&first, &found, &message_ts).ok_or_else(|| NO_MESSAGE.to_owned())
 }
 
 /// What a post of the mail would say, without the note and as plain text.
@@ -1296,5 +1441,120 @@ mod tests {
         assert_eq!(remove_legacy_file(dir.clone()), Ok(()));
         assert!(!dir.join(LEGACY_FILE).exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_link_keeps_the_messages_own_ts_besides_the_parent() {
+        let reply = parse_url(
+            "https://example.slack.com/archives/C0123ABC/p1761785520123456?thread_ts=1761780000.000100&cid=C0123ABC",
+        )
+        .unwrap();
+        assert_eq!(reply.thread_ts.as_deref(), Some("1761780000.000100"));
+        assert_eq!(reply.message_ts.as_deref(), Some("1761785520.123456"));
+        let plain =
+            parse_url("https://example.slack.com/archives/C0123ABC/p1761785520123456").unwrap();
+        assert_eq!(plain.message_ts, plain.thread_ts);
+        let channel = parse_url("https://example.slack.com/archives/C0123ABC").unwrap();
+        assert_eq!(channel.message_ts, None);
+    }
+
+    #[test]
+    fn reading_needs_the_history_scopes_of_public_and_private_channels() {
+        assert!(reads_messages("chat:write,channels:history,groups:history"));
+        assert!(reads_messages("groups:history, channels:history"));
+        assert!(!reads_messages("chat:write,channels:read,groups:read"));
+        assert!(!reads_messages("channels:history"));
+        assert!(!reads_messages("groups:history"));
+        assert!(!reads_messages(""));
+        assert!(!reads_messages("channels:history:x,groups:history"));
+    }
+
+    fn failure(code: Option<&str>) -> SlackError {
+        SlackError {
+            message: "元の文".into(),
+            token_dead: false,
+            code: code.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_missing_scope_names_the_workspace() {
+        assert_eq!(
+            read_error(failure(Some("missing_scope")), "Example"),
+            "Example のトークンにメッセージを読む権限がありません。設定でトークンを貼り直してください"
+        );
+        assert_eq!(read_error(failure(Some("not_in_channel")), "x"), "元の文");
+        assert_eq!(read_error(failure(None), "x"), "元の文");
+    }
+
+    #[test]
+    fn the_threads_first_message_is_asked_for_alone() {
+        assert_eq!(
+            replies_params("C0123ABC", "1761780000.000100", None),
+            [
+                ("channel", "C0123ABC".to_owned()),
+                ("ts", "1761780000.000100".to_owned()),
+                ("limit", "1".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reply_is_asked_for_by_its_own_time() {
+        assert_eq!(
+            replies_params("C0123ABC", "1761780000.000100", Some("1761780009.000200")),
+            [
+                ("channel", "C0123ABC".to_owned()),
+                ("ts", "1761780000.000100".to_owned()),
+                ("limit", "1".to_owned()),
+                ("oldest", "1761780009.000200".to_owned()),
+                ("latest", "1761780009.000200".to_owned()),
+                ("inclusive", "true".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reply_comes_with_the_threads_first_message() {
+        let first = [json!({"ts": "1.1", "user": "U1", "text": "PR を見てほしい"})];
+        let reply = [json!({"ts": "1.2", "user": "U2", "text": " 明日までに "})];
+        assert_eq!(
+            thread_context(&first, &reply, "1.2").unwrap(),
+            "[スレッドの最初のメッセージ]\nU1: PR を見てほしい\n\n[対象のメッセージ]\nU2: 明日までに"
+        );
+    }
+
+    #[test]
+    fn the_first_message_stands_alone() {
+        let first = [json!({"ts": "1.1", "user": "U1", "text": "a"})];
+        assert_eq!(
+            thread_context(&first, &first, "1.1").unwrap(),
+            "[対象のメッセージ]\nU1: a"
+        );
+    }
+
+    #[test]
+    fn a_long_first_message_is_cut_so_the_linked_one_stays() {
+        let first = [json!({"ts": "1.1", "user": "U1", "text": "あ".repeat(PARENT_LIMIT * 3)})];
+        let reply = [json!({"ts": "1.2", "user": "U2", "text": "明日までに"})];
+        let context = thread_context(&first, &reply, "1.2").unwrap();
+        assert!(
+            context.chars().count() < PARENT_LIMIT + 100,
+            "{}",
+            context.chars().count()
+        );
+        assert!(context.ends_with("[対象のメッセージ]\nU2: 明日までに"));
+    }
+
+    #[test]
+    fn a_message_that_is_not_there_gives_nothing() {
+        assert_eq!(thread_context(&[], &[], "1.1"), None);
+        let other = [json!({"ts": "1.2", "text": "b"})];
+        assert_eq!(thread_context(&other, &other, "1.1"), None);
+    }
+
+    #[test]
+    fn a_message_without_a_user_or_text_is_still_a_line() {
+        assert_eq!(message_line(&json!({"ts": "1.1"})), "?: ");
     }
 }

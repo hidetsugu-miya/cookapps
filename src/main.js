@@ -758,6 +758,10 @@ async function openThread({ id, account }, li, origin = "mail") {
 let inboxIssues = { needsLogin: [], failed: {} };
 // The account whose popup is open, or null.
 let popupAccount = null;
+// Whether the Claude avatar's popup is open (it is drawn in the same #account-popup).
+let claudePopup = false;
+// Claude Code on this machine ({ state: "ready" | "loggedOut" | "missing" | "failed", ... }); null until checked.
+let claude = null;
 // The account whose removal the popup is asking to confirm, or null.
 let confirmingRemoval = null;
 // What the popup shows now; it is redrawn only when this changes, so a sync does not drop a text selection.
@@ -804,24 +808,63 @@ function renderAccounts({ accounts, needsLogin, failed }) {
 
 function closePopup() {
   popupAccount = null;
+  claudePopup = false;
   confirmingRemoval = null;
   $("account-popup").hidden = true;
   accountButtons().forEach((b) => b.setAttribute("aria-expanded", "false"));
+  $("claude-btn").setAttribute("aria-expanded", "false");
 }
 
 function togglePopup(account) {
   if (popupAccount === account) return closePopup();
   popupAccount = account;
+  claudePopup = false;
   confirmingRemoval = null;
   popupKey = "";
   $("account-popup").hidden = false;
   accountButtons().forEach((b) => b.setAttribute("aria-expanded", String(b.dataset.account === account)));
+  $("claude-btn").setAttribute("aria-expanded", "false");
   refreshPopup();
 }
+
+// Puts the popup right of the sidebar at its avatar's height, inside the window.
+function placePopup(button) {
+  const popup = $("account-popup");
+  popup.style.left = `${$("sidebar").getBoundingClientRect().right + 8}px`;
+  popup.style.top = `${Math.max(8, Math.min(button.getBoundingClientRect().top, innerHeight - popup.offsetHeight - 8))}px`;
+}
+
+// Claude's popup: who is logged in and the plan. Nothing to change here; the settings hold the rest.
+function toggleClaudePopup() {
+  if (claudePopup) return closePopup();
+  popupAccount = null;
+  confirmingRemoval = null;
+  claudePopup = true;
+  accountButtons().forEach((b) => b.setAttribute("aria-expanded", "false"));
+  $("claude-btn").setAttribute("aria-expanded", "true");
+  const avatar = el("avatar claude");
+  avatar.innerHTML = CLAUDE_SVG;
+  const open = tag("button", "text-btn", "設定を開く");
+  open.onclick = () => {
+    closePopup();
+    setScreen("settings");
+  };
+  $("account-popup").replaceChildren(
+    avatar,
+    el("popup-email", claude.email),
+    el("popup-plan", claude.plan ? `Claude ・ ${claude.plan} プラン` : "Claude"),
+    tag("span", "status ok", "ログイン中"),
+    open,
+  );
+  $("account-popup").hidden = false;
+  placePopup($("claude-btn"));
+}
+$("claude-btn").onclick = toggleClaudePopup;
 
 // Redraws the open popup from the latest state and puts it right of the sidebar at its avatar's height, inside the window.
 // The avatars are rebuilt on every render, so the popup finds its avatar again by the account.
 function refreshPopup() {
+  if (claudePopup) return placePopup($("claude-btn"));
   if (popupAccount === null) return;
   const a = popupAccount;
   const button = accountButtons().find((b) => b.dataset.account === a);
@@ -869,18 +912,17 @@ function refreshPopup() {
       if (hadFocus) button.focus();
     }
   }
-  popup.style.left = `${$("sidebar").getBoundingClientRect().right + 8}px`;
-  popup.style.top = `${Math.max(8, Math.min(button.getBoundingClientRect().top, innerHeight - popup.offsetHeight - 8))}px`;
+  placePopup(button);
 }
 
 // Another avatar or the popup handles its own click.
 document.addEventListener("pointerdown", (e) => {
-  if (popupAccount !== null && !e.target.closest("#account-popup, .account-btn")) closePopup();
+  if ((popupAccount !== null || claudePopup) && !e.target.closest("#account-popup, .account-btn")) closePopup();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape" || popupAccount === null) return;
+  if (e.key !== "Escape" || (popupAccount === null && !claudePopup)) return;
   const inside = $("account-popup").contains(document.activeElement);
-  const button = accountButtons().find((b) => b.dataset.account === popupAccount);
+  const button = claudePopup ? $("claude-btn") : accountButtons().find((b) => b.dataset.account === popupAccount);
   closePopup();
   if (inside) button?.focus();
 });
@@ -904,7 +946,7 @@ function hideTip() {
 function showTip(target) {
   hideTip();
   const inSidebar = target.closest("#sidebar");
-  if (popupAccount !== null && target.closest("#accounts")) return;
+  if ((popupAccount !== null || claudePopup) && target.closest("#accounts")) return;
   tipTimer = setTimeout(() => {
     tip.textContent = target.getAttribute("aria-label");
     tip.hidden = false;
@@ -1397,6 +1439,7 @@ async function loadCalendar(refresh = false) {
 
 function setScreen(name) {
   screen = name;
+  closeHint();
   for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"], ["nav-todo", "todo"], ["nav-settings", "settings"]]) {
     if (target === name) $(id).setAttribute("aria-current", "page");
     else $(id).removeAttribute("aria-current");
@@ -1487,6 +1530,12 @@ const GRIP_SVG = svgOf('<path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M1
 const FLAG_SVG = svgOf('<path d="M5 21V4h11l-2 4 2 4H5"/>');
 const EDIT_SVG = svgOf('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>');
 const FOLDER_SVG = svgOf('<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>');
+const CLAUDE_SVG = svgOf('<path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>');
+const SLACK_SVG = $("thread-slack").innerHTML.trim();
+const UNLINK_SVG = $("todo-disconnect").innerHTML.trim();
+const LOCK_SVG = svgOf('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>');
+const COPY_SVG = svgOf('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>');
+const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 const INBOX_SVG = $("nav-mail").querySelector("svg").outerHTML;
 const PLUS_SVG = $("add-account").innerHTML.trim();
 const DELETE_SVG = $("todo-delete").innerHTML.trim();
@@ -1546,6 +1595,7 @@ function todoMode(mode) {
   $("todo-token").hidden = mode !== "token";
   $("projects").hidden = mode === "token";
   $("todo-add").hidden = mode !== "list";
+  $("todo-pending").hidden = mode !== "list";
   $("todo-list").hidden = mode !== "list";
   $("todo-detail").hidden = mode !== "detail";
   $("todo-back").hidden = mode !== "detail";
@@ -1782,6 +1832,7 @@ function renderList() {
   const showProject = todoView === "today";
   const tasks = viewTasks(todoView);
   $("todo-title").textContent = todoView === "today" ? "今日" : todoView === "inbox" ? "受信箱" : projectOf(todoView).name;
+  updateAddMode();
   const accounts = accountSet();
   const parts = [];
   for (const [bucket, label] of TODO_GROUPS) {
@@ -2394,11 +2445,135 @@ $("todo-token").onsubmit = async (e) => {
   // Only a rejected token says so; a failed load (network, 5xx) shows its own error.
   if (await loadTodo()) showTokenForm("トークンを確認できませんでした。もう一度入力してください");
 };
+// A Slack message link, `https://{ws}.slack.com/archives/{channel}/p{16 digits}` (a reply's has `?thread_ts=` too); Rust checks it again. Returns its host, or null.
+function slackMessageHost(text) {
+  let url;
+  try {
+    url = new URL(text.trim());
+  } catch {
+    return null;
+  }
+  const slack = url.hostname === "slack.com" || url.hostname.endsWith(".slack.com");
+  return url.protocol === "https:" && slack && /^\/archives\/[A-Z0-9]+\/p\d{16}\/?$/.test(url.pathname) ? url.host : null;
+}
+
+// slack_load's workspaces, or null until read; settings changes update it.
+let slackWorkspaces = null;
+let loadingSlack = false;
+async function loadSlackWorkspaces() {
+  if (loadingSlack) return;
+  loadingSlack = true;
+  try {
+    slackWorkspaces = (await invoke("slack_load")).workspaces;
+  } catch {
+    slackWorkspaces = [];
+  }
+  loadingSlack = false;
+  updateAddMode();
+}
+
+// What the add field does with its text: a Slack message link of a connected workspace, with Claude usable, is summarised; any other text is Quick Add.
+// `hint` is the line under the field.
+function addMode() {
+  const host = slackMessageHost($("todo-add-input").value);
+  if (host === null) return { summarize: false, hint: "" };
+  if (slackWorkspaces === null) {
+    loadSlackWorkspaces();
+    return { summarize: false, hint: "" };
+  }
+  if (claude === null) return { summarize: false, hint: "" };
+  if (claude.state !== "ready") return { summarize: false, hint: "Claude にログインすると、要約して追加できます" };
+  const workspace = slackWorkspaces.find((w) => hostOf(w.url) === host);
+  if (!workspace) return { summarize: false, hint: "このリンクのワークスペースは Slack に接続されていません。設定で追加してください" };
+  return { summarize: true, hint: `Slack のメッセージ（${workspace.team}）を Claude が要約し、「${$("todo-title").textContent}」に追加します` };
+}
+
+// What the add field's button and hint last showed; the list's redraw calls updateAddMode every 10 seconds.
+let shownAddMode = null;
+function updateAddMode() {
+  const { summarize, hint } = addMode();
+  if (shownAddMode?.summarize === summarize && shownAddMode.hint === hint) return;
+  shownAddMode = { summarize, hint };
+  const button = $("todo-add-button");
+  button.className = summarize ? "text-btn primary" : "text-btn";
+  if (summarize) button.innerHTML = `${CLAUDE_SVG}要約して追加`;
+  else button.textContent = "追加";
+  $("todo-add-input").classList.toggle("slack", summarize);
+  const line = $("todo-add-hint");
+  line.hidden = hint === "";
+  line.replaceChildren();
+  if (summarize) line.insertAdjacentHTML("beforeend", SLACK_SVG);
+  line.append(hint);
+}
+$("todo-add-input").oninput = updateAddMode;
+
+// The Slack links being summarised or that failed, above the list. Several may run at once.
+const pendingAdds = [];
+let pendingSeq = 0;
+
+function renderPending() {
+  $("todo-pending").replaceChildren(
+    ...pendingAdds.map((job) => {
+      const row = tag("div", `pending${job.failed ? " fail" : ""}`);
+      if (!job.failed) {
+        row.append(tag("span", "spin"), tag("span", "sp", "Claude が要約しています…"), tag("span", "pending-channel", job.host));
+        return row;
+      }
+      row.append(tag("span", "sp", `追加できませんでした: ${job.failed}`));
+      // Rust's wording for a token that cannot read the message (slack.rs read_error).
+      if (job.failed.includes("権限がありません")) {
+        const open = tag("button", "text-btn", "設定を開く");
+        open.onclick = () => setScreen("settings");
+        row.append(open);
+      }
+      const close = tag("button", "icon-btn");
+      close.innerHTML = CLOSE_SVG;
+      close.setAttribute("aria-label", "閉じる");
+      close.onclick = () => {
+        pendingAdds.splice(pendingAdds.indexOf(job), 1);
+        renderPending();
+      };
+      row.append(close);
+      return row;
+    }),
+  );
+}
+
+// Sends the Slack link to Rust, which reads the message, has Claude summarise it and adds the task. The field is free at once; the result shows in the row above the list.
+function addFromSlack(url) {
+  const input = $("todo-add-input");
+  // Like Quick Add: in "今日" the task goes to the inbox, due today unless the summary has a date.
+  const inToday = todoView === "today";
+  const projectId = inToday ? null : viewProjectId(todoView);
+  input.value = "";
+  updateAddMode();
+  input.focus();
+  const job = { id: ++pendingSeq, host: slackMessageHost(url), failed: null };
+  pendingAdds.push(job);
+  renderPending();
+  invoke("todoist_add_from_slack", { url, projectId, today: inToday }).then(
+    (name) => {
+      pendingAdds.splice(pendingAdds.indexOf(job), 1);
+      renderPending();
+      // null: a token is needed, and the load shows the token form.
+      if (name !== null) toast(`「${name}」を追加しました`);
+      loadTodo(false, false);
+    },
+    (e) => {
+      job.failed = String(e);
+      renderPending();
+    },
+  );
+}
+
 $("todo-add").onsubmit = async (e) => {
   e.preventDefault();
   const input = $("todo-add-input");
   const text = input.value.trim();
   if (!text) return;
+  // Until Claude's state and the workspaces are known, a Slack link would go to Quick Add as plain text: wait for the next Enter.
+  if (slackMessageHost(text) !== null && (claude === null || slackWorkspaces === null)) return;
+  if (addMode().summarize) return addFromSlack(text);
   // In "今日" the task goes where Quick Add puts it (the inbox, or the project named in the text), and a text with no date is due today.
   const inToday = todoView === "today";
   const projectId = inToday ? null : viewProjectId(todoView);
@@ -2469,8 +2644,27 @@ async function refreshTodo() {
 setInterval(refreshTodo, TODO_REFRESH_MS);
 document.addEventListener("visibilitychange", refreshTodo);
 
-// Settings: the Slack workspaces. A token is never shown; Rust keeps it in the keychain.
+// Settings: one card each for Slack and Claude. A Slack token is never shown; Rust keeps it in the keychain.
 let settingsSeq = 0;
+
+const hostOf = (url) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+};
+
+// A connected service's row: avatar, name, a line under it, a state label (`status` is [class, text]) and buttons. `meta` is a string or a list of strings and nodes.
+function itemRow({ avatar, name, meta, warn = false, status, actions = [] }) {
+  const line = tag("div", `item-meta${warn ? " warn" : ""}`);
+  line.append(...[meta].flat());
+  const who = tag("div", "who");
+  who.append(tag("div", "item-name", name), line);
+  const row = tag("div", "item");
+  row.append(...(avatar ? [avatar] : []), who, tag("span", `status ${status[0]}`, status[1]), ...actions);
+  return row;
+}
 
 // teamId -> the last `slack_check` of that workspace's token. A redraw after an add or a removal reuses it,
 // except for a workspace that is new, has a different user (its token was replaced), or was not usable.
@@ -2479,48 +2673,72 @@ function checkWorkspace(w) {
   const prev = wsChecks.get(w.teamId);
   if (prev && !prev.bad && prev.user === w.user) return prev;
   const c = { user: w.user, bad: false };
+  // readsMessages is null when Slack sent no scopes to judge by: the token counts as usable until a read fails with missing_scope.
   c.done = invoke("slack_check", { teamId: w.teamId }).then(
-    (r) => ({ text: `${r.user} ・ 接続済み`, bad: false }),
+    (r) => {
+      c.bad = r.readsMessages === false;
+      return { state: c.bad ? "noRead" : "ok" };
+    },
     (e) => {
       c.bad = true;
-      return { text: `確認できません: ${e}`, bad: true };
+      return { state: "error", message: String(e) };
     },
   );
   wsChecks.set(w.teamId, c);
   return c;
 }
 
+const WORKSPACE_STATUS = { ok: ["ok", "接続済み"], noRead: ["warn", "権限が不足"], error: ["warn", "確認できません"] };
+
+// `result` is the check's answer, or null while it is being asked.
+function workspaceRow(w, result) {
+  const avatar = tag("span", "avatar", initials(w.team));
+  avatar.style.background = avatarColor(w.team);
+  const unlink = tag("button", "icon-btn");
+  unlink.innerHTML = UNLINK_SVG;
+  unlink.setAttribute("aria-label", `${w.team} の接続を解除`);
+  unlink.onclick = async () => {
+    $("error").hidden = true;
+    try {
+      const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
+      wsChecks.delete(w.teamId);
+      renderWorkspaces(left);
+    } catch (e) {
+      showError(e);
+    }
+  };
+  const state = result?.state;
+  const meta =
+    state === "noRead"
+      ? "メッセージを読む権限がありません。スコープを足して、トークンを貼り直してください"
+      : state === "error"
+        ? result.message
+        : `${w.user} ・ ${hostOf(w.url)}`;
+  return itemRow({
+    avatar,
+    name: w.team,
+    meta,
+    warn: state === "noRead" || state === "error",
+    status: WORKSPACE_STATUS[state] ?? ["off", "確認中"],
+    actions: [unlink],
+  });
+}
+
 // Draws the workspaces, then asks Slack about each token that has not been asked: a row says why when its token is not usable.
 function renderWorkspaces(list) {
   const seq = ++settingsSeq;
+  slackWorkspaces = list;
+  updateAddMode();
   $("slack-workspaces").replaceChildren(
-    ...(list.length ? list : [null]).map((w) => {
-      const li = tag("li");
-      if (!w) {
-        li.append(tag("span", "ws-meta", "ワークスペースはまだありません"));
-        return li;
-      }
-      const meta = tag("span", "ws-meta", `${w.user} ・ 確認しています…`);
-      const del = tag("button", "text-btn danger", "接続を解除");
-      del.setAttribute("aria-label", `${w.team} の接続を解除`);
-      del.onclick = async () => {
-        $("error").hidden = true;
-        try {
-          const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
-          wsChecks.delete(w.teamId);
-          renderWorkspaces(left);
-        } catch (e) {
-          showError(e);
-        }
-      };
-      li.append(tag("span", "ws-name", w.team), meta, del);
-      checkWorkspace(w).done.then((r) => {
-        if (seq !== settingsSeq) return;
-        meta.textContent = r.text;
-        meta.classList.toggle("bad", r.bad);
-      });
-      return li;
-    }),
+    ...(list.length
+      ? list.map((w) => {
+          const row = workspaceRow(w, null);
+          checkWorkspace(w).done.then((r) => {
+            if (seq === settingsSeq) row.replaceWith(workspaceRow(w, r));
+          });
+          return row;
+        })
+      : [tag("div", "card-empty", "ワークスペースはまだありません")]),
   );
 }
 
@@ -2552,6 +2770,146 @@ $("slack-token").onsubmit = async (e) => {
     showError(err);
   }
 };
+
+// The Claude card's row for what `claude_status` said (null while it is being asked).
+function claudeRow() {
+  if (claude === null) return itemRow({ name: "確認しています…", meta: "", status: ["off", "確認中"] });
+  switch (claude.state) {
+    case "ready": {
+      const avatar = tag("span", "avatar claude");
+      avatar.innerHTML = CLAUDE_SVG;
+      const meta = [claude.plan && `${claude.plan} プラン`, claude.version && `Claude Code ${claude.version}`].filter(Boolean).join(" ・ ");
+      return itemRow({ avatar, name: claude.email, meta, status: ["ok", "ログイン中"] });
+    }
+    case "loggedOut":
+      return itemRow({
+        name: "ログインしていません",
+        meta: ["ターミナルで ", tag("code", "", "claude auth login"), " を実行してください"],
+        status: ["warn", "未ログイン"],
+      });
+    case "missing":
+      return itemRow({ name: "Claude Code が見つかりません", meta: "入れると、Slack のメッセージを要約して Todo にできます", status: ["off", "未導入"] });
+    default:
+      return itemRow({ name: "状態を確認できません", meta: claude.message, warn: true, status: ["warn", "確認できません"] });
+  }
+}
+
+// Takes the answer of `claude_status`: the sidebar's Claude avatar (only while logged in), the settings card, and the Todo add field follow.
+function applyClaude(next) {
+  claude = next;
+  const ready = claude?.state === "ready";
+  $("claude-btn").hidden = !ready;
+  if (ready) $("claude-btn").setAttribute("aria-label", `Claude: ${claude.email}`);
+  else if (claudePopup) closePopup();
+  $("claude-items").replaceChildren(claudeRow());
+  updateAddMode();
+}
+
+async function refreshClaude() {
+  const button = $("claude-recheck");
+  button.disabled = true;
+  applyClaude(null);
+  try {
+    applyClaude(await invoke("claude_status"));
+  } catch (e) {
+    applyClaude({ state: "failed", message: String(e) });
+  }
+  button.disabled = false;
+}
+$("claude-recheck").onclick = refreshClaude;
+
+// The "?" of a card opens its hint, a popup framed like the account popup; the same button, a click elsewhere, or Escape closes it.
+let hintOpen = null;
+function closeHint() {
+  if (!hintOpen) return;
+  hintOpen.node.remove();
+  hintOpen.button.setAttribute("aria-expanded", "false");
+  hintOpen = null;
+}
+
+function toggleHint(button, node) {
+  const same = hintOpen?.button === button;
+  closeHint();
+  if (same) return;
+  hintOpen = { button, node };
+  button.setAttribute("aria-expanded", "true");
+  document.body.append(node);
+  const r = button.getBoundingClientRect();
+  node.style.left = `${Math.max(8, Math.min(r.right - node.offsetWidth, innerWidth - node.offsetWidth - 8))}px`;
+  node.style.top = `${Math.max(8, Math.min(r.bottom + 4, innerHeight - node.offsetHeight - 8))}px`;
+}
+document.addEventListener("pointerdown", (e) => {
+  if (hintOpen && !e.target.closest(".pop, [data-hint]")) closeHint();
+});
+document.addEventListener("keydown", (e) => e.key === "Escape" && !composing(e) && closeHint());
+window.addEventListener("resize", closeHint);
+
+// A hint: a title, numbered steps (each a list of strings and nodes), and a last line with a lock.
+function hintPopup(title, steps, foot) {
+  const pop = tag("div", "pop");
+  pop.setAttribute("role", "dialog");
+  pop.setAttribute("aria-label", title);
+  const list = tag("ol");
+  for (const step of steps) {
+    const li = tag("li");
+    li.append(...step);
+    list.append(li);
+  }
+  const last = tag("div", "foot");
+  last.insertAdjacentHTML("beforeend", LOCK_SVG);
+  last.append(foot);
+  pop.append(tag("h3", "", title), list, last);
+  return pop;
+}
+
+const code = (text) => tag("code", "", text);
+const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", "channels:history", "groups:history"];
+
+$("slack-help").onclick = (e) => {
+  const link = tag("a", "", "api.slack.com/apps");
+  link.href = "https://api.slack.com/apps";
+  const copy = tag("button", "text-btn");
+  copy.type = "button";
+  const label = `${COPY_SVG}スコープをコピー`;
+  copy.innerHTML = label;
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(SLACK_SCOPES.join(","));
+      copy.textContent = "コピーしました";
+      setTimeout(() => (copy.innerHTML = label), 2000);
+    } catch (err) {
+      showError(err);
+    }
+  };
+  const scopes = tag("div", "scopes");
+  scopes.append(...SLACK_SCOPES.map((s) => code(s)));
+  toggleHint(
+    e.currentTarget,
+    hintPopup(
+      "Slack の接続方法",
+      [
+        [link, " で、ワークスペースごとにアプリを作る"],
+        ["「User Token Scopes」に次を足す", scopes, copy],
+        ["ワークスペースにインストールし、", code("xoxp-"), " で始まるトークンを下の欄に貼る"],
+      ],
+      "トークンは OS の資格情報の保管場所に入れ、画面には出しません",
+    ),
+  );
+};
+
+$("claude-help").onclick = (e) =>
+  toggleHint(
+    e.currentTarget,
+    hintPopup(
+      "Claude の使い方",
+      [
+        ["Claude Code を入れる"],
+        ["ターミナルで ", code("claude auth login"), " を実行してログインする"],
+        ["↻ で状態を確かめ直す"],
+      ],
+      "Slack のメッセージの本文を、要約のため Anthropic に送ります",
+    ),
+  );
 
 // "Slack に貼る": posts the open thread's latest message. The text of an HTML message is read from its frame (allow-same-origin).
 function latestText() {
@@ -2715,4 +3073,5 @@ $("thread-slack").onclick = async () => {
 
 
 showKeptInbox();
+refreshClaude();
 load();
