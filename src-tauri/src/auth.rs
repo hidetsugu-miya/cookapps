@@ -28,7 +28,7 @@ const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly";
 // Existing refresh tokens live under this name, so it must stay equal to `identifier` in tauri.conf.json.
-const KEYRING_SERVICE: &str = "jp.mysis.cookup";
+const KEYRING_SERVICE: &str = "jp.mysis.cookapps";
 const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -157,7 +157,7 @@ impl Auth {
         match entry.get_password() {
             Ok(token) => {
                 if let Err(e) = revoke(&self.http, REVOKE_URL, &token).await {
-                    eprintln!("cookup: revoke account={account} status=- error={e}");
+                    eprintln!("cookapps: revoke account={account} status=- error={e}");
                 }
             }
             Err(keyring::Error::NoEntry) => {}
@@ -303,14 +303,14 @@ pub async fn login(
 ) -> Result<String, String> {
     auth.login(&app, login_hint.as_deref()).await.map_err(|e| {
         eprintln!(
-            "cookup: login account={} status=- error={e}",
+            "cookapps: login account={} status=- error={e}",
             login_hint.as_deref().unwrap_or("-")
         );
         e
     })
 }
 
-/// Removes an account from cookup: revokes its grant at Google and drops every trace of it kept here.
+/// Removes an account from cookapps: revokes its grant at Google and drops every trace of it kept here.
 #[tauri::command]
 pub async fn remove_account(
     app: AppHandle,
@@ -328,7 +328,7 @@ pub async fn remove_account(
         Err(e) => Err(e),
     };
     removed.map_err(|e| {
-        eprintln!("cookup: remove_account account={account} status=- error={e}");
+        eprintln!("cookapps: remove_account account={account} status=- error={e}");
         e
     })
 }
@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn credential_manager_round_trip() {
         let user = format!("round-trip-{}", std::process::id());
-        let entry = keyring::Entry::new("jp.mysis.cookup.test", &user).unwrap();
+        let entry = keyring::Entry::new("jp.mysis.cookapps.test", &user).unwrap();
         let written = entry.set_password("secret-value");
         let read = entry.get_password();
         // Deleted before any assertion, so a failed assertion leaves nothing behind.
@@ -600,7 +600,7 @@ mod tests {
     /// A directory without accounts.json: no account is registered, so neither call reaches the keychain.
     #[test]
     fn refresh_and_remove_refuse_an_unregistered_account() {
-        let dir = std::env::temp_dir().join("cookup-test-no-accounts");
+        let dir = std::env::temp_dir().join("cookapps-test-no-accounts");
         let auth = Auth::new();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -614,7 +614,7 @@ mod tests {
     /// The token another call already refreshed is used without touching the keychain: the directory has no accounts.json.
     #[test]
     fn refresh_uses_the_token_a_concurrent_call_already_refreshed() {
-        let dir = std::env::temp_dir().join("cookup-test-no-accounts");
+        let dir = std::env::temp_dir().join("cookapps-test-no-accounts");
         let auth = Auth::new();
         auth.access
             .lock()

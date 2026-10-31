@@ -1,5 +1,5 @@
 # Gitignored files a new worktree needs; edit the originals in the main checkout only.
-CLAUDE.local.md
+AGENTS.local.md
 mise.toml
 .claude/rules/
 src-tauri/.cargo/

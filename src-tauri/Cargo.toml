@@ -1,11 +1,11 @@
 [package]
-name = "cookup"
+name = "cookapps"
 version = "0.14.6"
 edition = "2021"
-default-run = "cookup"
+default-run = "cookapps"
 
 [lib]
-name = "cookup_lib"
+name = "cookapps_lib"
 
 # Test-only: the WebDriver server and mock bridge for E2E (e2e/). Never in the default or release build.
 [features]

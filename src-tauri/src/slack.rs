@@ -20,7 +20,7 @@ use crate::{
 
 /// Every request goes here and nowhere else: nothing from outside is put into the URL.
 const API_URL: &str = "https://slack.com/api";
-const TOKEN_SERVICE: &str = "jp.mysis.cookup.slack";
+const TOKEN_SERVICE: &str = "jp.mysis.cookapps.slack";
 /// The keychain user name of v0.11.0's single token; a token now has its `team_id` as the user name.
 const LEGACY_USER: &str = "slack";
 const WORKSPACES_FILE: &str = "slack-workspaces.json";
@@ -1070,7 +1070,8 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("cookup-slack-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("cookapps-slack-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

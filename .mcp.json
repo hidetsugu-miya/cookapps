@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "cookup": {
-      "command": "cookup-mcp"
+    "cookapps": {
+      "command": "cookapps-mcp"
     }
   }
 }

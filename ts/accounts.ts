@@ -163,7 +163,7 @@ export function refreshPopup() {
       remove.className = "danger";
       const actions = el("popup-actions");
       actions.append(remove, cancel);
-      popup.replaceChildren(avatar, el("popup-email", a), el("popup-status", `${a} を cookup から削除します。Gmail のメールは消えません。`), actions);
+      popup.replaceChildren(avatar, el("popup-email", a), el("popup-status", `${a} を cookapps から削除します。Gmail のメールは消えません。`), actions);
       cancel.focus();
     } else {
       popup.replaceChildren(avatar, el("popup-email", a), ...lines.map((l) => el("popup-status", l)), el("popup-unread", `未読 ${unread} 件`));
