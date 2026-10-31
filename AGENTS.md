@@ -60,6 +60,7 @@ User-facing text is in `README.md` and `docs/`.
 | ID | Feature | What it does |
 |----|---------|--------------|
 | U-1 | Auto update | Check GitHub Releases at start and every 6 hours. When a newer version is out, the side menu shows an update button; pressing it downloads the new app, checks its signature, replaces the app and restarts it. macOS on Apple Silicon only |
+| U-2 | Update settings and version | The settings screen shows the running version (from `app.package_info()`), the update state and a "check now" button. The update mode is "manual" (U-1's behavior) or "auto" (the default), saved in `update-settings.json` in the app config directory. In auto mode a newer version is downloaded and replaced in the background without a restart (`install_update`), and the side menu's update button then restarts the app (`restart_app`); the app never restarts by itself. On other platforms the card shows the version and "not supported" |
 
 ### Out of scope
 
