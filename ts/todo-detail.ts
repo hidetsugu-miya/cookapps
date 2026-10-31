@@ -5,7 +5,7 @@ import { $, composing, onEnter, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
 import { DATE_SVG, MAIL_SVG, PLUS_SVG } from "./icons.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
-import { accountSet, dueLabel, linkedMail, PRIORITY_COLORS, projectName, projectOf, projectRows, todoState } from "./todo-data.js";
+import { accountSet, dueLabel, linkedMail, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
 import { checkBox, openMailFromTodo, renderList } from "./todo-list.js";
 import { moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
@@ -77,11 +77,11 @@ export function openDuePop(anchor: Element, t: TaskItem) {
 export function openProjectMenu(anchor: Element, t: TaskItem) {
   openMenu(
     anchor,
-    projectRows().map(({ p, depth }) => ({
+    todoState.todo!.projects.map((p) => ({
       label: projectName(p),
       color: p.color,
       current: p.id === t.projectId,
-      depth,
+      depth: p.depth,
       pick: () => p.id !== t.projectId && moveTask(t.id, p.id),
     })),
   );

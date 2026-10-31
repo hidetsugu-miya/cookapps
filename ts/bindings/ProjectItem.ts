@@ -8,4 +8,8 @@ color: string, inbox: boolean,
 /**
  * The project this one is nested in; `None` at the top.
  */
-parentId: string | null, };
+parentId: string | null, 
+/**
+ * How deep it is nested; 0 at the top.
+ */
+depth: number, };

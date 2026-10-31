@@ -307,6 +307,8 @@ pub struct ProjectItem {
     inbox: bool,
     /// The project this one is nested in; `None` at the top.
     parent_id: Option<String>,
+    /// How deep it is nested; 0 at the top.
+    depth: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -482,12 +484,11 @@ fn task_web_url(id: &str) -> Result<String, String> {
     Ok(format!("{WEB_TASK_URL}/{id}"))
 }
 
-/// The body of a task update holding only the fields given. `priority` is the apps' number; an empty `due_string` clears the due date.
+/// The body of a task update holding only the fields given; an empty `due_string` clears the due date.
 fn update_body(
     content: Option<&str>,
     description: Option<&str>,
     due_string: Option<&str>,
-    priority: Option<u8>,
 ) -> Result<Value, String> {
     let mut body = serde_json::Map::new();
     if let Some(c) = content {
@@ -507,12 +508,6 @@ fn update_body(
             d.trim()
         };
         body.insert("due_string".into(), d.into());
-    }
-    if let Some(p) = priority {
-        if !(1..=4).contains(&p) {
-            return Err("優先度は 1 から 4 で指定してください".into());
-        }
-        body.insert("priority".into(), flip_priority(p).into());
     }
     if body.is_empty() {
         return Err("変更する項目がありません".into());
@@ -583,9 +578,9 @@ fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
     })
 }
 
-/// Projects in tree order: each one is followed by its descendants, siblings by `child_order`. A project whose parent is not among
-/// `projects` (archived or deleted) is at the top, with its `parent_id` cleared.
-fn order_projects(mut projects: Vec<ApiProject>) -> Vec<ApiProject> {
+/// Projects in tree order with their depth: each one is followed by its descendants, siblings by `child_order`. A project whose parent
+/// is not among `projects` (archived or deleted) is at the top, with its `parent_id` cleared.
+fn order_projects(mut projects: Vec<ApiProject>) -> Vec<(ApiProject, u32)> {
     projects.sort_by_key(|p| p.child_order);
     let ids: HashSet<String> = projects.iter().map(|p| p.id.clone()).collect();
     let mut kids: HashMap<Option<String>, Vec<ApiProject>> = HashMap::new();
@@ -594,13 +589,17 @@ fn order_projects(mut projects: Vec<ApiProject>) -> Vec<ApiProject> {
         kids.entry(p.parent_id.clone()).or_default().push(p);
     }
     let mut out = Vec::with_capacity(ids.len());
-    let mut stack: Vec<ApiProject> = kids.remove(&None).unwrap_or_default();
-    stack.reverse();
-    while let Some(p) = stack.pop() {
-        let mut below = kids.remove(&Some(p.id.clone())).unwrap_or_default();
-        below.reverse();
-        out.push(p);
-        stack.extend(below);
+    let mut stack: Vec<(ApiProject, u32)> = kids
+        .remove(&None)
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .map(|p| (p, 0))
+        .collect();
+    while let Some((p, depth)) = stack.pop() {
+        let below = kids.remove(&Some(p.id.clone())).unwrap_or_default();
+        stack.extend(below.into_iter().rev().map(|c| (c, depth + 1)));
+        out.push((p, depth));
     }
     out
 }
@@ -693,12 +692,13 @@ fn build_todo<Tz: TimeZone>(
     Todo {
         projects: projects
             .into_iter()
-            .map(|p| ProjectItem {
+            .map(|(p, depth)| ProjectItem {
                 color: color_hex(&p.color).to_owned(),
                 id: p.id,
                 name: p.name,
                 inbox: p.inbox_project,
                 parent_id: p.parent_id,
+                depth,
             })
             .collect(),
         tasks: items,
@@ -1177,8 +1177,8 @@ async fn set_due_today(
     id: &str,
 ) -> Result<Option<bool>, String> {
     let url = task_api_url(id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let body = update_body(None, None, Some("today"), None)
-        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let body =
+        update_body(None, None, Some("today")).map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let done = request(auth, state, command, Method::POST, &url, Some(body)).await?;
     Ok(done.map(|_| true))
 }
@@ -1303,7 +1303,7 @@ pub async fn todoist_set_done(
     Ok(sent.map(|_| true))
 }
 
-/// Changes the fields given. `priority` is the apps' number (1 most urgent); an empty `due_string` clears the due date.
+/// Changes the fields given; an empty `due_string` clears the due date.
 #[tauri::command]
 pub async fn todoist_update(
     auth: State<'_, Auth>,
@@ -1312,7 +1312,6 @@ pub async fn todoist_update(
     content: Option<String>,
     description: Option<String>,
     due_string: Option<String>,
-    priority: Option<u8>,
 ) -> Result<Option<bool>, String> {
     let command = "todoist_update";
     let url = task_api_url(&id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
@@ -1320,7 +1319,6 @@ pub async fn todoist_update(
         content.as_deref(),
         description.as_deref(),
         due_string.as_deref(),
-        priority,
     )
     .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let done = request(&auth, &state, command, Method::POST, &url, Some(body)).await?;
@@ -1573,19 +1571,19 @@ mod tests {
     #[test]
     fn update_body_holds_only_the_given_fields() {
         assert_eq!(
-            update_body(Some("a"), None, None, None).unwrap(),
+            update_body(Some("a"), None, None).unwrap(),
             json!({"content": "a"})
         );
         assert_eq!(
-            update_body(None, Some("memo"), Some("明日"), Some(1)).unwrap(),
-            json!({"description": "memo", "due_string": "明日", "priority": 4})
+            update_body(None, Some("memo"), Some("明日")).unwrap(),
+            json!({"description": "memo", "due_string": "明日"})
         );
     }
 
     #[test]
     fn update_body_clears_the_due_date_with_an_empty_string() {
         assert_eq!(
-            update_body(None, None, Some("  "), None).unwrap(),
+            update_body(None, None, Some("  ")).unwrap(),
             json!({"due_string": "no date"})
         );
     }
@@ -1593,17 +1591,15 @@ mod tests {
     #[test]
     fn update_body_keeps_an_empty_description() {
         assert_eq!(
-            update_body(None, Some(""), None, None).unwrap(),
+            update_body(None, Some(""), None).unwrap(),
             json!({"description": ""})
         );
     }
 
     #[test]
-    fn update_body_refuses_an_empty_name_and_a_bad_priority() {
-        assert!(update_body(Some(" "), None, None, None).is_err());
-        assert!(update_body(None, None, None, Some(0)).is_err());
-        assert!(update_body(None, None, None, Some(5)).is_err());
-        assert!(update_body(None, None, None, None).is_err());
+    fn update_body_refuses_an_empty_name_and_no_fields() {
+        assert!(update_body(Some(" "), None, None).is_err());
+        assert!(update_body(None, None, None).is_err());
     }
 
     #[test]
@@ -1918,21 +1914,21 @@ mod tests {
             child("gone", "orphan", 3),
         ])
         .into_iter()
-        .map(|p| (p.id, p.parent_id))
+        .map(|(p, depth)| (p.id, p.parent_id, depth))
         .collect();
         let got: Vec<_> = got
             .iter()
-            .map(|(i, p)| (i.as_str(), p.as_deref()))
+            .map(|(i, p, d)| (i.as_str(), p.as_deref(), *d))
             .collect();
         assert_eq!(
             got,
             [
-                ("a", None),
-                ("a1", Some("a")),
-                ("a1x", Some("a1")),
-                ("a2", Some("a")),
-                ("b", None),
-                ("orphan", None)
+                ("a", None, 0),
+                ("a1", Some("a"), 1),
+                ("a1x", Some("a1"), 2),
+                ("a2", Some("a"), 1),
+                ("b", None, 0),
+                ("orphan", None, 0)
             ]
         );
     }

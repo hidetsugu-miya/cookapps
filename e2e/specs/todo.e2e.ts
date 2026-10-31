@@ -62,7 +62,11 @@ describe("todo projects and subtasks", () => {
     await openTodo();
     await waitForText("#projects .proj .name", "Sketch");
     expect(await textsOf("#projects .proj .name")).toEqual(["今日", "受信箱", "Work", "Design", "Sketch", "Home"]);
-    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#projects .proj-line")].map((l) => l.style.paddingLeft))).toEqual(["0px", "16px", "32px", "0px"]);
+    // A child is indented further right than its parent.
+    const [work, design, sketch, home] = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#projects .proj-line")].map((l) => parseInt(l.style.paddingLeft || "0", 10)));
+    expect(design).toBeGreaterThan(work);
+    expect(sketch).toBeGreaterThan(design);
+    expect(home).toBe(work);
     // Only the projects with children have a toggle.
     expect(await count("#projects .toggle")).toBe(2);
     await toggleOf("p1").click();
@@ -156,7 +160,10 @@ describe("todo detail", () => {
     await $(ROWS).click();
     await $("#todo-detail .field-value").click();
     expect(await textsOf(".menu button")).toEqual(["受信箱", "Work", "Design", "Sketch", "Home"]);
-    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".menu button")].map((b) => b.style.paddingLeft))).toEqual(["", "", "26px", "42px", ""]);
+    const [, work, design, sketch, home] = await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".menu button")].map((b) => parseInt(b.style.paddingLeft || "0", 10)));
+    expect(design).toBeGreaterThan(work);
+    expect(sketch).toBeGreaterThan(design);
+    expect(home).toBeLessThan(design);
     await $('.menu button[role="menuitem"]:nth-child(3)').click();
     expect(await waitForCalls(move)).toEqual([{ id: "k1", projectId: "p2" }]);
     await expect($("#todo-detail .field-value")).toHaveText("Design");

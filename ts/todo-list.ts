@@ -9,7 +9,7 @@ import { setScreen } from "./nav.js";
 import { openThread } from "./thread.js";
 import { updateAddMode } from "./todo-add.js";
 import { openDuePop, openProjectMenu } from "./todo-detail.js";
-import { accountSet, dueLabel, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, projectRows, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
+import { accountSet, dueLabel, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
 import { moveTask, saveTask, setTaskDone } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
 import { showError } from "./view.js";
@@ -48,14 +48,14 @@ export function renderProjects() {
   // The projects under a closed one, however deep.
   const hidden = new Set<string>();
   const lines: HTMLElement[] = [];
-  for (const { p, depth } of projectRows()) {
+  for (const p of todo.projects) {
     if (p.parentId && (hidden.has(p.parentId) || todoState.closedProjects.has(p.parentId))) {
       hidden.add(p.id);
       continue;
     }
     if (p === inbox) continue;
     const line = tag("div", "proj-line");
-    line.style.paddingLeft = `${depth * 16}px`;
+    line.style.paddingLeft = `${p.depth * 16}px`;
     line.append(projectButton(p.id, p.color, p.name, counts.get(p.id) ?? 0));
     if (parents.has(p.id)) {
       line.classList.add("parent");

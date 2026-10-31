@@ -165,11 +165,11 @@ export const todoData = (): Todo => {
   const seat = under(flights, task("k4", "Pick seat", "p1", "none"));
   return {
     projects: [
-      { id: "p0", name: "Inbox", color: "#808080", inbox: true, parentId: null },
-      { id: "p1", name: "Work", color: "#1e7b52", inbox: false, parentId: null },
-      { id: "p2", name: "Design", color: "#246fe0", inbox: false, parentId: "p1" },
-      { id: "p3", name: "Sketch", color: "#eb8909", inbox: false, parentId: "p2" },
-      { id: "p4", name: "Home", color: "#d1453b", inbox: false, parentId: null },
+      { id: "p0", name: "Inbox", color: "#808080", inbox: true, parentId: null, depth: 0 },
+      { id: "p1", name: "Work", color: "#1e7b52", inbox: false, parentId: null, depth: 0 },
+      { id: "p2", name: "Design", color: "#246fe0", inbox: false, parentId: "p1", depth: 1 },
+      { id: "p3", name: "Sketch", color: "#eb8909", inbox: false, parentId: "p2", depth: 2 },
+      { id: "p4", name: "Home", color: "#d1453b", inbox: false, parentId: null, depth: 0 },
     ],
     tasks: [task("k1", "Write report", "p1", "today"), trip, flights, seat],
   };

@@ -49,7 +49,7 @@ export interface Commands {
   todoist_add_from_slack: { args: { url: string; projectId?: string | null; today: boolean }; result: string | null };
   todoist_set_done: { args: { id: string; done: boolean }; result: boolean | null };
   todoist_update: {
-    args: { id: string; content?: string; description?: string; dueString?: string; priority?: number };
+    args: { id: string; content?: string; description?: string; dueString?: string };
     result: boolean | null;
   };
   todoist_move: { args: { id: string; projectId: string }; result: boolean | null };

@@ -63,16 +63,6 @@ export const projectOf = (id: string) => todoState.projectById.get(id);
 export const projectName = (p: ProjectItem | undefined) => (p?.inbox ? "受信箱" : p?.name ?? "");
 export const viewProjectId = (view: string) => (view === "inbox" ? inboxOf()?.id : view);
 
-// The projects in the backend's tree order (a parent, then its descendants), each with how deep it is nested.
-export function projectRows() {
-  const depth = new Map<string, number>();
-  return todoState.todo!.projects.map((p) => {
-    const above = p.parentId ? depth.get(p.parentId) : undefined;
-    depth.set(p.id, above === undefined ? 0 : above + 1);
-    return { p, depth: depth.get(p.id)! };
-  });
-}
-
 // The rows of `t`'s subtasks that are not done (a done one has no row), in Todoist's order.
 export const subRows = (t: TaskItem) => t.subtasks.flatMap((s) => (s.done ? [] : todoState.taskById.get(s.id) ?? []));
 
