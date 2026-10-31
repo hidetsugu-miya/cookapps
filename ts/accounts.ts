@@ -4,6 +4,7 @@ import { calendarNeedsLogin, loadCalendar, resetCalendar } from "./calendar.js";
 import { getClaude } from "./claude.js";
 import { $, el, tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
+import { hintPopup, toggleHint } from "./hint.js";
 import { CLAUDE_SVG } from "./icons.js";
 import { forgetRemoved, historyIds, load } from "./inbox.js";
 import { rows, updateBadge } from "./inbox-rows.js";
@@ -138,9 +139,10 @@ function accountState(a: string) {
   return { lines, relogin, unread };
 }
 
-// The settings' Google card: one row per sidebar avatar. It is redrawn only when a row changes.
+// The settings' Google card: one row per sidebar avatar. It is drawn only while the settings screen is shown, and redrawn only when a row changes.
 let googleKey = "";
-function renderGoogleCard() {
+export function renderGoogleCard() {
+  if (currentScreen() !== "settings") return;
   const states = accountButtons().map((b) => [b.dataset.account!, accountState(b.dataset.account!)] as const);
   const key = JSON.stringify(states);
   if (key === googleKey) return;
@@ -151,7 +153,13 @@ function renderGoogleCard() {
           const avatar = tag("span", "avatar", initials(a));
           avatar.style.background = avatarColor(a);
           const status: [string, string] = relogin ? ["warn", "要再ログイン"] : lines.length ? ["warn", "読み込み失敗"] : ["ok", "ログイン中"];
-          return itemRow({ avatar, name: a, meta: [...lines, `未読 ${unread}`].join(" · "), warn: lines.length > 0, status });
+          const actions: HTMLButtonElement[] = [];
+          if (relogin) {
+            const b = tag("button", "text-btn", "再ログイン") as HTMLButtonElement;
+            b.onclick = () => addAccount(a, b);
+            actions.push(b);
+          }
+          return itemRow({ avatar, name: a, meta: [...lines, `未読 ${unread}`].join(" · "), warn: lines.length > 0, status, actions });
         })
       : [tag("div", "card-empty", "アカウントはまだありません")]),
   );
@@ -278,4 +286,17 @@ export function initAccounts() {
   new MutationObserver(refreshPopup).observe($("threads"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
   $("login-button").onclick = () => addAccount(null, $<HTMLButtonElement>("login-button"));
   $("google-add").onclick = () => addAccount(null, $<HTMLButtonElement>("google-add"));
+  $("google-help").onclick = (e) =>
+    toggleHint(
+      e.currentTarget as Element,
+      hintPopup(
+        "Google アカウントの追加",
+        [
+          ["「アカウントを追加」を押すと、既定のブラウザが開きます"],
+          ["Google でログインし、Gmail とカレンダーへのアクセスを許可します"],
+          ["受信トレイとカレンダーに、そのアカウントの分が加わります"],
+        ],
+        "ログインの情報はキーチェーンに保存します。削除と再ログインは、サイドメニューのアバターからもできます",
+      ),
+    );
 }

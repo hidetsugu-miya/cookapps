@@ -1,4 +1,5 @@
 // Which screen the sidebar selected, and the sidebar's buttons.
+import { renderGoogleCard } from "./accounts.js";
 import { $ } from "./dom.js";
 import { showCalendar } from "./calendar.js";
 import { closeHint } from "./hint.js";
@@ -30,6 +31,7 @@ export function setScreen(name: Screen) {
     loadTodo(false, todoState.todo === null || todoState.kept);
   } else if (name === "settings") {
     show("settings");
+    renderGoogleCard();
     loadSettings();
   } else {
     show("list");

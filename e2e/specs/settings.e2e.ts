@@ -34,6 +34,9 @@ describe("settings: Google", () => {
     await waitForText("#google-accounts .item-meta", "再ログインが必要です · 未読");
     await expect($("#google-accounts .status.warn")).toHaveText("要再ログイン");
     await expect(meta()).toHaveElementClass("warn");
+    const login = await mock("login", account);
+    await $("#google-accounts .item .text-btn").click();
+    expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
   });
 
   it("shows an empty note with no account", async () => {
