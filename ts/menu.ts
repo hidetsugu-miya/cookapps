@@ -26,6 +26,8 @@ export interface MenuItem {
   label: string;
   color: string;
   current: boolean;
+  // How deep the item is nested, shown as an indent.
+  depth?: number;
   pick: () => unknown;
 }
 
@@ -38,6 +40,7 @@ export function openMenu(anchor: Element, items: MenuItem[]) {
     b.setAttribute("aria-current", String(item.current));
     const dot = tag("span", "pdot");
     dot.style.background = item.color;
+    if (item.depth) b.style.paddingLeft = `${10 + item.depth * 16}px`;
     b.append(dot, item.label);
     b.onclick = () => {
       closeMenu();

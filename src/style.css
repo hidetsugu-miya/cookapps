@@ -170,6 +170,16 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .proj[aria-current="true"] { background: var(--soft); color: var(--accent); font-weight: bold; }
 .proj .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj .count { color: #888; font-size: 12px; font-weight: normal; }
+/* A project in the side list, indented by its depth; a parent has a chevron over the right end. */
+.proj-line { position: relative; }
+.proj-line.parent .proj { padding-right: 34px; }
+.proj-line .toggle { position: absolute; right: 6px; top: 50%; margin-top: -11px; }
+.toggle { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #888; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.toggle:hover { background: var(--soft); }
+.toggle svg { width: 14px; height: 14px; }
+.toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+/* In the list's left padding, so the rows do not move. */
+.task > .toggle { position: absolute; left: -26px; top: 50%; margin-top: -11px; }
 .proj svg { width: 18px; height: 18px; flex: none; }
 .pdot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 #todo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -238,16 +248,19 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .drag-ghost { position: fixed; left: 0; top: 0; z-index: 30; max-width: 280px; padding: 6px 12px; border-radius: 8px; background: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .body .parent { color: #888; font-size: 12px; flex: none; }
 
-#todo-detail { max-width: 760px; }
+#todo-detail { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; max-width: 980px; }
+.detail-side { align-self: start; padding: 4px 16px; border-radius: 12px; background: var(--bar); }
+.field { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.field-label { margin-bottom: 4px; font-size: 12px; font-weight: bold; color: #666; }
+.field-value { display: flex; align-items: center; gap: 8px; width: calc(100% + 12px); margin: 0 -6px; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #333; text-align: left; cursor: pointer; }
+.field-value:hover { background: #fff; }
+.field-value svg { width: 16px; height: 16px; flex: none; }
+.field-value.over { color: #b00020; }
 #todo-detail .head { display: flex; gap: 14px; align-items: flex-start; padding: 4px 16px 0; }
 #todo-detail .head .check { margin-top: 4px; }
 #todo-detail .name { flex: 1; font-size: 18px; font-weight: bold; border: 0; padding: 2px 4px; border-radius: 6px; font-family: inherit; }
 #todo-detail .name:hover { background: var(--hover); }
 #todo-detail .name:focus { outline: 2px solid var(--accent); background: #fff; }
-.meta { display: flex; gap: 8px; padding: 12px 16px 4px 50px; flex-wrap: wrap; }
-.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; background: #fff; font: inherit; font-size: 12px; color: #444; cursor: pointer; }
-.chip svg { width: 14px; height: 14px; }
-.chip.over { color: #b00020; border-color: #f0c2c8; }
 .chip-input { box-sizing: border-box; height: 28px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 14px; font: inherit; font-size: 12px; }
 .due-pop { gap: 8px; padding: 8px; width: 232px; }
 .due-pop .chip-input { width: 100%; }
