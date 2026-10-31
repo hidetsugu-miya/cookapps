@@ -10,9 +10,11 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 /* The count sits on the button's top right corner; the button's aria-label carries it for screen readers. */
 .nav-count { position: absolute; top: -4px; right: -8px; box-sizing: border-box; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #d93025; color: #fff; font-size: 11px; font-weight: bold; line-height: 18px; text-align: center; }
 .nav-item:disabled { opacity: .4; cursor: default; }
-/* The bottom group (update button, account avatars, Claude avatar, settings) takes the free space above it, so settings stays last whatever is shown. */
 /* A newer version is out: a dot on the settings button, whose aria-label says so. */
 .nav-dot { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: #d93025; box-shadow: 0 0 0 2px var(--side); }
+.nav-item:hover .nav-dot { box-shadow: 0 0 0 2px var(--side-hover); }
+.nav-item[aria-current="page"] .nav-dot { box-shadow: 0 0 0 2px var(--accent); }
+/* The bottom group (update button, account avatars, Claude avatar, settings) takes the free space above it, so settings stays last whatever is shown. */
 #sidebar-bottom { margin-top: auto; padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 #account-list { display: flex; flex-direction: column; gap: 8px; }
 #account-list:empty { display: none; }
