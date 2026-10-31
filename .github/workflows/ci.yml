@@ -9,8 +9,40 @@ on:
 permissions:
   contents: read
 
+# One job per layer of checks (static, unit, E2E); no check runs in two jobs.
 jobs:
-  check:
+  # Static: nothing runs the app.
+  static:
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      # Keep the version in step with rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt
+      - name: Check version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            scripts/check-version.sh "$GITHUB_REF_NAME"
+          else
+            scripts/check-version.sh
+          fi
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Type check the frontend
+        run: npm run build:ts
+      - name: Type check the E2E
+        run: npm run e2e:check
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+  # Unit: Rust only; clippy sits here because it compiles every target of the OS it runs on.
+  test:
     strategy:
       fail-fast: false
       matrix:
@@ -21,43 +53,67 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-      # Keep the version in step with rust-toolchain.toml.
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
-          components: rustfmt, clippy
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Check version
-        if: matrix.os == 'macos-latest'
-        run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            scripts/check-version.sh "$GITHUB_REF_NAME"
-          else
-            scripts/check-version.sh
-          fi
       # tauri's build embeds src/, whose js/ is the output of tsc, so the frontend comes before cargo.
       - name: Build frontend
         run: |
           npm ci
           npm run build:ts
-      - name: Format
-        working-directory: src-tauri
-        run: cargo fmt --check
       - name: Clippy
         working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
         working-directory: src-tauri
         run: cargo test
       # cargo test writes the types of the Rust structs (src/ts/bindings/); a committed copy that differs is out of date.
       - name: Check bindings
+        if: matrix.os == 'macos-latest'
         run: test -z "$(git status --porcelain src/ts/bindings)"
+
+  # E2E: the real WebView (WKWebView, WebView2) with the commands mocked.
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Build the E2E app
+        run: npm run e2e:build
+      - name: E2E
+        run: npm run e2e
+
+  installer:
+    if: github.ref_type == 'tag'
+    needs: [test, e2e]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
       - name: Build installer
-        if: matrix.os == 'windows-latest' && github.ref_type == 'tag'
         run: npx tauri build --bundles nsis
       - name: Upload installer
-        if: matrix.os == 'windows-latest' && github.ref_type == 'tag'
         uses: actions/upload-artifact@v7
         with:
           name: cookup-windows-installer

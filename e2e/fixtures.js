@@ -34,10 +34,12 @@ window.__e2e_calls__ = {};
 const invoke = async (cmd, args, options) => {
   // Plugin and event traffic (wdio's own, listen/emit) is not an app command.
   if (cmd.startsWith("plugin:")) return real(cmd, args, options);
-  (window.__e2e_calls__[cmd] ??= []).push(args ?? null);
+  window.__e2e_calls__[cmd] ??= [];
+  window.__e2e_calls__[cmd].push(args ?? null);
   if (cmd in window.__e2e_mocks__) return structuredClone(window.__e2e_mocks__[cmd]);
   if (!(cmd in answers)) {
-    (window.__e2e_unmocked__ ??= []).push(cmd);
+    window.__e2e_unmocked__ ??= [];
+    window.__e2e_unmocked__.push(cmd);
     throw new Error(`e2e: unmocked command "${cmd}" (args ${JSON.stringify(args)})`);
   }
   return structuredClone(answers[cmd]);

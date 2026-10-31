@@ -51,7 +51,7 @@ const eventColor = (e: { color: string | null; account: string }) => e.color || 
 const CAL_NAME_MAX = 20;
 
 function eventBox(e: TimedItem) {
-  const box = el("cal-event" + (e.declined ? " declined" : ""));
+  const box = el(`cal-event${e.declined ? " declined" : ""}`);
   box.style.top = `${(e.startMin / 60) * HOUR_PX}px`;
   box.style.height = `${(Math.max(e.endMin - e.startMin, MIN_EVENT_MIN) / 60) * HOUR_PX - 1}px`;
   box.style.left = `${(e.col / e.cols) * 100}%`;
@@ -61,7 +61,7 @@ function eventBox(e: TimedItem) {
   const name = e.summary || "(件名なし)";
   // Counted by code point, so an emoji is never split in half.
   const chars = [...name];
-  box.append(el("cal-name", chars.length > CAL_NAME_MAX ? chars.slice(0, CAL_NAME_MAX).join("") + "…" : name));
+  box.append(el("cal-name", chars.length > CAL_NAME_MAX ? `${chars.slice(0, CAL_NAME_MAX).join("")}…` : name));
   // Under 45 minutes has no room for a second line, so the title takes the only one.
   if (e.endMin - e.startMin < 45) box.classList.add("short");
   // Side-by-side boxes are too narrow for the time; a long title would push it out of sight anyway.
@@ -70,7 +70,7 @@ function eventBox(e: TimedItem) {
 }
 
 function allDayChip(e: AllDayItem) {
-  const c = el("cal-chip" + (e.declined ? " declined" : ""), e.summary || "(件名なし)");
+  const c = el(`cal-chip${e.declined ? " declined" : ""}`, e.summary || "(件名なし)");
   c.style.setProperty("--c", eventColor(e));
   c.title = `${e.summary}\n${e.account}`;
   return c;
@@ -78,7 +78,9 @@ function allDayChip(e: AllDayItem) {
 
 // The current-time line in today's column and its label in the time gutter, if the shown week holds today.
 function drawNow() {
-  document.querySelectorAll(".cal-now").forEach((n) => n.remove());
+  document.querySelectorAll(".cal-now").forEach((n) => {
+    n.remove();
+  });
   const shown = calShown;
   if (!shown) return;
   const now = new Date();

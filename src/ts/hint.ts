@@ -82,6 +82,10 @@ export function initHint() {
   document.addEventListener("pointerdown", (e) => {
     if (hintOpen && !(e.target as Element).closest(".pop, [data-hint]")) closeHint();
   });
-  document.addEventListener("keydown", (e) => e.key === "Escape" && !composing(e) && (closeHint(), closePane()));
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || composing(e)) return;
+    closeHint();
+    closePane();
+  });
   window.addEventListener("resize", closeHint);
 }

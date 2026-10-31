@@ -52,7 +52,9 @@ async function showImages(urls: string[], frame: HTMLIFrameElement, ctx: ThreadC
     if (!data) continue;
     // The browser prefers srcset, and a <picture>'s <source>, over src.
     img.removeAttribute("srcset");
-    img.closest("picture")?.querySelectorAll("source").forEach((source) => source.remove());
+    img.closest("picture")?.querySelectorAll("source").forEach((source) => {
+      source.remove();
+    });
     img.setAttribute("src", data);
     shown++;
   }

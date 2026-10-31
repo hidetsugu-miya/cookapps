@@ -9,7 +9,7 @@ let pane: { scrim: HTMLElement; behind: HTMLElement[]; opener: HTMLElement | nul
 export function closePane() {
   if (!pane) return;
   pane.scrim.remove();
-  pane.behind.forEach((el) => (el.inert = false));
+  for (const el of pane.behind) el.inert = false;
   (pane.opener?.isConnected ? pane.opener : $("slack-token-input")).focus();
   pane = null;
 }
@@ -41,7 +41,7 @@ export function openPane(title: string, ...body: Node[]) {
   scrim.append(node);
   const behind = [...document.querySelectorAll<HTMLElement>("#sidebar, #content")];
   pane = { scrim, behind, opener: document.activeElement as HTMLElement | null };
-  behind.forEach((el) => (el.inert = true));
+  for (const el of behind) el.inert = true;
   document.body.append(scrim);
   node.focus();
 }

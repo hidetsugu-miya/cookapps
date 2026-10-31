@@ -4,7 +4,7 @@
 const URL_IN_TEXT = /https?:\/\/[!#-;=?-~]+/gi;
 
 function trimUrl(url: string) {
-  let opens = url.split("(").length - 1;
+  const opens = url.split("(").length - 1;
   let closes = url.split(")").length - 1;
   let end = url.length;
   for (; end; end--) {

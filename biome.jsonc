@@ -1,0 +1,22 @@
+// Lint only: the formatter and the import sorter are off. The rules are Biome's recommended set, minus the two below.
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "files": {
+    "includes": ["src/ts/**", "e2e/**", "wdio.conf.ts", "!src/ts/bindings", "!e2e/dist"]
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "style": {
+        // Every `!` sits on an element index.html or the code itself just built; a null check would turn a bug into a silent no-op.
+        "noNonNullAssertion": "off"
+      },
+      "performance": {
+        // Its fix is textContent, but innerText differs: it leaves out hidden text and keeps the line breaks (src/ts/slack-dialog.ts reads a rendered mail body).
+        "useDomNodeTextContent": "off"
+      }
+    }
+  }
+}

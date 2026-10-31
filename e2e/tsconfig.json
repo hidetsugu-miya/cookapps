@@ -8,5 +8,6 @@
     "skipLibCheck": true,
     "types": ["node", "@wdio/globals/types", "expect-webdriverio", "@wdio/mocha-framework", "@wdio/tauri-service"]
   },
-  "include": ["./**/*.ts", "../wdio.conf.ts"]
+  "include": ["./**/*.ts", "../wdio.conf.ts"],
+  "exclude": ["dist"]
 }

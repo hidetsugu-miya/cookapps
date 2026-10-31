@@ -246,7 +246,10 @@ export function renderDetail() {
   name.value = t.content;
   name.dataset.field = "name";
   name.setAttribute("aria-label", "タスクの名前");
-  name.onchange = () => (name.value.trim() ? saveTask(t.id, { content: name.value }) : (name.value = t.content));
+  name.onchange = () => {
+    if (name.value.trim()) saveTask(t.id, { content: name.value });
+    else name.value = t.content;
+  };
   onEnter(name, () => name.blur());
   const head = tag("div", "head");
   head.append(box, name);

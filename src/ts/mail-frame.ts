@@ -107,8 +107,9 @@ const doctypeOf = Object.getOwnPropertyDescriptor(Document.prototype, "doctype")
 export function plainBody(html: string) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   // A template's content may hold another, so one is unwrapped at a time.
-  for (let t; (t = queryAll<HTMLTemplateElement>(doc, SHADOW_TEMPLATE)[0]); ) t.replaceWith(...t.content.childNodes);
-  queryAll(doc, BLOCKED).forEach((el) => el.remove());
+  const nextTemplate = () => queryAll<HTMLTemplateElement>(doc, SHADOW_TEMPLATE)[0];
+  for (let t = nextTemplate(); t; t = nextTemplate()) t.replaceWith(...t.content.childNodes);
+  for (const el of queryAll(doc, BLOCKED)) el.remove();
   const doctype = doctypeOf.call(doc);
   return (doctype ? new XMLSerializer().serializeToString(doctype) : "") + rootOf.call(doc).outerHTML;
 }

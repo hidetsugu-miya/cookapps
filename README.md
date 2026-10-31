@@ -129,19 +129,31 @@ Claude Code から受信トレイと予定を扱う MCP サーバー `cookup-mcp
 
 ## テスト
 
-```sh
-cd src-tauri && cargo test
-```
+検査は 3 層に分かれています。
+
+- 静的: 書式、lint、型、バージョンの一致
+- 単体: Rust の処理（`cargo test`）
+- E2E: 本物の WebView（macOS は WKWebView、Windows は WebView2）で画面を動かす。コマンドの結果はモックで返す
 
 CI（`.github/workflows/ci.yml`）と同じチェックは、次のコマンドでローカルでも流せます。
 
 ```sh
+npm ci
+npm run lint                    # Biome（lint のみ）
+npm run build:ts                # フロントエンドの型の確認とビルド
+npm run e2e:check               # E2E の型の確認
+scripts/check-version.sh        # タグ名を渡すと、そのタグとも照合します（例: scripts/check-version.sh v0.4.2）
 cd src-tauri
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test
-cd ..
-scripts/check-version.sh        # タグ名を渡すと、そのタグとも照合します（例: scripts/check-version.sh v0.4.2）
+```
+
+E2E は、モックを入れたアプリをビルドして実行します。
+
+```sh
+npm run e2e:build
+npm run e2e
 ```
 
 ## ライセンス

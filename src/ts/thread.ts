@@ -115,7 +115,10 @@ function message(m: MessageDetail, ctx: ThreadCtx, account: string, folded: bool
       if (!folded && !body.firstChild) build();
     };
     // The head that was clicked goes away, so the focus moves to its counterpart.
-    line.onclick = () => (fold(false), open.focus());
+    line.onclick = () => {
+      fold(false);
+      open.focus();
+    };
     // Dragging over the address to copy it ends in a click; it must not fold the message.
     open.onclick = () => {
       if (getSelection()!.toString()) return;

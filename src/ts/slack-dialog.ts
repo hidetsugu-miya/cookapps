@@ -1,5 +1,6 @@
 // "Slack に貼る": posts the open thread's latest message to a destination picked in a dialog under the header button.
 import type { Channel } from "./bindings/Channel";
+import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Target } from "./bindings/Target";
 import { $, tag } from "./dom.js";
 import { unescapeHtml } from "./format.js";
@@ -24,7 +25,7 @@ const slackDate = (ms: number) => {
 
 async function openSlackDialog() {
   $("error").hidden = true;
-  let loaded;
+  let loaded: SlackLoad;
   try {
     loaded = await invoke("slack_load");
   } catch (e) {
@@ -40,7 +41,7 @@ async function openSlackDialog() {
     date: slackDate(current.latest.dateMs),
     body: latestText(),
   };
-  let preview;
+  let preview: string;
   try {
     preview = await invoke("slack_preview", mail);
   } catch (e) {
@@ -60,7 +61,7 @@ async function openSlackDialog() {
   // The workspace whose channels are searched; with one workspace it is not shown.
   const wsSelect = tag("select");
   wsSelect.setAttribute("aria-label", "ワークスペース");
-  workspaces.forEach((w) => wsSelect.append(new Option(w.team, w.teamId)));
+  for (const w of workspaces) wsSelect.append(new Option(w.team, w.teamId));
   const chosenEl = tag("p", "chosen", "貼り付け先を選んでください");
   const note = tag("textarea");
   note.rows = 2;

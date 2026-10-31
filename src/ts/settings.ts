@@ -1,4 +1,5 @@
 // The settings screen: one card each for Slack and Claude. A Slack token is never shown; Rust keeps it in the keychain.
+import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Workspace } from "./bindings/Workspace";
 import { $, tag } from "./dom.js";
 import { avatarColor, hostOf, initials } from "./format.js";
@@ -122,7 +123,7 @@ export function renderWorkspaces(list: Workspace[]) {
 export async function loadSettings() {
   const seq = ++settingsSeq;
   $("error").hidden = true;
-  let loaded;
+  let loaded: SlackLoad;
   try {
     loaded = await invoke("slack_load");
   } catch (e) {

@@ -7,9 +7,11 @@
     "watch:ts": "tsc -p src/ts/tsconfig.json --watch --preserveWatchOutput",
     "e2e:build": "npm run build:ts && node e2e/assemble.mjs && tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json",
     "e2e": "wdio run wdio.conf.ts",
+    "lint": "biome lint .",
     "e2e:check": "tsc --noEmit -p e2e/tsconfig.json"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
     "@tauri-apps/cli": "^2",
     "@types/node": "^26.6.6",
     "@wdio/cli": "^9.32.0",

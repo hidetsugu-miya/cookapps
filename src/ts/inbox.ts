@@ -146,7 +146,7 @@ function upsert(t: ThreadItem) {
   if (old && old.li.querySelector<HTMLInputElement>(".read-box")!.disabled) return;
   const li = row(t);
   rows.set(key, { t, li });
-  const focused = old && old.li.contains(document.activeElement) ? document.activeElement!.classList : null;
+  const focused = old?.li.contains(document.activeElement) ? document.activeElement!.classList : null;
   if (old && old.li.dataset.dateMs === li.dataset.dateMs && old.t.unread === t.unread) {
     old.li.replaceWith(li);
   } else {
@@ -164,14 +164,14 @@ export function applyChanges(threads: ThreadItem[], removedKeys: string[]) {
   const main = $("main");
   const top = main.getBoundingClientRect().top;
   const anchor = [...$("threads").querySelectorAll("li")].find((li) => li.getBoundingClientRect().bottom > top);
-  const before = anchor && anchor.getBoundingClientRect().top;
+  const before = anchor?.getBoundingClientRect().top;
   for (const key of removedKeys) {
     const r = rows.get(key);
     if (r) r.li.remove();
     rows.delete(key);
   }
   threads.forEach(upsert);
-  if (anchor && anchor.isConnected && main.scrollTop > 0) main.scrollTop += anchor.getBoundingClientRect().top - before!;
+  if (anchor?.isConnected && main.scrollTop > 0) main.scrollTop += anchor.getBoundingClientRect().top - before!;
   updateBadge();
 }
 

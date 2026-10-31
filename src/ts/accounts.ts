@@ -75,7 +75,7 @@ export function closePopup() {
   claudePopup = false;
   confirmingRemoval = null;
   $("account-popup").hidden = true;
-  accountButtons().forEach((b) => b.setAttribute("aria-expanded", "false"));
+  for (const b of accountButtons()) b.setAttribute("aria-expanded", "false");
   $("claude-btn").setAttribute("aria-expanded", "false");
 }
 
@@ -86,7 +86,7 @@ function togglePopup(account: string) {
   confirmingRemoval = null;
   popupKey = "";
   $("account-popup").hidden = false;
-  accountButtons().forEach((b) => b.setAttribute("aria-expanded", String(b.dataset.account === account)));
+  for (const b of accountButtons()) b.setAttribute("aria-expanded", String(b.dataset.account === account));
   $("claude-btn").setAttribute("aria-expanded", "false");
   refreshPopup();
 }
@@ -104,7 +104,7 @@ function toggleClaudePopup() {
   popupAccount = null;
   confirmingRemoval = null;
   claudePopup = true;
-  accountButtons().forEach((b) => b.setAttribute("aria-expanded", "false"));
+  for (const b of accountButtons()) b.setAttribute("aria-expanded", "false");
   $("claude-btn").setAttribute("aria-expanded", "true");
   // The button is only shown while Claude is logged in.
   const claude = getClaude() as Extract<Claude, { state: "ready" }>;
