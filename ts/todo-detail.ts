@@ -46,18 +46,20 @@ function monthPicker(shown: Date, due: Due | null, pick: (iso: string) => void) 
 }
 
 // The due popover opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
+// The field shows a one-off due date as "2026-11-02 12:00", which Todoist reads back as is; a repeat keeps Todoist's text, which a date cannot hold.
 // A repeating task gets the text field only: a picked day would replace its repeat.
 export function openDuePop(anchor: Element, t: TaskItem) {
   const pop = tag("div", "menu due-pop");
   const input = tag("input", "chip-input");
-  input.value = t.due?.string ?? "";
+  const shown = !t.due ? "" : t.due.recurring ? t.due.string : t.due.time ? `${t.due.date} ${t.due.time}` : t.due.date;
+  input.value = shown;
   input.placeholder = "例: 明日 15時";
   input.setAttribute("aria-label", "期限（空欄で期限なし）");
   input.onkeydown = (e) => {
     if (composing(e)) return;
     if (e.key !== "Enter") return;
     closeMenu();
-    if (input.value.trim() !== (t.due?.string ?? "")) saveTask(t.id, { dueString: input.value });
+    if (input.value.trim() !== shown) saveTask(t.id, { dueString: input.value });
   };
   const month = t.due ? addDays(t.due.date, 0) : new Date();
   pop.append(input);
