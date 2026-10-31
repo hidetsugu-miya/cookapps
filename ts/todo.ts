@@ -130,7 +130,7 @@ async function showKeptTodo() {
   if (currentScreen() === "todo") renderTodo();
 }
 
-// Fetches only for the Todo count on the sidebar while another screen is shown: `todo` and the Todo screen stay as they are, and a missing token or a failure shows no count and no message.
+// Fetches only for the Todo count on the sidebar while another screen is shown: `todo` and the Todo screen stay as they are, a missing token shows no count, and nothing shows a message.
 async function loadTodoCount() {
   if (currentScreen() === "todo" || document.hidden || todoState.countOff || todoState.writes) return;
   // A change that started or ended while fetching makes the answer older than the screen's count.
@@ -142,7 +142,10 @@ async function loadTodoCount() {
       todoState.countWithDone = false;
       count = data.tasks.filter(isDueToday).length;
     } else todoState.countOff = true;
-  } catch {}
+  } catch {
+    // A failure keeps the last count, so the Dock badge does not drop the Todo part meanwhile.
+    return;
+  }
   // The Todo screen sets the count itself, and its data is newer than this fetch.
   if (currentScreen() !== "todo" && !todoState.writes && seq === todoState.seq) setTodoCount(count);
 }
