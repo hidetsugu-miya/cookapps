@@ -129,7 +129,8 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 #cal-title { font-size: 20px; }
 #cal-title .year { color: #888; font-weight: normal; }
 .text-btn { height: 32px; padding: 0 16px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; color: #333; cursor: pointer; }
-.text-btn:hover { background: var(--soft); }
+.text-btn:hover, .text-btn[aria-pressed="true"] { background: var(--soft); }
+.text-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 #cal-notice:not(:empty), #todo-notice:not(:empty) { padding: 0 32px 8px; }
 #calendar.loading #cal-scroll { opacity: .5; }
 #cal-scroll { flex: 1; overflow-y: auto; }
@@ -320,6 +321,7 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .logo svg { width: 14px; height: 14px; stroke-width: 2.2; }
 .logo.slack { background: var(--slack); }
 .logo.claude { background: var(--claude); }
+.logo.update { background: var(--accent); }
 .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 20px; border-top: 1px solid var(--line); }
 .item .who { flex: 1; min-width: 0; }
 .item-name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

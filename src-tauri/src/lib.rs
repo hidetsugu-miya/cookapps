@@ -112,6 +112,7 @@ pub fn run() {
         .manage(todoist::TodoistState::default())
         .manage(slack::SlackState::default())
         .manage(std::sync::Mutex::new(None::<tauri_plugin_updater::Update>))
+        .manage(update::Installed::default())
         .invoke_handler(tauri::generate_handler![
             auth::login,
             auth::remove_account,
@@ -153,8 +154,12 @@ pub fn run() {
             slack::slack_preview,
             slack::slack_post,
             claude::claude_status,
+            update::app_info,
+            update::update_mode,
+            update::set_update_mode,
             update::check_update,
             update::install_update,
+            update::restart_app,
             set_badge
         ])
         .run(tauri::generate_context!())
