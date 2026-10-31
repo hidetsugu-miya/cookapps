@@ -110,6 +110,7 @@ async fn find(app: &tauri::AppHandle, command: &str) -> Result<Option<Update>, S
 }
 
 /// Whether a newer version is out. The sidebar shows its update button only for `Some`. The found update is kept for `install_update`.
+/// Once the app is replaced, it asks GitHub no more until the restart: the restart is all that is left, and the next check after it finds any later release.
 #[tauri::command]
 pub async fn check_update(
     app: tauri::AppHandle,
