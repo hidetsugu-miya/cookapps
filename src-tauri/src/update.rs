@@ -73,8 +73,9 @@ pub struct UpdateInfo {
 }
 
 /// The version `install_update` replaced the app with. The running app stays the old one until it restarts, so a check would find that version again.
+/// `busy` lets one replacement run at a time: the auto install and the update button can both call `install_update`.
 #[derive(Default)]
-pub struct Installed(Mutex<Option<String>>);
+pub struct Installed(Mutex<Option<String>>, tokio::sync::Mutex<()>);
 
 #[tauri::command]
 pub fn app_info(app: tauri::AppHandle) -> AppInfo {
@@ -142,6 +143,8 @@ pub async fn install_update(
     found: State<'_, Mutex<Option<Update>>>,
     installed: State<'_, Installed>,
 ) -> Result<(), String> {
+    // A second call waits here, then finds the app already replaced.
+    let _busy = installed.1.lock().await;
     if installed.0.lock().unwrap().is_some() {
         return Ok(());
     }
