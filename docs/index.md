@@ -1,10 +1,10 @@
 ---
-title: cookup
+title: cookapps
 ---
 
-# cookup
+# cookapps
 
-cookup は、個人向けのデスクトップ Gmail クライアントです。
+cookapps は、個人向けのデスクトップ Gmail クライアントです。
 複数の Gmail アカウントの受信トレイを 1 つの一覧で表示します。未読は上、既読は下に分けて並べます。
 スレッドの本文を読み、アーカイブ、ゴミ箱への移動、既読・未読の切り替えができます。
 未読のスレッドを開くと、既読になります。
@@ -20,4 +20,4 @@ MCP サーバーを設定すると、Claude Code から受信トレイと予定�
 
 - [Claude との連携（MCP）](mcp)
 - [プライバシーポリシー](privacy/)
-- [ソースコード（GitHub）](https://github.com/hidetsugu-miya/cookup)
+- [ソースコード（GitHub）](https://github.com/hidetsugu-miya/cookapps)

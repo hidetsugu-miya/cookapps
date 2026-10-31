@@ -445,7 +445,7 @@ async fn fetch_image(
         Ok((mime, bytes)) => Some((url, mime, bytes)),
         Err((status, why)) => {
             let status = status.map_or("-".to_owned(), |s| s.to_string());
-            eprintln!("cookup: fetch_images url={shown} status={status} error={why}");
+            eprintln!("cookapps: fetch_images url={shown} status={status} error={why}");
             None
         }
     }

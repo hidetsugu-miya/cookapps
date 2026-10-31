@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: "cookup の push 前のコードレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で、security-reviewer・performance-reviewer と並列に起動する。"
+description: "cookapps の push 前のコードレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で、security-reviewer・performance-reviewer と並列に起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -16,7 +16,7 @@ tools: Read, Grep, Glob, Bash
 
 - ロジックの誤り、端の場合（空、0 件、失敗、競合）
 - データの損失（意図しないアーカイブ・ゴミ箱・既読化、`accounts.json` の破損）
-- 要件（`CLAUDE.local.md` の要件定義）と `.claude/rules/` への違反
+- 要件（`AGENTS.local.md` の要件定義）と `.claude/rules/` への違反
 - 変更が呼び出し元・テスト・ドキュメント（README、`docs/`）と食い違っていないか
 - 危ない変更にテストがあるか
 

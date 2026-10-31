@@ -1,6 +1,6 @@
 ---
 name: performance-reviewer
-description: "cookup の push 前のパフォーマンスレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で、security-reviewer・code-reviewer と並列に起動する。"
+description: "cookapps の push 前のパフォーマンスレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で、security-reviewer・code-reviewer と並列に起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---

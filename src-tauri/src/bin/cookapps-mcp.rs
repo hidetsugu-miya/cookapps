@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use cookup_lib::{auth::Auth, calendar, gmail};
+use cookapps_lib::{auth::Auth, calendar, gmail};
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, transport::stdio, ServiceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,12 +10,12 @@ use serde::{Deserialize, Serialize};
 /// Tauri's `app_config_dir` for the app's identifier: `dirs::config_dir()` (as Tauri resolves it) joined with the identifier.
 fn config_dir() -> Result<PathBuf, String> {
     dirs::config_dir()
-        .map(|dir| dir.join("jp.mysis.cookup"))
+        .map(|dir| dir.join("jp.mysis.cookapps"))
         .ok_or_else(|| "設定フォルダの場所を特定できません".to_string())
 }
 
 fn relogin(account: &str) -> String {
-    format!("{account} は再ログインが必要です。cookup アプリで再ログインしてください")
+    format!("{account} は再ログインが必要です。cookapps アプリで再ログインしてください")
 }
 
 fn json(value: &impl Serialize) -> Result<String, String> {
@@ -48,13 +48,13 @@ struct EventsArgs {
     to: String,
 }
 
-struct Cookup {
+struct Cookapps {
     auth: Auth,
     dir: PathBuf,
 }
 
 #[tool_router(server_handler)]
-impl Cookup {
+impl Cookapps {
     #[tool(
         description = "List the inbox threads of every account, newest first. Accounts that must log in again are in needsLogin, accounts that failed to load are in failed.",
         annotations(read_only_hint = true)
@@ -134,7 +134,7 @@ impl Cookup {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let server = Cookup {
+    let server = Cookapps {
         auth: Auth::new(),
         dir: config_dir()?,
     };
@@ -155,6 +155,6 @@ mod tests {
     fn config_dir_is_the_apps_folder_under_the_users_config_dir() {
         let dir = config_dir().unwrap();
         assert!(dir.is_absolute());
-        assert!(dir.ends_with("jp.mysis.cookup"));
+        assert!(dir.ends_with("jp.mysis.cookapps"));
     }
 }

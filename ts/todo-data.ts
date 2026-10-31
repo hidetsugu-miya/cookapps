@@ -81,7 +81,7 @@ export function dueLabel(due: { date: string; time: string | null }) {
   return due.time ? `${m}/${d} ${due.time}` : `${m}/${d}`;
 }
 
-// The thread a task links to, only when it is of an account cookup has: a description can name any address.
+// The thread a task links to, only when it is of an account cookapps has: a description can name any address.
 export const linkedMail = (t: TaskItem, accounts: Set<string | undefined>) => (t.mail && accounts.has(t.mail.account) ? t.mail : null);
 export const accountSet = () => new Set(accountButtons().map((b) => b.dataset.account));
 

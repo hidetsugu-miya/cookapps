@@ -1,5 +1,5 @@
 {
-  "name": "cookup",
+  "name": "cookapps",
   "private": true,
   "scripts": {
     "tauri": "tauri",

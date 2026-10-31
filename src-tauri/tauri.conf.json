@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "cookup",
+  "productName": "cookapps",
   "version": "0.14.6",
-  "identifier": "jp.mysis.cookup",
+  "identifier": "jp.mysis.cookapps",
   "build": {
     "frontendDist": "../src",
     "beforeDevCommand": "npm run build:ts && npm run watch:ts",
@@ -14,7 +14,7 @@
       "csp": "default-src 'self'; script-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'self'"
     },
     "windows": [
-      { "title": "cookup", "width": 1200, "height": 820 }
+      { "title": "cookapps", "width": 1200, "height": 820 }
     ]
   },
   "bundle": {

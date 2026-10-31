@@ -163,7 +163,7 @@ mod tests {
     fn e2e_build_keeps_credentials_out_of_the_keychain() {
         super::use_mock_keyring();
         // The entry must come from the mock store even though keyring's own init ran first.
-        let _ = keyring::Entry::new("jp.mysis.cookup.test", "u");
+        let _ = keyring::Entry::new("jp.mysis.cookapps.test", "u");
         assert!(keyring_core::get_default_store()
             .unwrap()
             .vendor()

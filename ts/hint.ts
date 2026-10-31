@@ -71,7 +71,7 @@ export function confirmUnlink(button: Element, w: { team: string }, onConfirm: (
   actions.append(yes, no);
   pop.append(
     tag("h3", "", `${w.team} の接続を解除しますか？`),
-    tag("p", "", "トークンを Slack で取り消し、cookup から削除します。Slack のアプリは残ります。"),
+    tag("p", "", "トークンを Slack で取り消し、cookapps から削除します。Slack のアプリは残ります。"),
     actions,
   );
   toggleHint(button, pop);

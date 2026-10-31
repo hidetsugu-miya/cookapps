@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: "cookup の push 前のセキュリティレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で、performance-reviewer・code-reviewer と並列に起動する。"
+description: "cookapps の push 前のセキュリティレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で、performance-reviewer・code-reviewer と並列に起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -17,7 +17,7 @@ tools: Read, Grep, Glob, Bash
 - シークレット（クライアントシークレット、リフレッシュトークン、アクセストークン）が画面・ログ・エラー文・ファイルに出ないか
 - キーチェーンと `accounts.json` の読み書き
 - メール本文の表示（CSP、iframe の sandbox、XSS）
-- Tauri のコマンドと capabilities、MCP サーバー（`cookup-mcp`）が外から受け取る値の検証
+- Tauri のコマンドと capabilities、MCP サーバー（`cookapps-mcp`）が外から受け取る値の検証
 - 外部への通信の宛先と TLS
 - 依存の追加（`Cargo.toml`、`package.json`）
 

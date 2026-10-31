@@ -9,8 +9,8 @@ cd "$root/src-tauri"
 # [package] セクション内の最初の version だけを読む。
 cargo_toml=$(awk '/^\[/ { in_pkg = ($0 == "[package]") } in_pkg && /^version[[:space:]]*=/ { print; exit }' Cargo.toml | sed -E 's/^[^"]*"([^"]*)".*/\1/')
 tauri_conf=$(python3 -c 'import json; print(json.load(open("tauri.conf.json"))["version"])')
-# Cargo.lock は name = "cookup" の直後の version を読む。
-cargo_lock=$(awk '$0 == "name = \"cookup\"" { getline; print; exit }' Cargo.lock | sed -E 's/^[^"]*"([^"]*)".*/\1/')
+# Cargo.lock は name = "cookapps" の直後の version を読む。
+cargo_lock=$(awk '$0 == "name = \"cookapps\"" { getline; print; exit }' Cargo.lock | sed -E 's/^[^"]*"([^"]*)".*/\1/')
 
 versions=("Cargo.toml=$cargo_toml" "tauri.conf.json=$tauri_conf" "Cargo.lock=$cargo_lock")
 if [ $# -ge 1 ]; then

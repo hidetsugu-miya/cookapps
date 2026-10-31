@@ -3,6 +3,7 @@ node_modules/
 src-tauri/gen/
 .DS_Store
 CLAUDE.local.md
+AGENTS.local.md
 mise.toml
 .claude/*
 !.claude/agents/
