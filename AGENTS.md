@@ -95,12 +95,11 @@ docs/          public documentation (GitHub Pages)
 
 ## Run
 
-Rust is managed with mise, so the cargo commands here run through `mise exec --`.
-Without mise, install the Rust version in `rust-toolchain.toml` and run cargo directly.
+Install the Rust version in `rust-toolchain.toml`.
 
 ```sh
 npm install
-mise exec -- npx tauri dev
+npx tauri dev
 ```
 
 At the first start, press "Log in with Google" and the default browser opens.
@@ -142,9 +141,9 @@ No check is repeated in two layers.
 npm run lint        # Biome (lint only)
 npm run build:ts    # tsc (ts)
 npm run e2e:check   # tsc (e2e)
-cd src-tauri && mise exec -- cargo fmt --check
-cd src-tauri && mise exec -- cargo clippy --all-targets --all-features -- -D warnings
-cd src-tauri && mise exec -- cargo test --all-features    # also writes the ts-rs types to ts/bindings/
+cd src-tauri && cargo fmt --check
+cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
+cd src-tauri && cargo test --all-features    # also writes the ts-rs types to ts/bindings/
 npm run e2e:build   # build the app for E2E (feature e2e)
 npm run e2e         # WebdriverIO
 scripts/check-version.sh [tag]   # the version in Cargo.toml and tauri.conf.json matches the tag
@@ -160,13 +159,6 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 | `test` | macos-latest, windows-latest | clippy (`--all-targets --all-features`), cargo test (`--all-features`), bindings diff (macOS only) |
 | `e2e` | macos-latest, windows-latest | `npm run e2e:build`, `npm run e2e` |
 | `installer` | windows-latest (tags only) | the nsis installer artifact |
-
-## Commits
-
-- One commit holds one logical change.
-- The subject is `{prefix}: {summary}`, and the prefix is one of `feat`, `fix`, `docs`, `refactor`, `test`, `chore`.
-- Releases are annotated tags `v0.{minor}.{patch}`.
-  The `version` in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json` equals the tag.
 
 ## Known limitations
 
