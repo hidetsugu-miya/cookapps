@@ -15,7 +15,8 @@ describe("settings: Google", () => {
   it("lists each account like the sidebar avatar, with its state and unread count", async () => {
     await openSettings([]);
     await expect($("#google-accounts .item-name")).toHaveText(account);
-    await waitForText("#google-accounts .item-meta", "ログイン中 · 未読 2");
+    await waitForText("#google-accounts .item-meta", "未読 2");
+    await expect($("#google-accounts .status.ok")).toHaveText("ログイン中");
     await expect(meta()).not.toHaveElementClass("warn");
     const [side, card] = await browser.execute(() =>
       ["#account-list .avatar", "#google-accounts .avatar"].map((s) => {
@@ -30,7 +31,8 @@ describe("settings: Google", () => {
   it("warns on an account that needs a login", async () => {
     await boot({ inbox: { ...inbox(), needsLogin: [account] }, slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
     await $("#nav-settings").click();
-    await waitForText("#google-accounts .item-meta", "再ログインが必要です");
+    await waitForText("#google-accounts .item-meta", "再ログインが必要です · 未読");
+    await expect($("#google-accounts .status.warn")).toHaveText("要再ログイン");
     await expect(meta()).toHaveElementClass("warn");
   });
 

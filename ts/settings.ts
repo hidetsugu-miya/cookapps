@@ -13,32 +13,28 @@ import { showError } from "./view.js";
 
 let settingsSeq = 0;
 
-// A connected service's row: avatar, name, a line under it, an optional state label (`status` is [class, text]) and buttons. `meta` is a string or a list of strings and nodes.
+// A connected service's row: avatar, name, a line under it, a state label (`status` is [class, text]) and buttons. `meta` is a string or a list of strings and nodes.
 // With `onHelp`, the state label and the line under the name are buttons that call it.
 export function itemRow({ avatar, name, meta, warn = false, status, actions = [], onHelp }: {
   avatar?: HTMLElement;
   name: string;
   meta: string | (string | Node)[];
   warn?: boolean;
-  status?: [string, string];
+  status: [string, string];
   actions?: HTMLElement[];
   onHelp?: () => void;
 }) {
   const line = tag(onHelp ? "button" : "div", `item-meta${warn ? " warn" : ""}`);
-  const label = status && tag(onHelp ? "button" : "span", `status ${status[0]}`, status[1]);
+  const label = tag(onHelp ? "button" : "span", `status ${status[0]}`, status[1]);
   if (onHelp) {
-    (line as HTMLButtonElement).type = "button";
-    line.onclick = onHelp;
-    if (label) {
-      (label as HTMLButtonElement).type = "button";
-      label.onclick = onHelp;
-    }
+    (line as HTMLButtonElement).type = (label as HTMLButtonElement).type = "button";
+    line.onclick = label.onclick = onHelp;
   }
   line.append(...[meta].flat());
   const who = tag("div", "who");
   who.append(tag("div", "item-name", name), line);
   const row = tag("div", "item");
-  row.append(...(avatar ? [avatar] : []), who, ...(label ? [label] : []), ...actions);
+  row.append(...(avatar ? [avatar] : []), who, label, ...actions);
   return row;
 }
 

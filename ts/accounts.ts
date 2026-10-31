@@ -147,10 +147,11 @@ function renderGoogleCard() {
   googleKey = key;
   $("google-accounts").replaceChildren(
     ...(states.length
-      ? states.map(([a, { lines, unread }]) => {
+      ? states.map(([a, { lines, relogin, unread }]) => {
           const avatar = tag("span", "avatar", initials(a));
           avatar.style.background = avatarColor(a);
-          return itemRow({ avatar, name: a, meta: `${lines.length ? lines.join(" · ") : "ログイン中"} · 未読 ${unread}`, warn: lines.length > 0 });
+          const status: [string, string] = relogin ? ["warn", "要再ログイン"] : lines.length ? ["warn", "読み込み失敗"] : ["ok", "ログイン中"];
+          return itemRow({ avatar, name: a, meta: [...lines, `未読 ${unread}`].join(" · "), warn: lines.length > 0, status });
         })
       : [tag("div", "card-empty", "アカウントはまだありません")]),
   );
