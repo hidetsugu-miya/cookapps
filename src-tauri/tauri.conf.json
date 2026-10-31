@@ -17,6 +17,12 @@
       { "title": "cookapps", "width": 1200, "height": 820 }
     ]
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_UPDATER_PUBKEY",
+      "endpoints": ["https://github.com/hidetsugu-miya/cookapps/releases/latest/download/latest.json"]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["app", "nsis"],

@@ -8,6 +8,7 @@ pub mod image_senders;
 pub mod images;
 pub mod slack;
 pub mod todoist;
+pub mod update;
 
 use tauri_plugin_opener::OpenerExt;
 
@@ -100,6 +101,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(navigation_plugin())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(auth::Auth::new())
         .manage(gmail::SyncState::default())
         .manage(gmail::InlineCache::default())
@@ -150,6 +152,8 @@ pub fn run() {
             slack::slack_preview,
             slack::slack_post,
             claude::claude_status,
+            update::check_update,
+            update::install_update,
             set_badge
         ])
         .run(tauri::generate_context!())
