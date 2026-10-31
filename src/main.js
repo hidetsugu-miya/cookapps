@@ -2899,7 +2899,7 @@ function confirmUnlink(button, w, onConfirm) {
   actions.append(yes, no);
   pop.append(
     tag("h3", "", `${w.team} の接続を解除しますか？`),
-    tag("p", "", "cookup に保存したトークンを削除します。Slack のアプリは残ります。"),
+    tag("p", "", "トークンを Slack で取り消し、cookup から削除します。Slack のアプリは残ります。"),
     actions,
   );
   toggleHint(button, pop);
