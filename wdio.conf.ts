@@ -13,6 +13,11 @@ export const config = {
   reporters: ["spec"],
   mochaOpts: { ui: "bdd", timeout: 60000 },
   logLevel: "warn",
+  // Choosing the one window ("main", Tauri's default label) by hand stops the service's per-command focus check, whose eval can wait 30 s on macOS.
+  // `before` runs ahead of the service's own `before` (browser.tauri is not there yet), so this is the earliest hook that can do it.
+  beforeSuite: async () => {
+    await browser.tauri.switchWindow("main");
+  },
   // A command the fixtures do not answer rejects (e2e/fixtures.js) and may be swallowed by the app: name it, so a failure points at the missing mock.
   afterTest: async (_test: unknown, _context: unknown, result: { passed: boolean }) => {
     if (result.passed) return;

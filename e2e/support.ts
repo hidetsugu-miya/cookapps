@@ -15,9 +15,16 @@ import type { Workspace } from "../src/ts/bindings/Workspace";
 // The app asks for its data while loading, before a spec can mock anything: hand it over through the fixture layer (e2e/fixtures.js) and reload.
 // Mocks and recorded calls are page state, so a reload also clears them; call `mock` after `boot`.
 export async function boot(fixtures: Record<string, unknown> = {}) {
-  await browser.execute((data) => sessionStorage.setItem("e2e-fixtures", JSON.stringify(data)), fixtures);
+  // `refresh` returns once the reload is issued, so the old document may still say "complete": mark it and wait for a page without the mark.
+  await browser.execute((data) => {
+    sessionStorage.setItem("e2e-fixtures", JSON.stringify(data));
+    (window as unknown as { __e2e_old_page__: boolean }).__e2e_old_page__ = true;
+  }, fixtures);
   await browser.refresh();
-  await browser.waitUntil(() => browser.execute(() => document.readyState === "complete"), { timeoutMsg: "page did not load" });
+  await browser.waitUntil(
+    () => browser.execute(() => document.readyState === "complete" && !(window as unknown as { __e2e_old_page__?: boolean }).__e2e_old_page__),
+    { timeoutMsg: "page did not load" },
+  );
 }
 
 // Answers `command` with `value` from now on and forgets its earlier calls. Returns `command`, the handle `callsOf` and `waitForCalls` take.
