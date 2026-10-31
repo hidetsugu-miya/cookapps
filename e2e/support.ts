@@ -118,7 +118,7 @@ export const threadDetail = (subject: string, body: string, unread: boolean): Th
 export function weekOfToday(): Week {
   const now = new Date();
   const sunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
-  const info = (summary: string) => ({ summary, color: null, account, declined: false });
+  const info = (summary: string) => ({ summary, color: null, account, response: "" });
   return {
     weekStart: isoDate(sunday),
     allDay: [{ day: now.getDay(), ...info("Holiday") }],
