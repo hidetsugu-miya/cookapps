@@ -2935,8 +2935,11 @@ function openPane(title, ...body) {
   node.append(head, ...body);
   const scrim = tag("div", "scrim");
   // A block body: a handler property that returns false cancels the event, which would keep focus out of the pane's fields.
+  // On the dimmed part the default is cancelled, so the press does not move focus off the opener to the body.
   scrim.onpointerdown = (e) => {
-    if (e.target === scrim) closePane();
+    if (e.target !== scrim) return;
+    e.preventDefault();
+    closePane();
   };
   scrim.append(node);
   const behind = [...document.querySelectorAll("#sidebar, #content")];
