@@ -307,18 +307,31 @@ fn parse_url(raw: &str) -> Result<Link, String> {
     })
 }
 
-/// Whether an `x-oauth-scopes` header lists the scopes that reading a channel's messages needs, public and private.
+/// Whether an `x-oauth-scopes` header lists the scopes that reading a message needs: `conversations.replies` takes any of
+/// the four history scopes by the kind of conversation, so all four are wanted (public, private, DM, group DM).
 fn reads_messages(scopes: &str) -> bool {
     let has = |wanted: &str| scopes.split(',').any(|s| s.trim() == wanted);
-    has("channels:history") && has("groups:history")
+    [
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "mpim:history",
+    ]
+    .into_iter()
+    .all(has)
 }
 
-/// The message for a failed `conversations.replies`: a missing scope says which workspace's token to replace.
+/// The message for a failed `conversations.replies`: a missing scope says which workspace's token to replace, and which scope it lacks.
 fn read_error(e: SlackError, team: &str) -> String {
     match e.code.as_deref() {
-        Some("missing_scope") => format!(
-            "{team} のトークンにメッセージを読む権限がありません。設定でトークンを貼り直してください"
-        ),
+        Some("missing_scope") => {
+            let what = if e.needed.is_empty() {
+                "メッセージを読む".to_owned()
+            } else {
+                format!(" {} の", e.needed)
+            };
+            format!("{team} のトークンに{what}権限がありません。設定でトークンを貼り直してください")
+        }
         _ => e.message,
     }
 }
@@ -464,6 +477,8 @@ struct SlackError {
     token_dead: bool,
     /// Slack's `error` code, when Slack answered with one.
     code: Option<String>,
+    /// For `missing_scope`, the scope Slack says the token lacks; empty otherwise.
+    needed: String,
 }
 
 impl From<String> for SlackError {
@@ -472,6 +487,7 @@ impl From<String> for SlackError {
             message,
             token_dead: false,
             code: None,
+            needed: String::new(),
         }
     }
 }
@@ -553,6 +569,7 @@ async fn call_scoped(
             message,
             token_dead: token_is_dead(reply["error"].as_str().unwrap_or_default()),
             code: reply["error"].as_str().map(str::to_owned),
+            needed: reply["needed"].as_str().unwrap_or_default().to_owned(),
         })?;
         return Ok((reply, scopes));
     }
@@ -1459,14 +1476,25 @@ mod tests {
     }
 
     #[test]
-    fn reading_needs_the_history_scopes_of_public_and_private_channels() {
-        assert!(reads_messages("chat:write,channels:history,groups:history"));
-        assert!(reads_messages("groups:history, channels:history"));
+    fn reading_needs_the_history_scopes_of_channels_and_direct_messages() {
+        let all = "chat:write,channels:history,groups:history,im:history,mpim:history";
+        assert!(reads_messages(all));
+        assert!(reads_messages(
+            "mpim:history, im:history,groups:history, channels:history"
+        ));
         assert!(!reads_messages("chat:write,channels:read,groups:read"));
-        assert!(!reads_messages("channels:history"));
-        assert!(!reads_messages("groups:history"));
+        assert!(!reads_messages("channels:history,groups:history"));
+        assert!(!reads_messages(
+            "channels:history,groups:history,im:history"
+        ));
+        assert!(!reads_messages(
+            "channels:history,groups:history,mpim:history"
+        ));
+        assert!(!reads_messages("im:history,mpim:history"));
         assert!(!reads_messages(""));
-        assert!(!reads_messages("channels:history:x,groups:history"));
+        assert!(!reads_messages(
+            "channels:history:x,groups:history,im:history,mpim:history"
+        ));
     }
 
     fn failure(code: Option<&str>) -> SlackError {
@@ -1474,14 +1502,21 @@ mod tests {
             message: "元の文".into(),
             token_dead: false,
             code: code.map(str::to_owned),
+            needed: String::new(),
         }
     }
 
     #[test]
-    fn a_missing_scope_names_the_workspace() {
+    fn a_missing_scope_names_the_workspace_and_the_scope() {
         assert_eq!(
             read_error(failure(Some("missing_scope")), "Example"),
             "Example のトークンにメッセージを読む権限がありません。設定でトークンを貼り直してください"
+        );
+        let mut lacking = failure(Some("missing_scope"));
+        lacking.needed = "im:history".into();
+        assert_eq!(
+            read_error(lacking, "Example"),
+            "Example のトークンに im:history の権限がありません。設定でトークンを貼り直してください"
         );
         assert_eq!(read_error(failure(Some("not_in_channel")), "x"), "元の文");
         assert_eq!(read_error(failure(None), "x"), "元の文");

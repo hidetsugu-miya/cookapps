@@ -59,7 +59,7 @@ Todoist に接続している場合は、取得したタスクとプロジェク
 ## Slack に貼る
 
 ワークスペースごとに、社内向けの Slack アプリを作ります。
-User Token Scopes に `chat:write`・`channels:read`・`groups:read`・`channels:history`・`groups:history` を付けてワークスペースにインストールし、発行された User OAuth Token（`xoxp-` で始まる）を、サイドメニュー下部の設定にある Slack の欄へ貼り付けます。
+User Token Scopes に `chat:write`・`channels:read`・`groups:read`・`channels:history`・`groups:history`・`im:history`・`mpim:history` を付けてワークスペースにインストールし、発行された User OAuth Token（`xoxp-` で始まる）を、サイドメニュー下部の設定にある Slack の欄へ貼り付けます。
 トークンは Slack に確かめてから、OS の資格情報の保管場所（macOS ではキーチェーン、Windows では資格情報マネージャー）に保存します。
 ワークスペースはいくつでも追加でき、同じワークスペースのトークンを貼り直すと置き換わります。
 ワークスペースの一覧は、`app_config_dir` の `slack-workspaces.json` に保存されます。
@@ -80,7 +80,7 @@ Todo 画面の追加欄に Slack のメッセージの URL（`https://{ワーク
 処理中と失敗は、一覧の上の行に出ます。
 
 - 使えるのは、`claude` が入っていて、`claude auth login` でログインしているときです。状態は、設定の Claude の欄とサイドメニューのアバターに出ます。
-- メッセージを読むには、トークンに `channels:history`・`groups:history` のスコープが要ります。足りないワークスペースは、設定で「権限が不足」と出ます。
+- メッセージを読むには、トークンに `channels:history`・`groups:history`・`im:history`・`mpim:history` のスコープが要ります。足りないワークスペースは、設定で「権限が不足」と出ます。
 - メッセージの本文は、要約のため Claude Code 経由で Anthropic に送ります。要約のとき、モデルには道具も MCP サーバーも渡しません。
 
 ## アプリとして入れる
