@@ -13,6 +13,7 @@ User-facing text is in `README.md` and `docs/`.
 - Only Gmail accounts are supported.
 - Other mail providers (generic IMAP, Outlook and so on) are out of scope.
 - Calendar, Todoist and Slack are integrations around the mail client.
+- The app updates itself on macOS (Apple Silicon) only.
 - Notion is a planned integration.
 
 ## Requirements
@@ -54,6 +55,12 @@ User-facing text is in `README.md` and `docs/`.
 |----|---------|--------------|
 | A-1 | Claude integration | A local MCP server (`cookapps-mcp`, stdio) lets Claude list, read, archive, mark read and trash inbox threads, and list events |
 
+### Updates
+
+| ID | Feature | What it does |
+|----|---------|--------------|
+| U-1 | Auto update | Check GitHub Releases at start and every 6 hours. When a newer version is out, the side menu shows an update button; pressing it downloads the new app, checks its signature, replaces the app and restarts it. macOS on Apple Silicon only |
+
 ### Out of scope
 
 - Sending, replying and drafting mail
@@ -67,6 +74,9 @@ User-facing text is in `README.md` and `docs/`.
   - It is enough to trash and archive.
   - A permanent delete (one that skips the trash) needs `https://mail.google.com/`.
 - The Calendar scope is `calendar.readonly`.
+- Updates use `tauri-plugin-updater`. A tag push makes `cookapps.app.tar.gz`, its `.sig` and `latest.json` (`scripts/make-latest-json.sh`) in the `release` job and puts them in a GitHub Release.
+  The app reads `releases/latest/download/latest.json` (`plugins.updater.endpoints` in `tauri.conf.json`) and verifies the download with the public key `plugins.updater.pubkey`.
+  `bundle.createUpdaterArtifacts` is not in `tauri.conf.json`; the `release` job passes it with `--config`, so a local build needs no signing key.
 - The refresh token is stored locally so the user does not log in at every start.
 - Tokens go in the OS keychain (macOS Keychain, Windows Credential Manager), never in a plain file.
 - The list of accounts (email addresses only) is saved in `accounts.json` in the app config directory.
@@ -81,7 +91,7 @@ ts/bindings/   Rust struct types written by ts-rs (generated, committed)
 src/           index.html, CSS, vendored libraries (src/vendor/)
 src-tauri/     Rust backend (Tauri v2); src/bin/cookapps-mcp.rs is the MCP server
 e2e/           WebdriverIO specs, fixtures and mocks
-scripts/       check-version.sh, install-app.sh
+scripts/       check-version.sh, install-app.sh, make-latest-json.sh
 docs/          public documentation (GitHub Pages)
 ```
 
@@ -159,6 +169,7 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 | `test` | macos-latest, windows-latest | clippy (`--all-targets --all-features`), cargo test (`--all-features`), bindings diff (macOS only) |
 | `e2e` | macos-latest, windows-latest | `npm run e2e:build`, `npm run e2e` |
 | `installer` | windows-latest (tags only) | the nsis installer artifact |
+| `release` | macos-latest (tags only) | the signed `.app`, its updater files and `latest.json`, put in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
 ## Known limitations
 

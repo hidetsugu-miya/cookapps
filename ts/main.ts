@@ -14,6 +14,7 @@ import { initToast } from "./toast.js";
 import { initTodo } from "./todo.js";
 import { initTodoAdd } from "./todo-add.js";
 import { initTooltip } from "./tooltip.js";
+import { initUpdate } from "./update.js";
 
 initAccounts();
 initTooltip();
@@ -33,3 +34,4 @@ initSlackDialog();
 showKeptInbox();
 refreshClaude();
 load();
+initUpdate();
