@@ -58,7 +58,7 @@ Todoist に接続している場合は、取得したタスクとプロジェク
 ## Slack に貼る
 
 ワークスペースごとに、社内向けの Slack アプリを作ります。
-User Token Scopes に `chat:write`・`channels:read`・`groups:read` を付けてワークスペースにインストールし、発行された User OAuth Token（`xoxp-` で始まる）を、サイドメニュー下部の設定にある Slack の欄へ貼り付けます。
+User Token Scopes に `chat:write`・`channels:read`・`groups:read`・`channels:history`・`groups:history` を付けてワークスペースにインストールし、発行された User OAuth Token（`xoxp-` で始まる）を、サイドメニュー下部の設定にある Slack の欄へ貼り付けます。
 トークンは Slack に確かめてから、OS の資格情報の保管場所（macOS ではキーチェーン、Windows では資格情報マネージャー）に保存します。
 ワークスペースはいくつでも追加でき、同じワークスペースのトークンを貼り直すと置き換わります。
 ワークスペースの一覧は、`app_config_dir` の `slack-workspaces.json` に保存されます。
@@ -70,6 +70,17 @@ User Token Scopes に `chat:write`・`channels:read`・`groups:read` を付け�
 
 投稿するのは、「貼る」を押したときだけです。
 トークンのユーザーが参加していないチャンネルには投稿できません。ダイレクトメッセージへの投稿もできません。
+
+## Slack のメッセージを要約して Todo にする
+
+Todo 画面の追加欄に Slack のメッセージの URL（`https://{ワークスペース}.slack.com/archives/{チャンネル ID}/p{数字}`）を貼ると、ボタンが「要約して追加」に変わります。
+押すと、そのメッセージ（スレッドの返信なら、スレッドの最初のメッセージも）を Slack から読み、Claude Code の CLI（`claude -p`）で要約して、今開いているプロジェクトにタスクを追加します。
+タスクの名前は要約、説明は要点と Slack の URL で、メッセージに期限があれば期限にも入ります。
+処理中と失敗は、一覧の上の行に出ます。
+
+- 使えるのは、`claude` が入っていて、`claude auth login` でログインしているときです。状態は、設定の Claude の欄とサイドメニューのアバターに出ます。
+- メッセージを読むには、トークンに `channels:history`・`groups:history` のスコープが要ります。足りないワークスペースは、設定で「権限が不足」と出ます。
+- メッセージの本文は、要約のため Claude Code 経由で Anthropic に送ります。要約のとき、モデルには道具も MCP サーバーも渡しません。
 
 ## アプリとして入れる
 

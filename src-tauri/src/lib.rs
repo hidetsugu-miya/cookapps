@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod auth;
 pub mod calendar;
+pub mod claude;
 mod disk_cache;
 pub mod gmail;
 pub mod image_senders;
@@ -108,6 +109,7 @@ pub fn run() {
             todoist::todoist_add,
             todoist::todoist_add_subtask,
             todoist::todoist_task_from_mail,
+            todoist::todoist_add_from_slack,
             todoist::todoist_set_done,
             todoist::todoist_update,
             todoist::todoist_move,
@@ -121,6 +123,7 @@ pub fn run() {
             slack::slack_link,
             slack::slack_preview,
             slack::slack_post,
+            claude::claude_status,
             set_badge
         ])
         .run(tauri::generate_context!())

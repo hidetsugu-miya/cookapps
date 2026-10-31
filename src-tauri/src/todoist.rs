@@ -17,7 +17,9 @@ use url::Url;
 use crate::{
     accounts::write_synced,
     auth::{config_dir, delete_entry, keyring_entry, Auth},
+    claude::{self, Summary},
     gmail::{log_failure, ApiError},
+    slack,
 };
 
 const API_URL: &str = "https://api.todoist.com/api/v1";
@@ -27,6 +29,8 @@ const GMAIL_URL: &str = "https://mail.google.com/mail/u/";
 const TOKEN_USER: &str = "todoist";
 /// The token has a service of its own: under the Gmail accounts' one, a name from outside could reach it as an account.
 const TOKEN_SERVICE: &str = "jp.mysis.cookup.todoist";
+/// Todoist refuses a task name longer than this.
+const CONTENT_LIMIT: usize = 500;
 const PAGE_LIMIT: &str = "200";
 // shortcut: past these many pages (200 items each) the rest is dropped, upgrade if the list ever grows that long.
 const MAX_DONE_PAGES: usize = 5;
@@ -507,6 +511,32 @@ fn task_without_due(created: &Value) -> Option<String> {
         .get("due")
         .is_none_or(Value::is_null)
         .then(|| id.to_owned())
+}
+
+/// The body of `POST /tasks` for a task made from a Slack message. The name is cut at Todoist's limit, and the due date is the summary's (in words Todoist reads), else today when `today`.
+fn slack_task_body(
+    summary: &Summary,
+    slack_url: &str,
+    project_id: Option<&str>,
+    today: bool,
+) -> Value {
+    let description = [summary.description.as_str(), slack_url]
+        .iter()
+        .filter(|s| !s.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut body = json!({
+        "content": summary.content.chars().take(CONTENT_LIMIT).collect::<String>(),
+        "description": description,
+    });
+    if let Some(due) = summary.due.as_deref().or(today.then_some("today")) {
+        body["due_string"] = due.into();
+    }
+    if let Some(id) = project_id {
+        body["project_id"] = id.into();
+    }
+    body
 }
 
 fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
@@ -1166,6 +1196,35 @@ pub async fn todoist_task_from_mail(
     let body = json!({ "content": content, "description": url });
     let done = request(&auth, &state, command, Method::POST, "/tasks", Some(body)).await?;
     Ok(done.map(|_| true))
+}
+
+/// Reads the Slack message `url` points at, has Claude summarise it, and adds the summary as a task: its name is the summary's, its description
+/// the key points and then the message's URL. It goes to `project_id` (the inbox for `None`); with `today`, a task the summary gave no date is due today.
+/// Returns the task's name; `None` means a token is needed and nothing was created. The message's text is sent to Anthropic through Claude Code.
+#[tauri::command]
+pub async fn todoist_add_from_slack(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    url: String,
+    project_id: Option<String>,
+    today: bool,
+) -> Result<Option<String>, String> {
+    let command = "todoist_add_from_slack";
+    if let Some(id) = &project_id {
+        valid_id(id, "プロジェクト ID").map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    }
+    let url = url.trim();
+    let dir = config_dir(&app).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let message = slack::message_context(&dir, auth.http(), url)
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let summary = claude::summarize(&message)
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let body = slack_task_body(&summary, url, project_id.as_deref(), today);
+    let created = request(&auth, &state, command, Method::POST, "/tasks", Some(body)).await?;
+    Ok(created.map(|_| summary.content))
 }
 
 /// Completes (`close`) or reopens a task.
@@ -2093,5 +2152,78 @@ mod tests {
     fn a_fetched_todo_does_not_mention_offline() {
         let sent = serde_json::to_value(cached_todo()).unwrap();
         assert!(sent.get("offline").is_none());
+    }
+
+    fn summary(due: Option<&str>) -> Summary {
+        Summary {
+            content: "PR #482 のレビュー".into(),
+            description: "認証まわりの変更".into(),
+            due: due.map(str::to_owned),
+        }
+    }
+
+    const SLACK_URL: &str = "https://example.slack.com/archives/C0123ABC/p1761785520123456";
+
+    #[test]
+    fn a_slack_task_ends_its_description_with_the_message_url() {
+        assert_eq!(
+            slack_task_body(&summary(None), SLACK_URL, None, false),
+            json!({
+                "content": "PR #482 のレビュー",
+                "description": format!("認証まわりの変更\n\n{SLACK_URL}"),
+            })
+        );
+    }
+
+    #[test]
+    fn a_slack_task_with_no_key_points_has_only_the_url() {
+        let mut s = summary(None);
+        s.description = String::new();
+        assert_eq!(
+            slack_task_body(&s, SLACK_URL, None, false)["description"],
+            SLACK_URL
+        );
+    }
+
+    #[test]
+    fn a_slack_task_takes_the_summarys_due_and_the_project() {
+        assert_eq!(
+            slack_task_body(
+                &summary(Some("2026-11-01 15:00")),
+                SLACK_URL,
+                Some("P1"),
+                true
+            ),
+            json!({
+                "content": "PR #482 のレビュー",
+                "description": format!("認証まわりの変更\n\n{SLACK_URL}"),
+                "due_string": "2026-11-01 15:00",
+                "project_id": "P1",
+            })
+        );
+    }
+
+    #[test]
+    fn a_slack_task_with_no_due_is_due_today_only_in_today() {
+        assert_eq!(
+            slack_task_body(&summary(None), SLACK_URL, None, true)["due_string"],
+            "today"
+        );
+        assert!(
+            slack_task_body(&summary(None), SLACK_URL, Some("P1"), false)
+                .get("due_string")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_slack_task_name_is_cut_at_the_limit() {
+        let mut s = summary(None);
+        s.content = "あ".repeat(CONTENT_LIMIT + 10);
+        let body = slack_task_body(&s, SLACK_URL, None, false);
+        assert_eq!(
+            body["content"].as_str().unwrap().chars().count(),
+            CONTENT_LIMIT
+        );
     }
 }
