@@ -2680,11 +2680,12 @@ function checkWorkspace(w) {
   const prev = wsChecks.get(w.teamId);
   if (prev && !prev.bad && prev.user === w.user) return prev;
   const c = { user: w.user, bad: false };
-  // readsMessages is null when Slack sent no scopes to judge by: the token counts as usable until a read fails with missing_scope.
+  // missingScopes is null when Slack sent no scopes to judge by: the token counts as usable until a read fails with missing_scope.
   c.done = invoke("slack_check", { teamId: w.teamId }).then(
     (r) => {
-      c.bad = r.readsMessages === false;
-      return { state: c.bad ? "noRead" : "ok" };
+      const missing = r.missingScopes ?? [];
+      c.bad = missing.length > 0;
+      return { state: c.bad ? "noRead" : "ok", missing };
     },
     (e) => {
       c.bad = true;
@@ -2719,7 +2720,7 @@ function workspaceRow(w, result) {
   const state = result?.state;
   const meta =
     state === "noRead"
-      ? "メッセージを読む権限がありません。スコープを足して、トークンを貼り直してください"
+      ? `${result.missing.join("、")} の権限がありません。スコープを足して、トークンを貼り直してください`
       : state === "error"
         ? result.message
         : `${w.user} ・ ${hostOf(w.url)}`;
@@ -2730,7 +2731,7 @@ function workspaceRow(w, result) {
     warn: state === "noRead" || state === "error",
     status: WORKSPACE_STATUS[state] ?? ["off", "確認中"],
     actions: [unlink],
-    onHelp: state === "noRead" ? () => openPermissionPane(w) : undefined,
+    onHelp: state === "noRead" ? () => openPermissionPane(w, result.missing) : undefined,
   });
 }
 
@@ -2939,7 +2940,14 @@ function openPane(title, ...body) {
 }
 
 const code = (text) => tag("code", "", text);
-const HISTORY_SCOPES = ["channels:history", "groups:history", "im:history", "mpim:history"];
+// The history scopes, each with the conversations it reads.
+const HISTORY_KINDS = {
+  "channels:history": "公開チャンネル",
+  "groups:history": "非公開チャンネル",
+  "im:history": "DM",
+  "mpim:history": "グループ DM",
+};
+const HISTORY_SCOPES = Object.keys(HISTORY_KINDS);
 const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", ...HISTORY_SCOPES];
 
 // The Slack apps page (a link the default browser opens, by Rust's on_navigation) and a scope list with its copy button.
@@ -2949,7 +2957,8 @@ function appsLink() {
   return link;
 }
 
-function scopesBlock(list) {
+// `notes` (scope -> text) puts a short explanation after each scope.
+function scopesBlock(list, notes) {
   const copy = tag("button", "text-btn");
   copy.type = "button";
   const label = `${COPY_SVG}スコープをコピー`;
@@ -2964,12 +2973,20 @@ function scopesBlock(list) {
     }
   };
   const scopes = tag("div", "scopes");
-  scopes.append(...list.map((s) => code(s)));
+  if (notes) scopes.classList.add("noted");
+  scopes.append(
+    ...list.map((s) => {
+      if (!notes) return code(s);
+      const row = tag("div");
+      row.append(code(s), tag("span", "note", notes[s]));
+      return row;
+    }),
+  );
   return [scopes, copy];
 }
 
-// The pane for a workspace whose token cannot read messages: what to do in Slack, and a field for the new token.
-function openPermissionPane(w) {
+// The pane for a workspace whose token lacks the scopes `missing` for reading messages: what to do in Slack, and a field for the new token.
+function openPermissionPane(w, missing) {
   const input = tag("input");
   input.type = "password";
   input.autocomplete = "off";
@@ -3000,10 +3017,10 @@ function openPermissionPane(w) {
   };
   openPane(
     `${w.team} の権限を足す`,
-    tag("p", "", "Slack のチャンネル・DM のメッセージを読む権限がトークンにありません。"),
+    tag("p", "", `このトークンには ${missing.join("、")} がありません。`),
     stepList([
       [appsLink(), " で、このワークスペースのアプリを選ぶ"],
-      ["「OAuth & Permissions」の「User Token Scopes」に次を足す", ...scopesBlock(HISTORY_SCOPES)],
+      ["「OAuth & Permissions」の「User Token Scopes」に次を足す", ...scopesBlock(missing, HISTORY_KINDS)],
       ["ページ上部の「Reinstall to Workspace」を押して許可する（管理者の承認が要ることがある）"],
       ["「User OAuth Token」（", code("xoxp-"), "）をコピーして、下の欄に貼る"],
     ]),

@@ -320,6 +320,8 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 :is(.pop, .pane) li { margin-bottom: 8px; }
 :is(.pop, .pane) a { color: var(--accent); }
 :is(.pop, .pane) .scopes { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+:is(.pop, .pane) .scopes.noted { flex-direction: column; gap: 2px; }
+:is(.pop, .pane) .scopes .note { margin-left: 6px; color: #666; font-size: 12px; }
 :is(.pop, .pane) .text-btn { height: 26px; padding: 0 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
 :is(.pop, .pane) .text-btn svg { width: 13px; height: 13px; }
 :is(.pop, .pane) .foot { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line); color: #666; font-size: 12px; }
