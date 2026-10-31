@@ -33,7 +33,6 @@ tauri-plugin-opener = "2"
 tauri-plugin-wdio = { version = "1.5.1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1.5.1", optional = true }
 tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "sync", "time"] }
-ts-rs = "12"
 url = "2"
 
 # External images on macOS are fetched through NSURLSession (see `images/macos.rs`).
@@ -44,3 +43,4 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
+ts-rs = "12"

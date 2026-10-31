@@ -1,16 +1,16 @@
 // What every spec shares: booting the app with fixtures, mocking a command, and fixture data shaped like the Rust return values.
-// The fixtures are typed by the types ts-rs writes from the Serialize structs (src/ts/bindings/), so a change of a struct's shape fails the type check here.
+// The fixtures are typed by the types ts-rs writes from the Serialize structs (ts/bindings/), so a change of a struct's shape fails the type check here.
 // Only example.com addresses and made-up names appear here: the repository is public.
-import type { Checked } from "../src/ts/bindings/Checked";
-import type { Claude } from "../src/ts/bindings/Claude";
-import type { Inbox } from "../src/ts/bindings/Inbox";
-import type { SlackLoad } from "../src/ts/bindings/SlackLoad";
-import type { TaskItem } from "../src/ts/bindings/TaskItem";
-import type { ThreadDetail } from "../src/ts/bindings/ThreadDetail";
-import type { ThreadItem } from "../src/ts/bindings/ThreadItem";
-import type { Todo } from "../src/ts/bindings/Todo";
-import type { Week } from "../src/ts/bindings/Week";
-import type { Workspace } from "../src/ts/bindings/Workspace";
+import type { Checked } from "../ts/bindings/Checked";
+import type { Claude } from "../ts/bindings/Claude";
+import type { Inbox } from "../ts/bindings/Inbox";
+import type { SlackLoad } from "../ts/bindings/SlackLoad";
+import type { TaskItem } from "../ts/bindings/TaskItem";
+import type { ThreadDetail } from "../ts/bindings/ThreadDetail";
+import type { ThreadItem } from "../ts/bindings/ThreadItem";
+import type { Todo } from "../ts/bindings/Todo";
+import type { Week } from "../ts/bindings/Week";
+import type { Workspace } from "../ts/bindings/Workspace";
 
 // The app asks for its data while loading, before a spec can mock anything: hand it over through the fixture layer (e2e/fixtures.js) and reload.
 // Mocks and recorded calls are page state, so a reload also clears them; call `mock` after `boot`.

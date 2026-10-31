@@ -30,6 +30,10 @@ jobs:
           else
             scripts/check-version.sh
           fi
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
       - run: npm ci
       - name: Lint
         run: npm run lint
@@ -60,6 +64,10 @@ jobs:
         with:
           workspaces: src-tauri
       # tauri's build embeds src/, whose js/ is the output of tsc, so the frontend comes before cargo.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
       - name: Build frontend
         run: |
           npm ci
@@ -69,11 +77,11 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
         working-directory: src-tauri
-        run: cargo test
-      # cargo test writes the types of the Rust structs (src/ts/bindings/); a committed copy that differs is out of date.
+        run: cargo test --all-features
+      # cargo test writes the types of the Rust structs (ts/bindings/); a committed copy that differs is out of date.
       - name: Check bindings
         if: matrix.os == 'macos-latest'
-        run: test -z "$(git status --porcelain src/ts/bindings)"
+        run: test -z "$(git status --porcelain ts/bindings)"
 
   # E2E: the real WebView (WKWebView, WebView2) with the commands mocked.
   e2e:
@@ -91,6 +99,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
       - run: npm ci
       - name: Build the E2E app
         run: npm run e2e:build
@@ -99,7 +111,7 @@ jobs:
 
   installer:
     if: github.ref_type == 'tag'
-    needs: [test, e2e]
+    needs: [static, test, e2e]
     runs-on: windows-latest
     defaults:
       run:
@@ -110,6 +122,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
       - run: npm ci
       - name: Build installer
         run: npx tauri build --bundles nsis

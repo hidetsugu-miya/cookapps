@@ -146,7 +146,7 @@ scripts/check-version.sh        # タグ名を渡すと、そのタグとも照�
 cd src-tauri
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo test --all-features
 ```
 
 E2E は、モックを入れたアプリをビルドして実行します。

@@ -1,7 +1,11 @@
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 // `npm run e2e:build` puts the E2E binary here; Windows adds .exe. The exit code of `wdio run` (non-zero on a failed spec) is the result CI reads.
 const binary = resolve("src-tauri/target/debug", process.platform === "win32" ? "cookup.exe" : "cookup");
+
+// `tauri dev` writes its binary to the same place, so tell the E2E build apart by its identifier (src-tauri/tauri.e2e.conf.json), which Tauri embeds in the binary.
+const e2eIdentifier: string = JSON.parse(readFileSync("src-tauri/tauri.e2e.conf.json", "utf8")).identifier;
 
 export const config = {
   runner: "local",
@@ -13,6 +17,11 @@ export const config = {
   reporters: ["spec"],
   mochaOpts: { ui: "bdd", timeout: 60000 },
   logLevel: "warn",
+  onPrepare: () => {
+    if (!existsSync(binary) || !readFileSync(binary).includes(e2eIdentifier)) {
+      throw new Error(`${binary} is not the E2E build (no ${e2eIdentifier} in it): run \`npm run e2e:build\` first`);
+    }
+  },
   // Choosing the one window ("main", Tauri's default label) by hand stops the service's per-command focus check, whose eval can wait 30 s on macOS.
   // `before` runs ahead of the service's own `before` (browser.tauri is not there yet), so this is the earliest hook that can do it.
   beforeSuite: async () => {
