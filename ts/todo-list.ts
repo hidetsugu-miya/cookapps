@@ -2,14 +2,14 @@
 import type { MailRef } from "./bindings/MailRef";
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, tag } from "./dom.js";
-import { DATE_SVG, DAY_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, SUB_SVG } from "./icons.js";
+import { CHEVRON_SVG, DATE_SVG, DAY_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, SUB_SVG } from "./icons.js";
 import { rowButton, rows } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { openThread } from "./thread.js";
 import { updateAddMode } from "./todo-add.js";
 import { openDuePop, openProjectMenu } from "./todo-detail.js";
-import { accountSet, dueLabel, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, setTodoCount, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
+import { accountSet, dueLabel, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, projectRows, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
 import { moveTask, saveTask, setTaskDone } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
 import { showError } from "./view.js";
@@ -44,12 +44,51 @@ export function renderProjects() {
     if (!t.parent) counts.set(t.projectId, (counts.get(t.projectId) ?? 0) + 1);
   }
   setTodoCount(today);
+  const parents = new Set(todo.projects.map((p) => p.parentId));
+  // The projects under a closed one, however deep.
+  const hidden = new Set<string>();
+  const lines: HTMLElement[] = [];
+  for (const { p, depth } of projectRows()) {
+    if (p.parentId && (hidden.has(p.parentId) || todoState.closedProjects.has(p.parentId))) {
+      hidden.add(p.id);
+      continue;
+    }
+    if (p === inbox) continue;
+    const line = tag("div", "proj-line");
+    line.style.paddingLeft = `${depth * 16}px`;
+    line.append(projectButton(p.id, p.color, p.name, counts.get(p.id) ?? 0));
+    if (parents.has(p.id)) {
+      line.classList.add("parent");
+      const closed = todoState.closedProjects.has(p.id);
+      line.append(
+        toggleButton(closed ? "サブプロジェクトを開く" : "サブプロジェクトを閉じる", !closed, () => {
+          if (closed) todoState.closedProjects.delete(p.id);
+          else todoState.closedProjects.add(p.id);
+          renderProjects();
+        }),
+      );
+    }
+    lines.push(line);
+  }
   $("projects").replaceChildren(
     projectButton("today", DAY_SVG, "今日", today),
     projectButton("inbox", INBOX_SVG, "受信箱", counts.get(inbox?.id as string) ?? 0),
     tag("h3", "", "プロジェクト"),
-    ...todo.projects.filter((p) => p !== inbox).map((p) => projectButton(p.id, p.color, p.name, counts.get(p.id) ?? 0)),
+    ...lines,
   );
+}
+
+// The chevron that opens or closes what is nested under a project or a task. It must not reach the row or button it sits on.
+function toggleButton(label: string, expanded: boolean, toggle: () => void) {
+  const b = tag("button", "toggle");
+  b.setAttribute("aria-label", label);
+  b.setAttribute("aria-expanded", String(expanded));
+  b.innerHTML = CHEVRON_SVG;
+  b.onclick = (e) => {
+    e.stopPropagation();
+    toggle();
+  };
+  return b;
 }
 
 export function checkBox(color: string, checked: boolean, label: string) {
@@ -61,14 +100,30 @@ export function checkBox(color: string, checked: boolean, label: string) {
   return box;
 }
 
+// The row of `t`, and under it, while `t` is open, the rows of its subtasks, each indented one step more. The "today" list is flat.
+function taskRows(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>, depth = 0): HTMLElement[] {
+  const li = taskRow(t, showProject, accounts);
+  li.style.marginLeft = `${depth * 28}px`;
+  const subs = showProject ? [] : subRows(t);
+  if (subs.length === 0) return [li];
+  const open = todoState.openTasks.has(t.id);
+  li.append(
+    toggleButton(open ? "サブタスクを閉じる" : "サブタスクを開く", open, () => {
+      if (open) todoState.openTasks.delete(t.id);
+      else todoState.openTasks.add(t.id);
+      renderList();
+    }),
+  );
+  return open ? [li, ...subs.flatMap((s) => taskRows(s, showProject, accounts, depth + 1))] : [li];
+}
+
 function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>) {
   const mail = linkedMail(t, accounts);
   const li = tag("li", `task${showProject ? "" : " single"}`);
   li.onclick = () => {
     // A drag that starts in the name field and ends elsewhere on the row clicks the row; the edit keeps it.
     if (li.querySelector(".row-edit")) return;
-    // A subtask row opens the task that holds it.
-    todoState.open = t.parent?.id ?? t.id;
+    todoState.open = t.id;
     renderTodo();
   };
   const box = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
@@ -82,7 +137,8 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
   if (mail) line.insertAdjacentHTML("beforeend", MAIL_SVG);
   const name = tag("span", "", t.content);
   line.append(name);
-  if (t.parent) line.append(tag("span", "parent", t.parent.content));
+  // Where a subtask belongs, in the "today" list; in a project it is nested under its parent.
+  if (t.parent && showProject) line.append(tag("span", "parent", t.parent.content));
   if (t.subTotal) {
     const count = tag("span", "subcount");
     count.innerHTML = SUB_SVG;
@@ -228,7 +284,7 @@ export function renderList() {
     const items = tasks.filter((t) => t.bucket === bucket);
     if (items.length === 0) continue;
     const list = tag("ul");
-    list.append(...items.map((t) => taskRow(t, showProject, accounts)));
+    list.append(...items.flatMap((t) => taskRows(t, showProject, accounts)));
     parts.push(tag("div", `group${bucket === "overdue" ? " overdue" : ""}`, label), list);
   }
   $("todo-list").replaceChildren(...(parts.length ? parts : [tag("p", "todo-empty", "タスクはありません")]));

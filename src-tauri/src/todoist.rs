@@ -114,6 +114,7 @@ struct ApiProject {
     inbox_project: bool,
     #[serde(default)]
     child_order: i64,
+    parent_id: Option<String>,
     #[serde(default)]
     is_archived: bool,
     #[serde(default)]
@@ -290,7 +291,7 @@ pub struct TaskItem {
     sub_done: usize,
     sub_total: usize,
     mail: Option<MailRef>,
-    /// Set on the row of a subtask (one that is overdue, due today, or has subtasks of its own); `None` on a top-level task.
+    /// Set on the row of a subtask; `None` on a top-level task.
     parent: Option<ParentRef>,
 }
 
@@ -304,6 +305,8 @@ pub struct ProjectItem {
     /// `#RRGGBB`.
     color: String,
     inbox: bool,
+    /// The project this one is nested in; `None` at the top.
+    parent_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -311,7 +314,7 @@ pub struct ProjectItem {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 pub struct Todo {
     projects: Vec<ProjectItem>,
-    /// Top-level active tasks, then the subtasks that are overdue, due today, or have subtasks of their own as rows of their own, by due date.
+    /// Every active task whose parent is active too (a subtask has `parent` set), by due date.
     tasks: Vec<TaskItem>,
     /// Set only when Todoist could not be reached and this is the last fetched content; never stored in the cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -580,8 +583,30 @@ fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
     })
 }
 
-/// Top-level active tasks with their subtasks and counts. A subtask that is overdue, due today, or has subtasks of its own is also a row
-/// (with `parent` set), so the "today" list shows it and its detail can open. `completed` are the recently completed tasks: those under an
+/// Projects in tree order: each one is followed by its descendants, siblings by `child_order`. A project whose parent is not among
+/// `projects` (archived or deleted) is at the top, with its `parent_id` cleared.
+fn order_projects(mut projects: Vec<ApiProject>) -> Vec<ApiProject> {
+    projects.sort_by_key(|p| p.child_order);
+    let ids: HashSet<String> = projects.iter().map(|p| p.id.clone()).collect();
+    let mut kids: HashMap<Option<String>, Vec<ApiProject>> = HashMap::new();
+    for mut p in projects {
+        p.parent_id = p.parent_id.filter(|id| ids.contains(id));
+        kids.entry(p.parent_id.clone()).or_default().push(p);
+    }
+    let mut out = Vec::with_capacity(ids.len());
+    let mut stack: Vec<ApiProject> = kids.remove(&None).unwrap_or_default();
+    stack.reverse();
+    while let Some(p) = stack.pop() {
+        let mut below = kids.remove(&Some(p.id.clone())).unwrap_or_default();
+        below.reverse();
+        out.push(p);
+        stack.extend(below);
+    }
+    out
+}
+
+/// Top-level active tasks, then every active subtask whose parent is active, with their subtasks and counts. A subtask is a row of its
+/// own (with `parent` set), so a list can nest it and its detail can open. `completed` are the recently completed tasks: those under an
 /// active task count as its done subtasks. Dates are judged in `tz`.
 fn build_todo<Tz: TimeZone>(
     projects: Vec<ApiProject>,
@@ -590,8 +615,7 @@ fn build_todo<Tz: TimeZone>(
     today: NaiveDate,
     tz: &Tz,
 ) -> Todo {
-    let mut projects = projects;
-    projects.sort_by_key(|p| p.child_order);
+    let projects = order_projects(projects);
     let by_id: HashMap<&str, &ApiTask> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
     // Subtasks by parent: the active ones, then the completed ones (a recurring one is in both; the active one stands).
     let mut subs: HashMap<&str, Vec<(&ApiTask, bool)>> = HashMap::new();
@@ -650,10 +674,6 @@ fn build_todo<Tz: TimeZone>(
         // A subtask whose parent is not among the active tasks is not a row: nothing opens it.
         let parent = by_id.get(t.parent_id.as_deref()?)?;
         let due = dues.get(t.id.as_str())?;
-        let bucket = bucket_of(due.as_ref().and_then(|d| d.date.parse().ok()), today);
-        if !matches!(bucket, Bucket::Overdue | Bucket::Today) && !subs.contains_key(t.id.as_str()) {
-            return None;
-        }
         let parent = ParentRef {
             id: parent.id.clone(),
             content: parent.content.clone(),
@@ -678,6 +698,7 @@ fn build_todo<Tz: TimeZone>(
                 id: p.id,
                 name: p.name,
                 inbox: p.inbox_project,
+                parent_id: p.parent_id,
             })
             .collect(),
         tasks: items,
@@ -1392,8 +1413,16 @@ mod tests {
             color: color.into(),
             inbox_project: inbox,
             child_order: order,
+            parent_id: None,
             is_archived: false,
             is_deleted: false,
+        }
+    }
+
+    fn child(parent: &str, id: &str, order: i64) -> ApiProject {
+        ApiProject {
+            parent_id: Some(parent.into()),
+            ..project(id, id, "charcoal", false, order)
         }
     }
 
@@ -1630,7 +1659,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subtask_with_subtasks_is_a_row_so_its_detail_can_open() {
+    fn every_subtask_is_a_row_so_its_detail_can_open() {
         let t = todo(
             vec![
                 task(json!({"id": "A", "content": "親"})),
@@ -1640,8 +1669,7 @@ mod tests {
             vec![task(json!({"id": "D", "parent_id": "B", "content": "済"}))],
         );
         let ids: Vec<_> = t.tasks.iter().map(|t| t.id.as_str()).collect();
-        // C has no subtasks and is not due: no row.
-        assert_eq!(ids, ["A", "B"]);
+        assert_eq!(ids, ["A", "B", "C"]);
         let b = &t.tasks[1];
         assert_eq!(b.bucket, Bucket::NoDue);
         assert_eq!((b.sub_done, b.sub_total), (1, 2));
@@ -1688,7 +1716,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subtask_due_today_or_overdue_is_also_a_row_of_its_own() {
+    fn a_subtask_is_a_row_of_its_own_whatever_its_due() {
         let t = todo(
             vec![
                 task(json!({"id": "A", "content": "親", "project_id": "p"})),
@@ -1708,7 +1736,9 @@ mod tests {
             [
                 ("C", Bucket::Overdue),
                 ("B", Bucket::Today),
-                ("A", Bucket::NoDue)
+                ("D", Bucket::Upcoming),
+                ("A", Bucket::NoDue),
+                ("E", Bucket::NoDue)
             ]
         );
         let b = &t.tasks[1];
@@ -1723,8 +1753,8 @@ mod tests {
         );
         assert!(b.subtasks.is_empty());
         // The parent still lists all its subtasks and is not itself a subtask row.
-        assert_eq!(t.tasks[2].parent, None);
-        assert_eq!(t.tasks[2].sub_total, 4);
+        assert_eq!(t.tasks[3].parent, None);
+        assert_eq!(t.tasks[3].sub_total, 4);
     }
 
     #[test]
@@ -1874,6 +1904,54 @@ mod tests {
                 ("b", "#808080", false)
             ]
         );
+    }
+
+    #[test]
+    fn projects_come_in_tree_order_with_siblings_by_child_order() {
+        let got: Vec<_> = order_projects(vec![
+            child("a", "a2", 2),
+            project("b", "B", "", false, 2),
+            child("a1", "a1x", 1),
+            child("a", "a1", 1),
+            project("a", "A", "", false, 1),
+            // Its parent is not among the projects (archived): it goes to the top.
+            child("gone", "orphan", 3),
+        ])
+        .into_iter()
+        .map(|p| (p.id, p.parent_id))
+        .collect();
+        let got: Vec<_> = got
+            .iter()
+            .map(|(i, p)| (i.as_str(), p.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("a", None),
+                ("a1", Some("a")),
+                ("a1x", Some("a1")),
+                ("a2", Some("a")),
+                ("b", None),
+                ("orphan", None)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_project_item_carries_its_parent() {
+        let t = build_todo(
+            vec![project("a", "A", "", false, 1), child("a", "c", 1)],
+            vec![],
+            &[],
+            date("2026-10-29"),
+            &jst(),
+        );
+        let got: Vec<_> = t
+            .projects
+            .iter()
+            .map(|p| (p.id.as_str(), p.parent_id.as_deref()))
+            .collect();
+        assert_eq!(got, [("a", None), ("c", Some("a"))]);
     }
 
     #[test]

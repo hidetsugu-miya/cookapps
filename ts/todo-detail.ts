@@ -1,21 +1,14 @@
-// One task opened on the Todo screen: its name, due date, project, priority, description, linked mail and subtasks.
+// One task opened on the Todo screen: its name, description, linked mail and subtasks, and beside them its project and due date.
 import type { Due } from "./bindings/Due";
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, onEnter, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
-import { DATE_SVG, FLAG_SVG, MAIL_SVG, PLUS_SVG } from "./icons.js";
+import { DATE_SVG, MAIL_SVG, PLUS_SVG } from "./icons.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
-import { accountSet, dueLabel, linkedMail, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
+import { accountSet, dueLabel, linkedMail, PRIORITY_COLORS, projectName, projectOf, projectRows, todoState } from "./todo-data.js";
 import { checkBox, openMailFromTodo, renderList } from "./todo-list.js";
 import { moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
-
-function chip(svg: string, text: string, className = "") {
-  const b = tag("button", `chip ${className}`.trim());
-  b.insertAdjacentHTML("beforeend", svg);
-  b.append(text);
-  return b;
-}
 
 // A month of days to pick from, Sunday first; `shown` is the 1st of the month, `due` and today are marked.
 function monthPicker(shown: Date, due: Due | null, pick: (iso: string) => void) {
@@ -81,48 +74,42 @@ export function openDuePop(anchor: Element, t: TaskItem) {
   input.select();
 }
 
-function dueChip(t: TaskItem) {
-  const b = chip(DATE_SVG, t.due ? dueLabel(t.due) : "期限なし", t.bucket === "overdue" ? "over" : "");
-  b.onclick = () => openDuePop(b, t);
-  return b;
-}
-
 export function openProjectMenu(anchor: Element, t: TaskItem) {
   openMenu(
     anchor,
-    todoState.todo!.projects.map((x) => ({
-      label: projectName(x),
-      color: x.color,
-      current: x.id === t.projectId,
-      pick: () => x.id !== t.projectId && moveTask(t.id, x.id),
+    projectRows().map(({ p, depth }) => ({
+      label: projectName(p),
+      color: p.color,
+      current: p.id === t.projectId,
+      depth,
+      pick: () => p.id !== t.projectId && moveTask(t.id, p.id),
     })),
   );
 }
 
-function projectChip(t: TaskItem) {
+// A field of the side pane: its label over the value, a button that opens the menu or popover that changes it.
+function field(label: string, value: HTMLButtonElement) {
+  const f = tag("div", "field");
+  f.append(tag("div", "field-label", label), value);
+  return f;
+}
+
+function projectField(t: TaskItem) {
   const p = projectOf(t.projectId);
-  const b = tag("button", "chip");
+  const b = tag("button", "field-value");
   const dot = tag("span", "pdot");
   dot.style.background = p?.color as string;
   b.append(dot, projectName(p));
   b.onclick = () => openProjectMenu(b, t);
-  return b;
+  return field("プロジェクト", b);
 }
 
-function priorityChip(t: TaskItem) {
-  const b = chip(FLAG_SVG, `優先度 ${t.priority}`);
-  b.style.color = PRIORITY_COLORS[t.priority];
-  b.onclick = () =>
-    openMenu(
-      b,
-      [1, 2, 3, 4].map((n) => ({
-        label: `優先度 ${n}`,
-        color: PRIORITY_COLORS[n],
-        current: n === t.priority,
-        pick: () => n !== t.priority && saveTask(t.id, { priority: n }),
-      })),
-    );
-  return b;
+function dueField(t: TaskItem) {
+  const b = tag("button", `field-value${t.bucket === "overdue" ? " over" : ""}`);
+  b.insertAdjacentHTML("beforeend", DATE_SVG);
+  b.append(t.due ? dueLabel(t.due) : "期限なし");
+  b.onclick = () => openDuePop(b, t);
+  return field("日付", b);
 }
 
 function subtaskRow(s: TaskItem["subtasks"][number]) {
@@ -132,7 +119,7 @@ function subtaskRow(s: TaskItem["subtasks"][number]) {
     li.classList.toggle("done", box.checked);
     setTaskDone(s.id, box.checked, box);
   };
-  // A subtask with subtasks of its own has a row among the tasks, so it opens like one; otherwise nothing could reach its subtasks.
+  // A subtask has a row among the tasks, so it opens like one; a done one has none.
   if (todoState.taskById.has(s.id)) {
     li.onclick = () => {
       todoState.open = s.id;
@@ -254,10 +241,7 @@ export function renderDetail() {
   const head = tag("div", "head");
   head.append(box, name);
 
-  const meta = tag("div", "meta");
-  meta.append(dueChip(t), projectChip(t), priorityChip(t));
-
-  const parts: HTMLElement[] = [head, meta, ...descParts(t)];
+  const parts: HTMLElement[] = [head, ...descParts(t)];
   const mail = linkedMail(t, accountSet());
   if (mail) {
     const card = tag("div", "mail-link");
@@ -297,7 +281,11 @@ export function renderDetail() {
   add.append(input);
   parts.push(title, subs, add);
 
-  $("todo-detail").replaceChildren(...parts);
+  const main = tag("div", "detail-main");
+  main.append(...parts);
+  const side = tag("aside", "detail-side");
+  side.append(projectField(t), dueField(t));
+  $("todo-detail").replaceChildren(main, side);
   $("todo-detail").dataset.task = t.id;
   const area = $("todo-detail").querySelector("textarea");
   if (area) growDesc(area);

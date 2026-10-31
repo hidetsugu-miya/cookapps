@@ -15,6 +15,6 @@ priority: number, due: Due | null, bucket: Bucket,
  */
 subtasks: Array<Subtask>, subDone: number, subTotal: number, mail: MailRef | null, 
 /**
- * Set on the row of a subtask (one that is overdue, due today, or has subtasks of its own); `None` on a top-level task.
+ * Set on the row of a subtask; `None` on a top-level task.
  */
 parent: ParentRef | null, };
