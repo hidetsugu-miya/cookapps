@@ -1,4 +1,4 @@
-:root { --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; }
+:root { --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --google: #1a73e8; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 body { font-family: -apple-system, sans-serif; font-size: 14px; margin: 0; display: flex; }
@@ -10,11 +10,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 /* The count sits on the button's top right corner; the button's aria-label carries it for screen readers. */
 .nav-count { position: absolute; top: -4px; right: -8px; box-sizing: border-box; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #d93025; color: #fff; font-size: 11px; font-weight: bold; line-height: 18px; text-align: center; }
 .nav-item:disabled { opacity: .4; cursor: default; }
-/* The bottom group starts at the first shown of the update button, the Claude avatar and settings. */
-#update-btn, #claude-btn, #nav-settings { margin-top: auto; }
-#update-btn:not([hidden]) ~ #claude-btn, #update-btn:not([hidden]) ~ #nav-settings, #claude-btn:not([hidden]) + #nav-settings { margin-top: 0; }
-#accounts { padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+/* The bottom group (update button, account avatars, Claude avatar, settings) takes the free space above it, so settings stays last whatever is shown. */
+#sidebar-bottom { margin-top: auto; padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 #account-list { display: flex; flex-direction: column; gap: 8px; }
+#account-list:empty { display: none; }
 .account-btn { padding: 0; border: 0; font-family: inherit; cursor: pointer; }
 .account-btn[aria-expanded="true"] { box-shadow: 0 0 0 2px var(--side-fg); }
 .account-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
@@ -319,6 +318,7 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .card-head h2 { display: flex; align-items: center; gap: 8px; font-size: 15px; }
 .logo { width: 22px; height: 22px; flex: none; border-radius: 6px; color: #fff; display: flex; align-items: center; justify-content: center; }
 .logo svg { width: 14px; height: 14px; stroke-width: 2.2; }
+.logo.google { background: var(--google); font-size: 13px; font-weight: bold; }
 .logo.slack { background: var(--slack); }
 .logo.claude { background: var(--claude); }
 .logo.update { background: var(--accent); }
