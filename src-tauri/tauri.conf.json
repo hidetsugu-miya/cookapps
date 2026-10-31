@@ -19,7 +19,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_UPDATER_PUBKEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERBOUI0NzFERDRFOEI1ODcKUldTSHRlalVIVWViMmxza2xJcTJSVUc5YTUvNDVPLzNrSXA4OTVUMWFCbVJkbXhsdXFyUXFCblYK",
       "endpoints": ["https://github.com/hidetsugu-miya/cookapps/releases/latest/download/latest.json"]
     }
   },
