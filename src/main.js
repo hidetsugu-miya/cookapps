@@ -2673,7 +2673,10 @@ function checkWorkspace(w) {
   const c = { user: w.user, bad: false };
   // readsMessages is null when Slack sent no scopes to judge by: the token counts as usable until a read fails with missing_scope.
   c.done = invoke("slack_check", { teamId: w.teamId }).then(
-    (r) => ({ state: r.readsMessages === false ? "noRead" : "ok" }),
+    (r) => {
+      c.bad = r.readsMessages === false;
+      return { state: c.bad ? "noRead" : "ok" };
+    },
     (e) => {
       c.bad = true;
       return { state: "error", message: String(e) };
