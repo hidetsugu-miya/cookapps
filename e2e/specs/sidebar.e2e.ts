@@ -44,6 +44,8 @@ describe("sidebar", () => {
     const button = $("#update-btn");
     await button.waitForDisplayed();
     await expect(button).toHaveAttribute("aria-label", "v9.9.9 に更新");
+    await expect($("#nav-settings .nav-dot")).toBeDisplayed();
+    await expect($("#nav-settings")).toHaveAttribute("aria-label", "設定（v9.9.9 があります）");
     // The update button comes first in the bottom group, above the accounts.
     expect(await bottomGroup()).toEqual(["update-btn", "account-list", "claude-btn", "nav-settings"]);
     expect(await callsOf("install_update")).toEqual([]);
@@ -93,5 +95,7 @@ describe("sidebar", () => {
     await boot({ inbox: inbox(), claude_status: claudeReady });
     await waitForCalls("check_update");
     await expect($("#update-btn")).not.toBeDisplayed();
+    await expect($("#nav-settings .nav-dot")).not.toBeDisplayed();
+    await expect($("#nav-settings")).toHaveAttribute("aria-label", "設定");
   });
 });
