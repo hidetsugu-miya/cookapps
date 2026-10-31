@@ -513,7 +513,16 @@ fn task_without_due(created: &Value) -> Option<String> {
         .then(|| id.to_owned())
 }
 
-/// The body of `POST /tasks` for a task made from a Slack message. The name is cut at Todoist's limit, and the due date is the summary's (in words Todoist reads), else today when `today`.
+/// Whether the model's `due` is `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`. Anything else (`every day`) would be read by Todoist as words, and could make the task recur.
+fn is_plain_due(due: &str) -> bool {
+    match due.len() {
+        10 => NaiveDate::parse_from_str(due, "%Y-%m-%d").is_ok(),
+        16 => NaiveDateTime::parse_from_str(due, "%Y-%m-%d %H:%M").is_ok(),
+        _ => false,
+    }
+}
+
+/// The body of `POST /tasks` for a task made from a Slack message. The name is cut at Todoist's limit, and the due date is the summary's when it is a plain date or date and time, else today when `today`.
 fn slack_task_body(
     summary: &Summary,
     slack_url: &str,
@@ -530,7 +539,8 @@ fn slack_task_body(
         "content": summary.content.chars().take(CONTENT_LIMIT).collect::<String>(),
         "description": description,
     });
-    if let Some(due) = summary.due.as_deref().or(today.then_some("today")) {
+    let due = summary.due.as_deref().filter(|d| is_plain_due(d));
+    if let Some(due) = due.or(today.then_some("today")) {
         body["due_string"] = due.into();
     }
     if let Some(id) = project_id {
@@ -1214,14 +1224,24 @@ pub async fn todoist_add_from_slack(
     if let Some(id) = &project_id {
         valid_id(id, "プロジェクト ID").map_err(|e| log_failure(command, TOKEN_USER, e))?;
     }
+    // Without a Todoist token, nothing is read from Slack and nothing is sent to Claude.
+    if state
+        .token()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+        .is_none()
+    {
+        return Ok(None);
+    }
     let url = url.trim();
     let dir = config_dir(&app).map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let message = slack::message_context(&dir, auth.http(), url)
         .await
         .map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let summary = claude::summarize(&message)
-        .await
-        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let summary = claude::summarize(&message).await.map_err(|e| {
+        log_failure(command, TOKEN_USER, e.log);
+        e.screen
+    })?;
     let body = slack_task_body(&summary, url, project_id.as_deref(), today);
     let created = request(&auth, &state, command, Method::POST, "/tasks", Some(body)).await?;
     Ok(created.map(|_| summary.content))
@@ -2214,6 +2234,30 @@ mod tests {
                 .get("due_string")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_slack_task_takes_only_a_date_or_a_date_and_time_as_due() {
+        for due in ["2026-11-01", "2026-11-01 15:00"] {
+            assert_eq!(
+                slack_task_body(&summary(Some(due)), SLACK_URL, None, false)["due_string"],
+                due
+            );
+        }
+        for due in [
+            "every day",
+            "tomorrow",
+            "2026-11-01T15:00",
+            "2026-13-01",
+            "2026-11-01 25:00",
+            "2026-1-5",
+            "",
+        ] {
+            let body = slack_task_body(&summary(Some(due)), SLACK_URL, None, false);
+            assert!(body.get("due_string").is_none(), "{due}");
+            let today = slack_task_body(&summary(Some(due)), SLACK_URL, None, true);
+            assert_eq!(today["due_string"], "today", "{due}");
+        }
     }
 
     #[test]

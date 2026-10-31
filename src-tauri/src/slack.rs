@@ -38,6 +38,8 @@ const MIGRATE_RETRY: Duration = Duration::from_secs(5 * 60);
 const NAME_LIMIT: usize = 80;
 /// Characters of the mail's text that are posted.
 const BODY_LIMIT: usize = 3000;
+/// Characters of a thread's first message that reach the summary (`claude::INPUT_LIMIT` caps the whole input).
+const PARENT_LIMIT: usize = 2000;
 const NO_TOKEN: &str =
     "Slack のトークンが保存されていません。設定でワークスペースを追加してください";
 const BAD_URL: &str = "Slack のメッセージかチャンネルのリンクを入力してください";
@@ -321,13 +323,22 @@ fn read_error(e: SlackError, team: &str) -> String {
     }
 }
 
-/// The form of a `conversations.replies` request for the thread `ts`.
-fn replies_params(channel: &str, ts: &str) -> Vec<(&'static str, String)> {
-    vec![
+/// The form of a `conversations.replies` request for one message of the thread `ts`: the thread's first message, or with `only`
+/// (a reply's `ts`) that reply alone. `oldest` and `latest` leave the first message out of the range, so it is asked for on its own.
+fn replies_params(channel: &str, ts: &str, only: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut params = vec![
         ("channel", channel.to_owned()),
         ("ts", ts.to_owned()),
-        ("limit", "200".to_owned()),
-    ]
+        ("limit", "1".to_owned()),
+    ];
+    if let Some(only) = only {
+        params.extend([
+            ("oldest", only.to_owned()),
+            ("latest", only.to_owned()),
+            ("inclusive", "true".to_owned()),
+        ]);
+    }
+    params
 }
 
 /// The text of a message as sent to the summary: who wrote it (an ID: names need a scope the app does not ask for) and what.
@@ -339,15 +350,19 @@ fn message_line(m: &Value) -> String {
     )
 }
 
-/// What the summary reads: the thread's first message when the link is to a reply, then the linked message itself.
-/// `None` when the linked message is not among `messages`.
-fn thread_context(messages: &[Value], message_ts: &str) -> Option<String> {
-    let target = messages.iter().find(|m| m["ts"] == message_ts)?;
+/// What the summary reads: the thread's first message (the head of `first`) when the link is to a reply, cut at `PARENT_LIMIT`
+/// characters so the linked message stays within the summary's input, then the linked message itself, found in `found`.
+/// `None` when the linked message is not among `found`.
+fn thread_context(first: &[Value], found: &[Value], message_ts: &str) -> Option<String> {
+    let target = found.iter().find(|m| m["ts"] == message_ts)?;
     let mut parts = Vec::new();
-    if let Some(parent) = messages.first().filter(|p| p["ts"] != message_ts) {
+    if let Some(parent) = first.first().filter(|p| p["ts"] != message_ts) {
         parts.push(format!(
             "[スレッドの最初のメッセージ]\n{}",
             message_line(parent)
+                .chars()
+                .take(PARENT_LIMIT)
+                .collect::<String>()
         ));
     }
     parts.push(format!("[対象のメッセージ]\n{}", message_line(target)));
@@ -909,7 +924,7 @@ pub async fn slack_link(
 }
 
 /// The text of the Slack message `url` points at, with its thread's first message when it is a reply, read with the token of the link's workspace.
-/// Only the first 200 messages of a thread are searched (shortcut: upgrade with `cursor` if a reply deep in a long thread is linked).
+/// A reply is read on its own, so one deep in a long thread is found; two requests of one message each, not the whole thread.
 pub async fn message_context(
     dir: &Path,
     http: &reqwest::Client,
@@ -921,17 +936,23 @@ pub async fn message_context(
     let workspaces = load_workspaces(dir).await?;
     let workspace = workspace_for_host(&workspaces, &link.host).ok_or(NO_WORKSPACE)?;
     let token = token_of(&workspace.team_id).await?;
-    let params = replies_params(&link.channel, &thread_ts);
-    let reply = call(
-        http,
-        &token,
-        "conversations.replies",
-        Payload::Form(&params),
-    )
-    .await
-    .map_err(|e| read_error(e, &workspace.team))?;
-    let messages = reply["messages"].as_array().map_or(&[][..], Vec::as_slice);
-    thread_context(messages, &message_ts).ok_or_else(|| NO_MESSAGE.to_owned())
+    let read = |only: Option<&str>| {
+        let params = replies_params(&link.channel, &thread_ts, only);
+        let token = &token;
+        async move {
+            let reply = call(http, token, "conversations.replies", Payload::Form(&params))
+                .await
+                .map_err(|e| read_error(e, &workspace.team))?;
+            Ok::<_, String>(reply["messages"].as_array().cloned().unwrap_or_default())
+        }
+    };
+    let first = read(None).await?;
+    let found = if message_ts == thread_ts {
+        first.clone()
+    } else {
+        read(Some(&message_ts)).await?
+    };
+    thread_context(&first, &found, &message_ts).ok_or_else(|| NO_MESSAGE.to_owned())
 }
 
 /// What a post of the mail would say, without the note and as plain text.
@@ -1467,48 +1488,69 @@ mod tests {
     }
 
     #[test]
-    fn replies_are_asked_for_the_thread() {
+    fn the_threads_first_message_is_asked_for_alone() {
         assert_eq!(
-            replies_params("C0123ABC", "1761780000.000100"),
+            replies_params("C0123ABC", "1761780000.000100", None),
             [
                 ("channel", "C0123ABC".to_owned()),
                 ("ts", "1761780000.000100".to_owned()),
-                ("limit", "200".to_owned())
+                ("limit", "1".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reply_is_asked_for_by_its_own_time() {
+        assert_eq!(
+            replies_params("C0123ABC", "1761780000.000100", Some("1761780009.000200")),
+            [
+                ("channel", "C0123ABC".to_owned()),
+                ("ts", "1761780000.000100".to_owned()),
+                ("limit", "1".to_owned()),
+                ("oldest", "1761780009.000200".to_owned()),
+                ("latest", "1761780009.000200".to_owned()),
+                ("inclusive", "true".to_owned())
             ]
         );
     }
 
     #[test]
     fn a_reply_comes_with_the_threads_first_message() {
-        let messages = [
-            json!({"ts": "1.1", "user": "U1", "text": "PR を見てほしい"}),
-            json!({"ts": "1.2", "user": "U2", "text": " 明日までに "}),
-        ];
+        let first = [json!({"ts": "1.1", "user": "U1", "text": "PR を見てほしい"})];
+        let reply = [json!({"ts": "1.2", "user": "U2", "text": " 明日までに "})];
         assert_eq!(
-            thread_context(&messages, "1.2").unwrap(),
+            thread_context(&first, &reply, "1.2").unwrap(),
             "[スレッドの最初のメッセージ]\nU1: PR を見てほしい\n\n[対象のメッセージ]\nU2: 明日までに"
         );
     }
 
     #[test]
     fn the_first_message_stands_alone() {
-        let messages = [
-            json!({"ts": "1.1", "user": "U1", "text": "a"}),
-            json!({"ts": "1.2", "user": "U2", "text": "b"}),
-        ];
+        let first = [json!({"ts": "1.1", "user": "U1", "text": "a"})];
         assert_eq!(
-            thread_context(&messages, "1.1").unwrap(),
+            thread_context(&first, &first, "1.1").unwrap(),
             "[対象のメッセージ]\nU1: a"
         );
     }
 
     #[test]
-    fn a_message_that_is_not_there_gives_nothing() {
-        assert_eq!(thread_context(&[], "1.1"), None);
-        assert_eq!(
-            thread_context(&[json!({"ts": "1.2", "text": "b"})], "1.1"),
-            None
+    fn a_long_first_message_is_cut_so_the_linked_one_stays() {
+        let first = [json!({"ts": "1.1", "user": "U1", "text": "あ".repeat(PARENT_LIMIT * 3)})];
+        let reply = [json!({"ts": "1.2", "user": "U2", "text": "明日までに"})];
+        let context = thread_context(&first, &reply, "1.2").unwrap();
+        assert!(
+            context.chars().count() < PARENT_LIMIT + 100,
+            "{}",
+            context.chars().count()
         );
+        assert!(context.ends_with("[対象のメッセージ]\nU2: 明日までに"));
+    }
+
+    #[test]
+    fn a_message_that_is_not_there_gives_nothing() {
+        assert_eq!(thread_context(&[], &[], "1.1"), None);
+        let other = [json!({"ts": "1.2", "text": "b"})];
+        assert_eq!(thread_context(&other, &other, "1.1"), None);
     }
 
     #[test]

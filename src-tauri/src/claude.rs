@@ -17,7 +17,7 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 /// Characters of a message that reach the model.
 const INPUT_LIMIT: usize = 10_000;
 /// The JSON Schema `--json-schema` makes the model answer in.
-const SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"content":{"type":"string"},"description":{"type":"string"},"due":{"type":"string"}},"required":["content","description"]}"#;
+const SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"content":{"type":"string"},"description":{"type":"string"},"due":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}( \\d{2}:\\d{2})?$"}},"required":["content","description"]}"#;
 /// `CREATE_NO_WINDOW`: a GUI app that starts a console program must not flash a console window.
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x0800_0000;
@@ -40,7 +40,7 @@ pub enum Claude {
     },
 }
 
-/// What a message is turned into: the task's name, its description, and when it is due (a date or time in words or `YYYY-MM-DD HH:MM`).
+/// What a message is turned into: the task's name, its description, and when it is due (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM` as the schema asks; the model may still break it).
 #[derive(Debug, PartialEq)]
 pub struct Summary {
     pub content: String,
@@ -96,7 +96,8 @@ fn system_prompt(today: &str) -> String {
     )
 }
 
-/// The arguments of the summary call. No tools and no MCP servers are given to the model, so a message cannot make it act.
+/// The arguments of the summary call. No tools and no MCP servers are given to the model, so a message cannot make it act,
+/// and no settings are read (an empty `--setting-sources`), so no hook of the user's or the project's sees the message.
 fn summary_args(today: &str) -> Vec<String> {
     [
         "-p",
@@ -108,6 +109,8 @@ fn summary_args(today: &str) -> Vec<String> {
         "",
         "--strict-mcp-config",
         "--no-session-persistence",
+        "--setting-sources",
+        "",
         "--system-prompt",
         &system_prompt(today),
         "--json-schema",
@@ -117,16 +120,44 @@ fn summary_args(today: &str) -> Vec<String> {
     .to_vec()
 }
 
+/// Why a summary failed: `screen` is shown to the user; `log` goes to stderr and never holds the model's words, which may quote the message.
+#[derive(Debug, PartialEq)]
+pub struct SummaryError {
+    pub screen: String,
+    pub log: String,
+}
+
+impl From<String> for SummaryError {
+    fn from(message: String) -> Self {
+        Self {
+            log: message.clone(),
+            screen: message,
+        }
+    }
+}
+
+impl From<&str> for SummaryError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
 /// The answer of `claude -p --output-format json` with `--json-schema`.
-fn parse_summary(out: &str) -> Result<Summary, String> {
+fn parse_summary(out: &str) -> Result<Summary, SummaryError> {
     let answer: Value =
         serde_json::from_str(out.trim()).map_err(|e| format!("Claude の出力を読めません: {e}"))?;
     if answer["is_error"] == true {
         let detail = answer["result"].as_str().unwrap_or_default();
-        return Err(format!(
-            "Claude がエラーを返しました: {}",
-            detail.chars().take(200).collect::<String>()
-        ));
+        return Err(SummaryError {
+            screen: format!(
+                "Claude がエラーを返しました: {}",
+                detail.chars().take(200).collect::<String>()
+            ),
+            log: format!(
+                "Claude がエラーを返しました（{}）",
+                answer["subtype"].as_str().unwrap_or("-")
+            ),
+        });
     }
     let field = |k: &str| {
         answer["structured_output"][k]
@@ -200,10 +231,14 @@ fn args_of(args: &[&str]) -> Vec<String> {
 }
 
 fn read_status() -> Claude {
-    let version = run(&args_of(&["--version"]), "", STATUS_TIMEOUT)
-        .map(|out| parse_version(&out))
-        .unwrap_or_default();
-    match run(&args_of(&["auth", "status", "--json"]), "", STATUS_TIMEOUT) {
+    // Two processes, run side by side: the answer waits for the slower one, not for both.
+    let (version, status) = std::thread::scope(|scope| {
+        let version = scope.spawn(|| run(&args_of(&["--version"]), "", STATUS_TIMEOUT));
+        let status = run(&args_of(&["auth", "status", "--json"]), "", STATUS_TIMEOUT);
+        (version.join().unwrap(), status)
+    });
+    let version = version.map(|out| parse_version(&out)).unwrap_or_default();
+    match status {
         Err(RunError::NotInstalled) => Claude::Missing,
         Err(RunError::Failed(message)) => Claude::Failed { message },
         Ok(out) => parse_status(&out, version).unwrap_or_else(|message| Claude::Failed { message }),
@@ -223,7 +258,7 @@ pub async fn claude_status() -> Result<Claude, String> {
 }
 
 /// Summarises a Slack message into a task with `claude -p`. `message` is sent to Anthropic through Claude Code.
-pub async fn summarize(message: &str) -> Result<Summary, String> {
+pub async fn summarize(message: &str) -> Result<Summary, SummaryError> {
     let input: String = message.chars().take(INPUT_LIMIT).collect();
     let args = summary_args(&chrono::Local::now().format("%Y-%m-%d (%A)").to_string());
     let out = tokio::task::spawn_blocking(move || run(&args, &input, SUMMARY_TIMEOUT))
@@ -322,6 +357,7 @@ mod tests {
         assert_eq!(args[at("--tools") + 1], "");
         assert!(args.contains(&"--strict-mcp-config".to_owned()));
         assert!(args.contains(&"--no-session-persistence".to_owned()));
+        assert_eq!(args[at("--setting-sources") + 1], "");
         assert!(args[at("--system-prompt") + 1].contains("2026-10-31"));
         assert!(serde_json::from_str::<Value>(&args[at("--json-schema") + 1]).is_ok());
     }
@@ -359,10 +395,22 @@ mod tests {
     }
 
     #[test]
-    fn an_error_answer_says_so() {
-        let out = json!({"is_error": true, "result": "Not logged in"}).to_string();
+    fn an_error_answer_shows_its_words_but_logs_only_the_subtype() {
+        let out =
+            json!({"is_error": true, "subtype": "success", "result": "Not logged in"}).to_string();
         let e = parse_summary(&out).unwrap_err();
-        assert!(e.contains("Not logged in"), "{e}");
+        assert!(e.screen.contains("Not logged in"), "{}", e.screen);
+        assert!(!e.log.contains("Not logged in"), "{}", e.log);
+        assert!(e.log.contains("success"), "{}", e.log);
+    }
+
+    #[test]
+    fn the_schema_only_lets_a_date_or_a_date_and_time_through_as_due() {
+        let schema: Value = serde_json::from_str(SUMMARY_SCHEMA).unwrap();
+        assert_eq!(
+            schema["properties"]["due"]["pattern"],
+            r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$"
+        );
     }
 
     #[test]

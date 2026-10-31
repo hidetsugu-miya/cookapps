@@ -2459,12 +2459,16 @@ function slackMessageHost(text) {
 
 // slack_load's workspaces, or null until read; settings changes update it.
 let slackWorkspaces = null;
+let loadingSlack = false;
 async function loadSlackWorkspaces() {
+  if (loadingSlack) return;
+  loadingSlack = true;
   try {
     slackWorkspaces = (await invoke("slack_load")).workspaces;
   } catch {
     slackWorkspaces = [];
   }
+  loadingSlack = false;
   updateAddMode();
 }
 
@@ -2484,8 +2488,12 @@ function addMode() {
   return { summarize: true, hint: `Slack のメッセージ（${workspace.team}）を Claude が要約し、「${$("todo-title").textContent}」に追加します` };
 }
 
+// What the add field's button and hint last showed; the list's redraw calls updateAddMode every 10 seconds.
+let shownAddMode = null;
 function updateAddMode() {
   const { summarize, hint } = addMode();
+  if (shownAddMode?.summarize === summarize && shownAddMode.hint === hint) return;
+  shownAddMode = { summarize, hint };
   const button = $("todo-add-button");
   button.className = summarize ? "text-btn primary" : "text-btn";
   if (summarize) button.innerHTML = `${CLAUDE_SVG}要約して追加`;
@@ -2508,7 +2516,7 @@ function renderPending() {
     ...pendingAdds.map((job) => {
       const row = tag("div", `pending${job.failed ? " fail" : ""}`);
       if (!job.failed) {
-        row.append(tag("span", "spin"), tag("span", "sp", "Claude が要約しています…"), tag("span", "pending-channel", job.channel));
+        row.append(tag("span", "spin"), tag("span", "sp", "Claude が要約しています…"), tag("span", "pending-channel", job.host));
         return row;
       }
       row.append(tag("span", "sp", `追加できませんでした: ${job.failed}`));
@@ -2540,17 +2548,9 @@ function addFromSlack(url) {
   input.value = "";
   updateAddMode();
   input.focus();
-  const job = { id: ++pendingSeq, channel: "", failed: null };
+  const job = { id: ++pendingSeq, host: slackMessageHost(url), failed: null };
   pendingAdds.push(job);
   renderPending();
-  // The channel's name is only for the row: a failure leaves it out.
-  invoke("slack_link", { url }).then(
-    (target) => {
-      job.channel = `#${target.name}`;
-      renderPending();
-    },
-    () => {},
-  );
   invoke("todoist_add_from_slack", { url, projectId, today: inToday }).then(
     (name) => {
       pendingAdds.splice(pendingAdds.indexOf(job), 1);
@@ -2571,6 +2571,8 @@ $("todo-add").onsubmit = async (e) => {
   const input = $("todo-add-input");
   const text = input.value.trim();
   if (!text) return;
+  // Until Claude's state and the workspaces are known, a Slack link would go to Quick Add as plain text: wait for the next Enter.
+  if (slackMessageHost(text) !== null && (claude === null || slackWorkspaces === null)) return;
   if (addMode().summarize) return addFromSlack(text);
   // In "今日" the task goes where Quick Add puts it (the inbox, or the project named in the text), and a text with no date is due today.
   const inToday = todoView === "today";
