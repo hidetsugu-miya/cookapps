@@ -124,9 +124,10 @@ function slide(box: HTMLElement, id: string, opening: boolean) {
   box.querySelector(`.toggle[data-id="${key}"] svg`)!.animate(opening ? turn : turn.reverse(), { ...SLIDE, fill });
 }
 
-// Opens or closes what is nested under `id`: `change` sets the state and `redraw` draws it.
+// Opens or closes what is nested under `id`: `change` sets the state and `redraw` draws an open.
 // An open draws first and slides the new rows in; a close slides the rows shut first, since the redraw takes them away.
 // A redraw from elsewhere meanwhile is harmless: the timer still ends the close, and the state is drawn once more.
+// The timer draws what the screen shows by then (the detail opened, or the token form with no data), not `redraw`.
 // A timer, not the animations' end: they do not run while the window is not painting.
 function toggleNested(box: HTMLElement, id: string, opening: boolean, change: () => void, redraw: () => void) {
   const key = `${box.id}/${id}`;
@@ -143,7 +144,7 @@ function toggleNested(box: HTMLElement, id: string, opening: boolean, change: ()
   setTimeout(() => {
     closing.delete(key);
     change();
-    redraw();
+    if (todoState.todo) renderTodo();
   }, quiet ? 0 : SLIDE.duration);
 }
 
