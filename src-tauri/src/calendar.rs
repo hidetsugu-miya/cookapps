@@ -39,12 +39,27 @@ struct ApiTime {
     date_time: Option<String>,
 }
 
+/// The user's own answer to an invitation. `Unknown` covers a non-attendee and any value the API adds later.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub enum ResponseStatus {
+    Accepted,
+    Declined,
+    Tentative,
+    NeedsAction,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Deserialize)]
 struct Attendee {
     #[serde(default, rename = "self")]
     is_self: bool,
     #[serde(default, rename = "responseStatus")]
-    response_status: String,
+    response_status: ResponseStatus,
 }
 
 #[derive(Deserialize)]
@@ -125,8 +140,7 @@ struct RawEvent {
     /// Name of the calendar the event is on.
     calendar: String,
     summary: String,
-    /// The user's own `responseStatus` on the event; empty when the user is not an attendee.
-    response: String,
+    response: ResponseStatus,
     ical_uid: String,
     when: When,
 }
@@ -139,7 +153,7 @@ impl RawEvent {
                 .attendees
                 .iter()
                 .find(|a| a.is_self)
-                .map(|a| a.response_status.clone())
+                .map(|a| a.response_status)
                 .unwrap_or_default(),
             account: account.to_owned(),
             color: cal.background_color.clone(),
@@ -160,8 +174,9 @@ pub struct Info {
     /// `None` means the screen picks one from the account.
     color: Option<String>,
     account: String,
-    /// The user's own answer to the invitation (`accepted`, `declined`, `tentative` or `needsAction`); empty when the user is not an attendee.
-    response: String,
+    /// Absent in a cache an older version wrote.
+    #[serde(default)]
+    response: ResponseStatus,
 }
 
 impl From<&RawEvent> for Info {
@@ -170,7 +185,7 @@ impl From<&RawEvent> for Info {
             summary: e.summary.clone(),
             color: e.color.clone(),
             account: e.account.clone(),
-            response: e.response.clone(),
+            response: e.response,
         }
     }
 }
@@ -249,7 +264,7 @@ impl From<&RawEvent> for EventItem {
             account: e.account.clone(),
             calendar: e.calendar.clone(),
             summary: e.summary.clone(),
-            declined: e.response == "declined",
+            declined: e.response == ResponseStatus::Declined,
             all_day,
             start,
             end,
@@ -874,7 +889,7 @@ mod tests {
             color: None,
             calendar: "c".into(),
             summary: summary.into(),
-            response: String::new(),
+            response: ResponseStatus::Unknown,
             ical_uid: String::new(),
             when: When::AllDay {
                 start: date("2026-01-01"),
@@ -1182,7 +1197,7 @@ mod tests {
         )
         .unwrap();
         let r = RawEvent::from_api(ev, "a@example.com", &cal(Some("#fff"))).unwrap();
-        assert_eq!(r.response, "declined");
+        assert_eq!(r.response, ResponseStatus::Declined);
         assert_eq!(r.calendar, "仕事");
         assert_eq!(r.ical_uid, "u");
         assert_eq!(r.color.as_deref(), Some("#fff"));
@@ -1193,12 +1208,12 @@ mod tests {
         )
         .unwrap();
         let r = RawEvent::from_api(ev, "a@example.com", &cal(None)).unwrap();
-        assert_eq!(r.response, "accepted");
+        assert_eq!(r.response, ResponseStatus::Accepted);
         assert!(!EventItem::from(&r).declined);
     }
 
     #[test]
-    fn response_is_the_self_attendees_status_or_empty() {
+    fn response_is_the_self_attendees_status_or_unknown() {
         let response = |attendees: &str| {
             let ev: ApiEvent = serde_json::from_str(&format!(
                 r#"{{"start":{{"date":"2026-10-29"}},"end":{{"date":"2026-10-30"}},"attendees":{attendees}}}"#
@@ -1210,14 +1225,22 @@ mod tests {
         };
         assert_eq!(
             response(r#"[{"self":true,"responseStatus":"tentative"}]"#),
-            "tentative"
+            ResponseStatus::Tentative
         );
         assert_eq!(
             response(r#"[{"self":true,"responseStatus":"needsAction"}]"#),
-            "needsAction"
+            ResponseStatus::NeedsAction
         );
-        assert_eq!(response(r#"[{"responseStatus":"declined"}]"#), "");
-        assert_eq!(response("[]"), "");
+        assert_eq!(
+            response(r#"[{"responseStatus":"declined"}]"#),
+            ResponseStatus::Unknown
+        );
+        assert_eq!(response("[]"), ResponseStatus::Unknown);
+        // A value the API adds later does not fail the whole event.
+        assert_eq!(
+            response(r#"[{"self":true,"responseStatus":"later"}]"#),
+            ResponseStatus::Unknown
+        );
     }
 
     #[test]
@@ -1317,6 +1340,16 @@ mod tests {
     }
 
     #[test]
+    fn week_from_an_older_cache_without_response_deserializes() {
+        let w: Week = serde_json::from_str(
+            r#"{"weekStart":"2026-10-25","allDay":[{"day":1,"summary":"s","color":null,"account":"a@example.com","declined":true}],
+                "timed":[],"needsLogin":[],"failed":{},"calendarFailed":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(w.all_day[0].info.response, ResponseStatus::Unknown);
+    }
+
+    #[test]
     fn week_serializes_in_camel_case() {
         let w = Week {
             week_start: "2026-10-25".into(),
@@ -1326,7 +1359,7 @@ mod tests {
                     summary: "s".into(),
                     color: None,
                     account: "a@example.com".into(),
-                    response: "declined".into(),
+                    response: ResponseStatus::Declined,
                 },
             }],
             timed: vec![],
@@ -1356,7 +1389,7 @@ mod tests {
                     summary: start.into(),
                     color: Some("#fff".into()),
                     account: "a@example.com".into(),
-                    response: String::new(),
+                    response: ResponseStatus::Unknown,
                 },
             }],
             needs_login: vec![],

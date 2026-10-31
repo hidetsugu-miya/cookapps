@@ -4,6 +4,7 @@
 import type { Checked } from "../ts/bindings/Checked";
 import type { Claude } from "../ts/bindings/Claude";
 import type { Inbox } from "../ts/bindings/Inbox";
+import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
 import type { TaskItem } from "../ts/bindings/TaskItem";
 import type { ThreadDetail } from "../ts/bindings/ThreadDetail";
@@ -114,15 +115,19 @@ export const threadDetail = (subject: string, body: string, unread: boolean): Th
 
 // ---- Calendar ----
 
-// The week holding today: a timed event 10:00-11:00 and an all-day event, both today.
+// The week holding today: a timed event 10:00-11:00, a tentative one 12:00-13:00, an unanswered one 14:00-15:00 and an all-day event, all today.
 export function weekOfToday(): Week {
   const now = new Date();
   const sunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
-  const info = (summary: string) => ({ summary, color: null, account, response: "" });
+  const info = (summary: string, response: ResponseStatus = "unknown") => ({ summary, color: null, account, response });
   return {
     weekStart: isoDate(sunday),
     allDay: [{ day: now.getDay(), ...info("Holiday") }],
-    timed: [{ day: now.getDay(), startMin: 600, endMin: 660, col: 0, cols: 1, ...info("Team sync") }],
+    timed: [
+      { day: now.getDay(), startMin: 600, endMin: 660, col: 0, cols: 1, ...info("Team sync") },
+      { day: now.getDay(), startMin: 720, endMin: 780, col: 0, cols: 1, ...info("Maybe lunch", "tentative") },
+      { day: now.getDay(), startMin: 840, endMin: 900, col: 0, cols: 1, ...info("Unanswered", "needsAction") },
+    ],
     needsLogin: [],
     failed: {},
     calendarFailed: [],
