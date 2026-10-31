@@ -10,9 +10,11 @@ permissions:
   contents: read
 
 # One job per layer of checks (static, unit, E2E); no check runs in two jobs.
+# A tag push does not run them again: the push of main made the same commit pass them, and main-ci waits for that run.
 jobs:
   # Static: nothing runs the app.
   static:
+    if: github.ref_type != 'tag'
     runs-on: macos-latest
     defaults:
       run:
@@ -24,12 +26,7 @@ jobs:
         with:
           components: rustfmt
       - name: Check version
-        run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            scripts/check-version.sh "$GITHUB_REF_NAME"
-          else
-            scripts/check-version.sh
-          fi
+        run: scripts/check-version.sh
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -47,6 +44,7 @@ jobs:
 
   # Unit: Rust only; clippy sits here because it compiles every target of the OS it runs on.
   test:
+    if: github.ref_type != 'tag'
     strategy:
       fail-fast: false
       matrix:
@@ -85,6 +83,7 @@ jobs:
 
   # E2E: the real WebView (WKWebView, WebView2) with the commands mocked.
   e2e:
+    if: github.ref_type != 'tag'
     strategy:
       fail-fast: false
       matrix:
@@ -109,9 +108,41 @@ jobs:
       - name: E2E
         run: npm run e2e
 
+  # Tags only: wait for the CI run of the push of main at the same commit, then let installer and release go.
+  main-ci:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      # The tag name is only known on a tag run, so this check moved here from static.
+      - name: Check version
+        run: scripts/check-version.sh "$GITHUB_REF_NAME"
+      - name: Wait for the CI of main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          while true; do
+            run=$(gh run list --workflow ci.yml --branch main --event push --commit "$GITHUB_SHA" --limit 1 \
+              --json status,conclusion --jq '.[0] // empty | "\(.status) \(.conclusion)"')
+            case "$run" in
+              "completed success") exit 0 ;;
+              completed*) echo "CI of main at $GITHUB_SHA: $run" >&2; exit 1 ;;
+              *) echo "waiting for the CI of main at $GITHUB_SHA: ${run:-no run yet}" ;;
+            esac
+            sleep 30
+          done
+
   installer:
     if: github.ref_type == 'tag'
-    needs: [static, test, e2e]
+    needs: [main-ci]
     runs-on: windows-latest
     defaults:
       run:
@@ -139,7 +170,7 @@ jobs:
   # Release: the signed macOS app and the files the installed app updates itself from (latest.json, read by the updater plugin).
   release:
     if: github.ref_type == 'tag'
-    needs: [static, test, e2e]
+    needs: [main-ci]
     runs-on: macos-latest
     permissions:
       contents: write

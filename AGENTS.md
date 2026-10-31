@@ -169,8 +169,9 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 | `static` | macos-latest | version match, `npm run lint`, `npm run build:ts`, `npm run e2e:check`, cargo fmt |
 | `test` | macos-latest, windows-latest | clippy (`--all-targets --all-features`), cargo test (`--all-features`), bindings diff (macOS only) |
 | `e2e` | macos-latest, windows-latest | `npm run e2e:build`, `npm run e2e` |
-| `installer` | windows-latest (tags only) | the nsis installer artifact |
-| `release` | macos-latest (tags only) | the signed `.app`, its updater files and `latest.json`, put in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| `main-ci` | ubuntu-latest (tags only) | the version match with the tag, and waiting until the CI of the push of main at the same commit succeeds (a tag push does not run `static`, `test` and `e2e` again) |
+| `installer` | windows-latest (tags only; after `main-ci`) | the nsis installer artifact |
+| `release` | macos-latest (tags only; after `main-ci`) | the signed `.app`, its updater files and `latest.json`, put in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
 ## Known limitations
 
