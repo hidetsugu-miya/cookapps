@@ -80,7 +80,7 @@ export function renderProjects() {
 
 // The chevron that opens or closes what is nested under a project or a task. It must not reach the row or button it sits on.
 function toggleButton(label: string, expanded: boolean, toggle: () => void) {
-  const b = tag("button", "toggle");
+  const b = tag("button", "icon-btn toggle");
   b.setAttribute("aria-label", label);
   b.setAttribute("aria-expanded", String(expanded));
   b.innerHTML = CHEVRON_SVG;

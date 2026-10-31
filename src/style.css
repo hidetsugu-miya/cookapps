@@ -174,8 +174,7 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .proj-line { position: relative; }
 .proj-line.parent .proj { padding-right: 34px; }
 .proj-line .toggle { position: absolute; right: 6px; top: 50%; margin-top: -11px; }
-.toggle { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #888; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-.toggle:hover { background: var(--soft); }
+.toggle { width: 22px; height: 22px; padding: 0; color: #888; }
 .toggle svg { width: 14px; height: 14px; }
 .toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
 /* In the list's left padding, so the rows do not move. */
@@ -252,7 +251,7 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .detail-side { align-self: start; padding: 4px 16px; border-radius: 12px; background: var(--bar); }
 .field { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .field-label { margin-bottom: 4px; font-size: 12px; font-weight: bold; color: #666; }
-.field-value { display: flex; align-items: center; gap: 8px; width: calc(100% + 12px); margin: 0 -6px; padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; font: inherit; color: #333; text-align: left; cursor: pointer; }
+.field-value { display: flex; align-items: center; gap: 8px; width: calc(100% + 12px); margin: 0 -6px; padding: 4px 6px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: #333; text-align: left; cursor: pointer; }
 .field-value:hover { background: #fff; }
 .field-value svg { width: 16px; height: 16px; flex: none; }
 .field-value.over { color: #b00020; }
