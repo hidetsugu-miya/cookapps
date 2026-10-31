@@ -146,7 +146,7 @@ cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 cd src-tauri && cargo test --all-features    # also writes the ts-rs types to ts/bindings/
 npm run e2e:build   # build the app for E2E (feature e2e)
 npm run e2e         # WebdriverIO
-scripts/check-version.sh [tag]   # the version in Cargo.toml and tauri.conf.json matches the tag
+scripts/check-version.sh [tag]   # the version in Cargo.toml, tauri.conf.json and Cargo.lock matches the tag
 ```
 
 ## CI
@@ -174,7 +174,7 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 - Whether delete should stay "move to the trash" or also offer a permanent delete.
 - Which calendar views are needed (week view with a selected-calendars filter is implemented; day, month and an event list are open).
 - Whether the list should cover only the inbox, or also labels and search.
-- Offline behavior (whether a local cache is needed).
+- Offline behavior (the last fetched inbox, events and tasks are shown from the config folder; whether operations should work offline is open).
 
 ## References
 

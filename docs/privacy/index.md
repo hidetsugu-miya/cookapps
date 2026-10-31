@@ -4,7 +4,7 @@ title: プライバシーポリシー - cookapps
 
 # プライバシーポリシー
 
-最終更新日: 2026年10月30日
+最終更新日: 2026年10月31日
 
 cookapps（以下「本アプリ」）は、利用者自身のパソコン（macOS または Windows）上で動くデスクトップ Gmail クライアントです。
 本アプリが Google アカウントのデータをどう扱うかを説明します。
@@ -117,6 +117,7 @@ Gmail のメールそのものは消えません。
 Todoist のトークンは、Todo 画面の「Todoist の接続を解除」か、同じ場所で「jp.mysis.cookapps.todoist」の項目（Windows では名前がそれで終わる項目）を削除すると消せます。
 Slack のトークンは、設定画面の「接続を解除」か、同じ場所で「jp.mysis.cookapps.slack」の項目（ワークスペースごと。Windows では名前がそれで終わる項目）を削除すると消せます。
 キーチェーンアクセスや資格情報マネージャーで消した場合は、設定フォルダの `todoist-cache.json`（最後に取得したタスクの控え）が残るので、手で消してください。
+v0.14.6 以前（旧名 cookup）の本アプリを使っていた場合は、同じ場所の「jp.mysis.cookup」で始まる項目と、旧設定フォルダ（macOS では `~/Library/Application Support/jp.mysis.cookup`、Windows では `%APPDATA%\jp.mysis.cookup`）も手で消してください。旧名の項目のアクセス権は、上の「サードパーティ製のアプリとサービス」から取り消せます。
 
 ## お問い合わせ
 
