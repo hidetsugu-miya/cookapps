@@ -3,6 +3,8 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "formatter": { "enabled": false },
   "assist": { "enabled": false },
+  // Skip what git ignores, e.g. other checkouts under .claude/worktrees with their own biome.jsonc.
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "includes": ["ts/**", "e2e/**", "wdio.conf.ts", "!ts/bindings", "!e2e/dist"]
   },
