@@ -8,7 +8,16 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # The wdio packages must move together: a PR that mixes v9 and v10 breaks the types and the E2E.
+    groups:
+      wdio:
+        patterns:
+          - webdriverio
+          - "@wdio/*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The Rust version is pinned by hand in rust-toolchain.toml, mise.toml and CI.
+      - dependency-name: dtolnay/rust-toolchain
