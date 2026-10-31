@@ -1,4 +1,4 @@
-import { boot, checked, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, slackLoad, waitForCalls, callsOf } from "../support";
+import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, slackLoad, waitForCalls, waitForText, callsOf } from "../support";
 
 // The app with one Slack workspace whose token `slack_check` judges as given, and the settings screen open.
 async function openSettings(missingScopes: string[], claude: unknown = claudeMissing) {
@@ -8,6 +8,45 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
 }
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
+
+describe("settings: Google", () => {
+  const meta = () => $("#google-accounts .item-meta");
+
+  it("lists each account like the sidebar avatar, with its state and unread count", async () => {
+    await openSettings([]);
+    await expect($("#google-accounts .item-name")).toHaveText(account);
+    await waitForText("#google-accounts .item-meta", "ログイン中 · 未読 2");
+    await expect(meta()).not.toHaveElementClass("warn");
+    const [side, card] = await browser.execute(() =>
+      ["#account-list .avatar", "#google-accounts .avatar"].map((s) => {
+        const e = document.querySelector<HTMLElement>(s)!;
+        return [e.textContent, e.style.background];
+      }),
+    );
+    expect(card).toEqual(side);
+    await expect($("#google-accounts button")).not.toExist();
+  });
+
+  it("warns on an account that needs a login", async () => {
+    await boot({ inbox: { ...inbox(), needsLogin: [account] }, slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
+    await $("#nav-settings").click();
+    await waitForText("#google-accounts .item-meta", "再ログインが必要です");
+    await expect(meta()).toHaveElementClass("warn");
+  });
+
+  it("shows an empty note with no account", async () => {
+    await boot({ inbox: { ...inbox(), accounts: [], threads: [], historyIds: {} }, slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
+    await $("#nav-settings").click();
+    await expect($("#google-accounts .card-empty")).toHaveText("アカウントはまだありません");
+  });
+
+  it("calls login with no hint from アカウントを追加", async () => {
+    await openSettings([]);
+    const login = await mock("login", account);
+    await $("#google-add").click();
+    expect(await waitForCalls(login)).toEqual([{ loginHint: null }]);
+  });
+});
 
 describe("settings: Slack", () => {
   it("flags a token without read scopes and lists only the missing ones in the pane", async () => {

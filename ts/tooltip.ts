@@ -15,7 +15,7 @@ function hideTip() {
 function showTip(target: Element) {
   hideTip();
   const inSidebar = target.closest("#sidebar");
-  if (popupOpen() && target.closest("#accounts, #claude-btn")) return;
+  if (popupOpen() && target.closest("#account-list, #claude-btn")) return;
   tipTimer = setTimeout(() => {
     tip.textContent = target.getAttribute("aria-label");
     tip.hidden = false;

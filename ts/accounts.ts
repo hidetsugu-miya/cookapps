@@ -1,4 +1,4 @@
-// The sidebar's accounts: their avatars, the popup of an account (or of Claude), logging in and removing an account.
+// The accounts: the sidebar avatars, the popup of an account (or of Claude), the Google card of the settings, logging in and removing an account.
 import type { Claude } from "./bindings/Claude";
 import { calendarNeedsLogin, loadCalendar, resetCalendar } from "./calendar.js";
 import { getClaude } from "./claude.js";
@@ -9,6 +9,7 @@ import { forgetRemoved, historyIds, load } from "./inbox.js";
 import { rows, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { currentScreen, setScreen } from "./nav.js";
+import { itemRow } from "./settings.js";
 import { goBack, opened } from "./thread.js";
 import { show, showError } from "./view.js";
 
@@ -126,21 +127,46 @@ function toggleClaudePopup() {
   placePopup($("claude-btn"));
 }
 
-// Redraws the open popup from the latest state and puts it right of the sidebar at its avatar's height, inside the window.
-// The avatars are rebuilt on every render, so the popup finds its avatar again by the account.
-export function refreshPopup() {
-  if (claudePopup) return placePopup($("claude-btn"));
-  if (popupAccount === null) return;
-  const a = popupAccount;
-  const button = accountButtons().find((b) => b.dataset.account === a);
-  if (!button) return closePopup();
-  const popup = $("account-popup");
+// What the popup and the settings card say about an account: what is wrong with it, whether it needs a login, and its unread count.
+function accountState(a: string) {
   const lines: string[] = [];
   if (a in inboxIssues.failed) lines.push(`受信トレイの読み込みに失敗しました: ${inboxIssues.failed[a]}`);
   if (inboxIssues.needsLogin.includes(a)) lines.push("再ログインが必要です");
   if (calendarNeedsLogin(a)) lines.push("カレンダーの再ログインが必要です");
   const relogin = lines.some((l) => l.includes("再ログイン"));
   const unread = [...rows.values()].filter((r) => r.t.account === a && r.t.unread && r.li.isConnected).length;
+  return { lines, relogin, unread };
+}
+
+// The settings' Google card: one row per sidebar avatar. It is redrawn only when a row changes.
+let googleKey = "";
+function renderGoogleCard() {
+  const states = accountButtons().map((b) => [b.dataset.account!, accountState(b.dataset.account!)] as const);
+  const key = JSON.stringify(states);
+  if (key === googleKey) return;
+  googleKey = key;
+  $("google-accounts").replaceChildren(
+    ...(states.length
+      ? states.map(([a, { lines, unread }]) => {
+          const avatar = tag("span", "avatar", initials(a));
+          avatar.style.background = avatarColor(a);
+          return itemRow({ avatar, name: a, meta: `${lines.length ? lines.join(" · ") : "ログイン中"} · 未読 ${unread}`, warn: lines.length > 0 });
+        })
+      : [tag("div", "card-empty", "アカウントはまだありません")]),
+  );
+}
+
+// Redraws the open popup from the latest state and puts it right of the sidebar at its avatar's height, inside the window.
+// The avatars are rebuilt on every render, so the popup finds its avatar again by the account.
+export function refreshPopup() {
+  renderGoogleCard();
+  if (claudePopup) return placePopup($("claude-btn"));
+  if (popupAccount === null) return;
+  const a = popupAccount;
+  const button = accountButtons().find((b) => b.dataset.account === a);
+  if (!button) return closePopup();
+  const popup = $("account-popup");
+  const { lines, relogin, unread } = accountState(a);
   const confirming = confirmingRemoval === a;
   const key = JSON.stringify([a, lines, relogin, unread, confirming]);
   if (key !== popupKey) {
@@ -250,5 +276,5 @@ export function initAccounts() {
   // The unread count follows every change of the list: load, sync, read toggle, removal.
   new MutationObserver(refreshPopup).observe($("threads"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
   $("login-button").onclick = () => addAccount(null, $<HTMLButtonElement>("login-button"));
-  $("add-account").onclick = () => addAccount(null, $<HTMLButtonElement>("add-account"));
+  $("google-add").onclick = () => addAccount(null, $<HTMLButtonElement>("google-add"));
 }

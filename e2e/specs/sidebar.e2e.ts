@@ -1,13 +1,19 @@
 import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, waitForCalls, waitForText } from "../support";
 
+// The ids of what the sidebar's bottom group shows, top to bottom.
+const bottomGroup = () =>
+  browser.execute(() => [...document.querySelectorAll<HTMLElement>("#sidebar-bottom > *")].filter((e) => e.offsetParent !== null).map((e) => e.id));
+
 describe("sidebar", () => {
   it("shows the Claude avatar while logged in, and its popup on a click", async () => {
     await boot({ inbox: inbox(), claude_status: claudeReady });
     const button = $("#claude-btn");
     await expect(button).toBeDisplayed();
     await expect(button).toHaveAttribute("aria-label", "Claude: claude@example.com");
-    // Integrations sit just above settings, apart from the accounts at the bottom.
-    expect(await browser.execute(() => document.getElementById("claude-btn")?.nextElementSibling?.id)).toBe("nav-settings");
+    // The bottom group is the account avatars, then Claude, then settings last.
+    expect(await bottomGroup()).toEqual(["account-list", "claude-btn", "nav-settings"]);
+    await expect($('#account-list button[aria-label="me@example.com"]')).toBeDisplayed();
+    await expect($("#add-account")).not.toExist();
     await button.click();
     const popup = $("#account-popup");
     await expect(popup).toBeDisplayed();
@@ -38,10 +44,8 @@ describe("sidebar", () => {
     const button = $("#update-btn");
     await button.waitForDisplayed();
     await expect(button).toHaveAttribute("aria-label", "v9.9.9 に更新");
-    // The bottom group starts at the update button: only it takes the free space above, and the Claude avatar and settings follow it.
-    const margins = await browser.execute(() => ["update-btn", "claude-btn", "nav-settings"].map((id) => getComputedStyle(document.getElementById(id)!).marginTop));
-    expect(margins[0]).not.toBe("0px");
-    expect(margins.slice(1)).toEqual(["0px", "0px"]);
+    // The update button comes first in the bottom group, above the accounts.
+    expect(await bottomGroup()).toEqual(["update-btn", "account-list", "claude-btn", "nav-settings"]);
     expect(await callsOf("install_update")).toEqual([]);
     const install = await mock("install_update", null);
     const restart = await mock("restart_app", null);
@@ -65,6 +69,14 @@ describe("sidebar", () => {
     await waitForCalls(check);
     expect(await callsOf(install)).toEqual([]);
     await expect(button).toHaveAttribute("aria-label", "再起動して v9.9.9 にする");
+  });
+
+  it("keeps settings at the bottom edge with no account, no Claude and no update button", async () => {
+    await boot({ inbox: { ...inbox(), accounts: [], threads: [], historyIds: {} }, claude_status: claudeMissing });
+    await waitForText("#claude-items .status", "未導入");
+    expect(await bottomGroup()).toEqual(["nav-settings"]);
+    // The bottom group ends 16px above the window's bottom edge.
+    expect(await browser.execute(() => Math.round(innerHeight - document.getElementById("nav-settings")!.getBoundingClientRect().bottom))).toBe(16);
   });
 
   it("shows no update button when this is the latest version", async () => {

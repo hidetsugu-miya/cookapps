@@ -22,5 +22,5 @@ export const LOCK_SVG = svgOf('<rect x="5" y="11" width="14" height="10" rx="2"/
 export const COPY_SVG = svgOf('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>');
 export const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const INBOX_SVG = $("nav-mail").querySelector("svg")!.outerHTML;
-export const PLUS_SVG = $("add-account").innerHTML.trim();
+export const PLUS_SVG = svgOf('<path d="M12 5v14M5 12h14"/>');
 export const DELETE_SVG = $("todo-delete").innerHTML.trim();
