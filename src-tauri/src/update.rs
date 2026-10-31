@@ -25,6 +25,10 @@ async fn find(app: &tauri::AppHandle, command: &str) -> Result<Option<Update>, S
 /// Whether a newer version is out. The sidebar shows its update button only for `Some`.
 #[tauri::command]
 pub async fn check_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    // Releases carry only the macOS build, so elsewhere every check would fail.
+    if !cfg!(target_os = "macos") {
+        return Ok(None);
+    }
     Ok(find(&app, "check_update")
         .await?
         .map(|u| UpdateInfo { version: u.version }))
