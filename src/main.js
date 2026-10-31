@@ -2656,13 +2656,20 @@ const hostOf = (url) => {
 };
 
 // A connected service's row: avatar, name, a line under it, a state label (`status` is [class, text]) and buttons. `meta` is a string or a list of strings and nodes.
-function itemRow({ avatar, name, meta, warn = false, status, actions = [] }) {
-  const line = tag("div", `item-meta${warn ? " warn" : ""}`);
+// With `onHelp`, the state label and the line under the name are buttons that call it.
+function itemRow({ avatar, name, meta, warn = false, status, actions = [], onHelp }) {
+  const kind = onHelp ? "button" : "div";
+  const line = tag(kind, `item-meta${warn ? " warn" : ""}`);
+  const label = tag(onHelp ? "button" : "span", `status ${status[0]}`, status[1]);
+  if (onHelp) {
+    line.type = label.type = "button";
+    line.onclick = label.onclick = onHelp;
+  }
   line.append(...[meta].flat());
   const who = tag("div", "who");
   who.append(tag("div", "item-name", name), line);
   const row = tag("div", "item");
-  row.append(...(avatar ? [avatar] : []), who, tag("span", `status ${status[0]}`, status[1]), ...actions);
+  row.append(...(avatar ? [avatar] : []), who, label, ...actions);
   return row;
 }
 
@@ -2673,11 +2680,12 @@ function checkWorkspace(w) {
   const prev = wsChecks.get(w.teamId);
   if (prev && !prev.bad && prev.user === w.user) return prev;
   const c = { user: w.user, bad: false };
-  // readsMessages is null when Slack sent no scopes to judge by: the token counts as usable until a read fails with missing_scope.
+  // missingScopes is null when Slack sent no scopes to judge by: the token counts as usable until a read fails with missing_scope.
   c.done = invoke("slack_check", { teamId: w.teamId }).then(
     (r) => {
-      c.bad = r.readsMessages === false;
-      return { state: c.bad ? "noRead" : "ok" };
+      const missing = r.missingScopes ?? [];
+      c.bad = missing.length > 0;
+      return { state: c.bad ? "noRead" : "ok", missing };
     },
     (e) => {
       c.bad = true;
@@ -2697,20 +2705,22 @@ function workspaceRow(w, result) {
   const unlink = tag("button", "icon-btn");
   unlink.innerHTML = UNLINK_SVG;
   unlink.setAttribute("aria-label", `${w.team} の接続を解除`);
-  unlink.onclick = async () => {
-    $("error").hidden = true;
-    try {
-      const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
-      wsChecks.delete(w.teamId);
-      renderWorkspaces(left);
-    } catch (e) {
-      showError(e);
-    }
-  };
+  unlink.setAttribute("data-hint", "");
+  unlink.onclick = () =>
+    confirmUnlink(unlink, w, async () => {
+      $("error").hidden = true;
+      try {
+        const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
+        wsChecks.delete(w.teamId);
+        renderWorkspaces(left);
+      } catch (e) {
+        showError(e);
+      }
+    });
   const state = result?.state;
   const meta =
     state === "noRead"
-      ? "メッセージを読む権限がありません。スコープを足して、トークンを貼り直してください"
+      ? `${result.missing.join("、")} の権限がありません。スコープを足して、トークンを貼り直してください`
       : state === "error"
         ? result.message
         : `${w.user} ・ ${hostOf(w.url)}`;
@@ -2721,6 +2731,7 @@ function workspaceRow(w, result) {
     warn: state === "noRead" || state === "error",
     status: WORKSPACE_STATUS[state] ?? ["off", "確認中"],
     actions: [unlink],
+    onHelp: state === "noRead" ? () => openPermissionPane(w, result.missing) : undefined,
   });
 }
 
@@ -2841,40 +2852,130 @@ function toggleHint(button, node) {
 document.addEventListener("pointerdown", (e) => {
   if (hintOpen && !e.target.closest(".pop, [data-hint]")) closeHint();
 });
-document.addEventListener("keydown", (e) => e.key === "Escape" && !composing(e) && closeHint());
+document.addEventListener("keydown", (e) => e.key === "Escape" && !composing(e) && (closeHint(), closePane()));
 window.addEventListener("resize", closeHint);
 
-// A hint: a title, numbered steps (each a list of strings and nodes), and a last line with a lock.
-function hintPopup(title, steps, foot) {
-  const pop = tag("div", "pop");
-  pop.setAttribute("role", "dialog");
-  pop.setAttribute("aria-label", title);
+// Numbered steps (each a list of strings and nodes), and a last line with a lock.
+function stepList(steps) {
   const list = tag("ol");
   for (const step of steps) {
     const li = tag("li");
     li.append(...step);
     list.append(li);
   }
+  return list;
+}
+
+function lockFoot(text) {
   const last = tag("div", "foot");
   last.insertAdjacentHTML("beforeend", LOCK_SVG);
-  last.append(foot);
-  pop.append(tag("h3", "", title), list, last);
+  last.append(text);
+  return last;
+}
+
+// A hint: a title, numbered steps, and a last line with a lock.
+function hintPopup(title, steps, foot) {
+  const pop = tag("div", "pop");
+  pop.setAttribute("role", "dialog");
+  pop.setAttribute("aria-label", title);
+  pop.append(tag("h3", "", title), stepList(steps), lockFoot(foot));
   return pop;
 }
 
-const code = (text) => tag("code", "", text);
-const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", "channels:history", "groups:history"];
+// The confirmation before unlinking, framed like a hint; Cancel, the same button, a click elsewhere or Escape closes it.
+function confirmUnlink(button, w, onConfirm) {
+  const pop = tag("div", "pop");
+  pop.setAttribute("role", "alertdialog");
+  pop.setAttribute("aria-label", `${w.team} の接続を解除`);
+  const yes = tag("button", "text-btn danger", "解除");
+  const no = tag("button", "text-btn", "キャンセル");
+  yes.type = no.type = "button";
+  yes.onclick = () => {
+    closeHint();
+    onConfirm();
+  };
+  no.onclick = closeHint;
+  const actions = tag("div", "popup-actions");
+  actions.append(yes, no);
+  pop.append(
+    tag("h3", "", `${w.team} の接続を解除しますか？`),
+    tag("p", "", "トークンを Slack で取り消し、cookup から削除します。Slack のアプリは残ります。"),
+    actions,
+  );
+  toggleHint(button, pop);
+  no.focus();
+}
 
-$("slack-help").onclick = (e) => {
+// A pane slides in from the right over a dimmed screen; ✕, Escape or a click on the dimmed part closes it. Focus goes into it and returns to what opened it.
+// The screen behind is inert while it is open, so Tab stays inside. When a redraw removed the opener, focus goes to the Slack token field.
+let pane = null;
+function closePane() {
+  if (!pane) return;
+  pane.scrim.remove();
+  pane.behind.forEach((el) => (el.inert = false));
+  (pane.opener?.isConnected ? pane.opener : $("slack-token-input")).focus();
+  pane = null;
+}
+
+function openPane(title, ...body) {
+  closePane();
+  closeHint();
+  const close = tag("button", "icon-btn");
+  close.type = "button";
+  close.innerHTML = CLOSE_SVG;
+  close.setAttribute("aria-label", "閉じる");
+  close.onclick = closePane;
+  const head = tag("div", "pane-head");
+  head.append(tag("h2", "", title), close);
+  const node = tag("div", "pane");
+  node.setAttribute("role", "dialog");
+  node.setAttribute("aria-modal", "true");
+  node.setAttribute("aria-label", title);
+  node.tabIndex = -1;
+  node.append(head, ...body);
+  const scrim = tag("div", "scrim");
+  // A block body: a handler property that returns false cancels the event, which would keep focus out of the pane's fields.
+  // On the dimmed part the default is cancelled, so the press does not move focus off the opener to the body.
+  scrim.onpointerdown = (e) => {
+    if (e.target !== scrim) return;
+    e.preventDefault();
+    closePane();
+  };
+  scrim.append(node);
+  const behind = [...document.querySelectorAll("#sidebar, #content")];
+  pane = { scrim, behind, opener: document.activeElement };
+  behind.forEach((el) => (el.inert = true));
+  document.body.append(scrim);
+  node.focus();
+}
+
+const code = (text) => tag("code", "", text);
+// The history scopes, each with the conversations it reads.
+const HISTORY_KINDS = {
+  "channels:history": "公開チャンネル",
+  "groups:history": "非公開チャンネル",
+  "im:history": "DM",
+  "mpim:history": "グループ DM",
+};
+const HISTORY_SCOPES = Object.keys(HISTORY_KINDS);
+const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", ...HISTORY_SCOPES];
+
+// The Slack apps page (a link the default browser opens, by Rust's on_navigation) and a scope list with its copy button.
+function appsLink() {
   const link = tag("a", "", "api.slack.com/apps");
   link.href = "https://api.slack.com/apps";
+  return link;
+}
+
+// `notes` (scope -> text) puts a short explanation after each scope.
+function scopesBlock(list, notes) {
   const copy = tag("button", "text-btn");
   copy.type = "button";
   const label = `${COPY_SVG}スコープをコピー`;
   copy.innerHTML = label;
   copy.onclick = async () => {
     try {
-      await navigator.clipboard.writeText(SLACK_SCOPES.join(","));
+      await navigator.clipboard.writeText(list.join(","));
       copy.textContent = "コピーしました";
       setTimeout(() => (copy.innerHTML = label), 2000);
     } catch (err) {
@@ -2882,20 +2983,81 @@ $("slack-help").onclick = (e) => {
     }
   };
   const scopes = tag("div", "scopes");
-  scopes.append(...SLACK_SCOPES.map((s) => code(s)));
+  if (notes) scopes.classList.add("noted");
+  scopes.append(
+    ...list.map((s) => {
+      if (!notes) return code(s);
+      const row = tag("div");
+      row.append(code(s), tag("span", "note", notes[s]));
+      return row;
+    }),
+  );
+  return [scopes, copy];
+}
+
+// The pane for a workspace whose token lacks the scopes `missing` for reading messages: what to do in Slack, and a field for the new token.
+function openPermissionPane(w, missing) {
+  const input = tag("input");
+  input.type = "password";
+  input.autocomplete = "off";
+  input.required = true;
+  input.setAttribute("aria-label", "Slack の User OAuth Token");
+  input.placeholder = "User OAuth Token（xoxp-…）";
+  const submit = tag("button", "text-btn", "貼り直す");
+  const form = tag("form", "card-add");
+  form.append(input, submit);
+  const err = tag("p", "err danger");
+  err.hidden = true;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    // The token is never shown: the field is emptied as soon as it is read.
+    const token = input.value;
+    input.value = "";
+    err.hidden = true;
+    submit.disabled = true;
+    try {
+      const list = await invoke("slack_add_workspace", { token });
+      // Another workspace's token is added as it is (the list grows, or this workspace is gone); the pane says so and stays.
+      const other = list.length > slackWorkspaces.length || !list.some((x) => x.teamId === w.teamId);
+      renderWorkspaces(list);
+      if (other) {
+        err.textContent = `${w.team} のトークンではありません`;
+        err.hidden = false;
+      } else closePane();
+    } catch (x) {
+      err.textContent = String(x);
+      err.hidden = false;
+    }
+    submit.disabled = false;
+  };
+  openPane(
+    `${w.team} の権限を足す`,
+    tag("p", "", `このトークンには ${missing.join("、")} がありません。`),
+    stepList([
+      [appsLink(), " で、このワークスペースのアプリを選ぶ"],
+      ["「OAuth & Permissions」の「User Token Scopes」に次を足す", ...scopesBlock(missing, HISTORY_KINDS)],
+      ["ページ上部の「Reinstall to Workspace」を押して許可する（管理者の承認が要ることがある）"],
+      ["「User OAuth Token」（", code("xoxp-"), "）をコピーして、下の欄に貼る"],
+    ]),
+    form,
+    err,
+    lockFoot("トークンは OS の資格情報の保管場所に入れ、画面には出しません"),
+  );
+}
+
+$("slack-help").onclick = (e) =>
   toggleHint(
     e.currentTarget,
     hintPopup(
       "Slack の接続方法",
       [
-        [link, " で、ワークスペースごとにアプリを作る"],
-        ["「User Token Scopes」に次を足す", scopes, copy],
+        [appsLink(), " で、ワークスペースごとにアプリを作る"],
+        ["「User Token Scopes」に次を足す", ...scopesBlock(SLACK_SCOPES)],
         ["ワークスペースにインストールし、", code("xoxp-"), " で始まるトークンを下の欄に貼る"],
       ],
       "トークンは OS の資格情報の保管場所に入れ、画面には出しません",
     ),
   );
-};
 
 $("claude-help").onclick = (e) =>
   toggleHint(

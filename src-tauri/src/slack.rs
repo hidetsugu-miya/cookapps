@@ -307,18 +307,33 @@ fn parse_url(raw: &str) -> Result<Link, String> {
     })
 }
 
-/// Whether an `x-oauth-scopes` header lists the scopes that reading a channel's messages needs, public and private.
-fn reads_messages(scopes: &str) -> bool {
-    let has = |wanted: &str| scopes.split(',').any(|s| s.trim() == wanted);
-    has("channels:history") && has("groups:history")
+/// The history scopes `conversations.replies` takes by the kind of conversation: public, private, DM, group DM.
+const HISTORY_SCOPES: [&str; 4] = [
+    "channels:history",
+    "groups:history",
+    "im:history",
+    "mpim:history",
+];
+
+/// The history scopes an `x-oauth-scopes` header lacks; reading a message needs all four.
+fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
+    HISTORY_SCOPES
+        .into_iter()
+        .filter(|wanted| !scopes.split(',').any(|s| s.trim() == *wanted))
+        .collect()
 }
 
-/// The message for a failed `conversations.replies`: a missing scope says which workspace's token to replace.
+/// The message for a failed `conversations.replies`: a missing scope says which workspace's token to replace, and which scope it lacks.
 fn read_error(e: SlackError, team: &str) -> String {
     match e.code.as_deref() {
-        Some("missing_scope") => format!(
-            "{team} のトークンにメッセージを読む権限がありません。設定でトークンを貼り直してください"
-        ),
+        Some("missing_scope") => {
+            let what = if e.needed.is_empty() {
+                "メッセージを読む".to_owned()
+            } else {
+                format!(" {} の", e.needed)
+            };
+            format!("{team} のトークンに{what}権限がありません。設定でトークンを貼り直してください")
+        }
         _ => e.message,
     }
 }
@@ -464,6 +479,8 @@ struct SlackError {
     token_dead: bool,
     /// Slack's `error` code, when Slack answered with one.
     code: Option<String>,
+    /// For `missing_scope`, the scope Slack says the token lacks; empty otherwise.
+    needed: String,
 }
 
 impl From<String> for SlackError {
@@ -472,6 +489,7 @@ impl From<String> for SlackError {
             message,
             token_dead: false,
             code: None,
+            needed: String::new(),
         }
     }
 }
@@ -553,6 +571,7 @@ async fn call_scoped(
             message,
             token_dead: token_is_dead(reply["error"].as_str().unwrap_or_default()),
             code: reply["error"].as_str().map(str::to_owned),
+            needed: reply["needed"].as_str().unwrap_or_default().to_owned(),
         })?;
         return Ok((reply, scopes));
     }
@@ -602,16 +621,16 @@ async fn token_of(team_id: &str) -> Result<String, String> {
         .ok_or_else(|| NO_TOKEN.to_owned())
 }
 
-/// `auth.test` with `token`: which workspace and user the token is, and whether it can read messages (`None` when Slack did not say).
+/// `auth.test` with `token`: which workspace and user the token is, and the history scopes it lacks (`None` when Slack did not say).
 async fn identify_scoped(
     http: &reqwest::Client,
     token: &str,
-) -> Result<(Workspace, Option<bool>), SlackError> {
+) -> Result<(Workspace, Option<Vec<&'static str>>), SlackError> {
     let (reply, scopes) = call_scoped(http, token, "auth.test", Payload::Empty).await?;
     let workspace = workspace_of(&reply).ok_or_else(|| {
         SlackError::from("Slack の返答にワークスペースの ID がありません".to_owned())
     })?;
-    Ok((workspace, scopes.as_deref().map(reads_messages)))
+    Ok((workspace, scopes.as_deref().map(missing_history_scopes)))
 }
 
 /// `auth.test` with `token`: which workspace and user the token is.
@@ -738,13 +757,13 @@ pub async fn slack_load(
     Ok(SlackLoad { workspaces, recent })
 }
 
-/// A workspace as `auth.test` describes it now. `reads_messages` is `None` when Slack sent no scopes to judge by.
+/// A workspace as `auth.test` describes it now. `missing_scopes` is `None` when Slack sent no scopes to judge by.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Checked {
     #[serde(flatten)]
     workspace: Workspace,
-    reads_messages: Option<bool>,
+    missing_scopes: Option<Vec<&'static str>>,
 }
 
 /// Asks Slack who the stored token of the workspace is; an error says why it is not usable.
@@ -753,9 +772,9 @@ pub async fn slack_check(auth: State<'_, Auth>, team_id: String) -> Result<Check
     let result = match token_of(&team_id).await {
         Ok(token) => identify_scoped(auth.http(), &token)
             .await
-            .map(|(workspace, reads_messages)| Checked {
+            .map(|(workspace, missing_scopes)| Checked {
                 workspace,
-                reads_messages,
+                missing_scopes,
             })
             .map_err(String::from),
         Err(e) => Err(e),
@@ -1459,14 +1478,38 @@ mod tests {
     }
 
     #[test]
-    fn reading_needs_the_history_scopes_of_public_and_private_channels() {
-        assert!(reads_messages("chat:write,channels:history,groups:history"));
-        assert!(reads_messages("groups:history, channels:history"));
-        assert!(!reads_messages("chat:write,channels:read,groups:read"));
-        assert!(!reads_messages("channels:history"));
-        assert!(!reads_messages("groups:history"));
-        assert!(!reads_messages(""));
-        assert!(!reads_messages("channels:history:x,groups:history"));
+    fn reading_needs_the_history_scopes_of_channels_and_direct_messages() {
+        let all = "chat:write,channels:history,groups:history,im:history,mpim:history";
+        assert!(missing_history_scopes(all).is_empty());
+        assert!(missing_history_scopes(
+            "mpim:history, im:history,groups:history, channels:history"
+        )
+        .is_empty());
+        assert_eq!(
+            missing_history_scopes("chat:write,channels:read,groups:read"),
+            HISTORY_SCOPES
+        );
+        assert_eq!(
+            missing_history_scopes("channels:history,groups:history"),
+            ["im:history", "mpim:history"]
+        );
+        assert_eq!(
+            missing_history_scopes("channels:history,groups:history,im:history"),
+            ["mpim:history"]
+        );
+        assert_eq!(
+            missing_history_scopes("channels:history,groups:history,mpim:history"),
+            ["im:history"]
+        );
+        assert_eq!(
+            missing_history_scopes("im:history,mpim:history"),
+            ["channels:history", "groups:history"]
+        );
+        assert_eq!(missing_history_scopes(""), HISTORY_SCOPES);
+        assert_eq!(
+            missing_history_scopes("channels:history:x,groups:history,im:history,mpim:history"),
+            ["channels:history"]
+        );
     }
 
     fn failure(code: Option<&str>) -> SlackError {
@@ -1474,14 +1517,21 @@ mod tests {
             message: "元の文".into(),
             token_dead: false,
             code: code.map(str::to_owned),
+            needed: String::new(),
         }
     }
 
     #[test]
-    fn a_missing_scope_names_the_workspace() {
+    fn a_missing_scope_names_the_workspace_and_the_scope() {
         assert_eq!(
             read_error(failure(Some("missing_scope")), "Example"),
             "Example のトークンにメッセージを読む権限がありません。設定でトークンを貼り直してください"
+        );
+        let mut lacking = failure(Some("missing_scope"));
+        lacking.needed = "im:history".into();
+        assert_eq!(
+            read_error(lacking, "Example"),
+            "Example のトークンに im:history の権限がありません。設定でトークンを貼り直してください"
         );
         assert_eq!(read_error(failure(Some("not_in_channel")), "x"), "元の文");
         assert_eq!(read_error(failure(None), "x"), "元の文");
