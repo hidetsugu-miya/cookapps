@@ -2907,11 +2907,13 @@ function confirmUnlink(button, w, onConfirm) {
 }
 
 // A pane slides in from the right over a dimmed screen; ✕, Escape or a click on the dimmed part closes it. Focus goes into it and returns to what opened it.
+// The screen behind is inert while it is open, so Tab stays inside. When a redraw removed the opener, focus goes to the Slack token field.
 let pane = null;
 function closePane() {
   if (!pane) return;
   pane.scrim.remove();
-  pane.opener?.focus();
+  pane.behind.forEach((el) => (el.inert = false));
+  (pane.opener?.isConnected ? pane.opener : $("slack-token-input")).focus();
   pane = null;
 }
 
@@ -2934,7 +2936,9 @@ function openPane(title, ...body) {
   const scrim = tag("div", "scrim");
   scrim.onpointerdown = (e) => e.target === scrim && closePane();
   scrim.append(node);
-  pane = { scrim, opener: document.activeElement };
+  const behind = [...document.querySelectorAll("#sidebar, #content")];
+  pane = { scrim, behind, opener: document.activeElement };
+  behind.forEach((el) => (el.inert = true));
   document.body.append(scrim);
   node.focus();
 }
@@ -3007,8 +3011,13 @@ function openPermissionPane(w, missing) {
     submit.disabled = true;
     try {
       const list = await invoke("slack_add_workspace", { token });
-      closePane();
+      // Another workspace's token is added as it is (the list grows, or this workspace is gone); the pane says so and stays.
+      const other = list.length > slackWorkspaces.length || !list.some((x) => x.teamId === w.teamId);
       renderWorkspaces(list);
+      if (other) {
+        err.textContent = `${w.team} のトークンではありません`;
+        err.hidden = false;
+      } else closePane();
     } catch (x) {
       err.textContent = String(x);
       err.hidden = false;
