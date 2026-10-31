@@ -120,7 +120,7 @@ npx tauri build --bundles nsis
 ```
 
 インストーラーは `src-tauri/target/release/bundle/nsis/` に `cookapps_{バージョン}_x64-setup.exe` として出ます。
-GitHub Actions の CI（windows-latest）も、タグ（`v*`）の push のたびに同じインストーラーを作り、成果物 `cookapps-windows-installer` として残します。
+GitHub Actions の CI（windows-latest）も、版を上げたコミットが main に push されて CI がそのタグを付けるたびに同じインストーラーを作り、成果物 `cookapps-windows-installer` として残します。
 コード署名はしていないので、実行すると Windows の SmartScreen が警告を出すことがあります。
 `client_secret.json` は、セットアップの手順の場所（`%APPDATA%\jp.mysis.cookapps\`）に置きます。
 
