@@ -1,5 +1,16 @@
-// What every spec shares: booting the app with fixtures, mocking a command, and fixture data shaped like the Rust return values
-// (the Serialize structs in src-tauri/src/*.rs). Only example.com addresses and made-up names appear here: the repository is public.
+// What every spec shares: booting the app with fixtures, mocking a command, and fixture data shaped like the Rust return values.
+// The fixtures are typed by the types ts-rs writes from the Serialize structs (src/ts/bindings/), so a change of a struct's shape fails the type check here.
+// Only example.com addresses and made-up names appear here: the repository is public.
+import type { Checked } from "../src/ts/bindings/Checked";
+import type { Claude } from "../src/ts/bindings/Claude";
+import type { Inbox } from "../src/ts/bindings/Inbox";
+import type { SlackLoad } from "../src/ts/bindings/SlackLoad";
+import type { TaskItem } from "../src/ts/bindings/TaskItem";
+import type { ThreadDetail } from "../src/ts/bindings/ThreadDetail";
+import type { ThreadItem } from "../src/ts/bindings/ThreadItem";
+import type { Todo } from "../src/ts/bindings/Todo";
+import type { Week } from "../src/ts/bindings/Week";
+import type { Workspace } from "../src/ts/bindings/Workspace";
 
 // The app asks for its data while loading, before a spec can mock anything: hand it over through the fixture layer (e2e/fixtures.js) and reload.
 // Mocks and recorded calls are page state, so a reload also clears them; call `mock` after `boot`.
@@ -67,7 +78,7 @@ export const today = isoDate(new Date());
 
 export const account = "me@example.com";
 
-export const thread = (id: string, subject: string, unread: boolean) => ({
+export const thread = (id: string, subject: string, unread: boolean): ThreadItem => ({
   id,
   account,
   from: "Alice <alice@example.com>",
@@ -77,7 +88,7 @@ export const thread = (id: string, subject: string, unread: boolean) => ({
   unread,
 });
 
-export const inbox = (threads = [thread("t1", "First unread", true), thread("t2", "Second unread", true), thread("t3", "Already read", false)]) => ({
+export const inbox = (threads = [thread("t1", "First unread", true), thread("t2", "Second unread", true), thread("t3", "Already read", false)]): Inbox => ({
   accounts: [account],
   threads,
   needsLogin: [],
@@ -86,7 +97,7 @@ export const inbox = (threads = [thread("t1", "First unread", true), thread("t2"
 });
 
 // A thread of one plain-text message.
-export const threadDetail = (subject: string, body: string, unread: boolean) => ({
+export const threadDetail = (subject: string, body: string, unread: boolean): ThreadDetail => ({
   subject,
   unread,
   messages: [
@@ -97,7 +108,7 @@ export const threadDetail = (subject: string, body: string, unread: boolean) => 
 // ---- Calendar ----
 
 // The week holding today: a timed event 10:00-11:00 and an all-day event, both today.
-export function weekOfToday() {
+export function weekOfToday(): Week {
   const now = new Date();
   const sunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
   const info = (summary: string) => ({ summary, color: null, account, declined: false });
@@ -113,7 +124,7 @@ export function weekOfToday() {
 
 // ---- Todoist ----
 
-export const task = (id: string, content: string, projectId: string, bucket: "overdue" | "today" | "upcoming" | "none") => ({
+export const task = (id: string, content: string, projectId: string, bucket: "overdue" | "today" | "upcoming" | "none"): TaskItem => ({
   id,
   content,
   description: "",
@@ -128,7 +139,7 @@ export const task = (id: string, content: string, projectId: string, bucket: "ov
   parent: null,
 });
 
-export const todoData = () => ({
+export const todoData = (): Todo => ({
   projects: [
     { id: "p0", name: "Inbox", color: "#808080", inbox: true },
     { id: "p1", name: "Work", color: "#1e7b52", inbox: false },
@@ -138,13 +149,13 @@ export const todoData = () => ({
 
 // ---- Slack and Claude ----
 
-export const workspace = { teamId: "T1", team: "Example Team", user: "alice", url: "https://example-team.slack.com/" };
-export const slackLoad = { workspaces: [workspace], recent: [] };
+export const workspace: Workspace = { teamId: "T1", team: "Example Team", user: "alice", url: "https://example-team.slack.com/" };
+export const slackLoad: SlackLoad = { workspaces: [workspace], recent: [] };
 export const slackMessageUrl = "https://example-team.slack.com/archives/C0123ABCD/p1700000000123456";
 
 // What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by.
-export const checked = (missingScopes: string[] | null) => ({ ...workspace, missingScopes });
+export const checked = (missingScopes: string[] | null): Checked => ({ ...workspace, missingScopes });
 
-export const claudeReady = { state: "ready", email: "claude@example.com", plan: "Max", version: "2.0.0" };
-export const claudeLoggedOut = { state: "loggedOut", version: "2.0.0" };
-export const claudeMissing = { state: "missing" };
+export const claudeReady: Claude = { state: "ready", email: "claude@example.com", plan: "Max", version: "2.0.0" };
+export const claudeLoggedOut: Claude = { state: "loggedOut", version: "2.0.0" };
+export const claudeMissing: Claude = { state: "missing" };

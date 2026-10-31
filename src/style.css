@@ -121,7 +121,7 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .images-bar .text-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .images-bar .text-btn:disabled { opacity: .4; cursor: default; }
 
-/* Calendar: --hour is set from HOUR_PX in main.js. */
+/* Calendar: --hour is set from HOUR_PX in ts/calendar.ts. */
 #calendar { flex: 1; min-height: 0; display: flex; flex-direction: column; --gutter: 56px; }
 #cal-bar { flex: none; display: flex; align-items: center; gap: 4px; padding: 20px 32px 12px; }
 #cal-title { font-size: 20px; }

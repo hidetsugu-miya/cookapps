@@ -8,6 +8,7 @@ use std::{
 
 use serde::Serialize;
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::gmail::log_failure;
 
@@ -23,7 +24,8 @@ const SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"content":{"type"
 const NO_WINDOW: u32 = 0x0800_0000;
 
 /// What `claude` is here: logged in, not logged in, not installed, or unreadable.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Debug, PartialEq, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum Claude {
     Ready {

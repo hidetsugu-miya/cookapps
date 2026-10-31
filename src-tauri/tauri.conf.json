@@ -4,7 +4,9 @@
   "version": "0.14.1",
   "identifier": "jp.mysis.cookup",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src",
+    "beforeDevCommand": "npm run build:ts && npm run watch:ts",
+    "beforeBuildCommand": "npm run build:ts"
   },
   "app": {
     "withGlobalTauri": true,

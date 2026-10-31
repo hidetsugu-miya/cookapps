@@ -8,4 +8,5 @@ mise.toml
 !.claude/agents/
 src-tauri/.cargo/
 e2e/dist/
+src/js/
 graphify-out/

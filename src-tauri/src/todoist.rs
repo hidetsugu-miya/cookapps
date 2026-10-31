@@ -12,6 +12,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
+use ts_rs::TS;
 use url::Url;
 
 use crate::{
@@ -212,7 +213,8 @@ struct Page<T> {
     next_cursor: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 pub struct Due {
     /// Local date, `YYYY-MM-DD`.
     date: String,
@@ -225,7 +227,8 @@ pub struct Due {
     recurring: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "lowercase")]
 pub enum Bucket {
     Overdue,
@@ -236,7 +239,8 @@ pub enum Bucket {
     NoDue,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "camelCase")]
 pub struct Subtask {
     id: String,
@@ -246,7 +250,8 @@ pub struct Subtask {
 }
 
 /// The Gmail thread a task's description links to.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "camelCase")]
 pub struct MailRef {
     account: String,
@@ -254,13 +259,15 @@ pub struct MailRef {
 }
 
 /// The task whose detail lists a subtask row: the subtask's own parent.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 pub struct ParentRef {
     id: String,
     content: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskItem {
     id: String,
@@ -280,7 +287,8 @@ pub struct TaskItem {
     parent: Option<ParentRef>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectItem {
     id: String,
@@ -290,7 +298,8 @@ pub struct ProjectItem {
     inbox: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 pub struct Todo {
     projects: Vec<ProjectItem>,
     /// Top-level active tasks, then the subtasks that are overdue, due today, or have subtasks of their own as rows of their own, by due date.
@@ -301,7 +310,8 @@ pub struct Todo {
 }
 
 /// Why and since when a `Todo` is the cached one.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "camelCase")]
 pub struct Offline {
     /// RFC 3339, UTC: when the content was fetched.

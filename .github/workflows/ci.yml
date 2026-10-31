@@ -36,9 +36,11 @@ jobs:
           else
             scripts/check-version.sh
           fi
-      - name: Check JS syntax
-        if: matrix.os == 'macos-latest'
-        run: node --check src/main.js
+      # tauri's build embeds src/, whose js/ is the output of tsc, so the frontend comes before cargo.
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build:ts
       - name: Format
         working-directory: src-tauri
         run: cargo fmt --check
@@ -48,11 +50,12 @@ jobs:
       - name: Test
         working-directory: src-tauri
         run: cargo test
+      # cargo test writes the types of the Rust structs (src/ts/bindings/); a committed copy that differs is out of date.
+      - name: Check bindings
+        run: test -z "$(git status --porcelain src/ts/bindings)"
       - name: Build installer
         if: matrix.os == 'windows-latest' && github.ref_type == 'tag'
-        run: |
-          npm ci
-          npx tauri build --bundles nsis
+        run: npx tauri build --bundles nsis
       - name: Upload installer
         if: matrix.os == 'windows-latest' && github.ref_type == 'tag'
         uses: actions/upload-artifact@v7

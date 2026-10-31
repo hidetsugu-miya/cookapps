@@ -1,6 +1,6 @@
 // E2E only: sits under every invoke of the app. Loaded after the plugin and before the app.
 // On WKWebView `core.invoke` and `__TAURI_INTERNALS__.invoke` are read-only, so the plugin cannot intercept the app's calls itself;
-// but `window.__TAURI__.core` is writable, so it is replaced by a copy with a wrapped `invoke`. main.js reads `invoke` from it after this script ran.
+// but `window.__TAURI__.core` is writable, so it is replaced by a copy with a wrapped `invoke`. `src/ts/ipc.ts` reads `invoke` from it after this script ran.
 // Order of lookup: a spec's `mock(...)` in e2e/support.ts (window.__e2e_mocks__), then the fixtures, then the base answers below, else reject.
 // Every app command call is recorded in window.__e2e_calls__[command] as its argument list, for `callsOf` in e2e/support.ts.
 // Both live in the page, so a reload clears them. (@wdio/tauri-service's own `mock` is not used: it does not put the mock back into a reloaded page.)
