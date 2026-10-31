@@ -2934,7 +2934,10 @@ function openPane(title, ...body) {
   node.tabIndex = -1;
   node.append(head, ...body);
   const scrim = tag("div", "scrim");
-  scrim.onpointerdown = (e) => e.target === scrim && closePane();
+  // A block body: a handler property that returns false cancels the event, which would keep focus out of the pane's fields.
+  scrim.onpointerdown = (e) => {
+    if (e.target === scrim) closePane();
+  };
   scrim.append(node);
   const behind = [...document.querySelectorAll("#sidebar, #content")];
   pane = { scrim, behind, opener: document.activeElement };
