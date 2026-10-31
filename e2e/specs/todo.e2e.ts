@@ -108,6 +108,23 @@ describe("todo projects and subtasks", () => {
     await waitForCount(ROWS, 3);
   });
 
+  it("keeps the subtasks closed when the toggle is pressed again while they are closing", async () => {
+    await openTodo();
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 2);
+    await rowOf("Plan trip").$(".toggle").click();
+    await waitForCount(ROWS, 3);
+    // Two presses in one turn: the second lands while the rows are still sliding shut.
+    await browser.execute(() => {
+      const t = [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].find((l) => l.textContent?.includes("Plan trip"))!.querySelector<HTMLElement>(".toggle")!;
+      t.click();
+      t.click();
+    });
+    await waitForCount(ROWS, 2);
+    await expect(rowOf("Plan trip").$(".toggle")).toHaveAttribute("aria-expanded", "false");
+    await expect(rowOf("Book flights")).not.toExist();
+  });
+
   it("opens a subtask row as its own task and completes it from its checkbox", async () => {
     await openTodo();
     await $('#projects .proj[data-view="p1"]').click();

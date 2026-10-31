@@ -9,7 +9,7 @@ import { setScreen } from "./nav.js";
 import { openThread } from "./thread.js";
 import { updateAddMode } from "./todo-add.js";
 import { openDuePop, openProjectMenu } from "./todo-detail.js";
-import { accountSet, dueLabel, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
+import { accountSet, dueLabel, editingField, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
 import { moveTask, saveTask, setTaskDone } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
 import { showError } from "./view.js";
@@ -101,7 +101,9 @@ function toggleButton(id: string, label: string, expanded: boolean, toggle: () =
 }
 
 const SLIDE = { duration: 180, easing: "ease" };
-const SHRUNK = { height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0, marginBottom: 0, overflow: "hidden" };
+// Clips the row to its shrinking height but not on the left, where a row's own toggle sits outside it (overflow: hidden would cut the toggle).
+const CLIP = "inset(0 0 0 -30px)";
+const SHRUNK = { height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0, marginBottom: 0, clipPath: CLIP };
 const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 // The toggles whose rows are sliding shut; a click on one meanwhile does nothing.
 const closing = new Set<string>();
@@ -109,7 +111,7 @@ const closing = new Set<string>();
 // The row's own size, which the slide grows to or shrinks from.
 function fullSize(el: Element) {
   const s = getComputedStyle(el);
-  return { height: s.height, opacity: s.opacity, paddingTop: s.paddingTop, paddingBottom: s.paddingBottom, marginTop: s.marginTop, marginBottom: s.marginBottom, overflow: "hidden" };
+  return { height: s.height, opacity: s.opacity, paddingTop: s.paddingTop, paddingBottom: s.paddingBottom, marginTop: s.marginTop, marginBottom: s.marginBottom, clipPath: CLIP };
 }
 
 // Slides the rows nested under `id` in and the chevron round, or out and back.
@@ -144,7 +146,9 @@ function toggleNested(box: HTMLElement, id: string, opening: boolean, change: ()
   setTimeout(() => {
     closing.delete(key);
     change();
-    if (todoState.todo) renderTodo();
+    // Like a load: a name or a drag begun during the slide is kept, and drawn after it.
+    if (editingField()) todoState.undrawn = true;
+    else if (todoState.todo) renderTodo();
   }, quiet ? 0 : SLIDE.duration);
 }
 
