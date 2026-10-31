@@ -11,11 +11,11 @@ function hideTip() {
   tip.hidden = true;
 }
 
-// Right of a sidebar control, below any other; kept inside the window. While the account popup is open it covers that area, so the sidebar's account controls show none.
+// Right of a sidebar control, below any other; kept inside the window. While the account popup is open it covers that area, so the sidebar's account and Claude avatars show none.
 function showTip(target: Element) {
   hideTip();
   const inSidebar = target.closest("#sidebar");
-  if (popupOpen() && target.closest("#accounts")) return;
+  if (popupOpen() && target.closest("#accounts, #claude-btn")) return;
   tipTimer = setTimeout(() => {
     tip.textContent = target.getAttribute("aria-label");
     tip.hidden = false;

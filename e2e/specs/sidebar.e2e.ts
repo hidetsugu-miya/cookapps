@@ -14,6 +14,11 @@ describe("sidebar", () => {
     await expect(popup).toHaveText(expect.stringContaining("claude@example.com"));
     await expect(popup).toHaveText(expect.stringContaining("Claude ・ Max プラン"));
     await expect(button).toHaveAttribute("aria-expanded", "true");
+    // The tooltip would land on the popup, so the avatar shows none while it is open (the tooltip waits 300 ms).
+    await $("#nav-mail").moveTo();
+    await button.moveTo();
+    await browser.pause(600);
+    await expect($(".tooltip")).not.toBeDisplayed();
   });
 
   for (const [name, status, label] of [
