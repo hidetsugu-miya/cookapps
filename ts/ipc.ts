@@ -1,5 +1,6 @@
 // The commands of src-tauri (`invoke_handler`): each one's arguments and answer. The data types are ts-rs's (bindings/).
 // A command with no arguments is called as `invoke("inbox")`. An answer of `null` is what a Rust `()` or `None` becomes.
+import type { AppInfo } from "./bindings/AppInfo";
 import type { Channel } from "./bindings/Channel";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
@@ -11,6 +12,7 @@ import type { Target } from "./bindings/Target";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { Todo } from "./bindings/Todo";
 import type { UpdateInfo } from "./bindings/UpdateInfo";
+import type { UpdateMode } from "./bindings/UpdateMode";
 import type { Week } from "./bindings/Week";
 import type { Workspace } from "./bindings/Workspace";
 
@@ -68,9 +70,13 @@ export interface Commands {
     result: boolean;
   };
   claude_status: { args: undefined; result: Claude };
-  // null: this is the latest version. install_update restarts the app when it installs.
+  app_info: { args: undefined; result: AppInfo };
+  update_mode: { args: undefined; result: UpdateMode };
+  set_update_mode: { args: { mode: UpdateMode }; result: null };
+  // null: this is the latest version. install_update only replaces the app (UpdateInfo.installed afterwards); restart_app restarts it.
   check_update: { args: undefined; result: UpdateInfo | null };
   install_update: { args: undefined; result: null };
+  restart_app: { args: undefined; result: null };
   set_badge: { args: { count: number }; result: null };
 }
 

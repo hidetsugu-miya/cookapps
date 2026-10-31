@@ -1,4 +1,4 @@
-import { boot, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, waitForCalls, waitForText } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, waitForCalls, waitForText } from "../support";
 
 describe("sidebar", () => {
   it("shows the Claude avatar while logged in, and its popup on a click", async () => {
@@ -33,8 +33,8 @@ describe("sidebar", () => {
     });
   }
 
-  it("shows the update button with the new version, and installs on a press", async () => {
-    await boot({ inbox: inbox(), claude_status: claudeReady, check_update: { version: "9.9.9" } });
+  it("manual: shows the update button with the new version, and on a press replaces the app and restarts it", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady, update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
     const button = $("#update-btn");
     await button.waitForDisplayed();
     await expect(button).toHaveAttribute("aria-label", "v9.9.9 に更新");
@@ -42,9 +42,29 @@ describe("sidebar", () => {
     const margins = await browser.execute(() => ["update-btn", "claude-btn", "nav-settings"].map((id) => getComputedStyle(document.getElementById(id)!).marginTop));
     expect(margins[0]).not.toBe("0px");
     expect(margins.slice(1)).toEqual(["0px", "0px"]);
+    expect(await callsOf("install_update")).toEqual([]);
     const install = await mock("install_update", null);
+    const restart = await mock("restart_app", null);
     await button.click();
-    expect(await waitForCalls(install)).toEqual([null]);
+    expect(await waitForCalls(restart)).toEqual([null]);
+    expect(await callsOf(install)).toEqual([null]);
+  });
+
+  it("auto: replaces the app by itself, then the button restarts the app and nothing else", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady, update_mode: "auto", check_update: { version: "9.9.9", installed: false } });
+    expect(await waitForCalls("install_update")).toEqual([null]);
+    const button = $("#update-btn");
+    await expect(button).toHaveAttribute("aria-label", "再起動して v9.9.9 にする");
+    expect(await callsOf("restart_app")).toEqual([]);
+    // From now on the backend says the app is replaced.
+    const check = await mock("check_update", { version: "9.9.9", installed: true });
+    const install = await mock("install_update", null);
+    const restart = await mock("restart_app", null);
+    await button.click();
+    expect(await waitForCalls(restart)).toEqual([null]);
+    await waitForCalls(check);
+    expect(await callsOf(install)).toEqual([]);
+    await expect(button).toHaveAttribute("aria-label", "再起動して v9.9.9 にする");
   });
 
   it("shows no update button when this is the latest version", async () => {

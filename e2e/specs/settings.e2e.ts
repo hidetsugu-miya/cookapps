@@ -55,3 +55,68 @@ describe("settings: Claude", () => {
     });
   }
 });
+
+describe("settings: update", () => {
+  const openUpdate = async (fixtures: Record<string, unknown> = {}) => {
+    await boot({ inbox: inbox(), ...fixtures });
+    await $("#nav-settings").click();
+    await expect($("#settings")).toBeDisplayed();
+  };
+  const status = () => $("#update-items .status");
+  const modeButton = (label: string) => $("#update-items").$(`button=${label}`);
+
+  it("shows the running version from app_info and that this is the latest", async () => {
+    await openUpdate({ app_info: { version: "0.15.0", updatable: true } });
+    await expect($("#update-items .item-name")).toHaveText("v0.15.0");
+    await expect(status()).toHaveText("最新");
+  });
+
+  it("says a newer version is out while the mode is manual, and replaced once the mode is auto", async () => {
+    await openUpdate({ update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
+    await expect(status()).toHaveText("v9.9.9 があります");
+    expect(await callsOf("install_update")).toEqual([]);
+    await openUpdate({ update_mode: "auto", check_update: { version: "9.9.9", installed: false } });
+    await expect(status()).toHaveText("再起動で v9.9.9 になります");
+  });
+
+  it("shows the version and 対応していません without checking where the app cannot update itself", async () => {
+    await openUpdate({ app_info: { version: "0.15.0", updatable: false } });
+    await expect($("#update-items .item-name")).toHaveText("v0.15.0");
+    await expect(status()).toHaveText("対応していません");
+    await expect($("#update-recheck")).toBeDisabled();
+    expect(await callsOf("check_update")).toEqual([]);
+  });
+
+  it("saves the mode with set_update_mode, and marks the chosen one", async () => {
+    await openUpdate({ update_mode: "manual" });
+    await expect(modeButton("手動")).toHaveAttribute("aria-pressed", "true");
+    await expect(modeButton("自動")).toHaveAttribute("aria-pressed", "false");
+    const save = await mock("set_update_mode", null);
+    await modeButton("自動").click();
+    expect(await waitForCalls(save)).toEqual([{ mode: "auto" }]);
+    await expect(modeButton("自動")).toHaveAttribute("aria-pressed", "true");
+    await modeButton("手動").click();
+    expect(await waitForCalls(save, 2)).toEqual([{ mode: "auto" }, { mode: "manual" }]);
+    await expect(modeButton("手動")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("replaces a newer version found earlier as soon as the mode becomes auto", async () => {
+    await openUpdate({ update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
+    await expect(status()).toHaveText("v9.9.9 があります");
+    const install = await mock("install_update", null);
+    await modeButton("自動").click();
+    expect(await waitForCalls(install)).toEqual([null]);
+    await expect(status()).toHaveText("再起動で v9.9.9 になります");
+  });
+
+  it("checks again on 今すぐ確認, and redraws the card and the sidebar button", async () => {
+    await openUpdate();
+    await expect(status()).toHaveText("最新");
+    await expect($("#update-btn")).not.toBeDisplayed();
+    const check = await mock("check_update", { version: "9.9.9", installed: false });
+    await $("#update-recheck").click();
+    expect(await waitForCalls(check)).toEqual([null]);
+    await expect(status()).toHaveText("v9.9.9 があります");
+    await expect($("#update-btn")).toHaveAttribute("aria-label", "v9.9.9 に更新");
+  });
+});

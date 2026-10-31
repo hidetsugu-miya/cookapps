@@ -25,7 +25,13 @@ const answers = {
   todoist_load: null,
   slack_load: { workspaces: [], recent: [] },
   claude_status: { state: "missing" },
+  app_info: { version: "1.2.3", updatable: true },
+  // Manual, so that no spec replaces the app by accident; the real default (Rust) is auto.
+  update_mode: "manual",
+  set_update_mode: null,
   check_update: null,
+  install_update: null,
+  restart_app: null,
   set_badge: null,
   ...fixtures,
 };
