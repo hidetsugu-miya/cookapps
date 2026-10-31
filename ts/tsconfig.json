@@ -9,7 +9,7 @@
     "skipLibCheck": true,
     "types": [],
     "rootDir": ".",
-    "outDir": "../js"
+    "outDir": "../src/js"
   },
   "include": ["./**/*.ts"]
 }

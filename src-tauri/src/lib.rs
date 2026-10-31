@@ -13,7 +13,8 @@ use tauri_plugin_opener::OpenerExt;
 
 /// Where ts-rs writes the types the frontend shares (`#[ts(export_to = crate::BINDINGS)]`), on `cargo test`.
 /// An absolute path, so the default `./bindings` directory is not created next to it.
-const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/ts/bindings/");
+#[cfg(test)]
+const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ts/bindings/");
 
 // tao's macOS backend shows `Some(0)` as "0", so no unread must be `None`.
 fn badge_of(count: u32) -> Option<i64> {

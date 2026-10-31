@@ -4,7 +4,7 @@
   "formatter": { "enabled": false },
   "assist": { "enabled": false },
   "files": {
-    "includes": ["src/ts/**", "e2e/**", "wdio.conf.ts", "!src/ts/bindings", "!e2e/dist"]
+    "includes": ["ts/**", "e2e/**", "wdio.conf.ts", "!ts/bindings", "!e2e/dist"]
   },
   "linter": {
     "enabled": true,
@@ -14,7 +14,7 @@
         "noNonNullAssertion": "off"
       },
       "performance": {
-        // Its fix is textContent, but innerText differs: it leaves out hidden text and keeps the line breaks (src/ts/slack-dialog.ts reads a rendered mail body).
+        // Its fix is textContent, but innerText differs: it leaves out hidden text and keeps the line breaks (ts/slack-dialog.ts reads a rendered mail body).
         "useDomNodeTextContent": "off"
       }
     }

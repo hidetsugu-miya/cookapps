@@ -16,6 +16,7 @@ use serde::{
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 use tokio::task::JoinSet;
+#[cfg(test)]
 use ts_rs::TS;
 
 use crate::auth::{config_dir, Auth};
@@ -116,8 +117,9 @@ struct Header {
     value: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadItem {
     id: String,
@@ -126,7 +128,7 @@ pub struct ThreadItem {
     from: String,
     subject: String,
     snippet: String,
-    #[ts(type = "number")]
+    #[cfg_attr(test, ts(type = "number"))]
     date_ms: i64,
     unread: bool,
 }
@@ -165,8 +167,9 @@ impl ThreadItem {
     }
 }
 
-#[derive(Serialize, Debug, PartialEq, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetail {
     subject: String,
@@ -178,8 +181,9 @@ pub struct ThreadDetail {
     pending_images: Vec<PendingImage>,
 }
 
-#[derive(Serialize, Debug, PartialEq, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct MessageDetail {
     /// Gmail's message ID. The frontend finds the message's images by it.
@@ -187,7 +191,7 @@ pub struct MessageDetail {
     from: String,
     /// The To header as sent; empty when the message has none.
     to: String,
-    #[ts(type = "number")]
+    #[cfg_attr(test, ts(type = "number"))]
     date_ms: i64,
     /// Gmail's own summary of the message, HTML-escaped.
     snippet: String,
@@ -381,8 +385,9 @@ fn thread_cid_refs(detail: &ThreadDetail) -> Vec<Vec<CidRef>> {
 
 /// A `cid:` image that `thread` left as a reference because it is neither in its part nor in the cache.
 /// It goes to the frontend and comes back to `thread_images` as it is.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct PendingImage {
     message_id: String,
@@ -733,8 +738,9 @@ async fn send_json<T: DeserializeOwned>(
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize, Deserialize, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct Inbox {
     accounts: Vec<String>,
@@ -1066,8 +1072,9 @@ async fn list_history(
 }
 
 /// What one `sync` found, to apply to the list of that account.
-#[derive(Serialize, Debug, PartialEq, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -1837,7 +1844,7 @@ mod tests {
         );
     }
 
-    /// What the frontend reads (`src/ts/thread.ts`: `m.id`, `t.pendingImages`, `m.authenticated`) is in the serialized detail.
+    /// What the frontend reads (`ts/thread.ts`: `m.id`, `t.pendingImages`, `m.authenticated`) is in the serialized detail.
     #[test]
     fn thread_detail_serializes_what_the_frontend_reads() {
         let html = r#"<img src="cid:a%40x"><img src="CID:a@x">"#;

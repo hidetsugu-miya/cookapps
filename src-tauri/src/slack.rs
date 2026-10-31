@@ -8,6 +8,7 @@ use std::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
+#[cfg(test)]
 use ts_rs::TS;
 use url::Url;
 
@@ -50,8 +51,9 @@ const NO_MESSAGE: &str = "リンク先のメッセージが見つかりません
 const NO_WORKSPACE: &str = "このリンクのワークスペースは接続されていません。設定で追加してください";
 
 /// A connected workspace. Its token is in the keychain under `team_id`.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct Workspace {
     team_id: String,
@@ -62,8 +64,9 @@ pub struct Workspace {
 }
 
 /// A destination that a post succeeded in: a channel, or the thread of a message in it when `thread_ts` is set.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct Recent {
     team_id: String,
@@ -74,16 +77,18 @@ pub struct Recent {
 }
 
 /// A channel the user is in.
-#[derive(Serialize, Debug, PartialEq, Clone, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 pub struct Channel {
     id: String,
     name: String,
 }
 
 /// What a pasted Slack link points at.
-#[derive(Serialize, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
     team_id: String,
@@ -92,8 +97,9 @@ pub struct Target {
     thread_ts: Option<String>,
 }
 
-#[derive(Serialize, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct SlackLoad {
     workspaces: Vec<Workspace>,
@@ -764,8 +770,9 @@ pub async fn slack_load(
 }
 
 /// A workspace as `auth.test` describes it now. `missing_scopes` is `None` when Slack sent no scopes to judge by.
-#[derive(Serialize, TS)]
-#[ts(export, export_to = crate::BINDINGS)]
+#[derive(Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct Checked {
     #[serde(flatten)]
