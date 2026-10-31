@@ -26,6 +26,7 @@ export function initUpdate() {
       showError(e);
     }
     button.disabled = false;
+    await check();
   };
   check();
   setInterval(check, CHECK_EVERY_MS);

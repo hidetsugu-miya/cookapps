@@ -111,6 +111,7 @@ pub fn run() {
         .manage(calendar::CalendarCache::default())
         .manage(todoist::TodoistState::default())
         .manage(slack::SlackState::default())
+        .manage(std::sync::Mutex::new(None::<tauri_plugin_updater::Update>))
         .invoke_handler(tauri::generate_handler![
             auth::login,
             auth::remove_account,
