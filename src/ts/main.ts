@@ -1,0 +1,35 @@
+// Startup: each module registers its own handlers, then the lists are drawn. The order is the order the handlers were registered in
+// when the app was one script, and the first Todo and inbox calls start before the Claude check.
+import { initAccounts } from "./accounts.js";
+import { initCalendar } from "./calendar.js";
+import { initClaude, refreshClaude } from "./claude.js";
+import { initHint } from "./hint.js";
+import { initInbox, load, showKeptInbox } from "./inbox.js";
+import { initMenu } from "./menu.js";
+import { initNav } from "./nav.js";
+import { initSettings } from "./settings.js";
+import { initSlackDialog } from "./slack-dialog.js";
+import { initThread } from "./thread.js";
+import { initToast } from "./toast.js";
+import { initTodo } from "./todo.js";
+import { initTodoAdd } from "./todo-add.js";
+import { initTooltip } from "./tooltip.js";
+
+initAccounts();
+initTooltip();
+initInbox();
+initThread();
+initNav();
+initCalendar();
+initToast();
+initMenu();
+initTodo();
+initTodoAdd();
+initClaude();
+initHint();
+initSettings();
+initSlackDialog();
+
+showKeptInbox();
+refreshClaude();
+load();

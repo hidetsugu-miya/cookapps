@@ -11,6 +11,10 @@ pub mod todoist;
 
 use tauri_plugin_opener::OpenerExt;
 
+/// Where ts-rs writes the types the frontend shares (`#[ts(export_to = crate::BINDINGS)]`), on `cargo test`.
+/// An absolute path, so the default `./bindings` directory is not created next to it.
+const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/ts/bindings/");
+
 // tao's macOS backend shows `Some(0)` as "0", so no unread must be `None`.
 fn badge_of(count: u32) -> Option<i64> {
     (count > 0).then_some(i64::from(count))
@@ -70,8 +74,29 @@ fn navigation_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+/// Defense in depth under the JS-side mocks of the E2E build: no credential ever reaches the real keychain.
+/// keyring's one-time init installs the native store on the first `Entry::new` (or `store_status`), so run it first and replace the store after.
+#[cfg(feature = "e2e")]
+fn use_mock_keyring() {
+    let _ = keyring::Entry::store_status();
+    keyring_core::set_default_store(keyring_core::mock::Store::new().expect("mock keyring store"));
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(feature = "e2e")]
+    let builder = builder
+        .plugin(tauri_plugin_wdio::init())
+        .plugin(tauri_plugin_wdio_webdriver::init())
+        .setup(|app| {
+            // No Dock icon, and no focus taken from the developer's apps while the E2E run drives the window.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            Ok(())
+        });
+    #[cfg(feature = "e2e")]
+    use_mock_keyring();
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(navigation_plugin())
         .manage(auth::Auth::new())
@@ -132,6 +157,18 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "e2e")]
+    #[test]
+    fn e2e_build_keeps_credentials_out_of_the_keychain() {
+        super::use_mock_keyring();
+        // The entry must come from the mock store even though keyring's own init ran first.
+        let _ = keyring::Entry::new("jp.mysis.cookup.test", "u");
+        assert!(keyring_core::get_default_store()
+            .unwrap()
+            .vendor()
+            .contains("Mock"));
+    }
+
     use super::{badge_of, navigation_of, Navigation};
 
     fn url(raw: &str) -> tauri::Url {

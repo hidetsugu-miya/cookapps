@@ -13,6 +13,7 @@ use chrono::{
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{AppHandle, State};
+use ts_rs::TS;
 use url::Url;
 
 use crate::{
@@ -26,7 +27,7 @@ const CALENDARS_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 // shortcut: past this many pages (2500 events of one calendar) the rest is dropped, upgrade if a week ever needs more.
 const MAX_PAGES: usize = 10;
 /// A shorter event is laid out as if it lasted this long, so it stays visible.
-/// Keep in step with `MIN_EVENT_MIN` in `src/main.js`.
+/// Keep in step with `MIN_EVENT_MIN` in `src/ts/calendar.ts`.
 const MIN_MINUTES: u32 = 20;
 
 #[derive(Deserialize, Default)]
@@ -146,7 +147,8 @@ impl RawEvent {
 }
 
 /// What the screen needs of an event besides where it goes.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "camelCase")]
 pub struct Info {
     summary: String,
@@ -169,7 +171,8 @@ impl From<&RawEvent> for Info {
 }
 
 /// An all-day event on one day of the week (0 = Sunday). A multi-day event gets one item per day.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "camelCase")]
 pub struct AllDayItem {
     day: usize,
@@ -178,7 +181,8 @@ pub struct AllDayItem {
 }
 
 /// A timed event on one day of the week, in minutes from local midnight, with its column among overlapping events.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "camelCase")]
 pub struct TimedItem {
     day: usize,
@@ -190,7 +194,8 @@ pub struct TimedItem {
     info: Info,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, export_to = crate::BINDINGS)]
 #[serde(rename_all = "camelCase")]
 pub struct Week {
     /// Local date (YYYY-MM-DD) of the Sunday the week starts on.
@@ -797,7 +802,7 @@ pub async fn calendar_week(
 
 /// The file the last complete weeks are kept in.
 pub(crate) const CACHE_FILE: &str = "calendar-cache.json";
-/// Keep in step with `CAL_CACHE_MAX` in `src/main.js`.
+/// Keep in step with `CAL_CACHE_MAX` in `src/ts/calendar.ts`.
 const MAX_CACHED_WEEKS: usize = 10;
 
 /// What `calendar-cache.json` holds: the weeks fetched last, oldest first.

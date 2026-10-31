@@ -1,0 +1,16 @@
+{
+  "identifier": "jp.mysis.cookup.e2e",
+  "build": { "frontendDist": "../e2e/dist" },
+  "app": {
+    "windows": [{ "title": "cookup", "width": 1200, "height": 820, "visible": false }],
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "e2e",
+          "windows": ["main"],
+          "permissions": ["core:default", "wdio:default", "wdio-webdriver:default"]
+        }
+      ]
+    }
+  }
+}
