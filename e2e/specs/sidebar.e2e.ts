@@ -6,6 +6,8 @@ describe("sidebar", () => {
     const button = $("#claude-btn");
     await expect(button).toBeDisplayed();
     await expect(button).toHaveAttribute("aria-label", "Claude: claude@example.com");
+    // Integrations sit just above settings, apart from the accounts at the bottom.
+    expect(await browser.execute(() => document.getElementById("claude-btn")?.nextElementSibling?.id)).toBe("nav-settings");
     await button.click();
     const popup = $("#account-popup");
     await expect(popup).toBeDisplayed();
