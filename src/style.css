@@ -10,9 +10,9 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 /* The count sits on the button's top right corner; the button's aria-label carries it for screen readers. */
 .nav-count { position: absolute; top: -4px; right: -8px; box-sizing: border-box; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #d93025; color: #fff; font-size: 11px; font-weight: bold; line-height: 18px; text-align: center; }
 .nav-item:disabled { opacity: .4; cursor: default; }
-/* The bottom group starts at the Claude avatar, or at settings while the avatar is hidden. */
-#claude-btn, #nav-settings { margin-top: auto; }
-#claude-btn:not([hidden]) + #nav-settings { margin-top: 0; }
+/* The bottom group starts at the first shown of the update button, the Claude avatar and settings. */
+#update-btn, #claude-btn, #nav-settings { margin-top: auto; }
+#update-btn:not([hidden]) ~ #claude-btn, #update-btn:not([hidden]) ~ #nav-settings, #claude-btn:not([hidden]) + #nav-settings { margin-top: 0; }
 #accounts { padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 #account-list { display: flex; flex-direction: column; gap: 8px; }
 .account-btn { padding: 0; border: 0; font-family: inherit; cursor: pointer; }

@@ -10,6 +10,7 @@ import type { Sync } from "./bindings/Sync";
 import type { Target } from "./bindings/Target";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { Todo } from "./bindings/Todo";
+import type { UpdateInfo } from "./bindings/UpdateInfo";
 import type { Week } from "./bindings/Week";
 import type { Workspace } from "./bindings/Workspace";
 
@@ -67,6 +68,9 @@ export interface Commands {
     result: boolean;
   };
   claude_status: { args: undefined; result: Claude };
+  // null: this is the latest version. install_update restarts the app when it installs.
+  check_update: { args: undefined; result: UpdateInfo | null };
+  install_update: { args: undefined; result: null };
   set_badge: { args: { count: number }; result: null };
 }
 

@@ -25,6 +25,7 @@ const answers = {
   todoist_load: null,
   slack_load: { workspaces: [], recent: [] },
   claude_status: { state: "missing" },
+  check_update: null,
   set_badge: null,
   ...fixtures,
 };

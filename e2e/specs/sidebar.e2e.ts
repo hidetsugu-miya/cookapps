@@ -1,4 +1,4 @@
-import { boot, claudeLoggedOut, claudeMissing, claudeReady, inbox, waitForText } from "../support";
+import { boot, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, waitForCalls, waitForText } from "../support";
 
 describe("sidebar", () => {
   it("shows the Claude avatar while logged in, and its popup on a click", async () => {
@@ -32,4 +32,24 @@ describe("sidebar", () => {
       await expect($("#claude-btn")).not.toBeDisplayed();
     });
   }
+
+  it("shows the update button with the new version, and installs on a press", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady, check_update: { version: "9.9.9" } });
+    const button = $("#update-btn");
+    await button.waitForDisplayed();
+    await expect(button).toHaveAttribute("aria-label", "v9.9.9 に更新");
+    // The bottom group starts at the update button: only it takes the free space above, and the Claude avatar and settings follow it.
+    const margins = await browser.execute(() => ["update-btn", "claude-btn", "nav-settings"].map((id) => getComputedStyle(document.getElementById(id)!).marginTop));
+    expect(margins[0]).not.toBe("0px");
+    expect(margins.slice(1)).toEqual(["0px", "0px"]);
+    const install = await mock("install_update", null);
+    await button.click();
+    expect(await waitForCalls(install)).toEqual([null]);
+  });
+
+  it("shows no update button when this is the latest version", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady });
+    await waitForCalls("check_update");
+    await expect($("#update-btn")).not.toBeDisplayed();
+  });
 });
