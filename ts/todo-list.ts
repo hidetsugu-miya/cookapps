@@ -47,25 +47,33 @@ export function renderProjects() {
   const parents = new Set(todo.projects.map((p) => p.parentId));
   // The projects under a closed one, however deep.
   const hidden = new Set<string>();
+  // The ids of the projects a project is nested under, for the toggle's animation.
+  const under = new Map<string, string>();
   const lines: HTMLElement[] = [];
   for (const p of todo.projects) {
     if (p.parentId && (hidden.has(p.parentId) || todoState.closedProjects.has(p.parentId))) {
       hidden.add(p.id);
       continue;
     }
+    under.set(p.id, p.parentId ? `${under.get(p.parentId) ?? ""} ${p.parentId}`.trim() : "");
     if (p === inbox) continue;
     const line = tag("div", "proj-line");
+    line.dataset.under = under.get(p.id);
     line.style.paddingLeft = `${p.depth * 16}px`;
     line.append(projectButton(p.id, p.color, p.name, counts.get(p.id) ?? 0));
     if (parents.has(p.id)) {
       line.classList.add("parent");
       const closed = todoState.closedProjects.has(p.id);
       line.append(
-        toggleButton(closed ? "サブプロジェクトを開く" : "サブプロジェクトを閉じる", !closed, () => {
-          if (closed) todoState.closedProjects.delete(p.id);
-          else todoState.closedProjects.add(p.id);
-          renderProjects();
-        }),
+        toggleButton(p.id, closed ? "サブプロジェクトを開く" : "サブプロジェクトを閉じる", !closed, () =>
+          toggleNested(
+            $("projects"),
+            p.id,
+            closed,
+            () => (closed ? todoState.closedProjects.delete(p.id) : todoState.closedProjects.add(p.id)),
+            renderProjects,
+          ),
+        ),
       );
     }
     lines.push(line);
@@ -79,8 +87,9 @@ export function renderProjects() {
 }
 
 // The chevron that opens or closes what is nested under a project or a task. It must not reach the row or button it sits on.
-function toggleButton(label: string, expanded: boolean, toggle: () => void) {
+function toggleButton(id: string, label: string, expanded: boolean, toggle: () => void) {
   const b = tag("button", "icon-btn toggle");
+  b.dataset.id = id;
   b.setAttribute("aria-label", label);
   b.setAttribute("aria-expanded", String(expanded));
   b.innerHTML = CHEVRON_SVG;
@@ -89,6 +98,53 @@ function toggleButton(label: string, expanded: boolean, toggle: () => void) {
     toggle();
   };
   return b;
+}
+
+const SLIDE = { duration: 180, easing: "ease" };
+const SHRUNK = { height: 0, opacity: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0, marginBottom: 0, overflow: "hidden" };
+const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+// The toggles whose rows are sliding shut; a click on one meanwhile does nothing.
+const closing = new Set<string>();
+
+// The row's own size, which the slide grows to or shrinks from.
+function fullSize(el: Element) {
+  const s = getComputedStyle(el);
+  return { height: s.height, opacity: s.opacity, paddingTop: s.paddingTop, paddingBottom: s.paddingBottom, marginTop: s.marginTop, marginBottom: s.marginBottom, overflow: "hidden" };
+}
+
+// Slides the rows nested under `id` in and the chevron round, or out and back.
+function slide(box: HTMLElement, id: string, opening: boolean) {
+  const key = CSS.escape(id);
+  const rows = [...box.querySelectorAll(`[data-under~="${key}"]`)];
+  for (const el of rows) for (const a of el.getAnimations()) a.cancel();
+  const sizes = rows.map(fullSize);
+  const turn = [{ transform: "rotate(0deg)" }, { transform: "rotate(90deg)" }];
+  const fill = opening ? "none" : "forwards";
+  for (const [i, el] of rows.entries()) el.animate(opening ? [SHRUNK, sizes[i]] : [sizes[i], SHRUNK], { ...SLIDE, fill });
+  box.querySelector(`.toggle[data-id="${key}"] svg`)!.animate(opening ? turn : turn.reverse(), { ...SLIDE, fill });
+}
+
+// Opens or closes what is nested under `id`: `change` sets the state and `redraw` draws it.
+// An open draws first and slides the new rows in; a close slides the rows shut first, since the redraw takes them away.
+// A redraw from elsewhere meanwhile is harmless: the timer still ends the close, and the state is drawn once more.
+// A timer, not the animations' end: they do not run while the window is not painting.
+function toggleNested(box: HTMLElement, id: string, opening: boolean, change: () => void, redraw: () => void) {
+  const key = `${box.id}/${id}`;
+  if (closing.has(key)) return;
+  const quiet = still();
+  if (opening) {
+    change();
+    redraw();
+    if (!quiet) slide(box, id, true);
+    return;
+  }
+  closing.add(key);
+  if (!quiet) slide(box, id, false);
+  setTimeout(() => {
+    closing.delete(key);
+    change();
+    redraw();
+  }, quiet ? 0 : SLIDE.duration);
 }
 
 export function checkBox(color: string, checked: boolean, label: string) {
@@ -101,20 +157,19 @@ export function checkBox(color: string, checked: boolean, label: string) {
 }
 
 // The row of `t`, and under it, while `t` is open, the rows of its subtasks, each indented one step more. The "today" list is flat.
-function taskRows(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>, depth = 0): HTMLElement[] {
+function taskRows(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>, under: string[] = []): HTMLElement[] {
   const li = taskRow(t, showProject, accounts);
-  li.style.marginLeft = `${depth * 28}px`;
+  li.style.marginLeft = `${under.length * 28}px`;
+  li.dataset.under = under.join(" ");
   const subs = showProject ? [] : subRows(t);
   if (subs.length === 0) return [li];
   const open = todoState.openTasks.has(t.id);
   li.append(
-    toggleButton(open ? "サブタスクを閉じる" : "サブタスクを開く", open, () => {
-      if (open) todoState.openTasks.delete(t.id);
-      else todoState.openTasks.add(t.id);
-      renderList();
-    }),
+    toggleButton(t.id, open ? "サブタスクを閉じる" : "サブタスクを開く", open, () =>
+      toggleNested($("todo-list"), t.id, !open, () => (open ? todoState.openTasks.delete(t.id) : todoState.openTasks.add(t.id)), renderList),
+    ),
   );
-  return open ? [li, ...subs.flatMap((s) => taskRows(s, showProject, accounts, depth + 1))] : [li];
+  return open ? [li, ...subs.flatMap((s) => taskRows(s, showProject, accounts, [...under, t.id]))] : [li];
 }
 
 function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>) {
