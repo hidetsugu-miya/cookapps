@@ -89,10 +89,10 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init())
-        .setup(|app| {
+        .setup(|_app| {
             // No Dock icon, and no focus taken from the developer's apps while the E2E run drives the window.
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            _app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             Ok(())
         });
     #[cfg(feature = "e2e")]
