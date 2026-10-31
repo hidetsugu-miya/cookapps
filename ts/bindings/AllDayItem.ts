@@ -9,6 +9,6 @@ export type AllDayItem = { day: number, summary: string,
  */
 color: string | null, account: string, 
 /**
- * The user declined the invitation.
+ * The user's own answer to the invitation (`accepted`, `declined`, `tentative` or `needsAction`); empty when the user is not an attendee.
  */
-declined: boolean, };
+response: string, };

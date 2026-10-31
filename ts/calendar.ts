@@ -50,8 +50,12 @@ const eventColor = (e: { color: string | null; account: string }) => e.color || 
 // Longer titles are cut with "…"; the full one stays in the tooltip.
 const CAL_NAME_MAX = 20;
 
+// The class for the user's own answer: accepted and a non-attendee's events look plain.
+const RESPONSE_CLASS: Record<string, string> = { declined: " declined", tentative: " tentative", needsAction: " needs-action" };
+const responseClass = (response: string) => RESPONSE_CLASS[response] ?? "";
+
 function eventBox(e: TimedItem) {
-  const box = el(`cal-event${e.declined ? " declined" : ""}`);
+  const box = el(`cal-event${responseClass(e.response)}`);
   box.style.top = `${(e.startMin / 60) * HOUR_PX}px`;
   box.style.height = `${(Math.max(e.endMin - e.startMin, MIN_EVENT_MIN) / 60) * HOUR_PX - 1}px`;
   box.style.left = `${(e.col / e.cols) * 100}%`;
@@ -70,7 +74,7 @@ function eventBox(e: TimedItem) {
 }
 
 function allDayChip(e: AllDayItem) {
-  const c = el(`cal-chip${e.declined ? " declined" : ""}`, e.summary || "(件名なし)");
+  const c = el(`cal-chip${responseClass(e.response)}`, e.summary || "(件名なし)");
   c.style.setProperty("--c", eventColor(e));
   c.title = `${e.summary}\n${e.account}`;
   return c;

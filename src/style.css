@@ -148,6 +148,12 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .cal-time { color: #555; }
 .cal-event.short .cal-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .declined { opacity: .5; text-decoration: line-through; }
+/* Own answer: tentative is striped, no reply is the colors inverted. */
+.cal-event.tentative { background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--c) 22%, #fff) 0 6px, color-mix(in srgb, var(--c) 42%, #fff) 6px 12px); }
+.cal-event.needs-action { border-color: var(--c); background: #fff; box-shadow: none; color: color-mix(in srgb, var(--c) 70%, #000); }
+.cal-event.needs-action .cal-time { color: inherit; }
+.cal-chip.tentative::before { background: repeating-linear-gradient(-45deg, var(--c) 0 2px, color-mix(in srgb, var(--c) 35%, #fff) 2px 4px); }
+.cal-chip.needs-action::before { box-sizing: border-box; border: 1.5px solid var(--c); background: #fff; }
 .cal-now { position: absolute; z-index: 2; pointer-events: none; }
 .cal-now-line { left: 0; right: 0; border-top: 2px solid #ff9f43; }
 .cal-now-line::before { content: ""; position: absolute; left: -5px; top: -6px; width: 10px; height: 10px; border-radius: 50%; background: #ff9f43; }

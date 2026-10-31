@@ -125,7 +125,8 @@ struct RawEvent {
     /// Name of the calendar the event is on.
     calendar: String,
     summary: String,
-    declined: bool,
+    /// The user's own `responseStatus` on the event; empty when the user is not an attendee.
+    response: String,
     ical_uid: String,
     when: When,
 }
@@ -134,10 +135,12 @@ impl RawEvent {
     fn from_api(e: ApiEvent, account: &str, cal: &CalendarEntry) -> Option<Self> {
         Some(Self {
             when: when(&e.start, &e.end)?,
-            declined: e
+            response: e
                 .attendees
                 .iter()
-                .any(|a| a.is_self && a.response_status == "declined"),
+                .find(|a| a.is_self)
+                .map(|a| a.response_status.clone())
+                .unwrap_or_default(),
             account: account.to_owned(),
             color: cal.background_color.clone(),
             calendar: cal.summary.clone().unwrap_or_else(|| cal.id.clone()),
@@ -157,8 +160,8 @@ pub struct Info {
     /// `None` means the screen picks one from the account.
     color: Option<String>,
     account: String,
-    /// The user declined the invitation.
-    declined: bool,
+    /// The user's own answer to the invitation (`accepted`, `declined`, `tentative` or `needsAction`); empty when the user is not an attendee.
+    response: String,
 }
 
 impl From<&RawEvent> for Info {
@@ -167,7 +170,7 @@ impl From<&RawEvent> for Info {
             summary: e.summary.clone(),
             color: e.color.clone(),
             account: e.account.clone(),
-            declined: e.declined,
+            response: e.response.clone(),
         }
     }
 }
@@ -246,7 +249,7 @@ impl From<&RawEvent> for EventItem {
             account: e.account.clone(),
             calendar: e.calendar.clone(),
             summary: e.summary.clone(),
-            declined: e.declined,
+            declined: e.response == "declined",
             all_day,
             start,
             end,
@@ -871,7 +874,7 @@ mod tests {
             color: None,
             calendar: "c".into(),
             summary: summary.into(),
-            declined: false,
+            response: String::new(),
             ical_uid: String::new(),
             when: When::AllDay {
                 start: date("2026-01-01"),
@@ -1179,7 +1182,7 @@ mod tests {
         )
         .unwrap();
         let r = RawEvent::from_api(ev, "a@example.com", &cal(Some("#fff"))).unwrap();
-        assert!(r.declined);
+        assert_eq!(r.response, "declined");
         assert_eq!(r.calendar, "仕事");
         assert_eq!(r.ical_uid, "u");
         assert_eq!(r.color.as_deref(), Some("#fff"));
@@ -1189,11 +1192,32 @@ mod tests {
                 "attendees":[{"responseStatus":"declined"},{"self":true,"responseStatus":"accepted"}]}"#,
         )
         .unwrap();
-        assert!(
-            !RawEvent::from_api(ev, "a@example.com", &cal(None))
+        let r = RawEvent::from_api(ev, "a@example.com", &cal(None)).unwrap();
+        assert_eq!(r.response, "accepted");
+        assert!(!EventItem::from(&r).declined);
+    }
+
+    #[test]
+    fn response_is_the_self_attendees_status_or_empty() {
+        let response = |attendees: &str| {
+            let ev: ApiEvent = serde_json::from_str(&format!(
+                r#"{{"start":{{"date":"2026-10-29"}},"end":{{"date":"2026-10-30"}},"attendees":{attendees}}}"#
+            ))
+            .unwrap();
+            RawEvent::from_api(ev, "a@example.com", &cal(None))
                 .unwrap()
-                .declined
+                .response
+        };
+        assert_eq!(
+            response(r#"[{"self":true,"responseStatus":"tentative"}]"#),
+            "tentative"
         );
+        assert_eq!(
+            response(r#"[{"self":true,"responseStatus":"needsAction"}]"#),
+            "needsAction"
+        );
+        assert_eq!(response(r#"[{"responseStatus":"declined"}]"#), "");
+        assert_eq!(response("[]"), "");
     }
 
     #[test]
@@ -1302,7 +1326,7 @@ mod tests {
                     summary: "s".into(),
                     color: None,
                     account: "a@example.com".into(),
-                    declined: true,
+                    response: "declined".into(),
                 },
             }],
             timed: vec![],
@@ -1313,7 +1337,7 @@ mod tests {
         let v = serde_json::to_value(&w).unwrap();
         assert_eq!(v["weekStart"], "2026-10-25");
         assert_eq!(v["allDay"][0]["day"], 1);
-        assert_eq!(v["allDay"][0]["declined"], true);
+        assert_eq!(v["allDay"][0]["response"], "declined");
         assert_eq!(v["needsLogin"][0], "b@example.com");
         assert_eq!(v["calendarFailed"][0], "x");
     }
@@ -1332,7 +1356,7 @@ mod tests {
                     summary: start.into(),
                     color: Some("#fff".into()),
                     account: "a@example.com".into(),
-                    declined: false,
+                    response: String::new(),
                 },
             }],
             needs_login: vec![],
