@@ -10,7 +10,7 @@ date: string,
  */
 time: string | null, 
 /**
- * Todoist's human-readable form ("every day", "明日"); what the due chip edits.
+ * Todoist's human-readable form ("every day", "明日"); the due chip shows it only for a repeating task.
  */
 string: string, 
 /**

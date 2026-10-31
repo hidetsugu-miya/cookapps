@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeMissing, claudeReady, count, inbox, mock, slackLoad, slackMessageUrl, textsOf, todoData, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeMissing, claudeReady, count, inbox, mock, slackLoad, slackMessageUrl, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -195,5 +195,21 @@ describe("todo detail", () => {
     await $(".due-pop .chip-input").setValue("明日");
     await browser.keys("Enter");
     expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: "明日" }]);
+  });
+
+  it("shows a one-off due date in the due field as a date and time, and a repeat as Todoist's text", async () => {
+    const data = todoData();
+    data.tasks[0].due = { date: today, time: "12:00", string: "today 12:00", recurring: false };
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await $("#todo-detail .field:nth-child(2) .field-value").click();
+    await expect($(".due-pop .chip-input")).toHaveValue(`${today} 12:00`);
+    data.tasks[0].due = { date: today, time: null, string: "every day", recurring: true };
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await $("#todo-detail .field:nth-child(2) .field-value").click();
+    await expect($(".due-pop .chip-input")).toHaveValue("every day");
   });
 });

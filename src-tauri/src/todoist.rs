@@ -223,7 +223,7 @@ pub struct Due {
     date: String,
     /// Local time, `HH:MM`; `None` for a due date without a time.
     time: Option<String>,
-    /// Todoist's human-readable form ("every day", "明日"); what the due chip edits.
+    /// Todoist's human-readable form ("every day", "明日"); the due chip shows it only for a repeating task.
     string: String,
     /// Repeats ("every week"); a day picked from a calendar would replace the repeat, so the due chip only edits its text.
     #[serde(default)]
