@@ -114,7 +114,7 @@ npx tauri dev
 ```
 
 At the first start, press "Log in with Google" and the default browser opens.
-Add more accounts from "Add account" at the bottom of the side menu.
+Add more accounts from "Add account" in the Google card of the settings screen.
 
 ### OAuth client JSON
 
