@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, waitForCalls, waitForText } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, task, todoData, waitForCalls, waitForText } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -77,6 +77,16 @@ describe("sidebar", () => {
     expect(await bottomGroup()).toEqual(["nav-settings"]);
     // The bottom group ends 16px above the window's bottom edge.
     expect(await browser.execute(() => Math.round(innerHeight - document.getElementById("nav-settings")!.getBoundingClientRect().bottom))).toBe(16);
+  });
+
+  it("sets the Dock badge to the unread threads plus the overdue and today tasks", async () => {
+    const todo = todoData();
+    todo.tasks.push(task("k5", "Late bill", "p0", "overdue"), task("k6", "Someday", "p0", "upcoming"));
+    // 2 unread threads, and "Write report" (today) and "Late bill" (overdue).
+    await boot({ inbox: inbox(), todoist_load: todo, claude_status: claudeReady });
+    await browser.waitUntil(async () => JSON.stringify((await callsOf("set_badge")).at(-1)) === JSON.stringify({ count: 4 }), {
+      timeoutMsg: "set_badge was not called with 4",
+    });
   });
 
   it("shows no update button when this is the latest version", async () => {

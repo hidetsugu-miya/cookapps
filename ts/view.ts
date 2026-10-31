@@ -1,5 +1,6 @@
-// Which part of the window is shown, the error line, and the counts on the sidebar buttons.
+// Which part of the window is shown, the error line, and the counts on the sidebar buttons (and their sum on the Dock).
 import { $ } from "./dom.js";
+import { invoke } from "./ipc.js";
 
 export type View = "list" | "thread" | "login" | "calendar" | "todo" | "settings";
 
@@ -35,8 +36,19 @@ export function showError(e: unknown) {
   $("error").hidden = false;
 }
 
+// The counts of the inbox and Todo buttons, and the sum last sent to the Dock badge.
+const navCounts: Record<string, number> = { "nav-mail": 0, "nav-todo": 0 };
+let dockCount = 0;
+
 // The count on a sidebar button (99+ from 100; none for 0). The label carries it too: the tooltip shows the label, e.g. "受信トレイ（未読 3 件）".
+// The Dock badge shows the sum of the two buttons' counts; the call is skipped when the sum is unchanged.
 export function setNavCount(id: string, count: number, name: string, kind: string) {
+  navCounts[id] = count;
+  const sum = navCounts["nav-mail"] + navCounts["nav-todo"];
+  if (sum !== dockCount) {
+    dockCount = sum;
+    invoke("set_badge", { count: sum }).catch(() => {});
+  }
   const b = $(id);
   const badge = b.querySelector<HTMLElement>(".nav-count")!;
   badge.hidden = count === 0;

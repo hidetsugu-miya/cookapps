@@ -1,4 +1,4 @@
-// The rows of the inbox list: building one, its read state, and the unread count on the Dock and the sidebar.
+// The rows of the inbox list: building one, its read state, and the unread count on the sidebar.
 import type { ThreadItem } from "./bindings/ThreadItem";
 import { $, span } from "./dom.js";
 import { avatarColor, formatDate, initials, senderName, unescapeHtml } from "./format.js";
@@ -20,14 +20,13 @@ export const rowKey = (t: { account: string; id: string }) => `${t.account}/${t.
 const countUnread = (rows: Map<string, { t: ThreadItem }>, pending: Set<string>) =>
   [...rows].filter(([key, r]) => r.t.unread && !pending.has(key)).length;
 
-// Dock badge and the inbox button show the unread count of the list; the calls are skipped when the count is unchanged.
+// The inbox button shows the unread count of the list (view.ts sums it into the Dock badge); the update is skipped when the count is unchanged.
 let badge = 0;
 export function updateBadge() {
   const count = countUnread(rows, pending);
   if (count === badge) return;
   badge = count;
   setNavCount("nav-mail", count, "受信トレイ", "未読");
-  invoke("set_badge", { count }).catch(() => {});
 }
 
 // Puts the row in its section, unread above read, in date order.
