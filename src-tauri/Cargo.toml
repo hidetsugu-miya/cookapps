@@ -7,6 +7,10 @@ default-run = "cookup"
 [lib]
 name = "cookup_lib"
 
+# Test-only: the WebDriver server and mock bridge for E2E (e2e/). Never in the default or release build.
+[features]
+e2e = ["dep:keyring-core", "dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -17,6 +21,7 @@ dirs = "7"
 encoding_rs = "0.8"
 getrandom = "0.4"
 keyring = "4"
+keyring-core = { version = "1", optional = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query"] }
 rmcp = { version = "3.8", features = ["server", "transport-io", "macros"] }
 schemars = "1"
@@ -25,6 +30,8 @@ serde_json = "1"
 sha2 = "0.11"
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-wdio = { version = "1.5.1", optional = true }
+tauri-plugin-wdio-webdriver = { version = "1.5.1", optional = true }
 tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "sync", "time"] }
 url = "2"
 
