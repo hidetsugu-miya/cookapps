@@ -7,6 +7,7 @@ import type { Claude } from "./bindings/Claude";
 import type { Inbox } from "./bindings/Inbox";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { SlackLoad } from "./bindings/SlackLoad";
+import type { Summary } from "./bindings/Summary";
 import type { Sync } from "./bindings/Sync";
 import type { Target } from "./bindings/Target";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
@@ -49,7 +50,13 @@ export interface Commands {
   todoist_add: { args: { text: string; projectId?: string | null; today: boolean }; result: boolean | null };
   todoist_add_subtask: { args: { parentId: string; content: string }; result: boolean | null };
   todoist_task_from_mail: { args: Account & { threadId: string; subject: string }; result: boolean | null };
-  todoist_add_from_slack: { args: { url: string; projectId?: string | null; today: boolean }; result: string | null };
+  // The summary of a Slack message, to be confirmed before it is added.
+  todoist_summarize_slack: { args: { url: string }; result: Summary | null };
+  // What the user confirmed; answers the task's name.
+  todoist_add_from_slack: {
+    args: { url: string; content: string; description: string; due: string; projectId?: string | null; today: boolean };
+    result: string | null;
+  };
   todoist_set_done: { args: { id: string; done: boolean }; result: boolean | null };
   todoist_update: {
     args: { id: string; content?: string; description?: string; dueString?: string };

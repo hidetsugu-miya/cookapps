@@ -540,31 +540,47 @@ fn is_plain_due(due: &str) -> bool {
     }
 }
 
-/// The body of `POST /tasks` for a task made from a Slack message. The name is cut at Todoist's limit, and the due date is the summary's when it is a plain date or date and time, else today when `today`.
+/// The summary with its `due` kept only when it is a plain date or date and time: the model's words must not reach Todoist's date parser.
+fn with_plain_due(mut summary: Summary) -> Summary {
+    summary.due = summary.due.filter(|d| is_plain_due(d));
+    summary
+}
+
+/// The body of `POST /tasks` for a task made from a Slack message, from what the user confirmed. The name is cut at Todoist's limit and must not be empty.
+/// `due` is the user's own text for Todoist to read; when it is empty the task is due today if `today`.
 fn slack_task_body(
-    summary: &Summary,
+    content: &str,
+    description: &str,
     slack_url: &str,
+    due: &str,
     project_id: Option<&str>,
     today: bool,
-) -> Value {
-    let description = [summary.description.as_str(), slack_url]
+) -> Result<Value, String> {
+    let content = content.trim();
+    if content.is_empty() {
+        return Err("タスクの名前が空です".into());
+    }
+    let description = [description.trim(), slack_url]
         .iter()
         .filter(|s| !s.is_empty())
         .copied()
         .collect::<Vec<_>>()
         .join("\n\n");
     let mut body = json!({
-        "content": summary.content.chars().take(CONTENT_LIMIT).collect::<String>(),
+        "content": content.chars().take(CONTENT_LIMIT).collect::<String>(),
         "description": description,
     });
-    let due = summary.due.as_deref().filter(|d| is_plain_due(d));
-    if let Some(due) = due.or(today.then_some("today")) {
+    let due = due.trim();
+    if let Some(due) = Some(due)
+        .filter(|d| !d.is_empty())
+        .or(today.then_some("today"))
+    {
         body["due_string"] = due.into();
     }
     if let Some(id) = project_id {
         body["project_id"] = id.into();
     }
-    body
+    Ok(body)
 }
 
 fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
@@ -1249,22 +1265,16 @@ pub async fn todoist_task_from_mail(
     Ok(done.map(|_| true))
 }
 
-/// Reads the Slack message `url` points at, has Claude summarise it, and adds the summary as a task: its name is the summary's, its description
-/// the key points and then the message's URL. It goes to `project_id` (the inbox for `None`); with `today`, a task the summary gave no date is due today.
-/// Returns the task's name; `None` means a token is needed and nothing was created. The message's text is sent to Anthropic through Claude Code.
+/// Reads the Slack message `url` points at and has Claude summarise it into a task's name, description and due date; nothing is created.
+/// `None` means a token is needed and nothing was read. The message's text is sent to Anthropic through Claude Code.
 #[tauri::command]
-pub async fn todoist_add_from_slack(
+pub async fn todoist_summarize_slack(
     app: AppHandle,
     auth: State<'_, Auth>,
     state: State<'_, TodoistState>,
     url: String,
-    project_id: Option<String>,
-    today: bool,
-) -> Result<Option<String>, String> {
-    let command = "todoist_add_from_slack";
-    if let Some(id) = &project_id {
-        valid_id(id, "プロジェクト ID").map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    }
+) -> Result<Option<Summary>, String> {
+    let command = "todoist_summarize_slack";
     // Without a Todoist token, nothing is read from Slack and nothing is sent to Claude.
     if state
         .token()
@@ -1274,18 +1284,49 @@ pub async fn todoist_add_from_slack(
     {
         return Ok(None);
     }
-    let url = url.trim();
     let dir = config_dir(&app).map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let message = slack::message_context(&dir, auth.http(), url)
+    let message = slack::message_context(&dir, auth.http(), url.trim())
         .await
         .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let summary = claude::summarize(&message).await.map_err(|e| {
         log_failure(command, TOKEN_USER, e.log);
         e.screen
     })?;
-    let body = slack_task_body(&summary, url, project_id.as_deref(), today);
+    Ok(Some(with_plain_due(summary)))
+}
+
+/// Adds the task the user confirmed after `todoist_summarize_slack`: `content` is its name, `description` its text, and the message's URL is put at the end of that text.
+/// It goes to `project_id` (the inbox for `None`); `due` is Todoist's date text, and when it is empty a task is due today if `today`.
+/// Returns the task's name; `None` means a token is needed and nothing was created.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn todoist_add_from_slack(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    url: String,
+    content: String,
+    description: String,
+    due: String,
+    project_id: Option<String>,
+    today: bool,
+) -> Result<Option<String>, String> {
+    let command = "todoist_add_from_slack";
+    if let Some(id) = &project_id {
+        valid_id(id, "プロジェクト ID").map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    }
+    let url = url.trim();
+    slack::check_message_url(url).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let body = slack_task_body(
+        &content,
+        &description,
+        url,
+        &due,
+        project_id.as_deref(),
+        today,
+    )
+    .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let created = request(&auth, &state, command, Method::POST, "/tasks", Some(body)).await?;
-    Ok(created.map(|_| summary.content))
+    Ok(created.map(|_| content.trim().to_owned()))
 }
 
 /// Completes (`close`) or reopens a task.
@@ -2271,72 +2312,108 @@ mod tests {
     fn summary(due: Option<&str>) -> Summary {
         Summary {
             content: "PR #482 のレビュー".into(),
-            description: "認証まわりの変更".into(),
+            description: "- 認証まわりの変更".into(),
             due: due.map(str::to_owned),
         }
     }
 
     const SLACK_URL: &str = "https://example.slack.com/archives/C0123ABC/p1761785520123456";
 
+    /// `slack_task_body` with the confirmed values of the common case; each test changes the one it is about.
+    fn body(
+        content: &str,
+        description: &str,
+        due: &str,
+        project: Option<&str>,
+        today: bool,
+    ) -> Result<Value, String> {
+        slack_task_body(content, description, SLACK_URL, due, project, today)
+    }
+
     #[test]
     fn a_slack_task_ends_its_description_with_the_message_url() {
         assert_eq!(
-            slack_task_body(&summary(None), SLACK_URL, None, false),
-            json!({
+            body("PR #482 のレビュー", "- 認証まわりの変更", "", None, false),
+            Ok(json!({
                 "content": "PR #482 のレビュー",
-                "description": format!("認証まわりの変更\n\n{SLACK_URL}"),
-            })
+                "description": format!("- 認証まわりの変更\n\n{SLACK_URL}"),
+            }))
         );
     }
 
     #[test]
     fn a_slack_task_with_no_key_points_has_only_the_url() {
-        let mut s = summary(None);
-        s.description = String::new();
         assert_eq!(
-            slack_task_body(&s, SLACK_URL, None, false)["description"],
+            body("a", "  ", "", None, false).unwrap()["description"],
             SLACK_URL
         );
     }
 
     #[test]
-    fn a_slack_task_takes_the_summarys_due_and_the_project() {
+    fn a_slack_task_takes_the_users_due_text_as_it_is() {
+        for due in [
+            "2026-11-01 15:00",
+            "tomorrow",
+            "every day",
+            "来週の月曜 10時",
+        ] {
+            assert_eq!(body("a", "", due, None, false).unwrap()["due_string"], due);
+            assert_eq!(body("a", "", due, None, true).unwrap()["due_string"], due);
+        }
         assert_eq!(
-            slack_task_body(
-                &summary(Some("2026-11-01 15:00")),
-                SLACK_URL,
-                Some("P1"),
-                true
-            ),
-            json!({
-                "content": "PR #482 のレビュー",
-                "description": format!("認証まわりの変更\n\n{SLACK_URL}"),
-                "due_string": "2026-11-01 15:00",
-                "project_id": "P1",
-            })
+            body("a", "", "  2026-11-01  ", None, false).unwrap()["due_string"],
+            "2026-11-01"
         );
     }
 
     #[test]
     fn a_slack_task_with_no_due_is_due_today_only_in_today() {
-        assert_eq!(
-            slack_task_body(&summary(None), SLACK_URL, None, true)["due_string"],
-            "today"
-        );
-        assert!(
-            slack_task_body(&summary(None), SLACK_URL, Some("P1"), false)
+        for empty in ["", "   "] {
+            assert_eq!(
+                body("a", "", empty, None, true).unwrap()["due_string"],
+                "today"
+            );
+            assert!(body("a", "", empty, Some("P1"), false)
+                .unwrap()
                 .get("due_string")
-                .is_none()
-        );
+                .is_none());
+        }
     }
 
     #[test]
-    fn a_slack_task_takes_only_a_date_or_a_date_and_time_as_due() {
+    fn a_slack_task_goes_to_the_given_project() {
+        assert_eq!(
+            body("a", "", "", Some("P1"), false).unwrap()["project_id"],
+            "P1"
+        );
+        assert!(body("a", "", "", None, false)
+            .unwrap()
+            .get("project_id")
+            .is_none());
+    }
+
+    #[test]
+    fn a_slack_task_without_a_name_is_refused() {
+        for empty in ["", "  ", "\n"] {
+            assert!(body(empty, "x", "", None, false).is_err(), "{empty:?}");
+        }
+    }
+
+    #[test]
+    fn a_slack_task_name_is_trimmed_and_cut_at_the_limit() {
+        let long = "あ".repeat(CONTENT_LIMIT + 10);
+        let cut = body(&format!(" {long} "), "", "", None, false).unwrap();
+        assert_eq!(
+            cut["content"].as_str().unwrap().chars().count(),
+            CONTENT_LIMIT
+        );
+        assert_eq!(body(" a ", "", "", None, false).unwrap()["content"], "a");
+    }
+
+    #[test]
+    fn a_summary_keeps_only_a_date_or_a_date_and_time_as_due() {
         for due in ["2026-11-01", "2026-11-01 15:00"] {
-            assert_eq!(
-                slack_task_body(&summary(Some(due)), SLACK_URL, None, false)["due_string"],
-                due
-            );
+            assert_eq!(with_plain_due(summary(Some(due))).due.as_deref(), Some(due));
         }
         for due in [
             "every day",
@@ -2347,21 +2424,8 @@ mod tests {
             "2026-1-5",
             "",
         ] {
-            let body = slack_task_body(&summary(Some(due)), SLACK_URL, None, false);
-            assert!(body.get("due_string").is_none(), "{due}");
-            let today = slack_task_body(&summary(Some(due)), SLACK_URL, None, true);
-            assert_eq!(today["due_string"], "today", "{due}");
+            assert_eq!(with_plain_due(summary(Some(due))).due, None, "{due}");
         }
-    }
-
-    #[test]
-    fn a_slack_task_name_is_cut_at_the_limit() {
-        let mut s = summary(None);
-        s.content = "あ".repeat(CONTENT_LIMIT + 10);
-        let body = slack_task_body(&s, SLACK_URL, None, false);
-        assert_eq!(
-            body["content"].as_str().unwrap().chars().count(),
-            CONTENT_LIMIT
-        );
+        assert_eq!(with_plain_due(summary(None)).due, None);
     }
 }

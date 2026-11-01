@@ -956,6 +956,12 @@ pub async fn slack_link(
     })
 }
 
+/// Whether `url` is a link to one Slack message (not a channel's), as the frontend must have checked it.
+pub fn check_message_url(url: &str) -> Result<(), String> {
+    parse_url(url)?.message_ts.ok_or(BAD_MESSAGE_URL)?;
+    Ok(())
+}
+
 /// The text of the Slack message `url` points at, with its thread's first message when it is a reply, read with the token of the link's workspace.
 /// A reply is read on its own, so one deep in a long thread is found; two requests of one message each, not the whole thread.
 pub async fn message_context(
@@ -1490,6 +1496,21 @@ mod tests {
         assert_eq!(plain.message_ts, plain.thread_ts);
         let channel = parse_url("https://example.slack.com/archives/C0123ABC").unwrap();
         assert_eq!(channel.message_ts, None);
+    }
+
+    #[test]
+    fn only_a_message_link_passes_the_message_url_check() {
+        assert_eq!(
+            check_message_url("https://example.slack.com/archives/C0123ABC/p1761785520123456"),
+            Ok(())
+        );
+        for bad in [
+            "https://example.slack.com/archives/C0123ABC",
+            "https://example.com/archives/C0123ABC/p1761785520123456",
+            "not a url",
+        ] {
+            assert!(check_message_url(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -31,3 +31,6 @@ export const onEnter = (input: HTMLInputElement, action: () => void) => {
     if (e.key === "Enter" && !composing(e)) action();
   };
 };
+
+// Whether this is macOS: Cmd is the shortcut key there, Ctrl elsewhere.
+export const isMac = /Mac/.test(navigator.platform);

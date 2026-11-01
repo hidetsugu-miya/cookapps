@@ -3,7 +3,7 @@ import type { Inbox } from "./bindings/Inbox";
 import type { Sync } from "./bindings/Sync";
 import type { ThreadItem } from "./bindings/ThreadItem";
 import { renderAccounts } from "./accounts.js";
-import { $, composing } from "./dom.js";
+import { $, composing, isMac } from "./dom.js";
 import { place, pending, row, rowKey, rows, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { currentScreen } from "./nav.js";
@@ -220,8 +220,6 @@ async function syncAll() {
   syncFails = failure ? syncFails + 1 : 0;
   if (syncFails === 3) showError(`自動同期に失敗しています: ${failure}`);
 }
-
-const isMac = /Mac/.test(navigator.platform);
 
 export function initInbox() {
   setInterval(syncAll, SYNC_MS);
