@@ -19,6 +19,10 @@ let mode: UpdateMode = "auto";
 let update: UpdateInfo | null = null;
 let checking = false;
 let failed = false;
+// When the last check started; a window shown again checks when it is older than CHECK_EVERY_MS.
+let lastCheck = 0;
+// The version whose background replacement failed: it is not downloaded again every few minutes; the update button still offers it.
+let autoFailed: string | null = null;
 
 function status(): [string, string] {
   if (!info?.updatable) return ["off", "対応していません"];
@@ -50,6 +54,7 @@ async function check() {
   if (checking || !info?.updatable) return;
   checking = true;
   failed = false;
+  lastCheck = Date.now();
   render();
   try {
     update = await invoke("check_update");
@@ -57,12 +62,13 @@ async function check() {
     // Offline or no release yet is no reason to bother the user: the card says so, the sidebar stays as it was. The backend logs it.
     failed = true;
   }
-  if (!failed && mode === "auto" && update && !update.installed) {
+  if (!failed && mode === "auto" && update && !update.installed && update.version !== autoFailed) {
     try {
       await invoke("install_update");
       update.installed = true;
     } catch {
       // The update button still offers the update by hand. The backend logs it.
+      autoFailed = update.version;
     }
   }
   checking = false;
@@ -118,6 +124,8 @@ export function initUpdate() {
     }
     render();
     await check();
-    setInterval(check, CHECK_EVERY_MS);
+    // Not while the window is hidden; when it is shown again, the check runs if the last one is old.
+    setInterval(() => !document.hidden && check(), CHECK_EVERY_MS);
+    document.addEventListener("visibilitychange", () => !document.hidden && Date.now() - lastCheck >= CHECK_EVERY_MS && check());
   })();
 }
