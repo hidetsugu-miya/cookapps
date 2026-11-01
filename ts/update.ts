@@ -10,7 +10,7 @@ import { invoke } from "./ipc.js";
 import { itemRow } from "./settings.js";
 import { showError } from "./view.js";
 
-const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+const CHECK_EVERY_MS = 5 * 60 * 1000;
 
 // null until the backend has answered.
 let info: AppInfo | null = null;
@@ -103,7 +103,7 @@ export function initUpdate() {
       hintPopup(
         "アップデートの使い方",
         [
-          ["GitHub Releases を、起動時と 6 時間ごとに確認します（「今すぐ確認」でもできます）"],
+          ["GitHub Releases を、起動時と 5 分ごとに確認します（「今すぐ確認」でもできます）"],
           ["手動: 新しい版があるとサイドメニューに更新ボタンが出ます。押すと入れ替えて、再起動します"],
           ["自動: 新しい版を裏で入れ替えます。再起動は自動ではしません。サイドメニューの更新ボタンを押すと再起動します"],
         ],
