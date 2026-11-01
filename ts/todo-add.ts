@@ -224,8 +224,13 @@ function reviewCard(job: PendingAdd, summary: Summary) {
     e.preventDefault();
     commit();
   };
-  // Focus without scrolling the list away from where the user is.
-  setTimeout(() => name.isConnected && name.focus({ preventScroll: true }));
+  // Focus without scrolling the list away from where the user is, and only when nothing is being typed (a summary takes seconds,
+  // and taking the focus from a row's name would save the half-typed name on blur).
+  setTimeout(() => {
+    const active = document.activeElement;
+    const idle = active === document.body || (active instanceof HTMLInputElement && active.id === "todo-add-input" && !active.value);
+    if (name.isConnected && idle) name.focus({ preventScroll: true });
+  });
   return card;
 }
 
