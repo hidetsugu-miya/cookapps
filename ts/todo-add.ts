@@ -1,13 +1,15 @@
-// The Todo screen's add field: Quick Add, or a Slack message link summarised by Claude; and a task made from a mail.
+// The Todo screen's add field: Quick Add, or a Slack message link summarised by Claude and confirmed on a card; and a task made from a mail.
 import { getClaude } from "./claude.js";
-import { $, tag } from "./dom.js";
+import type { Summary } from "./bindings/Summary";
+import { $, composing, isMac, tag } from "./dom.js";
 import { hostOf } from "./format.js";
-import { CLAUDE_SVG, CLOSE_SVG, SLACK_SVG } from "./icons.js";
+import { CLAUDE_SVG, CLOSE_SVG, DATE_SVG, FOLDER_SVG, SLACK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { getSlackWorkspaces, loadSlackWorkspaces } from "./slack-workspaces.js";
 import { toast } from "./toast.js";
-import { todoState, viewProjectId } from "./todo-data.js";
+import { inboxOf, projectName, projectOf, todoState, viewProjectId } from "./todo-data.js";
+import { openProjectPicker } from "./todo-detail.js";
 import { todoCall } from "./todo-write.js";
 import { loadTodo } from "./todo.js";
 import { showError } from "./view.js";
@@ -54,7 +56,7 @@ function addMode() {
   if (claude.state !== "ready") return { summarize: false, hint: "Claude にログインすると、要約して追加できます" };
   const workspace = workspaces.find((w) => hostOf(w.url) === host);
   if (!workspace) return { summarize: false, hint: "このリンクのワークスペースは Slack に接続されていません。設定で追加してください" };
-  return { summarize: true, hint: `Slack のメッセージ（${workspace.team}）を Claude が要約し、「${$("todo-title").textContent}」に追加します` };
+  return { summarize: true, hint: `Slack のメッセージ（${workspace.team}）を Claude が要約します。内容を確かめてから「${$("todo-title").textContent}」に追加します` };
 }
 
 // What the add field's button and hint last showed; the list's redraw calls updateAddMode every 10 seconds.
@@ -65,7 +67,7 @@ export function updateAddMode() {
   shownAddMode = { summarize, hint };
   const button = $("todo-add-button");
   button.className = summarize ? "text-btn primary" : "text-btn";
-  if (summarize) button.innerHTML = `${CLAUDE_SVG}要約して追加`;
+  if (summarize) button.innerHTML = `${CLAUDE_SVG}要約する`;
   else button.textContent = "追加";
   $("todo-add-input").classList.toggle("slack", summarize);
   const line = $("todo-add-hint");
@@ -75,61 +77,183 @@ export function updateAddMode() {
   line.append(hint);
 }
 
-// The Slack links being summarised or that failed, above the list. Several may run at once.
-const pendingAdds: { id: number; host: string | null; failed: string | null }[] = [];
-let pendingSeq = 0;
+// The Slack links being summarised, waiting for the user's confirmation, or that failed, above the list. Several may be there at once.
+// `el` is the row drawn for it: a row is replaced alone, so a card being typed in keeps its focus when another one changes.
+interface PendingAdd {
+  url: string;
+  host: string | null;
+  failed: string | null;
+  // Set when Claude has answered; the card then asks the user to confirm it.
+  summary: Summary | null;
+  // Where the task goes: null is the inbox (a link pasted in "今日"). `today` is whether a task with no due date is due today.
+  projectId: string | null;
+  today: boolean;
+  el: HTMLElement | null;
+}
+const pendingAdds: PendingAdd[] = [];
 
-function renderPending() {
-  $("todo-pending").replaceChildren(
-    ...pendingAdds.map((job) => {
-      const row = tag("div", `pending${job.failed ? " fail" : ""}`);
-      if (!job.failed) {
-        row.append(tag("span", "spin"), tag("span", "sp", "Claude が要約しています…"), tag("span", "pending-channel", job.host ?? ""));
-        return row;
-      }
-      row.append(tag("span", "sp", `追加できませんでした: ${job.failed}`));
-      // Rust's wording for a token that cannot read the message (slack.rs read_error).
-      if (job.failed.includes("権限がありません")) {
-        const open = tag("button", "text-btn", "設定を開く");
-        open.onclick = () => setScreen("settings");
-        row.append(open);
-      }
-      const close = tag("button", "icon-btn");
-      close.innerHTML = CLOSE_SVG;
-      close.setAttribute("aria-label", "閉じる");
-      close.onclick = () => {
-        pendingAdds.splice(pendingAdds.indexOf(job), 1);
-        renderPending();
-      };
-      row.append(close);
-      return row;
-    }),
-  );
+function closeButton(onclick: () => void) {
+  const close = tag("button", "icon-btn");
+  close.innerHTML = CLOSE_SVG;
+  close.setAttribute("aria-label", "閉じる");
+  close.onclick = onclick;
+  return close;
 }
 
-// Sends the Slack link to Rust, which reads the message, has Claude summarise it and adds the task. The field is free at once; the result shows in the row above the list.
+// Draws the job's row where it is, or at the end for a new job.
+function showPending(job: PendingAdd) {
+  const row = job.failed ? failedRow(job) : job.summary ? reviewCard(job, job.summary) : busyRow(job);
+  if (job.el) job.el.replaceWith(row);
+  else $("todo-pending").append(row);
+  job.el = row;
+}
+
+function removePending(job: PendingAdd) {
+  pendingAdds.splice(pendingAdds.indexOf(job), 1);
+  job.el?.remove();
+}
+
+function busyRow(job: PendingAdd) {
+  const row = tag("div", "pending");
+  row.append(tag("span", "spin"), tag("span", "sp", "Claude が要約しています…"), tag("span", "pending-channel", job.host ?? ""));
+  return row;
+}
+
+function failedRow(job: PendingAdd) {
+  const row = tag("div", "pending fail");
+  row.append(tag("span", "sp", `追加できませんでした: ${job.failed}`));
+  // Rust's wording for a token that cannot read the message (slack.rs read_error).
+  if (job.failed?.includes("権限がありません")) {
+    const open = tag("button", "text-btn", "設定を開く");
+    open.onclick = () => setScreen("settings");
+    row.append(open);
+  }
+  row.append(closeButton(() => removePending(job)));
+  return row;
+}
+
+function reviewField(label: string, control: HTMLElement) {
+  const field = tag("label", "review-field");
+  field.append(tag("span", "review-label", label), control);
+  return field;
+}
+
+// The card that asks the user to confirm Claude's summary: name, description, due date and project can be changed, the link cannot (it ends the description).
+function reviewCard(job: PendingAdd, summary: Summary) {
+  const name = tag("input", "review-name");
+  name.value = summary.content;
+  const description = tag("textarea", "review-desc");
+  description.value = summary.description;
+  const due = tag("input", "review-due");
+  due.value = summary.due ?? "";
+  due.setAttribute("aria-label", "期限");
+  due.placeholder = job.today ? "空なら今日" : "期限なし";
+  const dueChip = tag("span", "review-chip");
+  dueChip.insertAdjacentHTML("beforeend", DATE_SVG);
+  dueChip.append(due);
+  const project = tag("button", "review-chip review-project");
+  project.type = "button";
+  const showProject = () => {
+    project.replaceChildren();
+    project.insertAdjacentHTML("beforeend", FOLDER_SVG);
+    project.append(projectName(projectOf(job.projectId ?? inboxOf()?.id ?? "")));
+  };
+  showProject();
+  project.onclick = () =>
+    todoState.todo &&
+    openProjectPicker(project, job.projectId ?? inboxOf()?.id, (id) => {
+      job.projectId = id;
+      showProject();
+    });
+  const team = getSlackWorkspaces()?.find((w) => hostOf(w.url) === job.host)?.team ?? job.host ?? "";
+  const source = tag("div", "review-src");
+  source.title = job.url;
+  source.insertAdjacentHTML("beforeend", SLACK_SVG);
+  source.append(`${team} の Slack のメッセージ（リンクは説明の末尾に付きます）`);
+  const error = tag("div", "pending fail review-err");
+  error.hidden = true;
+  const drop = tag("button", "text-btn review-drop", "破棄");
+  const add = tag("button", "text-btn primary review-add", "追加");
+  const keys = tag("span", "review-keys");
+  keys.append(tag("kbd", "", isMac ? "⌘" : "Ctrl"), tag("kbd", "", "Enter"), " で追加");
+  const actions = tag("div", "review-actions");
+  actions.append(keys, drop, add);
+  const head = tag("div", "review-head");
+  head.insertAdjacentHTML("beforeend", CLAUDE_SVG);
+  head.append("Claude の要約です。確かめてから追加してください");
+  const chips = tag("div", "review-chips");
+  chips.append(dueChip, project);
+  const body = tag("div", "review-body");
+  body.append(reviewField("名前", name), reviewField("説明", description), chips, source, error, actions);
+  const card = tag("div", "review");
+  card.append(head, body);
+
+  let saving = false;
+  const commit = async () => {
+    if (saving) return;
+    if (!name.value.trim()) return name.focus();
+    saving = true;
+    drop.disabled = add.disabled = true;
+    error.hidden = true;
+    try {
+      const added = await invoke("todoist_add_from_slack", {
+        url: job.url,
+        content: name.value,
+        description: description.value,
+        due: due.value,
+        projectId: job.projectId,
+        today: job.today,
+      });
+      removePending(job);
+      // null: a token is needed, and the load shows the token form.
+      if (added !== null) toast(`「${added}」を追加しました`);
+      loadTodo(false, false);
+    } catch (e) {
+      // The card stays as the user left it.
+      error.textContent = `追加できませんでした: ${e}`;
+      error.hidden = false;
+      saving = false;
+      drop.disabled = add.disabled = false;
+    }
+  };
+  add.onclick = commit;
+  drop.onclick = () => removePending(job);
+  // Enter in the name, or Cmd+Enter (Ctrl+Enter off macOS) anywhere on the card, adds. Escape does nothing: it would lose a summary by accident.
+  card.onkeydown = (e) => {
+    if (e.key !== "Enter" || composing(e) || !(e.target === name || (isMac ? e.metaKey : e.ctrlKey))) return;
+    e.preventDefault();
+    commit();
+  };
+  // Focus without scrolling the list away from where the user is.
+  setTimeout(() => name.isConnected && name.focus({ preventScroll: true }));
+  return card;
+}
+
+// Sends the Slack link to Rust, which reads the message and has Claude summarise it. The field is free at once; the result shows in the row above the list as a card to confirm.
 function addFromSlack(url: string) {
   const input = $<HTMLInputElement>("todo-add-input");
-  // Like Quick Add: in "今日" the task goes to the inbox, due today unless the summary has a date.
+  // Like Quick Add: in "今日" the task goes to the inbox, due today unless the user gives a date.
   const inToday = todoState.view === "today";
-  const projectId = inToday ? null : viewProjectId(todoState.view);
   input.value = "";
   updateAddMode();
   input.focus();
-  const job = { id: ++pendingSeq, host: slackMessageHost(url), failed: null as string | null };
+  const job: PendingAdd = { url, host: slackMessageHost(url), failed: null, summary: null, projectId: inToday ? null : (viewProjectId(todoState.view) ?? null), today: inToday, el: null };
   pendingAdds.push(job);
-  renderPending();
-  invoke("todoist_add_from_slack", { url, projectId, today: inToday }).then(
-    (name) => {
-      pendingAdds.splice(pendingAdds.indexOf(job), 1);
-      renderPending();
+  showPending(job);
+  invoke("todoist_summarize_slack", { url }).then(
+    (summary) => {
       // null: a token is needed, and the load shows the token form.
-      if (name !== null) toast(`「${name}」を追加しました`);
-      loadTodo(false, false);
+      if (summary === null) {
+        removePending(job);
+        loadTodo(false, false);
+        return;
+      }
+      job.summary = summary;
+      showPending(job);
     },
     (e) => {
       job.failed = String(e);
-      renderPending();
+      showPending(job);
     },
   );
 }

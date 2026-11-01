@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeMissing, claudeReady, count, inbox, mock, slackLoad, slackMessageUrl, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeMissing, claudeReady, count, inbox, mock, rejects, slackLoad, slackMessageUrl, slackSummary, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -32,16 +32,106 @@ describe("todo", () => {
     expect(await callsOf(add)).toContainEqual({ text: "Buy milk", projectId: null, today: true });
   });
 
-  it("turns the button into 要約して追加 for a Slack link and sends it to todoist_add_from_slack", async () => {
+  // The Todo screen with a Slack link pasted: the summary is mocked, and its card is up.
+  async function openSummaryCard() {
     await openTodo();
+    const summarize = await mock("todoist_summarize_slack", slackSummary);
     const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
     await $("#todo-add-input").setValue(slackMessageUrl);
-    await expect($("#todo-add-button")).toHaveText("要約して追加");
-    await expect($("#todo-add-hint")).toHaveText(expect.stringContaining("Example Team"));
     await $("#todo-add-button").click();
-    await waitForCalls(addFromSlack);
-    expect(await callsOf(addFromSlack)).toContainEqual({ url: slackMessageUrl, projectId: null, today: true });
+    await waitForCalls(summarize);
+    await $(".review").waitForExist();
+    return { summarize, addFromSlack };
+  }
+
+  it("turns the button into 要約する for a Slack link and shows the summary on a card to confirm", async () => {
+    await openTodo();
+    const summarize = await mock("todoist_summarize_slack", slackSummary);
+    const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await expect($("#todo-add-button")).toHaveText("要約する");
+    await expect($("#todo-add-hint")).toHaveText(expect.stringContaining("Example Team"));
+    await expect($("#todo-add-hint")).toHaveText(expect.stringContaining("内容を確かめてから「今日」に追加します"));
+    await $("#todo-add-button").click();
+    expect(await waitForCalls(summarize)).toEqual([{ url: slackMessageUrl }]);
+    await $(".review").waitForExist();
+    await expect($("#todo-add-input")).toHaveValue("");
+    await expect($(".review .review-name")).toHaveValue("Reply to the vendor");
+    await expect($(".review .review-desc")).toHaveValue(slackSummary.description);
+    await expect($(".review .review-due")).toHaveValue("2026-11-06");
+    await expect($(".review .review-project")).toHaveText("受信箱");
+    await expect($(".review .review-src")).toHaveText(expect.stringContaining("Example Team"));
+    // Nothing is created until the user confirms.
+    expect(await callsOf(addFromSlack)).toEqual([]);
+  });
+
+  it("adds the summary as it is, to the inbox and due today unless it has a date, when 追加 is pressed", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await $(".review .review-add").click();
+    expect(await waitForCalls(addFromSlack)).toEqual([
+      { url: slackMessageUrl, content: "Reply to the vendor", description: slackSummary.description, due: "2026-11-06", projectId: null, today: true },
+    ]);
+    await $(".review").waitForExist({ reverse: true });
     await expect($(".toast")).toHaveText(expect.stringContaining("Reply to the vendor"));
+  });
+
+  it("sends the name, description, due date and project the user edited", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await $(".review .review-name").setValue("Answer the vendor by Friday");
+    await $(".review .review-desc").setValue("- Quote needed");
+    await $(".review .review-due").setValue("tomorrow");
+    await $(".review .review-project").click();
+    await $('.menu button[role="menuitem"]:nth-child(2)').click();
+    await expect($(".review .review-project")).toHaveText("Work");
+    await $(".review .review-add").click();
+    expect(await waitForCalls(addFromSlack)).toEqual([
+      { url: slackMessageUrl, content: "Answer the vendor by Friday", description: "- Quote needed", due: "tomorrow", projectId: "p1", today: true },
+    ]);
+  });
+
+  it("adds with Enter in the name field", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await $(".review .review-name").click();
+    await browser.keys("Enter");
+    await waitForCalls(addFromSlack);
+  });
+
+  it("adds nothing and focuses the name when it is empty", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await $(".review .review-name").setValue("");
+    await $(".review .review-add").click();
+    await expect($(".review .review-name")).toBeFocused();
+    expect(await callsOf(addFromSlack)).toEqual([]);
+  });
+
+  it("closes the card with 破棄 and creates nothing", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await $(".review .review-drop").click();
+    await $(".review").waitForExist({ reverse: true });
+    expect(await callsOf(addFromSlack)).toEqual([]);
+  });
+
+  it("keeps what the user typed on the card, with the error, when the add fails", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await mock("todoist_add_from_slack", rejects("Todoist に接続できません"));
+    await $(".review .review-name").setValue("My own name");
+    await $(".review .review-add").click();
+    await expect($(".review .review-err")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($(".review .review-name")).toHaveValue("My own name");
+    await expect($(".review .review-desc")).toHaveValue(slackSummary.description);
+    await expect($(".review .review-add")).toBeEnabled();
+    expect(await callsOf(addFromSlack)).toHaveLength(1);
+  });
+
+  it("shows a failed summary as a closable warning row", async () => {
+    await openTodo();
+    const summarize = await mock("todoist_summarize_slack", rejects("Claude が時間内に終わりませんでした"));
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await waitForCalls(summarize);
+    await expect($(".pending.fail")).toHaveText(expect.stringContaining("Claude が時間内に終わりませんでした"));
+    await $(".pending.fail .icon-btn").click();
+    await $(".pending").waitForExist({ reverse: true });
   });
 
   it("keeps the button as 追加 and hints at the Claude login while Claude is missing", async () => {

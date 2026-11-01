@@ -76,17 +76,22 @@ export function openDuePop(anchor: Element, t: TaskItem) {
   input.select();
 }
 
-export function openProjectMenu(anchor: Element, t: TaskItem) {
+// The menu of projects, with `current` marked; `pick` gets the ID of the one chosen.
+export function openProjectPicker(anchor: Element, current: string | undefined, pick: (projectId: string) => unknown) {
   openMenu(
     anchor,
     todoState.todo!.projects.map((p) => ({
       label: projectName(p),
       color: p.color,
-      current: p.id === t.projectId,
+      current: p.id === current,
       depth: p.depth,
-      pick: () => p.id !== t.projectId && moveTask(t.id, p.id),
+      pick: () => pick(p.id),
     })),
   );
+}
+
+export function openProjectMenu(anchor: Element, t: TaskItem) {
+  openProjectPicker(anchor, t.projectId, (id) => id !== t.projectId && moveTask(t.id, id));
 }
 
 // A field of the side pane: its label over the value, a button that opens the menu or popover that changes it.
