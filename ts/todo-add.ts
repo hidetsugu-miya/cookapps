@@ -121,7 +121,7 @@ function busyRow(job: PendingAdd) {
 
 function failedRow(job: PendingAdd) {
   const row = tag("div", "pending fail");
-  row.append(tag("span", "sp", `追加できませんでした: ${job.failed}`));
+  row.append(tag("span", "sp", `要約できませんでした: ${job.failed}`));
   // Rust's wording for a token that cannot read the message (slack.rs read_error).
   if (job.failed?.includes("権限がありません")) {
     const open = tag("button", "text-btn", "設定を開く");
@@ -247,8 +247,8 @@ function addFromSlack(url: string) {
   showPending(job);
   invoke("todoist_summarize_slack", { url }).then(
     (summary) => {
-      // null: a token is needed, and the load shows the token form.
-      if (summary === null) {
+      // null: a token is needed, and the load shows the token form. Todoist disconnected meanwhile: there is no project to add to.
+      if (summary === null || todoState.todo === null) {
         removePending(job);
         loadTodo(false, false);
         return;
