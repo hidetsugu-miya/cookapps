@@ -133,7 +133,6 @@ pub fn run() {
             images::fetch_images,
             image_senders::image_sender_known,
             image_senders::remember_image_sender,
-            image_senders::forget_image_sender,
             todoist::todoist_load,
             todoist::todoist_cached,
             todoist::todoist_save_token,
