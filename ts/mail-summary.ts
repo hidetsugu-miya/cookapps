@@ -12,6 +12,10 @@ type State = { phase: "loading" } | { phase: "done"; points: string[]; open: boo
 // By account, thread and latest message: a thread that got a new message starts with no summary.
 const states = new Map<string, State>();
 const keyOf = (t: OpenThread) => `${t.account}/${t.id}/${t.messages.at(-1)!.id}`;
+// The most states kept; the oldest is dropped first (a Map keeps its keys in the order they were first set).
+const MAX_STATES = 50;
+// What Rust sends to the model at most (INPUT_LIMIT in claude.rs): the text past it is never read, so it is not made.
+const TEXT_LIMIT = 10_000;
 
 // The thread whose card is on the screen. A result for another thread is kept in `states` and drawn when that thread is opened again.
 let shown: string | null = null;
@@ -34,7 +38,11 @@ export function renderSummary(t: OpenThread) {
   const state = states.get(shown);
   const card = $("mail-summary");
   card.hidden = !state || (state.phase === "done" && !state.open);
-  if (!state || card.hidden) return;
+  if (!state || card.hidden) {
+    // An emptied card holds no handler that still points at an earlier thread.
+    card.replaceChildren();
+    return;
+  }
   card.dataset.phase = state.phase;
   switch (state.phase) {
     case "loading":
@@ -67,10 +75,25 @@ function closeCard(t: OpenThread) {
 // and a press while it is being made does nothing.
 async function start(t: OpenThread) {
   const key = keyOf(t);
+  // The earlier states of this thread (before its latest message changed) are not shown again.
+  for (const k of states.keys()) if (k.startsWith(`${t.account}/${t.id}/`)) states.delete(k);
   states.set(key, { phase: "loading" });
+  while (states.size > MAX_STATES) states.delete(states.keys().next().value!);
   renderSummary(t);
+  // Let the "loading" card be drawn before the text of the messages is made.
+  await new Promise(requestAnimationFrame);
   try {
-    const messages = t.messages.map((m) => ({ from: m.from, dateMs: m.dateMs, text: mailText(m) }));
+    // From the newest message back, until the text reaches what Rust reads; then oldest first as before.
+    const messages = [];
+    let length = 0;
+    for (let i = t.messages.length - 1; i >= 0; i--) {
+      const m = t.messages[i];
+      const text = mailText(m);
+      messages.push({ from: m.from, dateMs: m.dateMs, text });
+      length += text.length;
+      if (length >= TEXT_LIMIT) break;
+    }
+    messages.reverse();
     const { points } = await invoke("claude_summarize_mail", { subject: t.subject, messages });
     states.set(key, { phase: "done", points, open: true });
   } catch (e) {

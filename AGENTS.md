@@ -29,7 +29,7 @@ User-facing text is in `README.md` and `docs/`.
 | M-5 | Multiple accounts | Show the inboxes of several Gmail accounts together |
 | M-6 | Mark read | Mark a thread read or unread with the checkbox in the list |
 | M-7 | Auto sync | Sync the inbox with Gmail about every 10 seconds |
-| M-8 | AI summary | In the mail detail, an icon summarizes the thread with the Claude Code CLI (`claude -p`, haiku, no tools, no MCP, no settings) and shows a short list of points, in Japanese, on a card under the subject. Only pressing the icon sends the subject and the messages' text (newest first, up to 10,000 characters, the oldest dropped first). The summary is kept in memory per thread (and its latest message), never saved, and shown again without sending when the card is closed and reopened. The icon is shown only while Claude is logged in (`claude auth status`) |
+| M-8 | AI summary | In the mail detail, an icon summarizes the thread with the Claude Code CLI (`claude -p`, haiku, no tools, no MCP, no settings) and shows a short list of points, in Japanese, on a card under the subject. Only pressing the icon sends the subject and, of each message, the sender, the date and the text (newest first, up to 10,000 characters, the oldest dropped first). The summary is kept in memory per thread (and its latest message), never saved, and shown again without sending when the card is closed and reopened. The icon is shown only while Claude is logged in (`claude auth status`) |
 
 ### Calendar
 

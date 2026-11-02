@@ -72,7 +72,7 @@ export function initClaude() {
           ["ターミナルで ", code("claude auth login"), " を実行してログインする"],
           ["↻ で状態を確かめ直す"],
         ],
-        "Slack のメッセージの本文と、「AI 要約」を押したメールの件名と本文を、要約のため Anthropic に送ります",
+        "Slack のメッセージの本文と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります",
       ),
     );
 }

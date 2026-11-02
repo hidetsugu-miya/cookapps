@@ -163,6 +163,24 @@ describe("thread AI summary", () => {
     expect(await callsOf(call)).toHaveLength(1);
   });
 
+  it("starts again with no card when the thread got a new message, and sends the new thread when the icon is pressed", async () => {
+    const detail = quote("Quote");
+    await open("First unread", detail);
+    const call = await mock("claude_summarize_mail", summary);
+    await summaryButton().click();
+    await waitForCount("#mail-summary li", 2);
+    await $("#back").click();
+    const [older, newer] = detail.messages;
+    const reply = { ...newer, id: "m3", dateMs: newer.dateMs + 600_000, html: false, body: "Thanks, got it" };
+    await open("First unread", { ...detail, messages: [older, newer, reply] });
+    await expect(card()).not.toBeDisplayed();
+    await summaryButton().click();
+    const calls = (await waitForCalls(call, 2)) as { messages: { text: string }[] }[];
+    expect(calls).toHaveLength(2);
+    expect(calls[1].messages.map((m) => m.text)).toContain("Thanks, got it");
+    await waitForCount("#mail-summary li", 2);
+  });
+
   it("does not start a second summary while one is being made", async () => {
     await open("First unread", quote("Quote"));
     const call = await mock("claude_summarize_mail", holds);
