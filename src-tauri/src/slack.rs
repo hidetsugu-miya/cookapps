@@ -137,6 +137,11 @@ fn valid_ts(ts: &str) -> bool {
         .is_some_and(|(sec, micro)| digits(sec) && digits(micro))
 }
 
+/// A Bot User OAuth Token (`xoxb-`). It sees only the channels the bot has joined, so it is not accepted.
+fn is_bot_token(token: &str) -> bool {
+    token.trim().starts_with("xoxb-")
+}
+
 /// The keychain user name of a workspace's token. `team_id` comes from outside, so it must look like one (`T0123ABC`);
 /// that also keeps it apart from `LEGACY_USER`, which has lower-case letters.
 fn token_key(team_id: &str) -> Result<String, String> {
@@ -809,6 +814,9 @@ pub async fn slack_add_workspace(
     if token.is_empty() {
         return Err("トークンを入力してください".into());
     }
+    if is_bot_token(&token) {
+        return Err("Bot User OAuth Token は使えません。「OAuth & Permissions」の User OAuth Token（xoxp- で始まる）を貼ってください".into());
+    }
     let workspace = identify(auth.http(), &token)
         .await
         .map_err(|e| log_failure("slack_add_workspace", "-", e))?;
@@ -1103,6 +1111,14 @@ mod tests {
             name: format!("name {channel}"),
             thread_ts: thread_ts.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn a_bot_token_is_refused_even_with_spaces_around_it() {
+        assert!(is_bot_token("xoxb-1-2-abc"));
+        assert!(is_bot_token("  xoxb-1-2-abc\n"));
+        assert!(!is_bot_token("xoxp-1-2-abc"));
+        assert!(!is_bot_token(" xoxp-1-2-abc "));
     }
 
     #[test]
