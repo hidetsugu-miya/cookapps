@@ -35,8 +35,8 @@ export const todoState = {
   taskById: new Map<string, TaskItem>(),
   // Set when the count fetch finds no usable token: it stops reading the keychain until a load on the Todo screen succeeds.
   countOff: false,
-  // True while the backend has no completed tasks to reuse: at first, and after an answer from the cache (`offline`), whose completed tasks were not fetched.
-  // Every load then asks for them (`withDone`), so the detail, the counts and the cache the backend saves keep the done subtasks once Todoist answers again.
+  // True until a load has fetched from Todoist since the start or a disconnect; an answer from the cache (`offline`) leaves it as it is.
+  // Every load asks for the completed tasks (`withDone`) while it is set, so the detail, the counts and the cache the backend saves keep the done subtasks once Todoist answers.
   doneStale: true,
   // The description being edited ({ id, value }), or null. It outlives a redraw, so a refresh keeps the mode and the text; the textarea's own caret is restored by renderDetail.
   descEdit: null as { id: string; value: string } | null,

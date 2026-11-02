@@ -42,7 +42,7 @@ export function setScreen(name: Screen) {
   } else if (name === "todo") {
     show("todo");
     if (todoState.kept) renderTodo();
-    // The backend keeps the completed tasks of the last load; they are fetched again only on the first one.
+    // The backend keeps the completed tasks of the last load; they are fetched again only while `doneStale` is set (until a load has fetched from Todoist).
     loadTodo(false, todoState.todo === null || todoState.kept);
   } else if (name === "settings") {
     show("settings");

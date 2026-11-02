@@ -78,7 +78,7 @@ export async function loadTodo(quiet = false, withDone = true) {
   const seq = ++todoState.seq;
   try {
     const data = await invoke("todoist_load", { withDone: withDone || todoState.doneStale });
-    if (data) todoState.doneStale = Boolean(data.offline);
+    if (data && !data.offline) todoState.doneStale = false;
     // Not while a change is in flight: the reload after the last one draws.
     if (seq !== todoState.seq || currentScreen() !== "todo" || todoState.writes) return false;
     if (data === null) {
@@ -205,7 +205,7 @@ async function loadTodoCount() {
   try {
     const data = await invoke("todoist_load", { withDone: todoState.doneStale });
     if (data) {
-      todoState.doneStale = Boolean(data.offline);
+      if (!data.offline) todoState.doneStale = false;
       count = data.tasks.filter(isDueToday).length;
     } else todoState.countOff = true;
   } catch {
@@ -216,7 +216,7 @@ async function loadTodoCount() {
   if (currentScreen() !== "todo" && !todoState.writes && seq === todoState.seq) setTodoCount(count);
 }
 
-// The timed refresh, also when the window comes back. The backend asks Todoist for the changes only, so it is cheap; the completed tasks are not fetched again.
+// The timed refresh, also when the window comes back. The backend asks Todoist for the changes only, so it is cheap; the completed tasks are fetched again only while `doneStale` is set.
 // One at a time: while Todoist does not answer, the next rounds are skipped instead of piling up behind the backend's lock.
 let refreshingTodo = false;
 async function refreshTodo() {

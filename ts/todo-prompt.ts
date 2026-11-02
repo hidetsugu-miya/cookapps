@@ -227,7 +227,7 @@ export function initPrompt() {
     redrawClaudeItems();
     refreshPrompt();
   };
-  // The edits in the field are lost, so it takes two presses, as the delete button does: the first arms, and leaving the button or 4 seconds disarms.
+  // The edits in the field are lost, so it takes two presses: the first arms, and leaving the button or 4 seconds disarms.
   $("prompt-reset").onclick = async () => {
     const reset = $("prompt-reset");
     if (busy) return;

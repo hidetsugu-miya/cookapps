@@ -144,7 +144,7 @@ function dueField(t: TaskItem) {
     const clear = tag("button", "icon-btn field-clear");
     clear.insertAdjacentHTML("beforeend", CLOSE_SVG);
     clear.setAttribute("aria-label", "日付をクリア");
-    // A repeat is lost with the date, so it takes two presses, as the delete button does: the first arms, and leaving the button or 4 seconds disarms.
+    // A repeat is lost with the date, so it takes two presses: the first arms, and leaving the button or 4 seconds disarms.
     let armTimer = 0;
     const disarm = () => {
       clearTimeout(armTimer);
@@ -259,8 +259,8 @@ function descParts(t: TaskItem): HTMLElement[] {
       clearTimeout(editTimer);
       if (e.detail > 1 || selectedIn()) return;
       editTimer = setTimeout(() => {
-        // A redraw replaced the view, or the selection came after the press.
-        if (view.isConnected && !selectedIn()) edit();
+        // The task was closed, a redraw replaced the view, a screen change hid it (offsetParent is null), or the selection came after the press.
+        if (todoState.open === t.id && view.isConnected && view.offsetParent !== null && !selectedIn()) edit();
       }, 250);
     };
     view.onkeydown = (e) => {

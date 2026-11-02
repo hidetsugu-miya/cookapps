@@ -719,6 +719,21 @@ describe("todo detail description copy", () => {
     await expect($(desc)).toBeDisplayed();
   });
 
+  it("does not start the editor when 戻る is pressed within the delay after the press", async () => {
+    await openReport();
+    await browser.execute(() => {
+      document.querySelector<HTMLElement>("#todo-detail .desc")!.click();
+      document.getElementById("todo-back")!.click();
+    });
+    // Past the delay before a press starts the editor: it would find the hidden detail and no textarea.
+    await browser.pause(500);
+    await expect($("#todo-list")).toBeDisplayed();
+    await expect($("#todo-detail")).not.toBeDisplayed();
+    await $(ROWS).click();
+    await expect($(desc)).toBeDisplayed();
+    expect(await count("#todo-detail textarea")).toBe(0);
+  });
+
   it("still opens the editor on a plain press of the description", async () => {
     await openReport();
     await $(desc).click();
@@ -747,7 +762,7 @@ describe("todo completed tasks after an offline answer", () => {
     await waitForCount("#todo-notice div", 1);
   }
 
-  it("asks for the completed tasks again on each timed refresh until an answer is not from the cache", async () => {
+  it("asks for the completed tasks again on each timed refresh until an answer is not from the cache, and an offline answer later does not ask again", async () => {
     await openOffline();
     // The timed refresh: the page's visibilitychange makes it load again.
     const refreshNow = () => browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
@@ -761,9 +776,13 @@ describe("todo completed tasks after an offline answer", () => {
     loads = await mock("todoist_load", todoData());
     await refreshNow();
     expect(await withDone(loads)).toEqual([false]);
+    // An answer from the cache does not make the held completed tasks stale again.
+    loads = await mock("todoist_load", offlineData());
+    await refreshNow();
+    expect(await withDone(loads)).toEqual([false]);
   });
 
-  it("asks for the completed tasks again when the Todo screen is opened until an answer is not from the cache", async () => {
+  it("asks for the completed tasks again when the Todo screen is opened until an answer is not from the cache, and an offline answer later does not ask again", async () => {
     await openOffline();
     const reopen = async () => {
       await $("#nav-mail").click();
@@ -774,6 +793,9 @@ describe("todo completed tasks after an offline answer", () => {
     expect(await withDone(loads)).toEqual([true]);
     await waitForCount("#todo-notice div", 0);
     loads = await mock("todoist_load", todoData());
+    await reopen();
+    expect(await withDone(loads)).toEqual([false]);
+    loads = await mock("todoist_load", offlineData());
     await reopen();
     expect(await withDone(loads)).toEqual([false]);
   });
