@@ -158,13 +158,15 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .cal-day.today .cal-date { background: var(--accent); color: #fff; }
 .cal-allday-label { padding: 4px 8px 0 0; text-align: right; font-size: 11px; color: #888; }
 .cal-cell { min-width: 0; min-height: 24px; padding: 2px 8px 6px; border-left: 1px dashed var(--line); display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
-.cal-chip { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The events are buttons (they open the detail): reset the button look. */
+.cal-chip { display: block; margin: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-chip::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--c); }
 #cal-body { position: relative; display: grid; grid-template-columns: var(--gutter) repeat(7, minmax(0, 1fr)); height: calc(var(--hour) * 24); }
 .cal-gutter { position: relative; }
 .cal-hour { position: absolute; right: 8px; transform: translateY(-50%); font-size: 11px; color: #888; }
 .cal-col { position: relative; border-left: 1px dashed var(--line); background-image: linear-gradient(to bottom, var(--line) 1px, transparent 1px); background-size: 100% var(--hour); }
-.cal-event { position: absolute; box-sizing: border-box; padding: 2px 6px; overflow: hidden; border: 1px solid #fff; border-radius: 4px; font-size: 12px; line-height: 1.35; background: color-mix(in srgb, var(--c) 22%, #fff); box-shadow: inset 3px 0 0 var(--c); }
+/* A button centers its content vertically; the column keeps the title at the top. */
+.cal-event { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; justify-content: flex-start; margin: 0; padding: 2px 6px; overflow: hidden; border: 1px solid #fff; border-radius: 4px; font-family: inherit; font-size: 12px; line-height: 1.35; color: inherit; text-align: left; cursor: pointer; background: color-mix(in srgb, var(--c) 22%, #fff); box-shadow: inset 3px 0 0 var(--c); }
 .cal-time { color: #555; }
 .cal-event.short .cal-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .declined { opacity: .5; text-decoration: line-through; }
@@ -174,6 +176,32 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .cal-event.needs-action .cal-time { color: inherit; }
 .cal-chip.tentative::before { background: repeating-linear-gradient(-45deg, var(--c) 0 2px, color-mix(in srgb, var(--c) 35%, #fff) 2px 4px); }
 .cal-chip.needs-action::before { box-sizing: border-box; border: 1.5px solid var(--c); background: #fff; }
+/* The event whose detail is open. */
+.cal-event.selected, .cal-chip.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cal-event.selected { z-index: 1; }
+/* The detail popover (ts/calendar-detail.ts): the .pop frame, 340px wide, and as tall as the window leaves; the description scrolls inside. */
+.pop.cal-pop { width: 340px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; color: #222; }
+.cal-pop:focus { outline: none; }
+.cal-pop-head { display: flex; align-items: flex-start; gap: 10px; }
+.cal-pop-dot { width: 12px; height: 12px; flex: none; margin-top: 7px; border-radius: 50%; background: var(--c); }
+.cal-pop-title { flex: 1; min-width: 0; }
+.cal-pop-title h2 { margin: 0; font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+.cal-pop-when { color: var(--muted); }
+.cal-pop-head .icon-btn { margin: -6px -6px 0 0; flex: none; }
+.cal-pop-meet { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: var(--soft); }
+.cal-pop .meet-join { height: 36px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 18px; background: var(--accent); color: #fff; font-weight: bold; text-decoration: none; }
+.cal-pop .meet-join:hover { filter: brightness(1.1); }
+.cal-pop .meet-join svg { width: 18px; height: 18px; }
+.cal-pop-url { display: flex; align-items: center; gap: 4px; }
+.cal-pop-url span { flex: 1; min-width: 0; color: var(--ins); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-pop-url .icon-btn { width: 32px; height: 32px; color: var(--ins); }
+.cal-pop-url .icon-btn svg { width: 16px; height: 16px; }
+.cal-pop-row { display: flex; gap: 10px; }
+.cal-pop-row > svg { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--muted); }
+.cal-pop-row > :last-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cal-pop-desc { max-height: 160px; overflow-y: auto; white-space: pre-wrap; }
+.cal-pop-foot { display: flex; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.cal-pop-cal { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-now { position: absolute; z-index: 2; pointer-events: none; }
 .cal-now-line { left: 0; right: 0; border-top: 2px solid #ff9f43; }
 .cal-now-line::before { content: ""; position: absolute; left: -5px; top: -6px; width: 10px; height: 10px; border-radius: 50%; background: #ff9f43; }
@@ -389,7 +417,9 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .logo.google { background: var(--google); font-size: 13px; font-weight: bold; }
 .logo.slack { background: var(--slack); }
 .logo.claude { background: var(--claude); }
-.logo.update { background: var(--accent); }
+.logo.update, .logo.calendar { background: var(--accent); }
+.day-picks { display: flex; gap: 4px; }
+.day-picks .text-btn { width: 40px; padding: 0; }
 .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 20px; border-top: 1px solid var(--line); }
 .item .who { flex: 1; min-width: 0; }
 .item-name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

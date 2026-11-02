@@ -27,8 +27,11 @@ type Mail = { subject: string; from: string; date: string; body: string };
 export interface Commands {
   login: { args: { loginHint: string | null }; result: string };
   remove_account: { args: Account; result: null };
-  calendar_week: { args: { date: string; refresh: boolean }; result: Week };
+  // `firstDay`: the day the week starts on, 0 = Sunday to 6 = Saturday.
+  calendar_week: { args: { date: string; firstDay: number; refresh: boolean }; result: Week };
   calendar_cached: { args: undefined; result: Week[] };
+  calendar_first_day: { args: undefined; result: number };
+  set_calendar_first_day: { args: { firstDay: number }; result: null };
   inbox: { args: undefined; result: Inbox };
   inbox_cached: { args: undefined; result: Inbox | null };
   sync: { args: Account & { startHistoryId: string }; result: Sync };

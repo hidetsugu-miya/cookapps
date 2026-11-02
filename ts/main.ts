@@ -2,6 +2,7 @@
 // when the app was one script, and the first Todo and inbox calls start before the Claude check.
 import { initAccounts } from "./accounts.js";
 import { initCalendar } from "./calendar.js";
+import { initCalendarDetail } from "./calendar-detail.js";
 import { initClaude, refreshClaude } from "./claude.js";
 import { initHint } from "./hint.js";
 import { initInbox, load, showKeptInbox } from "./inbox.js";
@@ -23,6 +24,7 @@ initInbox();
 initThread();
 initNav();
 initCalendar();
+initCalendarDetail();
 initToast();
 initMenu();
 initTodo();

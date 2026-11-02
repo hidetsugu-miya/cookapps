@@ -2,6 +2,7 @@
 import { renderGoogleCard } from "./accounts.js";
 import { $ } from "./dom.js";
 import { showCalendar } from "./calendar.js";
+import { closeDetail } from "./calendar-detail.js";
 import { closeHint } from "./hint.js";
 import { loadSettings } from "./settings.js";
 import { loadTodo, renderTodo } from "./todo.js";
@@ -33,6 +34,7 @@ export function showPromptScreen() {
 export function setScreen(name: Screen) {
   screen = name;
   closeHint();
+  closeDetail();
   markNav(name);
   $("error").hidden = true;
   if (name === "calendar") {

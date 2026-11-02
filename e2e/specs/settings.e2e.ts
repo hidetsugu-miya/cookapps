@@ -1,4 +1,4 @@
-import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, slackLoad, todoPrompt, waitForCalls, waitForText, callsOf } from "../support";
+import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, rejects, slackLoad, textsOf, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
 
 // The app with one Slack workspace whose token `slack_check` judges as given, and the settings screen open.
 async function openSettings(missingScopes: string[], claude: unknown = claudeMissing) {
@@ -50,6 +50,47 @@ describe("settings: Google", () => {
     const login = await mock("login", account);
     await $("#google-add").click();
     expect(await waitForCalls(login)).toEqual([{ loginHint: null }]);
+  });
+});
+
+describe("settings: calendar", () => {
+  const dayButton = (label: string) => $("#calendar-items").$(`button=${label}`);
+  const openCalendarSettings = async (fixtures: Record<string, unknown> = {}) => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), calendar_week: weekOfToday(), ...fixtures });
+    await $("#nav-settings").click();
+    await expect($("#calendar-items .item-name")).toHaveText("週の始まり");
+  };
+
+  it("lists Sunday to Saturday and marks the saved first day", async () => {
+    await openCalendarSettings({ calendar_first_day: 3 });
+    expect(await textsOf("#calendar-items .text-btn")).toEqual(["日", "月", "火", "水", "木", "金", "土"]);
+    await expect(dayButton("水")).toHaveAttribute("aria-pressed", "true");
+    await expect(dayButton("日")).toHaveAttribute("aria-pressed", "false");
+    // The card follows the Google card.
+    expect(await browser.execute(() => document.querySelector("#google-accounts")?.closest(".card")?.nextElementSibling?.contains(document.getElementById("calendar-items")))).toBe(true);
+  });
+
+  it("saves the chosen day with set_calendar_first_day, and the next calendar view asks for weeks with it", async () => {
+    await openCalendarSettings();
+    await expect(dayButton("日")).toHaveAttribute("aria-pressed", "true");
+    const save = await mock("set_calendar_first_day", null);
+    await dayButton("月").click();
+    expect(await waitForCalls(save)).toEqual([{ firstDay: 1 }]);
+    await expect(dayButton("月")).toHaveAttribute("aria-pressed", "true");
+    await expect(dayButton("日")).toHaveAttribute("aria-pressed", "false");
+    const week = await mock("calendar_week", weekOfToday(1));
+    await $("#nav-calendar").click();
+    const calls = (await waitForCalls(week)) as { firstDay: number }[];
+    expect(calls.every((c) => c.firstDay === 1)).toBe(true);
+  });
+
+  it("keeps the selection and shows the error when the day cannot be saved", async () => {
+    await openCalendarSettings();
+    await mock("set_calendar_first_day", rejects("保存できません"));
+    await dayButton("火").click();
+    await expect($("#error")).toHaveText(expect.stringContaining("保存できません"));
+    await expect(dayButton("日")).toHaveAttribute("aria-pressed", "true");
+    await expect(dayButton("火")).toHaveAttribute("aria-pressed", "false");
   });
 });
 

@@ -25,9 +25,11 @@ const BLOCKS = "p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, tabl
 const HIDDEN =
   'script, style, noscript, [hidden], [style*="display:none" i], [style*="display: none" i], [style*="visibility:hidden" i], [style*="visibility: hidden" i]';
 
-export function mailText(m: MessageDetail) {
-  if (!m.html) return m.body;
-  const doc = new DOMParser().parseFromString(m.body, "text/html");
+export const mailText = (m: MessageDetail) => (m.html ? htmlText(m.body) : m.body);
+
+// `html` as plain text, by the rules above. Text that holds no markup comes back with its line breaks.
+export function htmlText(html: string) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
   for (const e of queryAll(doc, HIDDEN)) Element.prototype.remove.call(e);
   for (const e of queryAll(doc, BLOCKS)) {
     Element.prototype.before.call(e, "\n");

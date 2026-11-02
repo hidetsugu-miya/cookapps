@@ -1,8 +1,9 @@
-// The settings screen: one card each for Slack and Claude. A Slack token is never shown; Rust keeps it in the keychain.
+// The settings screen: a card each for the calendar (the day the week starts on), Slack and Claude. A Slack token is never shown; Rust keeps it in the keychain.
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Workspace } from "./bindings/Workspace";
+import { calendarFirstDay, setCalendarFirstDay } from "./calendar.js";
 import { $, tag } from "./dom.js";
-import { avatarColor, hostOf, initials } from "./format.js";
+import { avatarColor, hostOf, initials, WEEKDAYS } from "./format.js";
 import { UNLINK_SVG } from "./icons.js";
 import { code, confirmUnlink, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
@@ -121,10 +122,54 @@ export function renderWorkspaces(list: Workspace[]) {
   );
 }
 
+// The day the week starts on as the calendar card shows it; null until read.
+let calendarDay: number | null = null;
+
+function renderCalendarCard() {
+  const picks = tag("div", "day-picks");
+  picks.setAttribute("role", "group");
+  picks.setAttribute("aria-label", "週の始まり");
+  WEEKDAYS.forEach((name, day) => {
+    const b = tag("button", "text-btn", name);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(day === calendarDay));
+    b.onclick = () => pickFirstDay(day);
+    picks.append(b);
+  });
+  const who = tag("div", "who");
+  who.append(tag("div", "item-name", "週の始まり"));
+  const row = tag("div", "item");
+  row.append(who, picks);
+  $("calendar-items").replaceChildren(row);
+}
+
+// The selection moves only once the day is saved; a failure leaves it where it was and shows the error.
+async function pickFirstDay(day: number) {
+  if (day === calendarDay) return;
+  $("error").hidden = true;
+  try {
+    await setCalendarFirstDay(day);
+  } catch (e) {
+    return showError(e);
+  }
+  calendarDay = day;
+  renderCalendarCard();
+}
+
+async function loadCalendarCard() {
+  try {
+    calendarDay = await calendarFirstDay();
+  } catch (e) {
+    return showError(e);
+  }
+  renderCalendarCard();
+}
+
 export async function loadSettings() {
   const seq = ++settingsSeq;
   $("error").hidden = true;
   loadPromptState();
+  loadCalendarCard();
   let loaded: SlackLoad;
   try {
     loaded = await invoke("slack_load");
