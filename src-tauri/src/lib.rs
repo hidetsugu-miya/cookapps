@@ -135,6 +135,7 @@ pub fn run() {
             image_senders::remember_image_sender,
             todoist::todoist_load,
             todoist::todoist_cached,
+            todoist::todoist_connected,
             todoist::todoist_save_token,
             todoist::todoist_disconnect,
             todoist::todoist_add,

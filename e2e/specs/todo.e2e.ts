@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeMissing, claudeReady, count, holds, inbox, mock, rejects, release, slackLoad, slackMessageUrl, slackSummary, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeMissing, claudeReady, copiedTexts, count, holds, inbox, mock, rejects, release, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -365,7 +365,9 @@ describe("todo projects and subtasks", () => {
     const fresh = todoData();
     fresh.tasks.push({ ...fresh.tasks[0], id: "k5", content: "Fresh", due: null, bucket: "none" });
     await mock("todoist_load", fresh);
-    await $("#todo-reload").click();
+    // The screen has no reload button: leaving it and coming back loads again.
+    await $("#nav-mail").click();
+    await $("#nav-todo").click();
     await waitForCount(ROWS, 5);
     await expect(rowOf("Pick seat")).toExist();
     await rowOf("Plan trip").$(".toggle").click();
@@ -475,6 +477,327 @@ describe("todo detail", () => {
     await $(ROWS).click();
     await $("#todo-detail .field:nth-child(2) .field-value").click();
     await expect($(".due-pop .chip-input")).toHaveValue("every day");
+  });
+});
+
+// The Markdown source of the description the next specs copy.
+const description = "**Bold** line\n- item one\n- item two";
+// Todo data whose first task, "Write report" (k1), has that description.
+function withDescription() {
+  const data = todoData();
+  data.tasks[0].description = description;
+  return data;
+}
+
+describe("todo detail menu", () => {
+  const more = "#todo-more";
+  const items = '.menu[role="menu"] button[role="menuitem"]';
+  const deleteItem = '.menu[role="menu"] button.danger';
+
+  // The Todo screen with the detail of "Write report" (k1) open.
+  async function openReport(data = todoData()) {
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await expect($(more)).toBeDisplayed();
+  }
+
+  // Runs the timed refresh now: the page's visibilitychange makes it load again.
+  const refreshNow = () => browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
+
+  it("shows the three-dot button only in a task's detail, and the screen has no reload, disconnect or trash button", async () => {
+    await openTodo();
+    await expect($(more)).not.toBeDisplayed();
+    await expect($(more)).toHaveAttribute("aria-label", "その他");
+    expect(await count("#todo-reload, #todo-disconnect, #todo-delete")).toBe(0);
+    await $(ROWS).click();
+    await expect($(more)).toBeDisplayed();
+    await $("#todo-back").click();
+    await expect($(more)).not.toBeDisplayed();
+  });
+
+  it("shows neither the button nor the old header buttons while the token form is up", async () => {
+    await boot({ inbox: inbox(), todoist_load: null, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await expect($("#todo-token")).toBeDisplayed();
+    await expect($(more)).not.toBeDisplayed();
+  });
+
+  it("lists タスクのリンクをコピー and then 削除, which is the dangerous one", async () => {
+    await openReport();
+    await $(more).click();
+    await expect($(items)).toBeDisplayed();
+    expect(await textsOf(items)).toEqual(["タスクのリンクをコピー", "削除"]);
+    await expect($(deleteItem)).toHaveText("削除");
+    expect(await count(`${items} svg`)).toBe(2);
+  });
+
+  it("copies the task's url, closes the menu and says so", async () => {
+    await openReport();
+    await stubClipboard();
+    await $(more).click();
+    await $(`${items}:first-child`).click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
+    expect(await copiedTexts()).toEqual(["https://app.todoist.com/app/task/k1"]);
+    await expect($(".menu")).not.toExist();
+    await expect($(".toast")).toHaveText("リンクをコピーしました");
+  });
+
+  it("leaves the copy item out when the task has no url", async () => {
+    const data = todoData();
+    data.tasks[0].url = "";
+    await openReport(data);
+    await $(more).click();
+    expect(await textsOf(items)).toEqual(["削除"]);
+  });
+
+  it("lists 説明をコピー between the link and 削除 when the task has a description, and copies its Markdown source", async () => {
+    await openReport(withDescription());
+    await stubClipboard();
+    await $(more).click();
+    expect(await textsOf(items)).toEqual(["タスクのリンクをコピー", "説明をコピー", "削除"]);
+    expect(await count(`${items} svg`)).toBe(3);
+    await $(`${items}:nth-child(2)`).click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
+    expect(await copiedTexts()).toEqual([description]);
+    await expect($(".menu")).not.toExist();
+    await expect($(".toast")).toHaveText("説明をコピーしました");
+  });
+
+  it("shows the error and keeps the menu when the clipboard refuses the description", async () => {
+    await openReport(withDescription());
+    await browser.execute(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => Promise.reject(new Error("denied")) } });
+    });
+    await $(more).click();
+    await $(`${items}:nth-child(2)`).click();
+    await expect($("#error")).toHaveText(expect.stringContaining("denied"));
+    await expect($(".menu")).toExist();
+    await expect($(".toast")).not.toBeDisplayed();
+  });
+
+  it("shows the error and keeps the menu when the clipboard refuses", async () => {
+    await openReport();
+    await browser.execute(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => Promise.reject(new Error("denied")) } });
+    });
+    await $(more).click();
+    await $(`${items}:first-child`).click();
+    await expect($("#error")).toHaveText(expect.stringContaining("denied"));
+    await expect($(".menu")).toExist();
+    await expect($(".toast")).not.toBeDisplayed();
+  });
+
+  it("deletes with two presses of 削除: the first only asks, the second calls todoist_delete with the id", async () => {
+    await openReport();
+    const del = await mock("todoist_delete", true);
+    await $(more).click();
+    await $(deleteItem).click();
+    await expect($(deleteItem)).toHaveText("もう一度押すと削除");
+    await expect($(".menu")).toExist();
+    expect(await callsOf(del)).toEqual([]);
+    await $(deleteItem).click();
+    expect(await waitForCalls(del)).toEqual([{ id: "k1" }]);
+    await expect($(".menu")).not.toExist();
+    await expect($("#todo-detail")).not.toBeDisplayed();
+  });
+
+  it("calls nothing after one press, and closing the menu starts the question again", async () => {
+    await openReport();
+    const del = await mock("todoist_delete", true);
+    await $(more).click();
+    await $(deleteItem).click();
+    await expect($(deleteItem)).toHaveText("もう一度押すと削除");
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    await $(more).click();
+    await expect($(deleteItem)).toHaveText("削除");
+    await $(deleteItem).click();
+    await expect($(deleteItem)).toHaveText("もう一度押すと削除");
+    expect(await callsOf(del)).toEqual([]);
+  });
+
+  it("closes the menu when the button is pressed again", async () => {
+    await openReport();
+    await $(more).click();
+    await expect($(".menu")).toExist();
+    await $(more).click();
+    await expect($(".menu")).not.toExist();
+    await expect($(more)).not.toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps the open menu and the pending delete over a background redraw of the same task", async () => {
+    await openReport();
+    await $(more).click();
+    await $(deleteItem).click();
+    const data = todoData();
+    data.tasks[0].content = "Write report v2";
+    await mock("todoist_load", data);
+    await refreshNow();
+    await expect($("#todo-detail .name")).toHaveValue("Write report v2");
+    await expect($(".menu")).toExist();
+    await expect($(deleteItem)).toHaveText("もう一度押すと削除");
+  });
+
+  it("closes the menu when a redraw finds the open task gone", async () => {
+    await openReport();
+    await $(more).click();
+    const data = todoData();
+    data.tasks.shift();
+    await mock("todoist_load", data);
+    await refreshNow();
+    await expect($("#todo-detail")).not.toBeDisplayed();
+    await expect($(".menu")).not.toExist();
+  });
+});
+
+describe("todo detail description copy", () => {
+  const desc = "#todo-detail .desc";
+  const copyButton = "#todo-detail .desc-copy";
+
+  async function openReport(data = withDescription()) {
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await expect($(desc)).toBeDisplayed();
+  }
+
+  it("copies the Markdown source with the icon beside the description, and does not open the editor", async () => {
+    await openReport();
+    await stubClipboard();
+    await expect($(copyButton)).toHaveAttribute("aria-label", "説明をコピー");
+    // :hover and :focus never match in the E2E window: the hidden state is the computed style, and the rule that hides it says that hover or focus inside lifts it.
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#todo-detail .desc-copy")!).visibility)).toBe("hidden");
+    const hiding = await browser.execute(() => {
+      for (const sheet of document.styleSheets)
+        for (const rule of sheet.cssRules)
+          if (rule instanceof CSSStyleRule && rule.selectorText.includes(".desc-copy") && rule.style.visibility === "hidden") return rule.selectorText;
+      return null;
+    });
+    expect(hiding).toContain(":not(:hover)");
+    expect(hiding).toContain(":not(:focus-within)");
+    // Not inside the description's role="button".
+    expect(await browser.execute(() => document.querySelector("#todo-detail .desc-copy")!.closest(".desc"))).toBeNull();
+    // A hidden button takes no WebDriver click, so the press is made in the page.
+    await browser.execute(() => document.querySelector<HTMLElement>("#todo-detail .desc-copy")!.click());
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
+    expect(await copiedTexts()).toEqual([description]);
+    await expect($(".toast")).toHaveText("説明をコピーしました");
+    expect(await count("#todo-detail textarea")).toBe(0);
+    await expect($(desc)).toBeDisplayed();
+  });
+
+  it("does not open the editor when the click ends a text selection inside the description", async () => {
+    await openReport();
+    await browser.execute(() => {
+      const view = document.querySelector<HTMLElement>("#todo-detail .desc")!;
+      const range = document.createRange();
+      range.selectNodeContents(view);
+      const sel = getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      // The click a drag selection ends in; element.click() does not press the mouse, so the selection stays.
+      view.click();
+    });
+    // Past the delay before a press starts the editor.
+    await browser.pause(500);
+    expect(await count("#todo-detail textarea")).toBe(0);
+    await expect($(desc)).toBeDisplayed();
+  });
+
+  it("does not open the editor on the clicks of a double click, which select a word", async () => {
+    await openReport();
+    await browser.execute(() => {
+      const view = document.querySelector<HTMLElement>("#todo-detail .desc")!;
+      // The clicks a double click makes: the first has `detail` 1 and no selection yet, the second has `detail` 2.
+      view.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      view.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+    });
+    // Past the delay before a press starts the editor.
+    await browser.pause(500);
+    expect(await count("#todo-detail textarea")).toBe(0);
+    await expect($(desc)).toBeDisplayed();
+  });
+
+  it("does not start the editor when 戻る is pressed within the delay after the press", async () => {
+    await openReport();
+    await browser.execute(() => {
+      document.querySelector<HTMLElement>("#todo-detail .desc")!.click();
+      document.getElementById("todo-back")!.click();
+    });
+    // Past the delay before a press starts the editor: it would find the hidden detail and no textarea.
+    await browser.pause(500);
+    await expect($("#todo-list")).toBeDisplayed();
+    await expect($("#todo-detail")).not.toBeDisplayed();
+    await $(ROWS).click();
+    await expect($(desc)).toBeDisplayed();
+    expect(await count("#todo-detail textarea")).toBe(0);
+  });
+
+  it("still opens the editor on a plain press of the description", async () => {
+    await openReport();
+    await $(desc).click();
+    await expect($("#todo-detail textarea")).toBeDisplayed();
+    await expect($("#todo-detail textarea")).toHaveValue(description);
+  });
+
+  it("shows neither the icon nor the menu item for an empty description", async () => {
+    await openReport(todoData());
+    await expect($(".desc.empty")).toHaveText("説明を追加");
+    expect(await count(copyButton)).toBe(0);
+    await $("#todo-more").click();
+    expect(await textsOf('.menu[role="menu"] button[role="menuitem"]')).toEqual(["タスクのリンクをコピー", "削除"]);
+  });
+});
+
+describe("todo completed tasks after an offline answer", () => {
+  // Todo data that is the cached one, as the backend answers while Todoist cannot be reached.
+  const offlineData = () => ({ ...todoData(), offline: { fetchedAt: new Date().toISOString(), reason: "network" } });
+  const withDone = async (loads: string) => (await waitForCalls(loads)).map((a) => (a as { withDone: boolean }).withDone);
+
+  async function openOffline() {
+    await boot({ inbox: inbox(), todoist_load: offlineData(), slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 1);
+    await waitForCount("#todo-notice div", 1);
+  }
+
+  it("asks for the completed tasks again on each timed refresh until an answer is not from the cache, and an offline answer later does not ask again", async () => {
+    await openOffline();
+    // The timed refresh: the page's visibilitychange makes it load again.
+    const refreshNow = () => browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
+    let loads = await mock("todoist_load", offlineData());
+    await refreshNow();
+    expect(await withDone(loads)).toEqual([true]);
+    loads = await mock("todoist_load", todoData());
+    await refreshNow();
+    expect(await withDone(loads)).toEqual([true]);
+    await waitForCount("#todo-notice div", 0);
+    loads = await mock("todoist_load", todoData());
+    await refreshNow();
+    expect(await withDone(loads)).toEqual([false]);
+    // An answer from the cache does not make the held completed tasks stale again.
+    loads = await mock("todoist_load", offlineData());
+    await refreshNow();
+    expect(await withDone(loads)).toEqual([false]);
+  });
+
+  it("asks for the completed tasks again when the Todo screen is opened until an answer is not from the cache, and an offline answer later does not ask again", async () => {
+    await openOffline();
+    const reopen = async () => {
+      await $("#nav-mail").click();
+      await $("#nav-todo").click();
+    };
+    let loads = await mock("todoist_load", todoData());
+    await reopen();
+    expect(await withDone(loads)).toEqual([true]);
+    await waitForCount("#todo-notice div", 0);
+    loads = await mock("todoist_load", todoData());
+    await reopen();
+    expect(await withDone(loads)).toEqual([false]);
+    loads = await mock("todoist_load", offlineData());
+    await reopen();
+    expect(await withDone(loads)).toEqual([false]);
   });
 });
 

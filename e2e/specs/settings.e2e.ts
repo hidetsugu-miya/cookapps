@@ -1,4 +1,4 @@
-import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, holds, inbox, mock, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, holds, inbox, mock, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
 
 // The app with one Slack workspace whose token `slack_check` judges as given, and the settings screen open.
 async function openSettings(missingScopes: string[], claude: unknown = claudeMissing) {
@@ -104,6 +104,69 @@ describe("settings: calendar", () => {
     await expect($("#error")).toHaveText(expect.stringContaining("保存できません"));
     await expect(dayButton("日")).toHaveAttribute("aria-pressed", "true");
     await expect(dayButton("火")).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+describe("settings: Todoist", () => {
+  const unlink = () => $('button[aria-label="Todoist の接続を解除"]');
+  const openTodoistSettings = async (fixtures: Record<string, unknown> = {}) => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await expect($("#settings")).toBeDisplayed();
+  };
+
+  it("shows the card between カレンダー and Slack, connected with a button to unlink", async () => {
+    await openTodoistSettings({ todoist_connected: true });
+    await expect($("#todoist-items .item-name")).toHaveText("Todoist");
+    await expect($("#todoist-items .status")).toHaveText("接続済み");
+    await expect($("#todoist-items .status")).toHaveElementClass("ok");
+    await expect(unlink()).toExist();
+    expect(
+      await browser.execute(() => {
+        const card = document.getElementById("todoist-items")!.closest(".card")!;
+        return [card.previousElementSibling!.contains(document.getElementById("calendar-items")), card.nextElementSibling!.contains(document.getElementById("slack-workspaces"))];
+      }),
+    ).toEqual([true, true]);
+  });
+
+  it("says 未接続 and where to enter the token, with no button, when there is no token", async () => {
+    await openTodoistSettings({ todoist_connected: false });
+    await expect($("#todoist-items .status")).toHaveText("未接続");
+    await expect($("#todoist-items .status")).toHaveElementClass("off");
+    await expect($("#todoist-items .item-meta")).toHaveText("Todo 画面でトークンを入力します");
+    await expect($("#todoist-items button")).not.toExist();
+  });
+
+  it("asks before disconnecting: キャンセル sends nothing, 解除 calls todoist_disconnect, the row becomes 未接続 and the Todo count goes", async () => {
+    await openTodoistSettings({ todoist_connected: true, todoist_load: todoData() });
+    await waitForText("#nav-todo .nav-count", "1");
+    const disconnect = await mock("todoist_disconnect", null);
+    // With no token, Todoist has nothing to load.
+    await mock("todoist_load", null);
+
+    await unlink().click();
+    const dialog = $('[role="alertdialog"]');
+    await expect(dialog).toBeDisplayed();
+    await expect(dialog).toHaveText(expect.stringContaining("Todoist のタスクは残ります"));
+    await dialog.$("button=キャンセル").click();
+    await expect(dialog).not.toExist();
+    expect(await callsOf(disconnect)).toHaveLength(0);
+
+    await unlink().click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    expect(await waitForCalls(disconnect)).toEqual([null]);
+    await expect($("#todoist-items .status")).toHaveText("未接続");
+    await expect($("#todoist-items button")).not.toExist();
+    await expect($("#nav-todo .nav-count")).not.toBeDisplayed();
+  });
+
+  it("shows the error and keeps the row when the token cannot be removed", async () => {
+    await openTodoistSettings({ todoist_connected: true });
+    await mock("todoist_disconnect", rejects("資格情報を消せません"));
+    await unlink().click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await expect($("#error")).toHaveText(expect.stringContaining("資格情報を消せません"));
+    await expect($("#todoist-items .status")).toHaveText("接続済み");
   });
 });
 

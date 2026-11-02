@@ -1,6 +1,7 @@
 // Which part of the window is shown, the error line, and the counts on the sidebar buttons (and their sum on the Dock).
 import { $ } from "./dom.js";
 import { invoke } from "./ipc.js";
+import { toast } from "./toast.js";
 
 // Whether `claude` is logged in: the AI summary button is shown only then, in a thread.
 let claudeReady = false;
@@ -46,6 +47,19 @@ export function show(view: View) {
 export function showError(e: unknown) {
   $("error").textContent = String(e);
   $("error").hidden = false;
+}
+
+// Writes `text` to the clipboard and says `done`; false (with the error shown) when it is refused.
+// Call it straight from the click: nothing may be awaited before writeText, or WKWebView refuses it.
+export async function copyText(text: string, done: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    showError(e);
+    return false;
+  }
+  toast(done);
+  return true;
 }
 
 // The counts of the inbox and Todo buttons, and the sum last sent to the Dock badge.

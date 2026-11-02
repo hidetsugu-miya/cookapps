@@ -103,14 +103,8 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
           </button>
           <h1 id="todo-title">今日</h1>
-          <button id="todo-delete" class="icon-btn" aria-label="削除" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg>
-          </button>
-          <button id="todo-disconnect" class="icon-btn" aria-label="Todoist の接続を解除" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 15l6-6"/><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"/><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"/></svg>
-          </button>
-          <button id="todo-reload" class="icon-btn" aria-label="再読み込み">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+          <button id="todo-more" class="icon-btn" aria-label="その他" aria-haspopup="menu" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path stroke-width="3" d="M5 12h.01M12 12h.01M19 12h.01"/></svg>
           </button>
         </header>
         <div id="todo-notice"></div>
@@ -157,6 +151,14 @@
           </h2>
         </div>
         <div id="calendar-items"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>
+            <span class="logo todoist"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg></span>Todoist
+          </h2>
+        </div>
+        <div id="todoist-items"></div>
       </section>
       <section class="card">
         <div class="card-head">

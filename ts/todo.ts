@@ -1,16 +1,17 @@
-// The Todo screen: which part it shows, loading and refreshing from Todoist, and the buttons of its header.
+// The Todo screen: which part it shows, loading and refreshing from Todoist, and the header's back button and the menu of the open task.
 import type { Offline } from "./bindings/Offline";
 import type { Todo } from "./bindings/Todo";
-import { $ } from "./dom.js";
+import { $, tag } from "./dom.js";
 import { pad2 } from "./format.js";
-import { DELETE_SVG } from "./icons.js";
+import { COPY_SVG, DELETE_SVG, LINK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { closeMenu, showMenu } from "./menu.js";
 import { currentScreen } from "./nav.js";
 import { renderDetail } from "./todo-detail.js";
 import { editingField, isDueToday, projectOf, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
 import { cancelTodoReload, todoCall } from "./todo-write.js";
-import { showError } from "./view.js";
+import { copyText, showError } from "./view.js";
 
 const TODO_REFRESH_MS = 10 * 1000;
 
@@ -23,25 +24,28 @@ export function todoMode(mode: "token" | "list" | "detail") {
   $("todo-list").hidden = mode !== "list";
   $("todo-detail").hidden = mode !== "detail";
   $("todo-back").hidden = mode !== "detail";
-  $("todo-delete").hidden = mode !== "detail";
-  $("todo-disconnect").hidden = mode === "token";
-  $("todo-reload").hidden = mode === "token";
-  resetDelete();
+  $("todo-more").hidden = mode !== "detail";
+  // A redraw of the same task keeps its menu open; another task or another part closes it.
+  if (moreMenu && (mode !== "detail" || todoState.open !== moreMenu.id)) closeMoreMenu();
 }
 
-function showTokenForm(note = "") {
+// Shows the token form and forgets the content: a missing token, or one the settings screen just removed.
+export function showTokenForm(note = "") {
   // No reload is due: the form is what the screen shows now, and a load still in flight must not draw over it.
   cancelTodoReload();
   todoState.seq++;
   todoState.todo = null;
   todoState.kept = false;
+  // The disconnect cleared the backend's completed tasks too.
+  todoState.doneStale = true;
   setTodoCount(0);
   todoState.open = null;
   $("todo-notice").replaceChildren();
   todoMode("token");
   $("todo-title").textContent = "Todo";
   $("todo-token-note").textContent = note;
-  $("todo-token-input").focus();
+  // Not from the settings screen: the form is hidden there.
+  if (currentScreen() === "todo") $("todo-token-input").focus();
 }
 
 export function renderTodo() {
@@ -68,12 +72,13 @@ function drawTodoNotice(offline: Offline | null | undefined) {
 }
 
 // Fetches the tasks and draws them. `quiet` is the timed refresh: it fetches nothing while a field is being typed in, and draws nothing when nothing changed.
-// Without `withDone` the backend reuses the completed tasks it fetched last. Returns true when a token is needed (the token form is shown).
+// Without `withDone` the backend reuses the completed tasks it fetched last, unless `doneStale` says it has none. Returns true when a token is needed (the token form is shown).
 export async function loadTodo(quiet = false, withDone = true) {
   if (quiet && (editingField() || todoState.writes)) return false;
   const seq = ++todoState.seq;
   try {
-    const data = await invoke("todoist_load", { withDone });
+    const data = await invoke("todoist_load", { withDone: withDone || todoState.doneStale });
+    if (data && !data.offline) todoState.doneStale = false;
     // Not while a change is in flight: the reload after the last one draws.
     if (seq !== todoState.seq || currentScreen() !== "todo" || todoState.writes) return false;
     if (data === null) {
@@ -105,14 +110,74 @@ export async function loadTodo(quiet = false, withDone = true) {
   return false;
 }
 
-// Todoist cannot undo a delete, so the button asks twice: the first press changes its label, the second deletes.
-let deleteTimer = 0;
-function resetDelete() {
-  clearTimeout(deleteTimer);
-  const b = $("todo-delete");
-  b.classList.remove("confirm", "danger");
-  b.innerHTML = DELETE_SVG;
-  b.setAttribute("aria-label", "削除");
+// The menu of the open task, opened for task `id`: every item acts on that task, whatever is open when it is pressed.
+// Todoist cannot undo a delete, so 削除 asks twice: the first press changes its label, the second deletes.
+let moreMenu: { id: string; timer: number } | null = null;
+
+function closeMoreMenu() {
+  if (!moreMenu) return;
+  clearTimeout(moreMenu.timer);
+  moreMenu = null;
+  // The anchor is expanded only while this menu is the open one.
+  if ($("todo-more").hasAttribute("aria-expanded")) closeMenu();
+}
+
+function menuItem(icon: string, label: string) {
+  const b = tag("button");
+  b.setAttribute("role", "menuitem");
+  b.insertAdjacentHTML("beforeend", icon);
+  const text = tag("span", "", label);
+  b.append(text);
+  return { b, text };
+}
+
+function openMoreMenu() {
+  const id = todoState.open;
+  if (!id) return;
+  const menu = tag("div", "menu");
+  menu.setAttribute("role", "menu");
+  const url = todoState.taskById.get(id)?.url;
+  // An empty url (an old cache, an ID the backend refuses) has nothing to copy.
+  if (url) {
+    const copy = menuItem(LINK_SVG, "タスクのリンクをコピー");
+    copy.b.onclick = async () => {
+      if (await copyText(url, "リンクをコピーしました")) closeMoreMenu();
+    };
+    menu.append(copy.b);
+  }
+  // Read when pressed: a refresh may have changed the description since the menu opened.
+  if (todoState.taskById.get(id)?.description) {
+    const copy = menuItem(COPY_SVG, "説明をコピー");
+    copy.b.onclick = async () => {
+      const text = todoState.taskById.get(id)?.description;
+      if (text && (await copyText(text, "説明をコピーしました"))) closeMoreMenu();
+    };
+    menu.append(copy.b);
+  }
+  const del = menuItem(DELETE_SVG, "削除");
+  del.b.classList.add("danger");
+  let asked = false;
+  del.b.onclick = () => {
+    if (!moreMenu) return;
+    if (!asked) {
+      asked = true;
+      del.text.textContent = "もう一度押すと削除";
+      moreMenu.timer = setTimeout(() => {
+        asked = false;
+        del.text.textContent = "削除";
+      }, 4000);
+      return;
+    }
+    closeMoreMenu();
+    todoState.open = null;
+    // Gone from the list at once; the reload after the call brings it back if Todoist refused.
+    todoCall("todoist_delete", { id }, null, () => settleLocal(id, null));
+  };
+  menu.append(del.b);
+  closeMoreMenu();
+  showMenu($("todo-more"), menu);
+  moreMenu = { id, timer: 0 };
+  menu.querySelector("button")!.focus();
 }
 
 // Draws the content the last run kept, on the sidebar's count and, if it is open, the Todo screen, while the first fetch is on its way.
@@ -138,9 +203,9 @@ async function loadTodoCount() {
   const seq = todoState.seq;
   let count = 0;
   try {
-    const data = await invoke("todoist_load", { withDone: todoState.countWithDone });
+    const data = await invoke("todoist_load", { withDone: todoState.doneStale });
     if (data) {
-      todoState.countWithDone = false;
+      if (!data.offline) todoState.doneStale = false;
       count = data.tasks.filter(isDueToday).length;
     } else todoState.countOff = true;
   } catch {
@@ -151,7 +216,7 @@ async function loadTodoCount() {
   if (currentScreen() !== "todo" && !todoState.writes && seq === todoState.seq) setTodoCount(count);
 }
 
-// The timed refresh, also when the window comes back. The backend asks Todoist for the changes only, so it is cheap; the completed tasks are not fetched again.
+// The timed refresh, also when the window comes back. The backend asks Todoist for the changes only, so it is cheap; the completed tasks are fetched again only while `doneStale` is set.
 // One at a time: while Todoist does not answer, the next rounds are skipped instead of piling up behind the backend's lock.
 let refreshingTodo = false;
 async function refreshTodo() {
@@ -167,34 +232,18 @@ async function refreshTodo() {
 }
 
 export function initTodo() {
-  $("todo-delete").onclick = () => {
-    const b = $("todo-delete");
-    if (!b.classList.contains("confirm")) {
-      b.classList.add("confirm", "danger");
-      b.textContent = "もう一度押すと削除";
-      b.setAttribute("aria-label", "もう一度押すと削除");
-      deleteTimer = setTimeout(resetDelete, 4000);
-      return;
-    }
-    const id = todoState.open!;
-    todoState.open = null;
-    // Gone from the list at once; the reload after the call brings it back if Todoist refused.
-    todoCall("todoist_delete", { id }, null, () => settleLocal(id, null));
+  // The document's pointerdown closes an open menu before the click, so whether this press found it open is read before that.
+  let wasOpen = false;
+  $("todo-more").onpointerdown = () => (wasOpen = $("todo-more").hasAttribute("aria-expanded"));
+  $("todo-more").onclick = () => {
+    const was = wasOpen || $("todo-more").hasAttribute("aria-expanded");
+    wasOpen = false;
+    if (was) closeMoreMenu();
+    else openMoreMenu();
   };
-  $("todo-delete").onblur = resetDelete;
   $("todo-back").onclick = () => {
     todoState.open = null;
     renderTodo();
-  };
-  $("todo-reload").onclick = () => loadTodo();
-  $("todo-disconnect").onclick = async () => {
-    $("error").hidden = true;
-    try {
-      await invoke("todoist_disconnect");
-      showTokenForm("Todoist の接続を解除しました");
-    } catch (e) {
-      showError(e);
-    }
   };
   $("todo-token").onsubmit = async (e) => {
     e.preventDefault();

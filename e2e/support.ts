@@ -198,6 +198,7 @@ export const task = (id: string, content: string, projectId: string, bucket: "ov
   subTotal: 0,
   mail: null,
   parent: null,
+  url: `https://app.todoist.com/app/task/${id}`,
 });
 
 // The task `t` as a row under `parent`, and as an entry of the parent's subtask list.

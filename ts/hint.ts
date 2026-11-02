@@ -55,10 +55,11 @@ export function hintPopup(title: string, steps: (string | Node)[][], foot: strin
 }
 
 // The confirmation before unlinking, framed like a hint; Cancel, the same button, a click elsewhere or Escape closes it.
-export function confirmUnlink(button: Element, w: { team: string }, onConfirm: () => void) {
+// `name` is the service or workspace, `body` says what happens to the token and to the service's own data.
+export function confirmUnlink(button: Element, name: string, body: string, onConfirm: () => void) {
   const pop = tag("div", "pop");
   pop.setAttribute("role", "alertdialog");
-  pop.setAttribute("aria-label", `${w.team} の接続を解除`);
+  pop.setAttribute("aria-label", `${name} の接続を解除`);
   const yes = tag("button", "text-btn danger", "解除");
   const no = tag("button", "text-btn", "キャンセル");
   yes.type = no.type = "button";
@@ -70,8 +71,8 @@ export function confirmUnlink(button: Element, w: { team: string }, onConfirm: (
   const actions = tag("div", "popup-actions");
   actions.append(yes, no);
   pop.append(
-    tag("h3", "", `${w.team} の接続を解除しますか？`),
-    tag("p", "", "トークンを Slack で取り消し、cookapps から削除します。Slack のアプリは残ります。"),
+    tag("h3", "", `${name} の接続を解除しますか？`),
+    tag("p", "", body),
     actions,
   );
   toggleHint(button, pop);

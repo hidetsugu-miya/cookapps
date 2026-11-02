@@ -28,6 +28,7 @@ const answers = {
   sync: { kind: "unchanged" },
   todoist_cached: null,
   todoist_load: null,
+  todoist_connected: false,
   slack_load: { workspaces: [], recent: [] },
   claude_status: { state: "missing" },
   claude_todo_prompt: { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false },

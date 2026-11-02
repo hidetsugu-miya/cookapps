@@ -17,4 +17,8 @@ subtasks: Array<Subtask>, subDone: number, subTotal: number, mail: MailRef | nul
 /**
  * Set on the row of a subtask; `None` on a top-level task.
  */
-parent: ParentRef | null, };
+parent: ParentRef | null, 
+/**
+ * The task in Todoist's web app, for "copy link". Empty in a cache written before this field existed, and for an ID `task_web_url` refuses.
+ */
+url: string, };
