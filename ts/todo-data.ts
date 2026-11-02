@@ -19,6 +19,8 @@ export const todoState = {
   open: null as string | null,
   // Only the latest of overlapping loads may draw.
   seq: 0,
+  // The `seq` of the load whose data `todo` holds (whether or not it was drawn); the subtasks being created are shown until a load that began after their creation is drawn.
+  loaded: 0,
   // Changes in flight (todoCall's writes). While any is, a load draws nothing: it could hold the state from before the change and put it back.
   writes: 0,
   // True while a row is dragged by its grip, so the timed refresh does not redraw the list under it.

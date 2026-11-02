@@ -3,7 +3,7 @@ import type { Due } from "./bindings/Due";
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, onEnter, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
-import { DATE_SVG, MAIL_SVG, PLUS_SVG } from "./icons.js";
+import { CLOSE_SVG, DATE_SVG, MAIL_SVG, PLUS_SVG, RETURN_SVG } from "./icons.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { accountSet, dueLabel, linkedMail, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
 import { checkBox, openMailFromTodo, renderList } from "./todo-list.js";
@@ -95,7 +95,7 @@ export function openProjectMenu(anchor: Element, t: TaskItem) {
 }
 
 // A field of the side pane: its label over the value, a button that opens the menu or popover that changes it.
-function field(label: string, value: HTMLButtonElement) {
+function field(label: string, value: HTMLElement) {
   const f = tag("div", "field");
   f.append(tag("div", "field-label", label), value);
   return f;
@@ -111,12 +111,41 @@ function projectField(t: TaskItem) {
   return field("プロジェクト", b);
 }
 
+// A task with a due date, a repeating one too, gets a button beside the value that clears it at once, without a confirmation.
 function dueField(t: TaskItem) {
-  const b = tag("button", `field-value${t.bucket === "overdue" ? " over" : ""}`);
+  const b = tag("button", `field-value${t.bucket === "overdue" ? " over" : ""}${t.due ? " clearable" : ""}`);
   b.insertAdjacentHTML("beforeend", DATE_SVG);
   b.append(t.due ? dueLabel(t.due) : "期限なし");
   b.onclick = () => openDuePop(b, t);
-  return field("日付", b);
+  const row = tag("div", "field-row");
+  row.append(b);
+  if (t.due) {
+    const clear = tag("button", "icon-btn field-clear");
+    clear.insertAdjacentHTML("beforeend", CLOSE_SVG);
+    clear.setAttribute("aria-label", "日付をクリア");
+    clear.onclick = () => saveTask(t.id, { dueString: "" });
+    row.append(clear);
+  }
+  return field("日付", row);
+}
+
+// The subtasks being created, shown at the end of their parent's list: a row stays until the request fails, or, once it succeeded, until a load that began after it is drawn.
+// `settled` is `todoState.seq` when the request succeeded; `el` is the row last drawn for it.
+interface Creating {
+  parentId: string;
+  content: string;
+  settled: number | null;
+  el: HTMLElement | null;
+}
+const creating: Creating[] = [];
+
+function creatingRow(job: Creating) {
+  const li = tag("li", "task single creating");
+  const body = tag("div", "body");
+  body.append(tag("div", "t", job.content));
+  li.append(tag("span", "spin"), body, tag("span", "creating-label", "作成中"));
+  job.el = li;
+  return li;
 }
 
 function subtaskRow(s: TaskItem["subtasks"][number]) {
@@ -248,7 +277,21 @@ export function renderDetail() {
   const head = tag("div", "head");
   head.append(box, name);
 
+  // The subtasks created since that load are in it now: their rows are drawn for real.
+  for (let i = creating.length - 1; i >= 0; i--) if (creating[i].settled !== null && creating[i].settled! < todoState.loaded) creating.splice(i, 1);
   const parts: HTMLElement[] = [head, ...descParts(t)];
+  // A subtask's direct parent, when it has a row to open.
+  const parent = t.parent && todoState.taskById.get(t.parent.id);
+  if (parent) {
+    const link = tag("button", "parent-link");
+    link.insertAdjacentHTML("beforeend", RETURN_SVG);
+    link.append(tag("span", "pl-label", "親タスク"), tag("span", "pl-name", parent.content));
+    link.onclick = () => {
+      todoState.open = parent.id;
+      renderTodo();
+    };
+    parts.unshift(link);
+  }
   const mail = linkedMail(t, accountSet());
   if (mail) {
     const card = tag("div", "mail-link");
@@ -269,7 +312,7 @@ export function renderDetail() {
     title.append(bar);
   }
   const subs = tag("ul", "subs");
-  subs.append(...t.subtasks.map(subtaskRow));
+  subs.append(...t.subtasks.map(subtaskRow), ...creating.filter((c) => c.parentId === t.id).map(creatingRow));
   const add = tag("div", "add-sub");
   add.insertAdjacentHTML("beforeend", PLUS_SVG);
   const input = tag("input");
@@ -282,8 +325,16 @@ export function renderDetail() {
     if (!content.trim()) return;
     // Emptied before the call, or the redraw after it would restore the text.
     input.value = "";
+    const job: Creating = { parentId: t.id, content, settled: null, el: null };
+    creating.push(job);
+    subs.append(creatingRow(job));
     // No control is passed: disabling the field would drop its focus, and the next subtask could not be typed at once.
-    todoCall("todoist_add_subtask", { parentId: t.id, content });
+    todoCall("todoist_add_subtask", { parentId: t.id, content }).then((answer) => {
+      if (answer === null) {
+        creating.splice(creating.indexOf(job), 1);
+        job.el?.remove();
+      } else job.settled = todoState.seq;
+    });
   });
   add.append(input);
   parts.push(title, subs, add);

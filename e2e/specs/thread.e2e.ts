@@ -30,6 +30,22 @@ describe("thread", () => {
     expect(await callsOf(open)).toContainEqual({ account, id: "t3" });
     expect(await callsOf(setRead)).toHaveLength(0);
   });
+
+  it("shows a spinner in place of the Todo button's icon while the task is made from the open thread", async () => {
+    await mock("thread", threadDetail("Already read", "Old news", false));
+    const make = await mock("todoist_task_from_mail", holds);
+    await rowOf("read-threads", "Already read").$(".subject").click();
+    await expect($("#thread-subject")).toHaveText("Already read");
+    await $("#thread-todo").click();
+    expect(await waitForCalls(make)).toEqual([{ account, threadId: "t3", subject: "Already read" }]);
+    await expect($("#thread-todo .spin")).toExist();
+    await expect($("#thread-todo svg")).not.toExist();
+    await expect($("#thread-todo")).toBeDisabled();
+    await release(make, true);
+    await expect($("#thread-todo .spin")).not.toExist();
+    await expect($("#thread-todo svg")).toExist();
+    await expect($("#thread-todo")).toBeEnabled();
+  });
 });
 
 describe("thread AI summary", () => {

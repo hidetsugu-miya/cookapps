@@ -84,6 +84,7 @@ export async function loadTodo(quiet = false, withDone = true) {
     const same = text !== null && text === todoState.text;
     todoState.text = text;
     todoState.todo = data;
+    todoState.loaded = seq;
     todoState.kept = false;
     todoState.countOff = false;
     // Also while a field is being typed in, when nothing is drawn below.

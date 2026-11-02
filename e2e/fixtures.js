@@ -8,6 +8,7 @@
 // To change what the app sees at startup, put {command: value} in sessionStorage["e2e-fixtures"] and reload (`boot` in e2e/support.ts does it).
 // A mock value of the form {__e2e_reject__: text} makes the command fail with that text, as a Rust `Err(String)` reaches the app.
 // A mock value {__e2e_hold__: true} makes the command wait until `release` in e2e/support.ts answers it, so a spec decides when the answer arrives.
+// Calls held at the same time are answered by `release` in the order they were made.
 // An unmocked command is also recorded in window.__e2e_unmocked__: the app swallows some rejections, and wdio.conf.ts prints the list when a test fails.
 // The window is never shown (visible: false in tauri.e2e.conf.json), and WKWebView then reports document.hidden and runs no animation frames,
 // which would stop the app's sync, Todo refresh and its requestAnimationFrame work. Make the page behave as in a shown window.
@@ -50,8 +51,9 @@ const invoke = async (cmd, args, options) => {
     if (value?.__e2e_reject__ !== undefined) throw value.__e2e_reject__;
     if (value?.__e2e_hold__) {
       window.__e2e_release__ ??= {};
+      window.__e2e_release__[cmd] ??= [];
       return new Promise((resolve) => {
-        window.__e2e_release__[cmd] = resolve;
+        window.__e2e_release__[cmd].push(resolve);
       });
     }
     return value;
