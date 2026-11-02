@@ -3,7 +3,7 @@ import type { Offline } from "./bindings/Offline";
 import type { Todo } from "./bindings/Todo";
 import { $, tag } from "./dom.js";
 import { pad2 } from "./format.js";
-import { DELETE_SVG, LINK_SVG } from "./icons.js";
+import { COPY_SVG, DELETE_SVG, LINK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { currentScreen } from "./nav.js";
@@ -11,8 +11,7 @@ import { renderDetail } from "./todo-detail.js";
 import { editingField, isDueToday, projectOf, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
 import { cancelTodoReload, todoCall } from "./todo-write.js";
-import { toast } from "./toast.js";
-import { showError } from "./view.js";
+import { copyText, showError } from "./view.js";
 
 const TODO_REFRESH_MS = 10 * 1000;
 
@@ -138,15 +137,17 @@ function openMoreMenu() {
   // An empty url (an old cache, an ID the backend refuses) has nothing to copy.
   if (url) {
     const copy = menuItem(LINK_SVG, "タスクのリンクをコピー");
-    // No await before writeText: WKWebView only lets it run inside the click.
     copy.b.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(url);
-      } catch (e) {
-        return showError(e);
-      }
-      closeMoreMenu();
-      toast("リンクをコピーしました");
+      if (await copyText(url, "リンクをコピーしました")) closeMoreMenu();
+    };
+    menu.append(copy.b);
+  }
+  // Read when pressed: a refresh may have changed the description since the menu opened.
+  if (todoState.taskById.get(id)?.description) {
+    const copy = menuItem(COPY_SVG, "説明をコピー");
+    copy.b.onclick = async () => {
+      const text = todoState.taskById.get(id)?.description;
+      if (text && (await copyText(text, "説明をコピーしました"))) closeMoreMenu();
     };
     menu.append(copy.b);
   }

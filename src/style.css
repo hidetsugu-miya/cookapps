@@ -368,7 +368,13 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .due-pop button.dp-day.current { background: var(--accent); color: #fff; }
 .chip-input:focus { outline: none; }
 /* The description: Markdown shown in full, or a textarea that grows with its text. */
-#todo-detail .desc { box-sizing: border-box; width: calc(100% - 66px); margin: 8px 16px 0 46px; padding: 8px; border-radius: 8px; color: #333; line-height: 1.6; overflow-wrap: anywhere; cursor: text; }
+#todo-detail .desc-wrap { position: relative; width: calc(100% - 66px); margin: 8px 16px 0 46px; }
+#todo-detail .desc { box-sizing: border-box; padding: 8px; border-radius: 8px; color: #333; line-height: 1.6; overflow-wrap: anywhere; cursor: text; user-select: text; -webkit-user-select: text; }
+/* The copy button sits at the top right, over room the text leaves; it is hidden until the description is hovered or has focus. */
+#todo-detail .desc-wrap.copyable .desc { padding-right: 40px; }
+#todo-detail .desc-copy { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; visibility: hidden; user-select: none; -webkit-user-select: none; }
+#todo-detail .desc-copy svg { width: 16px; height: 16px; }
+#todo-detail .desc-wrap:hover .desc-copy, #todo-detail .desc-wrap:focus-within .desc-copy { visibility: visible; }
 #todo-detail .desc > :first-child { margin-top: 0; }
 #todo-detail .desc > :last-child { margin-bottom: 0; }
 #todo-detail .desc p, #todo-detail .desc ul, #todo-detail .desc ol, #todo-detail .desc pre, #todo-detail .desc blockquote { margin: 0 0 8px; }
@@ -380,7 +386,7 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .desc pre { padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 6px; background: var(--code); overflow-x: auto; }
 #todo-detail .desc pre code { padding: 0; background: none; }
 #todo-detail .desc blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
-#todo-detail .desc:hover { background: var(--hover); }
+#todo-detail .desc-wrap:hover .desc { background: var(--hover); }
 #todo-detail .desc:focus-visible { outline: 2px solid var(--accent); }
 #todo-detail .desc.empty { color: #999; }
 #todo-detail .desc-edit { display: block; box-sizing: border-box; width: calc(100% - 66px); margin: 8px 16px 0 46px; min-height: 96px; padding: 8px; border: 0; border-radius: 8px; outline: 2px solid var(--accent); font: inherit; color: #333; line-height: 1.6; resize: none; overflow: hidden; }

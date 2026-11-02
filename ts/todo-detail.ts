@@ -2,12 +2,13 @@
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, onEnter, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
-import { CLOSE_SVG, DATE_SVG, MAIL_SVG, PLUS_SVG, RETURN_SVG } from "./icons.js";
+import { CLOSE_SVG, COPY_SVG, DATE_SVG, MAIL_SVG, PLUS_SVG, RETURN_SVG } from "./icons.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { accountSet, dueLabel, linkedMail, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
 import { checkBox, openMailFromTodo, renderList } from "./todo-list.js";
 import { moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
+import { copyText } from "./view.js";
 
 // A month of days to pick from, Sunday first; `shown` is the 1st of the month, `current` (a `YYYY-MM-DD` or null) and today are marked.
 function monthPicker(shown: Date, current: string | null, pick: (iso: string) => void) {
@@ -245,15 +246,32 @@ function descParts(t: TaskItem): HTMLElement[] {
       area.focus();
       area.setSelectionRange(area.value.length, area.value.length);
     };
-    // A click on a link opens it, not the editor.
-    view.onclick = (e) => (e.target as Element).closest("a") || edit();
+    // A click on a link opens it, and one that ends a text selection in the description (to copy it) is not a press to edit.
+    view.onclick = (e) => {
+      if ((e.target as Element).closest("a")) return;
+      const sel = getSelection();
+      if (sel && !sel.isCollapsed && view.contains(sel.anchorNode) && view.contains(sel.focusNode)) return;
+      edit();
+    };
     view.onkeydown = (e) => {
       if (e.key !== "Enter" || e.target !== view) return;
       // Without this the Enter reaches the textarea that edit() focuses, and adds a newline.
       e.preventDefault();
       edit();
     };
-    return [view];
+    // The button is beside the view, not in it: the view is a role="button" and may hold no other control.
+    const wrap = tag("div", "desc-wrap");
+    wrap.append(view);
+    if (t.description) {
+      wrap.classList.add("copyable");
+      const copy = tag("button", "icon-btn desc-copy");
+      copy.type = "button";
+      copy.innerHTML = COPY_SVG;
+      copy.setAttribute("aria-label", "説明をコピー");
+      copy.onclick = () => void copyText(t.description, "説明をコピーしました");
+      wrap.append(copy);
+    }
+    return [wrap];
   }
   const area = tag("textarea", "desc-edit");
   area.value = todoState.descEdit.value;

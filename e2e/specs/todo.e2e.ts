@@ -480,6 +480,15 @@ describe("todo detail", () => {
   });
 });
 
+// The Markdown source of the description the next specs copy.
+const description = "**Bold** line\n- item one\n- item two";
+// Todo data whose first task, "Write report" (k1), has that description.
+function withDescription() {
+  const data = todoData();
+  data.tasks[0].description = description;
+  return data;
+}
+
 describe("todo detail menu", () => {
   const more = "#todo-more";
   const items = '.menu[role="menu"] button[role="menuitem"]';
@@ -540,6 +549,31 @@ describe("todo detail menu", () => {
     await openReport(data);
     await $(more).click();
     expect(await textsOf(items)).toEqual(["削除"]);
+  });
+
+  it("lists 説明をコピー between the link and 削除 when the task has a description, and copies its Markdown source", async () => {
+    await openReport(withDescription());
+    await stubClipboard();
+    await $(more).click();
+    expect(await textsOf(items)).toEqual(["タスクのリンクをコピー", "説明をコピー", "削除"]);
+    expect(await count(`${items} svg`)).toBe(3);
+    await $(`${items}:nth-child(2)`).click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
+    expect(await copiedTexts()).toEqual([description]);
+    await expect($(".menu")).not.toExist();
+    await expect($(".toast")).toHaveText("説明をコピーしました");
+  });
+
+  it("shows the error and keeps the menu when the clipboard refuses the description", async () => {
+    await openReport(withDescription());
+    await browser.execute(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => Promise.reject(new Error("denied")) } });
+    });
+    await $(more).click();
+    await $(`${items}:nth-child(2)`).click();
+    await expect($("#error")).toHaveText(expect.stringContaining("denied"));
+    await expect($(".menu")).toExist();
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   it("shows the error and keeps the menu when the clipboard refuses", async () => {
@@ -614,6 +648,81 @@ describe("todo detail menu", () => {
     await refreshNow();
     await expect($("#todo-detail")).not.toBeDisplayed();
     await expect($(".menu")).not.toExist();
+  });
+});
+
+describe("todo detail description copy", () => {
+  const desc = "#todo-detail .desc";
+  const copyButton = "#todo-detail .desc-copy";
+
+  async function openReport(data = withDescription()) {
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await expect($(desc)).toBeDisplayed();
+  }
+
+  it("copies the Markdown source with the icon beside the description, and does not open the editor", async () => {
+    await openReport();
+    await stubClipboard();
+    await expect($(copyButton)).toHaveAttribute("aria-label", "説明をコピー");
+    expect(await $(copyButton).getCSSProperty("visibility")).toMatchObject({ value: "hidden" });
+    // Not inside the description's role="button".
+    expect(await browser.execute(() => document.querySelector("#todo-detail .desc-copy")!.closest(".desc"))).toBeNull();
+    await $("#todo-detail .desc-wrap").moveTo();
+    await expect($(copyButton)).toBeDisplayed();
+    await $(copyButton).click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
+    expect(await copiedTexts()).toEqual([description]);
+    await expect($(".toast")).toHaveText("説明をコピーしました");
+    expect(await count("#todo-detail textarea")).toBe(0);
+    await expect($(desc)).toBeDisplayed();
+  });
+
+  it("copies with Enter on the icon reached by the keyboard, and does not open the editor", async () => {
+    await openReport();
+    await stubClipboard();
+    // The view has the focus, so the icon is shown and can take it.
+    await browser.execute(() => {
+      document.querySelector<HTMLElement>("#todo-detail .desc")!.focus();
+      document.querySelector<HTMLElement>("#todo-detail .desc-copy")!.focus();
+    });
+    expect(await browser.execute(() => document.activeElement!.className)).toContain("desc-copy");
+    await browser.keys("Enter");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
+    expect(await copiedTexts()).toEqual([description]);
+    expect(await count("#todo-detail textarea")).toBe(0);
+  });
+
+  it("does not open the editor when the click ends a text selection inside the description", async () => {
+    await openReport();
+    await browser.execute(() => {
+      const view = document.querySelector<HTMLElement>("#todo-detail .desc")!;
+      const range = document.createRange();
+      range.selectNodeContents(view);
+      const sel = getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      // The click a drag selection ends in; element.click() does not press the mouse, so the selection stays.
+      view.click();
+    });
+    expect(await count("#todo-detail textarea")).toBe(0);
+    await expect($(desc)).toBeDisplayed();
+  });
+
+  it("still opens the editor on a plain press of the description", async () => {
+    await openReport();
+    await $(desc).click();
+    await expect($("#todo-detail textarea")).toBeDisplayed();
+    await expect($("#todo-detail textarea")).toHaveValue(description);
+  });
+
+  it("shows neither the icon nor the menu item for an empty description", async () => {
+    await openReport(todoData());
+    await expect($(".desc.empty")).toHaveText("説明を追加");
+    expect(await count(copyButton)).toBe(0);
+    await $("#todo-more").click();
+    expect(await textsOf('.menu[role="menu"] button[role="menuitem"]')).toEqual(["タスクのリンクをコピー", "削除"]);
   });
 });
 
