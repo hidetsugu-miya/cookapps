@@ -430,6 +430,8 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .day-picks .text-btn { width: 40px; padding: 0; }
 .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 20px; border-top: 1px solid var(--line); }
 .item .who { flex: 1; min-width: 0; }
+.item select { height: 32px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; font: inherit; color: #333; }
+.item select:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .item-name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-meta { color: #666; font-size: 12px; overflow-wrap: anywhere; }
 .item-meta.warn { color: var(--warn); }

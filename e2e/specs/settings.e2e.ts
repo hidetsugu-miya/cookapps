@@ -217,8 +217,86 @@ describe("settings: Claude", () => {
   }
 });
 
+describe("settings: Claude model and effort", () => {
+  const modelSelect = () => $('#claude-items select[aria-label="モデル"]');
+  const effortSelect = () => $('#claude-items select[aria-label="effort"]');
+  // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
+  const choose = (label: string, value: string) =>
+    browser.execute(
+      (l, v) => {
+        const select = document.querySelector<HTMLSelectElement>(`#claude-items select[aria-label="${l}"]`)!;
+        select.value = v;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      label,
+      value,
+    );
+  const optionTexts = (select: ChainablePromiseElement) => select.$$("option").map((o) => o.getText());
+
+  for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
+    it(`has its row between the Claude state and the Todo prompt, with the defaults selected, while Claude is ${state}`, async () => {
+      await openSettings([], status);
+      await expect($("#claude-items .item:nth-child(2) .item-name")).toHaveText("モデルと effort");
+      await expect($("#claude-items .item:nth-child(3) .item-name")).toHaveText("Todo の要約プロンプト");
+      await expect(modelSelect()).toHaveValue("sonnet");
+      await expect(effortSelect()).toHaveValue("medium");
+    });
+  }
+
+  it("offers the four models and the five efforts, marking the defaults", async () => {
+    await openSettings([]);
+    expect(await optionTexts(modelSelect())).toEqual(["Haiku", "Sonnet（デフォルト）", "Opus", "Fable"]);
+    expect(await optionTexts(effortSelect())).toEqual(["low", "medium（デフォルト）", "high", "xhigh", "max"]);
+  });
+
+  it("shows the saved model and effort", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_model_settings: { model: "fable", effort: "xhigh" } });
+    await $("#nav-settings").click();
+    await expect(modelSelect()).toHaveValue("fable");
+    await expect(effortSelect()).toHaveValue("xhigh");
+  });
+
+  it("saves on change with claude_model_settings_save, sending both values", async () => {
+    await openSettings([]);
+    const save = await mock("claude_model_settings_save", { model: "opus", effort: "medium" });
+    await choose("モデル", "opus");
+    expect(await waitForCalls(save)).toEqual([{ model: "opus", effort: "medium" }]);
+    await expect(modelSelect()).toHaveValue("opus");
+    const saveEffort = await mock("claude_model_settings_save", { model: "opus", effort: "max" });
+    await choose("effort", "max");
+    expect(await waitForCalls(saveEffort)).toEqual([{ model: "opus", effort: "max" }]);
+    await expect(effortSelect()).toHaveValue("max");
+  });
+
+  it("puts the selection back and shows the error when it cannot be saved", async () => {
+    await openSettings([]);
+    await mock("claude_model_settings_save", rejects("モデルが不正です: x"));
+    await choose("モデル", "haiku");
+    await expect($("#error")).toHaveText(expect.stringContaining("モデルが不正です"));
+    await expect(modelSelect()).toHaveValue("sonnet");
+  });
+
+  it("disables the selects while a save is on its way", async () => {
+    await openSettings([]);
+    const save = await mock("claude_model_settings_save", holds);
+    await choose("モデル", "opus");
+    await waitForCalls(save);
+    await expect(modelSelect()).toBeDisabled();
+    await expect(effortSelect()).toBeDisabled();
+    await release(save, { model: "opus", effort: "medium" });
+    await expect(modelSelect()).toBeEnabled();
+    await expect(modelSelect()).toHaveValue("opus");
+  });
+
+  it("says in the ? hint that the setting applies to the three Claude calls", async () => {
+    await openSettings([]);
+    await $("#claude-help").click();
+    await expect($('[role="dialog"][aria-label="Claude の使い方"] .foot')).toHaveText(expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話"));
+  });
+});
+
 describe("settings: Todo prompt", () => {
-  const row = () => $("#claude-items .item:nth-child(2)");
+  const row = () => $("#claude-items .item:nth-child(3)");
 
   for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
     it(`has its row under the Claude state while Claude is ${state}`, async () => {

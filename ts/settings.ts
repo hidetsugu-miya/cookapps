@@ -2,6 +2,7 @@
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Workspace } from "./bindings/Workspace";
 import { calendarFirstDay, setCalendarFirstDay } from "./calendar.js";
+import { loadModelSettings } from "./claude.js";
 import { $, tag } from "./dom.js";
 import { avatarColor, hostOf, initials, WEEKDAYS } from "./format.js";
 import { LINK_SVG } from "./icons.js";
@@ -225,6 +226,7 @@ export async function loadSettings() {
   const seq = ++settingsSeq;
   $("error").hidden = true;
   loadPromptState();
+  loadModelSettings();
   loadCalendarCard();
   loadTodoistCard();
   let loaded: SlackLoad;

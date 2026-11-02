@@ -161,6 +161,8 @@ pub fn run() {
             claude::claude_todo_prompt,
             claude::claude_todo_prompt_save,
             claude::claude_todo_prompt_reset,
+            claude::claude_model_settings,
+            claude::claude_model_settings_save,
             claude::claude_edit_todo_prompt,
             update::app_info,
             update::update_mode,

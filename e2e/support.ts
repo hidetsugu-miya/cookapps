@@ -5,6 +5,7 @@ import type { Checked } from "../ts/bindings/Checked";
 import type { Claude } from "../ts/bindings/Claude";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
+import type { ModelSettings } from "../ts/bindings/ModelSettings";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
@@ -233,6 +234,9 @@ export const slackMessageUrl = "https://example-team.slack.com/archives/C0123ABC
 
 // What `todoist_summarize_slack` answers for `slackMessageUrl`.
 export const slackSummary: Summary = { content: "Reply to the vendor", description: "- Asked for a quote\n- Wants an answer by Friday", due: "2026-11-06", projectId: null };
+
+// What `claude_model_settings` answers (the same as the base answer in e2e/fixtures.js): the defaults.
+export const modelSettings: ModelSettings = { model: "sonnet", effort: "medium" };
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
 export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };

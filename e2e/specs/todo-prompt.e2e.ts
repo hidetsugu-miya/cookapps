@@ -21,7 +21,7 @@ async function openPrompt(claude: unknown = claudeReady, state = todoPrompt) {
   await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claude, claude_todo_prompt: state });
   await $("#nav-settings").click();
   await settled();
-  await $("#claude-items .item:nth-child(2) .text-btn").click();
+  await $("#claude-items .item:nth-child(3) .text-btn").click();
   await expect($("#prompt")).toBeDisplayed();
 }
 
@@ -133,7 +133,7 @@ describe("todo prompt screen", () => {
     // The settings read the instructions again; opening the screen does not.
     await waitForCalls("claude_todo_prompt", reads + 1);
     await settled();
-    await $("#claude-items .item:nth-child(2) .text-btn").click();
+    await $("#claude-items .item:nth-child(3) .text-btn").click();
     await expect(body()).toHaveValue("Typed by hand");
     await expect($("#prompt-status")).toBeDisplayed();
     await expect($("#prompt-log .chat-user")).toHaveText("短くして");
