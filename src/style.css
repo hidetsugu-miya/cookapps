@@ -180,7 +180,7 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .cal-event.selected, .cal-chip.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cal-event.selected { z-index: 1; }
 /* The detail popover (ts/calendar-detail.ts): the .pop frame, 340px wide, and as tall as the window leaves; the description scrolls inside. */
-.pop.cal-pop { width: 340px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; color: #222; }
+.pop.cal-pop { width: 340px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
 .cal-pop:focus { outline: none; }
 .cal-pop-head { display: flex; align-items: flex-start; gap: 10px; }
 .cal-pop-dot { width: 12px; height: 12px; flex: none; margin-top: 7px; border-radius: 50%; background: var(--c); }
@@ -189,8 +189,8 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .cal-pop-when { color: var(--muted); }
 .cal-pop-head .icon-btn { margin: -6px -6px 0 0; flex: none; }
 .cal-pop-meet { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: var(--soft); }
-.cal-pop .meet-join { height: 36px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 18px; background: var(--accent); color: #fff; font-weight: bold; text-decoration: none; }
-.cal-pop .meet-join:hover { filter: brightness(1.1); }
+/* A .text-btn.primary link; the three-class selector beats the small buttons of `:is(.pop, .pane) .text-btn`. */
+.cal-pop .text-btn.meet-join { height: 36px; box-sizing: border-box; display: flex; justify-content: center; gap: 8px; border-radius: 18px; font-size: 13px; font-weight: bold; text-decoration: none; }
 .cal-pop .meet-join svg { width: 18px; height: 18px; }
 .cal-pop-url { display: flex; align-items: center; gap: 4px; }
 .cal-pop-url span { flex: 1; min-width: 0; color: var(--ins); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

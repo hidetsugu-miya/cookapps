@@ -52,11 +52,21 @@ export function htmlText(html: string, showHrefs = false) {
     .trim();
 }
 
+function isAppOrigin(url: string) {
+  try {
+    return new URL(url).hostname === "tauri.localhost";
+  } catch {
+    return false;
+  }
+}
+
 export function linkify(text: string) {
   const nodes: (string | HTMLAnchorElement)[] = [];
   let last = 0;
   for (const match of text.matchAll(URL_IN_TEXT)) {
     const url = trimUrl(match[0]);
+    // A link to the app's own origin on Windows would navigate the window itself (Rust's on_navigation lets it through), so it stays text.
+    if (isAppOrigin(url)) continue;
     nodes.push(text.slice(last, match.index));
     const a = document.createElement("a");
     a.href = url;

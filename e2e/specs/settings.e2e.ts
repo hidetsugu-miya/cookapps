@@ -1,4 +1,4 @@
-import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, rejects, slackLoad, textsOf, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, holds, inbox, mock, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
 
 // The app with one Slack workspace whose token `slack_check` judges as given, and the settings screen open.
 async function openSettings(missingScopes: string[], claude: unknown = claudeMissing) {
@@ -80,8 +80,21 @@ describe("settings: calendar", () => {
     await expect(dayButton("日")).toHaveAttribute("aria-pressed", "false");
     const week = await mock("calendar_week", weekOfToday(1));
     await $("#nav-calendar").click();
-    const calls = (await waitForCalls(week)) as { firstDay: number }[];
+    const calls = (await waitForCalls(week)) as { firstDay: number; refresh: boolean }[];
     expect(calls.every((c) => c.firstDay === 1)).toBe(true);
+    // Only the weeks are dropped: the calendar lists are not asked for again.
+    expect(calls.every((c) => !c.refresh)).toBe(true);
+  });
+
+  it("ignores another day pressed while a day is being saved", async () => {
+    await openCalendarSettings();
+    const save = await mock("set_calendar_first_day", holds);
+    await dayButton("月").click();
+    await waitForCalls(save);
+    await dayButton("火").click();
+    await release(save, null);
+    await expect(dayButton("月")).toHaveAttribute("aria-pressed", "true");
+    expect(await callsOf(save)).toEqual([{ firstDay: 1 }]);
   });
 
   it("keeps the selection and shows the error when the day cannot be saved", async () => {

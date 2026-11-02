@@ -2,6 +2,7 @@
 // One at a time. A press on another event switches, a press on the same one closes; so do ✕, Escape, a click elsewhere, a scroll of the week, a resize,
 // a week change and a screen change. Focus moves into the popover and returns to the event on ✕ and Escape (as the pane in pane.ts does).
 // A redraw of the week (a background refresh) does not close it: `endEvents` finds the same event again in the new week and updates the popover, or closes it.
+// The same event is told by its title, time text and account, so an event whose time or title changed is a different one and the popover closes.
 import type { Info } from "./bindings/Info";
 import { $, composing, tag } from "./dom.js";
 import { CHECK_SVG, CLOSE_SVG, COPY_SVG, LINES_SVG, MEET_SVG, PEOPLE_SVG, PIN_SVG } from "./icons.js";
@@ -98,7 +99,7 @@ function row(icon: string, content: Node) {
 }
 
 function meetBlock(url: string) {
-  const join = tag("a", "meet-join");
+  const join = tag("a", "text-btn primary meet-join");
   join.href = url;
   join.insertAdjacentHTML("beforeend", MEET_SVG);
   join.append("Meet に参加");
@@ -125,7 +126,8 @@ function meetBlock(url: string) {
 // The description as text nodes and links: HTML goes through the mail summary's HTML-to-text, and nothing of it is inserted as markup.
 function descriptionBlock(description: string) {
   const box = tag("div", "cal-pop-desc");
-  box.append(...linkify(htmlText(description, true)));
+  // A plain-text "<https://example.com/a>" is a tag to the HTML parser and would vanish with its URL, so the brackets go first.
+  box.append(...linkify(htmlText(description.replace(/<(https?:\/\/[^\s<>]+)>/g, "$1"), true)));
   return box;
 }
 

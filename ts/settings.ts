@@ -144,13 +144,19 @@ function renderCalendarCard() {
 }
 
 // The selection moves only once the day is saved; a failure leaves it where it was and shows the error.
+// A press while a save is on its way is ignored, as saves would share one temporary file.
+let savingDay = false;
+
 async function pickFirstDay(day: number) {
-  if (day === calendarDay) return;
+  if (day === calendarDay || savingDay) return;
+  savingDay = true;
   $("error").hidden = true;
   try {
     await setCalendarFirstDay(day);
   } catch (e) {
     return showError(e);
+  } finally {
+    savingDay = false;
   }
   calendarDay = day;
   renderCalendarCard();

@@ -80,6 +80,17 @@ export const waitForText = (selector: string, text: string) =>
 export const waitForCount = (selector: string, n: number) =>
   browser.waitUntil(async () => (await count(selector)) === n, { timeoutMsg: `expected ${n} of ${selector}` });
 
+// Replaces navigator.clipboard.writeText with a function that keeps the text in the page, so a spec never touches the real clipboard. A reload undoes it.
+export const stubClipboard = () =>
+  browser.execute(() => {
+    const w = window as unknown as { __e2e_copied__: string[] };
+    w.__e2e_copied__ = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void w.__e2e_copied__.push(t) } });
+  });
+
+// The texts written to the stubbed clipboard so far.
+export const copiedTexts = () => browser.execute(() => (window as unknown as { __e2e_copied__: string[] }).__e2e_copied__);
+
 // Cmd+Z (Ctrl+Z off macOS), sent to the page as the key event the app listens for.
 export const pressUndo = () =>
   browser.execute(() => {

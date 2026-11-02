@@ -48,11 +48,16 @@ let calScrolled = false;
 // The accounts changed (a login, a removal): the weeks kept so far and the calendar lists behind them are stale.
 // The popup must not keep the old state until the calendar is opened; `dropKept` also forgets the weeks of the last run.
 export function resetCalendar(dropKept: boolean) {
-  closeDetail();
+  dropWeeks();
   if (dropKept) keptWeeks = Promise.resolve([]);
+  calRefresh = true;
+}
+
+// Forgets the weeks drawn and fetched so far (not the calendar lists behind them).
+function dropWeeks() {
+  closeDetail();
   calCache.clear();
   calEpoch++;
-  calRefresh = true;
   calShown = null;
 }
 
@@ -63,7 +68,7 @@ export async function setCalendarFirstDay(day: number) {
   firstDayRead = Promise.resolve(day);
   // A load on its way would draw a week of the old first day.
   calSeq++;
-  resetCalendar(false);
+  dropWeeks();
 }
 
 // Whether the shown week says that `account` must log in again for the calendar.
@@ -209,6 +214,7 @@ function renderWeek(w: Week) {
 }
 
 // The date of the first day of the week, which starts on the weekday `first`, holding the "YYYY-MM-DD" date.
+// Keep in step with week_start in calendar.rs.
 const weekKey = (iso: string, first: number) => isoDate(addDays(iso, -((addDays(iso, 0).getDay() + 7 - first) % 7)));
 
 // Fetches the week holding `date` that starts on `first`, and keeps it, dropping the oldest beyond CAL_CACHE_MAX.

@@ -25,6 +25,10 @@ use crate::{
 };
 
 const CALENDAR_LIST_URL: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+/// The `fields` of an event list: what `list_events` needs, and what the detail of the week adds.
+const EVENT_FIELDS: &str =
+    "nextPageToken,items(summary,iCalUID,start,end,attendees(self,responseStatus))";
+const EVENT_DETAIL_FIELDS: &str = "nextPageToken,items(summary,iCalUID,start,end,description,location,hangoutLink,attendees(self,responseStatus,resource))";
 const CALENDARS_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 // shortcut: past this many pages (2500 events of one calendar) the rest is dropped, upgrade if a week ever needs more.
 const MAX_PAGES: usize = 10;
@@ -84,6 +88,17 @@ fn meet_url(link: Option<&str>) -> Option<String> {
 /// `None` for a missing or blank text.
 fn non_empty(text: Option<String>) -> Option<String> {
     text.filter(|t| !t.trim().is_empty())
+}
+
+/// Longest description kept, in characters; a multi-day event carries it once per day on the screen and in the cache.
+const DESCRIPTION_MAX: usize = 10_000;
+
+/// `text` cut to `DESCRIPTION_MAX` characters, never inside a character.
+fn clip_description(text: String) -> String {
+    match text.char_indices().nth(DESCRIPTION_MAX) {
+        Some((end, _)) => text[..end].to_owned(),
+        None => text,
+    }
 }
 
 #[derive(Deserialize)]
@@ -197,7 +212,7 @@ impl RawEvent {
             ical_uid: e.ical_uid,
             meet_url: meet_url(e.hangout_link.as_deref()),
             location: non_empty(e.location),
-            description: non_empty(e.description),
+            description: non_empty(e.description).map(clip_description),
             attendees,
             accepted,
         })
@@ -764,6 +779,7 @@ async fn calendar_events(
     cal: &CalendarEntry,
     min: &str,
     max: &str,
+    fields: &str,
 ) -> Result<Option<Vec<RawEvent>>, ApiError> {
     let event_query = [
         ("singleEvents", "true"),
@@ -771,10 +787,7 @@ async fn calendar_events(
         ("timeMin", min),
         ("timeMax", max),
         ("maxResults", "250"),
-        (
-            "fields",
-            "nextPageToken,items(summary,iCalUID,start,end,description,location,hangoutLink,attendees(self,responseStatus,resource))",
-        ),
+        ("fields", fields),
     ];
     let url = events_url(&cal.id)?;
     let Some(pages) = fetch_pages::<EventPage>(dir, auth, account, &url, &event_query, |p| {
@@ -802,6 +815,7 @@ struct AccountEvents {
 /// Events in `[min, max)` of every selected calendar of one account, the calendars fetched at once.
 /// `refresh` lists the calendars again instead of using the kept list. `Ok(None)` means that account must log in again.
 /// A failure of the whole account is an `Err`; a failure of one calendar leaves that calendar out and is listed in `failed`.
+#[allow(clippy::too_many_arguments)]
 async fn account_events(
     dir: &Path,
     auth: &Auth,
@@ -809,6 +823,7 @@ async fn account_events(
     account: &str,
     min: &str,
     max: &str,
+    fields: &str,
     refresh: bool,
 ) -> Result<Option<AccountEvents>, ApiError> {
     let kept = if refresh {
@@ -835,8 +850,8 @@ async fn account_events(
         .cloned()
         .map(|cal| {
             let (dir, auth, account) = (dir.to_owned(), auth.clone(), account.to_owned());
-            let (min, max) = (min.to_owned(), max.to_owned());
-            async move { calendar_events(&dir, &auth, &account, &cal, &min, &max).await }
+            let (min, max, fields) = (min.to_owned(), max.to_owned(), fields.to_owned());
+            async move { calendar_events(&dir, &auth, &account, &cal, &min, &max, &fields).await }
         })
         .collect();
     let mut out = AccountEvents {
@@ -868,7 +883,8 @@ struct Collected {
 }
 
 /// Events in `[min, max)` of every account, the accounts fetched at once. Accounts needing login or failing to load,
-/// and calendars failing to load, are listed, not fatal. `command` names the caller in the failure log.
+/// and calendars failing to load, are listed, not fatal. `command` names the caller in the failure log. `fields` is the `fields` query of the event lists.
+#[allow(clippy::too_many_arguments)]
 async fn collect_events(
     dir: &Path,
     auth: &Auth,
@@ -876,6 +892,7 @@ async fn collect_events(
     command: &str,
     min: &str,
     max: &str,
+    fields: &str,
     refresh: bool,
 ) -> Result<Collected, String> {
     let (mut events, mut needs_login, mut failed) = (Vec::new(), Vec::new(), HashMap::new());
@@ -888,7 +905,10 @@ async fn collect_events(
         .map(|account| {
             let (dir, auth, cache) = (dir.to_owned(), auth.clone(), cache.clone());
             let (account, min, max) = (account.clone(), min.to_owned(), max.to_owned());
-            async move { account_events(&dir, &auth, &cache, &account, &min, &max, refresh).await }
+            let fields = fields.to_owned();
+            async move {
+                account_events(&dir, &auth, &cache, &account, &min, &max, &fields, refresh).await
+            }
         })
         .collect();
     let results = join_all(jobs)
@@ -938,6 +958,7 @@ pub async fn list_events(dir: &Path, auth: &Auth, from: &str, to: &str) -> Resul
         "list_events",
         &min,
         &max,
+        EVENT_FIELDS,
         true,
     )
     .await?;
@@ -967,7 +988,17 @@ pub async fn calendar_week(
     let start = week_start(date, first_day)?;
     let (min, max) = week_bounds(&Local, start).ok_or("週の範囲を求められません")?;
     let dir = config_dir(&app).map_err(|e| log_failure("calendar_week", "-", e))?;
-    let found = collect_events(&dir, &auth, &cache, "calendar_week", &min, &max, refresh).await?;
+    let found = collect_events(
+        &dir,
+        &auth,
+        &cache,
+        "calendar_week",
+        &min,
+        &max,
+        EVENT_DETAIL_FIELDS,
+        refresh,
+    )
+    .await?;
     let (all_day, timed) = build_week(&Local, start, found.events);
     let week = Week {
         week_start: start.to_string(),
@@ -1345,6 +1376,16 @@ mod tests {
         assert_eq!(bare.location, None);
         assert_eq!(bare.description, None);
         assert_eq!((bare.attendees, bare.accepted), (0, 0));
+    }
+
+    #[test]
+    fn a_long_description_is_cut_by_characters() {
+        assert_eq!(clip_description("説明".into()), "説明");
+        let exact = "あ".repeat(DESCRIPTION_MAX);
+        assert_eq!(clip_description(exact.clone()), exact);
+        let cut = clip_description(format!("{exact}い"));
+        assert_eq!(cut, exact);
+        assert_eq!(cut.len(), DESCRIPTION_MAX * 3);
     }
 
     #[test]
