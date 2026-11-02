@@ -13,7 +13,7 @@ import { showError } from "./view.js";
 
 // The text of an HTML message is read from its frame (allow-same-origin).
 function latestText() {
-  const m = opened.current!.latest;
+  const m = opened.current!.messages.at(-1)!;
   if (!m.html) return m.body;
   const doc = $("messages").firstElementChild?.querySelector("iframe")?.contentDocument;
   return doc?.body?.innerText.trim() || unescapeHtml(m.snippet);
@@ -37,8 +37,8 @@ async function openSlackDialog() {
   const current = opened.current!;
   const mail = {
     subject: current.subject || "(件名なし)",
-    from: current.latest.from,
-    date: slackDate(current.latest.dateMs),
+    from: current.messages.at(-1)!.from,
+    date: slackDate(current.messages.at(-1)!.dateMs),
     body: latestText(),
   };
   let preview: string;

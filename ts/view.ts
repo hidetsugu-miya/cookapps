@@ -2,6 +2,16 @@
 import { $ } from "./dom.js";
 import { invoke } from "./ipc.js";
 
+// Whether `claude` is logged in: the AI summary button is shown only then, in a thread.
+let claudeReady = false;
+const syncSummaryButton = () => {
+  $("thread-summary").hidden = $("thread").hidden || !claudeReady;
+};
+export function setClaudeReady(ready: boolean) {
+  claudeReady = ready;
+  syncSummaryButton();
+}
+
 export type View = "list" | "thread" | "login" | "calendar" | "todo" | "settings";
 
 // #main scrolls both the list and the thread, so each view keeps its own position.
@@ -21,6 +31,7 @@ export function show(view: View) {
   $("threads").hidden = view !== "list";
   $("reload").hidden = view !== "list";
   $("thread").hidden = view !== "thread";
+  syncSummaryButton();
   $("back").hidden = view !== "thread";
   $("thread-slack").hidden = view !== "thread";
   $("thread-todo").hidden = view !== "thread";

@@ -1,3 +1,6 @@
+import type { MessageDetail } from "./bindings/MessageDetail";
+import { queryAll } from "./mail-frame.js";
+
 // A plain-text body as text nodes and links to its http(s) URLs. A click navigates this page, which Rust's on_navigation
 // cancels and opens in the default browser. A URL ends at whitespace, a non-ASCII character or " < > (never in a URL as is);
 // trailing punctuation is left out, and a trailing ")" only when unpaired, as in "(https://example.com/a)" but not ".../Foo_(bar)".
@@ -12,6 +15,22 @@ function trimUrl(url: string) {
     if (c === ")" ? closes-- <= opens : !".,;:!?']".includes(c)) break;
   }
   return url.slice(0, end);
+}
+
+// A message as plain text, for the summary. An HTML body is parsed by DOMParser (no script runs and nothing is fetched: the document has no
+// browsing context), its style and script are dropped, and a line break is put where a block ends. The frame the body is shown in is not touched.
+const BLOCKS = "br, p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote";
+
+export function mailText(m: MessageDetail) {
+  if (!m.html) return m.body;
+  const doc = new DOMParser().parseFromString(m.body, "text/html");
+  for (const e of queryAll(doc, "script, style")) Element.prototype.remove.call(e);
+  for (const e of queryAll(doc, BLOCKS)) Element.prototype.after.call(e, "\n");
+  return (queryAll<HTMLElement>(doc, "body")[0].textContent ?? "")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export function linkify(text: string) {

@@ -94,10 +94,21 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 /* Detail view: the toolbar is tinted, the subject sits above the messages, and each message lines its body up with the sender's name (avatar 40px + gap 16px). */
 #mail-header.detail { padding: 14px 32px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #mail-header.detail .icon-btn { color: #444746; border-radius: 50%; }
-#mail-header.detail #thread-slack { margin-left: auto; }
+/* The right-hand group starts at the first button that is shown: the AI summary button, or the Slack button while the summary button is hidden. */
+#mail-header.detail #thread-summary:not([hidden]), #mail-header.detail #thread-summary[hidden] + #thread-slack { margin-left: auto; }
 #thread-head { margin: 16px 0 20px 56px; font-size: 22px; line-height: 1.35; }
 #thread-subject { display: inline; margin: 0; font-size: inherit; font-weight: normal; color: #1f1f1f; white-space: normal; overflow-wrap: anywhere; }
 #thread-head .label { display: inline-block; white-space: nowrap; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--code-line); color: #444746; font-size: 11px; vertical-align: middle; }
+#mail-summary { margin: 0 0 20px 56px; padding: 12px 14px; border-radius: 12px; background: var(--bar); color: #1f1f1f; line-height: 1.6; }
+#mail-summary[data-phase="loading"] { display: flex; align-items: center; gap: 10px; color: #444746; }
+#mail-summary[data-phase="failed"] { background: var(--warn-bg); color: var(--warn); }
+.summary-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 500; color: var(--accent); }
+#mail-summary[data-phase="failed"] .summary-head { color: var(--warn); }
+.summary-head svg { width: 16px; height: 16px; flex: none; }
+.summary-head .icon-btn { width: 26px; height: 26px; margin-left: auto; color: #444746; }
+.summary-head .icon-btn svg { width: 14px; height: 14px; }
+#mail-summary ul { margin: 6px 0 0; padding-left: 20px; }
+#mail-summary .text-btn { margin-top: 8px; height: 26px; font-size: 12px; }
 #messages article { margin-bottom: 20px; }
 #messages article.folded { margin-bottom: 0; border-bottom: 1px solid var(--line); }
 #messages article.folded + article { margin-top: 16px; }

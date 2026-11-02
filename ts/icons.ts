@@ -16,6 +16,7 @@ export const CHEVRON_SVG = svgOf('<path d="M9 6l6 6-6 6"/>');
 export const EDIT_SVG = svgOf('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>');
 export const FOLDER_SVG = svgOf('<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>');
 export const CLAUDE_SVG = svgOf('<path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>');
+export const SUMMARY_SVG = $("thread-summary").innerHTML.trim();
 export const SLACK_SVG = $("thread-slack").innerHTML.trim();
 export const UNLINK_SVG = $("todo-disconnect").innerHTML.trim();
 export const LOCK_SVG = svgOf('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>');

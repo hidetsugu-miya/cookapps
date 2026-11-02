@@ -155,6 +155,7 @@ pub fn run() {
             slack::slack_preview,
             slack::slack_post,
             claude::claude_status,
+            claude::claude_summarize_mail,
             update::app_info,
             update::update_mode,
             update::set_update_mode,

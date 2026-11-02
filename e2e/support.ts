@@ -47,6 +47,13 @@ export async function mock(command: string, value: unknown = null) {
 // A `mock` value that makes the command fail with `message` (e2e/fixtures.js).
 export const rejects = (message: string) => ({ __e2e_reject__: message });
 
+// A `mock` value that keeps the command waiting until `release` (e2e/fixtures.js).
+export const holds = { __e2e_hold__: true };
+
+// Answers the waiting call of `command` with `value`. Wait for the call first (`waitForCalls`).
+export const release = (command: string, value: unknown) =>
+  browser.execute((c, v) => (window as unknown as { __e2e_release__: Record<string, (v: unknown) => void> }).__e2e_release__[c](v), command, value);
+
 // The arguments of every call of `command` so far.
 export const callsOf = (command: string) =>
   browser.execute((c) => (window as unknown as { __e2e_calls__: Record<string, unknown[]> }).__e2e_calls__[c] ?? [], command);
