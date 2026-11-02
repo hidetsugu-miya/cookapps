@@ -111,7 +111,7 @@ function projectField(t: TaskItem) {
   return field("プロジェクト", b);
 }
 
-// A task with a due date, a repeating one too, gets a button beside the value that clears it at once, without a confirmation.
+// A task with a due date, a repeating one too, gets a button beside the value that clears it; a repeating one asks for a second press.
 function dueField(t: TaskItem) {
   const b = tag("button", `field-value${t.bucket === "overdue" ? " over" : ""}${t.due ? " clearable" : ""}`);
   b.insertAdjacentHTML("beforeend", DATE_SVG);
@@ -123,7 +123,26 @@ function dueField(t: TaskItem) {
     const clear = tag("button", "icon-btn field-clear");
     clear.insertAdjacentHTML("beforeend", CLOSE_SVG);
     clear.setAttribute("aria-label", "日付をクリア");
-    clear.onclick = () => saveTask(t.id, { dueString: "" });
+    // A repeat is lost with the date, so it takes two presses, as the delete button does: the first arms, and leaving the button or 4 seconds disarms.
+    let armTimer = 0;
+    const disarm = () => {
+      clearTimeout(armTimer);
+      clear.classList.remove("confirm", "danger");
+      clear.innerHTML = CLOSE_SVG;
+      clear.setAttribute("aria-label", "日付をクリア");
+    };
+    clear.onclick = () => {
+      if (t.due?.recurring && !clear.classList.contains("confirm")) {
+        clear.classList.add("confirm", "danger");
+        clear.textContent = "もう一度押すとクリア";
+        clear.setAttribute("aria-label", "もう一度押すと繰り返しごと日付をクリア");
+        armTimer = setTimeout(disarm, 4000);
+        return;
+      }
+      disarm();
+      saveTask(t.id, { dueString: "" });
+    };
+    clear.onblur = disarm;
     row.append(clear);
   }
   return field("日付", row);
@@ -333,7 +352,10 @@ export function renderDetail() {
       if (answer === null) {
         creating.splice(creating.indexOf(job), 1);
         job.el?.remove();
-      } else job.settled = todoState.seq;
+      } else {
+        job.settled = todoState.seq;
+        job.el = null;
+      }
     });
   });
   add.append(input);

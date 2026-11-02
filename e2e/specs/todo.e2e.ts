@@ -530,6 +530,21 @@ describe("todo detail due date clear button", () => {
     await expect($(clear)).toExist();
   });
 
+  it("takes two presses to clear a repeating task's date: the first only asks, the second clears", async () => {
+    const data = todoData();
+    data.tasks[0].due = { date: today, time: null, string: "every day", recurring: true };
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    const update = await mock("todoist_update", true);
+    const press = () => browser.execute(() => document.querySelector<HTMLElement>("#todo-detail .field-clear")!.click());
+    await press();
+    await expect($(clear)).toHaveAttribute("aria-label", "もう一度押すと繰り返しごと日付をクリア");
+    expect(await callsOf(update)).toEqual([]);
+    await press();
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: "" }]);
+  });
+
   it("has no button on a task without a date", async () => {
     await openTask();
     await expect($("#todo-detail .name")).toHaveValue("Plan trip");

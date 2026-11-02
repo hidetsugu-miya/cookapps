@@ -70,4 +70,27 @@ describe("inbox", () => {
     await expect(row.$(".todo-row")).toBeEnabled();
     await expect($(".toast")).toHaveText(expect.stringContaining("First unread"));
   });
+
+  it("keeps the spinner and the disabled Todo button on a row rebuilt by a reload while the task is made, and puts them back after", async () => {
+    const make = await mock("todoist_task_from_mail", holds);
+    const row = rowOf("unread-threads", "First unread");
+    await row.moveTo();
+    await row.$(".todo-row").click();
+    await waitForCalls(make);
+    // Marks the rows on screen, so the rebuilt ones can be told apart.
+    await browser.execute(() => {
+      for (const li of document.querySelectorAll("#unread-threads li")) li.setAttribute("data-old", "");
+    });
+    await $("#reload").click();
+    await waitForCount("#unread-threads li:not([data-old])", 2);
+    await expect(rowOf("unread-threads", "First unread").$(".todo-row .spin")).toExist();
+    await expect(rowOf("unread-threads", "First unread").$(".todo-row")).toBeDisabled();
+    // Only that thread: the other row's button is a normal one.
+    await expect(rowOf("unread-threads", "Second unread").$(".todo-row .spin")).not.toExist();
+    await release(make, true);
+    await expect(rowOf("unread-threads", "First unread").$(".todo-row .spin")).not.toExist();
+    await expect(rowOf("unread-threads", "First unread").$(".todo-row svg")).toExist();
+    await expect(rowOf("unread-threads", "First unread").$(".todo-row")).toBeEnabled();
+    expect(await callsOf(make)).toHaveLength(1);
+  });
 });
