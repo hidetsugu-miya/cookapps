@@ -44,7 +44,7 @@ describe("thread AI summary", () => {
       from: "Bob <bob@example.com>",
       dateMs: older.dateMs + 600_000,
       html: true,
-      body: "<style>p { color: red }</style><p>Newest</p><script>x()</script><p>reply&nbsp;here</p>",
+      body: "<style>p { color: red }</style><p>Newest</p><script>x()</script><p>reply&nbsp;here</p>text<div>next</div><table><tr><td>100</td><td>200</td></tr></table>",
     };
     return { ...base, messages: [older, newer] };
   };
@@ -106,7 +106,7 @@ describe("thread AI summary", () => {
         subject: "Quote",
         messages: [
           { from: older.from, dateMs: older.dateMs, text: "Please confirm the quote" },
-          { from: newer.from, dateMs: newer.dateMs, text: "Newest\nreply here" },
+          { from: newer.from, dateMs: newer.dateMs, text: "Newest\n\nreply here\ntext\nnext\n\n100 200" },
         ],
       },
     ]);

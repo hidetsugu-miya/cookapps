@@ -18,14 +18,20 @@ function trimUrl(url: string) {
 }
 
 // A message as plain text, for the summary. An HTML body is parsed by DOMParser (no script runs and nothing is fetched: the document has no
-// browsing context), its style and script are dropped, and a line break is put where a block ends. The frame the body is shown in is not touched.
-const BLOCKS = "br, p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote";
+// browsing context), its style and script are dropped, and a line break is put before and after a block (after a <br>) and a space after a cell,
+// so text next to a block or a cell is not joined. The frame the body is shown in is not touched.
+const BLOCKS = "p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, table, pre, hr, section, article";
 
 export function mailText(m: MessageDetail) {
   if (!m.html) return m.body;
   const doc = new DOMParser().parseFromString(m.body, "text/html");
   for (const e of queryAll(doc, "script, style")) Element.prototype.remove.call(e);
-  for (const e of queryAll(doc, BLOCKS)) Element.prototype.after.call(e, "\n");
+  for (const e of queryAll(doc, BLOCKS)) {
+    Element.prototype.before.call(e, "\n");
+    Element.prototype.after.call(e, "\n");
+  }
+  for (const e of queryAll(doc, "br")) Element.prototype.after.call(e, "\n");
+  for (const e of queryAll(doc, "td, th")) Element.prototype.after.call(e, " ");
   return (queryAll<HTMLElement>(doc, "body")[0].textContent ?? "")
     .replace(/[^\S\n]+/g, " ")
     .replace(/ ?\n ?/g, "\n")
