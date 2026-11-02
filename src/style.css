@@ -1,4 +1,4 @@
-:root { --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --google: #1a73e8; }
+:root { --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 body { font-family: -apple-system, sans-serif; font-size: 14px; margin: 0; display: flex; }
@@ -69,9 +69,11 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .read-box:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .read-box:disabled { opacity: .4; cursor: default; }
 /* The checkbox and the row buttons appear only on hover or focus (opacity keeps them reachable by keyboard); the buttons replace the date. */
-#threads li:not(:hover):not(:focus-within) .read-box, #threads li:not(:hover):not(:focus-within) .row-actions { opacity: 0; }
+#threads li:not(:hover):not(:focus-within) .read-box, #threads li:not(:hover):not(:focus-within):not(:has(.busy)) .row-actions { opacity: 0; }
 /* visibility, not opacity: an opacity < 1 layer paints above the buttons and would take their clicks. */
-#threads li:hover .date, #threads li:focus-within .date { visibility: hidden; }
+#threads li:hover .date, #threads li:focus-within .date, #threads li:has(.busy) .date { visibility: hidden; }
+/* While a Todo is being made from the row, its spinner stays when the mouse leaves; the other buttons go. */
+#threads li:not(:hover):not(:focus-within) .row-actions:has(.busy) .row-btn:not(.busy) { visibility: hidden; }
 .unread-dot { width: 8px; height: 8px; border-radius: 50%; }
 #threads li.unread .unread-dot { background: var(--accent); }
 .avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; flex: none; }
@@ -89,6 +91,7 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .row-btn:hover:not(:disabled) { background: var(--soft); }
 .row-btn:focus-visible { outline: 2px solid var(--accent); }
 .row-btn:disabled { opacity: .4; cursor: default; }
+.row-btn.busy:disabled, .icon-btn.busy:disabled { opacity: 1; }
 .date { text-align: right; white-space: nowrap; padding-right: 8px; color: #666; font-size: 12px; }
 
 /* Detail view: the toolbar is tinted, the subject sits above the messages, and each message lines its body up with the sender's name (avatar 40px + gap 16px). */
@@ -246,6 +249,8 @@ button.review-chip:hover { background: var(--hover); }
 .review-actions .text-btn { height: 28px; padding: 0 12px; border-radius: 14px; font: inherit; font-size: 13px; }
 .spin { width: 14px; height: 14px; border: 2px solid var(--chip-line); border-top-color: var(--accent); border-radius: 50%; flex: none; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.text-btn.primary .spin { border-color: var(--accent-dim); border-top-color: #fff; }
+.review-add { display: inline-flex; align-items: center; gap: 6px; }
 #todo-token { max-width: 520px; margin: 32px auto; }
 #todo-token .row { display: flex; gap: 8px; }
 #todo-token-note { color: #b00020; }
@@ -297,6 +302,19 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .field-value:hover { background: #fff; }
 .field-value svg { width: 16px; height: 16px; flex: none; }
 .field-value.over { color: #b00020; }
+.field-value.clearable { padding-right: 30px; }
+/* The clear button sits beside the due button, not in it; hidden with visibility so it takes no click until the field is hovered or focused. */
+.field-row { position: relative; }
+.field-clear { position: absolute; right: -6px; top: 50%; width: 24px; height: 24px; margin-top: -12px; }
+.field-clear svg { width: 14px; height: 14px; }
+.field-clear.confirm { height: 24px; background: #fff; font-size: 12px; white-space: nowrap; }
+.field-row:not(:hover):not(:focus-within) .field-clear { visibility: hidden; }
+#todo-detail .parent-link { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: calc(100% - 66px); margin: 0 0 4px 50px; padding: 3px 6px; border: 0; border-radius: 8px; background: var(--hover); color: var(--accent); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+#todo-detail .parent-link:hover { background: var(--soft); }
+#todo-detail .parent-link:focus-visible { outline: 2px solid var(--accent); }
+#todo-detail .parent-link svg { width: 14px; height: 14px; flex: none; }
+.parent-link .pl-label { flex: none; color: var(--muted); }
+.parent-link .pl-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #todo-detail .head { display: flex; gap: 14px; align-items: flex-start; padding: 4px 16px 0; }
 #todo-detail .head .check { margin-top: 4px; }
 #todo-detail .name { flex: 1; font-size: 18px; font-weight: bold; border: 0; padding: 2px 4px; border-radius: 6px; font-family: inherit; }
@@ -340,6 +358,9 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .section-title .bar { flex: 1; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
 .section-title .bar i { display: block; height: 100%; background: var(--accent); }
 #todo-detail .subs .task, .add-sub { margin-left: 34px; }
+.task.creating .spin { justify-self: center; }
+.task.creating .t { color: var(--muted); }
+.task.creating .creating-label { color: #666; font-size: 12px; padding-right: 8px; }
 .add-sub { display: flex; align-items: center; gap: 16px; padding: 10px 16px; color: #888; }
 .add-sub input { flex: 1; border: 0; font: inherit; padding: 4px; }
 .add-sub input:focus { outline: none; }

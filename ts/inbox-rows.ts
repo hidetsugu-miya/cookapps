@@ -12,6 +12,27 @@ import { setNavCount, showError } from "./view.js";
 // Threads being archived / trashed ("account/id"); a list reload or sync must not bring them back meanwhile.
 export const pending = new Set<string>();
 
+// Threads whose Todo is being made ("account/id"); a row built meanwhile shows the spinner too, so a second press cannot make a duplicate task.
+const makingTodo = new Set<string>();
+
+// The Todo button of a row: the icon, or the spinner and disabled while its task is made.
+function showTodoButton(button: HTMLButtonElement, busy: boolean) {
+  button.disabled = busy;
+  button.classList.toggle("busy", busy);
+  if (busy) button.replaceChildren(span("spin", ""));
+  else button.innerHTML = TODO_SVG;
+}
+
+// Makes the task of a thread; when it ends, the button of the row that holds the thread then, which a sync or load may have rebuilt, is put back.
+async function makeTodoOf(t: ThreadItem, button: HTMLButtonElement) {
+  const key = rowKey(t);
+  makingTodo.add(key);
+  await makeTodo(t.account, t.id, t.subject, button);
+  makingTodo.delete(key);
+  const now = rows.get(key)?.li.querySelector<HTMLButtonElement>(".todo-row");
+  if (now) showTodoButton(now, false);
+}
+
 // The rows on screen by "account/id": the thread data and its <li>.
 export const rows = new Map<string, { t: ThreadItem; li: HTMLLIElement }>();
 export const rowKey = (t: { account: string; id: string }) => `${t.account}/${t.id}`;
@@ -109,10 +130,12 @@ export function row(t: ThreadItem) {
   // The date and the hover buttons share one grid cell.
   const trail = span("trail", "");
   const actions = span("row-actions", "");
+  const todoButton = rowButton("todo-row", "Todo にする", TODO_SVG, (button) => makeTodoOf(t, button));
+  if (makingTodo.has(rowKey(t))) showTodoButton(todoButton, true);
   actions.append(
     rowButton("archive-row", "アーカイブ", CHECK_SVG, () => removeRow("archive", t.account, t.id, li)),
     rowButton("trash-row", "ゴミ箱へ移動", $("trash").innerHTML, () => removeRow("trash", t.account, t.id, li)),
-    rowButton("todo-row", "Todo にする", TODO_SVG, (button) => makeTodo(t.account, t.id, t.subject, button)),
+    todoButton,
   );
   trail.append(span("date", formatDate(t.dateMs)), actions);
   li.append(readBox(t, li), span("unread-dot", ""), avatar, span("from", name), subject, trail);

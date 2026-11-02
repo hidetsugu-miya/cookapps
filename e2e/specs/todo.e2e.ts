@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeMissing, claudeReady, count, inbox, mock, rejects, slackLoad, slackMessageUrl, slackSummary, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeMissing, claudeReady, count, holds, inbox, mock, rejects, release, slackLoad, slackMessageUrl, slackSummary, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -121,6 +121,7 @@ describe("todo", () => {
     await expect($(".review .review-name")).toHaveValue("My own name");
     await expect($(".review .review-desc")).toHaveValue(slackSummary.description);
     await expect($(".review .review-add")).toBeEnabled();
+    await expect($(".review .review-add")).toHaveText("追加");
     expect(await callsOf(addFromSlack)).toHaveLength(1);
   });
 
@@ -133,6 +134,49 @@ describe("todo", () => {
     await expect($(".pending.fail")).toHaveText(expect.stringContaining("Claude が時間内に終わりませんでした"));
     await $(".pending.fail .icon-btn").click();
     await $(".pending").waitForExist({ reverse: true });
+  });
+
+  it("shows a spinner and 追加中 on the add button, with the field and the button disabled, until the add is answered", async () => {
+    await openTodo();
+    const add = await mock("todoist_add", holds);
+    await $("#todo-add-input").setValue("Buy milk");
+    await $("#todo-add-button").click();
+    await waitForCalls(add);
+    await expect($("#todo-add-button")).toHaveText("追加中");
+    await expect($("#todo-add-button .spin")).toExist();
+    await expect($("#todo-add-button")).toBeDisabled();
+    await expect($("#todo-add-input")).toBeDisabled();
+    await release(add, true);
+    await expect($("#todo-add-button")).toHaveText("追加");
+    await expect($("#todo-add-button .spin")).not.toExist();
+    await expect($("#todo-add-button")).toBeEnabled();
+    await expect($("#todo-add-input")).toBeEnabled();
+    await expect($("#todo-add-input")).toHaveValue("");
+  });
+
+  it("puts the add button back to 追加 and keeps the text when the add fails", async () => {
+    await openTodo();
+    const add = await mock("todoist_add", rejects("Todoist に接続できません"));
+    await $("#todo-add-input").setValue("Buy milk");
+    await $("#todo-add-button").click();
+    await waitForCalls(add);
+    await expect($("#todo-add-button")).toHaveText("追加");
+    await expect($("#todo-add-button .spin")).not.toExist();
+    await expect($("#todo-add-button")).toBeEnabled();
+    await expect($("#todo-add-input")).toHaveValue("Buy milk");
+  });
+
+  it("shows a spinner and 追加中 on the card's 追加 button while the Slack task is being added, and 破棄 stays disabled", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await mock("todoist_add_from_slack", holds);
+    await $(".review .review-add").click();
+    await waitForCalls(addFromSlack);
+    await expect($(".review .review-add")).toHaveText("追加中");
+    await expect($(".review .review-add .spin")).toExist();
+    await expect($(".review .review-add")).toBeDisabled();
+    await expect($(".review .review-drop")).toBeDisabled();
+    await release(addFromSlack, "Reply to the vendor");
+    await $(".review").waitForExist({ reverse: true });
   });
 
   it("keeps the button as 追加 and hints at the Claude login while Claude is missing", async () => {
@@ -302,5 +346,209 @@ describe("todo detail", () => {
     await $(ROWS).click();
     await $("#todo-detail .field:nth-child(2) .field-value").click();
     await expect($(".due-pop .chip-input")).toHaveValue("every day");
+  });
+});
+
+// The subtask `name` in the open task's list.
+const subRowOf = (name: string) => $(`//section[@id="todo-detail"]//ul[contains(@class,"subs")]/li[contains(., "${name}")]`);
+// Opens the detail of "Plan trip", then, one by one, of each subtask named after it.
+async function openTask(...path: string[]) {
+  await openTodo();
+  await $('#projects .proj[data-view="p1"]').click();
+  await waitForCount(ROWS, 2);
+  await rowOf("Plan trip").click();
+  for (const name of path) await subRowOf(name).click();
+}
+
+describe("todo detail of a subtask", () => {
+  it("shows the parent task above the name of a subtask, and opens the parent when it is pressed", async () => {
+    await openTask("Book flights");
+    await expect($("#todo-detail .name")).toHaveValue("Book flights");
+    await expect($("#todo-detail .parent-link")).toHaveText(expect.stringContaining("親タスク"));
+    await expect($("#todo-detail .parent-link")).toHaveText(expect.stringContaining("Plan trip"));
+    // A real button, above the name row.
+    expect(await $("#todo-detail .parent-link").getTagName()).toBe("button");
+    expect(await browser.execute(() => document.querySelector("#todo-detail .parent-link")!.nextElementSibling!.className)).toBe("head");
+    await $("#todo-detail .parent-link").click();
+    await expect($("#todo-detail .name")).toHaveValue("Plan trip");
+  });
+
+  it("shows only the direct parent of a subtask whose parent is a subtask too", async () => {
+    await openTask("Book flights", "Pick seat");
+    await expect($("#todo-detail .name")).toHaveValue("Pick seat");
+    expect(await count("#todo-detail .parent-link")).toBe(1);
+    await expect($("#todo-detail .parent-link")).toHaveText(expect.stringContaining("Book flights"));
+    await expect($("#todo-detail .parent-link")).not.toHaveText(expect.stringContaining("Plan trip"));
+    await $("#todo-detail .parent-link").click();
+    await expect($("#todo-detail .name")).toHaveValue("Book flights");
+  });
+
+  it("shows no parent task on a task that has none", async () => {
+    await openTask();
+    await expect($("#todo-detail .name")).toHaveValue("Plan trip");
+    expect(await count("#todo-detail .parent-link")).toBe(0);
+  });
+});
+
+describe("todo subtask being created", () => {
+  const sub = '#todo-detail [data-field="sub"]';
+  const creating = "#todo-detail .subs li.creating";
+  // Types a subtask name and presses Enter.
+  async function typeSub(name: string) {
+    await $(sub).setValue(name);
+    await browser.keys("Enter");
+  }
+  // What Todoist holds once the subtasks `names` were added to "Plan trip".
+  function withNew(...names: string[]) {
+    const data = todoData();
+    names.forEach((name, i) => {
+      const id = `n${i}`;
+      data.tasks[1].subtasks.push({ id, content: name, done: false, due: null });
+      data.tasks[1].subTotal++;
+      data.tasks.push({ ...task(id, name, "p1", "none"), parent: { id: "k2", content: "Plan trip" } });
+    });
+    return data;
+  }
+
+  it("shows a row with a spinner, the typed name and 作成中 at the end of the list, and keeps the field free, while the subtask is being created", async () => {
+    await openTask();
+    const add = await mock("todoist_add_subtask", holds);
+    await typeSub("Buy luggage");
+    expect(await waitForCalls(add)).toEqual([{ parentId: "k2", content: "Buy luggage" }]);
+    await waitForCount(creating, 1);
+    await expect($(creating)).toHaveText(expect.stringContaining("Buy luggage"));
+    await expect($(creating)).toHaveText(expect.stringContaining("作成中"));
+    await expect($(`${creating} .spin`)).toExist();
+    // At the end: after the subtasks it already had.
+    expect(await browser.execute(() => document.querySelector("#todo-detail .subs")!.lastElementChild!.classList.contains("creating"))).toBe(true);
+    await expect($(sub)).toBeEnabled();
+    await expect($(sub)).toHaveValue("");
+  });
+
+  it("shows a row for each of several subtasks added one after another, and the field takes the next while they wait", async () => {
+    await openTask();
+    const add = await mock("todoist_add_subtask", holds);
+    await typeSub("Buy luggage");
+    await waitForCalls(add);
+    await typeSub("Pack bag");
+    await waitForCalls(add, 2);
+    await waitForCount(creating, 2);
+    expect(await textsOf(creating)).toEqual([expect.stringContaining("Buy luggage"), expect.stringContaining("Pack bag")]);
+    await mock("todoist_load", withNew("Buy luggage", "Pack bag"));
+    await release(add, true);
+    await release(add, true);
+    await waitForCount(creating, 0);
+    await expect(subRowOf("Buy luggage")).toExist();
+    await expect(subRowOf("Pack bag")).toExist();
+  });
+
+  it("keeps the row over a redraw of the detail", async () => {
+    await openTask();
+    const add = await mock("todoist_add_subtask", holds);
+    await typeSub("Buy luggage");
+    await waitForCount(creating, 1);
+    await $("#todo-back").click();
+    await rowOf("Plan trip").click();
+    await waitForCount(creating, 1);
+    await expect($(creating)).toHaveText(expect.stringContaining("Buy luggage"));
+    await release(add, true);
+  });
+
+  it("keeps the row until the real one is drawn, with no moment in between when neither is there", async () => {
+    await openTask();
+    const add = await mock("todoist_add_subtask", holds);
+    await typeSub("Buy luggage");
+    await waitForCount(creating, 1);
+    await mock("todoist_load", withNew("Buy luggage"));
+    // Watches every redraw of the detail: the name is in the subtask list after each.
+    await browser.execute(() => {
+      const w = window as unknown as { __gap__: boolean };
+      w.__gap__ = false;
+      new MutationObserver(() => {
+        if (!document.querySelector("#todo-detail .subs")?.textContent?.includes("Buy luggage")) w.__gap__ = true;
+      }).observe(document.getElementById("todo-detail")!, { childList: true, subtree: true });
+    });
+    await release(add, true);
+    await waitForCount(creating, 0);
+    await expect(subRowOf("Buy luggage")).toExist();
+    expect(await browser.execute(() => (window as unknown as { __gap__: boolean }).__gap__)).toBe(false);
+  });
+
+  it("removes the row and shows the error when the creation fails", async () => {
+    await openTask();
+    const add = await mock("todoist_add_subtask", rejects("Todoist に接続できません"));
+    await typeSub("Buy luggage");
+    await waitForCalls(add);
+    await waitForCount(creating, 0);
+    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect(subRowOf("Buy luggage")).not.toExist();
+  });
+});
+
+describe("todo detail due date clear button", () => {
+  const clear = "#todo-detail .field-clear";
+
+  // The E2E driver dispatches pointer events from JS and the window is hidden, so :hover and :focus never match here: the shown state cannot be reached.
+  // The hidden state is the computed style with no hover, and the rule that hides it is read from the stylesheet to say that hover or focus inside the row lifts it.
+  it("hides the button unless the mouse is over the date or the focus is in it, and clears the date at once when it is pressed", async () => {
+    await openTodo();
+    const update = await mock("todoist_update", true);
+    // What Todoist answers after it, so the reload that follows keeps the task without a date.
+    const cleared = todoData();
+    Object.assign(cleared.tasks[0], { due: null, bucket: "none" });
+    await mock("todoist_load", cleared);
+    await $(ROWS).click();
+    await expect($(clear)).toExist();
+    await expect($(clear)).toHaveAttribute("aria-label", "日付をクリア");
+    expect(await $(clear).getTagName()).toBe("button");
+    await expect($(clear)).not.toBeDisplayed();
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#todo-detail .field-clear")!).visibility)).toBe("hidden");
+    const hiding = await browser.execute(() => {
+      for (const sheet of document.styleSheets)
+        for (const rule of sheet.cssRules)
+          if (rule instanceof CSSStyleRule && rule.selectorText.includes(".field-clear") && rule.style.visibility === "hidden") return rule.selectorText;
+      return null;
+    });
+    expect(hiding).toContain(":not(:hover)");
+    expect(hiding).toContain(":not(:focus-within)");
+    // A sibling of the date button, not inside it.
+    expect(await browser.execute(() => document.querySelector("#todo-detail .field-clear")!.closest(".field-value"))).toBe(null);
+    // A hidden button takes no WebDriver click, so the press is made in the page.
+    await browser.execute(() => document.querySelector<HTMLElement>("#todo-detail .field-clear")!.click());
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: "" }]);
+    await expect($("#todo-detail .field:nth-child(2) .field-value")).toHaveText("期限なし");
+    await expect($(".due-pop")).not.toExist();
+    await expect($(clear)).not.toExist();
+  });
+
+  it("shows the button on a repeating task too", async () => {
+    const data = todoData();
+    data.tasks[0].due = { date: today, time: null, string: "every day", recurring: true };
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await expect($(clear)).toExist();
+  });
+
+  it("takes two presses to clear a repeating task's date: the first only asks, the second clears", async () => {
+    const data = todoData();
+    data.tasks[0].due = { date: today, time: null, string: "every day", recurring: true };
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    const update = await mock("todoist_update", true);
+    const press = () => browser.execute(() => document.querySelector<HTMLElement>("#todo-detail .field-clear")!.click());
+    await press();
+    await expect($(clear)).toHaveAttribute("aria-label", "もう一度押すと繰り返しごと日付をクリア");
+    expect(await callsOf(update)).toEqual([]);
+    await press();
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: "" }]);
+  });
+
+  it("has no button on a task without a date", async () => {
+    await openTask();
+    await expect($("#todo-detail .name")).toHaveValue("Plan trip");
+    await expect($("#todo-detail .field:nth-child(2) .field-value")).toHaveText("期限なし");
+    await expect($(clear)).not.toExist();
   });
 });

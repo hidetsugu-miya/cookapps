@@ -14,10 +14,13 @@ import { todoCall } from "./todo-write.js";
 import { loadTodo } from "./todo.js";
 import { showError } from "./view.js";
 
-// Creates a Todoist task in the inbox that points at the thread, and says so.
+// Creates a Todoist task in the inbox that points at the thread, and says so. The button shows a spinner in place of its icon meanwhile.
 export async function makeTodo(account: string, id: string, subject: string, button: HTMLButtonElement) {
   $("error").hidden = true;
   button.disabled = true;
+  const icon = button.innerHTML;
+  button.classList.add("busy");
+  button.replaceChildren(tag("span", "spin"));
   try {
     const done = await invoke("todoist_task_from_mail", { account, threadId: id, subject });
     if (done === null) return showError("Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください");
@@ -26,6 +29,8 @@ export async function makeTodo(account: string, id: string, subject: string, but
     showError(e);
   } finally {
     button.disabled = false;
+    button.classList.remove("busy");
+    button.innerHTML = icon;
   }
 }
 
@@ -59,15 +64,20 @@ function addMode() {
   return { summarize: true, hint: `Slack のメッセージ（${workspace.team}）を Claude が要約します。内容を確かめてから「${$("todo-title").textContent}」に追加します` };
 }
 
+// Whether a Quick Add is on its way: the button then shows a spinner and is disabled (the input is, by todoCall).
+let adding = false;
+
 // What the add field's button and hint last showed; the list's redraw calls updateAddMode every 10 seconds.
-let shownAddMode: { summarize: boolean; hint: string } | null = null;
+let shownAddMode: { summarize: boolean; hint: string; adding: boolean } | null = null;
 export function updateAddMode() {
   const { summarize, hint } = addMode();
-  if (shownAddMode?.summarize === summarize && shownAddMode.hint === hint) return;
-  shownAddMode = { summarize, hint };
-  const button = $("todo-add-button");
+  if (shownAddMode?.summarize === summarize && shownAddMode.hint === hint && shownAddMode.adding === adding) return;
+  shownAddMode = { summarize, hint, adding };
+  const button = $<HTMLButtonElement>("todo-add-button");
   button.className = summarize ? "text-btn primary" : "text-btn";
-  if (summarize) button.innerHTML = `${CLAUDE_SVG}要約する`;
+  button.disabled = adding;
+  if (adding) button.replaceChildren(tag("span", "spin"), "追加中");
+  else if (summarize) button.innerHTML = `${CLAUDE_SVG}要約する`;
   else button.textContent = "追加";
   $("todo-add-input").classList.toggle("slack", summarize);
   const line = $("todo-add-hint");
@@ -194,6 +204,7 @@ function reviewCard(job: PendingAdd, summary: Summary) {
     if (!name.value.trim()) return name.focus();
     saving = true;
     drop.disabled = add.disabled = true;
+    add.replaceChildren(tag("span", "spin"), "追加中");
     error.hidden = true;
     try {
       const added = await invoke("todoist_add_from_slack", {
@@ -214,6 +225,7 @@ function reviewCard(job: PendingAdd, summary: Summary) {
       error.hidden = false;
       saving = false;
       drop.disabled = add.disabled = false;
+      add.textContent = "追加";
     }
   };
   add.onclick = commit;
@@ -276,7 +288,10 @@ export function initTodoAdd() {
     // In "今日" the task goes where Quick Add puts it (the inbox, or the project named in the text), and a text with no date is due today.
     const inToday = todoState.view === "today";
     const projectId = inToday ? null : viewProjectId(todoState.view);
+    adding = true;
+    updateAddMode();
     const added = await todoCall("todoist_add", { text, projectId, today: inToday }, input);
+    adding = false;
     if (added !== null) {
       input.value = "";
       // false: created, but the move into the project failed (it is in the inbox) or, in "今日", the due date could not be set.
@@ -288,6 +303,7 @@ export function initTodoAdd() {
             : "タスクを追加しましたが、プロジェクトへ移せませんでした。受信箱にあります",
       );
     }
+    updateAddMode();
     input.focus();
   };
 }
