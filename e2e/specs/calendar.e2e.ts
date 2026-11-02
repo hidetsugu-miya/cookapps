@@ -41,6 +41,9 @@ describe("calendar", () => {
   });
 });
 
+// A press as a mouse makes it: pointerdown, mouseup and click. WebDriver's element click only calls el.click() and then el.focus(), so it sends no pointerdown and takes the focus back.
+const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
+
 describe("calendar: event detail", () => {
   it("opens beside a timed event, inside the window, with each item and the Meet link", async () => {
     await openCalendar();
@@ -118,7 +121,7 @@ describe("calendar: event detail", () => {
 
   it("closes on Escape and gives the focus back to the event", async () => {
     await openCalendar();
-    await eventButton("Team sync").click();
+    await press(eventButton("Team sync"));
     await expect($(".cal-pop")).toBeDisplayed();
     // The focus moved into the popover.
     expect(await browser.execute(() => document.activeElement?.classList.contains("cal-pop"))).toBe(true);
@@ -139,7 +142,7 @@ describe("calendar: event detail", () => {
     await openCalendar();
     await eventButton("Team sync").click();
     await expect($(".cal-pop")).toBeDisplayed();
-    await $("#cal-title").click();
+    await press($("#cal-title"));
     await waitForCount(".cal-pop", 0);
   });
 
