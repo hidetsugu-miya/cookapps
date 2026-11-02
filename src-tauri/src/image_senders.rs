@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tauri::{AppHandle, State};
 use tokio::{sync::Mutex, task::spawn_blocking};
 
@@ -11,7 +11,7 @@ use crate::{accounts::write_synced, auth::config_dir};
 const FILE: &str = "image_senders.json";
 const TMP_FILE: &str = "image_senders.json.tmp";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct SendersFile {
     senders: Vec<String>,
 }
@@ -119,10 +119,11 @@ fn load(dir: &Path) -> Result<Vec<String>, String> {
     }
 }
 
-fn save(dir: &Path, senders: Vec<String>) -> Result<(), String> {
+fn save(dir: &Path, senders: &[String]) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let (path, tmp) = (dir.join(FILE), dir.join(TMP_FILE));
-    let text = serde_json::to_string_pretty(&SendersFile { senders }).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "senders": senders }))
+        .map_err(|e| e.to_string())?;
     // Rename over the target so a crash mid-write leaves the old file, not a truncated one.
     write_synced(&tmp, &text)
         .and_then(|()| std::fs::rename(&tmp, &path))
@@ -154,12 +155,21 @@ impl ImageSenders {
     }
 
     /// Adds the sender of `from` to the list and saves it; the list in memory changes only once the file did.
-    async fn update(&self, dir: PathBuf, from: String) -> Result<(), String> {
+    /// Nothing is written when the sender is listed already or has no readable address.
+    async fn remember(&self, dir: PathBuf, from: String) -> Result<(), String> {
         let mut senders = self.loaded(&dir).await?;
-        let new = with_sender(senders.clone().unwrap_or_default(), &from);
-        let to_save = new.clone();
-        blocking(move || save(&dir, to_save)).await?;
-        *senders = Some(new);
+        let current = senders.as_deref().unwrap_or_default();
+        let new = with_sender(current.to_vec(), &from);
+        if new.len() == current.len() {
+            return Ok(());
+        }
+        *senders = Some(
+            blocking(move || {
+                save(&dir, &new)?;
+                Ok(new)
+            })
+            .await?,
+        );
         Ok(())
     }
 }
@@ -183,7 +193,7 @@ pub async fn remember_image_sender(
     senders: State<'_, ImageSenders>,
     from: String,
 ) -> Result<(), String> {
-    senders.update(config_dir(&app)?, from).await
+    senders.remember(config_dir(&app)?, from).await
 }
 
 #[cfg(test)]
@@ -314,9 +324,9 @@ mod tests {
     fn load_is_empty_without_file_and_save_creates_dir_and_file() {
         let dir = temp_dir("save");
         assert_eq!(load(&dir), Ok(vec![]));
-        save(&dir, vec!["a@x.com".into()]).unwrap();
+        save(&dir, &["a@x.com".to_string()]).unwrap();
         assert_eq!(load(&dir), Ok(vec!["a@x.com".to_string()]));
-        save(&dir, vec!["b@x.com".into()]).unwrap();
+        save(&dir, &["b@x.com".to_string()]).unwrap();
         assert_eq!(load(&dir), Ok(vec!["b@x.com".to_string()]));
         assert!(!dir.join(TMP_FILE).exists());
         std::fs::remove_dir_all(&dir).unwrap();
@@ -325,10 +335,10 @@ mod tests {
     #[test]
     fn failed_save_leaves_the_existing_file_untouched() {
         let dir = temp_dir("atomic");
-        save(&dir, vec!["a@x.com".into()]).unwrap();
+        save(&dir, &["a@x.com".to_string()]).unwrap();
         // A directory in the temporary file's place makes the write fail before the rename.
         std::fs::create_dir(dir.join(TMP_FILE)).unwrap();
-        assert!(save(&dir, vec!["b@x.com".into()]).is_err());
+        assert!(save(&dir, &["b@x.com".to_string()]).is_err());
         assert_eq!(load(&dir), Ok(vec!["a@x.com".to_string()]));
         std::fs::remove_dir_all(&dir).unwrap();
     }
