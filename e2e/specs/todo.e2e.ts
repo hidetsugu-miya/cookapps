@@ -262,7 +262,7 @@ describe("todo", () => {
     await waitForCalls(summarize);
     await expect($(".pending.fail")).toHaveText(expect.stringContaining("Claude が時間内に終わりませんでした"));
     await $(".pending.fail .icon-btn").click();
-    await $(".pending").waitForExist({ reverse: true });
+    await $("#todo-pending .pending").waitForExist({ reverse: true });
   });
 
   it("shows a spinner and 追加中 on the add button, with the field and the button disabled, until the add is answered", async () => {
