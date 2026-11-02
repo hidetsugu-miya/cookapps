@@ -8,6 +8,7 @@ import { rows, setReadState, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { autoFit, fitAfterImages, frameObserver, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
+import { renderSummary, summaryPressed } from "./mail-summary.js";
 import { linkify } from "./mail-text.js";
 import { setScreen } from "./nav.js";
 import { makeTodo } from "./todo-add.js";
@@ -18,7 +19,7 @@ export interface OpenThread {
   id: string;
   account: string;
   li: HTMLLIElement | null;
-  latest: MessageDetail;
+  messages: MessageDetail[];
   subject: string;
 }
 export const opened: { current: OpenThread | null } = { current: null };
@@ -161,7 +162,7 @@ export async function openThread({ id, account }: { id: string; account: string 
     if (seq !== openCount) return;
     // null: that account must log in again, which the list shows.
     if (t === null) return load();
-    opened.current = { id, account, li, latest: t.messages.at(-1)!, subject: t.subject };
+    opened.current = { id, account, li, messages: t.messages, subject: t.subject };
     threadOrigin = origin;
     $("thread-subject").textContent = t.subject || "(件名なし)";
     // The images that had to be fetched come separately, so the body is not held up by them.
@@ -179,6 +180,7 @@ export async function openThread({ id, account }: { id: string; account: string 
       ...[...t.messages].reverse().map((m, i) => message(m, ctx, account, several && i > 0, several)),
     );
     show("thread");
+    renderSummary(opened.current);
     // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
     $("trash").hidden = $("archive").hidden = $("thread-label").hidden = !li;
     if (t.unread) markRead(account, id);
@@ -207,6 +209,7 @@ export function initThread() {
     const current = opened.current!;
     makeTodo(current.account, current.id, $("thread-subject").textContent!, $<HTMLButtonElement>("thread-todo"));
   };
+  $("thread-summary").onclick = () => summaryPressed(opened.current!);
   $("trash").onclick = () => removeCurrent("trash");
   $("archive").onclick = () => removeCurrent("archive");
 }

@@ -5,6 +5,7 @@ import type { Channel } from "./bindings/Channel";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
 import type { Inbox } from "./bindings/Inbox";
+import type { MailSummary } from "./bindings/MailSummary";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Summary } from "./bindings/Summary";
@@ -77,6 +78,8 @@ export interface Commands {
     result: boolean;
   };
   claude_status: { args: undefined; result: Claude };
+  // The thread's messages in the order the thread has them; `text` is each body as plain text.
+  claude_summarize_mail: { args: { subject: string; messages: { from: string; dateMs: number; text: string }[] }; result: MailSummary };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };
