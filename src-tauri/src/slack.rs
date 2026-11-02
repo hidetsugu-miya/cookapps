@@ -137,9 +137,12 @@ fn valid_ts(ts: &str) -> bool {
         .is_some_and(|(sec, micro)| digits(sec) && digits(micro))
 }
 
+const BOT_TOKEN: &str =
+    "Bot User OAuth Token は使えません。「OAuth & Permissions」の User OAuth Token（xoxp- で始まる）を貼ってください";
+
 /// A Bot User OAuth Token (`xoxb-`). It sees only the channels the bot has joined, so it is not accepted.
 fn is_bot_token(token: &str) -> bool {
-    token.trim().starts_with("xoxb-")
+    token.starts_with("xoxb-")
 }
 
 /// The keychain user name of a workspace's token. `team_id` comes from outside, so it must look like one (`T0123ABC`);
@@ -789,6 +792,7 @@ pub struct Checked {
 #[tauri::command]
 pub async fn slack_check(auth: State<'_, Auth>, team_id: String) -> Result<Checked, String> {
     let result = match token_of(&team_id).await {
+        Ok(token) if is_bot_token(&token) => Err(BOT_TOKEN.to_owned()),
         Ok(token) => identify_scoped(auth.http(), &token)
             .await
             .map(|(workspace, missing_scopes)| Checked {
@@ -815,7 +819,7 @@ pub async fn slack_add_workspace(
         return Err("トークンを入力してください".into());
     }
     if is_bot_token(&token) {
-        return Err("Bot User OAuth Token は使えません。「OAuth & Permissions」の User OAuth Token（xoxp- で始まる）を貼ってください".into());
+        return Err(BOT_TOKEN.into());
     }
     let workspace = identify(auth.http(), &token)
         .await
@@ -1114,11 +1118,9 @@ mod tests {
     }
 
     #[test]
-    fn a_bot_token_is_refused_even_with_spaces_around_it() {
+    fn a_bot_token_is_told_from_a_user_token() {
         assert!(is_bot_token("xoxb-1-2-abc"));
-        assert!(is_bot_token("  xoxb-1-2-abc\n"));
         assert!(!is_bot_token("xoxp-1-2-abc"));
-        assert!(!is_bot_token(" xoxp-1-2-abc "));
     }
 
     #[test]
