@@ -235,12 +235,18 @@
           <div class="chat-head">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
             Claude と編集
+            <button id="prompt-clear" type="button" class="text-btn" disabled>クリア</button>
           </div>
           <div id="prompt-log"></div>
           <p id="prompt-chat-note" hidden></p>
           <form id="prompt-form">
-            <input id="prompt-input" aria-label="Claude への指示" placeholder="どう変えたいかを書く" autocomplete="off">
-            <button id="prompt-send" class="text-btn">送信</button>
+            <div class="composer">
+              <textarea id="prompt-input" rows="1" aria-label="Claude への指示" placeholder="どう変えたいかを書く" autocomplete="off"></textarea>
+              <div class="composer-foot">
+                <span id="prompt-keys" class="composer-hint"></span>
+                <button id="prompt-send" class="text-btn primary">送信</button>
+              </div>
+            </div>
           </form>
         </aside>
       </div>

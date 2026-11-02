@@ -3,7 +3,7 @@
 import type { DiffLine } from "./bindings/DiffLine";
 import type { TodoPrompt } from "./bindings/TodoPrompt";
 import { getClaude, redrawClaudeItems } from "./claude.js";
-import { $, tag } from "./dom.js";
+import { $, composing, isMac, tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { setScreen, showPromptScreen } from "./nav.js";
 import { itemRow } from "./settings.js";
@@ -40,8 +40,9 @@ const SENT_TURNS = 20;
 let sending = false;
 // A save or a reset is on its way: both buttons wait.
 let busy = false;
-// Resetting is armed by the first press (see the reset button's handler).
+// Resetting and clearing are armed by the first press (see the reset and clear buttons' handlers).
 let resetTimer = 0;
+let clearTimer = 0;
 
 // The apply buttons of the open proposals drawn now, with the line that says why one is disabled.
 let applyControls: { proposal: Proposal; apply: HTMLButtonElement; stale: HTMLElement }[] = [];
@@ -85,8 +86,11 @@ export function refreshPrompt() {
   $<HTMLTextAreaElement>("prompt-body").disabled = !loaded;
   const ready = getClaude()?.state === "ready";
   const chat = loaded && ready && !sending;
-  $<HTMLInputElement>("prompt-input").disabled = !chat;
+  $<HTMLTextAreaElement>("prompt-input").disabled = !chat;
   $<HTMLButtonElement>("prompt-send").disabled = !chat;
+  const noClear = turns.length === 0 || sending;
+  $<HTMLButtonElement>("prompt-clear").disabled = noClear;
+  if (noClear && $("prompt-clear").classList.contains("confirm")) disarmClear();
   $("prompt-chat-note").hidden = ready;
   $("prompt-chat-note").textContent = "Claude にログインすると、会話で編集できます";
   for (const { proposal, apply, stale } of applyControls) {
@@ -167,8 +171,31 @@ function disarmReset() {
   reset.textContent = "デフォルトに戻す";
 }
 
+function disarmClear() {
+  clearTimeout(clearTimer);
+  const clear = $("prompt-clear");
+  clear.classList.remove("confirm", "danger");
+  clear.textContent = "クリア";
+}
+
+// The request field is one line high and grows with what is typed, up to 6 lines (the `max-height` of `#prompt-input`; then it scrolls).
+// It sits at the bottom of the pane, so the log above shrinks; when the log was scrolled to its end it stays there, and the newest turn is not pushed out of sight.
+// The layout is read only when the line count may have changed: when the text got shorter, or the field is too short for it.
+let typedLength = 0;
+function growInput() {
+  const [input, log] = [$<HTMLTextAreaElement>("prompt-input"), $("prompt-log")];
+  const shorter = input.value.length < typedLength;
+  typedLength = input.value.length;
+  if (!shorter && input.scrollHeight <= input.clientHeight) return;
+  const before = input.clientHeight;
+  const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 4;
+  if (shorter) input.style.height = "auto";
+  input.style.height = `${input.scrollHeight}px`;
+  if (atEnd && input.clientHeight !== before) log.scrollTop = log.scrollHeight;
+}
+
 async function send() {
-  const input = $<HTMLInputElement>("prompt-input");
+  const input = $<HTMLTextAreaElement>("prompt-input");
   const instruction = input.value.trim();
   if (!instruction || sending || draft === null) return;
   const body = draft;
@@ -177,6 +204,7 @@ async function send() {
     .slice(-SENT_TURNS)
     .map(({ role, text }) => ({ role, text }));
   input.value = "";
+  growInput();
   addTurn({ role: "user", text: instruction });
   sending = true;
   drawLog();
@@ -248,6 +276,29 @@ export function initPrompt() {
     refreshPrompt();
   };
   $("prompt-reset").onblur = disarmReset;
+  // Clearing forgets the conversation only (not the field, the saved instructions or what is being typed), so it takes two presses too.
+  $("prompt-clear").onclick = () => {
+    const clear = $("prompt-clear");
+    if (!clear.classList.contains("confirm")) {
+      clear.classList.add("confirm", "danger");
+      clear.textContent = "もう一度押すとクリア";
+      clearTimer = setTimeout(disarmClear, 4000);
+      return;
+    }
+    disarmClear();
+    turns.length = 0;
+    drawLog();
+  };
+  $("prompt-clear").onblur = disarmClear;
+  $("prompt-keys").textContent = isMac ? "↩ で改行、⌘↩ で送信" : "Enter で改行、Ctrl+Enter で送信";
+  const input = $<HTMLTextAreaElement>("prompt-input");
+  input.oninput = growInput;
+  // Enter is a line break; Cmd+Enter (Ctrl+Enter off macOS) sends, unless it only confirms an IME conversion.
+  input.onkeydown = (e) => {
+    if (e.key !== "Enter" || composing(e) || !(isMac ? e.metaKey : e.ctrlKey)) return;
+    e.preventDefault();
+    send();
+  };
   $("prompt-form").onsubmit = (e) => {
     e.preventDefault();
     send();
