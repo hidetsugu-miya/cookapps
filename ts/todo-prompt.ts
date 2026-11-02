@@ -90,7 +90,7 @@ export function refreshPrompt() {
   $<HTMLButtonElement>("prompt-send").disabled = !chat;
   const noClear = turns.length === 0 || sending;
   $<HTMLButtonElement>("prompt-clear").disabled = noClear;
-  if (noClear) disarmClear();
+  if (noClear && $("prompt-clear").classList.contains("confirm")) disarmClear();
   $("prompt-chat-note").hidden = ready;
   $("prompt-chat-note").textContent = "Claude にログインすると、会話で編集できます";
   for (const { proposal, apply, stale } of applyControls) {
@@ -180,12 +180,18 @@ function disarmClear() {
 
 // The request field is one line high and grows with what is typed, up to 6 lines (the `max-height` of `#prompt-input`; then it scrolls).
 // It sits at the bottom of the pane, so the log above shrinks; when the log was scrolled to its end it stays there, and the newest turn is not pushed out of sight.
+// The layout is read only when the line count may have changed: when the text got shorter, or the field is too short for it.
+let typedLength = 0;
 function growInput() {
   const [input, log] = [$<HTMLTextAreaElement>("prompt-input"), $("prompt-log")];
+  const shorter = input.value.length < typedLength;
+  typedLength = input.value.length;
+  if (!shorter && input.scrollHeight <= input.clientHeight) return;
+  const before = input.clientHeight;
   const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 4;
-  input.style.height = "auto";
+  if (shorter) input.style.height = "auto";
   input.style.height = `${input.scrollHeight}px`;
-  if (atEnd) log.scrollTop = log.scrollHeight;
+  if (atEnd && input.clientHeight !== before) log.scrollTop = log.scrollHeight;
 }
 
 async function send() {

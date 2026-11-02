@@ -79,25 +79,36 @@ function modelRow() {
   const row = tag("div", "item");
   row.append(
     who,
-    select("モデル", MODELS, now.model, (model) => saveModel(model, now.effort)),
-    select("effort", EFFORTS, now.effort, (effort) => saveModel(now.model, effort)),
+    select("モデル", MODELS, now.model, (model) => saveModel({ model }, "モデル")),
+    select("effort", EFFORTS, now.effort, (effort) => saveModel({ effort }, "effort")),
   );
   return [row];
 }
 
+// The selects of the card now, in the order model, effort.
+const modelSelects = () => [...$("claude-items").querySelectorAll<HTMLSelectElement>("select")];
+
 // The selects show the saved values until the save succeeds; a failure puts them back and shows the error.
-async function saveModel(model: Model, effort: Effort) {
-  if (savingModel) return;
+// The row is not drawn again, so the select the user operated keeps its place; it gets the focus back that disabling it took away.
+async function saveModel(change: Partial<ModelSettings>, operated: string) {
+  if (savingModel || modelSettings === null) return;
   savingModel = true;
   $("error").hidden = true;
-  redrawClaudeItems();
+  for (const el of modelSelects()) el.disabled = true;
   try {
-    modelSettings = await invoke("claude_model_settings_save", { model, effort });
+    modelSettings = await invoke("claude_model_settings_save", { ...modelSettings, ...change });
   } catch (e) {
     showError(e);
   } finally {
     savingModel = false;
-    redrawClaudeItems();
+    const [model, effort] = modelSelects();
+    if (model && effort && modelSettings !== null) {
+      [model.value, effort.value] = [modelSettings.model, modelSettings.effort];
+    }
+    for (const el of modelSelects()) {
+      el.disabled = false;
+      if (el.getAttribute("aria-label") === operated) el.focus();
+    }
   }
 }
 

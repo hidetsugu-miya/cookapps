@@ -23,13 +23,15 @@ const EDIT_TIMEOUT: Duration = Duration::from_secs(120);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 /// A high effort thinks longer (`--effort max` took 61 seconds on a small input), so every call gets this long from `high` up.
 const HIGH_EFFORT_TIMEOUT: Duration = Duration::from_secs(300);
-/// The model and effort in use; absent while they are the defaults.
+/// The model and effort in use; absent until the first save.
 const SETTINGS_FILE: &str = "claude-settings.json";
 const SETTINGS_TMP_FILE: &str = "claude-settings.json.tmp";
 /// Characters of a message that reach the model.
 const INPUT_LIMIT: usize = 10_000;
 /// How many `claude` processes run at once, for the Slack and the mail summaries together.
 static CLAUDE_SLOTS: Semaphore = Semaphore::const_new(2);
+/// How long a call waits for a free slot before it gives up.
+const SLOT_WAIT: Duration = Duration::from_secs(60);
 /// The JSON Schema `--json-schema` makes the model answer in.
 const SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"content":{"type":"string"},"description":{"type":"string"},"due":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}( \\d{2}:\\d{2})?$"},"project":{"type":"string"}},"required":["content","description"]}"#;
 /// The schema of an edit of the summary instructions: a short reply, and the whole changed instructions when they change.
@@ -335,7 +337,7 @@ fn projects_text(projects: &[(String, String)]) -> String {
         })
         .collect();
     if lines.is_empty() {
-        return "(none)".to_owned();
+        return "（なし）".to_owned();
     }
     lines.join("\n")
 }
@@ -564,7 +566,7 @@ fn todo_prompt(dir: &Path) -> TodoPrompt {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct SettingsFile {
     model: String,
     effort: String,
@@ -589,8 +591,8 @@ fn load_settings(dir: &Path) -> ModelSettings {
 /// Saves `model` and `effort` (what the screen sent, checked against the lists here) and returns them.
 fn save_settings(dir: &Path, model: &str, effort: &str) -> Result<ModelSettings, String> {
     let settings = ModelSettings {
-        model: Model::parse(model).ok_or_else(|| format!("モデルが不正です: {model}"))?,
-        effort: Effort::parse(effort).ok_or_else(|| format!("effort が不正です: {effort}"))?,
+        model: Model::parse(model).ok_or("モデルが不正です")?,
+        effort: Effort::parse(effort).ok_or("effort が不正です")?,
     };
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let (path, tmp) = (dir.join(SETTINGS_FILE), dir.join(SETTINGS_TMP_FILE));
@@ -893,7 +895,10 @@ pub async fn claude_status() -> Result<Claude, String> {
 /// Runs `claude` with `args` and `input` on a blocking thread (at most `CLAUDE_SLOTS` at a time), and returns its stdout. A run past `timeout` is killed.
 async fn ask(args: Vec<String>, input: String, timeout: Duration) -> Result<String, String> {
     // Waits for a free slot first, so a burst of presses does not start a `claude` process each.
-    let _slot = CLAUDE_SLOTS.acquire().await.map_err(|e| e.to_string())?;
+    let _slot = tokio::time::timeout(SLOT_WAIT, CLAUDE_SLOTS.acquire())
+        .await
+        .map_err(|_| "他の要約が終わるのを待っています。もう一度試してください".to_owned())?
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || run(&args, &input, timeout))
         .await
         .map_err(|e| e.to_string())?
@@ -1151,7 +1156,7 @@ mod tests {
             ),
             "{prompt}"
         );
-        assert!(system_prompt("2026-10-31", &[], "BODY", B).contains("(none)\n\nBODY"));
+        assert!(system_prompt("2026-10-31", &[], "BODY", B).contains("（なし）\n\nBODY"));
     }
 
     #[test]
@@ -1165,11 +1170,11 @@ mod tests {
         // Whole lines only, from the first.
         assert!(text.lines().all(|l| l.ends_with(&"n".repeat(60))), "{text}");
         assert!(text.lines().count() > 100 && text.lines().count() < many.len());
-        // A list under the limit is kept whole; a first project past it leaves "(none)".
+        // A list under the limit is kept whole; a first project past it leaves "（なし）".
         assert_eq!(projects_text(&projects()).lines().count(), 2);
         assert_eq!(
             projects_text(&[("p".into(), "n".repeat(PROJECTS_LIMIT))]),
-            "(none)"
+            "（なし）"
         );
     }
 

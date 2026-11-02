@@ -276,6 +276,15 @@ describe("settings: Claude model and effort", () => {
     await expect(modelSelect()).toHaveValue("sonnet");
   });
 
+  it("shows the error and no selects when the settings cannot be read", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_model_settings: rejects("設定を読めません") });
+    await $("#nav-settings").click();
+    await expect($("#error")).toHaveText(expect.stringContaining("設定を読めません"));
+    await expect($("#claude-items .item-name=モデルと effort")).not.toExist();
+    await expect(modelSelect()).not.toExist();
+    await expect(effortSelect()).not.toExist();
+  });
+
   it("disables the selects while a save is on its way", async () => {
     await openSettings([]);
     const save = await mock("claude_model_settings_save", holds);
