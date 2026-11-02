@@ -298,10 +298,12 @@ describe("settings: Claude model and effort", () => {
     await expect(modelSelect()).toHaveValue("opus");
   });
 
-  it("says in the ? hint that the setting applies to the three Claude calls", async () => {
+  it("says in the ? hint that the setting applies to the four Claude calls", async () => {
     await openSettings([]);
     await $("#claude-help").click();
-    await expect($('[role="dialog"][aria-label="Claude の使い方"] .foot')).toHaveText(expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話"));
+    await expect($('[role="dialog"][aria-label="Claude の使い方"] .foot')).toHaveText(
+      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正"),
+    );
   });
 });
 

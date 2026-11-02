@@ -51,9 +51,9 @@ function fitFrame(frame: HTMLIFrameElement) {
       const frames = [...fitting];
       fitting.clear();
       const heights = frames.map((frame) => {
-        // null: the frame left the page before this frame.
+        // null: the frame left the page before this frame, or its view is hidden (0 wide), where it measures 0 and must keep its height for when the view is shown again.
         const root = frame.contentDocument && rootOf.call(frame.contentDocument);
-        if (!root) return null;
+        if (!root || frame.clientWidth === 0) return null;
         // Content taller than the frame overflows it, which scrollHeight reports; otherwise the root's own height is the content's.
         return Math.ceil(root.scrollHeight > root.clientHeight ? root.scrollHeight : root.getBoundingClientRect().height);
       });

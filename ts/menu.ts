@@ -1,4 +1,4 @@
-// The menu under a button: a list to pick from, or any node (the due popover, the Slack dialog). One at a time.
+// The menu under a button: a list to pick from, or any node (the due popover, the Slack destination picker). One at a time.
 import { composing, tag } from "./dom.js";
 
 // The menu under `anchor`; one at a time, closed by a pick, a click elsewhere, or Escape.

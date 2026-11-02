@@ -57,8 +57,9 @@ const invoke = async (cmd, args, options) => {
     if (value?.__e2e_hold__) {
       window.__e2e_release__ ??= {};
       window.__e2e_release__[cmd] ??= [];
-      return new Promise((resolve) => {
-        window.__e2e_release__[cmd].push(resolve);
+      return new Promise((resolve, reject) => {
+        // `release` with a {__e2e_reject__: text} value makes the held call fail.
+        window.__e2e_release__[cmd].push((answer) => (answer?.__e2e_reject__ !== undefined ? reject(answer.__e2e_reject__) : resolve(answer)));
       });
     }
     return value;

@@ -11,8 +11,9 @@ import { show } from "./view.js";
 
 export type Screen = "mail" | "calendar" | "todo" | "settings";
 
-// Which screen the sidebar selected. Background work reads it; only the sidebar changes it.
-let screen: Screen = "mail";
+// Which screen the sidebar selected, or "slack" while the Slack compose screen is open (the sidebar then still shows the inbox).
+// Background work reads it; only the sidebar and the compose screen's open and close change it.
+let screen: Screen | "slack" = "mail";
 export const currentScreen = () => screen;
 
 function markNav(name: Screen) {
@@ -29,6 +30,22 @@ export function showPromptScreen() {
   closeHint();
   $("error").hidden = true;
   show("prompt");
+}
+
+// The Slack compose screen, opened from a thread. The sidebar stays on the inbox, but `currentScreen()` is not "mail", so a list load or a sync does not draw the list over it.
+export function showSlackScreen() {
+  screen = "slack";
+  markNav("mail");
+  closeHint();
+  $("error").hidden = true;
+  show("slack");
+}
+
+// Back from the Slack compose screen to the open thread, which was left as it was (nothing is fetched again).
+export function showThreadScreen() {
+  screen = "mail";
+  $("error").hidden = true;
+  show("thread");
 }
 
 export function setScreen(name: Screen) {

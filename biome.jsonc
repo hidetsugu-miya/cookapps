@@ -16,7 +16,7 @@
         "noNonNullAssertion": "off"
       },
       "performance": {
-        // Its fix is textContent, but innerText differs: it leaves out hidden text and keeps the line breaks (ts/slack-dialog.ts reads a rendered mail body).
+        // Its fix is textContent, but innerText differs: it leaves out hidden text and keeps the line breaks (ts/slack-compose.ts reads a rendered mail body).
         "useDomNodeTextContent": "off"
       }
     }

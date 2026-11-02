@@ -81,9 +81,11 @@ export interface Commands {
   slack_remove_workspace: { args: { teamId: string }; result: Workspace[] };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   slack_link: { args: { url: string }; result: Target };
+  // What a post of the mail starts out as (plain text); the user edits it on the compose screen.
   slack_preview: { args: Mail; result: string };
+  // Posts `text` as it is (Rust escapes it for Slack and refuses a blank one or one past 10,000 characters).
   slack_post: {
-    args: Mail & { teamId: string; channel: string; threadTs: string | null; name: string; note: string };
+    args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string };
     result: boolean;
   };
   claude_status: { args: undefined; result: Claude };
@@ -98,6 +100,8 @@ export interface Commands {
   claude_todo_prompt_reset: { args: undefined; result: TodoPrompt };
   // Claude's answer to a request about the instructions in the edit field; `history` is the conversation before this request. Nothing is saved.
   claude_edit_todo_prompt: { args: { body: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
+  // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions. Nothing is saved.
+  claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

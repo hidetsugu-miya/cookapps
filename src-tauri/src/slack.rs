@@ -38,8 +38,10 @@ const CHANNELS_TTL: Duration = Duration::from_secs(10 * 60);
 const MIGRATE_RETRY: Duration = Duration::from_secs(5 * 60);
 /// Characters of a channel name that are remembered.
 const NAME_LIMIT: usize = 80;
-/// Characters of the mail's text that are posted.
+/// Characters of the mail's text that the post starts out with.
 const BODY_LIMIT: usize = 3000;
+/// The most characters the user may post in one message.
+const POST_LIMIT: usize = 10_000;
 /// Characters of a thread's first message that reach the summary (`claude::INPUT_LIMIT` caps the whole input).
 const PARENT_LIMIT: usize = 2000;
 const NO_TOKEN: &str =
@@ -431,36 +433,29 @@ fn clip_body(body: &str) -> String {
     }
 }
 
-/// The post: the note (if any), `*subject*`, `from ・ date`, and the clipped body. `escape` is for Slack; the preview shows the plain text.
-fn mail_text(
-    note: &str,
-    subject: &str,
-    from: &str,
-    date: &str,
-    body: &str,
-    escape: bool,
-) -> String {
-    let e = |s: &str| {
-        if escape {
-            escape_mrkdwn(s)
-        } else {
-            s.to_owned()
-        }
-    };
+/// The mail as the post starts out: `*subject*`, `from ・ date`, and the clipped body, as plain text. The user edits it before it is posted (`post_text`).
+fn mail_text(subject: &str, from: &str, date: &str, body: &str) -> String {
     let subject = match subject.trim() {
         "" => "(件名なし)",
         s => s,
     };
-    let mut parts = Vec::new();
-    if !note.trim().is_empty() {
-        parts.push(e(note.trim()));
-    }
-    parts.push(format!("*{}*\n{} ・ {}", e(subject), e(from), e(date)));
+    let mut parts = vec![format!("*{subject}*\n{from} ・ {date}")];
     let body = clip_body(body);
     if !body.is_empty() {
-        parts.push(e(&body));
+        parts.push(body);
     }
     parts.join("\n\n")
+}
+
+/// The text to post, escaped for Slack (`*` stays markup), or why it cannot be posted: blank, or past `POST_LIMIT` characters.
+fn post_text(text: &str) -> Result<String, String> {
+    if text.trim().is_empty() {
+        return Err("貼る内容が空です".into());
+    }
+    if text.chars().count() > POST_LIMIT {
+        return Err(format!("貼る内容が長すぎます（{POST_LIMIT} 文字まで）"));
+    }
+    Ok(escape_mrkdwn(text.trim()))
 }
 
 /// The message for the UI of a Slack error code. Slack answers 200 with `ok: false`.
@@ -1006,16 +1001,15 @@ pub async fn message_context(
     thread_context(&first, &found, &message_ts).ok_or_else(|| NO_MESSAGE.to_owned())
 }
 
-/// What a post of the mail would say, without the note and as plain text.
+/// What a post of the mail starts out as, as plain text.
 #[tauri::command]
 pub fn slack_preview(subject: &str, from: &str, date: &str, body: &str) -> String {
-    mail_text("", subject, from, date, body, false)
+    mail_text(subject, from, date, body)
 }
 
-/// Posts the mail to the channel, or as a reply in `thread_ts`'s thread, and remembers the destination.
-/// The mail's text goes to Slack only here, on the user's click.
+/// Posts `text` (what the user edited) to the channel, or as a reply in `thread_ts`'s thread, and remembers the destination.
+/// The text goes to Slack only here, on the user's click.
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn slack_post(
     app: AppHandle,
     auth: State<'_, Auth>,
@@ -1023,11 +1017,7 @@ pub async fn slack_post(
     channel: String,
     thread_ts: Option<String>,
     name: String,
-    note: String,
-    subject: String,
-    from: String,
-    date: String,
-    body: String,
+    text: String,
 ) -> Result<bool, String> {
     let command = "slack_post";
     let user = token_key(&team_id);
@@ -1037,12 +1027,13 @@ pub async fn slack_post(
     {
         return Err(log_failure(command, &team_id, BAD_TARGET));
     }
+    let text = post_text(&text).map_err(|e| log_failure(command, &team_id, e))?;
     let token = token_of(&team_id)
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
     let mut message = json!({
         "channel": channel,
-        "text": mail_text(&note, &subject, &from, &date, &body, true),
+        "text": text,
         "unfurl_links": false,
         "unfurl_media": false,
     });
@@ -1353,15 +1344,33 @@ mod tests {
     }
 
     #[test]
-    fn the_post_is_note_subject_sender_and_body() {
+    fn the_post_starts_as_subject_sender_and_body() {
         assert_eq!(
-            mail_text("確認お願いします", "見積 <1>", "A <a@x.jp>", "2026/10/30 9:05", "本文 & 続き", true),
-            "確認お願いします\n\n*見積 &lt;1&gt;*\nA &lt;a@x.jp&gt; ・ 2026/10/30 9:05\n\n本文 &amp; 続き"
+            mail_text("見積 <1>", "A <a@x.jp>", "2026/10/30 9:05", "本文 & 続き"),
+            "*見積 <1>*\nA <a@x.jp> ・ 2026/10/30 9:05\n\n本文 & 続き"
         );
-        // No note, no subject, no body: only the header lines remain; the preview is not escaped.
+        // No subject and no body: only the header lines remain.
         assert_eq!(
-            mail_text(" ", "", "A <a@x.jp>", "d", "", false),
+            mail_text("", "A <a@x.jp>", "d", ""),
             "*(件名なし)*\nA <a@x.jp> ・ d"
+        );
+    }
+
+    #[test]
+    fn the_edited_text_is_escaped_but_keeps_its_bold_markup() {
+        assert_eq!(
+            post_text("  *見積 <1>*\nA <a@x.jp> & 本文\n").as_deref(),
+            Ok("*見積 &lt;1&gt;*\nA &lt;a@x.jp&gt; &amp; 本文")
+        );
+    }
+
+    #[test]
+    fn a_blank_or_too_long_text_is_refused_in_japanese() {
+        assert_eq!(post_text(" \n ").unwrap_err(), "貼る内容が空です");
+        assert!(post_text(&"あ".repeat(POST_LIMIT)).is_ok());
+        assert_eq!(
+            post_text(&"あ".repeat(POST_LIMIT + 1)).unwrap_err(),
+            "貼る内容が長すぎます（10000 文字まで）"
         );
     }
 

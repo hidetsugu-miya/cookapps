@@ -13,19 +13,20 @@ export function setClaudeReady(ready: boolean) {
   syncSummaryButton();
 }
 
-export type View = "list" | "thread" | "login" | "calendar" | "todo" | "settings" | "prompt";
+export type View = "list" | "thread" | "login" | "calendar" | "todo" | "settings" | "prompt" | "slack";
 
 // #main scrolls both the list and the thread, so each view keeps its own position.
 let listScroll = 0;
 
 export function show(view: View) {
   if (!$("threads").hidden) listScroll = $("main").scrollTop;
-  // The calendar and Todo screens bring their own header.
-  const own = view === "calendar" || view === "todo" || view === "settings" || view === "prompt";
+  // The calendar, Todo, settings, prompt and Slack screens bring their own header.
+  const own = view === "calendar" || view === "todo" || view === "settings" || view === "prompt" || view === "slack";
   $("calendar").hidden = view !== "calendar";
   $("todo").hidden = view !== "todo";
   $("settings").hidden = view !== "settings";
   $("prompt").hidden = view !== "prompt";
+  $("slack-compose").hidden = view !== "slack";
   $("mail-header").hidden = own;
   $("main").hidden = own;
   $("login").hidden = view !== "login";

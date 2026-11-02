@@ -1,6 +1,7 @@
 // What every spec shares: booting the app with fixtures, mocking a command, and fixture data shaped like the Rust return values.
 // The fixtures are typed by the types ts-rs writes from the Serialize structs (ts/bindings/), so a change of a struct's shape fails the type check here.
 // Only example.com addresses and made-up names appear here: the repository is public.
+import type { Channel } from "../ts/bindings/Channel";
 import type { Checked } from "../ts/bindings/Checked";
 import type { Claude } from "../ts/bindings/Claude";
 import type { Inbox } from "../ts/bindings/Inbox";
@@ -246,6 +247,22 @@ export const promptEdit: PromptEdit = {
     { kind: "ins", text: "Better body" },
   ],
 };
+
+// What `slack_preview` answers for the thread of `threadDetail("First unread", "Hello from Alice", …)`: the post as it starts out in the compose screen.
+export const slackPreview = "*First unread*\nAlice <alice@example.com> ・ 2026/11/3 9:00\n\nHello from Alice";
+
+// What `claude_proofread_slack` answers when Claude proposes adding a full stop to the last line of `slackPreview`.
+export const proofreadEdit: PromptEdit = {
+  reply: "文末に句点を付けました",
+  body: `${slackPreview}。`,
+  diff: [
+    { kind: "del", text: "Hello from Alice" },
+    { kind: "ins", text: "Hello from Alice。" },
+  ],
+};
+
+// What `slack_channels` answers: the channels of the workspace `workspace`.
+export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general" }];
 
 // What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by.
 export const checked = (missingScopes: string[] | null): Checked => ({ ...workspace, missingScopes });
