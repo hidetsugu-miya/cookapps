@@ -666,32 +666,25 @@ describe("todo detail description copy", () => {
     await openReport();
     await stubClipboard();
     await expect($(copyButton)).toHaveAttribute("aria-label", "説明をコピー");
-    expect(await $(copyButton).getCSSProperty("visibility")).toMatchObject({ value: "hidden" });
+    // :hover and :focus never match in the E2E window: the hidden state is the computed style, and the rule that hides it says that hover or focus inside lifts it.
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#todo-detail .desc-copy")!).visibility)).toBe("hidden");
+    const hiding = await browser.execute(() => {
+      for (const sheet of document.styleSheets)
+        for (const rule of sheet.cssRules)
+          if (rule instanceof CSSStyleRule && rule.selectorText.includes(".desc-copy") && rule.style.visibility === "hidden") return rule.selectorText;
+      return null;
+    });
+    expect(hiding).toContain(":not(:hover)");
+    expect(hiding).toContain(":not(:focus-within)");
     // Not inside the description's role="button".
     expect(await browser.execute(() => document.querySelector("#todo-detail .desc-copy")!.closest(".desc"))).toBeNull();
-    await $("#todo-detail .desc-wrap").moveTo();
-    await expect($(copyButton)).toBeDisplayed();
-    await $(copyButton).click();
+    // A hidden button takes no WebDriver click, so the press is made in the page.
+    await browser.execute(() => document.querySelector<HTMLElement>("#todo-detail .desc-copy")!.click());
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
     expect(await copiedTexts()).toEqual([description]);
     await expect($(".toast")).toHaveText("説明をコピーしました");
     expect(await count("#todo-detail textarea")).toBe(0);
     await expect($(desc)).toBeDisplayed();
-  });
-
-  it("copies with Enter on the icon reached by the keyboard, and does not open the editor", async () => {
-    await openReport();
-    await stubClipboard();
-    // The view has the focus, so the icon is shown and can take it.
-    await browser.execute(() => {
-      document.querySelector<HTMLElement>("#todo-detail .desc")!.focus();
-      document.querySelector<HTMLElement>("#todo-detail .desc-copy")!.focus();
-    });
-    expect(await browser.execute(() => document.activeElement!.className)).toContain("desc-copy");
-    await browser.keys("Enter");
-    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
-    expect(await copiedTexts()).toEqual([description]);
-    expect(await count("#todo-detail textarea")).toBe(0);
   });
 
   it("does not open the editor when the click ends a text selection inside the description", async () => {

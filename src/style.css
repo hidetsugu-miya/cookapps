@@ -372,9 +372,9 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .desc { box-sizing: border-box; padding: 8px; border-radius: 8px; color: #333; line-height: 1.6; overflow-wrap: anywhere; cursor: text; user-select: text; -webkit-user-select: text; }
 /* The copy button sits at the top right, over room the text leaves; it is hidden until the description is hovered or has focus. */
 #todo-detail .desc-wrap.copyable .desc { padding-right: 40px; }
-#todo-detail .desc-copy { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; visibility: hidden; user-select: none; -webkit-user-select: none; }
+#todo-detail .desc-copy { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; user-select: none; -webkit-user-select: none; }
 #todo-detail .desc-copy svg { width: 16px; height: 16px; }
-#todo-detail .desc-wrap:hover .desc-copy, #todo-detail .desc-wrap:focus-within .desc-copy { visibility: visible; }
+#todo-detail .desc-wrap:not(:hover):not(:focus-within) .desc-copy { visibility: hidden; }
 #todo-detail .desc > :first-child { margin-top: 0; }
 #todo-detail .desc > :last-child { margin-bottom: 0; }
 #todo-detail .desc p, #todo-detail .desc ul, #todo-detail .desc ol, #todo-detail .desc pre, #todo-detail .desc blockquote { margin: 0 0 8px; }
