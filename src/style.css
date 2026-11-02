@@ -1,4 +1,4 @@
-:root { --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; }
+:root { --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 body { font-family: -apple-system, sans-serif; font-size: 14px; margin: 0; display: flex; }
@@ -233,13 +233,20 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .review-name { padding: 6px 8px; border: 1px solid transparent; font-size: 15px; font-weight: 600; }
 .review-name:hover { border-color: var(--line); }
 .review-desc { min-height: 74px; resize: vertical; padding: 6px 8px; border: 1px solid var(--line); font-size: 13px; line-height: 1.55; color: #333; }
-.review-name:focus, .review-desc:focus, .review-due:focus-visible { outline: 2px solid var(--accent); border-color: transparent; }
+.review-name:focus, .review-desc:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .review-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .review-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 13px; background: #fff; font: inherit; font-size: 12px; color: #444; }
 button.review-chip { cursor: pointer; }
 button.review-chip:hover { background: var(--hover); }
 .review-chip svg { width: 13px; height: 13px; flex: none; }
-.review-due { width: 110px; height: 22px; padding: 0; border: 0; font: inherit; font-size: 12px; color: #333; background: transparent; }
+.review-chip[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.review-head-text { flex: 1; }
+.link-btn { padding: 0; border: 0; background: transparent; font: inherit; color: var(--accent); cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+.link-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A small label: "推奨" on the project chip and on its row in the project menu. */
+.tag { padding: 0 6px; border-radius: 8px; background: var(--soft); color: var(--accent); font-size: 11px; font-weight: normal; line-height: 16px; }
+.menu .tag { margin-left: auto; }
 .review-src { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #777; }
 .review-src svg { width: 13px; height: 13px; flex: none; color: var(--slack); }
 .review-err { margin: 0; }
@@ -443,3 +450,41 @@ button.status:hover { filter: brightness(.95); }
 .slack-pop .row { display: flex; gap: 8px; }
 .slack-pop .row .text-btn { align-self: auto; flex: none; }
 .slack-pop .chosen { margin: 0; padding: 6px 8px; border-radius: 8px; background: var(--soft); font-size: 12px; overflow-wrap: anywhere; }
+
+/* The Todo prompt screen: the fixed part and the editable body on the left, the conversation with Claude on the right. */
+#prompt { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#prompt header { gap: 8px; padding: 16px 24px 12px 16px; border-bottom: 1px solid var(--line); }
+#prompt h1 { flex: none; }
+#prompt .grow { flex: 1; }
+#prompt-error { margin: 8px 24px 0; }
+#prompt-main { flex: 1; min-height: 0; display: flex; }
+#prompt-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
+.prompt-label { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 12px; color: #666; }
+.prompt-label svg { width: 13px; height: 13px; }
+#prompt-fixed, #prompt-fixed-after, #prompt-body, .chat-diff { font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+#prompt-fixed, #prompt-fixed-after { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--code); color: #555; }
+.prompt-body-box { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#prompt-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
+#prompt-body:focus { outline: 2px solid var(--soft); }
+#prompt-body:disabled { border-color: var(--chip-line); background: var(--bar); }
+#prompt-chat { width: 380px; flex: none; display: flex; flex-direction: column; border-left: 1px solid var(--line); }
+.chat-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: bold; }
+.chat-head svg { width: 16px; height: 16px; color: var(--claude); }
+#prompt-log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.chat-user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 12px; background: var(--soft); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.chat-ai { font-size: 13px; line-height: 1.5; color: #333; overflow-wrap: anywhere; }
+#prompt-log .pending { margin: 0; }
+.chat-diff { margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.diff-del, .diff-ins { padding: 4px 8px; }
+.diff-del { background: var(--del-bg); color: var(--del); }
+.diff-ins { background: var(--soft); color: var(--ins); }
+.diff-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 8px; background: var(--bar); font-family: -apple-system, sans-serif; font-size: 12px; white-space: normal; }
+.diff-foot .text-btn { height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
+.diff-state { color: var(--accent); }
+.diff-stale { margin-right: auto; color: var(--warn); }
+#prompt-chat-note { flex: none; margin: 0; padding: 8px 16px 0; border-top: 1px solid var(--line); background: var(--bar); font-size: 12px; color: var(--warn); }
+#prompt-form { flex: none; display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); background: var(--bar); }
+#prompt-chat-note:not([hidden]) + #prompt-form { border-top: 0; padding-top: 8px; }
+#prompt-form input { flex: 1; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: #fff; }
+#prompt-form input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+#prompt-form input:disabled { background: var(--bar); }

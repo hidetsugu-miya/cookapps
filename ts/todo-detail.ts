@@ -1,5 +1,4 @@
 // One task opened on the Todo screen: its name, description, linked mail and subtasks, and beside them its project and due date.
-import type { Due } from "./bindings/Due";
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, onEnter, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
@@ -10,12 +9,12 @@ import { checkBox, openMailFromTodo, renderList } from "./todo-list.js";
 import { moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
 
-// A month of days to pick from, Sunday first; `shown` is the 1st of the month, `due` and today are marked.
-function monthPicker(shown: Date, due: Due | null, pick: (iso: string) => void) {
+// A month of days to pick from, Sunday first; `shown` is the 1st of the month, `current` (a `YYYY-MM-DD` or null) and today are marked.
+function monthPicker(shown: Date, current: string | null, pick: (iso: string) => void) {
   const box = tag("div", "dp");
   // The pressed arrow is replaced with the month, so the focus moves to the new one.
   const move = (n: number) => {
-    const moved = monthPicker(new Date(shown.getFullYear(), shown.getMonth() + n, 1), due, pick);
+    const moved = monthPicker(new Date(shown.getFullYear(), shown.getMonth() + n, 1), current, pick);
     box.replaceWith(moved);
     moved.querySelectorAll<HTMLElement>(".dp-nav")[n < 0 ? 0 : 1].focus();
   };
@@ -37,7 +36,7 @@ function monthPicker(shown: Date, due: Due | null, pick: (iso: string) => void) 
     const b = tag("button", "dp-day", String(day.getDate()));
     if (day.getMonth() !== shown.getMonth()) b.classList.add("other");
     if (iso === today) b.classList.add("today");
-    if (iso === due?.date) b.classList.add("current");
+    if (iso === current) b.classList.add("current");
     b.onclick = () => pick(iso);
     grid.append(b);
   }
@@ -45,30 +44,39 @@ function monthPicker(shown: Date, due: Due | null, pick: (iso: string) => void) 
   return box;
 }
 
+// What the due popover edits. `text` is what its field starts with; `date` (`YYYY-MM-DD`) and `time` (`HH:MM`) are the day it marks and the time a picked day keeps,
+// null for none; a `recurring` due date gets the text field only, since a picked day would replace its repeat. `commit` gets the new text, only when it differs.
+export interface DueEdit {
+  text: string;
+  date: string | null;
+  time: string | null;
+  recurring: boolean;
+  commit: (dueString: string) => void;
+}
+
 // The due popover opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
-// The field shows a one-off due date as "2026-11-02 12:00", which Todoist reads back as is; a repeat keeps Todoist's text, which a date cannot hold.
-// A repeating task gets the text field only: a picked day would replace its repeat.
-export function openDuePop(anchor: Element, t: TaskItem) {
+// A one-off due date is written "2026-11-02 12:00", which Todoist reads back as is; a repeat keeps Todoist's text, which a date cannot hold.
+// The task's detail and the Slack summary card both open it; what is done with the new text is theirs.
+export function openDueEditor(anchor: Element, e: DueEdit) {
   const pop = tag("div", "menu due-pop");
   const input = tag("input", "chip-input");
-  const shown = !t.due ? "" : t.due.recurring ? t.due.string : t.due.time ? `${t.due.date} ${t.due.time}` : t.due.date;
-  input.value = shown;
+  input.value = e.text;
   input.placeholder = "例: 明日 15時";
   input.setAttribute("aria-label", "期限（空欄で期限なし）");
-  input.onkeydown = (e) => {
-    if (composing(e)) return;
-    if (e.key !== "Enter") return;
+  input.onkeydown = (ev) => {
+    if (composing(ev)) return;
+    if (ev.key !== "Enter") return;
     closeMenu();
-    if (input.value.trim() !== shown) saveTask(t.id, { dueString: input.value });
+    if (input.value.trim() !== e.text) e.commit(input.value);
   };
-  const month = t.due ? addDays(t.due.date, 0) : new Date();
+  const month = e.date ? addDays(e.date, 0) : new Date();
   pop.append(input);
-  if (!t.due?.recurring)
+  if (!e.recurring)
     pop.append(
-      monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), t.due, (iso) => {
+      monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), e.date, (iso) => {
         closeMenu();
-        if (iso === t.due?.date) return;
-        saveTask(t.id, { dueString: t.due?.time ? `${iso} ${t.due.time}` : iso });
+        if (iso === e.date) return;
+        e.commit(e.time ? `${iso} ${e.time}` : iso);
       }),
     );
   showMenu(anchor, pop);
@@ -76,8 +84,19 @@ export function openDuePop(anchor: Element, t: TaskItem) {
   input.select();
 }
 
-// The menu of projects, with `current` marked; `pick` gets the ID of the one chosen.
-export function openProjectPicker(anchor: Element, current: string | undefined, pick: (projectId: string) => unknown) {
+export function openDuePop(anchor: Element, t: TaskItem) {
+  const due = t.due;
+  openDueEditor(anchor, {
+    text: !due ? "" : due.recurring ? due.string : due.time ? `${due.date} ${due.time}` : due.date,
+    date: due?.date ?? null,
+    time: due?.time ?? null,
+    recurring: !!due?.recurring,
+    commit: (dueString) => saveTask(t.id, { dueString }),
+  });
+}
+
+// The menu of projects, with `current` marked and, when given, `recommended` tagged; `pick` gets the ID of the one chosen.
+export function openProjectPicker(anchor: Element, current: string | undefined, pick: (projectId: string) => unknown, recommended?: string | null) {
   openMenu(
     anchor,
     todoState.todo!.projects.map((p) => ({
@@ -85,6 +104,7 @@ export function openProjectPicker(anchor: Element, current: string | undefined, 
       color: p.color,
       current: p.id === current,
       depth: p.depth,
+      tag: p.id === recommended ? "推奨" : undefined,
       pick: () => pick(p.id),
     })),
   );

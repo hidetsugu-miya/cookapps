@@ -8,8 +8,9 @@ import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { getSlackWorkspaces, loadSlackWorkspaces } from "./slack-workspaces.js";
 import { toast } from "./toast.js";
-import { inboxOf, projectName, projectOf, todoState, viewProjectId } from "./todo-data.js";
-import { openProjectPicker } from "./todo-detail.js";
+import { inboxOf, PICKED_DUE, projectName, projectOf, todoState, viewProjectId } from "./todo-data.js";
+import { openDueEditor, openProjectPicker } from "./todo-detail.js";
+import { openPrompt } from "./todo-prompt.js";
 import { todoCall } from "./todo-write.js";
 import { loadTodo } from "./todo.js";
 import { showError } from "./view.js";
@@ -97,6 +98,8 @@ interface PendingAdd {
   summary: Summary | null;
   // Where the task goes: null is the inbox (a link pasted in "今日"). `today` is whether a task with no due date is due today.
   projectId: string | null;
+  // The project Claude recommended (it is the first `projectId`), or null; the chip and the menu tag it.
+  recommended: string | null;
   today: boolean;
   el: HTMLElement | null;
 }
@@ -154,27 +157,51 @@ function reviewCard(job: PendingAdd, summary: Summary) {
   name.value = summary.content;
   const description = tag("textarea", "review-desc");
   description.value = summary.description;
-  const due = tag("input", "review-due");
-  due.value = summary.due ?? "";
-  due.setAttribute("aria-label", "期限");
-  due.placeholder = job.today ? "空なら今日" : "期限なし";
-  const dueChip = tag("span", "review-chip");
-  dueChip.insertAdjacentHTML("beforeend", DATE_SVG);
-  dueChip.append(due);
+  // The due date is text Todoist reads (or empty); the chip opens the same popover as a task's detail, which changes only this text.
+  let dueText = summary.due ?? "";
+  const dueChip = tag("button", "review-chip review-due");
+  dueChip.type = "button";
+  const showDue = () => {
+    dueChip.replaceChildren();
+    dueChip.insertAdjacentHTML("beforeend", DATE_SVG);
+    dueChip.append(dueText || (job.today ? "空なら今日" : "期限なし"));
+  };
+  showDue();
+  dueChip.onclick = () => {
+    const picked = PICKED_DUE.exec(dueText);
+    openDueEditor(dueChip, {
+      text: dueText,
+      date: picked?.[1] ?? null,
+      time: picked?.[2] ?? null,
+      recurring: false,
+      commit: (text) => {
+        dueText = text.trim();
+        showDue();
+      },
+    });
+  };
   const project = tag("button", "review-chip review-project");
   project.type = "button";
   const showProject = () => {
     project.replaceChildren();
     project.insertAdjacentHTML("beforeend", FOLDER_SVG);
-    project.append(projectName(projectOf(job.projectId ?? inboxOf()?.id ?? "")));
+    const id = job.projectId ?? inboxOf()?.id ?? "";
+    project.append(projectName(projectOf(id)));
+    // Choosing another project takes the tag off the chip; the menu keeps it on its row.
+    if (job.recommended !== null && id === job.recommended) project.append(tag("span", "tag", "推奨"));
   };
   showProject();
   project.onclick = () =>
     todoState.todo &&
-    openProjectPicker(project, job.projectId ?? inboxOf()?.id, (id) => {
-      job.projectId = id;
-      showProject();
-    });
+    openProjectPicker(
+      project,
+      job.projectId ?? inboxOf()?.id,
+      (id) => {
+        job.projectId = id;
+        showProject();
+      },
+      job.recommended,
+    );
   const team = getSlackWorkspaces()?.find((w) => hostOf(w.url) === job.host)?.team ?? job.host ?? "";
   const source = tag("div", "review-src");
   source.title = job.url;
@@ -188,9 +215,12 @@ function reviewCard(job: PendingAdd, summary: Summary) {
   keys.append(tag("kbd", "", isMac ? "⌘" : "Ctrl"), tag("kbd", "", "Enter"), " で追加");
   const actions = tag("div", "review-actions");
   actions.append(keys, drop, add);
+  const editPrompt = tag("button", "link-btn", "プロンプトを編集");
+  editPrompt.type = "button";
+  editPrompt.onclick = () => openPrompt("todo");
   const head = tag("div", "review-head");
   head.insertAdjacentHTML("beforeend", CLAUDE_SVG);
-  head.append("Claude の要約です。確かめてから追加してください");
+  head.append(tag("span", "review-head-text", "Claude の要約です。確かめてから追加してください"), editPrompt);
   const chips = tag("div", "review-chips");
   chips.append(dueChip, project);
   const body = tag("div", "review-body");
@@ -211,7 +241,7 @@ function reviewCard(job: PendingAdd, summary: Summary) {
         url: job.url,
         content: name.value,
         description: description.value,
-        due: due.value,
+        due: dueText,
         projectId: job.projectId,
         today: job.today,
       });
@@ -254,7 +284,7 @@ function addFromSlack(url: string) {
   input.value = "";
   updateAddMode();
   input.focus();
-  const job: PendingAdd = { url, host: slackMessageHost(url), failed: null, summary: null, projectId: inToday ? null : (viewProjectId(todoState.view) ?? null), today: inToday, el: null };
+  const job: PendingAdd = { url, host: slackMessageHost(url), failed: null, summary: null, projectId: inToday ? null : (viewProjectId(todoState.view) ?? null), recommended: null, today: inToday, el: null };
   pendingAdds.push(job);
   showPending(job);
   invoke("todoist_summarize_slack", { url }).then(
@@ -265,6 +295,8 @@ function addFromSlack(url: string) {
         loadTodo(false, false);
         return;
       }
+      // Claude's project starts the card, when the list has it (Rust checked it against the sync it last read).
+      if (summary.projectId !== null && projectOf(summary.projectId)) job.projectId = job.recommended = summary.projectId;
       job.summary = summary;
       showPending(job);
     },

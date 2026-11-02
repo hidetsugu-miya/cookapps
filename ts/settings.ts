@@ -9,6 +9,7 @@ import { invoke } from "./ipc.js";
 import { appsLink, openPermissionPane, scopesBlock, SLACK_SCOPES } from "./permission-pane.js";
 import { setSlackWorkspaces } from "./slack-workspaces.js";
 import { updateAddMode } from "./todo-add.js";
+import { loadPromptState } from "./todo-prompt.js";
 import { showError } from "./view.js";
 
 let settingsSeq = 0;
@@ -123,6 +124,7 @@ export function renderWorkspaces(list: Workspace[]) {
 export async function loadSettings() {
   const seq = ++settingsSeq;
   $("error").hidden = true;
+  loadPromptState();
   let loaded: SlackLoad;
   try {
     loaded = await invoke("slack_load");

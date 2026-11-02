@@ -98,7 +98,7 @@ export function editingField() {
 
 // What the screen shows for a due text the calendar picked (`YYYY-MM-DD`, with ` HH:MM` for a task with a time), or an empty one (no due date).
 // Other text is Todoist's to read, so the task stays as it is until the reload.
-const PICKED_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
+export const PICKED_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
 
 // shortcut: the list is not re-sorted after a due date change; the next reload fixes it.
 export function patchTask(id: string, { dueString, ...fields }: TaskFields) {

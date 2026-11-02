@@ -13,6 +13,7 @@ import { initThread } from "./thread.js";
 import { initToast } from "./toast.js";
 import { initTodo } from "./todo.js";
 import { initTodoAdd } from "./todo-add.js";
+import { initPrompt } from "./todo-prompt.js";
 import { initTooltip } from "./tooltip.js";
 import { initUpdate } from "./update.js";
 
@@ -26,6 +27,7 @@ initToast();
 initMenu();
 initTodo();
 initTodoAdd();
+initPrompt();
 initClaude();
 initHint();
 initSettings();

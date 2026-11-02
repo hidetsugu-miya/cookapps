@@ -44,6 +44,28 @@ describe("todo", () => {
     return { summarize, addFromSlack };
   }
 
+  // Types `text` in the card's due popover and confirms it with Enter.
+  async function setCardDue(text: string) {
+    await $(".review .review-due").click();
+    await $(".due-pop .chip-input").setValue(text);
+    await browser.keys("Enter");
+  }
+
+  // The day button `n` of the month the due popover shows (not a day of the month before or after).
+  const dayButton = (n: number) => $(`//div[contains(@class,"due-pop")]//button[contains(@class,"dp-day") and not(contains(@class,"other")) and text()="${n}"]`);
+
+  // The same card with Claude's recommendation: `projectId` is an ID of the Todo fixtures (p1 is Work).
+  async function openRecommendedCard(projectId: string) {
+    await openTodo();
+    const summarize = await mock("todoist_summarize_slack", { ...slackSummary, projectId });
+    const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await waitForCalls(summarize);
+    await $(".review").waitForExist();
+    return { addFromSlack };
+  }
+
   it("turns the button into 要約する for a Slack link and shows the summary on a card to confirm", async () => {
     await openTodo();
     const summarize = await mock("todoist_summarize_slack", slackSummary);
@@ -58,7 +80,7 @@ describe("todo", () => {
     await expect($("#todo-add-input")).toHaveValue("");
     await expect($(".review .review-name")).toHaveValue("Reply to the vendor");
     await expect($(".review .review-desc")).toHaveValue(slackSummary.description);
-    await expect($(".review .review-due")).toHaveValue("2026-11-06");
+    await expect($(".review .review-due")).toHaveText("2026-11-06");
     await expect($(".review .review-project")).toHaveText("受信箱");
     await expect($(".review .review-src")).toHaveText(expect.stringContaining("Example Team"));
     // Nothing is created until the user confirms.
@@ -79,7 +101,7 @@ describe("todo", () => {
     const { addFromSlack } = await openSummaryCard();
     await $(".review .review-name").setValue("Answer the vendor by Friday");
     await $(".review .review-desc").setValue("- Quote needed");
-    await $(".review .review-due").setValue("tomorrow");
+    await setCardDue("tomorrow");
     await $(".review .review-project").click();
     await $('.menu button[role="menuitem"]:nth-child(2)').click();
     await expect($(".review .review-project")).toHaveText("Work");
@@ -87,6 +109,113 @@ describe("todo", () => {
     expect(await waitForCalls(addFromSlack)).toEqual([
       { url: slackMessageUrl, content: "Answer the vendor by Friday", description: "- Quote needed", due: "tomorrow", projectId: "p1", today: true },
     ]);
+  });
+
+  it("opens the calendar from the due chip, and a day picked keeps the time", async () => {
+    await openTodo();
+    await mock("todoist_summarize_slack", { ...slackSummary, due: "2026-11-06 15:00" });
+    const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await $(".review").waitForExist();
+    await expect($(".review .review-due")).toHaveText("2026-11-06 15:00");
+    await $(".review .review-due").click();
+    await expect($(".due-pop .chip-input")).toHaveValue("2026-11-06 15:00");
+    await expect($(".due-pop")).toHaveText(expect.stringContaining("2026年11月"));
+    await expect($(".due-pop .dp-day.current")).toHaveText("6");
+    await dayButton(20).click();
+    await expect($(".due-pop")).not.toExist();
+    await expect($(".review .review-due")).toHaveText("2026-11-20 15:00");
+    // Picking a day saves nothing: the value is only sent with 追加.
+    expect(await callsOf(addFromSlack)).toEqual([]);
+    await $(".review .review-add").click();
+    expect((await waitForCalls(addFromSlack))[0]).toMatchObject({ due: "2026-11-20 15:00" });
+  });
+
+  it("keeps no time when the day is picked for a date without one", async () => {
+    await openSummaryCard();
+    await $(".review .review-due").click();
+    await dayButton(12).click();
+    await expect($(".review .review-due")).toHaveText("2026-11-12");
+  });
+
+  it("takes other text in the due popover with Enter, and an empty one means no due date (today in 今日)", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await setCardDue("明日 15時");
+    await expect($(".review .review-due")).toHaveText("明日 15時");
+    // The popover shows the text as it is, and a day from the calendar replaces it.
+    await $(".review .review-due").click();
+    await expect($(".due-pop .chip-input")).toHaveValue("明日 15時");
+    await browser.keys("Escape");
+    await setCardDue("");
+    await expect($(".review .review-due")).toHaveText("空なら今日");
+    await $(".review .review-add").click();
+    expect((await waitForCalls(addFromSlack))[0]).toMatchObject({ due: "", today: true });
+  });
+
+  it("says 期限なし on the due chip when the card is for a project and the date is empty", async () => {
+    await openTodo();
+    await $('#projects .proj[data-view="p1"]').click();
+    await mock("todoist_summarize_slack", { ...slackSummary, due: null });
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await $(".review").waitForExist();
+    await expect($(".review .review-due")).toHaveText("期限なし");
+  });
+
+  it("starts the card in the project Claude recommended, tagged 推奨 on the chip and in the menu", async () => {
+    const { addFromSlack } = await openRecommendedCard("p1");
+    await expect($(".review .review-project")).toHaveText(expect.stringContaining("Work"));
+    await expect($(".review .review-project .tag")).toHaveText("推奨");
+    await $(".review .review-project").click();
+    await expect($('.menu button[role="menuitem"]:nth-child(2) .tag')).toHaveText("推奨");
+    await expect($('.menu button[role="menuitem"]:nth-child(2)')).toHaveAttribute("aria-current", "true");
+    expect(await count(".menu .tag")).toBe(1);
+    await browser.keys("Escape");
+    await $(".review .review-add").click();
+    expect((await waitForCalls(addFromSlack))[0]).toMatchObject({ projectId: "p1" });
+  });
+
+  it("takes the tag off the chip when another project is chosen, keeps it on the menu row, and adds to the chosen one", async () => {
+    const { addFromSlack } = await openRecommendedCard("p1");
+    await $(".review .review-project").click();
+    await $('.menu button[role="menuitem"]:nth-child(5)').click();
+    await expect($(".review .review-project")).toHaveText("Home");
+    await expect($(".review .review-project .tag")).not.toExist();
+    await $(".review .review-project").click();
+    await expect($('.menu button[role="menuitem"]:nth-child(2) .tag')).toHaveText("推奨");
+    await expect($('.menu button[role="menuitem"]:nth-child(5)')).toHaveAttribute("aria-current", "true");
+    await browser.keys("Escape");
+    await $(".review .review-add").click();
+    expect((await waitForCalls(addFromSlack))[0]).toMatchObject({ projectId: "p4" });
+  });
+
+  it("puts the tag back on the chip when the recommended project is chosen again", async () => {
+    await openRecommendedCard("p1");
+    await $(".review .review-project").click();
+    await $('.menu button[role="menuitem"]:nth-child(5)').click();
+    await $(".review .review-project").click();
+    await $('.menu button[role="menuitem"]:nth-child(2)').click();
+    await expect($(".review .review-project .tag")).toHaveText("推奨");
+  });
+
+  it("ignores a recommendation that is not a project in the list, and the card starts where it would", async () => {
+    await openRecommendedCard("p9");
+    await expect($(".review .review-project")).toHaveText("受信箱");
+    await expect($(".review .review-project .tag")).not.toExist();
+  });
+
+  it("opens the prompt screen from the card, and 戻る returns to the Todo screen with the card still there", async () => {
+    await openSummaryCard();
+    await $(".review .link-btn").click();
+    await expect($("#prompt")).toBeDisplayed();
+    await expect($("#todo")).not.toBeDisplayed();
+    await expect($("#nav-settings")).toHaveAttribute("aria-current", "page");
+    await $("#prompt-back").click();
+    await expect($("#todo")).toBeDisplayed();
+    await expect($(".review")).toExist();
+    await expect($(".review .review-name")).toHaveValue("Reply to the vendor");
+    await expect($("#nav-todo")).toHaveAttribute("aria-current", "page");
   });
 
   it("adds with Enter in the name field", async () => {
@@ -133,7 +262,7 @@ describe("todo", () => {
     await waitForCalls(summarize);
     await expect($(".pending.fail")).toHaveText(expect.stringContaining("Claude が時間内に終わりませんでした"));
     await $(".pending.fail .icon-btn").click();
-    await $(".pending").waitForExist({ reverse: true });
+    await $("#todo-pending .pending").waitForExist({ reverse: true });
   });
 
   it("shows a spinner and 追加中 on the add button, with the field and the button disabled, until the add is answered", async () => {

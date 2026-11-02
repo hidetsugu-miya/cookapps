@@ -7,12 +7,14 @@ import type { Claude } from "./bindings/Claude";
 import type { Inbox } from "./bindings/Inbox";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { PendingImage } from "./bindings/PendingImage";
+import type { PromptEdit } from "./bindings/PromptEdit";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Summary } from "./bindings/Summary";
 import type { Sync } from "./bindings/Sync";
 import type { Target } from "./bindings/Target";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { Todo } from "./bindings/Todo";
+import type { TodoPrompt } from "./bindings/TodoPrompt";
 import type { UpdateInfo } from "./bindings/UpdateInfo";
 import type { UpdateMode } from "./bindings/UpdateMode";
 import type { Week } from "./bindings/Week";
@@ -80,6 +82,12 @@ export interface Commands {
   claude_status: { args: undefined; result: Claude };
   // The thread's messages in the order the thread has them; `text` is each body as plain text.
   claude_summarize_mail: { args: { subject: string; messages: { from: string; dateMs: number; text: string }[] }; result: MailSummary };
+  // The instructions of the Slack summary: the one in use, saved (the default body removes the saved one), or back to the default. Each answers the state after it.
+  claude_todo_prompt: { args: undefined; result: TodoPrompt };
+  claude_todo_prompt_save: { args: { body: string }; result: TodoPrompt };
+  claude_todo_prompt_reset: { args: undefined; result: TodoPrompt };
+  // Claude's answer to a request about the instructions in the edit field; `history` is the conversation before this request. Nothing is saved.
+  claude_edit_todo_prompt: { args: { body: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

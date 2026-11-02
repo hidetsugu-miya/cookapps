@@ -7,6 +7,7 @@ import { code, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { itemRow } from "./settings.js";
 import { updateAddMode } from "./todo-add.js";
+import { promptRow, refreshPrompt } from "./todo-prompt.js";
 import { setClaudeReady } from "./view.js";
 
 // Claude Code on this machine; null until checked.
@@ -44,8 +45,14 @@ function applyClaude(next: Claude | null) {
   setClaudeReady(next?.state === "ready");
   if (next?.state === "ready") $("claude-btn").setAttribute("aria-label", `Claude: ${next.email}`);
   else closeClaudePopup();
-  $("claude-items").replaceChildren(claudeRow());
+  redrawClaudeItems();
   updateAddMode();
+  refreshPrompt();
+}
+
+// The card's rows: Claude's state, then the Todo prompt (shown whether or not Claude is logged in).
+export function redrawClaudeItems() {
+  $("claude-items").replaceChildren(claudeRow(), promptRow());
 }
 
 export async function refreshClaude() {
@@ -72,7 +79,7 @@ export function initClaude() {
           ["ターミナルで ", code("claude auth login"), " を実行してログインする"],
           ["↻ で状態を確かめ直す"],
         ],
-        "Slack のメッセージの本文と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります",
+        "Slack のメッセージの本文（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります",
       ),
     );
 }

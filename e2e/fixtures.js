@@ -28,6 +28,7 @@ const answers = {
   todoist_load: null,
   slack_load: { workspaces: [], recent: [] },
   claude_status: { state: "missing" },
+  claude_todo_prompt: { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false },
   app_info: { version: "1.2.3", updatable: true },
   // Manual, so that no spec replaces the app by accident; the real default (Rust) is auto.
   update_mode: "manual",

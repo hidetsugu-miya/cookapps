@@ -3,16 +3,22 @@ import { composing, tag } from "./dom.js";
 
 // The menu under `anchor`; one at a time, closed by a pick, a click elsewhere, or Escape.
 let menuEl: HTMLElement | null = null;
+// The anchor of the open menu carries aria-expanded="true" while it is open.
+let menuAnchor: Element | null = null;
 
 export function closeMenu() {
   menuEl?.remove();
   menuEl = null;
+  menuAnchor?.removeAttribute("aria-expanded");
+  menuAnchor = null;
 }
 
 // Shows `node` as the open menu, under `anchor` and inside the window.
 export function showMenu(anchor: Element, node: HTMLElement) {
   closeMenu();
   menuEl = node;
+  menuAnchor = anchor;
+  anchor.setAttribute("aria-expanded", "true");
   document.body.append(node);
   const r = anchor.getBoundingClientRect();
   node.style.left = `${Math.max(8, Math.min(r.left, innerWidth - node.offsetWidth - 8))}px`;
@@ -28,6 +34,8 @@ export interface MenuItem {
   current: boolean;
   // How deep the item is nested, shown as an indent.
   depth?: number;
+  // A small label at the right end of the row.
+  tag?: string;
   pick: () => unknown;
 }
 
@@ -42,6 +50,7 @@ export function openMenu(anchor: Element, items: MenuItem[]) {
     dot.style.background = item.color;
     if (item.depth) b.style.paddingLeft = `${10 + item.depth * 16}px`;
     b.append(dot, item.label);
+    if (item.tag) b.append(tag("span", "tag", item.tag));
     b.onclick = () => {
       closeMenu();
       item.pick();
