@@ -25,6 +25,24 @@ async function openPrompt(claude: unknown = claudeReady, state = todoPrompt) {
   await expect($("#prompt")).toBeDisplayed();
 }
 
+// Cmd+Enter (Ctrl+Enter off macOS) in the request field, sent as the key event the app listens for; `composing` makes it the Enter that confirms an IME conversion.
+const pressSend = (composing = false) =>
+  browser.execute((c) => {
+    const mac = /Mac/.test(navigator.platform);
+    const key = new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, isComposing: c, bubbles: true, cancelable: true });
+    document.getElementById("prompt-input")!.dispatchEvent(key);
+  }, composing);
+
+// Puts `lines` lines in the request field as typing does (value, then input).
+const fillLines = (lines: number) =>
+  browser.execute((n) => {
+    const area = document.getElementById("prompt-input") as HTMLTextAreaElement;
+    area.value = Array.from({ length: n }, (_, i) => `行${i + 1}`).join("\n");
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  }, lines);
+
+const heightOf = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().height, selector);
+
 // Asks Claude for `text` and waits until the `replies`th reply is drawn.
 async function ask(text: string, reply: unknown = promptEdit, replies = 1) {
   const edit = await mock("claude_edit_todo_prompt", reply);
@@ -269,4 +287,160 @@ describe("todo prompt screen: the conversation with Claude", () => {
       await expect(body()).toBeEnabled();
     });
   }
+});
+
+describe("todo prompt screen: the request field", () => {
+  it("is one line high, with the key hint under it and the send button beside the hint", async () => {
+    await openPrompt();
+    expect(await $("#prompt-input").getTagName()).toBe("textarea");
+    expect(await heightOf("#prompt-input")).toBe(20);
+    const mac = await browser.execute(() => /Mac/.test(navigator.platform));
+    await expect($("#prompt-keys")).toHaveText(mac ? "↩ で改行、⌘↩ で送信" : "Enter で改行、Ctrl+Enter で送信");
+    await expect($("#prompt-send")).toHaveElementClass("primary");
+    expect(await heightOf("#prompt-send")).toBe(26);
+  });
+
+  it("takes plain Enter as a line break and sends nothing", async () => {
+    await openPrompt();
+    const edit = await mock("claude_edit_todo_prompt", promptEdit);
+    await input().setValue("一行目");
+    await browser.keys("Enter");
+    await browser.keys("二行目");
+    await expect(input()).toHaveValue("一行目\n二行目");
+    expect(await callsOf(edit)).toEqual([]);
+    await expect($("#prompt-log .chat-user")).not.toExist();
+  });
+
+  it("sends the whole text with its line breaks on Cmd+Enter, shows the breaks, and goes back to one line", async () => {
+    await openPrompt();
+    const edit = await mock("claude_edit_todo_prompt", promptEdit);
+    await input().setValue("一行目");
+    await browser.keys("Enter");
+    await browser.keys("二行目");
+    await browser.keys("Enter");
+    await browser.keys("三行目");
+    expect(await heightOf("#prompt-input")).toBe(60);
+    await pressSend();
+    expect(await waitForCalls(edit)).toEqual([{ body: "Default body", history: [], instruction: "一行目\n二行目\n三行目" }]);
+    await waitForCount("#prompt-log .chat-ai", 1);
+    await expect(input()).toHaveValue("");
+    expect(await heightOf("#prompt-input")).toBe(20);
+    await expect($("#prompt-log .chat-user")).toHaveText("一行目\n二行目\n三行目");
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".chat-user")!).whiteSpace)).toBe("pre-wrap");
+  });
+
+  it("does not send on Cmd+Enter that only confirms an IME conversion", async () => {
+    await openPrompt();
+    const edit = await mock("claude_edit_todo_prompt", promptEdit);
+    await input().setValue("変換中");
+    await pressSend(true);
+    expect(await callsOf(edit)).toEqual([]);
+    await expect(input()).toHaveValue("変換中");
+  });
+
+  it("sends nothing on Cmd+Enter with an empty request", async () => {
+    await openPrompt();
+    const edit = await mock("claude_edit_todo_prompt", promptEdit);
+    await pressSend();
+    expect(await callsOf(edit)).toEqual([]);
+  });
+
+  it("grows with its lines up to 6, then scrolls inside; the bottom stays put, the log shrinks and stays at its end", async () => {
+    await openPrompt();
+    await ask("短くして", { ...answer, reply: "あ".repeat(3000) });
+    const log = () => browser.execute(() => {
+      const e = document.getElementById("prompt-log")!;
+      return { height: e.clientHeight, fromEnd: e.scrollHeight - e.scrollTop - e.clientHeight, overflows: e.scrollHeight > e.clientHeight };
+    });
+    const before = await log();
+    expect(before.overflows).toBe(true);
+    const bottom = () => browser.execute(() => document.getElementById("prompt-form")!.getBoundingClientRect().bottom);
+    const bottomBefore = await bottom();
+    const heights: number[] = [];
+    for (const lines of [1, 2, 6, 7, 12]) {
+      await fillLines(lines);
+      heights.push(await heightOf("#prompt-input"));
+    }
+    expect(heights).toEqual([20, 40, 120, 120, 120]);
+    // Past 6 lines the field scrolls inside.
+    expect(await browser.execute(() => {
+      const a = document.getElementById("prompt-input")!;
+      return a.scrollHeight > a.clientHeight;
+    })).toBe(true);
+    expect(await bottom()).toBe(bottomBefore);
+    const after = await log();
+    expect(after.height).toBeLessThan(before.height);
+    expect(after.fromEnd).toBeLessThan(4);
+    await fillLines(1);
+    expect(await heightOf("#prompt-input")).toBe(20);
+  });
+});
+
+describe("todo prompt screen: clearing the conversation", () => {
+  const clear = () => $("#prompt-clear");
+
+  it("is a small button at the right end of the header, disabled while there is no conversation", async () => {
+    await openPrompt();
+    await expect(clear()).toHaveText("クリア");
+    await expect(clear()).toBeDisabled();
+    expect(await heightOf("#prompt-clear")).toBe(26);
+    expect(await browser.execute(() => document.querySelector("#prompt-chat .chat-head")!.lastElementChild!.id)).toBe("prompt-clear");
+    await ask("短くして");
+    await expect(clear()).toBeEnabled();
+  });
+
+  it("clears with two presses, and the next request is sent with an empty history", async () => {
+    await openPrompt();
+    await ask("短くして");
+    await clear().click();
+    await expect(clear()).toHaveText("もう一度押すとクリア");
+    await expect(clear()).toHaveElementClass("confirm");
+    await expect(clear()).toHaveElementClass("danger");
+    await expect($("#prompt-log .chat-user")).toExist();
+    await clear().click();
+    await expect($("#prompt-log .chat-user")).not.toExist();
+    await expect($("#prompt-log .chat-ai")).not.toExist();
+    await expect(clear()).toHaveText("クリア");
+    await expect(clear()).toBeDisabled();
+    const edit = await ask("次の頼み", answer);
+    expect(await callsOf(edit)).toEqual([{ body: "Default body", history: [], instruction: "次の頼み" }]);
+  });
+
+  it("leaves the field, the saved instructions and the text being typed alone", async () => {
+    await openPrompt();
+    await ask("短くして");
+    await body().setValue("Typed by hand");
+    await input().setValue("書きかけ");
+    const save = await mock("claude_todo_prompt_save", todoPrompt);
+    await clear().click();
+    await clear().click();
+    await expect($("#prompt-log .chat-user")).not.toExist();
+    await expect(body()).toHaveValue("Typed by hand");
+    await expect(input()).toHaveValue("書きかけ");
+    await expect($("#prompt-status")).toBeDisplayed();
+    expect(await callsOf(save)).toEqual([]);
+  });
+
+  it("disarms when the button is left, and keeps the conversation", async () => {
+    await openPrompt();
+    await ask("短くして");
+    await clear().click();
+    await expect(clear()).toHaveText("もう一度押すとクリア");
+    await body().click();
+    await expect(clear()).toHaveText("クリア");
+    await expect(clear()).not.toHaveElementClass("danger");
+    await expect($("#prompt-log .chat-user")).toExist();
+  });
+
+  it("is disabled while Claude is answering", async () => {
+    await openPrompt();
+    await ask("短くして");
+    const edit = await mock("claude_edit_todo_prompt", holds);
+    await input().setValue("もう一度");
+    await $("#prompt-send").click();
+    await waitForCalls(edit);
+    await expect(clear()).toBeDisabled();
+    await release(edit, promptEdit);
+    await expect(clear()).toBeEnabled();
+  });
 });
