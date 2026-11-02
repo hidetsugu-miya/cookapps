@@ -62,13 +62,13 @@ async function showImages(urls: string[], frame: HTMLIFrameElement, ctx: ThreadC
   fitAfterImages(frame);
 }
 
-// A bar above a mail's frame with one button. The bar goes when `onClick` succeeds; a failure is shown.
-function imagesBar(label: string, onClick: () => Promise<void>) {
+// A bar above a mail's frame with the "画像を表示" button. The bar goes when `onClick` succeeds; a failure is shown.
+function imagesBar(onClick: () => Promise<void>) {
   const bar = document.createElement("div");
   bar.className = "images-bar";
   const button = document.createElement("button");
   button.className = "text-btn";
-  button.textContent = label;
+  button.textContent = "画像を表示";
   button.onclick = async () => {
     $("error").hidden = true;
     button.disabled = true;
@@ -86,13 +86,10 @@ function imagesBar(label: string, onClick: () => Promise<void>) {
 
 // The "画像を表示" bars of the open thread that are still up.
 const waiting = new Set<{ m: MessageDetail; frame: HTMLIFrameElement; urls: string[]; bar: HTMLElement }>();
-// The "この送信者の画像を自動で表示しない" bars of the open thread that are still up.
-const forgettable = new Set<{ m: MessageDetail; bar: HTMLElement }>();
 
 // Opening a thread drops the bars of the one before.
 export function resetImageBars() {
   waiting.clear();
-  forgettable.clear();
 }
 
 // The ones of `froms` whose sender Rust remembers, as a Set.
@@ -106,37 +103,22 @@ export async function knownSenders(froms: string[]) {
   }
 }
 
-// Asks Rust again after a sender was remembered or forgotten. Rust matches by address, so the display name does not matter.
+// Asks Rust again after a sender was remembered. Rust matches by address, so the display name does not matter.
 const refreshSenders = (ctx: ThreadCtx) => (ctx.senders = knownSenders(ctx.froms));
 
 // Shows the mail's external images: at once when its sender is remembered and Gmail vouches for the sender (a forged From
-// can name a remembered one), with a bar to forget the sender; otherwise, or when that fetch fails, behind a bar whose
-// button shows them and remembers the sender.
+// can name a remembered one); otherwise, or when that fetch fails, behind a bar whose button shows them and remembers the sender.
 export async function offerImages(m: MessageDetail, frame: HTMLIFrameElement, urls: string[], ctx: ThreadCtx) {
   if (m.authenticated && (await ctx.senders).has(m.from)) {
     try {
       await showImages(urls, frame, ctx);
-      if (ctx.stale()) return;
-      const bar = imagesBar("この送信者の画像を自動で表示しない", async () => {
-        await invoke("forget_image_sender", { from: m.from });
-        // The thread's other messages from this sender no longer show theirs by themselves either.
-        const known = await refreshSenders(ctx);
-        forgettable.forEach((f) => {
-          if (!known.has(f.m.from)) {
-            f.bar.remove();
-            forgettable.delete(f);
-          }
-        });
-      });
-      forgettable.add({ m, bar });
-      frame.before(bar);
       return;
     } catch {
       // No error: the bar below fetches again.
     }
   }
   if (ctx.stale()) return;
-  const bar = imagesBar("画像を表示", async () => {
+  const bar = imagesBar(async () => {
     await showImages(urls, frame, ctx);
     waiting.delete(entry);
     // The images are shown, so a failure to remember is only reported. The thread's other messages may be from this sender too.

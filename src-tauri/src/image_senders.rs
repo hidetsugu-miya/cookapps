@@ -107,15 +107,6 @@ pub fn with_sender(mut senders: Vec<String>, from: &str) -> Vec<String> {
     senders
 }
 
-/// Drops the sender of `from`; one not listed leaves the list as it is.
-pub fn without_sender(senders: Vec<String>, from: &str) -> Vec<String> {
-    let address = sender_address(from);
-    senders
-        .into_iter()
-        .filter(|s| Some(s) != address.as_ref())
-        .collect()
-}
-
 /// An empty list when image_senders.json does not exist yet.
 fn load(dir: &Path) -> Result<Vec<String>, String> {
     let path = dir.join(FILE);
@@ -162,15 +153,10 @@ impl ImageSenders {
         Ok(senders)
     }
 
-    /// Replaces the list with `change` of it and saves it; the list in memory changes only once the file did.
-    async fn update(
-        &self,
-        dir: PathBuf,
-        from: String,
-        change: fn(Vec<String>, &str) -> Vec<String>,
-    ) -> Result<(), String> {
+    /// Adds the sender of `from` to the list and saves it; the list in memory changes only once the file did.
+    async fn update(&self, dir: PathBuf, from: String) -> Result<(), String> {
         let mut senders = self.loaded(&dir).await?;
-        let new = change(senders.clone().unwrap_or_default(), &from);
+        let new = with_sender(senders.clone().unwrap_or_default(), &from);
         let to_save = new.clone();
         blocking(move || save(&dir, to_save)).await?;
         *senders = Some(new);
@@ -197,19 +183,7 @@ pub async fn remember_image_sender(
     senders: State<'_, ImageSenders>,
     from: String,
 ) -> Result<(), String> {
-    senders.update(config_dir(&app)?, from, with_sender).await
-}
-
-/// Forgets the sender of `from`.
-#[tauri::command]
-pub async fn forget_image_sender(
-    app: AppHandle,
-    senders: State<'_, ImageSenders>,
-    from: String,
-) -> Result<(), String> {
-    senders
-        .update(config_dir(&app)?, from, without_sender)
-        .await
+    senders.update(config_dir(&app)?, from).await
 }
 
 #[cfg(test)]
@@ -334,9 +308,6 @@ mod tests {
         assert!(!is_known(&list, "no address"));
         // A From with no readable address adds nothing.
         assert_eq!(with_sender(list.clone(), "no address"), list);
-        assert_eq!(without_sender(list.clone(), "c@x.com"), list);
-        assert_eq!(without_sender(list.clone(), "ALICE <a@x.com>"), ["b@x.com"]);
-        assert_eq!(without_sender(list.clone(), "no address"), list);
     }
 
     #[test]

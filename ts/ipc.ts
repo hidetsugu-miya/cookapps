@@ -47,7 +47,6 @@ export interface Commands {
   fetch_images: { args: { urls: string[] }; result: Record<string, string> };
   image_sender_known: { args: { froms: string[] }; result: string[] };
   remember_image_sender: { args: { from: string }; result: null };
-  forget_image_sender: { args: { from: string }; result: null };
   // null: a token is needed.
   todoist_load: { args: { withDone: boolean }; result: Todo | null };
   todoist_cached: { args: undefined; result: Todo | null };

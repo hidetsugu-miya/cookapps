@@ -31,6 +31,25 @@ describe("thread", () => {
     expect(await callsOf(setRead)).toHaveLength(0);
   });
 
+  it("fetches the images of a remembered, authenticated sender by itself, with no bar", async () => {
+    const url = "https://images.example.com/a.png";
+    const shown = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+    const base = threadDetail("Already read", "", false);
+    const [first] = base.messages;
+    const html = { ...first, html: true, authenticated: true, body: `<p>Hi</p><img src="${url}">` };
+    await mock("thread", { ...base, messages: [html] });
+    await mock("image_sender_known", [first.from]);
+    const fetch = await mock("fetch_images", { [url]: shown });
+    await rowOf("read-threads", "Already read").$(".subject").click();
+    await expect($("#thread-subject")).toHaveText("Already read");
+    expect(await waitForCalls(fetch)).toEqual([{ urls: [url] }]);
+    await browser.waitUntil(
+      () => browser.execute(() => document.querySelector<HTMLIFrameElement>("#messages iframe")?.contentDocument?.querySelector("img")?.getAttribute("src")?.startsWith("data:") ?? false),
+      { timeoutMsg: "the image was not swapped for its data: URI" },
+    );
+    expect(await count(".images-bar")).toBe(0);
+  });
+
   it("shows a spinner in place of the Todo button's icon while the task is made from the open thread", async () => {
     await mock("thread", threadDetail("Already read", "Old news", false));
     const make = await mock("todoist_task_from_mail", holds);
