@@ -246,12 +246,22 @@ function descParts(t: TaskItem): HTMLElement[] {
       area.focus();
       area.setSelectionRange(area.value.length, area.value.length);
     };
+    const selectedIn = () => {
+      const sel = getSelection();
+      return !!sel && !sel.isCollapsed && view.contains(sel.anchorNode) && view.contains(sel.focusNode);
+    };
     // A click on a link opens it, and one that ends a text selection in the description (to copy it) is not a press to edit.
+    // The edit waits for a second click: a double or triple click selects a word or a paragraph, and its first click has no selection yet.
+    // element.click() has `detail` 0 and counts as a press.
+    let editTimer = 0;
     view.onclick = (e) => {
       if ((e.target as Element).closest("a")) return;
-      const sel = getSelection();
-      if (sel && !sel.isCollapsed && view.contains(sel.anchorNode) && view.contains(sel.focusNode)) return;
-      edit();
+      clearTimeout(editTimer);
+      if (e.detail > 1 || selectedIn()) return;
+      editTimer = setTimeout(() => {
+        // A redraw replaced the view, or the selection came after the press.
+        if (view.isConnected && !selectedIn()) edit();
+      }, 250);
     };
     view.onkeydown = (e) => {
       if (e.key !== "Enter" || e.target !== view) return;

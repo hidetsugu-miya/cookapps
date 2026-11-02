@@ -36,6 +36,8 @@ export function showTokenForm(note = "") {
   todoState.seq++;
   todoState.todo = null;
   todoState.kept = false;
+  // The disconnect cleared the backend's completed tasks too.
+  todoState.doneStale = true;
   setTodoCount(0);
   todoState.open = null;
   $("todo-notice").replaceChildren();
@@ -70,12 +72,13 @@ function drawTodoNotice(offline: Offline | null | undefined) {
 }
 
 // Fetches the tasks and draws them. `quiet` is the timed refresh: it fetches nothing while a field is being typed in, and draws nothing when nothing changed.
-// Without `withDone` the backend reuses the completed tasks it fetched last. Returns true when a token is needed (the token form is shown).
+// Without `withDone` the backend reuses the completed tasks it fetched last, unless `doneStale` says it has none. Returns true when a token is needed (the token form is shown).
 export async function loadTodo(quiet = false, withDone = true) {
   if (quiet && (editingField() || todoState.writes)) return false;
   const seq = ++todoState.seq;
   try {
-    const data = await invoke("todoist_load", { withDone });
+    const data = await invoke("todoist_load", { withDone: withDone || todoState.doneStale });
+    if (data) todoState.doneStale = Boolean(data.offline);
     // Not while a change is in flight: the reload after the last one draws.
     if (seq !== todoState.seq || currentScreen() !== "todo" || todoState.writes) return false;
     if (data === null) {
@@ -200,9 +203,9 @@ async function loadTodoCount() {
   const seq = todoState.seq;
   let count = 0;
   try {
-    const data = await invoke("todoist_load", { withDone: todoState.countWithDone });
+    const data = await invoke("todoist_load", { withDone: todoState.doneStale });
     if (data) {
-      todoState.countWithDone = false;
+      todoState.doneStale = Boolean(data.offline);
       count = data.tasks.filter(isDueToday).length;
     } else todoState.countOff = true;
   } catch {

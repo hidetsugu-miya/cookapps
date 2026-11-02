@@ -699,6 +699,22 @@ describe("todo detail description copy", () => {
       // The click a drag selection ends in; element.click() does not press the mouse, so the selection stays.
       view.click();
     });
+    // Past the delay before a press starts the editor.
+    await browser.pause(500);
+    expect(await count("#todo-detail textarea")).toBe(0);
+    await expect($(desc)).toBeDisplayed();
+  });
+
+  it("does not open the editor on the clicks of a double click, which select a word", async () => {
+    await openReport();
+    await browser.execute(() => {
+      const view = document.querySelector<HTMLElement>("#todo-detail .desc")!;
+      // The clicks a double click makes: the first has `detail` 1 and no selection yet, the second has `detail` 2.
+      view.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      view.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+    });
+    // Past the delay before a press starts the editor.
+    await browser.pause(500);
     expect(await count("#todo-detail textarea")).toBe(0);
     await expect($(desc)).toBeDisplayed();
   });
@@ -716,6 +732,50 @@ describe("todo detail description copy", () => {
     expect(await count(copyButton)).toBe(0);
     await $("#todo-more").click();
     expect(await textsOf('.menu[role="menu"] button[role="menuitem"]')).toEqual(["タスクのリンクをコピー", "削除"]);
+  });
+});
+
+describe("todo completed tasks after an offline answer", () => {
+  // Todo data that is the cached one, as the backend answers while Todoist cannot be reached.
+  const offlineData = () => ({ ...todoData(), offline: { fetchedAt: new Date().toISOString(), reason: "network" } });
+  const withDone = async (loads: string) => (await waitForCalls(loads)).map((a) => (a as { withDone: boolean }).withDone);
+
+  async function openOffline() {
+    await boot({ inbox: inbox(), todoist_load: offlineData(), slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 1);
+    await waitForCount("#todo-notice div", 1);
+  }
+
+  it("asks for the completed tasks again on each timed refresh until an answer is not from the cache", async () => {
+    await openOffline();
+    // The timed refresh: the page's visibilitychange makes it load again.
+    const refreshNow = () => browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
+    let loads = await mock("todoist_load", offlineData());
+    await refreshNow();
+    expect(await withDone(loads)).toEqual([true]);
+    loads = await mock("todoist_load", todoData());
+    await refreshNow();
+    expect(await withDone(loads)).toEqual([true]);
+    await waitForCount("#todo-notice div", 0);
+    loads = await mock("todoist_load", todoData());
+    await refreshNow();
+    expect(await withDone(loads)).toEqual([false]);
+  });
+
+  it("asks for the completed tasks again when the Todo screen is opened until an answer is not from the cache", async () => {
+    await openOffline();
+    const reopen = async () => {
+      await $("#nav-mail").click();
+      await $("#nav-todo").click();
+    };
+    let loads = await mock("todoist_load", todoData());
+    await reopen();
+    expect(await withDone(loads)).toEqual([true]);
+    await waitForCount("#todo-notice div", 0);
+    loads = await mock("todoist_load", todoData());
+    await reopen();
+    expect(await withDone(loads)).toEqual([false]);
   });
 });
 
