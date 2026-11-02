@@ -50,6 +50,8 @@ export interface Commands {
   // null: a token is needed.
   todoist_load: { args: { withDone: boolean }; result: Todo | null };
   todoist_cached: { args: undefined; result: Todo | null };
+  // Whether a token is stored; asks Todoist nothing.
+  todoist_connected: { args: undefined; result: boolean };
   todoist_save_token: { args: { token: string }; result: null };
   todoist_disconnect: { args: undefined; result: null };
   todoist_add: { args: { text: string; projectId?: string | null; today: boolean }; result: boolean | null };

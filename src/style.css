@@ -1,4 +1,4 @@
-:root { --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; }
+:root { --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 body { font-family: -apple-system, sans-serif; font-size: 14px; margin: 0; display: flex; }
@@ -399,12 +399,12 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .add-sub { display: flex; align-items: center; gap: 16px; padding: 10px 16px; color: #888; }
 .add-sub input { flex: 1; border: 0; font: inherit; padding: 4px; }
 .add-sub input:focus { outline: none; }
-.icon-btn.confirm { width: auto; padding: 0 12px; font: inherit; }
 
 .menu { position: fixed; z-index: 10; min-width: 160px; padding: 4px; border: 1px solid var(--chip-line); border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; }
 .menu button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
 .menu button[aria-current="true"] { font-weight: bold; }
+.menu[role="menu"] button svg { width: 16px; height: 16px; flex: none; }
 
 /* Settings: one card per service (head, connected rows, add row). */
 #settings { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 32px 32px; }
@@ -416,6 +416,7 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .logo svg { width: 14px; height: 14px; stroke-width: 2.2; }
 .logo.google { background: var(--google); font-size: 13px; font-weight: bold; }
 .logo.slack { background: var(--slack); }
+.logo.todoist { background: var(--todoist); }
 .logo.claude { background: var(--claude); }
 .logo.update, .logo.calendar { background: var(--accent); }
 .day-picks { display: flex; gap: 4px; }

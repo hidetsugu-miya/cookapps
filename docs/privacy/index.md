@@ -78,7 +78,7 @@ HTML 形式のメールに含まれる画像は、既定では読み込みませ
 ## Todoist との連携
 
 利用者が Todoist の個人 API トークンを入力した場合に限り、本アプリは Todoist のサーバーと通信して、タスクとプロジェクトを表示・操作します。
-「Todo にする」を押したスレッドの件名と、アカウントのメールアドレスを含む Gmail の URL を Todoist に送り、トークンは OS の資格情報の保管場所に保存して、Todo 画面の「Todoist の接続を解除」で消せます。
+「Todo にする」を押したスレッドの件名と、アカウントのメールアドレスを含む Gmail の URL を Todoist に送り、トークンは OS の資格情報の保管場所に保存して、設定画面の「Todoist の接続を解除」で消せます。
 取得したタスクとプロジェクトは、起動直後や Todo 画面を開いた直後と、Todoist に接続できないときに前回の内容を表示するため、設定フォルダに保存し、接続を解除すると消します。
 
 ## Slack との連携
@@ -132,7 +132,7 @@ Gmail のメールそのものは消えません。
 
 本アプリへのアクセス権は、Google アカウントの「[サードパーティ製のアプリとサービス](https://myaccount.google.com/connections)」からいつでも取り消せます。
 保存したリフレッシュトークンは、macOS ではキーチェーンアクセスで「jp.mysis.cookapps」の項目を、Windows では資格情報マネージャーの「Windows 資格情報」で名前が「jp.mysis.cookapps」で終わる項目を削除すると消せます。
-Todoist のトークンは、Todo 画面の「Todoist の接続を解除」か、同じ場所で「jp.mysis.cookapps.todoist」の項目（Windows では名前がそれで終わる項目）を削除すると消せます。
+Todoist のトークンは、設定画面の「Todoist の接続を解除」か、同じ場所で「jp.mysis.cookapps.todoist」の項目（Windows では名前がそれで終わる項目）を削除すると消せます。
 Slack のトークンは、設定画面の「接続を解除」か、同じ場所で「jp.mysis.cookapps.slack」の項目（ワークスペースごと。Windows では名前がそれで終わる項目）を削除すると消せます。
 キーチェーンアクセスや資格情報マネージャーで消した場合は、設定フォルダの `todoist-cache.json`（最後に取得したタスクの控え）が残るので、手で消してください。
 v0.14.6 以前（旧名 cookup）の本アプリを使っていた場合は、同じ場所の「jp.mysis.cookup」で始まる項目と、旧設定フォルダ（macOS では `~/Library/Application Support/jp.mysis.cookup`、Windows では `%APPDATA%\jp.mysis.cookup`）も手で消してください。旧名の項目のアクセス権は、上の「サードパーティ製のアプリとサービス」から取り消せます。

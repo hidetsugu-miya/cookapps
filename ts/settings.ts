@@ -1,15 +1,16 @@
-// The settings screen: a card each for the calendar (the day the week starts on), Slack and Claude. A Slack token is never shown; Rust keeps it in the keychain.
+// The settings screen: a card each for the calendar (the day the week starts on), Todoist (whether it is connected), Slack and Claude. A token is never shown; Rust keeps it in the keychain.
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Workspace } from "./bindings/Workspace";
 import { calendarFirstDay, setCalendarFirstDay } from "./calendar.js";
 import { $, tag } from "./dom.js";
 import { avatarColor, hostOf, initials, WEEKDAYS } from "./format.js";
-import { UNLINK_SVG } from "./icons.js";
+import { LINK_SVG } from "./icons.js";
 import { code, confirmUnlink, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { appsLink, openPermissionPane, scopesBlock, SLACK_SCOPES } from "./permission-pane.js";
 import { setSlackWorkspaces } from "./slack-workspaces.js";
 import { updateAddMode } from "./todo-add.js";
+import { showTokenForm } from "./todo.js";
 import { loadPromptState } from "./todo-prompt.js";
 import { showError } from "./view.js";
 
@@ -73,11 +74,11 @@ function workspaceRow(w: Workspace, result: Check | null) {
   const avatar = tag("span", "avatar", initials(w.team));
   avatar.style.background = avatarColor(w.team);
   const unlink = tag("button", "icon-btn");
-  unlink.innerHTML = UNLINK_SVG;
+  unlink.innerHTML = LINK_SVG;
   unlink.setAttribute("aria-label", `${w.team} の接続を解除`);
   unlink.setAttribute("data-hint", "");
   unlink.onclick = () =>
-    confirmUnlink(unlink, w, async () => {
+    confirmUnlink(unlink, w.team, "トークンを Slack で取り消し、cookapps から削除します。Slack のアプリは残ります。", async () => {
       $("error").hidden = true;
       try {
         const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
@@ -171,11 +172,61 @@ async function loadCalendarCard() {
   renderCalendarCard();
 }
 
+// Whether Todoist has a token, as the Todoist card shows it; null until read. The token form stays on the Todo screen.
+let todoistConnected: boolean | null = null;
+// Only the latest read, and no read that began before an unlink, may draw the card.
+let todoistSeq = 0;
+
+function renderTodoistCard() {
+  if (todoistConnected === null) return $("todoist-items").replaceChildren();
+  let row: HTMLElement;
+  if (todoistConnected) {
+    const unlink = tag("button", "icon-btn");
+    unlink.innerHTML = LINK_SVG;
+    unlink.setAttribute("aria-label", "Todoist の接続を解除");
+    unlink.setAttribute("data-hint", "");
+    unlink.onclick = () =>
+      confirmUnlink(unlink, "Todoist", "トークンを cookapps から削除します。Todoist のタスクは残ります。", unlinkTodoist);
+    row = itemRow({ name: "Todoist", meta: "", status: ["ok", "接続済み"], actions: [unlink] });
+  } else {
+    row = itemRow({ name: "Todoist", meta: "Todo 画面でトークンを入力します", status: ["off", "未接続"] });
+  }
+  $("todoist-items").replaceChildren(row);
+}
+
+async function unlinkTodoist() {
+  $("error").hidden = true;
+  todoistSeq++;
+  try {
+    await invoke("todoist_disconnect");
+  } catch (e) {
+    return showError(e);
+  }
+  // The Todo screen forgets its content too, and the sidebar's count goes to 0.
+  showTokenForm();
+  todoistConnected = false;
+  renderTodoistCard();
+}
+
+async function loadTodoistCard() {
+  const seq = ++todoistSeq;
+  let connected: boolean;
+  try {
+    connected = await invoke("todoist_connected");
+  } catch (e) {
+    return showError(e);
+  }
+  if (seq !== todoistSeq) return;
+  todoistConnected = connected;
+  renderTodoistCard();
+}
+
 export async function loadSettings() {
   const seq = ++settingsSeq;
   $("error").hidden = true;
   loadPromptState();
   loadCalendarCard();
+  loadTodoistCard();
   let loaded: SlackLoad;
   try {
     loaded = await invoke("slack_load");

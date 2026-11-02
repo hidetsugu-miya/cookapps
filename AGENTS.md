@@ -43,7 +43,7 @@ User-facing text is in `README.md` and `docs/`.
 
 | ID | Feature | What it does |
 |----|---------|--------------|
-| T-1 | Todoist | Work with Todoist tasks in per-project and today lists and a detail view (description and subtasks), and create a task from a mail. Authentication is a personal API token |
+| T-1 | Todoist | Work with Todoist tasks in per-project and today lists and a detail view (description, subtasks, and a three-dot menu to copy the task link or delete it), and create a task from a mail. Authentication is a personal API token, and the settings screen shows the connection and unlinks it |
 
 ### Slack
 

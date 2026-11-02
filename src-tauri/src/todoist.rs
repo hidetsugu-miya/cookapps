@@ -293,6 +293,9 @@ pub struct TaskItem {
     mail: Option<MailRef>,
     /// Set on the row of a subtask; `None` on a top-level task.
     parent: Option<ParentRef>,
+    /// The task in Todoist's web app, for "copy link". Empty in a cache written before this field existed, and for an ID `task_web_url` refuses.
+    #[serde(default)]
+    url: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -678,6 +681,7 @@ fn build_todo<Tz: TimeZone>(
             mail: mail_of(&t.description),
             due,
             parent,
+            url: task_web_url(&t.id).unwrap_or_default(),
         }
     };
     let mut items: Vec<_> = tasks
@@ -1093,6 +1097,16 @@ pub async fn todoist_cached(app: AppHandle) -> Result<Option<Todo>, String> {
         rebucket(&mut todo, Local::now().date_naive());
         todo
     }))
+}
+
+/// Whether a token is stored. Asks Todoist nothing, so a settings screen can show it at once.
+#[tauri::command]
+pub async fn todoist_connected(state: State<'_, TodoistState>) -> Result<bool, String> {
+    let token = state
+        .token()
+        .await
+        .map_err(|e| log_failure("todoist_connected", TOKEN_USER, e))?;
+    Ok(token.is_some())
 }
 
 /// Stores the personal API token in the keychain. It is never logged or returned.
@@ -2260,6 +2274,35 @@ mod tests {
         std::fs::create_dir(dir.join(CACHE_TMP_FILE)).unwrap();
         assert!(save_cache(&dir, &todo, "new").is_err());
         assert_eq!(load_cache(&dir).unwrap().fetched_at, "old");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_built_task_carries_its_web_url() {
+        let t = todo(
+            vec![
+                task(json!({"id": "6XGg", "content": "a", "project_id": "p1", "priority": 4})),
+                task(json!({"id": "a/b", "content": "b", "project_id": "p1", "priority": 4})),
+            ],
+            vec![],
+        );
+        assert_eq!(t.tasks[0].url, "https://app.todoist.com/app/task/6XGg");
+        // An ID the web URL refuses leaves the url empty, which hides "copy link".
+        assert_eq!(t.tasks[1].url, "");
+    }
+
+    #[test]
+    fn a_cache_written_without_task_urls_still_loads() {
+        let dir = temp_dir("old-cache");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut file = json!({"fetched_at": "2026-10-29T01:02:03Z", "todo": cached_todo()});
+        for t in file["todo"]["tasks"].as_array_mut().unwrap() {
+            assert!(t.as_object_mut().unwrap().remove("url").is_some());
+        }
+        std::fs::write(dir.join(CACHE_FILE), file.to_string()).unwrap();
+        let loaded = load_cache(&dir).unwrap();
+        assert_eq!(loaded.todo.tasks[0].id, "t1");
+        assert_eq!(loaded.todo.tasks[0].url, "");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
