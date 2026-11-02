@@ -4,7 +4,7 @@ import type { TimedItem } from "./TimedItem";
 
 export type Week = { 
 /**
- * Local date (YYYY-MM-DD) of the Sunday the week starts on.
+ * Local date (YYYY-MM-DD) of the day the week starts on (the first day of the week the setting names).
  */
 weekStart: string, allDay: Array<AllDayItem>, timed: Array<TimedItem>, 
 /**

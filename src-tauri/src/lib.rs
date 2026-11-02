@@ -118,6 +118,8 @@ pub fn run() {
             auth::remove_account,
             calendar::calendar_week,
             calendar::calendar_cached,
+            calendar::calendar_first_day,
+            calendar::set_calendar_first_day,
             gmail::inbox,
             gmail::inbox_cached,
             gmail::thread,

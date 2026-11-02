@@ -4,6 +4,7 @@
 import type { Checked } from "../ts/bindings/Checked";
 import type { Claude } from "../ts/bindings/Claude";
 import type { Inbox } from "../ts/bindings/Inbox";
+import type { Info } from "../ts/bindings/Info";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
@@ -79,6 +80,17 @@ export const waitForText = (selector: string, text: string) =>
 export const waitForCount = (selector: string, n: number) =>
   browser.waitUntil(async () => (await count(selector)) === n, { timeoutMsg: `expected ${n} of ${selector}` });
 
+// Replaces navigator.clipboard.writeText with a function that keeps the text in the page, so a spec never touches the real clipboard. A reload undoes it.
+export const stubClipboard = () =>
+  browser.execute(() => {
+    const w = window as unknown as { __e2e_copied__: string[] };
+    w.__e2e_copied__ = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void w.__e2e_copied__.push(t) } });
+  });
+
+// The texts written to the stubbed clipboard so far.
+export const copiedTexts = () => browser.execute(() => (window as unknown as { __e2e_copied__: string[] }).__e2e_copied__);
+
 // Cmd+Z (Ctrl+Z off macOS), sent to the page as the key event the app listens for.
 export const pressUndo = () =>
   browser.execute(() => {
@@ -128,18 +140,42 @@ export const threadDetail = (subject: string, body: string, unread: boolean): Th
 
 // ---- Calendar ----
 
-// The week holding today: a timed event 10:00-11:00, a tentative one 12:00-13:00, an unanswered one 14:00-15:00 and an all-day event, all today.
-export function weekOfToday(): Week {
+// The week holding today, starting on `firstDay` (0 = Sunday): all today.
+// "Team sync" 10:00-11:00 has every detail (a Meet link, a place, a description with a link, 6 people of whom 4 accepted) and was accepted.
+// "Maybe lunch" 12:00-13:00 is tentative and "Unanswered" 14:00-15:00 is unanswered; both have no detail. "Holiday" is an all-day event with no detail.
+export const meetUrl = "https://meet.google.com/abc-defg-hij";
+export function weekOfToday(firstDay = 0): Week {
   const now = new Date();
-  const sunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
-  const info = (summary: string, response: ResponseStatus = "unknown") => ({ summary, color: null, account, response });
+  const day = (now.getDay() + 7 - firstDay) % 7;
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
+  const info = (summary: string, whenText: string, response: ResponseStatus = "unknown", detail: Partial<Info> = {}): Info => ({
+    summary,
+    color: null,
+    account,
+    response,
+    calendar: "Work",
+    whenText,
+    meetUrl: null,
+    location: null,
+    description: null,
+    attendees: 0,
+    accepted: 0,
+    ...detail,
+  });
+  const detail: Partial<Info> = {
+    meetUrl,
+    location: "Room B",
+    description: "Review the plan.\nDocs: https://example.com/plan",
+    attendees: 6,
+    accepted: 4,
+  };
   return {
-    weekStart: isoDate(sunday),
-    allDay: [{ day: now.getDay(), ...info("Holiday") }],
+    weekStart: isoDate(start),
+    allDay: [{ day, ...info("Holiday", "11月3日（火）終日", "unknown", { calendar: "Holidays" }) }],
     timed: [
-      { day: now.getDay(), startMin: 600, endMin: 660, col: 0, cols: 1, ...info("Team sync") },
-      { day: now.getDay(), startMin: 720, endMin: 780, col: 0, cols: 1, ...info("Maybe lunch", "tentative") },
-      { day: now.getDay(), startMin: 840, endMin: 900, col: 0, cols: 1, ...info("Unanswered", "needsAction") },
+      { day, startMin: 600, endMin: 660, col: 0, cols: 1, ...info("Team sync", "11月2日（月）10:00 - 11:00", "accepted", detail) },
+      { day, startMin: 720, endMin: 780, col: 0, cols: 1, ...info("Maybe lunch", "11月2日（月）12:00 - 13:00", "tentative") },
+      { day, startMin: 840, endMin: 900, col: 0, cols: 1, ...info("Unanswered", "11月2日（月）14:00 - 15:00", "needsAction") },
     ],
     needsLogin: [],
     failed: {},

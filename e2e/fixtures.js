@@ -22,6 +22,8 @@ const fixtures = JSON.parse(sessionStorage.getItem("e2e-fixtures") ?? "{}");
 const answers = {
   inbox_cached: null,
   calendar_cached: [],
+  calendar_first_day: 0,
+  set_calendar_first_day: null,
   inbox: { accounts: [], threads: [], needsLogin: [], failed: {}, historyIds: {} },
   sync: { kind: "unchanged" },
   todoist_cached: null,

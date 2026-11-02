@@ -3,6 +3,7 @@ import type { AllDayItem } from "./bindings/AllDayItem";
 import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
 import { addAccount, refreshPopup } from "./accounts.js";
+import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
 import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
 import { invoke } from "./ipc.js";
@@ -14,11 +15,23 @@ const HOUR_PX = 64;
 const MIN_EVENT_MIN = 20;
 const CAL_REFRESH_MS = 5 * 60 * 1000;
 
+// The day the week starts on (0 = Sunday to 6 = Saturday), read from the backend once; null until it is asked for. No week is fetched before it is known.
+let firstDayRead: Promise<number> | null = null;
+
+export function calendarFirstDay() {
+  // A failed read is asked for again next time.
+  firstDayRead ??= invoke("calendar_first_day").catch((e) => {
+    firstDayRead = null;
+    throw e;
+  });
+  return firstDayRead;
+}
+
 // A day of the week on screen, as "YYYY-MM-DD", and the week drawn now once loaded.
 let calDate = isoDate(new Date());
 let calShown: Week | null = null;
 let calSeq = 0;
-// Weeks fetched so far by their Sunday ("YYYY-MM-DD"), oldest first; memory only.
+// Weeks fetched so far by their first day ("YYYY-MM-DD"), oldest first; memory only.
 const calCache = new Map<string, Week>();
 const CAL_CACHE_MAX = 10;
 // The weeks the last run kept, read once and then drawn from here; not fetched weeks, so a draw from it is always followed by a fetch.
@@ -35,11 +48,27 @@ let calScrolled = false;
 // The accounts changed (a login, a removal): the weeks kept so far and the calendar lists behind them are stale.
 // The popup must not keep the old state until the calendar is opened; `dropKept` also forgets the weeks of the last run.
 export function resetCalendar(dropKept: boolean) {
+  dropWeeks();
   if (dropKept) keptWeeks = Promise.resolve([]);
+  calRefresh = true;
+}
+
+// Forgets the weeks drawn and fetched so far (not the calendar lists behind them).
+function dropWeeks() {
+  closeDetail();
   calCache.clear();
   calEpoch++;
-  calRefresh = true;
   calShown = null;
+}
+
+// Saves the day the week starts on and drops the weeks drawn and kept for the old one; the calendar draws the new weeks when it is opened next.
+// A week is told by its first day's date, which falls on the chosen weekday, so a week kept for another first day is never taken for one of this.
+export async function setCalendarFirstDay(day: number) {
+  await invoke("set_calendar_first_day", { firstDay: day });
+  firstDayRead = Promise.resolve(day);
+  // A load on its way would draw a week of the old first day.
+  calSeq++;
+  dropWeeks();
 }
 
 // Whether the shown week says that `account` must log in again for the calendar.
@@ -54,8 +83,17 @@ const CAL_NAME_MAX = 20;
 const RESPONSE_CLASS: Record<string, string> = { declined: " declined", tentative: " tentative", needsAction: " needs-action" };
 const responseClass = (response: string) => RESPONSE_CLASS[response] ?? "";
 
+// A button that opens the event's detail (ts/calendar-detail.ts).
+function eventButton(className: string, e: AllDayItem | TimedItem) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = className;
+  bindEvent(b, e, eventColor(e), e.day);
+  return b;
+}
+
 function eventBox(e: TimedItem) {
-  const box = el(`cal-event${responseClass(e.response)}`);
+  const box = eventButton(`cal-event${responseClass(e.response)}`, e);
   box.style.top = `${(e.startMin / 60) * HOUR_PX}px`;
   box.style.height = `${(Math.max(e.endMin - e.startMin, MIN_EVENT_MIN) / 60) * HOUR_PX - 1}px`;
   box.style.left = `${(e.col / e.cols) * 100}%`;
@@ -74,7 +112,8 @@ function eventBox(e: TimedItem) {
 }
 
 function allDayChip(e: AllDayItem) {
-  const c = el(`cal-chip${responseClass(e.response)}`, e.summary || "(件名なし)");
+  const c = eventButton(`cal-chip${responseClass(e.response)}`, e);
+  c.textContent = e.summary || "(件名なし)";
   c.style.setProperty("--c", eventColor(e));
   c.title = `${e.summary}\n${e.account}`;
   return c;
@@ -101,6 +140,7 @@ function drawNow() {
 
 function renderWeek(w: Week) {
   calShown = w;
+  startEvents();
   const days = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(w.weekStart, i));
   const todayIndex = days.findIndex((d) => isoDate(d) === isoDate(new Date()));
   const mark = <N extends HTMLElement>(node: N, i: number) => {
@@ -163,6 +203,8 @@ function renderWeek(w: Week) {
       return div;
     }),
   );
+  // A detail open on an event of the old draw follows it into this one.
+  endEvents();
   refreshPopup();
   if (!calScrolled) {
     // Two hours before now at the top (11:00 shows from 9:00); a little less keeps the hour label whole.
@@ -171,15 +213,16 @@ function renderWeek(w: Week) {
   }
 }
 
-// The Sunday of the week holding the "YYYY-MM-DD" date.
-const weekKey = (iso: string) => isoDate(addDays(iso, -addDays(iso, 0).getDay()));
+// The date of the first day of the week, which starts on the weekday `first`, holding the "YYYY-MM-DD" date.
+// Keep in step with week_start in calendar.rs.
+const weekKey = (iso: string, first: number) => isoDate(addDays(iso, -((addDays(iso, 0).getDay() + 7 - first) % 7)));
 
-// Fetches the week holding `date` and keeps it, dropping the oldest beyond CAL_CACHE_MAX.
-async function fetchWeek(date: string, refresh: boolean) {
+// Fetches the week holding `date` that starts on `first`, and keeps it, dropping the oldest beyond CAL_CACHE_MAX.
+async function fetchWeek(date: string, first: number, refresh: boolean) {
   const epoch = calEpoch;
   refresh ||= calRefresh;
   calRefresh = false;
-  const week = await invoke("calendar_week", { date, refresh });
+  const week = await invoke("calendar_week", { date, firstDay: first, refresh });
   if (epoch === calEpoch) {
     calCache.delete(week.weekStart);
     calCache.set(week.weekStart, week);
@@ -189,11 +232,11 @@ async function fetchWeek(date: string, refresh: boolean) {
 }
 
 // Fetches in the background the weeks before and after `key` that are not kept yet; a failure is left to when the week is opened.
-function prefetchAround(key: string) {
+function prefetchAround(key: string, first: number) {
   for (const k of [isoDate(addDays(key, -7)), isoDate(addDays(key, 7))]) {
     if (calCache.has(k) || calAhead.has(k)) continue;
     calAhead.add(k);
-    fetchWeek(k, false)
+    fetchWeek(k, first, false)
       .catch(() => {})
       .finally(() => calAhead.delete(k));
   }
@@ -212,9 +255,17 @@ async function showKeptWeek(key: string, seq: number) {
 // With none kept, the old week stays (dimmed) until the new one arrives.
 export async function loadCalendar(refresh = false) {
   const seq = ++calSeq;
-  const key = weekKey(calDate);
-  const kept = calCache.get(key);
   $("error").hidden = true;
+  let first: number;
+  try {
+    first = await calendarFirstDay();
+  } catch (e) {
+    if (seq === calSeq) showError(e);
+    return;
+  }
+  if (seq !== calSeq) return;
+  const key = weekKey(calDate, first);
+  const kept = calCache.get(key);
   if (kept) {
     if (calShown?.weekStart !== key) renderWeek(kept);
   } else {
@@ -222,10 +273,10 @@ export async function loadCalendar(refresh = false) {
     showKeptWeek(key, seq);
   }
   try {
-    const week = await fetchWeek(calDate, refresh);
+    const week = await fetchWeek(calDate, first, refresh);
     if (seq === calSeq) {
       if (JSON.stringify(week) !== JSON.stringify(calShown)) renderWeek(week);
-      prefetchAround(key);
+      prefetchAround(key, first);
     }
   } catch (e) {
     if (seq === calSeq) showError(e);
@@ -242,6 +293,7 @@ export function showCalendar() {
 }
 
 const moveWeek = (date: string) => {
+  closeDetail();
   calDate = date;
   loadCalendar();
 };

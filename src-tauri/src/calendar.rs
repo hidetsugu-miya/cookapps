@@ -8,7 +8,7 @@ use std::{
 
 use chrono::{
     DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, NaiveTime, SecondsFormat,
-    TimeZone, Utc,
+    TimeZone, Timelike, Utc,
 };
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -18,12 +18,17 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::{
+    accounts::write_synced,
     auth::{config_dir, Auth},
     disk_cache,
     gmail::{log_failure, send_json_refreshing, ApiError},
 };
 
 const CALENDAR_LIST_URL: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+/// The `fields` of an event list: what `list_events` needs, and what the detail of the week adds.
+const EVENT_FIELDS: &str =
+    "nextPageToken,items(summary,iCalUID,start,end,attendees(self,responseStatus))";
+const EVENT_DETAIL_FIELDS: &str = "nextPageToken,items(summary,iCalUID,start,end,description,location,hangoutLink,attendees(self,responseStatus,resource))";
 const CALENDARS_URL: &str = "https://www.googleapis.com/calendar/v3/calendars";
 // shortcut: past this many pages (2500 events of one calendar) the rest is dropped, upgrade if a week ever needs more.
 const MAX_PAGES: usize = 10;
@@ -60,6 +65,40 @@ struct Attendee {
     is_self: bool,
     #[serde(default, rename = "responseStatus")]
     response_status: ResponseStatus,
+    /// A room or other resource, not a person.
+    #[serde(default)]
+    resource: bool,
+}
+
+/// How many people are invited (rooms left out), and how many of them accepted.
+fn attendee_counts(attendees: &[Attendee]) -> (u32, u32) {
+    let people = attendees.iter().filter(|a| !a.resource);
+    let accepted = people
+        .clone()
+        .filter(|a| a.response_status == ResponseStatus::Accepted);
+    (people.count() as u32, accepted.count() as u32)
+}
+
+/// The Meet link of the event: only an address on `meet.google.com`, so the screen never offers a link to anywhere else.
+fn meet_url(link: Option<&str>) -> Option<String> {
+    link.filter(|l| l.starts_with("https://meet.google.com/"))
+        .map(str::to_owned)
+}
+
+/// `None` for a missing or blank text.
+fn non_empty(text: Option<String>) -> Option<String> {
+    text.filter(|t| !t.trim().is_empty())
+}
+
+/// Longest description kept, in characters; a multi-day event carries it once per day on the screen and in the cache.
+const DESCRIPTION_MAX: usize = 10_000;
+
+/// `text` cut to `DESCRIPTION_MAX` characters, never inside a character.
+fn clip_description(text: String) -> String {
+    match text.char_indices().nth(DESCRIPTION_MAX) {
+        Some((end, _)) => text[..end].to_owned(),
+        None => text,
+    }
 }
 
 #[derive(Deserialize)]
@@ -74,6 +113,10 @@ struct ApiEvent {
     end: ApiTime,
     #[serde(default)]
     attendees: Vec<Attendee>,
+    #[serde(rename = "hangoutLink")]
+    hangout_link: Option<String>,
+    location: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -142,11 +185,18 @@ struct RawEvent {
     summary: String,
     response: ResponseStatus,
     ical_uid: String,
+    meet_url: Option<String>,
+    location: Option<String>,
+    description: Option<String>,
+    /// Invited people (rooms left out), and how many of them accepted.
+    attendees: u32,
+    accepted: u32,
     when: When,
 }
 
 impl RawEvent {
     fn from_api(e: ApiEvent, account: &str, cal: &CalendarEntry) -> Option<Self> {
+        let (attendees, accepted) = attendee_counts(&e.attendees);
         Some(Self {
             when: when(&e.start, &e.end)?,
             response: e
@@ -160,7 +210,55 @@ impl RawEvent {
             calendar: cal.summary.clone().unwrap_or_else(|| cal.id.clone()),
             summary: e.summary,
             ical_uid: e.ical_uid,
+            meet_url: meet_url(e.hangout_link.as_deref()),
+            location: non_empty(e.location),
+            description: non_empty(e.description).map(clip_description),
+            attendees,
+            accepted,
         })
+    }
+}
+
+const WEEKDAY_NAMES: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
+
+/// `11月2日（月）`.
+fn day_text(d: NaiveDate) -> String {
+    format!(
+        "{}月{}日（{}）",
+        d.month(),
+        d.day(),
+        WEEKDAY_NAMES[d.weekday().num_days_from_sunday() as usize]
+    )
+}
+
+/// The time of an event as the detail shows it, in `tz`: `11月2日（月）13:00 - 14:30`, across midnight `11月2日（月）23:00 - 11月3日（火）1:00`,
+/// all day `11月3日（火）終日`, several days `11月3日（火）- 11月5日（木）`. An event that ends where it starts shows its start only.
+fn when_text<Tz: TimeZone>(tz: &Tz, when: &When) -> String {
+    match when {
+        When::AllDay { start, end } => {
+            // The API's end date is exclusive.
+            let last = (*end - Duration::days(1)).max(*start);
+            if last == *start {
+                format!("{}終日", day_text(*start))
+            } else {
+                format!("{}- {}", day_text(*start), day_text(last))
+            }
+        }
+        When::Timed { start, end } => {
+            let (s, e) = (
+                start.with_timezone(tz).naive_local(),
+                end.with_timezone(tz).naive_local(),
+            );
+            let clock = |t: NaiveTime| format!("{}:{:02}", t.hour(), t.minute());
+            let from = format!("{}{}", day_text(s.date()), clock(s.time()));
+            if e <= s {
+                from
+            } else if e.date() == s.date() {
+                format!("{from} - {}", clock(e.time()))
+            } else {
+                format!("{from} - {}{}", day_text(e.date()), clock(e.time()))
+            }
+        }
     }
 }
 
@@ -177,20 +275,47 @@ pub struct Info {
     /// Absent in a cache an older version wrote.
     #[serde(default)]
     response: ResponseStatus,
+    /// Name of the calendar the event is on. This and the fields below are absent in a cache an older version wrote (empty text, `None`, 0).
+    #[serde(default)]
+    calendar: String,
+    /// The time as the detail shows it, e.g. `11月2日（月）13:00 - 14:30`.
+    #[serde(default)]
+    when_text: String,
+    /// A `https://meet.google.com/` link, else `None`.
+    #[serde(default)]
+    meet_url: Option<String>,
+    #[serde(default)]
+    location: Option<String>,
+    /// As Google sends it: plain text or a little HTML.
+    #[serde(default)]
+    description: Option<String>,
+    /// Invited people (rooms left out), and how many of them accepted.
+    #[serde(default)]
+    attendees: u32,
+    #[serde(default)]
+    accepted: u32,
 }
 
-impl From<&RawEvent> for Info {
-    fn from(e: &RawEvent) -> Self {
+impl Info {
+    /// `tz` is the zone the times are shown in.
+    fn new<Tz: TimeZone>(e: &RawEvent, tz: &Tz) -> Self {
         Self {
             summary: e.summary.clone(),
             color: e.color.clone(),
             account: e.account.clone(),
             response: e.response,
+            calendar: e.calendar.clone(),
+            when_text: when_text(tz, &e.when),
+            meet_url: e.meet_url.clone(),
+            location: e.location.clone(),
+            description: e.description.clone(),
+            attendees: e.attendees,
+            accepted: e.accepted,
         }
     }
 }
 
-/// An all-day event on one day of the week (0 = Sunday). A multi-day event gets one item per day.
+/// An all-day event on one day of the week (0 = the first day). A multi-day event gets one item per day.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -221,7 +346,7 @@ pub struct TimedItem {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct Week {
-    /// Local date (YYYY-MM-DD) of the Sunday the week starts on.
+    /// Local date (YYYY-MM-DD) of the day the week starts on (the first day of the week the setting names).
     week_start: String,
     all_day: Vec<AllDayItem>,
     timed: Vec<TimedItem>,
@@ -298,8 +423,71 @@ pub struct Events {
     calendar_failed: Vec<String>,
 }
 
-fn week_start(date: NaiveDate) -> NaiveDate {
-    date - Duration::days(date.weekday().num_days_from_sunday().into())
+/// The first day of the week as the setting holds it: 0 = Sunday to 6 = Saturday.
+fn check_first_day(first_day: u8) -> Result<u8, String> {
+    if first_day <= 6 {
+        Ok(first_day)
+    } else {
+        Err(format!("週の始まりが不正です: {first_day}"))
+    }
+}
+
+/// The first day of the week (`first_day`, 0 = Sunday) on or before `date`.
+fn week_start(date: NaiveDate, first_day: u8) -> Result<NaiveDate, String> {
+    let first_day = u32::from(check_first_day(first_day)?);
+    let back = (date.weekday().num_days_from_sunday() + 7 - first_day) % 7;
+    Ok(date - Duration::days(back.into()))
+}
+
+const SETTINGS_FILE: &str = "calendar-settings.json";
+const SETTINGS_TMP_FILE: &str = "calendar-settings.json.tmp";
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsFile {
+    first_day: u8,
+}
+
+/// The first day a settings file holds. A file that does not say a valid one gives Sunday.
+fn parse_first_day(text: &str) -> u8 {
+    serde_json::from_str::<SettingsFile>(text)
+        .ok()
+        .and_then(|f| check_first_day(f.first_day).ok())
+        .unwrap_or(0)
+}
+
+fn load_first_day(dir: &Path) -> u8 {
+    std::fs::read_to_string(dir.join(SETTINGS_FILE))
+        .map(|text| parse_first_day(&text))
+        .unwrap_or(0)
+}
+
+fn save_first_day(dir: &Path, first_day: u8) -> Result<(), String> {
+    let first_day = check_first_day(first_day)?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let (path, tmp) = (dir.join(SETTINGS_FILE), dir.join(SETTINGS_TMP_FILE));
+    let text =
+        serde_json::to_string_pretty(&SettingsFile { first_day }).map_err(|e| e.to_string())?;
+    write_synced(&tmp, &text)
+        .and_then(|()| std::fs::rename(&tmp, &path))
+        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+}
+
+/// The first day of the week: 0 = Sunday (the default) to 6 = Saturday.
+#[tauri::command]
+pub async fn calendar_first_day(app: AppHandle) -> Result<u8, String> {
+    let dir = config_dir(&app)?;
+    tokio::task::spawn_blocking(move || load_first_day(&dir))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_calendar_first_day(app: AppHandle, first_day: u8) -> Result<(), String> {
+    let dir = config_dir(&app)?;
+    tokio::task::spawn_blocking(move || save_first_day(&dir, first_day))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// `timeMin` / `timeMax` of `[from, to)`: local midnights as UTC RFC 3339.
@@ -398,6 +586,7 @@ fn build_week<Tz: TimeZone>(
         if is_duplicate(&mut seen, e) {
             continue;
         }
+        let info = Info::new(e, tz);
         for day in 0..7 {
             let d = start + Duration::days(day as i64);
             match &e.when {
@@ -405,7 +594,7 @@ fn build_week<Tz: TimeZone>(
                     if *s <= d && d < *end {
                         all_day.push(AllDayItem {
                             day,
-                            info: e.into(),
+                            info: info.clone(),
                         });
                     }
                 }
@@ -426,7 +615,7 @@ fn build_week<Tz: TimeZone>(
                             end_min: minutes(end.min(day_end)),
                             col: 0,
                             cols: 1,
-                            info: e.into(),
+                            info: info.clone(),
                         });
                     }
                 }
@@ -590,6 +779,7 @@ async fn calendar_events(
     cal: &CalendarEntry,
     min: &str,
     max: &str,
+    fields: &str,
 ) -> Result<Option<Vec<RawEvent>>, ApiError> {
     let event_query = [
         ("singleEvents", "true"),
@@ -597,10 +787,7 @@ async fn calendar_events(
         ("timeMin", min),
         ("timeMax", max),
         ("maxResults", "250"),
-        (
-            "fields",
-            "nextPageToken,items(summary,iCalUID,start,end,attendees(self,responseStatus))",
-        ),
+        ("fields", fields),
     ];
     let url = events_url(&cal.id)?;
     let Some(pages) = fetch_pages::<EventPage>(dir, auth, account, &url, &event_query, |p| {
@@ -628,6 +815,7 @@ struct AccountEvents {
 /// Events in `[min, max)` of every selected calendar of one account, the calendars fetched at once.
 /// `refresh` lists the calendars again instead of using the kept list. `Ok(None)` means that account must log in again.
 /// A failure of the whole account is an `Err`; a failure of one calendar leaves that calendar out and is listed in `failed`.
+#[allow(clippy::too_many_arguments)]
 async fn account_events(
     dir: &Path,
     auth: &Auth,
@@ -635,6 +823,7 @@ async fn account_events(
     account: &str,
     min: &str,
     max: &str,
+    fields: &str,
     refresh: bool,
 ) -> Result<Option<AccountEvents>, ApiError> {
     let kept = if refresh {
@@ -661,8 +850,8 @@ async fn account_events(
         .cloned()
         .map(|cal| {
             let (dir, auth, account) = (dir.to_owned(), auth.clone(), account.to_owned());
-            let (min, max) = (min.to_owned(), max.to_owned());
-            async move { calendar_events(&dir, &auth, &account, &cal, &min, &max).await }
+            let (min, max, fields) = (min.to_owned(), max.to_owned(), fields.to_owned());
+            async move { calendar_events(&dir, &auth, &account, &cal, &min, &max, &fields).await }
         })
         .collect();
     let mut out = AccountEvents {
@@ -694,7 +883,8 @@ struct Collected {
 }
 
 /// Events in `[min, max)` of every account, the accounts fetched at once. Accounts needing login or failing to load,
-/// and calendars failing to load, are listed, not fatal. `command` names the caller in the failure log.
+/// and calendars failing to load, are listed, not fatal. `command` names the caller in the failure log. `fields` is the `fields` query of the event lists.
+#[allow(clippy::too_many_arguments)]
 async fn collect_events(
     dir: &Path,
     auth: &Auth,
@@ -702,6 +892,7 @@ async fn collect_events(
     command: &str,
     min: &str,
     max: &str,
+    fields: &str,
     refresh: bool,
 ) -> Result<Collected, String> {
     let (mut events, mut needs_login, mut failed) = (Vec::new(), Vec::new(), HashMap::new());
@@ -714,7 +905,10 @@ async fn collect_events(
         .map(|account| {
             let (dir, auth, cache) = (dir.to_owned(), auth.clone(), cache.clone());
             let (account, min, max) = (account.clone(), min.to_owned(), max.to_owned());
-            async move { account_events(&dir, &auth, &cache, &account, &min, &max, refresh).await }
+            let fields = fields.to_owned();
+            async move {
+                account_events(&dir, &auth, &cache, &account, &min, &max, &fields, refresh).await
+            }
         })
         .collect();
     let results = join_all(jobs)
@@ -764,6 +958,7 @@ pub async fn list_events(dir: &Path, auth: &Auth, from: &str, to: &str) -> Resul
         "list_events",
         &min,
         &max,
+        EVENT_FIELDS,
         true,
     )
     .await?;
@@ -775,7 +970,7 @@ pub async fn list_events(dir: &Path, auth: &Auth, from: &str, to: &str) -> Resul
     })
 }
 
-/// The week containing `date` (YYYY-MM-DD, local), Sunday first, with the events of every account, the accounts fetched at once.
+/// The week containing `date` (YYYY-MM-DD, local), starting on `first_day` (0 = Sunday to 6 = Saturday), with the events of every account, the accounts fetched at once.
 /// `refresh` lists each account's calendars again instead of using the kept lists.
 /// Accounts needing login or failing to load, and calendars failing to load, are listed, not fatal.
 #[tauri::command]
@@ -784,15 +979,26 @@ pub async fn calendar_week(
     auth: State<'_, Auth>,
     cache: State<'_, CalendarCache>,
     date: String,
+    first_day: u8,
     refresh: bool,
 ) -> Result<Week, String> {
     let date: NaiveDate = date
         .parse()
         .map_err(|_| format!("日付が不正です: {date}"))?;
-    let start = week_start(date);
+    let start = week_start(date, first_day)?;
     let (min, max) = week_bounds(&Local, start).ok_or("週の範囲を求められません")?;
     let dir = config_dir(&app).map_err(|e| log_failure("calendar_week", "-", e))?;
-    let found = collect_events(&dir, &auth, &cache, "calendar_week", &min, &max, refresh).await?;
+    let found = collect_events(
+        &dir,
+        &auth,
+        &cache,
+        "calendar_week",
+        &min,
+        &max,
+        EVENT_DETAIL_FIELDS,
+        refresh,
+    )
+    .await?;
     let (all_day, timed) = build_week(&Local, start, found.events);
     let week = Week {
         week_start: start.to_string(),
@@ -891,10 +1097,31 @@ mod tests {
             summary: summary.into(),
             response: ResponseStatus::Unknown,
             ical_uid: String::new(),
+            meet_url: None,
+            location: None,
+            description: None,
+            attendees: 0,
+            accepted: 0,
             when: When::AllDay {
                 start: date("2026-01-01"),
                 end: date("2026-01-02"),
             },
+        }
+    }
+
+    fn info(summary: &str, color: Option<&str>, response: ResponseStatus) -> Info {
+        Info {
+            summary: summary.into(),
+            color: color.map(Into::into),
+            account: "a@example.com".into(),
+            response,
+            calendar: "c".into(),
+            when_text: String::new(),
+            meet_url: None,
+            location: None,
+            description: None,
+            attendees: 0,
+            accepted: 0,
         }
     }
 
@@ -958,9 +1185,207 @@ mod tests {
 
     #[test]
     fn week_starts_on_sunday() {
-        assert_eq!(week_start(date("2026-10-29")), date("2026-10-25")); // Thursday
-        assert_eq!(week_start(date("2026-10-25")), date("2026-10-25")); // Sunday
-        assert_eq!(week_start(date("2026-10-31")), date("2026-10-25")); // Saturday
+        assert_eq!(week_start(date("2026-10-29"), 0), Ok(date("2026-10-25"))); // Thursday
+        assert_eq!(week_start(date("2026-10-25"), 0), Ok(date("2026-10-25"))); // Sunday
+        assert_eq!(week_start(date("2026-10-31"), 0), Ok(date("2026-10-25"))); // Saturday
+    }
+
+    #[test]
+    fn week_starts_on_the_chosen_day() {
+        // Monday 26th to Sunday Nov 1st.
+        for d in ["2026-10-26", "2026-10-29", "2026-11-01"] {
+            assert_eq!(week_start(date(d), 1), Ok(date("2026-10-26")), "{d}");
+        }
+        // The day before the first day belongs to the week before.
+        assert_eq!(week_start(date("2026-10-25"), 1), Ok(date("2026-10-19")));
+        // Saturday first: Sat 24th to Fri 30th.
+        assert_eq!(week_start(date("2026-10-24"), 6), Ok(date("2026-10-24")));
+        assert_eq!(week_start(date("2026-10-30"), 6), Ok(date("2026-10-24")));
+        assert_eq!(week_start(date("2026-10-31"), 6), Ok(date("2026-10-31")));
+        // Whatever the first day, the week starts on that weekday and holds the date.
+        for first in 0..=6u8 {
+            let start = week_start(date("2026-10-29"), first).unwrap();
+            assert_eq!(start.weekday().num_days_from_sunday(), u32::from(first));
+            assert!((0..7).contains(&(date("2026-10-29") - start).num_days()));
+        }
+    }
+
+    #[test]
+    fn first_day_outside_sunday_to_saturday_is_an_error() {
+        assert_eq!(check_first_day(6), Ok(6));
+        assert!(check_first_day(7).unwrap_err().contains('7'));
+        assert!(week_start(date("2026-10-29"), 7).is_err());
+        assert!(week_start(date("2026-10-29"), 255).is_err());
+    }
+
+    #[test]
+    fn first_day_setting_reads_a_valid_day_and_falls_back_to_sunday() {
+        assert_eq!(parse_first_day(r#"{"firstDay":1}"#), 1);
+        assert_eq!(parse_first_day(r#"{"firstDay":6}"#), 6);
+        for text in [
+            "",
+            "{",
+            "{}",
+            r#"{"firstDay":7}"#,
+            r#"{"firstDay":-1}"#,
+            r#"{"firstDay":"1"}"#,
+        ] {
+            assert_eq!(parse_first_day(text), 0, "{text}");
+        }
+    }
+
+    #[test]
+    fn first_day_load_gives_what_save_wrote_and_sunday_for_no_file() {
+        let dir = std::env::temp_dir().join(format!("cookapps-calendar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(load_first_day(&dir), 0);
+        save_first_day(&dir, 1).unwrap();
+        assert_eq!(load_first_day(&dir), 1);
+        assert!(save_first_day(&dir, 7).is_err());
+        assert_eq!(load_first_day(&dir), 1);
+        save_first_day(&dir, 0).unwrap();
+        assert_eq!(load_first_day(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn meet_url_is_kept_only_for_google_meet() {
+        assert_eq!(
+            meet_url(Some("https://meet.google.com/abc-defg-hij")).as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+        for other in [
+            None,
+            Some(""),
+            Some("http://meet.google.com/abc"),
+            Some("https://meet.google.com.example.com/abc"),
+            Some("https://example.com/https://meet.google.com/"),
+            Some("https://zoom.us/j/1"),
+            Some("javascript:alert(1)"),
+            Some(" https://meet.google.com/abc"),
+        ] {
+            assert_eq!(meet_url(other), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn empty_text_is_none() {
+        assert_eq!(non_empty(None), None);
+        assert_eq!(non_empty(Some(String::new())), None);
+        assert_eq!(non_empty(Some(" \n".into())), None);
+        assert_eq!(non_empty(Some("a".into())).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn attendees_are_counted_without_rooms() {
+        let attendees: Vec<Attendee> = serde_json::from_str(
+            r#"[{"responseStatus":"accepted"},{"self":true,"responseStatus":"accepted"},
+                {"responseStatus":"declined"},{"responseStatus":"needsAction"},
+                {"responseStatus":"accepted","resource":true},{"resource":true}]"#,
+        )
+        .unwrap();
+        assert_eq!(attendee_counts(&attendees), (4, 2));
+        assert_eq!(attendee_counts(&[]), (0, 0));
+    }
+
+    #[test]
+    fn timed_event_text_has_the_day_and_the_times() {
+        let t = |s: &str, e: &str| when_text(&jst(), &timed(s, e).when);
+        assert_eq!(
+            t("2026-11-02T13:00:00+09:00", "2026-11-02T14:30:00+09:00"),
+            "11月2日（月）13:00 - 14:30"
+        );
+        // In the viewer's zone, not the event's.
+        assert_eq!(
+            t("2026-11-02T04:05:00Z", "2026-11-02T05:00:00Z"),
+            "11月2日（月）13:05 - 14:00"
+        );
+        // Across midnight both days are named; the hour has no leading zero.
+        assert_eq!(
+            t("2026-11-02T23:00:00+09:00", "2026-11-03T01:00:00+09:00"),
+            "11月2日（月）23:00 - 11月3日（火）1:00"
+        );
+        // An event that ends where it starts shows its start only.
+        assert_eq!(
+            t("2026-11-01T09:00:00+09:00", "2026-11-01T09:00:00+09:00"),
+            "11月1日（日）9:00"
+        );
+    }
+
+    #[test]
+    fn all_day_event_text_ends_on_the_last_day_not_the_exclusive_end() {
+        let t = |s: &str, e: &str| when_text(&jst(), &all_day(s, e).when);
+        assert_eq!(t("2026-11-03", "2026-11-04"), "11月3日（火）終日");
+        assert_eq!(
+            t("2026-11-03", "2026-11-06"),
+            "11月3日（火）- 11月5日（木）"
+        );
+        // An end before the start is a one-day event.
+        assert_eq!(t("2026-11-03", "2026-11-03"), "11月3日（火）終日");
+    }
+
+    #[test]
+    fn info_carries_the_detail_of_the_event() {
+        let mut e = timed("2026-11-02T13:00:00+09:00", "2026-11-02T14:30:00+09:00");
+        e.meet_url = Some("https://meet.google.com/abc-defg-hij".into());
+        e.location = Some("会議室".into());
+        e.description = Some("説明".into());
+        e.attendees = 6;
+        e.accepted = 4;
+        let i = Info::new(&e, &jst());
+        assert_eq!(i.calendar, "c");
+        assert_eq!(i.when_text, "11月2日（月）13:00 - 14:30");
+        assert_eq!(
+            i.meet_url.as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+        assert_eq!(i.location.as_deref(), Some("会議室"));
+        assert_eq!(i.description.as_deref(), Some("説明"));
+        assert_eq!((i.attendees, i.accepted), (6, 4));
+        // The detail reaches the screen in camelCase.
+        let v = serde_json::to_value(&i).unwrap();
+        assert_eq!(v["whenText"], "11月2日（月）13:00 - 14:30");
+        assert_eq!(v["meetUrl"], "https://meet.google.com/abc-defg-hij");
+    }
+
+    #[test]
+    fn api_event_detail_is_read_and_empty_values_are_none() {
+        let read = |json: &str| {
+            let ev: ApiEvent = serde_json::from_str(json).unwrap();
+            RawEvent::from_api(ev, "a@example.com", &cal(None)).unwrap()
+        };
+        let full = read(
+            r#"{"start":{"date":"2026-10-29"},"end":{"date":"2026-10-30"},
+                "hangoutLink":"https://meet.google.com/abc-defg-hij","location":"会議室",
+                "description":"<b>説明</b>",
+                "attendees":[{"responseStatus":"accepted"},{"self":true,"responseStatus":"needsAction"},
+                             {"responseStatus":"accepted","resource":true}]}"#,
+        );
+        assert_eq!(
+            full.meet_url.as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+        assert_eq!(full.location.as_deref(), Some("会議室"));
+        assert_eq!(full.description.as_deref(), Some("<b>説明</b>"));
+        assert_eq!((full.attendees, full.accepted), (2, 1));
+        let bare = read(
+            r#"{"start":{"date":"2026-10-29"},"end":{"date":"2026-10-30"},
+                "hangoutLink":"https://zoom.us/j/1","location":"","description":" "}"#,
+        );
+        assert_eq!(bare.meet_url, None);
+        assert_eq!(bare.location, None);
+        assert_eq!(bare.description, None);
+        assert_eq!((bare.attendees, bare.accepted), (0, 0));
+    }
+
+    #[test]
+    fn a_long_description_is_cut_by_characters() {
+        assert_eq!(clip_description("説明".into()), "説明");
+        let exact = "あ".repeat(DESCRIPTION_MAX);
+        assert_eq!(clip_description(exact.clone()), exact);
+        let cut = clip_description(format!("{exact}い"));
+        assert_eq!(cut, exact);
+        assert_eq!(cut.len(), DESCRIPTION_MAX * 3);
     }
 
     #[test]
@@ -1350,17 +1775,34 @@ mod tests {
     }
 
     #[test]
+    fn week_from_an_older_cache_without_the_detail_deserializes() {
+        let w: Week = serde_json::from_str(
+            r#"{"weekStart":"2026-10-25","allDay":[],
+                "timed":[{"day":1,"startMin":60,"endMin":120,"col":0,"cols":1,"summary":"s","color":null,
+                          "account":"a@example.com","response":"accepted"}],
+                "needsLogin":[],"failed":{},"calendarFailed":[]}"#,
+        )
+        .unwrap();
+        let i = &w.timed[0].info;
+        assert_eq!((i.calendar.as_str(), i.when_text.as_str()), ("", ""));
+        assert_eq!(
+            (
+                i.meet_url.as_deref(),
+                i.location.as_deref(),
+                i.description.as_deref()
+            ),
+            (None, None, None)
+        );
+        assert_eq!((i.attendees, i.accepted), (0, 0));
+    }
+
+    #[test]
     fn week_serializes_in_camel_case() {
         let w = Week {
             week_start: "2026-10-25".into(),
             all_day: vec![AllDayItem {
                 day: 1,
-                info: Info {
-                    summary: "s".into(),
-                    color: None,
-                    account: "a@example.com".into(),
-                    response: ResponseStatus::Declined,
-                },
+                info: info("s", None, ResponseStatus::Declined),
             }],
             timed: vec![],
             needs_login: vec!["b@example.com".into()],
@@ -1385,12 +1827,7 @@ mod tests {
                 end_min: 120,
                 col: 0,
                 cols: 1,
-                info: Info {
-                    summary: start.into(),
-                    color: Some("#fff".into()),
-                    account: "a@example.com".into(),
-                    response: ResponseStatus::Unknown,
-                },
+                info: info(start, Some("#fff"), ResponseStatus::Unknown),
             }],
             needs_login: vec![],
             failed: Default::default(),

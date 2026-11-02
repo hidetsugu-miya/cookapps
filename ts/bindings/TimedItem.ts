@@ -12,4 +12,24 @@ color: string | null, account: string,
 /**
  * Absent in a cache an older version wrote.
  */
-response: ResponseStatus, };
+response: ResponseStatus, 
+/**
+ * Name of the calendar the event is on. This and the fields below are absent in a cache an older version wrote (empty text, `None`, 0).
+ */
+calendar: string, 
+/**
+ * The time as the detail shows it, e.g. `11月2日（月）13:00 - 14:30`.
+ */
+whenText: string, 
+/**
+ * A `https://meet.google.com/` link, else `None`.
+ */
+meetUrl: string | null, location: string | null, 
+/**
+ * As Google sends it: plain text or a little HTML.
+ */
+description: string | null, 
+/**
+ * Invited people (rooms left out), and how many of them accepted.
+ */
+attendees: number, accepted: number, };
