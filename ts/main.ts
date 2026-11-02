@@ -9,7 +9,7 @@ import { initInbox, load, showKeptInbox } from "./inbox.js";
 import { initMenu } from "./menu.js";
 import { initNav } from "./nav.js";
 import { initSettings } from "./settings.js";
-import { initSlackDialog } from "./slack-dialog.js";
+import { initSlackCompose } from "./slack-compose.js";
 import { initThread } from "./thread.js";
 import { initToast } from "./toast.js";
 import { initTodo } from "./todo.js";
@@ -33,7 +33,7 @@ initPrompt();
 initClaude();
 initHint();
 initSettings();
-initSlackDialog();
+initSlackCompose();
 
 showKeptInbox();
 refreshClaude();

@@ -231,20 +231,69 @@
             <pre id="prompt-fixed-after"></pre>
           </div>
         </div>
-        <aside id="prompt-chat" aria-label="Claude と編集">
+        <aside id="prompt-chat" class="chat-pane" aria-label="Claude と編集">
           <div class="chat-head">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
             Claude と編集
-            <button id="prompt-clear" type="button" class="text-btn" disabled>クリア</button>
+            <button id="prompt-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
           </div>
-          <div id="prompt-log"></div>
-          <p id="prompt-chat-note" hidden></p>
-          <form id="prompt-form">
+          <div id="prompt-log" class="chat-log"></div>
+          <p id="prompt-chat-note" class="chat-note" hidden></p>
+          <form id="prompt-form" class="chat-form">
             <div class="composer">
-              <textarea id="prompt-input" rows="1" aria-label="Claude への指示" placeholder="どう変えたいかを書く" autocomplete="off"></textarea>
+              <textarea id="prompt-input" class="chat-input" rows="1" aria-label="Claude への指示" placeholder="どう変えたいかを書く" autocomplete="off"></textarea>
               <div class="composer-foot">
                 <span id="prompt-keys" class="composer-hint"></span>
-                <button id="prompt-send" class="text-btn primary">送信</button>
+                <button id="prompt-send" class="text-btn primary chat-send">送信</button>
+              </div>
+            </div>
+          </form>
+        </aside>
+      </div>
+    </section>
+    <section id="slack-compose" hidden>
+      <header>
+        <button id="slack-back" class="text-btn back-text">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>メールに戻る
+        </button>
+        <h1>Slack に貼る</h1>
+        <span id="slack-subject" class="header-sub"></span>
+        <span class="grow"></span>
+        <button id="slack-post" class="text-btn primary" disabled>貼る</button>
+      </header>
+      <p id="slack-error" class="pending fail" role="alert" hidden></p>
+      <div id="slack-main">
+        <section id="slack-edit" aria-label="貼る内容">
+          <div class="slack-target">
+            <span class="prompt-label">貼り付け先</span>
+            <button id="slack-target" class="review-chip" aria-haspopup="menu">選んでください</button>
+          </div>
+          <div class="prompt-body-box">
+            <div class="slack-body-head">
+              <label class="prompt-label" for="slack-body">貼る内容（編集できます）</label>
+              <button id="slack-reset" class="text-btn" disabled>元の内容に戻す</button>
+            </div>
+            <textarea id="slack-body" spellcheck="false"></textarea>
+          </div>
+        </section>
+        <div id="slack-split" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
+        <aside id="slack-chat" class="chat-pane" aria-label="Claude と校正">
+          <div class="chat-head">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+            Claude と校正
+            <button id="slack-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+          </div>
+          <div id="slack-log" class="chat-log"></div>
+          <p id="slack-chat-note" class="chat-note" hidden></p>
+          <form id="slack-form" class="chat-form">
+            <div class="proofread-row">
+              <button id="slack-proofread" type="button" class="text-btn" disabled>校正する</button>
+            </div>
+            <div class="composer">
+              <textarea id="slack-input" class="chat-input" rows="1" aria-label="Claude への依頼" placeholder="どう直したいかを書く" autocomplete="off"></textarea>
+              <div class="composer-foot">
+                <span id="slack-keys" class="composer-hint"></span>
+                <button id="slack-send" class="text-btn primary chat-send">送信</button>
               </div>
             </div>
           </form>

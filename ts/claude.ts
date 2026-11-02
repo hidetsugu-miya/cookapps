@@ -9,6 +9,7 @@ import { closeClaudePopup } from "./accounts.js";
 import { code, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { itemRow } from "./settings.js";
+import { refreshSlackCompose } from "./slack-compose.js";
 import { updateAddMode } from "./todo-add.js";
 import { promptRow, refreshPrompt } from "./todo-prompt.js";
 import { setClaudeReady, showError } from "./view.js";
@@ -51,6 +52,7 @@ function applyClaude(next: Claude | null) {
   redrawClaudeItems();
   updateAddMode();
   refreshPrompt();
+  refreshSlackCompose();
 }
 
 // The model and effort of every `claude -p` call (A-2) as the card shows them; null until read.
@@ -151,7 +153,7 @@ export function initClaude() {
           ["ターミナルで ", code("claude auth login"), " を実行してログインする"],
           ["↻ で状態を確かめ直す"],
         ],
-        "Slack のメッセージの本文（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります。モデルと effort の設定は、Slack の要約、メールの要約、プロンプトの会話のすべてに使われます",
+        "Slack のメッセージの本文（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります。Slack に貼る文章を Claude と校正するときは、編集欄の文章、会話、依頼を、「校正する」か送信を押したときだけ送ります。モデルと effort の設定は、Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正のすべてに使われます",
       ),
     );
 }

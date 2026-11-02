@@ -1,9 +1,9 @@
 // The Todo prompt screen: the instructions Claude follows to turn a Slack message into a task. The user edits them in a field, or in a conversation with Claude
 // whose proposals are applied to the field. Only the save button writes them (Rust keeps them in the settings folder).
-import type { DiffLine } from "./bindings/DiffLine";
 import type { TodoPrompt } from "./bindings/TodoPrompt";
-import { getClaude, redrawClaudeItems } from "./claude.js";
-import { $, composing, isMac, tag } from "./dom.js";
+import { createChat } from "./claude-chat.js";
+import { redrawClaudeItems } from "./claude.js";
+import { $, tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { setScreen, showPromptScreen } from "./nav.js";
 import { itemRow } from "./settings.js";
@@ -19,33 +19,23 @@ let saved: TodoPrompt | null = null;
 // What the edit field holds; null until the screen was opened once. It is kept, with the conversation, when the screen is left, and gone with the app.
 let draft: string | null = null;
 
-// A change Claude proposed: the whole new body, the lines that differ, and the field's text when it was asked (an `open` proposal applies only to that text).
-interface Proposal {
-  body: string;
-  diff: DiffLine[];
-  base: string;
-  state: "open" | "applied" | "rejected";
-}
-interface Turn {
-  role: "user" | "assistant";
-  text: string;
-  // An error shown in the conversation; it is not part of what Claude is sent.
-  failed?: boolean;
-  proposal?: Proposal;
-}
-const turns: Turn[] = [];
-// The oldest turns are dropped past this many; Claude is sent the last SENT_TURNS (the same as Rust's CHAT_TURNS).
-const MAX_TURNS = 100;
-const SENT_TURNS = 20;
-let sending = false;
 // A save or a reset is on its way: both buttons wait.
 let busy = false;
-// Resetting and clearing are armed by the first press (see the reset and clear buttons' handlers).
+// Resetting is armed by the first press (see the reset button's handler).
 let resetTimer = 0;
-let clearTimer = 0;
 
-// The apply buttons of the open proposals drawn now, with the line that says why one is disabled.
-let applyControls: { proposal: Proposal; apply: HTMLButtonElement; stale: HTMLElement }[] = [];
+// The conversation with Claude about the field's text (claude-chat.ts). Applying a proposal fills the field and does not save.
+const chat = createChat({
+  prefix: "prompt",
+  loginNote: "Claude にログインすると、会話で編集できます",
+  text: () => (saved !== null ? draft : null),
+  apply: (text) => {
+    draft = text;
+    $<HTMLTextAreaElement>("prompt-body").value = text;
+  },
+  ask: (body, history, instruction) => invoke("claude_edit_todo_prompt", { body, history, instruction }),
+  changed: refreshPrompt,
+});
 
 // The settings' Claude card row: the state of the instructions and the way in.
 export function promptRow() {
@@ -84,69 +74,7 @@ export function refreshPrompt() {
   $<HTMLButtonElement>("prompt-save").disabled = !dirty || busy;
   $<HTMLButtonElement>("prompt-reset").disabled = !loaded || (!now.edited && text === now.defaultBody) || busy;
   $<HTMLTextAreaElement>("prompt-body").disabled = !loaded;
-  const ready = getClaude()?.state === "ready";
-  const chat = loaded && ready && !sending;
-  $<HTMLTextAreaElement>("prompt-input").disabled = !chat;
-  $<HTMLButtonElement>("prompt-send").disabled = !chat;
-  const noClear = turns.length === 0 || sending;
-  $<HTMLButtonElement>("prompt-clear").disabled = noClear;
-  if (noClear && $("prompt-clear").classList.contains("confirm")) disarmClear();
-  $("prompt-chat-note").hidden = ready;
-  $("prompt-chat-note").textContent = "Claude にログインすると、会話で編集できます";
-  for (const { proposal, apply, stale } of applyControls) {
-    apply.disabled = proposal.base !== draft;
-    stale.hidden = !apply.disabled;
-  }
-}
-
-function diffCard(p: Proposal) {
-  const card = tag("div", "chat-diff");
-  for (const d of p.diff) card.append(tag("div", d.kind === "del" ? "diff-del" : "diff-ins", `${d.kind === "del" ? "-" : "+"} ${d.text}`));
-  const foot = tag("div", "diff-foot");
-  if (p.state !== "open") {
-    foot.append(tag("span", "diff-state", p.state === "applied" ? "適用しました" : "却下しました"));
-  } else {
-    const stale = tag("span", "diff-stale", "編集欄が変わったため適用できません");
-    const reject = tag("button", "text-btn", "却下");
-    const apply = tag("button", "text-btn primary", "適用");
-    reject.onclick = () => {
-      p.state = "rejected";
-      drawLog();
-    };
-    apply.onclick = () => {
-      draft = p.body;
-      $<HTMLTextAreaElement>("prompt-body").value = p.body;
-      p.state = "applied";
-      drawLog();
-    };
-    applyControls.push({ proposal: p, apply, stale });
-    foot.append(stale, reject, apply);
-  }
-  card.append(foot);
-  return card;
-}
-
-function turnNode(t: Turn) {
-  if (t.failed) return tag("div", "pending fail", t.text);
-  if (t.role === "user") return tag("div", "chat-user", t.text);
-  const node = tag("div", "chat-ai", t.text);
-  if (t.proposal) node.append(diffCard(t.proposal));
-  return node;
-}
-
-function drawLog() {
-  applyControls = [];
-  const thinking = tag("div", "pending");
-  thinking.append(tag("span", "spin"), tag("span", "sp", "Claude が考えています…"));
-  const log = $("prompt-log");
-  log.replaceChildren(...turns.map(turnNode), ...(sending ? [thinking] : []));
-  log.scrollTop = log.scrollHeight;
-  refreshPrompt();
-}
-
-function addTurn(turn: Turn) {
-  turns.push(turn);
-  if (turns.length > MAX_TURNS) turns.splice(0, turns.length - MAX_TURNS);
+  chat.refresh();
 }
 
 // Runs a save or a reset with both buttons disabled; null when it failed (the error is shown).
@@ -171,57 +99,6 @@ function disarmReset() {
   reset.textContent = "デフォルトに戻す";
 }
 
-function disarmClear() {
-  clearTimeout(clearTimer);
-  const clear = $("prompt-clear");
-  clear.classList.remove("confirm", "danger");
-  clear.textContent = "クリア";
-}
-
-// The request field is one line high and grows with what is typed, up to 6 lines (the `max-height` of `#prompt-input`; then it scrolls).
-// It sits at the bottom of the pane, so the log above shrinks; when the log was scrolled to its end it stays there, and the newest turn is not pushed out of sight.
-// The layout is read only when the line count may have changed: when the text got shorter, or the field is too short for it.
-let typedLength = 0;
-function growInput() {
-  const [input, log] = [$<HTMLTextAreaElement>("prompt-input"), $("prompt-log")];
-  const shorter = input.value.length < typedLength;
-  typedLength = input.value.length;
-  if (!shorter && input.scrollHeight <= input.clientHeight) return;
-  const before = input.clientHeight;
-  const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 4;
-  if (shorter) input.style.height = "auto";
-  input.style.height = `${input.scrollHeight}px`;
-  if (atEnd && input.clientHeight !== before) log.scrollTop = log.scrollHeight;
-}
-
-async function send() {
-  const input = $<HTMLTextAreaElement>("prompt-input");
-  const instruction = input.value.trim();
-  if (!instruction || sending || draft === null) return;
-  const body = draft;
-  const history = turns
-    .filter((t) => !t.failed)
-    .slice(-SENT_TURNS)
-    .map(({ role, text }) => ({ role, text }));
-  input.value = "";
-  growInput();
-  addTurn({ role: "user", text: instruction });
-  sending = true;
-  drawLog();
-  try {
-    const answer = await invoke("claude_edit_todo_prompt", { body, history, instruction });
-    addTurn({
-      role: "assistant",
-      text: answer.reply,
-      proposal: answer.body === null ? undefined : { body: answer.body, diff: answer.diff, base: body, state: "open" },
-    });
-  } catch (e) {
-    addTurn({ role: "assistant", text: `送れませんでした: ${e}`, failed: true });
-  }
-  sending = false;
-  drawLog();
-}
-
 // Opens the screen. The first time, the field takes the saved instructions; after that it keeps what the user left in it.
 export async function openPrompt(from: Origin) {
   origin = from;
@@ -235,7 +112,7 @@ export async function openPrompt(from: Origin) {
     $("prompt-fixed").textContent = saved.fixed;
     $("prompt-fixed-after").textContent = saved.fixedAfter;
   }
-  drawLog();
+  chat.draw();
 }
 
 export function initPrompt() {
@@ -276,31 +153,5 @@ export function initPrompt() {
     refreshPrompt();
   };
   $("prompt-reset").onblur = disarmReset;
-  // Clearing forgets the conversation only (not the field, the saved instructions or what is being typed), so it takes two presses too.
-  $("prompt-clear").onclick = () => {
-    const clear = $("prompt-clear");
-    if (!clear.classList.contains("confirm")) {
-      clear.classList.add("confirm", "danger");
-      clear.textContent = "もう一度押すとクリア";
-      clearTimer = setTimeout(disarmClear, 4000);
-      return;
-    }
-    disarmClear();
-    turns.length = 0;
-    drawLog();
-  };
-  $("prompt-clear").onblur = disarmClear;
-  $("prompt-keys").textContent = isMac ? "↩ で改行、⌘↩ で送信" : "Enter で改行、Ctrl+Enter で送信";
-  const input = $<HTMLTextAreaElement>("prompt-input");
-  input.oninput = growInput;
-  // Enter is a line break; Cmd+Enter (Ctrl+Enter off macOS) sends, unless it only confirms an IME conversion.
-  input.onkeydown = (e) => {
-    if (e.key !== "Enter" || composing(e) || !(isMac ? e.metaKey : e.ctrlKey)) return;
-    e.preventDefault();
-    send();
-  };
-  $("prompt-form").onsubmit = (e) => {
-    e.preventDefault();
-    send();
-  };
+  chat.init();
 }

@@ -474,12 +474,10 @@ button.status:hover { filter: brightness(.95); }
 @keyframes pane-in { from { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .pane { animation: none; } }
 
-/* "Slack に貼る" popover (a .menu). */
+/* The destination picker of the Slack compose screen (a .menu under the chip). */
 .slack-pop { width: 340px; max-height: calc(100vh - 32px); overflow-y: auto; padding: 12px; gap: 8px; }
-.slack-pop select, .slack-pop textarea, .slack-pop input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--chip-line); border-radius: 8px; font: inherit; }
-.slack-pop textarea { resize: vertical; }
-.slack-pop select:focus, .slack-pop textarea:focus, .slack-pop input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-.slack-pop .preview { max-height: 120px; margin: 0; padding: 8px; overflow-y: auto; border-radius: 8px; background: var(--hover); font: inherit; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.slack-pop select, .slack-pop input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--chip-line); border-radius: 8px; font: inherit; }
+.slack-pop select:focus, .slack-pop input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .slack-pop .text-btn { align-self: flex-end; justify-content: center; }
 .slack-pop .err { margin: 0; color: #b00020; font-size: 12px; }
 .slack-pop h3 { margin: 4px 0 0; font-size: 12px; color: #666; font-weight: normal; }
@@ -489,14 +487,13 @@ button.status:hover { filter: brightness(.95); }
 .slack-pop .pick-list .ws { margin-left: auto; color: #888; font-size: 12px; }
 .slack-pop .row { display: flex; gap: 8px; }
 .slack-pop .row .text-btn { align-self: auto; flex: none; }
-.slack-pop .chosen { margin: 0; padding: 6px 8px; border-radius: 8px; background: var(--soft); font-size: 12px; overflow-wrap: anywhere; }
 
 /* The Todo prompt screen: the fixed part and the editable body on the left, the conversation with Claude on the right. */
-#prompt { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#prompt header { gap: 8px; padding: 16px 24px 12px 16px; border-bottom: 1px solid var(--line); }
-#prompt h1 { flex: none; }
-#prompt .grow { flex: 1; }
-#prompt-error { margin: 8px 24px 0; }
+#prompt, #slack-compose { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#prompt header, #slack-compose header { gap: 8px; padding: 16px 24px 12px 16px; border-bottom: 1px solid var(--line); }
+#prompt h1, #slack-compose h1 { flex: none; }
+#prompt .grow, #slack-compose .grow { flex: 1; }
+#prompt-error, #slack-error { margin: 8px 24px 0; }
 #prompt-main { flex: 1; min-height: 0; display: flex; }
 #prompt-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
 .prompt-label { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 12px; color: #666; }
@@ -504,16 +501,18 @@ button.status:hover { filter: brightness(.95); }
 #prompt-fixed, #prompt-fixed-after, #prompt-body, .chat-diff { font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 #prompt-fixed, #prompt-fixed-after { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--code); color: #555; }
 .prompt-body-box { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#prompt-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
-#prompt-body:focus { outline: 2px solid var(--soft); }
-#prompt-body:disabled { border-color: var(--chip-line); background: var(--bar); }
-#prompt-chat { width: 380px; flex: none; display: flex; flex-direction: column; border-left: 1px solid var(--line); }
+#prompt-body, #slack-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
+#prompt-body:focus, #slack-body:focus { outline: 2px solid var(--soft); }
+#prompt-body:disabled, #slack-body:disabled { border-color: var(--chip-line); background: var(--bar); }
+#prompt-chat { width: 380px; flex: none; border-left: 1px solid var(--line); }
+/* The conversation pane (ts/claude-chat.ts), shared by the Todo prompt screen and the Slack compose screen. */
+.chat-pane { display: flex; flex-direction: column; min-width: 0; }
 .chat-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: bold; }
 .chat-head svg { width: 16px; height: 16px; color: var(--claude); }
-#prompt-log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .chat-user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 12px; background: var(--soft); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .chat-ai { font-size: 13px; line-height: 1.5; color: #333; overflow-wrap: anywhere; }
-#prompt-log .pending { margin: 0; }
+.chat-log .pending { margin: 0; }
 .chat-diff { margin-top: 6px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .diff-del, .diff-ins { padding: 4px 8px; }
 .diff-del { background: var(--del-bg); color: var(--del); }
@@ -522,17 +521,42 @@ button.status:hover { filter: brightness(.95); }
 .diff-foot .text-btn { height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
 .diff-state { color: var(--accent); }
 .diff-stale { margin-right: auto; color: var(--warn); }
-#prompt-chat-note { flex: none; margin: 0; padding: 8px 16px 0; border-top: 1px solid var(--line); background: var(--bar); font-size: 12px; color: var(--warn); }
-#prompt-form { flex: none; padding: 12px 16px 16px; border-top: 1px solid var(--line); background: var(--bar); }
-#prompt-chat-note:not([hidden]) + #prompt-form { border-top: 0; padding-top: 8px; }
+.chat-note { flex: none; margin: 0; padding: 8px 16px 0; border-top: 1px solid var(--line); background: var(--bar); font-size: 12px; color: var(--warn); }
+.chat-form { flex: none; padding: 12px 16px 16px; border-top: 1px solid var(--line); background: var(--bar); }
+.chat-note:not([hidden]) + .chat-form { border-top: 0; padding-top: 8px; }
 .composer { display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 8px 14px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; }
 .composer:focus-within { outline: 2px solid var(--accent); border-color: transparent; }
 .composer:has(textarea:disabled) { background: var(--bar); }
-#prompt-input { display: block; width: 100%; box-sizing: border-box; padding: 0; border: 0; outline: 0; resize: none; background: transparent; font: inherit; line-height: 20px; max-height: 120px; overflow-y: auto; }
+.chat-input { display: block; width: 100%; box-sizing: border-box; padding: 0; border: 0; outline: 0; resize: none; background: transparent; font: inherit; line-height: 20px; max-height: 120px; overflow-y: auto; }
 .composer-foot { display: flex; align-items: center; gap: 8px; }
 .composer-hint { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
 .composer-foot .text-btn { height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
-#prompt-clear:disabled, #prompt-send:disabled { opacity: .4; cursor: default; }
-#prompt-clear:disabled:hover { background: #fff; }
-#prompt-send:disabled:hover { background: var(--accent); filter: none; }
-#prompt-clear { margin-left: auto; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; font-size: 12px; font-weight: normal; }
+.chat-clear:disabled, .chat-send:disabled { opacity: .4; cursor: default; }
+.chat-clear:disabled:hover { background: #fff; }
+.chat-send:disabled:hover { background: var(--accent); filter: none; }
+.chat-clear { margin-left: auto; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; font-size: 12px; font-weight: normal; }
+
+/* The Slack compose screen: the text to post on the left, a divider the user drags, and the conversation with Claude on the right.
+   The Claude pane is a third to a half as wide as #slack-main. `--chat-w` (ts/slack-compose.ts) is where the divider put it, and the clamp holds it to that range whatever is set. */
+#slack-main { flex: 1; min-height: 0; display: flex; }
+#slack-main.dragging { user-select: none; -webkit-user-select: none; cursor: col-resize; }
+#slack-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
+.slack-target { display: flex; align-items: center; gap: 10px; }
+.slack-target .prompt-label { margin-bottom: 0; }
+.slack-body-head { display: flex; align-items: center; margin-bottom: 4px; }
+.slack-body-head .prompt-label { flex: 1; margin-bottom: 0; }
+#slack-reset { height: 26px; padding: 0 12px; font-size: 12px; }
+#slack-reset:disabled { opacity: .4; cursor: default; }
+#slack-reset:disabled:hover { background: #fff; }
+#slack-body { font: inherit; line-height: 1.7; overflow-wrap: anywhere; }
+#slack-split { flex: none; width: 7px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border-left: 1px solid var(--line); background: var(--bar); cursor: col-resize; touch-action: none; }
+#slack-split span { width: 3px; height: 32px; border-radius: 2px; background: var(--chip-line); }
+#slack-split:hover span, #slack-split:focus-visible span, .dragging #slack-split span { background: var(--accent-dim); }
+#slack-split:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#slack-chat { flex: none; width: clamp(33.3333%, var(--chat-w, 33.3333%), 50%); }
+.header-sub { min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.back-text { display: inline-flex; align-items: center; gap: 4px; padding: 0 12px 0 6px; border-color: transparent; background: transparent; }
+.proofread-row { margin-bottom: 8px; }
+.proofread-row .text-btn { height: 28px; padding: 0 12px; border-color: var(--accent); color: var(--accent); font-size: 12px; font-weight: bold; }
+.proofread-row .text-btn:disabled { opacity: .4; cursor: default; }
+.proofread-row .text-btn:disabled:hover { background: #fff; }
