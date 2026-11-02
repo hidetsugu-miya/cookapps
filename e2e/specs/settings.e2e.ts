@@ -281,7 +281,7 @@ describe("settings: Claude model and effort", () => {
     await mock("claude_model_settings", rejects("設定を読めません"));
     await $("#nav-settings").click();
     await expect($("#error")).toHaveText(expect.stringContaining("設定を読めません"));
-    await expect($("#claude-items .item-name=モデルと effort")).not.toExist();
+    await expect($("#claude-items .item:nth-child(2) .item-name")).toHaveText("Todo の要約プロンプト");
     await expect(modelSelect()).not.toExist();
     await expect(effortSelect()).not.toExist();
   });
