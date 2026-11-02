@@ -189,8 +189,11 @@ export function createChat(cfg: ChatConfig) {
   }
 
   function clearInput() {
-    $<HTMLTextAreaElement>(id("input")).value = "";
-    growInput();
+    // Not `growInput`: the pane can be hidden, where `scrollHeight` reads 0 and would set the height to 0px.
+    const input = $<HTMLTextAreaElement>(id("input"));
+    input.value = "";
+    input.style.height = "";
+    typedLength = 0;
   }
 
   function init() {

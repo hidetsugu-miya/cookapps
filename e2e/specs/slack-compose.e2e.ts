@@ -157,6 +157,59 @@ describe("slack compose screen", () => {
     await expect($("#slack-log .chat-user")).not.toExist();
   });
 
+  it("stays on another mail's compose screen when an earlier post finishes", async () => {
+    await openCompose();
+    await chooseGeneral();
+    const slackPost = await mock("slack_post", holds);
+    await post().click();
+    await waitForCalls(slackPost);
+    await openOtherMail("Second unread", "Another text");
+    await pressSlack();
+    await expect($("#slack-subject")).toHaveText("Second unread");
+    await release(slackPost, true);
+    await expect($(".toast")).toHaveText("Example Team の #general に貼りました");
+    await expect($("#slack-compose")).toBeDisplayed();
+    await expect($("#thread")).not.toBeDisplayed();
+    await expect($("#slack-subject")).toHaveText("Second unread");
+    await expect(target()).toHaveText("選んでください");
+  });
+
+  it("tells a post that failed after the screen was left with a toast", async () => {
+    await openCompose();
+    await chooseGeneral();
+    const slackPost = await mock("slack_post", holds);
+    await post().click();
+    await waitForCalls(slackPost);
+    await $("#nav-mail").click();
+    await expect($("#threads")).toBeDisplayed();
+    await release(slackPost, rejects("チャンネルに投稿する権限がありません"));
+    await expect($(".toast")).toHaveText("Example Team の #general に貼れませんでした: チャンネルに投稿する権限がありません");
+    await expect($("#threads")).toBeDisplayed();
+  });
+
+  it("does not switch to the compose screen when another mail was opened while Slack was loading", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
+    await waitForCount("#unread-threads li", 2);
+    await openMail("First unread", "Hello from Alice");
+    const load = await mock("slack_load", holds);
+    const preview = await mock("slack_preview", slackPreview);
+    await $("#thread-slack").click();
+    await waitForCalls(load);
+    await openOtherMail("Second unread", "Another text");
+    await release(load, slackLoad);
+    // Give a wrongly kept answer the time to switch the screen.
+    await browser.pause(300);
+    await expect($("#thread")).toBeDisplayed();
+    await expect($("#thread-subject")).toHaveText("Second unread");
+    await expect($("#slack-compose")).not.toBeDisplayed();
+    expect(await callsOf(preview)).toEqual([]);
+    // The second mail then opens its own compose screen.
+    await mock("slack_load", slackLoad);
+    await pressSlack();
+    await expect($("#slack-subject")).toHaveText("Second unread");
+    await expect(body()).toHaveValue(slackPreview);
+  });
+
   it("returns to the list when the sidebar's inbox button is pressed", async () => {
     await openCompose();
     await $("#nav-mail").click();
@@ -257,6 +310,21 @@ describe("slack compose screen: proofreading with Claude", () => {
     expect(await count("#slack-log .chat-ai")).toBe(0);
     expect(await count("#slack-log .pending")).toBe(0);
     await expect($("#slack-proofread")).toBeEnabled();
+  });
+
+  it("starts the request field one line high again when another mail's compose screen opens", async () => {
+    await openCompose();
+    const height = () => browser.execute(() => document.getElementById("slack-input")!.getBoundingClientRect().height);
+    await browser.execute(() => {
+      const input = document.getElementById("slack-input") as HTMLTextAreaElement;
+      input.value = "一行目\n二行目\n三行目\n四行目";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await browser.waitUntil(async () => (await height()) > 20, { timeoutMsg: "the request field did not grow" });
+    await openOtherMail("Second unread", "Another text");
+    await pressSlack();
+    await expect($("#slack-input")).toHaveValue("");
+    expect(await height()).toBe(20);
   });
 
   it("forgets the conversation with two presses of クリア", async () => {

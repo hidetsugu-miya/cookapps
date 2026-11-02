@@ -11,7 +11,7 @@ import { unescapeHtml } from "./format.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen, showSlackScreen, showThreadScreen } from "./nav.js";
-import { opened } from "./thread.js";
+import { type OpenThread, opened } from "./thread.js";
 import { toast } from "./toast.js";
 import { showError } from "./view.js";
 
@@ -39,8 +39,8 @@ const wsName = (teamId: string) => workspaces.find((w) => w.teamId === teamId)?.
 const label = (t: { name: string; threadTs: string | null }) => `#${t.name}${t.threadTs ? "（スレッド）" : ""}`;
 
 // The text of an HTML message is read from its frame (allow-same-origin).
-function latestText() {
-  const m = opened.current!.messages.at(-1)!;
+function latestText(current: OpenThread) {
+  const m = current.messages.at(-1)!;
   if (!m.html) return m.body;
   const doc = $("messages").firstElementChild?.querySelector("iframe")?.contentDocument;
   return doc?.body?.innerText.trim() || unescapeHtml(m.snippet);
@@ -182,41 +182,52 @@ function openPicker() {
   search.focus();
 }
 
-// Starts a new draft from the open mail's latest message, and forgets the conversation and the request being typed.
-async function newDraft(key: string) {
-  const current = opened.current!;
+// Starts a new draft from `current`'s latest message, and forgets the conversation and the request being typed.
+// `stale` says the user moved on while the text was asked for; then nothing is touched.
+async function newDraft(key: string, current: OpenThread, stale: () => boolean) {
   const latest = current.messages.at(-1)!;
   const original = await invoke("slack_preview", {
     subject: current.subject || "(件名なし)",
     from: latest.from,
     date: slackDate(latest.dateMs),
-    body: latestText(),
+    body: latestText(current),
   });
+  if (stale()) return;
   draft = { key, original, text: original, target: null };
   chat.reset();
   chat.clearInput();
   $<HTMLTextAreaElement>("slack-body").value = original;
 }
 
+// The latest call of `openCompose`; an earlier one still waiting for a command goes no further.
+let openSeq = 0;
+
 async function openCompose() {
   $("error").hidden = true;
   const current = opened.current!;
+  const seq = ++openSeq;
+  // While a command is awaited the user can press again, open another mail or leave the thread: only the latest call, still on the same open thread, goes on.
+  const stale = () => seq !== openSeq || opened.current !== current || $("thread").hidden === true;
   let loaded: SlackLoad;
   try {
     loaded = await invoke("slack_load");
   } catch (e) {
+    if (stale()) return;
     return showError(e);
   }
+  if (stale()) return;
   if (!loaded.workspaces.length)
     return toast("Slack のワークスペースを設定で追加してください", { label: "設定を開く", run: () => setScreen("settings") });
   [workspaces, recent] = [loaded.workspaces, loaded.recent];
   const key = `${current.account}/${current.id}/${current.messages.at(-1)!.id}`;
   if (draft?.key !== key) {
     try {
-      await newDraft(key);
+      await newDraft(key, current, stale);
     } catch (e) {
+      if (stale()) return;
       return showError(e);
     }
+    if (stale()) return;
   }
   threadScroll = $("main").scrollTop;
   $("slack-subject").textContent = current.subject || "(件名なし)";
@@ -246,7 +257,9 @@ async function post() {
   } catch (e) {
     posting = false;
     refreshSlackCompose();
-    return showComposeError(e);
+    // The error line is on the compose screen: when the screen was left, or another mail's draft took its place, a toast tells instead.
+    if (currentScreen() === "slack" && draft === d) return showComposeError(e);
+    return toast(`${wsName(t.teamId)} の ${label(t)} に貼れませんでした: ${e}`);
   }
   posting = false;
   toast(`${wsName(t.teamId)} の ${label(t)} に貼りました`);
@@ -255,8 +268,8 @@ async function post() {
     draft = null;
     chat.reset();
     chat.clearInput();
+    if (currentScreen() === "slack") back();
   }
-  if (currentScreen() === "slack") back();
   refreshSlackCompose();
 }
 
