@@ -60,6 +60,7 @@ const chat = createChat({
   },
   ask: (text, history, instruction) => invoke("claude_proofread_slack", { text, history, instruction }),
   changed: refreshSlackCompose,
+  locked: () => posting,
 });
 
 function disarmReset() {
@@ -74,10 +75,16 @@ function showComposeError(e: unknown) {
   $("slack-error").hidden = false;
 }
 
-// Draws what follows from the state: the destination, the buttons, and whether Claude can be asked.
+// Draws the destination chip. It changes only when a destination is chosen or the screen opens, so typing does not write it.
+function drawTarget() {
+  const t = draft?.target;
+  $("slack-target").textContent = t ? `${wsName(t.teamId)} ・ ${label(t)}` : "選んでください";
+}
+
+// Draws what follows from the state: the buttons, and whether Claude can be asked.
 export function refreshSlackCompose() {
   const d = draft;
-  $("slack-target").textContent = d?.target ? `${wsName(d.target.teamId)} ・ ${label(d.target)}` : "選んでください";
+  $<HTMLTextAreaElement>("slack-body").disabled = posting;
   $<HTMLButtonElement>("slack-post").disabled = !d?.target || !d.text.trim() || posting;
   const same = !d || d.text === d.original;
   $<HTMLButtonElement>("slack-reset").disabled = same;
@@ -99,6 +106,7 @@ function openPicker() {
     d.target = t;
     $("slack-error").hidden = true;
     closeMenu();
+    drawTarget();
     refreshSlackCompose();
   };
   const pop = tag("div", "menu slack-pop");
@@ -219,6 +227,8 @@ async function openCompose() {
   if (!loaded.workspaces.length)
     return toast("Slack のワークスペースを設定で追加してください", { label: "設定を開く", run: () => setScreen("settings") });
   [workspaces, recent] = [loaded.workspaces, loaded.recent];
+  // A workspace that was removed meanwhile cannot be posted to.
+  if (draft?.target && !workspaces.some((w) => w.teamId === draft!.target!.teamId)) draft.target = null;
   const key = `${current.account}/${current.id}/${current.messages.at(-1)!.id}`;
   if (draft?.key !== key) {
     try {
@@ -232,8 +242,12 @@ async function openCompose() {
   threadScroll = $("main").scrollTop;
   $("slack-subject").textContent = current.subject || "(件名なし)";
   $("slack-error").hidden = true;
+  drawTarget();
   showSlackScreen();
-  chat.draw();
+  // The log is drawn already (by the answers, or by the new draft's reset); only its scroll position was lost while the screen was hidden.
+  refreshSlackCompose();
+  const log = $("slack-log");
+  log.scrollTop = log.scrollHeight;
 }
 
 // Back to the mail; the draft stays.
@@ -268,6 +282,7 @@ async function post() {
     draft = null;
     chat.reset();
     chat.clearInput();
+    drawTarget();
     if (currentScreen() === "slack") back();
   }
   refreshSlackCompose();
@@ -295,13 +310,24 @@ function initSplit() {
     down.preventDefault();
     const pointer = down.pointerId;
     main.classList.add("dragging");
+    // The box is read once; the writes of a drag are gathered into one per animation frame.
+    const box = main.getBoundingClientRect();
+    let pending: number | null = null;
+    let frame = 0;
+    const flush = () => {
+      frame = 0;
+      if (pending !== null) setRatio(pending);
+      pending = null;
+    };
     const move = (e: PointerEvent) => {
       if (e.pointerId !== pointer) return;
-      const box = main.getBoundingClientRect();
-      setRatio((box.right - e.clientX) / box.width);
+      pending = (box.right - e.clientX) / box.width;
+      if (!frame) frame = requestAnimationFrame(flush);
     };
     const end = (e: PointerEvent) => {
       if (e.pointerId !== pointer) return;
+      cancelAnimationFrame(frame);
+      flush();
       main.classList.remove("dragging");
       document.removeEventListener("pointermove", move, true);
       document.removeEventListener("pointerup", end, true);
@@ -346,5 +372,6 @@ export function initSlackCompose() {
   $("slack-proofread").onclick = () => chat.send("校正してください");
   chat.init();
   initSplit();
+  drawTarget();
   refreshSlackCompose();
 }

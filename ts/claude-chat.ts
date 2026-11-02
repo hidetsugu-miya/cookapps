@@ -23,6 +23,8 @@ export interface ChatConfig {
   ask: (text: string, history: ChatTurnPayload[], instruction: string) => Promise<PromptEdit>;
   // The conversation changed: the owner draws what follows from it, and calls `refresh`.
   changed: () => void;
+  // True while the owner's text must not be replaced (a proposal cannot be applied then).
+  locked?: () => boolean;
 }
 
 // A change Claude proposed: the whole new text, the lines that differ, and the text when it was asked (an `open` proposal applies only to that text).
@@ -50,6 +52,8 @@ export function createChat(cfg: ChatConfig) {
   let sending = false;
   // Bumped when the conversation is forgotten: an answer that was asked before it belongs to a conversation that is gone, and is dropped.
   let generation = 0;
+  // The generation of the request on its way; "Claude が考えています" is shown only while it is the current one.
+  let sendingGeneration = 0;
   let clearTimer = 0;
   // The apply buttons of the open proposals drawn now, with the line that says why one is disabled.
   let applyControls: { proposal: Proposal; apply: HTMLButtonElement; stale: HTMLElement }[] = [];
@@ -72,10 +76,9 @@ export function createChat(cfg: ChatConfig) {
     $<HTMLButtonElement>(id("clear")).disabled = noClear;
     if (noClear && $(id("clear")).classList.contains("confirm")) disarmClear();
     $(id("chat-note")).hidden = ready;
-    $(id("chat-note")).textContent = cfg.loginNote;
     for (const { proposal, apply, stale } of applyControls) {
-      apply.disabled = proposal.base !== text;
-      stale.hidden = !apply.disabled;
+      apply.disabled = proposal.base !== text || (cfg.locked?.() ?? false);
+      stale.hidden = proposal.base === text;
     }
     return on;
   }
@@ -119,7 +122,7 @@ export function createChat(cfg: ChatConfig) {
     const thinking = tag("div", "pending");
     thinking.append(tag("span", "spin"), tag("span", "sp", "Claude が考えています…"));
     const log = $(id("log"));
-    log.replaceChildren(...turns.map(turnNode), ...(sending ? [thinking] : []));
+    log.replaceChildren(...turns.map(turnNode), ...(sending && sendingGeneration === generation ? [thinking] : []));
     log.scrollTop = log.scrollHeight;
     cfg.changed();
   }
@@ -162,27 +165,30 @@ export function createChat(cfg: ChatConfig) {
     const mine = generation;
     addTurn({ role: "user", text: instruction });
     sending = true;
+    sendingGeneration = mine;
     draw();
+    let turn: Turn;
     try {
       const answer = await cfg.ask(body, history, instruction);
-      if (mine !== generation) return;
-      addTurn({
+      turn = {
         role: "assistant",
         text: answer.reply,
         proposal: answer.body === null ? undefined : { body: answer.body, diff: answer.diff, base: body, state: "open" },
-      });
+      };
     } catch (e) {
-      if (mine !== generation) return;
-      addTurn({ role: "assistant", text: `送れませんでした: ${e}`, failed: true });
+      turn = { role: "assistant", text: `送れませんでした: ${e}`, failed: true };
     }
     sending = false;
+    // The conversation was forgotten meanwhile: the answer is dropped, and the request field is free again.
+    if (mine !== generation) return cfg.changed();
+    addTurn(turn);
     draw();
   }
 
-  // Forgets the conversation (not the owner's text or what is being typed). An answer still on its way is dropped.
+  // Forgets the conversation (not the owner's text or what is being typed).
+  // An answer still on its way is dropped when it arrives, and `sending` stays up until then, so only one request is on its way.
   function reset() {
     generation++;
-    sending = false;
     turns.length = 0;
     disarmClear();
     draw();
@@ -209,6 +215,7 @@ export function createChat(cfg: ChatConfig) {
       reset();
     };
     $(id("clear")).onblur = disarmClear;
+    $(id("chat-note")).textContent = cfg.loginNote;
     $(id("keys")).textContent = isMac ? "↩ で改行、⌘↩ で送信" : "Enter で改行、Ctrl+Enter で送信";
     const input = $<HTMLTextAreaElement>(id("input"));
     input.oninput = growInput;

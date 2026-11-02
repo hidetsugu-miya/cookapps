@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeLoggedOut, claudeReady, count, holds, inbox, mock, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, threadDetail, waitForCalls, waitForCount,
+  boot, callsOf, claudeLoggedOut, claudeReady, count, holds, inbox, mock, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, threadDetail, waitForCalls, waitForCount, workspace,
 } from "../support";
 
 const body = () => $("#slack-body");
@@ -157,6 +157,62 @@ describe("slack compose screen", () => {
     await expect($("#slack-log .chat-user")).not.toExist();
   });
 
+  it("restores the scroll position of an HTML mail, whose frame must keep its height while the thread is hidden", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
+    await waitForCount("#unread-threads li", 2);
+    const base = threadDetail("First unread", "", false);
+    const [first] = base.messages;
+    const lines = Array.from({ length: 300 }, (_, i) => `<p>line ${i + 1}</p>`).join("");
+    await mock("thread", { ...base, messages: [{ ...first, html: true, authenticated: true, body: lines }] });
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await expect($("#thread-subject")).toHaveText("First unread");
+    const frameHeight = () => browser.execute(() => document.querySelector<HTMLIFrameElement>("#messages iframe")?.getBoundingClientRect().height ?? 0);
+    const scroll = () => browser.execute(() => document.getElementById("main")!.scrollTop);
+    await browser.waitUntil(async () => (await frameHeight()) > 2000, { timeoutMsg: "the frame was not sized to the mail" });
+    const tall = await frameHeight();
+    await browser.execute(() => {
+      document.getElementById("main")!.scrollTop = 400;
+    });
+    const scrolled = await scroll();
+    expect(scrolled).toBeGreaterThan(0);
+    await pressSlack();
+    await $("#slack-back").click();
+    await expect($("#thread")).toBeDisplayed();
+    await browser.waitUntil(async () => (await scroll()) === scrolled, { timeoutMsg: "the scroll position of the HTML mail was not restored" });
+    expect(await frameHeight()).toBe(tall);
+  });
+
+  it("empties the destination when its workspace is gone by the time the draft is opened again", async () => {
+    await openCompose();
+    await chooseGeneral();
+    await $("#slack-back").click();
+    await expect($("#thread")).toBeDisplayed();
+    await mock("slack_load", { workspaces: [{ ...workspace, teamId: "T2", team: "Other Team" }], recent: [] });
+    await $("#thread-slack").click();
+    await expect($("#slack-compose")).toBeDisplayed();
+    await expect(target()).toHaveText("選んでください");
+    await expect(post()).toBeDisabled();
+  });
+
+  it("locks the edit field and the apply button while the post is on its way, and frees them when it fails", async () => {
+    await openCompose();
+    await chooseGeneral();
+    await mock("claude_proofread_slack", proofreadEdit);
+    await $("#slack-proofread").click();
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect(applyButton()).toBeEnabled();
+    const slackPost = await mock("slack_post", holds);
+    await post().click();
+    await waitForCalls(slackPost);
+    await expect(body()).toBeDisabled();
+    await expect(applyButton()).toBeDisabled();
+    await expect($("#slack-log .diff-stale")).not.toBeDisplayed();
+    await release(slackPost, rejects("チャンネルに投稿する権限がありません"));
+    await expect($("#slack-error")).toHaveText(expect.stringContaining("チャンネルに投稿する権限がありません"));
+    await expect(body()).toBeEnabled();
+    await expect(applyButton()).toBeEnabled();
+  });
+
   it("stays on another mail's compose screen when an earlier post finishes", async () => {
     await openCompose();
     await chooseGeneral();
@@ -310,6 +366,25 @@ describe("slack compose screen: proofreading with Claude", () => {
     expect(await count("#slack-log .chat-ai")).toBe(0);
     expect(await count("#slack-log .pending")).toBe(0);
     await expect($("#slack-proofread")).toBeEnabled();
+  });
+
+  it("keeps the request off, with no thinking line, until the answer dropped by a new draft arrives", async () => {
+    await openCompose();
+    const edit = await mock("claude_proofread_slack", holds);
+    await $("#slack-proofread").click();
+    await waitForCalls(edit);
+    await expect($("#slack-log .pending")).toExist();
+    await openOtherMail("Second unread", "Another text");
+    await pressSlack();
+    // The old request is still on its way: it is not shown as the new draft's, and no second request can start.
+    expect(await count("#slack-log .pending")).toBe(0);
+    await expect($("#slack-proofread")).toBeDisabled();
+    await expect($("#slack-input")).toBeDisabled();
+    await expect($("#slack-send")).toBeDisabled();
+    await release(edit, proofreadEdit);
+    await expect($("#slack-proofread")).toBeEnabled();
+    await expect($("#slack-input")).toBeEnabled();
+    expect(await count("#slack-log .chat-ai")).toBe(0);
   });
 
   it("starts the request field one line high again when another mail's compose screen opens", async () => {
