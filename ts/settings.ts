@@ -124,6 +124,7 @@ export function renderWorkspaces(list: Workspace[]) {
 export async function loadSettings() {
   const seq = ++settingsSeq;
   $("error").hidden = true;
+  loadPromptState();
   let loaded: SlackLoad;
   try {
     loaded = await invoke("slack_load");
@@ -134,7 +135,6 @@ export async function loadSettings() {
   // Opening the settings asks about every token again.
   wsChecks.clear();
   renderWorkspaces(loaded.workspaces);
-  loadPromptState();
 }
 
 export function initSettings() {

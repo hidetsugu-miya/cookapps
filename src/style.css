@@ -461,8 +461,8 @@ button.status:hover { filter: brightness(.95); }
 #prompt-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
 .prompt-label { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 12px; color: #666; }
 .prompt-label svg { width: 13px; height: 13px; }
-#prompt-fixed, #prompt-body, .chat-diff { font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-#prompt-fixed { max-height: 30%; margin: 0; padding: 10px 12px; overflow-y: auto; border-radius: 8px; background: var(--code); color: #555; }
+#prompt-fixed, #prompt-fixed-after, #prompt-body, .chat-diff { font: 12px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+#prompt-fixed, #prompt-fixed-after { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--code); color: #555; }
 .prompt-body-box { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #prompt-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
 #prompt-body:focus { outline: 2px solid var(--soft); }

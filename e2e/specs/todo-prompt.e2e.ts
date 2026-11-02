@@ -40,6 +40,7 @@ describe("todo prompt screen", () => {
     await openPrompt();
     await expect($("#nav-settings")).toHaveAttribute("aria-current", "page");
     await expect($("#prompt-fixed")).toHaveText(expect.stringContaining("Today is {today}."));
+    await expect($("#prompt-fixed-after")).toHaveText("Fixed tail");
     await expect(body()).toHaveValue("Default body");
     await expect(body()).toBeEnabled();
     await expect($("#prompt-status")).not.toBeDisplayed();
@@ -80,11 +81,14 @@ describe("todo prompt screen", () => {
     await expect($("#prompt-save")).toBeEnabled();
   });
 
-  it("goes back to the default with デフォルトに戻す and shows it in the field", async () => {
+  it("goes back to the default with two presses of デフォルトに戻す and shows it in the field", async () => {
     await openPrompt(claudeReady, edited);
     await expect(body()).toHaveValue("My body");
     await expect($("#prompt-reset")).toBeEnabled();
     const reset = await mock("claude_todo_prompt_reset", todoPrompt);
+    await $("#prompt-reset").click();
+    await expect($("#prompt-reset")).toHaveText("もう一度押すと戻す");
+    expect(await callsOf(reset)).toEqual([]);
     await $("#prompt-reset").click();
     expect(await waitForCalls(reset)).toEqual([null]);
     await expect(body()).toHaveValue("Default body");
@@ -94,6 +98,29 @@ describe("todo prompt screen", () => {
     await $("#prompt-back").click();
     await waitForText("#claude-items .status", "デフォルト");
     expect(await textsOf("#claude-items .status")).toEqual(["ログイン中", "デフォルト"]);
+  });
+
+  it("disarms デフォルトに戻す when the button is left, and sends nothing", async () => {
+    await openPrompt(claudeReady, edited);
+    const reset = await mock("claude_todo_prompt_reset", todoPrompt);
+    await $("#prompt-reset").click();
+    await expect($("#prompt-reset")).toHaveText("もう一度押すと戻す");
+    await body().click();
+    await expect($("#prompt-reset")).toHaveText("デフォルトに戻す");
+    expect(await callsOf(reset)).toEqual([]);
+  });
+
+  it("disables 保存 and デフォルトに戻す while one of them is on its way", async () => {
+    await openPrompt(claudeReady, edited);
+    const save = await mock("claude_todo_prompt_save", holds);
+    await body().setValue("Other body");
+    await $("#prompt-save").click();
+    await waitForCalls(save);
+    await expect($("#prompt-save")).toBeDisabled();
+    await expect($("#prompt-reset")).toBeDisabled();
+    await release(save, { ...edited, body: "Other body" });
+    await expect($(".toast")).toHaveText(expect.stringContaining("保存しました"));
+    await expect($("#prompt-reset")).toBeEnabled();
   });
 
   it("keeps the field and the conversation when the screen is left and opened again", async () => {

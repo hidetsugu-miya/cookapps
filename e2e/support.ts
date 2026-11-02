@@ -198,7 +198,7 @@ export const slackMessageUrl = "https://example-team.slack.com/archives/C0123ABC
 export const slackSummary: Summary = { content: "Reply to the vendor", description: "- Asked for a quote\n- Wants an answer by Friday", due: "2026-11-06", projectId: null };
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
-export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", edited: false };
+export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };
 
 // What `claude_edit_todo_prompt` answers when Claude proposes changing the line "Default body" to "Better body".
 export const promptEdit: PromptEdit = {

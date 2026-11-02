@@ -2,6 +2,6 @@
 
 /**
  * The summary instructions as the screen shows them: the body that can be edited, the default body, the fixed part around it
- * (with `{today}` and `{projects}` as placeholders), and whether the body was edited.
+ * (with `{boundary}`, `{today}` and `{projects}` as placeholders), the fixed part after it, and whether the body was edited.
  */
-export type TodoPrompt = { body: string, defaultBody: string, fixed: string, edited: boolean, };
+export type TodoPrompt = { body: string, defaultBody: string, fixed: string, fixedAfter: string, edited: boolean, };
