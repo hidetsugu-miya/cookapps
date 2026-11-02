@@ -28,7 +28,8 @@ const HIDDEN =
 export const mailText = (m: MessageDetail) => (m.html ? htmlText(m.body) : m.body);
 
 // `html` as plain text, by the rules above. Text that holds no markup comes back with its line breaks.
-export function htmlText(html: string) {
+// With `showHrefs`, a link to an http(s) URL whose text is not that URL gets " (URL)" after it, so the destination is seen and `linkify` can make it a link (the calendar's description; the mail summary leaves it off).
+export function htmlText(html: string, showHrefs = false) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   for (const e of queryAll(doc, HIDDEN)) Element.prototype.remove.call(e);
   for (const e of queryAll(doc, BLOCKS)) {
@@ -37,6 +38,13 @@ export function htmlText(html: string) {
   }
   for (const e of queryAll(doc, "br")) Element.prototype.after.call(e, "\n");
   for (const e of queryAll(doc, "td, th")) Element.prototype.after.call(e, " ");
+  if (showHrefs) {
+    for (const a of queryAll<HTMLAnchorElement>(doc, "a[href]")) {
+      const raw = a.getAttribute("href") ?? "";
+      const text = a.textContent ?? "";
+      if (/^https?:\/\//i.test(raw) && !text.includes(raw) && !text.includes(a.href)) Element.prototype.after.call(a, ` (${a.href})`);
+    }
+  }
   return (queryAll<HTMLElement>(doc, "body")[0]?.textContent ?? "")
     .replace(/[^\S\n]+/g, " ")
     .replace(/ ?\n ?/g, "\n")

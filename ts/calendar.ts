@@ -83,7 +83,7 @@ function eventButton(className: string, e: AllDayItem | TimedItem) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = className;
-  bindEvent(b, e, eventColor(e));
+  bindEvent(b, e, eventColor(e), e.day);
   return b;
 }
 

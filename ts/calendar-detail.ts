@@ -22,6 +22,8 @@ interface Target {
   info: Info;
   color: string;
   node: HTMLElement;
+  // The day of the week the item is on: a multi-day event has one item per day, all with the same key.
+  day: number;
 }
 
 // The events drawn in the shown week, filled by `bindEvent` while the week is drawn.
@@ -38,9 +40,9 @@ export function startEvents() {
   targets = [];
 }
 
-// Makes `node` (a button) open the detail of `info`; `color` is the event's dot.
-export function bindEvent(node: HTMLElement, info: Info, color: string) {
-  const target = { info, color, node };
+// Makes `node` (a button) open the detail of `info`; `color` is the event's dot and `day` the day of the week the item is on.
+export function bindEvent(node: HTMLElement, info: Info, color: string, day: number) {
+  const target = { info, color, node, day };
   targets.push(target);
   node.onclick = () => (open?.target.node === node ? closeDetail(true) : show(target));
 }
@@ -49,7 +51,9 @@ export function bindEvent(node: HTMLElement, info: Info, color: string) {
 export function endEvents() {
   if (!open) return;
   const key = keyOf(open.target.info);
-  const target = targets.find((t) => keyOf(t.info) === key);
+  // The item on the same day first: a multi-day event has an item per day with the same key.
+  const same = targets.filter((t) => keyOf(t.info) === key);
+  const target = same.find((t) => t.day === open?.target.day) ?? same[0];
   if (!target) return closeDetail();
   const built = builtOf(target);
   if (built !== open.built) {
@@ -121,7 +125,7 @@ function meetBlock(url: string) {
 // The description as text nodes and links: HTML goes through the mail summary's HTML-to-text, and nothing of it is inserted as markup.
 function descriptionBlock(description: string) {
   const box = tag("div", "cal-pop-desc");
-  box.append(...linkify(htmlText(description)));
+  box.append(...linkify(htmlText(description, true)));
   return box;
 }
 

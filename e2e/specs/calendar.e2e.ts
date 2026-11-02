@@ -1,4 +1,4 @@
-import { boot, count, inbox, meetUrl, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
+import { boot, count, inbox, meetUrl, mock, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
 
 // The button of the event (a timed box or an all-day chip) with `title`.
 const eventButton = (title: string) => $(`//button[contains(@class, "cal-event") or contains(@class, "cal-chip")][contains(., "${title}")]`);
@@ -79,6 +79,42 @@ describe("calendar: event detail", () => {
     expect(frame.top).toBeGreaterThanOrEqual(0);
     expect(frame.right).toBeLessThanOrEqual(win.width);
     expect(frame.bottom).toBeLessThanOrEqual(win.height);
+  });
+
+  it("keeps the destination of a link in the description whose text is not the URL", async () => {
+    const week = weekOfToday();
+    week.timed[0].description = 'See <a href="https://example.com/x">資料</a> first.';
+    await boot({ inbox: inbox(), calendar_week: week });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await eventButton("Team sync").click();
+    const desc = $(".cal-pop .cal-pop-desc");
+    await expect(desc).toHaveText("See 資料 (https://example.com/x) first.");
+    await expect(desc.$("a")).toHaveAttribute("href", "https://example.com/x");
+  });
+
+  it("keeps a multi-day event open on the same day's item when the week is drawn again", async () => {
+    const week = weekOfToday();
+    const offsite = { ...week.allDay[0], summary: "Offsite", whenText: "11月3日（火）- 11月4日（水）終日" };
+    week.allDay = [{ ...offsite, day: 1 }, { ...offsite, day: 2 }];
+    await boot({ inbox: inbox(), calendar_week: week });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-allday .cal-chip", "Offsite");
+    // The index of the day cell (after the label) holding the selected chip.
+    const selectedDay = () =>
+      browser.execute(() => [...document.querySelectorAll("#cal-allday > *")].findIndex((cell) => cell.querySelector(".cal-chip.selected")));
+    await $$("#cal-allday .cal-chip")[1].click();
+    expect(await selectedDay()).toBe(3);
+    // A fetch that brings a change draws the week again.
+    await mock("calendar_week", { ...week, allDay: [...week.allDay, { ...week.allDay[0], day: 4, summary: "Extra" }] });
+    await browser.execute(async () => {
+      const path = "/js/calendar.js";
+      const calendar = (await import(path)) as { loadCalendar(refresh: boolean): Promise<void> };
+      await calendar.loadCalendar(true);
+    });
+    await waitForText("#cal-allday", "Extra");
+    await expect($(".cal-pop h2")).toHaveText("Offsite");
+    expect(await selectedDay()).toBe(3);
   });
 
   it("leaves out the rows an event has no value for", async () => {
