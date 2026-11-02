@@ -183,7 +183,6 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 - The access token expiry is not tracked. On a 401, the token is refreshed and the request is retried (also in the middle of `threads.get`).
 - On a rate limit (429 or 403 `rateLimitExceeded`), interactive operations retry up to 2 times (they follow `Retry-After`, capped at 30 seconds).
   Auto sync does not retry. It backs off per account (`SyncState`).
-- The app icon is a placeholder envelope (`src-tauri/icons/icon.svg`).
 - There is no coverage tool.
 - Windows support is built and tested in CI, but it has not been checked on a real Windows machine.
 
