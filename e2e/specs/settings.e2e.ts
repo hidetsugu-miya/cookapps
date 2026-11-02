@@ -1,4 +1,4 @@
-import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, slackLoad, waitForCalls, waitForText, callsOf } from "../support";
+import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, slackLoad, todoPrompt, waitForCalls, waitForText, callsOf } from "../support";
 
 // The app with one Slack workspace whose token `slack_check` judges as given, and the settings screen open.
 async function openSettings(missingScopes: string[], claude: unknown = claudeMissing) {
@@ -98,6 +98,37 @@ describe("settings: Claude", () => {
       await expect($("#claude-items .status")).toHaveText(label);
     });
   }
+});
+
+describe("settings: Todo prompt", () => {
+  const row = () => $("#claude-items .item:nth-child(2)");
+
+  for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
+    it(`has its row under the Claude state while Claude is ${state}`, async () => {
+      await openSettings([], status);
+      await expect(row().$(".item-name")).toHaveText("Todo の要約プロンプト");
+      await expect(row().$(".status")).toHaveText("デフォルト");
+      await expect(row().$(".status")).toHaveElementClass("off");
+      await expect(row().$(".text-btn")).toHaveText("確認・編集");
+    });
+  }
+
+  it("says 編集済み when the instructions were edited", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeReady, claude_todo_prompt: { ...todoPrompt, body: "My body", edited: true } });
+    await $("#nav-settings").click();
+    await expect(row().$(".status")).toHaveText("編集済み");
+    await expect(row().$(".status")).toHaveElementClass("ok");
+  });
+
+  it("opens the prompt screen with 確認・編集 and shows the saved instructions there", async () => {
+    await openSettings([], claudeReady);
+    await expect($("#claude-items .item-name")).toHaveText("claude@example.com");
+    await expect(row().$(".status")).toHaveText("デフォルト");
+    await row().$(".text-btn").click();
+    await expect($("#prompt")).toBeDisplayed();
+    await expect($("#settings")).not.toBeDisplayed();
+    await expect($("#prompt-body")).toHaveValue(todoPrompt.body);
+  });
 });
 
 describe("settings: update", () => {

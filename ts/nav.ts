@@ -14,13 +14,26 @@ export type Screen = "mail" | "calendar" | "todo" | "settings";
 let screen: Screen = "mail";
 export const currentScreen = () => screen;
 
-export function setScreen(name: Screen) {
-  screen = name;
-  closeHint();
+function markNav(name: Screen) {
   for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"], ["nav-todo", "todo"], ["nav-settings", "settings"]]) {
     if (target === name) $(id).setAttribute("aria-current", "page");
     else $(id).removeAttribute("aria-current");
   }
+}
+
+// The Todo prompt screen. The sidebar stays on the settings, and so does `currentScreen()`, so background work does not draw another screen under it.
+export function showPromptScreen() {
+  screen = "settings";
+  markNav("settings");
+  closeHint();
+  $("error").hidden = true;
+  show("prompt");
+}
+
+export function setScreen(name: Screen) {
+  screen = name;
+  closeHint();
+  markNav(name);
   $("error").hidden = true;
   if (name === "calendar") {
     showCalendar();

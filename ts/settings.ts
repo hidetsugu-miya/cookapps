@@ -9,6 +9,7 @@ import { invoke } from "./ipc.js";
 import { appsLink, openPermissionPane, scopesBlock, SLACK_SCOPES } from "./permission-pane.js";
 import { setSlackWorkspaces } from "./slack-workspaces.js";
 import { updateAddMode } from "./todo-add.js";
+import { loadPromptState } from "./todo-prompt.js";
 import { showError } from "./view.js";
 
 let settingsSeq = 0;
@@ -133,6 +134,7 @@ export async function loadSettings() {
   // Opening the settings asks about every token again.
   wsChecks.clear();
   renderWorkspaces(loaded.workspaces);
+  loadPromptState();
 }
 
 export function initSettings() {

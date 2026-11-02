@@ -4,6 +4,7 @@
 import type { Checked } from "../ts/bindings/Checked";
 import type { Claude } from "../ts/bindings/Claude";
 import type { Inbox } from "../ts/bindings/Inbox";
+import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
 import type { Summary } from "../ts/bindings/Summary";
@@ -11,6 +12,7 @@ import type { TaskItem } from "../ts/bindings/TaskItem";
 import type { ThreadDetail } from "../ts/bindings/ThreadDetail";
 import type { ThreadItem } from "../ts/bindings/ThreadItem";
 import type { Todo } from "../ts/bindings/Todo";
+import type { TodoPrompt } from "../ts/bindings/TodoPrompt";
 import type { Week } from "../ts/bindings/Week";
 import type { Workspace } from "../ts/bindings/Workspace";
 
@@ -193,7 +195,20 @@ export const slackLoad: SlackLoad = { workspaces: [workspace], recent: [] };
 export const slackMessageUrl = "https://example-team.slack.com/archives/C0123ABCD/p1700000000123456";
 
 // What `todoist_summarize_slack` answers for `slackMessageUrl`.
-export const slackSummary: Summary = { content: "Reply to the vendor", description: "- Asked for a quote\n- Wants an answer by Friday", due: "2026-11-06" };
+export const slackSummary: Summary = { content: "Reply to the vendor", description: "- Asked for a quote\n- Wants an answer by Friday", due: "2026-11-06", projectId: null };
+
+// What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
+export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", edited: false };
+
+// What `claude_edit_todo_prompt` answers when Claude proposes changing the line "Default body" to "Better body".
+export const promptEdit: PromptEdit = {
+  reply: "1行目を変えます",
+  body: "Better body",
+  diff: [
+    { kind: "del", text: "Default body" },
+    { kind: "ins", text: "Better body" },
+  ],
+};
 
 // What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by.
 export const checked = (missingScopes: string[] | null): Checked => ({ ...workspace, missingScopes });

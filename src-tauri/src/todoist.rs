@@ -1265,8 +1265,8 @@ pub async fn todoist_task_from_mail(
     Ok(done.map(|_| true))
 }
 
-/// Reads the Slack message `url` points at and has Claude summarise it into a task's name, description and due date; nothing is created.
-/// `None` means a token is needed and nothing was read. The message's text is sent to Anthropic through Claude Code.
+/// Reads the Slack message `url` points at and has Claude summarise it into a task's name, description, due date and the project that fits it; nothing is created.
+/// `None` means a token is needed and nothing was read. The message's text and the names of the projects are sent to Anthropic through Claude Code.
 #[tauri::command]
 pub async fn todoist_summarize_slack(
     app: AppHandle,
@@ -1288,10 +1288,17 @@ pub async fn todoist_summarize_slack(
     let message = slack::message_context(&dir, auth.http(), url.trim())
         .await
         .map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let summary = claude::summarize(&message).await.map_err(|e| {
-        log_failure(command, TOKEN_USER, e.log);
-        e.screen
-    })?;
+    // The projects of the last sync, in tree order: Claude names the one that fits, and only a project of this list is kept.
+    let projects: Vec<(String, String)> = order_projects(state.sync.lock().await.projects.clone())
+        .into_iter()
+        .map(|(p, _)| (p.id, p.name))
+        .collect();
+    let summary = claude::summarize(&dir, &message, &projects)
+        .await
+        .map_err(|e| {
+            log_failure(command, TOKEN_USER, e.log);
+            e.screen
+        })?;
     Ok(Some(with_plain_due(summary)))
 }
 
@@ -2314,6 +2321,7 @@ mod tests {
             content: "PR #482 のレビュー".into(),
             description: "- 認証まわりの変更".into(),
             due: due.map(str::to_owned),
+            project_id: None,
         }
     }
 
