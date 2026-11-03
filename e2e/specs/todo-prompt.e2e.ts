@@ -1,4 +1,4 @@
-import { boot, callsOf, count, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, promptEdit, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, count, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 // What Claude answers when the request changes nothing.
@@ -28,11 +28,16 @@ async function openPrompt(claude: unknown = claudeReady, state = todoPrompt) {
 
 // Cmd+Enter (Ctrl+Enter off macOS) in the request field, sent as the key event the app listens for; `composing` makes it the Enter that confirms an IME conversion.
 const pressSend = (composing = false) =>
-  browser.execute((c) => {
-    const mac = /Mac/.test(navigator.platform);
-    const key = new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, isComposing: c, bubbles: true, cancelable: true });
-    document.getElementById("prompt-input")!.dispatchEvent(key);
-  }, composing);
+  browser.execute(
+    (id, c) => {
+      if (!window.__e2e_once__(id)) return;
+      const mac = /Mac/.test(navigator.platform);
+      const key = new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, isComposing: c, bubbles: true, cancelable: true });
+      document.getElementById("prompt-input")!.dispatchEvent(key);
+    },
+    onceId(),
+    composing,
+  );
 
 // Puts `lines` lines in the request field as typing does (value, then input).
 const fillLines = (lines: number) =>

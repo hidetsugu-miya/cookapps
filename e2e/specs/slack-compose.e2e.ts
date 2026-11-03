@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeLoggedOut, claudeReady, count, holds, inbox, mock, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, threadDetail, waitForCalls, waitForCount, workspace,
+  boot, callsOf, claudeLoggedOut, claudeReady, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, threadDetail, waitForCalls, waitForCount, workspace,
 } from "../support";
 
 const body = () => $("#slack-body");
@@ -446,7 +446,11 @@ describe("slack compose screen: the divider", () => {
       document.dispatchEvent(new PointerEvent("pointerup", at(f)));
     }, fraction);
   const press = (key: string) =>
-    browser.execute((k) => document.getElementById("slack-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), key);
+    browser.execute(
+      (id, k) => window.__e2e_once__(id) && document.getElementById("slack-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })),
+      onceId(),
+      key,
+    );
 
   it("is a vertical separator that starts at a third", async () => {
     await openCompose();

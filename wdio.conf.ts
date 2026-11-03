@@ -52,6 +52,8 @@ export const config = {
   ],
   framework: "mocha",
   reporters: ["spec"],
+  // On the macOS runner a `browser.execute` that loses its result costs the 3 s script timeout plus a retry, which used up the default 5 s of one `waitUntil`; 15 s fits that and stays far under the test's 60 s.
+  waitforTimeout: 15000,
   mochaOpts: { ui: "bdd", timeout: 60000 },
   logLevel: "warn",
   onPrepare: async (_config: unknown, capabilities: { "wdio:tauriServiceOptions": { embeddedPort?: number } }[]) => {
