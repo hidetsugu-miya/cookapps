@@ -27,9 +27,10 @@ const freePorts = async (count: number) => {
 };
 
 // The service starts one app for each capability, so the specs are split into three capabilities and run in three apps at once.
-// The longest specs have a capability each, and every spec not named here (a new one included) runs in the last one.
+// The first two capabilities name their specs, chosen so that all three hold about the same number of tests; every spec not named here (a new one included) runs in the last one.
+// `--spec` replaces the specs of every capability and keeps only their excludes, so a spec given there runs in each app that does not exclude it (three apps for an unnamed spec, two for a named one).
 // `wdio:maxInstances: 1` keeps two workers out of one app.
-const longSpecs = ["./e2e/specs/todo.e2e.ts", "./e2e/specs/settings.e2e.ts"];
+const namedSpecs = [["./e2e/specs/todo.e2e.ts"], ["./e2e/specs/settings.e2e.ts", "./e2e/specs/slack-compose.e2e.ts", "./e2e/specs/sidebar.e2e.ts"]];
 const appCapability = (specs: { "wdio:specs": string[] } | { "wdio:exclude": string[] }) => ({
   browserName: "tauri",
   "tauri:options": { application: binary },
@@ -45,9 +46,9 @@ export const config = {
   maxInstances: 3,
   services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
   capabilities: [
-    appCapability({ "wdio:specs": [longSpecs[0]] }),
-    appCapability({ "wdio:specs": [longSpecs[1]] }),
-    appCapability({ "wdio:exclude": longSpecs }),
+    appCapability({ "wdio:specs": namedSpecs[0] }),
+    appCapability({ "wdio:specs": namedSpecs[1] }),
+    appCapability({ "wdio:exclude": namedSpecs.flat() }),
   ],
   framework: "mocha",
   reporters: ["spec"],
