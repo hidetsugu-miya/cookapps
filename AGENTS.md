@@ -175,11 +175,11 @@ scripts/check-version.sh   # the version in Cargo.toml, tauri.conf.json and Carg
 ## CI
 
 CI is `.github/workflows/release.yml`, and only a pushed tag `v*` starts it.
-Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions, so a push to main or a pull request runs nothing.
+Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions, so a push to main or a pull request runs no workflow of this repository (GitHub Pages still builds `docs/` on a push to main).
 
 | Job | Environment | What it does |
 |-----|-------------|--------------|
-| `release` | macos-latest | checks that the tag is the version of its commit, then puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| `release` | macos-latest | checks that the tag is the version of its commit and that the commit is on main, then puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
 ## Known limitations
 
