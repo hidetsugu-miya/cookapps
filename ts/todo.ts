@@ -24,6 +24,7 @@ export function todoMode(mode: "token" | "list" | "detail") {
   $("todo-list").hidden = mode !== "list";
   $("todo-detail").hidden = mode !== "detail";
   $("todo-back").hidden = mode !== "detail";
+  $("todo-prompt").hidden = mode !== "list";
   $("todo-more").hidden = mode !== "detail";
   // A redraw of the same task keeps its menu open; another task or another part closes it.
   if (moreMenu && (mode !== "detail" || todoState.open !== moreMenu.id)) closeMoreMenu();

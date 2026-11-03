@@ -1,11 +1,19 @@
-import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, holds, inbox, mock, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
 
-// The app with one Slack workspace whose token `slack_check` judges as given, and the settings screen open.
-async function openSettings(missingScopes: string[], claude: unknown = claudeMissing) {
+type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "update";
+
+// Presses a tab of the settings screen.
+const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
+
+// The app with one Slack workspace whose token `slack_check` judges as given, and the settings screen open on `tab` (it opens on Google).
+async function openSettings(missingScopes: string[], claude: unknown = claudeMissing, tab: Tab = "google") {
   await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked(missingScopes), claude_status: claude });
   await $("#nav-settings").click();
   await expect($("#settings")).toBeDisplayed();
+  if (tab !== "google") await openTab(tab);
 }
+
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["update", "アップデート"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -58,6 +66,7 @@ describe("settings: calendar", () => {
   const openCalendarSettings = async (fixtures: Record<string, unknown> = {}) => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), calendar_week: weekOfToday(), ...fixtures });
     await $("#nav-settings").click();
+    await openTab("calendar");
     await expect($("#calendar-items .item-name")).toHaveText("週の始まり");
   };
 
@@ -113,6 +122,7 @@ describe("settings: Todoist", () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
     await $("#nav-settings").click();
     await expect($("#settings")).toBeDisplayed();
+    await openTab("todoist");
   };
 
   it("shows the card between カレンダー and Slack, connected with a button to unlink", async () => {
@@ -171,8 +181,17 @@ describe("settings: Todoist", () => {
 });
 
 describe("settings: Slack", () => {
+  it("asks Slack about the tokens only when the Slack tab is shown", async () => {
+    await openSettings([]);
+    await browser.waitUntil(async () => (await textsOf("#slack-workspaces .status")).join() === "確認中", { timeoutMsg: "the workspace row was not drawn" });
+    expect(await callsOf("slack_check")).toHaveLength(0);
+    await openTab("slack");
+    expect(await waitForCalls("slack_check")).toEqual([{ teamId: "T1" }]);
+    await expect($("#slack-workspaces .status")).toHaveText("接続済み");
+  });
+
   it("flags a token without read scopes and lists only the missing ones in the pane", async () => {
-    await openSettings(["im:history", "mpim:history"]);
+    await openSettings(["im:history", "mpim:history"], claudeMissing, "slack");
     const status = $("#slack-workspaces .status");
     await expect(status).toHaveText("権限が不足");
     await status.click();
@@ -184,7 +203,7 @@ describe("settings: Slack", () => {
   });
 
   it("asks before disconnecting: キャンセル sends nothing, 解除 calls slack_remove_workspace", async () => {
-    await openSettings([]);
+    await openSettings([], claudeMissing, "slack");
     const remove = await mock("slack_remove_workspace", []);
     await expect($("#slack-workspaces .status")).toHaveText("接続済み");
 
@@ -210,7 +229,7 @@ describe("settings: Claude", () => {
     ["missing", claudeMissing, "Claude Code が見つかりません", "未導入"],
   ] as const) {
     it(`shows the ${state} state`, async () => {
-      await openSettings([], status);
+      await openSettings([], status, "claude");
       await expect($("#claude-items .item-name")).toHaveText(name);
       await expect($("#claude-items .status")).toHaveText(label);
     });
@@ -218,101 +237,150 @@ describe("settings: Claude", () => {
 });
 
 describe("settings: Claude model and effort", () => {
-  const modelSelect = () => $('#claude-items select[aria-label="モデル"]');
-  const effortSelect = () => $('#claude-items select[aria-label="effort"]');
+  type Purpose = keyof typeof claudeSettings;
+  const PURPOSES: [Purpose, string, string][] = [
+    ["slackSummary", "Slack の要約", "Slack のメッセージから Todo を作るとき"],
+    ["mailSummary", "メールの要約", "メール詳細の AI 要約"],
+    ["promptChat", "プロンプトの会話", "Todo の要約プロンプトを Claude と編集するとき"],
+    ["proofread", "Slack に貼る文章の校正", "Slack に貼る画面の「Claude と校正」"],
+  ];
+  const selectOf = (purpose: Purpose, kind: "model" | "effort") => $(`#claude-items select[data-purpose="${purpose}"][data-kind="${kind}"]`);
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
-  const choose = (label: string, value: string) =>
+  const choose = (purpose: Purpose, kind: "model" | "effort", value: string) =>
     browser.execute(
-      (l, v) => {
-        const select = document.querySelector<HTMLSelectElement>(`#claude-items select[aria-label="${l}"]`)!;
+      (p, k, v) => {
+        const select = document.querySelector<HTMLSelectElement>(`#claude-items select[data-purpose="${p}"][data-kind="${k}"]`)!;
         select.value = v;
         select.dispatchEvent(new Event("change", { bubbles: true }));
       },
-      label,
+      purpose,
+      kind,
       value,
     );
   const optionTexts = (select: ChainablePromiseElement) => select.$$("option").map((o) => o.getText());
+  const drawnSelects = () => browser.execute(() => document.querySelectorAll("#claude-items select").length);
 
   for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
-    it(`has its row between the Claude state and the Todo prompt, with the defaults selected, while Claude is ${state}`, async () => {
-      await openSettings([], status);
-      await expect($("#claude-items .item:nth-child(2) .item-name")).toHaveText("モデルと effort");
-      await expect($("#claude-items .item:nth-child(3) .item-name")).toHaveText("Todo の要約プロンプト");
-      await expect(modelSelect()).toHaveValue("sonnet");
-      await expect(effortSelect()).toHaveValue("medium");
+    it(`has its block between the Claude state and the Todo prompt, with the defaults selected for the four purposes, while Claude is ${state}`, async () => {
+      await openSettings([], status, "claude");
+      await expect($("#claude-items > :nth-child(2) .item-name")).toHaveText("モデルと effort");
+      await expect($("#claude-items > :nth-child(3) .item-name")).toHaveText("Todo の要約プロンプト");
+      expect(await drawnSelects()).toBe(8);
+      for (const [purpose] of PURPOSES) {
+        await expect(selectOf(purpose, "model")).toHaveValue("sonnet");
+        await expect(selectOf(purpose, "effort")).toHaveValue("medium");
+      }
     });
   }
 
-  it("offers the four models and the five efforts, marking the defaults", async () => {
-    await openSettings([]);
-    expect(await optionTexts(modelSelect())).toEqual(["Haiku", "Sonnet（デフォルト）", "Opus", "Fable"]);
-    expect(await optionTexts(effortSelect())).toEqual(["low", "medium（デフォルト）", "high", "xhigh", "max"]);
+  it("names the four purposes in order, each with where it is used, and labels its selects", async () => {
+    await openSettings([], claudeReady, "claude");
+    const whos = await textsOf("#claude-items .model-grid .who");
+    expect(whos).toEqual(PURPOSES.map(([, name, meta]) => `${name}${meta}`));
+    for (const [purpose, name] of PURPOSES) {
+      await expect(selectOf(purpose, "model")).toHaveAttribute("aria-label", `${name}のモデル`);
+      await expect(selectOf(purpose, "effort")).toHaveAttribute("aria-label", `${name}の effort`);
+    }
   });
 
-  it("shows the saved model and effort", async () => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_model_settings: { model: "fable", effort: "xhigh" } });
+  it("offers the four models and the five efforts for each purpose, marking the defaults", async () => {
+    await openSettings([], claudeReady, "claude");
+    for (const [purpose] of PURPOSES) {
+      expect(await optionTexts(selectOf(purpose, "model"))).toEqual(["Haiku", "Sonnet（デフォルト）", "Opus", "Fable"]);
+      expect(await optionTexts(selectOf(purpose, "effort"))).toEqual(["low", "medium（デフォルト）", "high", "xhigh", "max"]);
+    }
+  });
+
+  it("shows the saved model and effort of each purpose", async () => {
+    await boot({
+      inbox: inbox(),
+      slack_load: slackLoad,
+      slack_check: checked([]),
+      claude_model_settings: {
+        slackSummary: { model: "fable", effort: "xhigh" },
+        mailSummary: { model: "haiku", effort: "low" },
+        promptChat: { model: "opus", effort: "high" },
+        proofread: { model: "sonnet", effort: "max" },
+      },
+    });
     await $("#nav-settings").click();
-    await expect(modelSelect()).toHaveValue("fable");
-    await expect(effortSelect()).toHaveValue("xhigh");
+    await openTab("claude");
+    await expect(selectOf("slackSummary", "model")).toHaveValue("fable");
+    await expect(selectOf("slackSummary", "effort")).toHaveValue("xhigh");
+    await expect(selectOf("mailSummary", "model")).toHaveValue("haiku");
+    await expect(selectOf("mailSummary", "effort")).toHaveValue("low");
+    await expect(selectOf("promptChat", "model")).toHaveValue("opus");
+    await expect(selectOf("promptChat", "effort")).toHaveValue("high");
+    await expect(selectOf("proofread", "model")).toHaveValue("sonnet");
+    await expect(selectOf("proofread", "effort")).toHaveValue("max");
   });
 
-  it("saves on change with claude_model_settings_save, sending both values", async () => {
-    await openSettings([]);
-    const save = await mock("claude_model_settings_save", { model: "opus", effort: "medium" });
-    await choose("モデル", "opus");
-    expect(await waitForCalls(save)).toEqual([{ model: "opus", effort: "medium" }]);
-    await expect(modelSelect()).toHaveValue("opus");
-    const saveEffort = await mock("claude_model_settings_save", { model: "opus", effort: "max" });
-    await choose("effort", "max");
-    expect(await waitForCalls(saveEffort)).toEqual([{ model: "opus", effort: "max" }]);
-    await expect(effortSelect()).toHaveValue("max");
-  });
+  for (const [purpose, name] of PURPOSES) {
+    it(`saves ${name} with claude_model_settings_save, sending the purpose and both values, and leaves the other purposes alone`, async () => {
+      await openSettings([], claudeReady, "claude");
+      const save = await mock("claude_model_settings_save", { ...claudeSettings, [purpose]: { model: "opus", effort: "medium" } });
+      await choose(purpose, "model", "opus");
+      expect(await waitForCalls(save)).toEqual([{ purpose, model: "opus", effort: "medium" }]);
+      await expect(selectOf(purpose, "model")).toHaveValue("opus");
+      const saveEffort = await mock("claude_model_settings_save", { ...claudeSettings, [purpose]: { model: "opus", effort: "max" } });
+      await choose(purpose, "effort", "max");
+      expect(await waitForCalls(saveEffort)).toEqual([{ purpose, model: "opus", effort: "max" }]);
+      await expect(selectOf(purpose, "effort")).toHaveValue("max");
+      for (const [other] of PURPOSES.filter(([p]) => p !== purpose)) {
+        await expect(selectOf(other, "model")).toHaveValue("sonnet");
+        await expect(selectOf(other, "effort")).toHaveValue("medium");
+      }
+    });
+  }
 
   it("puts the selection back and shows the error when it cannot be saved", async () => {
-    await openSettings([]);
+    await openSettings([], claudeReady, "claude");
     await mock("claude_model_settings_save", rejects("モデルが不正です: x"));
-    await choose("モデル", "haiku");
+    await choose("mailSummary", "model", "haiku");
     await expect($("#error")).toHaveText(expect.stringContaining("モデルが不正です"));
-    await expect(modelSelect()).toHaveValue("sonnet");
+    await expect(selectOf("mailSummary", "model")).toHaveValue("sonnet");
   });
 
   it("shows the error and no selects when the settings cannot be read", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]) });
     await mock("claude_model_settings", rejects("設定を読めません"));
     await $("#nav-settings").click();
+    await openTab("claude");
     await expect($("#error")).toHaveText(expect.stringContaining("設定を読めません"));
-    await expect($("#claude-items .item:nth-child(2) .item-name")).toHaveText("Todo の要約プロンプト");
-    await expect(modelSelect()).not.toExist();
-    await expect(effortSelect()).not.toExist();
+    await expect($("#claude-items > :nth-child(2) .item-name")).toHaveText("Todo の要約プロンプト");
+    expect(await drawnSelects()).toBe(0);
   });
 
-  it("disables the selects while a save is on its way", async () => {
-    await openSettings([]);
+  it("disables every select while a save is on its way", async () => {
+    await openSettings([], claudeReady, "claude");
     const save = await mock("claude_model_settings_save", holds);
-    await choose("モデル", "opus");
+    await choose("proofread", "model", "opus");
     await waitForCalls(save);
-    await expect(modelSelect()).toBeDisabled();
-    await expect(effortSelect()).toBeDisabled();
-    await release(save, { model: "opus", effort: "medium" });
-    await expect(modelSelect()).toBeEnabled();
-    await expect(modelSelect()).toHaveValue("opus");
+    for (const [purpose] of PURPOSES) {
+      await expect(selectOf(purpose, "model")).toBeDisabled();
+      await expect(selectOf(purpose, "effort")).toBeDisabled();
+    }
+    await release(save, { ...claudeSettings, proofread: { model: "opus", effort: "medium" } });
+    await expect(selectOf("proofread", "model")).toBeEnabled();
+    await expect(selectOf("proofread", "model")).toHaveValue("opus");
+    await expect(selectOf("slackSummary", "effort")).toBeEnabled();
   });
 
-  it("says in the ? hint that the setting applies to the four Claude calls", async () => {
-    await openSettings([]);
+  it("says in the ? hint that each of the four Claude calls has its own setting", async () => {
+    await openSettings([], claudeReady, "claude");
     await $("#claude-help").click();
     await expect($('[role="dialog"][aria-label="Claude の使い方"] .foot')).toHaveText(
-      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正"),
+      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正のそれぞれに選べます"),
     );
   });
 });
 
 describe("settings: Todo prompt", () => {
-  const row = () => $("#claude-items .item:nth-child(3)");
+  const row = () => $("#claude-items > :nth-child(3)");
 
   for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
     it(`has its row under the Claude state while Claude is ${state}`, async () => {
-      await openSettings([], status);
+      await openSettings([], status, "claude");
       await expect(row().$(".item-name")).toHaveText("Todo の要約プロンプト");
       await expect(row().$(".status")).toHaveText("デフォルト");
       await expect(row().$(".status")).toHaveElementClass("off");
@@ -323,12 +391,13 @@ describe("settings: Todo prompt", () => {
   it("says 編集済み when the instructions were edited", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeReady, claude_todo_prompt: { ...todoPrompt, body: "My body", edited: true } });
     await $("#nav-settings").click();
+    await openTab("claude");
     await expect(row().$(".status")).toHaveText("編集済み");
     await expect(row().$(".status")).toHaveElementClass("ok");
   });
 
   it("opens the prompt screen with 確認・編集 and shows the saved instructions there", async () => {
-    await openSettings([], claudeReady);
+    await openSettings([], claudeReady, "claude");
     await expect($("#claude-items .item-name")).toHaveText("claude@example.com");
     await expect(row().$(".status")).toHaveText("デフォルト");
     await row().$(".text-btn").click();
@@ -343,6 +412,7 @@ describe("settings: update", () => {
     await boot({ inbox: inbox(), ...fixtures });
     await $("#nav-settings").click();
     await expect($("#settings")).toBeDisplayed();
+    await openTab("update");
   };
   const status = () => $("#update-items .status");
   const modeButton = (label: string) => $("#update-items").$(`button=${label}`);
@@ -400,5 +470,146 @@ describe("settings: update", () => {
     expect(await waitForCalls(check)).toEqual([null]);
     await expect(status()).toHaveText("v9.9.9 があります");
     await expect($("#update-btn")).toHaveAttribute("aria-label", "v9.9.9 に更新");
+  });
+});
+
+describe("settings: tabs", () => {
+  const tab = (name: Tab) => $(`#settings-tab-${name}`);
+  const panel = (name: Tab) => $(`#settings-panel-${name}`);
+  const selected = () => browser.execute(() => [...document.querySelectorAll('#settings-tabs [role="tab"]')].filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.id));
+  // Left or right pressed on the selected tab, as the key event the app listens for.
+  const pressArrow = (key: "ArrowLeft" | "ArrowRight") =>
+    browser.execute((k) => {
+      const current = document.querySelector('#settings-tabs [role="tab"][aria-selected="true"]')!;
+      current.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    }, key);
+
+  it("has the six tabs in order, in a tablist, each controlling the card it names", async () => {
+    await openSettings([]);
+    await expect($("#settings-tabs")).toHaveAttribute("role", "tablist");
+    expect(await textsOf('#settings-tabs [role="tab"]')).toEqual(TABS.map(([, label]) => label));
+    for (const [name] of TABS) {
+      await expect(tab(name)).toHaveAttribute("aria-controls", `settings-panel-${name}`);
+      await expect(panel(name)).toHaveAttribute("role", "tabpanel");
+      await expect(panel(name)).toHaveAttribute("aria-labelledby", `settings-tab-${name}`);
+    }
+  });
+
+  it("opens on Google from the side menu and hides the other cards", async () => {
+    await openSettings([]);
+    expect(await selected()).toEqual(["settings-tab-google"]);
+    await expect(panel("google")).toBeDisplayed();
+    for (const [name] of TABS.filter(([n]) => n !== "google")) await expect(panel(name)).not.toBeDisplayed();
+  });
+
+  it("shows only the card of the pressed tab", async () => {
+    await openSettings([]);
+    for (const [name] of TABS) {
+      await openTab(name);
+      expect(await selected()).toEqual([`settings-tab-${name}`]);
+      for (const [other] of TABS) {
+        if (other === name) await expect(panel(other)).toBeDisplayed();
+        else await expect(panel(other)).not.toBeDisplayed();
+      }
+    }
+  });
+
+  it("moves to the next tab with the right arrow and the previous one with the left, from the last to the first and back", async () => {
+    await openSettings([]);
+    await pressArrow("ArrowRight");
+    expect(await selected()).toEqual(["settings-tab-calendar"]);
+    await expect(panel("calendar")).toBeDisplayed();
+    await expect(panel("google")).not.toBeDisplayed();
+    await pressArrow("ArrowLeft");
+    await pressArrow("ArrowLeft");
+    expect(await selected()).toEqual(["settings-tab-update"]);
+    await expect(panel("update")).toBeDisplayed();
+    await pressArrow("ArrowRight");
+    expect(await selected()).toEqual(["settings-tab-google"]);
+  });
+
+  it("moves the focus to the neighbour tab along with the arrow key", async () => {
+    await openSettings([]);
+    const focused = () => browser.execute(() => document.activeElement?.id);
+    await pressArrow("ArrowRight");
+    expect(await focused()).toBe("settings-tab-calendar");
+    await pressArrow("ArrowLeft");
+    await pressArrow("ArrowLeft");
+    expect(await focused()).toBe("settings-tab-update");
+  });
+
+  it("opens the Claude tab from 設定を開く in the Claude popup", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeReady });
+    await $("#claude-btn").click();
+    await $("#account-popup").$("button=設定を開く").click();
+    await expect($("#settings")).toBeDisplayed();
+    expect(await selected()).toEqual(["settings-tab-claude"]);
+    await expect(panel("claude")).toBeDisplayed();
+  });
+
+  it("clears a shown error when another tab is pressed", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, todoist_connected: true });
+    await $("#nav-settings").click();
+    await openTab("todoist");
+    await mock("todoist_disconnect", rejects("資格情報を消せません"));
+    await $('button[aria-label="Todoist の接続を解除"]').click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await expect($("#error")).toBeDisplayed();
+    await openTab("slack");
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("opens on Google again when the settings are left and entered from the side menu", async () => {
+    await openSettings([], claudeReady, "claude");
+    await $("#nav-mail").click();
+    await $("#nav-settings").click();
+    expect(await selected()).toEqual(["settings-tab-google"]);
+  });
+
+  it("closes an open ? hint when a tab is pressed", async () => {
+    await openSettings([], claudeReady, "claude");
+    await $("#claude-help").click();
+    await expect($('[role="dialog"][aria-label="Claude の使い方"]')).toBeDisplayed();
+    await openTab("slack");
+    await expect($('[role="dialog"][aria-label="Claude の使い方"]')).not.toExist();
+  });
+
+  it("keeps the heading and the tabs in view while a long card scrolls under them, and shows a card from its top when its tab is pressed again", async () => {
+    const workspaces = Array.from({ length: 24 }, (_, i) => ({ teamId: `T${i}`, team: `Team ${i}`, user: "alice", url: `https://team-${i}.slack.com/` }));
+    await boot({ inbox: inbox(), slack_load: { workspaces, recent: [] }, slack_check: checked([]), claude_status: claudeMissing });
+    await $("#nav-settings").click();
+    await openTab("slack");
+    await expect($("#slack-workspaces .item")).toExist();
+    const scrolled = await browser.execute(() => {
+      const settings = document.getElementById("settings")!;
+      settings.scrollTop = 400;
+      return settings.scrollTop;
+    });
+    expect(scrolled).toBeGreaterThan(0);
+    const edges = () =>
+      browser.execute(() => {
+        const settings = document.getElementById("settings")!.getBoundingClientRect();
+        const head = document.getElementById("settings-head")!.getBoundingClientRect();
+        const tabs = document.getElementById("settings-tabs")!.getBoundingClientRect();
+        return { headTop: Math.round(head.top - settings.top), tabsInside: tabs.top >= settings.top && tabs.bottom <= settings.top + head.height };
+      });
+    expect(await edges()).toEqual({ headTop: 0, tabsInside: true });
+    await expect($("#settings h1")).toBeDisplayed();
+    await expect(tab("slack")).toBeDisplayed();
+    await openTab("slack");
+    expect(await browser.execute(() => document.getElementById("settings")!.scrollTop)).toBe(0);
+  });
+
+  it("puts the dot on the update tab only while a newer version is out", async () => {
+    await boot({ inbox: inbox(), update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
+    await $("#nav-settings").click();
+    await waitForText("#update-items .status", "v9.9.9 があります");
+    await expect($("#settings-tab-update .tab-dot")).toBeDisplayed();
+    expect(await browser.execute(() => document.querySelectorAll("#settings-tabs .tab-dot:not([hidden])").length)).toBe(1);
+    await boot({ inbox: inbox() });
+    await $("#nav-settings").click();
+    await waitForCalls("check_update");
+    await waitForText("#update-items .status", "最新");
+    await expect($("#settings-tab-update .tab-dot")).not.toBeDisplayed();
   });
 });

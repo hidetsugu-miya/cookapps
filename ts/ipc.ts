@@ -8,7 +8,7 @@ import type { Effort } from "./bindings/Effort";
 import type { Inbox } from "./bindings/Inbox";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { Model } from "./bindings/Model";
-import type { ModelSettings } from "./bindings/ModelSettings";
+import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -90,9 +90,9 @@ export interface Commands {
     result: boolean;
   };
   claude_status: { args: undefined; result: Claude };
-  // The model and effort of every `claude -p` call (A-2): the saved ones, or the defaults. Saving answers what was saved.
-  claude_model_settings: { args: undefined; result: ModelSettings };
-  claude_model_settings_save: { args: { model: Model; effort: Effort }; result: ModelSettings };
+  // The model and effort of each purpose of the `claude -p` calls (A-2): the saved ones, or the defaults. Saving one purpose answers the settings of all of them.
+  claude_model_settings: { args: undefined; result: ClaudeSettings };
+  claude_model_settings_save: { args: { purpose: keyof ClaudeSettings; model: Model; effort: Effort }; result: ClaudeSettings };
   // The thread's messages in the order the thread has them; `text` is each body as plain text.
   claude_summarize_mail: { args: { subject: string; messages: { from: string; dateMs: number; text: string }[] }; result: MailSummary };
   // The instructions of the Slack summary: the one in use, saved (the default body removes the saved one), or back to the default. Each answers the state after it.

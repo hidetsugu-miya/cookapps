@@ -103,6 +103,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
           </button>
           <h1 id="todo-title">今日</h1>
+          <button id="todo-prompt" class="icon-btn" aria-label="Todo の要約プロンプトを確認・編集" hidden></button>
           <button id="todo-more" class="icon-btn" aria-label="その他" aria-haspopup="menu" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path stroke-width="3" d="M5 12h.01M12 12h.01M19 12h.01"/></svg>
           </button>
@@ -129,8 +130,18 @@
       </div>
     </section>
     <section id="settings" hidden>
-      <h1>設定</h1>
-      <section class="card">
+      <div id="settings-head">
+        <h1>設定</h1>
+        <div id="settings-tabs" role="tablist" aria-label="設定の項目">
+          <button id="settings-tab-google" class="tab" role="tab" aria-controls="settings-panel-google" aria-selected="true">Google</button>
+          <button id="settings-tab-calendar" class="tab" role="tab" aria-controls="settings-panel-calendar" aria-selected="false" tabindex="-1">カレンダー</button>
+          <button id="settings-tab-todoist" class="tab" role="tab" aria-controls="settings-panel-todoist" aria-selected="false" tabindex="-1">Todoist</button>
+          <button id="settings-tab-slack" class="tab" role="tab" aria-controls="settings-panel-slack" aria-selected="false" tabindex="-1">Slack</button>
+          <button id="settings-tab-claude" class="tab" role="tab" aria-controls="settings-panel-claude" aria-selected="false" tabindex="-1">Claude</button>
+          <button id="settings-tab-update" class="tab" role="tab" aria-controls="settings-panel-update" aria-selected="false" tabindex="-1">アップデート<span class="tab-dot" hidden></span></button>
+        </div>
+      </div>
+      <section id="settings-panel-google" class="card" role="tabpanel" aria-labelledby="settings-tab-google">
         <div class="card-head">
           <h2>
             <span class="logo google">G</span>Google
@@ -144,7 +155,7 @@
           <button id="google-add" class="text-btn primary">アカウントを追加</button>
         </div>
       </section>
-      <section class="card">
+      <section id="settings-panel-calendar" class="card" role="tabpanel" aria-labelledby="settings-tab-calendar" hidden>
         <div class="card-head">
           <h2>
             <span class="logo calendar"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></span>カレンダー
@@ -152,7 +163,7 @@
         </div>
         <div id="calendar-items"></div>
       </section>
-      <section class="card">
+      <section id="settings-panel-todoist" class="card" role="tabpanel" aria-labelledby="settings-tab-todoist" hidden>
         <div class="card-head">
           <h2>
             <span class="logo todoist"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg></span>Todoist
@@ -160,7 +171,7 @@
         </div>
         <div id="todoist-items"></div>
       </section>
-      <section class="card">
+      <section id="settings-panel-slack" class="card" role="tabpanel" aria-labelledby="settings-tab-slack" hidden>
         <div class="card-head">
           <h2>
             <span class="logo slack"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/></svg></span>Slack
@@ -175,7 +186,7 @@
           <button class="text-btn">追加</button>
         </form>
       </section>
-      <section class="card">
+      <section id="settings-panel-claude" class="card" role="tabpanel" aria-labelledby="settings-tab-claude" hidden>
         <div class="card-head">
           <h2>
             <span class="logo claude"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span>Claude
@@ -189,7 +200,7 @@
         </div>
         <div id="claude-items"></div>
       </section>
-      <section class="card">
+      <section id="settings-panel-update" class="card" role="tabpanel" aria-labelledby="settings-tab-update" hidden>
         <div class="card-head">
           <h2>
             <span class="logo update"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg></span>アップデート
@@ -247,6 +258,7 @@
                 <button id="prompt-send" class="text-btn primary chat-send">送信</button>
               </div>
             </div>
+            <div id="prompt-model"></div>
           </form>
         </aside>
       </div>

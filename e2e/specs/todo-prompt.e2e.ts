@@ -1,4 +1,4 @@
-import { boot, callsOf, count, claudeLoggedOut, claudeMissing, claudeReady, holds, inbox, mock, promptEdit, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, count, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, promptEdit, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 // What Claude answers when the request changes nothing.
@@ -20,6 +20,7 @@ const settled = () =>
 async function openPrompt(claude: unknown = claudeReady, state = todoPrompt) {
   await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claude, claude_todo_prompt: state });
   await $("#nav-settings").click();
+  await $("#settings-tab-claude").click();
   await settled();
   await $("#claude-items .item:nth-child(3) .text-btn").click();
   await expect($("#prompt")).toBeDisplayed();
@@ -68,6 +69,14 @@ describe("todo prompt screen", () => {
     await expect($("#settings")).toBeDisplayed();
     await expect($("#prompt")).not.toBeDisplayed();
     await expect($("#nav-settings")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("returns to the Claude tab it was opened from, not to Google", async () => {
+    await openPrompt();
+    await $("#prompt-back").click();
+    await expect($("#settings-tab-claude")).toHaveAttribute("aria-selected", "true");
+    await expect($("#settings-panel-claude")).toBeDisplayed();
+    await expect($("#settings-panel-google")).not.toBeDisplayed();
   });
 
   it("marks an edited field 未保存の変更 and saves it with 保存", async () => {
@@ -442,5 +451,113 @@ describe("todo prompt screen: clearing the conversation", () => {
     await expect(clear()).toBeDisabled();
     await release(edit, promptEdit);
     await expect(clear()).toBeEnabled();
+  });
+});
+
+describe("todo prompt screen: the model and effort of the conversation", () => {
+  const selectOf = (kind: "model" | "effort") => $(`#prompt-model select[data-purpose="promptChat"][data-kind="${kind}"]`);
+  const settingsSelect = (kind: "model" | "effort") => $(`#claude-items select[data-purpose="promptChat"][data-kind="${kind}"]`);
+  // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
+  const choose = (scope: string, kind: "model" | "effort", value: string) =>
+    browser.execute(
+      (sc, k, v) => {
+        const select = document.querySelector<HTMLSelectElement>(`${sc} select[data-purpose="promptChat"][data-kind="${k}"]`)!;
+        select.value = v;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      scope,
+      kind,
+      value,
+    );
+  const saved = { ...claudeSettings, promptChat: { model: "opus", effort: "high" } } as const;
+
+  // The Todo screen with the prompt opened by the icon of its heading: the settings screen was never visited.
+  async function openFromTodo(settings: unknown = claudeSettings) {
+    await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady, claude_model_settings: settings });
+    await $("#nav-todo").click();
+    await waitForCount("#todo-list li.task", 1);
+    await $("#todo-prompt").click();
+    await expect($("#prompt")).toBeDisplayed();
+  }
+
+  it("puts a model select and an effort select, borderless and short, under the request field", async () => {
+    await openPrompt();
+    await expect(selectOf("model")).toBeDisplayed();
+    await expect(selectOf("effort")).toBeDisplayed();
+    expect(await count("#prompt-model select")).toBe(2);
+    expect(await selectOf("model").$$("option").map((o) => o.getText())).toEqual(["Haiku", "Sonnet", "Opus", "Fable"]);
+    expect(await selectOf("effort").$$("option").map((o) => o.getText())).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    await expect(selectOf("model")).toHaveAttribute("aria-label", "モデル");
+    await expect(selectOf("effort")).toHaveAttribute("aria-label", "effort");
+    await expect(selectOf("model")).toHaveValue("sonnet");
+    await expect(selectOf("effort")).toHaveValue("medium");
+    // After the composer, inside the form, and without a border.
+    expect(await browser.execute(() => document.querySelector("#prompt-form > .composer")?.nextElementSibling?.id)).toBe("prompt-model");
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#prompt-model select")!).borderTopWidth)).toBe("0px");
+  });
+
+  it("is on the prompt screen only, not on the Slack compose screen", async () => {
+    await openPrompt();
+    expect(await count("#slack-compose select")).toBe(0);
+    expect(await count("#prompt-model select")).toBe(2);
+  });
+
+  it("shows the saved values of the prompt conversation when opened from Todo, without visiting the settings", async () => {
+    await openFromTodo(saved);
+    await expect(selectOf("model")).toHaveValue("opus");
+    await expect(selectOf("effort")).toHaveValue("high");
+    expect((await callsOf("claude_model_settings")).length).toBeGreaterThan(0);
+  });
+
+  it("saves a change with the purpose promptChat and both values, and the settings show it", async () => {
+    await openPrompt();
+    const save = await mock("claude_model_settings_save", { ...claudeSettings, promptChat: { model: "opus", effort: "medium" } });
+    await choose("#prompt-model", "model", "opus");
+    expect(await waitForCalls(save)).toEqual([{ purpose: "promptChat", model: "opus", effort: "medium" }]);
+    await expect(selectOf("model")).toHaveValue("opus");
+    const saveEffort = await mock("claude_model_settings_save", { ...claudeSettings, promptChat: { model: "opus", effort: "max" } });
+    await choose("#prompt-model", "effort", "max");
+    expect(await waitForCalls(saveEffort)).toEqual([{ purpose: "promptChat", model: "opus", effort: "max" }]);
+    await expect(selectOf("effort")).toHaveValue("max");
+    // What the file now holds: the settings read it again.
+    await mock("claude_model_settings", { ...claudeSettings, promptChat: { model: "opus", effort: "max" } });
+    await $("#prompt-back").click();
+    await expect(settingsSelect("model")).toHaveValue("opus");
+    await expect(settingsSelect("effort")).toHaveValue("max");
+    // The other purposes are as they were.
+    await expect($('#claude-items select[data-purpose="proofread"][data-kind="model"]')).toHaveValue("sonnet");
+  });
+
+  it("shows a change made in the settings", async () => {
+    await openPrompt();
+    await $("#prompt-back").click();
+    const save = await mock("claude_model_settings_save", { ...claudeSettings, promptChat: { model: "sonnet", effort: "high" } });
+    await choose("#claude-items", "effort", "high");
+    expect(await waitForCalls(save)).toEqual([{ purpose: "promptChat", model: "sonnet", effort: "high" }]);
+    await expect(settingsSelect("effort")).toHaveValue("high");
+    // What the file now holds: opening the prompt screen reads it again.
+    await mock("claude_model_settings", { ...claudeSettings, promptChat: { model: "sonnet", effort: "high" } });
+    await $("#claude-items .item:nth-child(3) .text-btn").click();
+    await expect(selectOf("effort")).toHaveValue("high");
+  });
+
+  it("puts the selection back and shows the error when it cannot be saved", async () => {
+    await openPrompt();
+    await mock("claude_model_settings_save", rejects("モデルが不正です: x"));
+    await choose("#prompt-model", "model", "haiku");
+    await expect($("#error")).toHaveText(expect.stringContaining("モデルが不正です"));
+    await expect(selectOf("model")).toHaveValue("sonnet");
+  });
+
+  it("disables both selects while the save is on its way", async () => {
+    await openPrompt();
+    const save = await mock("claude_model_settings_save", holds);
+    await choose("#prompt-model", "effort", "low");
+    await waitForCalls(save);
+    await expect(selectOf("model")).toBeDisabled();
+    await expect(selectOf("effort")).toBeDisabled();
+    await release(save, { ...claudeSettings, promptChat: { model: "sonnet", effort: "low" } });
+    await expect(selectOf("effort")).toBeEnabled();
+    await expect(selectOf("effort")).toHaveValue("low");
   });
 });

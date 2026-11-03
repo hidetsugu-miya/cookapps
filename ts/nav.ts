@@ -4,7 +4,7 @@ import { $ } from "./dom.js";
 import { showCalendar } from "./calendar.js";
 import { closeDetail } from "./calendar-detail.js";
 import { closeHint } from "./hint.js";
-import { loadSettings } from "./settings.js";
+import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
 import { loadTodo, renderTodo } from "./todo.js";
 import { todoState } from "./todo-data.js";
 import { show } from "./view.js";
@@ -48,7 +48,8 @@ export function showThreadScreen() {
   show("thread");
 }
 
-export function setScreen(name: Screen) {
+// `tab` is the settings tab to open on (Google when none is named).
+export function setScreen(name: Screen, tab?: SettingsTab) {
   screen = name;
   closeHint();
   closeDetail();
@@ -63,6 +64,7 @@ export function setScreen(name: Screen) {
     loadTodo(false, todoState.todo === null || todoState.kept);
   } else if (name === "settings") {
     show("settings");
+    selectSettingsTab(tab ?? "google");
     renderGoogleCard();
     loadSettings();
   } else {
