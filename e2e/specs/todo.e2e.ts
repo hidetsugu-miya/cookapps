@@ -200,7 +200,7 @@ describe("todo", () => {
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
     await $(".review").waitForExist();
-    await expect($(".review .review-target-cut")).toHaveText("対象のメッセージは先頭の 4,000 文字だけを要約しました");
+    await expect($(".review .review-target-cut")).toHaveText("対象のメッセージは長いため、先頭だけを要約しました");
     await $(".review .review-add").click();
     const [sent] = await waitForCalls(addFromSlack);
     expect(sent).not.toHaveProperty("targetCut");
