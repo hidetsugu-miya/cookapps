@@ -357,15 +357,14 @@ describe("settings: Claude API key", () => {
 
   it("disables the radios while a change of the method is on its way", async () => {
     await withKey("subscription");
-    await mock("claude_method_set", null);
-    await browser.execute(() => {
-      const w = window as unknown as { __TAURI__: { core: { invoke: (c: string, a?: unknown) => Promise<unknown> } } };
-      const original = w.__TAURI__.core.invoke;
-      w.__TAURI__.core.invoke = (c, a) => (c === "claude_method_set" ? new Promise(() => {}) : original(c, a));
-    });
+    const set = await mock("claude_method_set", holds);
     await radio(2).click();
+    await waitForCalls(set);
     await expect(radio(1)).toBeDisabled();
     await expect(radio(2)).toBeDisabled();
+    await release(set, null);
+    await expect(radio(1)).not.toBeDisabled();
+    await expect(radio(2)).not.toBeDisabled();
   });
 
   it("shows one failed row with the error and no radio when claude_connection itself fails, and nothing can be pressed", async () => {
