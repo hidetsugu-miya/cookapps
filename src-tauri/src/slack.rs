@@ -15,6 +15,7 @@ use url::Url;
 use crate::{
     accounts::write_synced,
     auth::{config_dir, delete_entry, Auth},
+    claude::Thread,
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
 };
 
@@ -42,8 +43,9 @@ const NAME_LIMIT: usize = 80;
 const BODY_LIMIT: usize = 3000;
 /// The most characters the user may post in one message.
 const POST_LIMIT: usize = 10_000;
-/// Characters of a thread's first message that reach the summary (`claude::INPUT_LIMIT` caps the whole input).
-const PARENT_LIMIT: usize = 2000;
+/// Messages `conversations.replies` answers with per page, and how many pages are read: a thread past `REPLY_PAGES * REPLY_PAGE_SIZE` messages is read to there.
+const REPLY_PAGE_SIZE: &str = "200";
+const REPLY_PAGES: usize = 20;
 const NO_TOKEN: &str =
     "Slack のトークンが保存されていません。設定でワークスペースを追加してください";
 const BAD_URL: &str = "Slack のメッセージかチャンネルのリンクを入力してください";
@@ -360,22 +362,51 @@ fn read_error(e: SlackError, team: &str) -> String {
     }
 }
 
-/// The form of a `conversations.replies` request for one message of the thread `ts`: the thread's first message, or with `only`
-/// (a reply's `ts`) that reply alone. `oldest` and `latest` leave the first message out of the range, so it is asked for on its own.
-fn replies_params(channel: &str, ts: &str, only: Option<&str>) -> Vec<(&'static str, String)> {
-    let mut params = vec![
-        ("channel", channel.to_owned()),
-        ("ts", ts.to_owned()),
-        ("limit", "1".to_owned()),
-    ];
-    if let Some(only) = only {
-        params.extend([
+/// The form of a `conversations.replies` request for the thread `ts`: a page of it (`REPLY_PAGE_SIZE` messages, oldest first, the first being the thread's own
+/// message), after `cursor` when it is a later page; or with `only` (a message's `ts`) that message alone, which finds one the pages did not reach.
+fn replies_params(
+    channel: &str,
+    ts: &str,
+    only: Option<&str>,
+    cursor: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let mut params = vec![("channel", channel.to_owned()), ("ts", ts.to_owned())];
+    match only {
+        Some(only) => params.extend([
+            ("limit", "1".to_owned()),
             ("oldest", only.to_owned()),
             ("latest", only.to_owned()),
             ("inclusive", "true".to_owned()),
-        ]);
+        ]),
+        None => {
+            params.push(("limit", REPLY_PAGE_SIZE.to_owned()));
+            if let Some(cursor) = cursor {
+                params.push(("cursor", cursor.to_owned()));
+            }
+        }
     }
     params
+}
+
+/// Whether a `conversations.replies` answer says the thread goes on past it (a cursor, or `has_more` without one).
+fn truncated(reply: &Value) -> bool {
+    next_cursor(reply).is_some() || reply["has_more"] == true
+}
+
+/// How many replies were left unread when the read stopped at the page cap (`more`): the parent message's `reply_count` less the `read` replies
+/// (and the linked reply, when it was `alone` read afterwards). Slack gives no count of its own, so when the total is missing or already reached it is at least 1:
+/// the thread did go on, and the note must show.
+fn unread_replies(more: bool, reply_count: Option<u64>, read: usize, alone: bool) -> usize {
+    if !more {
+        return 0;
+    }
+    let total = reply_count.map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    let left = total.saturating_sub(read + usize::from(alone));
+    if alone && reply_count.is_some() {
+        left
+    } else {
+        left.max(1)
+    }
 }
 
 /// The text of a message as sent to the summary: who wrote it (an ID: names need a scope the app does not ask for) and what.
@@ -387,23 +418,34 @@ fn message_line(m: &Value) -> String {
     )
 }
 
-/// What the summary reads: the thread's first message (the head of `first`) when the link is to a reply, cut at `PARENT_LIMIT`
-/// characters so the linked message stays within the summary's input, then the linked message itself, found in `found`.
-/// `None` when the linked message is not among `found`.
-fn thread_context(first: &[Value], found: &[Value], message_ts: &str) -> Option<String> {
-    let target = found.iter().find(|m| m["ts"] == message_ts)?;
-    let mut parts = Vec::new();
-    if let Some(parent) = first.first().filter(|p| p["ts"] != message_ts) {
-        parts.push(format!(
-            "[スレッドの最初のメッセージ]\n{}",
-            message_line(parent)
-                .chars()
-                .take(PARENT_LIMIT)
-                .collect::<String>()
-        ));
+/// The thread the summary reads: every message of `read` (the pages, oldest first) as a line, in order, with the blank ones skipped except the linked one,
+/// and the linked message `message_ts` marked by its index. A linked message the pages did not reach is taken from `alone` and put last.
+/// `None` when it is in neither. `unread` is the count of replies the page cap left unread.
+fn thread_of(read: &[Value], alone: &[Value], message_ts: &str, unread: usize) -> Option<Thread> {
+    let mut lines = Vec::new();
+    let mut target = None;
+    for m in read {
+        let linked = m["ts"] == message_ts;
+        if !linked && m["text"].as_str().is_none_or(|t| t.trim().is_empty()) {
+            continue;
+        }
+        if linked {
+            target = Some(lines.len());
+        }
+        lines.push(message_line(m));
     }
-    parts.push(format!("[対象のメッセージ]\n{}", message_line(target)));
-    Some(parts.join("\n\n"))
+    let target = match target {
+        Some(target) => target,
+        None => {
+            lines.push(message_line(alone.iter().find(|m| m["ts"] == message_ts)?));
+            lines.len() - 1
+        }
+    };
+    Some(Thread {
+        lines,
+        target,
+        unread,
+    })
 }
 
 /// Slack's mrkdwn treats these three characters as markup.
@@ -969,36 +1011,70 @@ pub fn check_message_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The text of the Slack message `url` points at, with its thread's first message when it is a reply, read with the token of the link's workspace.
-/// A reply is read on its own, so one deep in a long thread is found; two requests of one message each, not the whole thread.
+/// The thread of the Slack message `url` points at, read with the token of the link's workspace: the whole thread, in pages of `REPLY_PAGE_SIZE` up to `REPLY_PAGES` pages,
+/// whether the link is to its first message or to a reply. A linked message the pages did not reach is read on its own.
 pub async fn message_context(
     dir: &Path,
     http: &reqwest::Client,
     url: &str,
-) -> Result<String, String> {
+) -> Result<Thread, String> {
     let link = parse_url(url)?;
     let message_ts = link.message_ts.ok_or(BAD_MESSAGE_URL)?;
     let thread_ts = link.thread_ts.unwrap_or_else(|| message_ts.clone());
     let workspaces = load_workspaces(dir).await?;
     let workspace = workspace_for_host(&workspaces, &link.host).ok_or(NO_WORKSPACE)?;
     let token = token_of(&workspace.team_id).await?;
-    let read = |only: Option<&str>| {
-        let params = replies_params(&link.channel, &thread_ts, only);
+    let read = |params: Vec<(&'static str, String)>| {
         let token = &token;
         async move {
-            let reply = call(http, token, "conversations.replies", Payload::Form(&params))
+            call(http, token, "conversations.replies", Payload::Form(&params))
                 .await
-                .map_err(|e| read_error(e, &workspace.team))?;
-            Ok::<_, String>(reply["messages"].as_array().cloned().unwrap_or_default())
+                .map_err(|e| read_error(e, &workspace.team))
         }
     };
-    let first = read(None).await?;
-    let found = if message_ts == thread_ts {
-        first.clone()
+    let mut pages: Vec<Value> = Vec::new();
+    let mut cursor = None;
+    let mut more;
+    let mut read_pages = 0;
+    loop {
+        let reply = read(replies_params(
+            &link.channel,
+            &thread_ts,
+            None,
+            cursor.as_deref(),
+        ))
+        .await?;
+        pages.extend(reply["messages"].as_array().cloned().unwrap_or_default());
+        read_pages += 1;
+        cursor = next_cursor(&reply);
+        more = truncated(&reply);
+        if cursor.is_none() || read_pages == REPLY_PAGES {
+            break;
+        }
+    }
+    let alone = if more && !pages.iter().any(|m| m["ts"] == message_ts) {
+        let reply = read(replies_params(
+            &link.channel,
+            &thread_ts,
+            Some(&message_ts),
+            None,
+        ))
+        .await?;
+        reply["messages"].as_array().cloned().unwrap_or_default()
     } else {
-        read(Some(&message_ts)).await?
+        Vec::new()
     };
-    thread_context(&first, &found, &message_ts).ok_or_else(|| NO_MESSAGE.to_owned())
+    let reply_count = pages
+        .first()
+        .filter(|m| m["ts"] == thread_ts)
+        .and_then(|m| m["reply_count"].as_u64());
+    let unread = unread_replies(
+        more,
+        reply_count,
+        pages.len().saturating_sub(1),
+        alone.iter().any(|m| m["ts"] == message_ts),
+    );
+    thread_of(&pages, &alone, &message_ts, unread).ok_or_else(|| NO_MESSAGE.to_owned())
 }
 
 /// What a post of the mail starts out as, as plain text.
@@ -1600,22 +1676,41 @@ mod tests {
         assert_eq!(read_error(failure(None), "x"), "元の文");
     }
 
+    fn msg(ts: &str, user: &str, text: &str) -> Value {
+        json!({"ts": ts, "user": user, "text": text})
+    }
+
     #[test]
-    fn the_threads_first_message_is_asked_for_alone() {
+    fn a_page_of_the_thread_is_asked_for_by_the_threads_time() {
         assert_eq!(
-            replies_params("C0123ABC", "1761780000.000100", None),
+            replies_params("C0123ABC", "1761780000.000100", None, None),
             [
                 ("channel", "C0123ABC".to_owned()),
                 ("ts", "1761780000.000100".to_owned()),
-                ("limit", "1".to_owned())
+                ("limit", "200".to_owned())
             ]
         );
     }
 
     #[test]
+    fn the_next_page_is_asked_for_with_its_cursor() {
+        let params = replies_params("C0123ABC", "1.1", None, Some("dXNlcjpVMDYx"));
+        assert_eq!(
+            params.last().unwrap(),
+            &("cursor", "dXNlcjpVMDYx".to_owned())
+        );
+        assert_eq!(params.iter().filter(|(k, _)| *k == "limit").count(), 1);
+    }
+
+    #[test]
     fn a_reply_is_asked_for_by_its_own_time() {
         assert_eq!(
-            replies_params("C0123ABC", "1761780000.000100", Some("1761780009.000200")),
+            replies_params(
+                "C0123ABC",
+                "1761780000.000100",
+                Some("1761780009.000200"),
+                None
+            ),
             [
                 ("channel", "C0123ABC".to_owned()),
                 ("ts", "1761780000.000100".to_owned()),
@@ -1628,42 +1723,99 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_comes_with_the_threads_first_message() {
-        let first = [json!({"ts": "1.1", "user": "U1", "text": "PR を見てほしい"})];
-        let reply = [json!({"ts": "1.2", "user": "U2", "text": " 明日までに "})];
-        assert_eq!(
-            thread_context(&first, &reply, "1.2").unwrap(),
-            "[スレッドの最初のメッセージ]\nU1: PR を見てほしい\n\n[対象のメッセージ]\nU2: 明日までに"
-        );
+    fn a_cursor_is_read_from_the_response_metadata() {
+        let more = json!({"has_more": true, "response_metadata": {"next_cursor": "abc"}});
+        assert_eq!(next_cursor(&more).as_deref(), Some("abc"));
+        assert!(truncated(&more));
+        let last = json!({"has_more": false, "response_metadata": {"next_cursor": ""}});
+        assert_eq!(next_cursor(&last), None);
+        assert!(!truncated(&last));
+        assert_eq!(next_cursor(&json!({"messages": []})), None);
+        assert!(!truncated(&json!({"messages": []})));
     }
 
     #[test]
-    fn the_first_message_stands_alone() {
-        let first = [json!({"ts": "1.1", "user": "U1", "text": "a"})];
-        assert_eq!(
-            thread_context(&first, &first, "1.1").unwrap(),
-            "[対象のメッセージ]\nU1: a"
-        );
+    fn a_page_that_says_more_without_a_cursor_is_still_cut_short() {
+        let reply = json!({"has_more": true});
+        assert_eq!(next_cursor(&reply), None);
+        assert!(truncated(&reply));
     }
 
     #[test]
-    fn a_long_first_message_is_cut_so_the_linked_one_stays() {
-        let first = [json!({"ts": "1.1", "user": "U1", "text": "あ".repeat(PARENT_LIMIT * 3)})];
-        let reply = [json!({"ts": "1.2", "user": "U2", "text": "明日までに"})];
-        let context = thread_context(&first, &reply, "1.2").unwrap();
-        assert!(
-            context.chars().count() < PARENT_LIMIT + 100,
-            "{}",
-            context.chars().count()
+    fn nothing_is_unread_when_the_whole_thread_was_read() {
+        assert_eq!(unread_replies(false, Some(500), 3, false), 0);
+        assert_eq!(unread_replies(false, None, 3, false), 0);
+    }
+
+    #[test]
+    fn the_unread_replies_are_the_parents_count_less_those_read() {
+        assert_eq!(unread_replies(true, Some(4500), 3999, false), 501);
+        // The linked reply was read on its own, so it is not unread.
+        assert_eq!(unread_replies(true, Some(4500), 3999, true), 500);
+    }
+
+    #[test]
+    fn a_cut_thread_counts_at_least_one_unread_reply() {
+        assert_eq!(unread_replies(true, None, 3999, false), 1);
+        assert_eq!(unread_replies(true, Some(3999), 3999, false), 1);
+        assert_eq!(unread_replies(true, Some(10), 50, false), 1);
+    }
+
+    #[test]
+    fn the_thread_is_every_message_in_order_with_the_linked_one_marked_by_its_index() {
+        let read = [
+            msg("1.1", "U1", "PR を見てほしい"),
+            msg("1.2", "U2", " 明日までに "),
+            msg("1.3", "U3", "了解"),
+        ];
+        let thread = thread_of(&read, &[], "1.2", 0).unwrap();
+        assert_eq!(
+            thread.lines,
+            ["U1: PR を見てほしい", "U2: 明日までに", "U3: 了解"]
         );
-        assert!(context.ends_with("[対象のメッセージ]\nU2: 明日までに"));
+        assert_eq!(thread.target, 1);
+        assert_eq!(thread.unread, 0);
+    }
+
+    #[test]
+    fn a_message_alone_is_a_thread_of_one() {
+        let read = [msg("1.1", "U1", "a")];
+        let thread = thread_of(&read, &[], "1.1", 0).unwrap();
+        assert_eq!((thread.lines, thread.target), (vec!["U1: a".to_owned()], 0));
+    }
+
+    #[test]
+    fn blank_messages_are_skipped_except_the_linked_one() {
+        let read = [
+            msg("1.1", "U1", "a"),
+            msg("1.2", "U2", "  \n "),
+            json!({"ts": "1.3", "user": "U3"}),
+            msg("1.4", "U4", ""),
+            msg("1.5", "U5", "b"),
+        ];
+        let thread = thread_of(&read, &[], "1.5", 0).unwrap();
+        assert_eq!(thread.lines, ["U1: a", "U5: b"]);
+        assert_eq!(thread.target, 1);
+        let linked_blank = thread_of(&read, &[], "1.4", 0).unwrap();
+        assert_eq!(linked_blank.lines, ["U1: a", "U4: ", "U5: b"]);
+        assert_eq!(linked_blank.target, 1);
+    }
+
+    #[test]
+    fn a_linked_message_beyond_the_pages_is_added_after_the_pages() {
+        let read = [msg("1.1", "U1", "a"), msg("1.2", "U2", "b")];
+        let alone = [msg("9.9", "U9", "late")];
+        let thread = thread_of(&read, &alone, "9.9", 7).unwrap();
+        assert_eq!(thread.lines, ["U1: a", "U2: b", "U9: late"]);
+        assert_eq!(thread.target, 2);
+        assert_eq!(thread.unread, 7);
     }
 
     #[test]
     fn a_message_that_is_not_there_gives_nothing() {
-        assert_eq!(thread_context(&[], &[], "1.1"), None);
-        let other = [json!({"ts": "1.2", "text": "b"})];
-        assert_eq!(thread_context(&other, &other, "1.1"), None);
+        assert_eq!(thread_of(&[], &[], "1.1", 0), None);
+        let other = [msg("1.2", "U1", "b")];
+        assert_eq!(thread_of(&other, &other, "1.1", 0), None);
     }
 
     #[test]

@@ -258,7 +258,7 @@ export const slackLoad: SlackLoad = { workspaces: [workspace], recent: [] };
 export const slackMessageUrl = "https://example-team.slack.com/archives/C0123ABCD/p1700000000123456";
 
 // What `todoist_summarize_slack` answers for `slackMessageUrl`.
-export const slackSummary: Summary = { content: "Reply to the vendor", description: "- Asked for a quote\n- Wants an answer by Friday", due: "2026-11-06", projectId: null };
+export const slackSummary: Summary = { content: "Reply to the vendor", description: "- Asked for a quote\n- Wants an answer by Friday", due: "2026-11-06", projectId: null, omitted: 0 };
 
 // What `claude_model_settings` answers (the same as the base answer in e2e/fixtures.js): the defaults, Sonnet and medium, for the four purposes.
 export const claudeSettings: ClaudeSettings = {

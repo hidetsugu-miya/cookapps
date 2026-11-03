@@ -174,6 +174,24 @@ describe("todo", () => {
     await expect($(".review .review-due")).toHaveText("期限なし");
   });
 
+  it("tells on the card how many messages of the thread the summary leaves out, and does not send the count on", async () => {
+    await openTodo();
+    await mock("todoist_summarize_slack", { ...slackSummary, omitted: 12 });
+    const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await $(".review").waitForExist();
+    await expect($(".review .review-omitted")).toHaveText("途中の 12 件は要約に含まれていません");
+    await $(".review .review-add").click();
+    const [sent] = await waitForCalls(addFromSlack);
+    expect(sent).not.toHaveProperty("omitted");
+  });
+
+  it("shows no note on the card when the summary reflects the whole thread", async () => {
+    await openSummaryCard();
+    await expect($(".review .review-omitted")).not.toExist();
+  });
+
   it("starts the card in the project Claude recommended, tagged 推奨 on the chip and in the menu", async () => {
     const { addFromSlack } = await openRecommendedCard("p1");
     await expect($(".review .review-project")).toHaveText(expect.stringContaining("Work"));
