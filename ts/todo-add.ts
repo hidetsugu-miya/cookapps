@@ -209,6 +209,8 @@ function reviewCard(job: PendingAdd, summary: Summary) {
   source.append(`${team} の Slack のメッセージ（リンクは説明の末尾に付きます）`);
   // Only when the summary leaves out some of the thread's messages (a long thread, or a part that Claude could not summarise).
   const omitted = summary.omitted > 0 ? [tag("div", "review-omitted", `途中の ${summary.omitted} 件は要約に含まれていません`)] : [];
+  // Only when the linked message was long enough to be cut before it was summarised.
+  const targetCut = summary.targetCut ? [tag("div", "review-target-cut", "対象のメッセージは先頭の 4,000 文字だけを要約しました")] : [];
   const error = tag("div", "pending fail review-err");
   error.hidden = true;
   const drop = tag("button", "text-btn review-drop", "破棄");
@@ -226,7 +228,7 @@ function reviewCard(job: PendingAdd, summary: Summary) {
   const chips = tag("div", "review-chips");
   chips.append(dueChip, project);
   const body = tag("div", "review-body");
-  body.append(reviewField("名前", name), reviewField("説明", description), chips, source, ...omitted, error, actions);
+  body.append(reviewField("名前", name), reviewField("説明", description), chips, source, ...omitted, ...targetCut, error, actions);
   const card = tag("div", "review");
   card.append(head, body);
 

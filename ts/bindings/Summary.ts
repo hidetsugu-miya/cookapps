@@ -3,6 +3,7 @@
 /**
  * What a message is turned into: the task's name, its description, when it is due (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM` as the schema asks; the model may still break it),
  * and the ID of the project that fits it best. `summarize` keeps `project_id` only when it is one of the projects it was given.
- * `omitted` is how many messages of the thread the summary does not reflect (unread, left out, or in a chunk that failed); only `summarize` sets it, never the model's answer.
+ * `omitted` is how many messages of the thread the summary does not reflect (unread, left out, or in a chunk that failed), and `target_cut` is whether the linked message was cut at `TARGET_LIMIT`;
+ * only `summarize` sets them, never the model's answer.
  */
-export type Summary = { content: string, description: string, due: string | null, projectId: string | null, omitted: number, };
+export type Summary = { content: string, description: string, due: string | null, projectId: string | null, omitted: number, targetCut: boolean, };

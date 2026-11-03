@@ -2424,6 +2424,7 @@ mod tests {
             due: due.map(str::to_owned),
             project_id: None,
             omitted: 0,
+            target_cut: false,
         }
     }
 

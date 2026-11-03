@@ -46,8 +46,11 @@ const LATEST_LIMIT: usize = 3_000;
 const MIDDLE_LIMIT: usize = 3_000;
 /// The middle is summarised in chunks of at most `INPUT_LIMIT` characters, and at most this many chunks (the ones nearest the end of the thread).
 const MAX_CHUNKS: usize = 5;
-/// The chunk calls together may start for this many times the time limit of one call; past it no new chunk starts.
-const CHUNK_BUDGET_CALLS: u32 = 3;
+/// The chunk calls together may run this long: past it no new chunk starts, and the one running is cut off at it.
+const CHUNK_BUDGET: Duration = Duration::from_secs(180);
+/// The line after a linked message that `plan_thread` cut at `TARGET_LIMIT`, so the model knows the rest was not read.
+const TARGET_CUT_NOTE: &str =
+    "（このメッセージは長いため、ここで切っています。続きは読めていません）";
 /// How many `claude` processes run at once, for the Slack and the mail summaries together.
 static CLAUDE_SLOTS: Semaphore = Semaphore::const_new(2);
 /// How long a call waits for a free slot before it gives up.
@@ -278,7 +281,8 @@ pub struct KeySaved {
 
 /// What a message is turned into: the task's name, its description, when it is due (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM` as the schema asks; the model may still break it),
 /// and the ID of the project that fits it best. `summarize` keeps `project_id` only when it is one of the projects it was given.
-/// `omitted` is how many messages of the thread the summary does not reflect (unread, left out, or in a chunk that failed); only `summarize` sets it, never the model's answer.
+/// `omitted` is how many messages of the thread the summary does not reflect (unread, left out, or in a chunk that failed), and `target_cut` is whether the linked message was cut at `TARGET_LIMIT`;
+/// only `summarize` sets them, never the model's answer.
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -289,6 +293,7 @@ pub struct Summary {
     pub due: Option<String>,
     pub project_id: Option<String>,
     pub omitted: u32,
+    pub target_cut: bool,
 }
 
 /// The thread of a Slack message as the summary reads it: each message as a line `{user}: {text}`, oldest first, `target` the index of the linked one,
@@ -658,6 +663,7 @@ fn parse_summary(out: &str) -> Result<Summary, SummaryError> {
         project_id: field("project"),
         // Never read from the answer: the model's words cannot set how much was left out.
         omitted: 0,
+        target_cut: false,
     })
 }
 
@@ -1060,12 +1066,14 @@ struct Chunk {
 }
 
 /// How a thread is read: `kept` are the messages that go to the final call as they are (cut where a limit says), in time order;
-/// `chunks` are the middle, to be summarised first; `skipped` is how many middle messages are in chunks that are not summarised at all.
+/// `chunks` are the middle, to be summarised first; `skipped` is how many middle messages are in chunks that are not summarised at all;
+/// `target_cut` is whether the linked message was cut at `TARGET_LIMIT` (it then ends with `TARGET_CUT_NOTE`).
 #[derive(Debug, PartialEq)]
 struct Plan {
     kept: Vec<(Part, String)>,
     chunks: Vec<Chunk>,
     skipped: usize,
+    target_cut: bool,
 }
 
 /// `lines` grouped in order into chunks of at most `limit` characters (a line break counts), split only between lines; a line over `limit` is cut to it.
@@ -1114,13 +1122,14 @@ fn render(kept: &[(Part, String)], middle: Option<(String, Vec<String>)>) -> Str
 }
 
 /// How the thread `lines` (oldest first, `target` the linked one) is read. When all of it, with its headings, fits `INPUT_LIMIT`, it is read whole in one call.
-/// Otherwise the first message is cut at `PART_LIMIT` and the linked one at `TARGET_LIMIT`, the newest messages are taken whole from the newest back within `LATEST_LIMIT`
+/// Otherwise the first message is cut at `PART_LIMIT` and the linked one at `TARGET_LIMIT` (followed by `TARGET_CUT_NOTE` when it is cut), the newest messages are taken whole from the newest back within `LATEST_LIMIT`
 /// (a newest message longer than that is cut to it), and the rest is the middle, grouped into chunks. No message is in two places.
 fn plan_thread(lines: &[String], target: usize) -> Plan {
     let whole = |kept| Plan {
         kept,
         chunks: Vec::new(),
         skipped: 0,
+        target_cut: false,
     };
     let part_of = |i: usize| match i {
         _ if i == target => Part::Target,
@@ -1146,25 +1155,16 @@ fn plan_thread(lines: &[String], target: usize) -> Plan {
         taken[i] = true;
         picked.push((i, part, text));
     };
-    pick(
-        0,
-        if target == 0 {
-            Part::Target
-        } else {
-            Part::First
-        },
-        cut(
-            &lines[0],
-            if target == 0 {
-                TARGET_LIMIT
-            } else {
-                PART_LIMIT
-            },
-        ),
-    );
-    if target != 0 {
-        pick(target, Part::Target, cut(&lines[target], TARGET_LIMIT));
+    let target_cut = lines[target].chars().count() > TARGET_LIMIT;
+    let mut target_text = cut(&lines[target], TARGET_LIMIT);
+    if target_cut {
+        target_text.push('\n');
+        target_text.push_str(TARGET_CUT_NOTE);
     }
+    if target != 0 {
+        pick(0, Part::First, cut(&lines[0], PART_LIMIT));
+    }
+    pick(target, Part::Target, target_text);
     let mut used = 0;
     for i in (1..n).rev().filter(|i| *i != target) {
         let cost = lines[i].chars().count() + usize::from(used > 0);
@@ -1187,6 +1187,7 @@ fn plan_thread(lines: &[String], target: usize) -> Plan {
         kept: picked.into_iter().map(|(_, p, t)| (p, t)).collect(),
         chunks,
         skipped,
+        target_cut,
     }
 }
 
@@ -1198,6 +1199,11 @@ fn chunk_order(count: usize) -> impl Iterator<Item = usize> {
 /// Whether the next chunk may start: not once a chunk has failed (a stalled network or a refused login would fail them all), and not once the `budget` is spent.
 fn may_start_chunk(elapsed: Duration, budget: Duration, failed: bool) -> bool {
     !failed && elapsed < budget
+}
+
+/// How long a chunk call may run when `elapsed` of the `budget` has gone: what is left of it, and never more than `limit`, the time limit of one call.
+fn chunk_time(elapsed: Duration, budget: Duration, limit: Duration) -> Duration {
+    budget.saturating_sub(elapsed).min(limit)
 }
 
 /// The points of the chunks (`groups`, each non-empty and with its points on one line each) as lines `- {point}`, at most `cap` characters with their line breaks.
@@ -1584,13 +1590,14 @@ fn today() -> String {
 async fn summarize_chunk(
     text: &str,
     settings: ModelSettings,
+    timeout: Duration,
     connection: &Connection,
 ) -> Result<Vec<String>, SummaryError> {
     let boundary = new_boundary()?;
     let out = ask(
         chunk_args(&boundary, settings),
         summary_input(text, &boundary),
-        settings.timeout(SUMMARY_TIMEOUT),
+        timeout,
         connection.clone(),
     )
     .await?;
@@ -1599,7 +1606,8 @@ async fn summarize_chunk(
 
 /// Summarises a Slack thread into a task with `claude -p`, following the instructions saved in `dir`. The thread's messages and the names of `projects` (ID and name) are sent to Anthropic through Claude Code.
 /// A thread too long for one call has its middle summarised first, one chunk at a time (`CLAUDE_SLOTS` is 2 and a slot is waited for 60 seconds, so not all at once), the newest chunk first.
-/// No new chunk starts once the chunk calls together have run `CHUNK_BUDGET_CALLS` times the time limit of one call, or once a chunk has failed (it is logged, never its text).
+/// The chunk calls together have `CHUNK_BUDGET`: no new chunk starts once it is spent, and the one running is cut off at it (`chunk_time`), which fails it like any other failure.
+/// No new chunk starts once a chunk has failed either (it is logged, never its text). The final call keeps its own time limit.
 /// The chunks not run and the one that failed count as omitted, while a failure of the final call is an error. The summary's project is kept only when it is one of `projects`.
 pub async fn summarize(
     dir: &Path,
@@ -1617,15 +1625,16 @@ pub async fn summarize(
     })
     .await
     .map_err(|e| e.to_string())??;
-    let budget = settings.timeout(SUMMARY_TIMEOUT) * CHUNK_BUDGET_CALLS;
     let started = Instant::now();
     let mut failed = false;
     let mut points: Vec<Option<Vec<String>>> = vec![None; plan.chunks.len()];
     for i in chunk_order(plan.chunks.len()) {
-        if !may_start_chunk(started.elapsed(), budget, failed) {
+        let elapsed = started.elapsed();
+        if !may_start_chunk(elapsed, CHUNK_BUDGET, failed) {
             break;
         }
-        match summarize_chunk(&plan.chunks[i].text, settings, &connection).await {
+        let timeout = chunk_time(elapsed, CHUNK_BUDGET, settings.timeout(SUMMARY_TIMEOUT));
+        match summarize_chunk(&plan.chunks[i].text, settings, timeout, &connection).await {
             Ok(got) => points[i] = Some(got),
             Err(e) => {
                 log_failure("claude_summarize_slack_chunk", "-", e.log);
@@ -1645,6 +1654,7 @@ pub async fn summarize(
     let mut summary = parse_summary(&out)?;
     summary.project_id = known_project(summary.project_id.take(), projects);
     summary.omitted = u32::try_from(thread.unread + left_out).unwrap_or(u32::MAX);
+    summary.target_cut = plan.target_cut;
     Ok(summary)
 }
 
@@ -2218,7 +2228,8 @@ mod tests {
                 description: "認証まわりの変更".into(),
                 due: Some("2026-11-01 15:00".into()),
                 project_id: Some("p1".into()),
-                omitted: 0
+                omitted: 0,
+                target_cut: false
             })
         );
     }
@@ -2258,6 +2269,7 @@ mod tests {
             due: None,
             project_id: Some("p1".into()),
             omitted: 0,
+            target_cut: false,
         })
         .unwrap();
         assert_eq!(sent["projectId"], "p1");
@@ -3351,6 +3363,11 @@ mod tests {
         format!("<{i:03}>")
     }
 
+    /// The characters of a linked message cut at `TARGET_LIMIT`: the cut text, a line break and the note.
+    fn cut_target_chars() -> usize {
+        TARGET_LIMIT + 1 + TARGET_CUT_NOTE.chars().count()
+    }
+
     /// How many times the line `i` of `thread_lines` shows in the plan: kept whole or cut, or inside a chunk.
     fn appearances(plan: &Plan, i: usize) -> usize {
         plan.kept
@@ -3418,7 +3435,7 @@ mod tests {
                 .iter()
                 .map(|(_, l)| l.chars().count())
                 .collect::<Vec<_>>(),
-            [PART_LIMIT, TARGET_LIMIT]
+            [PART_LIMIT, cut_target_chars()]
         );
     }
 
@@ -3477,7 +3494,8 @@ mod tests {
         ];
         let plan = plan_thread(&lines, 1);
         assert_eq!(plan.kept[0].1.chars().count(), PART_LIMIT);
-        assert_eq!(plan.kept[1].1.chars().count(), TARGET_LIMIT);
+        assert_eq!(plan.kept[1].1.chars().count(), cut_target_chars());
+        assert!(plan.kept[1].1.starts_with(&"い".repeat(TARGET_LIMIT)));
     }
 
     #[test]
@@ -3485,7 +3503,48 @@ mod tests {
         let lines = vec!["あ".repeat(PART_LIMIT * 3), "い".repeat(INPUT_LIMIT)];
         let plan = plan_thread(&lines, 0);
         assert_eq!(plan.kept[0].0, Part::Target);
-        assert_eq!(plan.kept[0].1.chars().count(), TARGET_LIMIT);
+        assert_eq!(plan.kept[0].1.chars().count(), cut_target_chars());
+    }
+
+    #[test]
+    fn a_target_cut_at_the_limit_is_noted_whether_or_not_it_is_the_first_message() {
+        for target in [0, 1] {
+            let mut lines = thread_lines(12, 1_200);
+            lines[target] = "い".repeat(TARGET_LIMIT + 1);
+            let plan = plan_thread(&lines, target);
+            assert!(plan.target_cut, "target {target}");
+            let (part, text) = plan.kept.iter().find(|(p, _)| *p == Part::Target).unwrap();
+            assert_eq!(*part, Part::Target);
+            assert_eq!(
+                *text,
+                format!("{}\n{TARGET_CUT_NOTE}", "い".repeat(TARGET_LIMIT))
+            );
+            // The note stands right after the cut text in what the final call reads.
+            let message = final_message(&plan, &[]).0;
+            assert!(message.contains(&format!("い\n{TARGET_CUT_NOTE}")));
+            assert!(message.chars().count() <= INPUT_LIMIT);
+        }
+    }
+
+    #[test]
+    fn a_target_of_exactly_the_target_limit_is_not_cut_or_noted() {
+        for target in [0, 1] {
+            let mut lines = thread_lines(12, 1_200);
+            lines[target] = "い".repeat(TARGET_LIMIT);
+            let plan = plan_thread(&lines, target);
+            assert!(!plan.target_cut, "target {target}");
+            assert!(plan.kept.contains(&(Part::Target, lines[target].clone())));
+            assert!(!final_message(&plan, &[]).0.contains(TARGET_CUT_NOTE));
+        }
+    }
+
+    #[test]
+    fn a_thread_sent_whole_is_never_noted_even_with_a_long_target() {
+        let lines = vec!["あ".repeat(1_000), "い".repeat(TARGET_LIMIT + 1_000)];
+        let plan = plan_thread(&lines, 1);
+        assert!(!plan.target_cut);
+        assert!(plan.chunks.is_empty());
+        assert!(!final_message(&plan, &[]).0.contains(TARGET_CUT_NOTE));
     }
 
     #[test]
@@ -3496,7 +3555,8 @@ mod tests {
         lines.extend(thread_lines(10, 1_499));
         let plan = plan_thread(&lines, 1);
         assert_eq!(plan.kept[0].1.chars().count(), PART_LIMIT);
-        assert_eq!(plan.kept[1].1.chars().count(), TARGET_LIMIT);
+        assert_eq!(plan.kept[1].1.chars().count(), cut_target_chars());
+        assert!(plan.target_cut);
         let latest: usize = plan
             .kept
             .iter()
@@ -3514,6 +3574,7 @@ mod tests {
         );
         assert!(message.contains("[途中の"), "the points still stand");
         assert!(message.contains(&"い".repeat(TARGET_LIMIT)));
+        assert!(message.contains(TARGET_CUT_NOTE));
     }
 
     #[test]
@@ -3530,6 +3591,26 @@ mod tests {
         assert!(!may_start_chunk(budget, budget, false));
         assert!(!may_start_chunk(Duration::from_secs(400), budget, false));
         assert!(!may_start_chunk(Duration::ZERO, budget, true));
+    }
+
+    #[test]
+    fn a_chunk_gets_what_is_left_of_the_budget_and_never_more_than_one_call() {
+        let budget = Duration::from_secs(180);
+        let limit = Duration::from_secs(60);
+        // More left than one call may take: the call's own limit.
+        assert_eq!(chunk_time(Duration::ZERO, budget, limit), limit);
+        assert_eq!(chunk_time(Duration::from_secs(120), budget, limit), limit);
+        // Less left: what is left.
+        assert_eq!(
+            chunk_time(Duration::from_secs(150), budget, limit),
+            Duration::from_secs(30)
+        );
+        // Spent: nothing, whether exactly or past it.
+        assert_eq!(chunk_time(budget, budget, limit), Duration::ZERO);
+        assert_eq!(
+            chunk_time(Duration::from_secs(400), budget, limit),
+            Duration::ZERO
+        );
     }
 
     #[test]
@@ -3605,6 +3686,7 @@ mod tests {
         let plan = plan_thread(&lines, 0);
         assert_eq!(plan.kept, [(Part::Target, lines[0].clone())]);
         assert!(plan.chunks.is_empty());
+        assert!(!plan.target_cut);
         // As before, the call cuts what it is given at INPUT_LIMIT.
         let input = summary_input(&final_message(&plan, &[]).0, B);
         assert_eq!(
@@ -3814,6 +3896,16 @@ mod tests {
     }
 
     #[test]
+    fn the_target_cut_flag_is_set_by_us_and_never_read_from_the_model() {
+        let out = json!({
+            "is_error": false,
+            "structured_output": {"content": "a", "description": "b", "targetCut": true, "target_cut": true}
+        })
+        .to_string();
+        assert!(!parse_summary(&out).unwrap().target_cut);
+    }
+
+    #[test]
     fn the_summary_reaches_the_screen_with_the_omitted_count() {
         let sent = serde_json::to_value(Summary {
             content: "a".into(),
@@ -3821,9 +3913,11 @@ mod tests {
             due: None,
             project_id: None,
             omitted: 3,
+            target_cut: true,
         })
         .unwrap();
         assert_eq!(sent["omitted"], 3);
+        assert_eq!(sent["targetCut"], true);
     }
 
     #[test]

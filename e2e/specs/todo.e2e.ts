@@ -190,6 +190,20 @@ describe("todo", () => {
   it("shows no note on the card when the summary reflects the whole thread", async () => {
     await openSummaryCard();
     await expect($(".review .review-omitted")).not.toExist();
+    await expect($(".review .review-target-cut")).not.toExist();
+  });
+
+  it("tells on the card that the linked message was cut, and does not send the flag on", async () => {
+    await openTodo();
+    await mock("todoist_summarize_slack", { ...slackSummary, targetCut: true });
+    const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await $(".review").waitForExist();
+    await expect($(".review .review-target-cut")).toHaveText("対象のメッセージは先頭の 4,000 文字だけを要約しました");
+    await $(".review .review-add").click();
+    const [sent] = await waitForCalls(addFromSlack);
+    expect(sent).not.toHaveProperty("targetCut");
   });
 
   it("starts the card in the project Claude recommended, tagged 推奨 on the chip and in the menu", async () => {
