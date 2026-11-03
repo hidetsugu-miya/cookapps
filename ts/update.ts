@@ -1,4 +1,4 @@
-// The updater: the sidebar's update button, a dot on the settings button, and the settings card with the running version and the way to update.
+// The updater: the sidebar's update button, a dot on the settings button and on the update tab, and the settings card with the running version and the way to update.
 // Manual: a newer version shows the button, and pressing it replaces the app and restarts it.
 // Auto: a newer version is replaced in the background; the button then restarts the app (never by itself, so no screen in use is lost).
 import type { AppInfo } from "./bindings/AppInfo";
@@ -38,6 +38,7 @@ function render() {
   button.hidden = update === null;
   if (update) button.setAttribute("aria-label", update.installed ? `再起動して v${update.version} にする` : `v${update.version} に更新`);
   $("nav-settings").querySelector<HTMLElement>(".nav-dot")!.hidden = update === null;
+  $("settings-tab-update").querySelector<HTMLElement>(".tab-dot")!.hidden = update === null;
   $("nav-settings").setAttribute("aria-label", update ? `設定（v${update.version} があります）` : "設定");
   const modes = (["manual", "auto"] as const).map((m) => {
     const b = tag("button", "text-btn", m === "auto" ? "自動" : "手動");

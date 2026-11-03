@@ -115,7 +115,7 @@ function toggleClaudePopup() {
   const open = tag("button", "text-btn", "設定を開く");
   open.onclick = () => {
     closePopup();
-    setScreen("settings");
+    setScreen("settings", "claude");
   };
   $("account-popup").replaceChildren(
     avatar,

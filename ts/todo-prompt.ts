@@ -2,11 +2,12 @@
 // whose proposals are applied to the field. Only the save button writes them (Rust keeps them in the settings folder).
 import type { TodoPrompt } from "./bindings/TodoPrompt";
 import { createChat } from "./claude-chat.js";
-import { redrawClaudeItems } from "./claude.js";
+import { loadModelSettings, redrawClaudeItems } from "./claude.js";
 import { $, tag } from "./dom.js";
+import { CLAUDE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { setScreen, showPromptScreen } from "./nav.js";
-import { itemRow } from "./settings.js";
+import { itemRow, settingsTab } from "./settings.js";
 import { toast } from "./toast.js";
 import { showError } from "./view.js";
 
@@ -104,6 +105,8 @@ export async function openPrompt(from: Origin) {
   origin = from;
   showPromptScreen();
   $("prompt-error").hidden = true;
+  // Opened from Todo, the settings were not read; the selects under the request field need them.
+  loadModelSettings();
   if (draft === null) {
     if (saved === null) await loadPromptState();
     if (saved === null) return;
@@ -116,7 +119,10 @@ export async function openPrompt(from: Origin) {
 }
 
 export function initPrompt() {
-  $("prompt-back").onclick = () => setScreen(origin);
+  $("prompt-back").onclick = () => setScreen(origin, settingsTab());
+  // The way in from the Todo screen's heading.
+  $("todo-prompt").innerHTML = CLAUDE_SVG;
+  $("todo-prompt").onclick = () => openPrompt("todo");
   $<HTMLTextAreaElement>("prompt-body").oninput = (e) => {
     draft = (e.currentTarget as HTMLTextAreaElement).value;
     $("prompt-error").hidden = true;
