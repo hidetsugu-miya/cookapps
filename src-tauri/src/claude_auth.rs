@@ -275,6 +275,19 @@ pub fn refusal(check: &KeyCheck) -> Option<String> {
     }
 }
 
+/// Why the switch to the stored key is refused: only a key Anthropic rejects stops it (one that could not be asked about stays usable).
+pub fn switch_refusal(check: &KeyCheck) -> Option<String> {
+    match check {
+        KeyCheck::Rejected => refusal(check),
+        _ => None,
+    }
+}
+
+/// The card's key row when the keychain could not be read: the row alone says so, and the rest of the card is still drawn.
+pub fn key_state_or_unverified(read: Result<ApiKeyState, String>) -> ApiKeyState {
+    read.unwrap_or_else(|message| ApiKeyState::Unverified { message })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,6 +500,31 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ApiKeyState::None).unwrap(),
             serde_json::json!({"state": "none"})
+        );
+    }
+
+    #[test]
+    fn only_a_rejected_key_stops_the_switch() {
+        assert_eq!(
+            switch_refusal(&KeyCheck::Valid { workspace_id: None }),
+            None
+        );
+        assert_eq!(switch_refusal(&KeyCheck::Unverified("x".into())), None);
+        let refused = switch_refusal(&KeyCheck::Rejected).unwrap();
+        assert!(refused.contains("使えません"), "{refused}");
+    }
+
+    #[test]
+    fn a_keychain_failure_is_the_key_rows_unverified_state() {
+        assert_eq!(
+            key_state_or_unverified(Ok(ApiKeyState::None)),
+            ApiKeyState::None
+        );
+        assert_eq!(
+            key_state_or_unverified(Err("資格情報の読み取りに失敗: x".into())),
+            ApiKeyState::Unverified {
+                message: "資格情報の読み取りに失敗: x".into()
+            }
         );
     }
 

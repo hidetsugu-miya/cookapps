@@ -28,7 +28,7 @@ let resetTimer = 0;
 // The conversation with Claude about the field's text (claude-chat.ts). Applying a proposal fills the field and does not save.
 const chat = createChat({
   prefix: "prompt",
-  loginNote: "Claude にログインすると、会話で編集できます",
+  loginNote: "設定の Claude タブで接続すると、会話で編集できます",
   text: () => (saved !== null ? draft : null),
   apply: (text) => {
     draft = text;

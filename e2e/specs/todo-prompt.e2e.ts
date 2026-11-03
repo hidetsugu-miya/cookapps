@@ -292,7 +292,7 @@ describe("todo prompt screen: the conversation with Claude", () => {
       await openPrompt(claude);
       await expect(input()).toBeDisabled();
       await expect($("#prompt-send")).toBeDisabled();
-      await expect($("#prompt-chat-note")).toHaveText("Claude にログインすると、会話で編集できます");
+      await expect($("#prompt-chat-note")).toHaveText("設定の Claude タブで接続すると、会話で編集できます");
       await expect(body()).toBeEnabled();
     });
   }

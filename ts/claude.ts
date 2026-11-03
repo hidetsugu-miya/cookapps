@@ -21,8 +21,10 @@ import { setClaudeReady, showError } from "./view.js";
 let claude: Claude | null = null;
 export const getClaude = () => claude;
 
-// The settings card's view of the connection (the method, and the subscription's and the API key's own states); null while it is being asked.
+// The settings card's view of the connection (the method, and the subscription's and the API key's own states); null while it is being asked, and after the asking failed.
 let connection: ClaudeConnection | null = null;
+// Why the asking failed (the rows are not pressable then); null otherwise.
+let connectionError: string | null = null;
 // The key field is open (to register a key, or to paste it again).
 let keyFormOpen = false;
 // A change of the method or the key is on its way: the rows wait.
@@ -39,7 +41,7 @@ function pickRow(row: HTMLElement, method: Method, pick: () => void) {
   row.prepend(radio);
   row.classList.add("pick");
   row.onclick = (e) => {
-    if (!changing && !(e.target as Element).closest("button")) pick();
+    if (!changing && !(e.target as Element).closest("button") && !getSelection()?.toString()) pick();
   };
   return row;
 }
@@ -100,9 +102,10 @@ function keyRow(key: ApiKeyState) {
   }
 }
 
-// The rows of the connection card (a placeholder while the connection is being asked).
+// The rows of the connection card (a placeholder while the connection is being asked, one failed row when asking it failed).
 function connectionRows() {
   const c = connection;
+  if (c === null && connectionError !== null) return [itemRow({ name: "接続", meta: connectionError, warn: true, status: ["warn", "確認できません"] })];
   if (c === null) return [itemRow({ name: "確認しています…", meta: "", status: ["off", "確認中"] })];
   return [
     pickRow(subscriptionRow(c.subscription), "subscription", pickSubscription),
@@ -116,9 +119,9 @@ function pickSubscription() {
   changeConnection(() => invoke("claude_method_set", { method: "subscription" }));
 }
 
-// Without a stored key, pressing the row only opens the field (nothing is switched or logged out); with one, it switches to it.
+// Without a stored key, or with one Anthropic refuses, pressing the row only opens the field (nothing is switched or logged out); with a usable one, it switches to it.
 function pickKey() {
-  if (connection?.apiKey.state === "none") {
+  if (connection?.apiKey.state === "none" || connection?.apiKey.state === "rejected") {
     keyFormOpen = true;
     redrawClaudeItems();
     return $("claude-key-input").focus();
@@ -287,17 +290,20 @@ export function redrawClaudeItems() {
   $("claude-prompt").replaceChildren(promptRow());
 }
 
-// Asks for the usable state and for the connection card's view together; a failure of either is shown as that part's failed state.
+// Asks for the usable state and for the connection card's view together.
+// A failure of the usable state is shown as its failed state; a failure of the connection leaves it null, shows the error, and the card shows one failed row nothing can be pressed on.
 export async function refreshClaude() {
   const button = $<HTMLButtonElement>("claude-recheck");
   button.disabled = true;
   connection = null;
+  connectionError = null;
   applyClaude(null);
   const [status, card] = await Promise.allSettled([invoke("claude_status"), invoke("claude_connection")]);
-  connection =
-    card.status === "fulfilled"
-      ? card.value
-      : { method: "subscription", subscription: { state: "failed", message: String(card.reason) }, apiKey: { state: "none" } };
+  if (card.status === "fulfilled") connection = card.value;
+  else {
+    connectionError = String(card.reason);
+    showError(card.reason);
+  }
   applyClaude(status.status === "fulfilled" ? status.value : { state: "failed", message: String(status.reason) });
   button.disabled = false;
 }

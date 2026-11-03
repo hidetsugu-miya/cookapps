@@ -17,7 +17,10 @@ use ts_rs::TS;
 use crate::{
     accounts::write_synced,
     auth::config_dir,
-    claude_auth::{self, key_state, ApiKeyState, Connection, EnvChange, Method, API_BASE},
+    claude_auth::{
+        self, key_state, key_state_or_unverified, ApiKeyState, Connection, EnvChange, Method,
+        API_BASE,
+    },
     gmail::log_failure,
 };
 
@@ -1104,6 +1107,7 @@ pub async fn claude_status(app: tauri::AppHandle) -> Result<Claude, String> {
 }
 
 /// The settings card's view of the connection: the method, and the state of the subscription and of the API key, each on its own.
+/// A keychain failure stays in the key row (`Unverified`); the rest of the card is still answered.
 #[tauri::command]
 pub async fn claude_connection(app: tauri::AppHandle) -> Result<ClaudeConnection, String> {
     let command = "claude_connection";
@@ -1116,7 +1120,7 @@ pub async fn claude_connection(app: tauri::AppHandle) -> Result<ClaudeConnection
     Ok(ClaudeConnection {
         method: method?,
         subscription: subscription?,
-        api_key: api_key.map_err(|e| log_failure(command, "-", e))?,
+        api_key: key_state_or_unverified(api_key.map_err(|e| log_failure(command, "-", e))),
     })
 }
 
@@ -1159,21 +1163,31 @@ pub async fn claude_key_save(app: tauri::AppHandle, key: String) -> Result<(), S
     .map_err(|e| log_failure(command, "-", e))
 }
 
-/// Chooses the method. The API key needs a stored key; switching to it logs the subscription out of Claude Code (see `claude_key_save`).
+/// Chooses the method. The API key needs a stored key that Anthropic does not reject (one that cannot be asked about is let through);
+/// switching to it logs the subscription out of Claude Code (see `claude_key_save`). A rejected key changes and logs out nothing.
 /// Going back to the subscription only changes the method.
 #[tauri::command]
 pub async fn claude_method_set(app: tauri::AppHandle, method: Method) -> Result<(), String> {
     let command = "claude_method_set";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
-    blocking(move || match method {
-        Method::Subscription => claude_auth::save_method(&dir, method),
+    match method {
+        Method::Subscription => blocking(move || claude_auth::save_method(&dir, method)).await?,
         Method::ApiKey => {
-            claude_auth::require_key()?;
-            claude_auth::save_method(&dir, method)?;
-            logout_subscription()
+            let key = blocking(claude_auth::require_key)
+                .await?
+                .map_err(|e| log_failure(command, "-", e))?;
+            if let Some(message) =
+                claude_auth::switch_refusal(&claude_auth::check_key(API_BASE, &key).await)
+            {
+                return Err(log_failure(command, "-", message));
+            }
+            blocking(move || {
+                claude_auth::save_method(&dir, method)?;
+                logout_subscription()
+            })
+            .await?
         }
-    })
-    .await?
+    }
     .map_err(|e| log_failure(command, "-", e))
 }
 

@@ -311,7 +311,7 @@ describe("todo", () => {
   it("keeps the button as 追加 and hints at the Claude login while Claude is missing", async () => {
     await openTodo(claudeMissing);
     await $("#todo-add-input").setValue(slackMessageUrl);
-    await expect($("#todo-add-hint")).toHaveText("Claude にログインすると、要約して追加できます");
+    await expect($("#todo-add-hint")).toHaveText("設定の Claude タブで接続すると、要約して追加できます");
     await expect($("#todo-add-button")).toHaveText("追加");
   });
 });

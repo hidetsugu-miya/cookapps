@@ -328,6 +328,49 @@ describe("settings: Claude API key", () => {
     await expect(row(1).$('input[type="radio"]')).toBeSelected();
   });
 
+  it("only opens the key field when the row of a refused key is pressed: no method change, no logout", async () => {
+    await withKey("subscription", { state: "rejected", message: "キーが使えません。Console で確かめて、貼り直してください" });
+    await mock("claude_method_set", null);
+    await row(2).click();
+    await expect($("#claude-key")).toBeDisplayed();
+    await expect($("#claude-key-input")).toBeFocused();
+    expect(await callsOf("claude_method_set")).toEqual([]);
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+  });
+
+  it("does not switch when the click ends a text selection inside the API key row", async () => {
+    await withKey("subscription");
+    await mock("claude_method_set", null);
+    await browser.execute(() => {
+      const name = document.querySelector<HTMLElement>("#claude-items .item:nth-child(2) .item-name")!;
+      const range = document.createRange();
+      range.selectNodeContents(name);
+      const sel = getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      // The click a drag selection ends in; element.click() does not press the mouse, so the selection stays.
+      name.click();
+    });
+    await browser.pause(300);
+    expect(await callsOf("claude_method_set")).toEqual([]);
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+  });
+
+  it("shows one failed row with the error and no radio when claude_connection itself fails, and nothing can be pressed", async () => {
+    await withKey("subscription");
+    await mock("claude_method_set", null);
+    const card = await mock("claude_connection", rejects("接続の確認に失敗しました"));
+    await $("#claude-recheck").click();
+    await waitForCalls(card);
+    await expect($("#error")).toHaveText(expect.stringContaining("接続の確認に失敗しました"));
+    expect(await count("#claude-items .item")).toBe(1);
+    expect(await count('#claude-items input[type="radio"]')).toBe(0);
+    await expect(row(1).$(".status")).toHaveText("確認できません");
+    await expect(row(1).$(".item-meta")).toHaveText(expect.stringContaining("接続の確認に失敗しました"));
+    await row(1).click();
+    expect(await callsOf("claude_method_set")).toEqual([]);
+  });
+
   it("registers the key with claude_key_save, empties the field as soon as it is read, and shows the key in use after the states are asked again", async () => {
     await openSettings([], claudeReady, "claude");
     await row(2).click();
