@@ -35,7 +35,10 @@ export function selectSettingsTab(name: SettingsTab) {
     $(`settings-panel-${t}`).hidden = t !== name;
   }
   closeHint();
+  $("error").hidden = true;
   $("settings").scrollTop = 0;
+  // The tokens are asked about only once the Slack tab is shown.
+  if (name === "slack" && workspaces.some((w) => !wsChecks.has(w.teamId))) drawWorkspaces(workspaces, settingsSeq);
 }
 
 // A connected service's row: avatar, name, a line under it, a state label (`status` is [class, text]) and buttons. `meta` is a string or a list of strings and nodes.
@@ -127,18 +130,28 @@ function workspaceRow(w: Workspace, result: Check | null) {
   });
 }
 
+// The workspaces as last drawn.
+let workspaces: Workspace[] = [];
+
 // Draws the workspaces, then asks Slack about each token that has not been asked: a row says why when its token is not usable.
 export function renderWorkspaces(list: Workspace[]) {
   const seq = ++settingsSeq;
+  workspaces = list;
   setSlackWorkspaces(list);
   updateAddMode();
+  drawWorkspaces(list, seq);
+}
+
+// The rows of the Slack card. The tokens are asked about only while the Slack tab is shown (the tab asks when it is pressed).
+function drawWorkspaces(list: Workspace[], seq: number) {
   $("slack-workspaces").replaceChildren(
     ...(list.length
       ? list.map((w) => {
           const row = workspaceRow(w, null);
-          checkWorkspace(w).done.then((r) => {
-            if (seq === settingsSeq) row.replaceWith(workspaceRow(w, r));
-          });
+          if (tab === "slack")
+            checkWorkspace(w).done.then((r) => {
+              if (seq === settingsSeq) row.replaceWith(workspaceRow(w, r));
+            });
           return row;
         })
       : [tag("div", "card-empty", "ワークスペースはまだありません")]),
@@ -257,7 +270,7 @@ export async function loadSettings() {
     return showError(e);
   }
   if (seq !== settingsSeq) return;
-  // Opening the settings asks about every token again.
+  // Opening the settings forgets the answers; the Slack tab asks about every token again.
   wsChecks.clear();
   renderWorkspaces(loaded.workspaces);
 }

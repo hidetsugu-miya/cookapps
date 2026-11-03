@@ -181,6 +181,15 @@ describe("settings: Todoist", () => {
 });
 
 describe("settings: Slack", () => {
+  it("asks Slack about the tokens only when the Slack tab is shown", async () => {
+    await openSettings([]);
+    await browser.waitUntil(async () => (await textsOf("#slack-workspaces .status")).join() === "確認中", { timeoutMsg: "the workspace row was not drawn" });
+    expect(await callsOf("slack_check")).toHaveLength(0);
+    await openTab("slack");
+    expect(await waitForCalls("slack_check")).toEqual([{ teamId: "T1" }]);
+    await expect($("#slack-workspaces .status")).toHaveText("接続済み");
+  });
+
   it("flags a token without read scopes and lists only the missing ones in the pane", async () => {
     await openSettings(["im:history", "mpim:history"], claudeMissing, "slack");
     const status = $("#slack-workspaces .status");
@@ -517,6 +526,37 @@ describe("settings: tabs", () => {
     await expect(panel("update")).toBeDisplayed();
     await pressArrow("ArrowRight");
     expect(await selected()).toEqual(["settings-tab-google"]);
+  });
+
+  it("moves the focus to the neighbour tab along with the arrow key", async () => {
+    await openSettings([]);
+    const focused = () => browser.execute(() => document.activeElement?.id);
+    await pressArrow("ArrowRight");
+    expect(await focused()).toBe("settings-tab-calendar");
+    await pressArrow("ArrowLeft");
+    await pressArrow("ArrowLeft");
+    expect(await focused()).toBe("settings-tab-update");
+  });
+
+  it("opens the Claude tab from 設定を開く in the Claude popup", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeReady });
+    await $("#claude-btn").click();
+    await $("#account-popup").$("button=設定を開く").click();
+    await expect($("#settings")).toBeDisplayed();
+    expect(await selected()).toEqual(["settings-tab-claude"]);
+    await expect(panel("claude")).toBeDisplayed();
+  });
+
+  it("clears a shown error when another tab is pressed", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, todoist_connected: true });
+    await $("#nav-settings").click();
+    await openTab("todoist");
+    await mock("todoist_disconnect", rejects("資格情報を消せません"));
+    await $('button[aria-label="Todoist の接続を解除"]').click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await expect($("#error")).toBeDisplayed();
+    await openTab("slack");
+    await expect($("#error")).not.toBeDisplayed();
   });
 
   it("opens on Google again when the settings are left and entered from the side menu", async () => {

@@ -127,7 +127,8 @@ function syncModelSelects() {
 }
 
 // The selects show the saved values until the save succeeds; a failure puts them back and shows the error.
-// The selects are not drawn again, so the one the user operated keeps its place; it gets the focus back that disabling it took away.
+// The selects are not drawn again by the save itself, so the one the user operated keeps its place and gets the focus back that disabling it took away.
+// When the card was drawn again meanwhile (a read or a Claude check), the operated select is gone, and the select of the same purpose and kind that is shown gets the focus.
 async function saveModel(purpose: Purpose, change: Partial<ModelSettings>, operated: HTMLSelectElement) {
   if (savingModel || modelSettings === null) return;
   savingModel = true;
@@ -141,8 +142,15 @@ async function saveModel(purpose: Purpose, change: Partial<ModelSettings>, opera
   } finally {
     savingModel = false;
     syncModelSelects();
-    if (operated.isConnected) operated.focus();
+    const { purpose: p, kind } = operated.dataset;
+    (operated.isConnected ? operated : modelSelects().find((el) => el.dataset.purpose === p && el.dataset.kind === kind && el.offsetParent !== null))?.focus();
   }
+}
+
+// Opens the prompt screen's selects: the settings are read the first time, and what was read is drawn if the selects are empty.
+export function showPromptModel() {
+  if (modelSettings === null) loadModelSettings();
+  else if ($("prompt-model").childElementCount === 0) redrawPromptModel();
 }
 
 // Reads the saved model and effort; the card and the prompt screen follow. A read that a save overtook is dropped: the save's answer is newer.

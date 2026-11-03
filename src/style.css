@@ -1,4 +1,4 @@
-:root { --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; }
+:root { --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 body { font-family: -apple-system, sans-serif; font-size: 14px; margin: 0; display: flex; }
@@ -11,7 +11,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .nav-count { position: absolute; top: -4px; right: -8px; box-sizing: border-box; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #d93025; color: #fff; font-size: 11px; font-weight: bold; line-height: 18px; text-align: center; }
 .nav-item:disabled { opacity: .4; cursor: default; }
 /* A newer version is out: a dot on the settings button, whose aria-label says so. */
-.nav-dot { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: #d93025; box-shadow: 0 0 0 2px var(--side); }
+.nav-dot { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 0 2px var(--side); }
 .nav-item:hover .nav-dot { box-shadow: 0 0 0 2px var(--side-hover); }
 .nav-item[aria-current="page"] .nav-dot { box-shadow: 0 0 0 2px var(--accent); }
 /* The bottom group (update button, account avatars, Claude avatar, settings) takes the free space above it, so settings stays last whatever is shown. */
@@ -424,7 +424,7 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .tab[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
 .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
 /* A newer version is out: a dot on the update tab, like the one on the settings button. */
-.tab-dot { position: absolute; top: 6px; right: 2px; width: 8px; height: 8px; border-radius: 50%; background: #d93025; }
+.tab-dot { position: absolute; top: 6px; right: 2px; width: 8px; height: 8px; border-radius: 50%; background: var(--dot); }
 .card { max-width: 640px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 12px; }
 .card-head { display: flex; align-items: center; gap: 4px; padding: 14px 12px 10px 20px; }
 .card-head h2 { display: flex; align-items: center; gap: 8px; font-size: 15px; }
