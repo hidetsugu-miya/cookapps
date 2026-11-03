@@ -59,7 +59,7 @@ function addMode() {
   }
   const claude = getClaude();
   if (claude === null) return { summarize: false, hint: "" };
-  if (claude.state !== "ready") return { summarize: false, hint: "Claude にログインすると、要約して追加できます" };
+  if (claude.state !== "ready") return { summarize: false, hint: "設定の Claude タブで接続すると、要約して追加できます" };
   const workspace = workspaces.find((w) => hostOf(w.url) === host);
   if (!workspace) return { summarize: false, hint: "このリンクのワークスペースは Slack に接続されていません。設定で追加してください" };
   return { summarize: true, hint: `Slack のメッセージ（${workspace.team}）を Claude が要約します。内容を確かめてから「${$("todo-title").textContent}」に追加します` };

@@ -47,6 +47,8 @@ const answers = {
   set_badge: null,
   ...fixtures,
 };
+// The settings card's view of the connection follows the usable state (the subscription is the method in use) unless a spec gives its own.
+answers.claude_connection ??= { method: "subscription", subscription: answers.claude_status, apiKey: { state: "none" }, claude: answers.claude_status };
 window.__e2e_mocks__ = {};
 window.__e2e_calls__ = {};
 
@@ -73,6 +75,9 @@ const invoke = async (cmd, args, options) => {
     window.__e2e_unmocked__.push(cmd);
     throw new Error(`e2e: unmocked command "${cmd}" (args ${JSON.stringify(args)})`);
   }
-  return structuredClone(answers[cmd]);
+  const answer = structuredClone(answers[cmd]);
+  // A fixture can make a command fail from the start too (a mock does the same, once the page is loaded).
+  if (answer?.__e2e_reject__ !== undefined) throw answer.__e2e_reject__;
+  return answer;
 };
 window.__TAURI__.core = { ...core, invoke };

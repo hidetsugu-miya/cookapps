@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeLoggedOut, claudeReady, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, threadDetail, waitForCalls, waitForCount, workspace,
+  boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, threadDetail, waitForCalls, waitForCount, workspace,
 } from "../support";
 
 const body = () => $("#slack-body");
@@ -352,6 +352,15 @@ describe("slack compose screen: proofreading with Claude", () => {
     // Putting the text back makes it applicable again.
     await body().setValue(slackPreview);
     await expect(applyButton()).toBeEnabled();
+  });
+
+  it("proofreads while an API key is in use", async () => {
+    await openCompose(claudeKeyReady);
+    await expect($("#slack-proofread")).toBeEnabled();
+    const edit = await mock("claude_proofread_slack", proofreadEdit);
+    await $("#slack-proofread").click();
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください" }]);
+    await waitForCount("#slack-log .chat-ai", 1);
   });
 
   it("is off with a note while Claude is not logged in", async () => {

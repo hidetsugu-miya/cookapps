@@ -3,4 +3,4 @@
 /**
  * The models the settings offer: the aliases `claude --model` takes. The default is `Sonnet`.
  */
-export type Model = "haiku" | "sonnet" | "opus" | "fable";
+export type Model = "haiku" | "sonnet" | "opus";

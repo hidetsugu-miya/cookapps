@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod auth;
 pub mod calendar;
 pub mod claude;
+pub mod claude_auth;
 mod disk_cache;
 pub mod gmail;
 pub mod image_senders;
@@ -158,6 +159,10 @@ pub fn run() {
             slack::slack_preview,
             slack::slack_post,
             claude::claude_status,
+            claude::claude_connection,
+            claude::claude_key_save,
+            claude::claude_method_set,
+            claude::claude_key_delete,
             claude::claude_summarize_mail,
             claude::claude_todo_prompt,
             claude::claude_todo_prompt_save,

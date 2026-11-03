@@ -14,7 +14,15 @@ use tokio::sync::Semaphore;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{accounts::write_synced, auth::config_dir, gmail::log_failure};
+use crate::{
+    accounts::write_synced,
+    auth::config_dir,
+    claude_auth::{
+        self, key_state, key_state_or_unverified, ApiKeyState, Connection, EnvChange, Method,
+        API_BASE,
+    },
+    gmail::log_failure,
+};
 
 /// A summary is one model call, about 4 seconds when measured; this only stops a hung process.
 const SUMMARY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -55,8 +63,9 @@ const MAIL_SCHEMA: &str = r#"{"type":"object","properties":{"points":{"type":"ar
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x0800_0000;
 
-/// What `claude` is here: logged in, not logged in, not installed, or unreadable.
-#[derive(Serialize, Debug, PartialEq)]
+/// What `claude` is here: usable (logged in, or given an API key), not logged in, not installed, or unreadable.
+/// With the API key `method`, `email` and `plan` are empty: a key says nothing about who owns it.
+#[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(tag = "state", rename_all = "camelCase")]
@@ -65,6 +74,7 @@ pub enum Claude {
         email: String,
         plan: String,
         version: String,
+        method: Method,
     },
     LoggedOut {
         version: String,
@@ -85,18 +95,16 @@ pub enum Model {
     #[default]
     Sonnet,
     Opus,
-    Fable,
 }
 
 impl Model {
-    const ALL: [Self; 4] = [Self::Haiku, Self::Sonnet, Self::Opus, Self::Fable];
+    const ALL: [Self; 3] = [Self::Haiku, Self::Sonnet, Self::Opus];
 
     fn as_str(self) -> &'static str {
         match self {
             Self::Haiku => "haiku",
             Self::Sonnet => "sonnet",
             Self::Opus => "opus",
-            Self::Fable => "fable",
         }
     }
 
@@ -136,6 +144,15 @@ impl Effort {
     /// The effort `name` spells, only if it is in the list: this is the allowlist in front of `--effort`.
     fn parse(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|e| e.as_str() == name)
+    }
+}
+
+/// The effort the documentation recommends for `model`, which a change of model switches to
+/// (https://platform.claude.com/docs/en/build-with-claude/effort, "Recommended effort levels").
+fn recommended_effort(model: Model) -> Effort {
+    match model {
+        Model::Haiku | Model::Opus => Effort::Medium,
+        Model::Sonnet => Effort::High,
     }
 }
 
@@ -223,6 +240,28 @@ impl ClaudeSettings {
         }
         self
     }
+}
+
+/// The settings card of the Claude connection (A-4): the method in use, the subscription's own state and the API key's own state,
+/// so each row shows its state whichever is in use, and `claude`, the usable state the whole screen follows (what `claude_status` answers).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeConnection {
+    pub method: Method,
+    pub subscription: Claude,
+    pub api_key: ApiKeyState,
+    pub claude: Claude,
+}
+
+/// What saving a key answers. The key is stored whenever this is answered; `logout_error` says that Claude Code could not be shown to be logged out.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct KeySaved {
+    pub logout_error: Option<String>,
 }
 
 /// What a message is turned into: the task's name, its description, when it is due (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM` as the schema asks; the model may still break it),
@@ -345,7 +384,40 @@ fn parse_status(out: &str, version: String) -> Result<Claude, String> {
         email: status["email"].as_str().unwrap_or_default().to_owned(),
         plan: plan_label(status["subscriptionType"].as_str().unwrap_or_default()),
         version,
+        method: Method::Subscription,
     })
+}
+
+/// The usable state of the method in use, from the states the card already holds: the subscription's own, or an API key's
+/// (which needs the version of Claude Code, and the subscription's status carries it).
+fn usable_claude(method: Method, subscription: &Claude, key: &ApiKeyState) -> Claude {
+    match (method, subscription) {
+        (Method::Subscription, _) => subscription.clone(),
+        (Method::ApiKey, Claude::Ready { version, .. } | Claude::LoggedOut { version }) => {
+            api_key_claude(version.clone(), key)
+        }
+        (Method::ApiKey, other) => other.clone(),
+    }
+}
+
+/// Whether `claude` can be used with the stored API key: a key that works, or one Anthropic could not be asked about, is usable;
+/// a key that is refused, or none stored, is not.
+fn api_key_claude(version: String, key: &ApiKeyState) -> Claude {
+    match key {
+        ApiKeyState::Ready { .. } | ApiKeyState::Unverified { .. } => Claude::Ready {
+            email: String::new(),
+            plan: String::new(),
+            version,
+            method: Method::ApiKey,
+        },
+        ApiKeyState::Rejected { message } => Claude::Failed {
+            message: message.clone(),
+        },
+        ApiKeyState::None => Claude::Failed {
+            message: "API キーが保存されていません。設定の Claude タブで登録してください"
+                .to_owned(),
+        },
+    }
 }
 
 /// The rules for Japanese text in the summary, taken from the yomiyasu skill (a skill that proofreads Japanese): only the ones that help a short summary.
@@ -671,16 +743,21 @@ fn load_settings(dir: &Path) -> ClaudeSettings {
 }
 
 /// Saves `model` and `effort` for `purpose` (what the screen sent, checked against the lists here), keeps the other purposes as they are, and returns all of them.
+/// Without an `effort`, the model's recommended one is saved.
 fn save_settings(
     dir: &Path,
     purpose: &str,
     model: &str,
-    effort: &str,
+    effort: Option<&str>,
 ) -> Result<ClaudeSettings, String> {
     let purpose = ModelPurpose::parse(purpose).ok_or("用途が不正です")?;
+    let model = Model::parse(model).ok_or("モデルが不正です")?;
     let chosen = ModelSettings {
-        model: Model::parse(model).ok_or("モデルが不正です")?,
-        effort: Effort::parse(effort).ok_or("effort が不正です")?,
+        model,
+        effort: match effort {
+            Some(effort) => Effort::parse(effort).ok_or("effort が不正です")?,
+            None => recommended_effort(model),
+        },
     };
     let settings = load_settings(dir).with(purpose, chosen);
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -919,8 +996,13 @@ enum RunError {
 
 /// Runs `claude` with `args`, `input` on its stdin, and returns its stdout. The exit code is not looked at:
 /// `auth status` exits non-zero when logged out and still prints JSON, and an unreadable stdout is reported by the caller.
-/// A run past `timeout` is killed.
-fn run(args: &[String], input: &str, timeout: Duration) -> Result<String, RunError> {
+/// `connection` decides which credentials the child process sees (the key is passed only in its environment, never in `args`). A run past `timeout` is killed.
+fn run(
+    args: &[String],
+    input: &str,
+    timeout: Duration,
+    connection: &Connection,
+) -> Result<String, RunError> {
     for path in locations(dirs::home_dir(), cfg!(windows)) {
         let mut command = Command::new(&path);
         // Not the app's own folder: `claude` would read that project's settings and CLAUDE.md.
@@ -930,6 +1012,12 @@ fn run(args: &[String], input: &str, timeout: Duration) -> Result<String, RunErr
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        for change in connection.env() {
+            match change {
+                EnvChange::Set(name, value) => command.env(name, value),
+                EnvChange::Remove(name) => command.env_remove(name),
+            };
+        }
         #[cfg(windows)]
         std::os::windows::process::CommandExt::creation_flags(&mut command, NO_WINDOW);
         let mut child = match command.spawn() {
@@ -968,41 +1056,234 @@ fn args_of(args: &[&str]) -> Vec<String> {
     args.iter().map(|a| (*a).to_owned()).collect()
 }
 
-fn read_status() -> Claude {
-    // Two processes, run side by side: the answer waits for the slower one, not for both.
-    let (version, status) = std::thread::scope(|scope| {
-        let version = scope.spawn(|| run(&args_of(&["--version"]), "", STATUS_TIMEOUT));
-        let status = run(&args_of(&["auth", "status", "--json"]), "", STATUS_TIMEOUT);
-        (version.join().unwrap(), status)
-    });
-    let version = version.map(|out| parse_version(&out)).unwrap_or_default();
-    match status {
+/// `claude auth status --json` with every credential variable taken out, so a key in the environment cannot make it look logged in.
+fn run_auth_status() -> Result<String, RunError> {
+    run(
+        &args_of(&["auth", "status", "--json"]),
+        "",
+        STATUS_TIMEOUT,
+        &Connection::Subscription,
+    )
+}
+
+/// The subscription's state from what `claude auth status` printed.
+fn status_of(out: Result<String, RunError>, version: String) -> Claude {
+    match out {
         Err(RunError::NotInstalled) => Claude::Missing,
         Err(RunError::Failed(message)) => Claude::Failed { message },
         Ok(out) => parse_status(&out, version).unwrap_or_else(|message| Claude::Failed { message }),
     }
 }
 
-/// Whether `claude` is installed and logged in. The state is shown in the settings and the sidebar; it changes nothing at Anthropic.
-#[tauri::command]
-pub async fn claude_status() -> Result<Claude, String> {
-    let status = tokio::task::spawn_blocking(read_status)
+/// The subscription's own state.
+fn read_status() -> Claude {
+    // Two processes, run side by side: the answer waits for the slower one, not for both.
+    let (version, status) = std::thread::scope(|scope| {
+        let version = scope.spawn(read_version);
+        (version.join().unwrap(), run_auth_status())
+    });
+    let version = version.map(|out| parse_version(&out)).unwrap_or_default();
+    status_of(status, version)
+}
+
+fn read_version() -> Result<String, RunError> {
+    run(
+        &args_of(&["--version"]),
+        "",
+        STATUS_TIMEOUT,
+        &Connection::Subscription,
+    )
+}
+
+/// Runs file or keychain work off the async threads.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
+
+/// The stored API key asked about at Anthropic: `ApiKeyState::None` when none is stored.
+async fn read_key_state() -> Result<ApiKeyState, String> {
+    let check = match blocking(claude_auth::read_key).await?? {
+        Some(key) => Some(claude_auth::check_key(API_BASE, &key).await),
+        None => None,
+    };
+    Ok(key_state(check))
+}
+
+/// Whether `claude` can be used, with the method saved in the app: the subscription logged in, or an API key that is not refused.
+/// The state is shown in the settings and the sidebar; the subscription changes nothing at Anthropic, and a key is only asked about at the models endpoint.
+#[tauri::command]
+pub async fn claude_status(app: tauri::AppHandle) -> Result<Claude, String> {
+    let command = "claude_status";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
+    let status = match blocking(move || claude_auth::load_method(&dir)).await? {
+        Method::Subscription => blocking(read_status).await?,
+        Method::ApiKey => {
+            let (version, key) = tokio::join!(blocking(read_version), read_key_state());
+            match version? {
+                Err(RunError::NotInstalled) => Claude::Missing,
+                Err(RunError::Failed(message)) => Claude::Failed { message },
+                Ok(out) => api_key_claude(
+                    parse_version(&out),
+                    &key.map_err(|e| log_failure(command, "-", e))?,
+                ),
+            }
+        }
+    };
     if let Claude::Failed { message } = &status {
-        log_failure("claude_status", "-", message.clone());
+        log_failure(command, "-", message.clone());
     }
     Ok(status)
 }
 
+/// The settings card's view of the connection: the method, and the state of the subscription and of the API key, each on its own,
+/// with the usable state of the method in use, so one call (and one read of each state) refreshes the card and the whole screen.
+/// A keychain failure stays in the key row (`Unverified`); the rest of the card is still answered.
+#[tauri::command]
+pub async fn claude_connection(app: tauri::AppHandle) -> Result<ClaudeConnection, String> {
+    let command = "claude_connection";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
+    let (method, subscription, api_key) = tokio::join!(
+        blocking(move || claude_auth::load_method(&dir)),
+        blocking(read_status),
+        read_key_state()
+    );
+    let (method, subscription) = (method?, subscription?);
+    let api_key = key_state_or_unverified(api_key.map_err(|e| log_failure(command, "-", e)));
+    let claude = usable_claude(method, &subscription, &api_key);
+    if let Claude::Failed { message } = &claude {
+        log_failure(command, "-", message.clone());
+    }
+    Ok(ClaudeConnection {
+        method,
+        subscription,
+        api_key,
+        claude,
+    })
+}
+
+const LOGOUT_REMAINS: &str = "Claude Code のログアウトを確認できませんでした。ターミナルで claude auth logout を実行してください";
+
+/// Whether the status read after a logout shows Claude Code logged out (or absent). Anything else, including a status that could not be read, is an error.
+fn logout_outcome(status: &Claude) -> Result<(), String> {
+    match status {
+        Claude::LoggedOut { .. } | Claude::Missing => Ok(()),
+        _ => Err(LOGOUT_REMAINS.to_owned()),
+    }
+}
+
+/// Logs the subscription out of Claude Code (`claude auth logout`) and reads its status again (`claude auth status` alone):
+/// still logged in, or a status that cannot be read, is an error.
+/// Without Claude Code there is nothing to log out of.
+fn logout_subscription() -> Result<(), String> {
+    let logout = run(
+        &args_of(&["auth", "logout"]),
+        "",
+        STATUS_TIMEOUT,
+        &Connection::Subscription,
+    );
+    if matches!(logout, Err(RunError::NotInstalled)) {
+        return Ok(());
+    }
+    logout_outcome(&status_of(run_auth_status(), String::new()))
+}
+
+/// Checks `key` at Anthropic, and only a working one is stored (the order: check, keychain, method file, logout).
+/// With `switch` the key also becomes the method, and the subscription is logged out of Claude Code unless the key was the method already;
+/// without it only the key is replaced and the method stays. The key is stored when the logout could not be confirmed: that is answered as `logout_error`, not as an error.
+#[tauri::command]
+pub async fn claude_key_save(
+    app: tauri::AppHandle,
+    key: String,
+    switch: bool,
+) -> Result<KeySaved, String> {
+    let command = "claude_key_save";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
+    let key = claude_auth::check_key_format(&key).map_err(|e| log_failure(command, "-", e))?;
+    if let Some(message) = claude_auth::refusal(&claude_auth::check_key(API_BASE, &key).await) {
+        return Err(log_failure(command, "-", message));
+    }
+    let logout_error = blocking(move || {
+        claude_auth::write_key(&key)?;
+        let was = claude_auth::load_method(&dir);
+        if switch {
+            claude_auth::save_method(&dir, Method::ApiKey)?;
+        }
+        Ok::<_, String>(if claude_auth::should_logout(switch, was) {
+            logout_subscription().err()
+        } else {
+            None
+        })
+    })
+    .await?
+    .map_err(|e| log_failure(command, "-", e))?;
+    Ok(KeySaved {
+        logout_error: logout_error.map(|e| log_failure(command, "-", e)),
+    })
+}
+
+/// Chooses the method. The API key needs a stored key that Anthropic does not reject (one that cannot be asked about is let through);
+/// switching to it logs the subscription out of Claude Code unless the key was the method already (see `claude_key_save`). A rejected key changes and logs out nothing.
+/// Going back to the subscription only changes the method.
+#[tauri::command]
+pub async fn claude_method_set(app: tauri::AppHandle, method: Method) -> Result<(), String> {
+    let command = "claude_method_set";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
+    match method {
+        Method::Subscription => blocking(move || claude_auth::save_method(&dir, method)).await?,
+        Method::ApiKey => {
+            let key = blocking(claude_auth::require_key)
+                .await?
+                .map_err(|e| log_failure(command, "-", e))?;
+            if let Some(message) =
+                claude_auth::switch_refusal(&claude_auth::check_key(API_BASE, &key).await)
+            {
+                return Err(log_failure(command, "-", message));
+            }
+            blocking(move || {
+                let was = claude_auth::load_method(&dir);
+                claude_auth::save_method(&dir, method)?;
+                if claude_auth::should_logout(true, was) {
+                    logout_subscription()
+                } else {
+                    Ok(())
+                }
+            })
+            .await?
+        }
+    }
+    .map_err(|e| log_failure(command, "-", e))
+}
+
+/// Deletes the stored key. If the key was the method in use, the method goes back to the subscription (which stays logged out until the user logs in).
+#[tauri::command]
+pub async fn claude_key_delete(app: tauri::AppHandle) -> Result<(), String> {
+    let command = "claude_key_delete";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
+    blocking(move || {
+        if claude_auth::load_method(&dir) == Method::ApiKey {
+            claude_auth::save_method(&dir, Method::Subscription)?;
+        }
+        claude_auth::delete_key()
+    })
+    .await?
+    .map_err(|e| log_failure(command, "-", e))
+}
+
 /// Runs `claude` with `args` and `input` on a blocking thread (at most `CLAUDE_SLOTS` at a time), and returns its stdout. A run past `timeout` is killed.
-async fn ask(args: Vec<String>, input: String, timeout: Duration) -> Result<String, String> {
+async fn ask(
+    args: Vec<String>,
+    input: String,
+    timeout: Duration,
+    connection: Connection,
+) -> Result<String, String> {
     // Waits for a free slot first, so a burst of presses does not start a `claude` process each.
     let _slot = tokio::time::timeout(SLOT_WAIT, CLAUDE_SLOTS.acquire())
         .await
         .map_err(|_| "他の要約が終わるのを待っています。もう一度試してください".to_owned())?
         .map_err(|e| e.to_string())?;
-    tokio::task::spawn_blocking(move || run(&args, &input, timeout))
+    tokio::task::spawn_blocking(move || run(&args, &input, timeout, &connection))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| match e {
@@ -1027,18 +1308,20 @@ pub async fn summarize(
     let boundary = new_boundary()?;
     let input = summary_input(message, &boundary);
     let dir = dir.to_owned();
-    let (body, settings) = tokio::task::spawn_blocking(move || {
-        (
+    let (body, settings, connection) = tokio::task::spawn_blocking(move || {
+        Ok::<_, String>((
             load_prompt(&dir),
             load_settings(&dir).for_purpose(ModelPurpose::SlackSummary),
-        )
+            claude_auth::load_connection(&dir)?,
+        ))
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())??;
     let out = ask(
         summary_args(&today(), projects, &body, &boundary, settings),
         input,
         settings.timeout(SUMMARY_TIMEOUT),
+        connection,
     )
     .await?;
     let mut summary = parse_summary(&out)?;
@@ -1091,17 +1374,17 @@ pub async fn claude_model_settings(app: tauri::AppHandle) -> Result<ClaudeSettin
         .map_err(|e| e.to_string())
 }
 
-/// Saves the model and effort of one purpose (each must be one the settings offer) and returns the settings of all purposes.
+/// Saves the model and effort of one purpose (each must be one the settings offer; without an effort, the model's recommended one) and returns the settings of all purposes.
 #[tauri::command]
 pub async fn claude_model_settings_save(
     app: tauri::AppHandle,
     purpose: String,
     model: String,
-    effort: String,
+    effort: Option<String>,
 ) -> Result<ClaudeSettings, String> {
     let command = "claude_model_settings_save";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
-    tokio::task::spawn_blocking(move || save_settings(&dir, &purpose, &model, &effort))
+    tokio::task::spawn_blocking(move || save_settings(&dir, &purpose, &model, effort.as_deref()))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| log_failure(command, "-", e))
@@ -1161,9 +1444,15 @@ async fn chat_edit(
 ) -> Result<PromptEdit, String> {
     let (noun, args, purpose) = target;
     let dir = config_dir(app).map_err(|e| log_failure(command, "-", e))?;
-    let settings = tokio::task::spawn_blocking(move || load_settings(&dir).for_purpose(purpose))
-        .await
-        .map_err(|e| log_failure(command, "-", e.to_string()))?;
+    let (settings, connection) = tokio::task::spawn_blocking(move || {
+        Ok::<_, String>((
+            load_settings(&dir).for_purpose(purpose),
+            claude_auth::load_connection(&dir)?,
+        ))
+    })
+    .await
+    .map_err(|e| log_failure(command, "-", e.to_string()))?
+    .map_err(|e| log_failure(command, "-", e))?;
     let boundary = new_boundary().map_err(|e| log_failure(command, "-", e))?;
     let input = edit_input(noun, &body, &history, &instruction, &boundary)
         .map_err(|e| log_failure(command, "-", e))?;
@@ -1171,6 +1460,7 @@ async fn chat_edit(
         args(&boundary, settings),
         input,
         settings.timeout(EDIT_TIMEOUT),
+        connection,
     )
     .await
     .map_err(|e| log_failure(command, "-", e))?;
@@ -1194,11 +1484,15 @@ pub async fn claude_summarize_mail(
 ) -> Result<MailSummary, String> {
     let command = "claude_summarize_mail";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
-    let settings = tokio::task::spawn_blocking(move || {
-        load_settings(&dir).for_purpose(ModelPurpose::MailSummary)
+    let (settings, connection) = tokio::task::spawn_blocking(move || {
+        Ok::<_, String>((
+            load_settings(&dir).for_purpose(ModelPurpose::MailSummary),
+            claude_auth::load_connection(&dir)?,
+        ))
     })
     .await
-    .map_err(|e| log_failure(command, "-", e.to_string()))?;
+    .map_err(|e| log_failure(command, "-", e.to_string()))?
+    .map_err(|e| log_failure(command, "-", e))?;
     let boundary = new_boundary().map_err(|e| log_failure(command, "-", e))?;
     let input =
         mail_input(&subject, &messages, &boundary).map_err(|e| log_failure(command, "-", e))?;
@@ -1206,6 +1500,7 @@ pub async fn claude_summarize_mail(
         mail_args(&today(), &boundary, settings),
         input,
         settings.timeout(SUMMARY_TIMEOUT),
+        connection,
     )
     .await
     .map_err(|e| log_failure(command, "-", e))?;
@@ -1264,9 +1559,176 @@ mod tests {
             Ok(Claude::Ready {
                 email: "a@example.com".into(),
                 plan: "Max".into(),
-                version: "2.1.314".into()
+                version: "2.1.314".into(),
+                method: Method::Subscription
             })
         );
+    }
+
+    #[test]
+    fn an_api_key_that_is_not_refused_is_usable_without_an_email_or_a_plan() {
+        let ready = |key: &ApiKeyState| api_key_claude("2.1.314".into(), key);
+        let usable = Claude::Ready {
+            email: String::new(),
+            plan: String::new(),
+            version: "2.1.314".into(),
+            method: Method::ApiKey,
+        };
+        assert_eq!(ready(&ApiKeyState::Ready { workspace_id: None }), usable);
+        // Anthropic could not be asked: the stored key stays usable.
+        assert_eq!(
+            ready(&ApiKeyState::Unverified {
+                message: "x".into()
+            }),
+            usable
+        );
+    }
+
+    #[test]
+    fn a_refused_or_missing_api_key_is_not_usable() {
+        let rejected = api_key_claude(
+            "1".into(),
+            &ApiKeyState::Rejected {
+                message: "キーが使えません".into(),
+            },
+        );
+        assert_eq!(
+            rejected,
+            Claude::Failed {
+                message: "キーが使えません".into()
+            }
+        );
+        assert!(
+            matches!(api_key_claude("1".into(), &ApiKeyState::None), Claude::Failed { message } if message.contains("保存されていません"))
+        );
+    }
+
+    #[test]
+    fn the_connection_goes_to_the_screen_with_its_three_parts() {
+        let sent = serde_json::to_value(ClaudeConnection {
+            method: Method::ApiKey,
+            subscription: Claude::Missing,
+            api_key: ApiKeyState::None,
+            claude: Claude::Missing,
+        })
+        .unwrap();
+        assert_eq!(
+            sent,
+            json!({"method": "apiKey", "subscription": {"state": "missing"}, "apiKey": {"state": "none"}, "claude": {"state": "missing"}})
+        );
+    }
+
+    #[test]
+    fn a_saved_key_answers_the_logout_that_remains_in_camel_case() {
+        assert_eq!(
+            serde_json::to_value(KeySaved { logout_error: None }).unwrap(),
+            json!({"logoutError": null})
+        );
+        assert_eq!(
+            serde_json::to_value(KeySaved {
+                logout_error: Some("x".into())
+            })
+            .unwrap(),
+            json!({"logoutError": "x"})
+        );
+    }
+
+    #[test]
+    fn the_usable_state_follows_the_method_in_use() {
+        let ready = Claude::Ready {
+            email: "a@example.com".into(),
+            plan: "Max".into(),
+            version: "2.1.314".into(),
+            method: Method::Subscription,
+        };
+        let key = ApiKeyState::Ready { workspace_id: None };
+        // The subscription in use: its own state, whatever the key is.
+        assert_eq!(
+            usable_claude(Method::Subscription, &ready, &ApiKeyState::None),
+            ready
+        );
+        let logged_out = Claude::LoggedOut {
+            version: "2.1.314".into(),
+        };
+        assert_eq!(
+            usable_claude(Method::Subscription, &logged_out, &key),
+            logged_out
+        );
+        // The key in use: usable with the version the subscription's status carries, logged in or not.
+        let by_key = Claude::Ready {
+            email: String::new(),
+            plan: String::new(),
+            version: "2.1.314".into(),
+            method: Method::ApiKey,
+        };
+        assert_eq!(usable_claude(Method::ApiKey, &ready, &key), by_key);
+        assert_eq!(usable_claude(Method::ApiKey, &logged_out, &key), by_key);
+        assert!(matches!(
+            usable_claude(Method::ApiKey, &logged_out, &ApiKeyState::None),
+            Claude::Failed { .. }
+        ));
+        // No Claude Code, or a status that could not be read: that is the state.
+        assert_eq!(
+            usable_claude(Method::ApiKey, &Claude::Missing, &key),
+            Claude::Missing
+        );
+        let failed = Claude::Failed {
+            message: "x".into(),
+        };
+        assert_eq!(usable_claude(Method::ApiKey, &failed, &key), failed);
+    }
+
+    #[test]
+    fn only_a_logged_out_or_absent_claude_code_counts_as_logged_out() {
+        assert_eq!(logout_outcome(&Claude::Missing), Ok(()));
+        assert_eq!(
+            logout_outcome(&Claude::LoggedOut {
+                version: "1".into()
+            }),
+            Ok(())
+        );
+        let ready = Claude::Ready {
+            email: String::new(),
+            plan: String::new(),
+            version: "1".into(),
+            method: Method::Subscription,
+        };
+        for status in [
+            ready,
+            Claude::Failed {
+                message: "x".into(),
+            },
+        ] {
+            assert_eq!(
+                logout_outcome(&status),
+                Err(LOGOUT_REMAINS.to_owned()),
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_subscription_status_comes_from_what_auth_status_printed() {
+        assert_eq!(
+            status_of(Err(RunError::NotInstalled), "1".into()),
+            Claude::Missing
+        );
+        assert_eq!(
+            status_of(Err(RunError::Failed("x".into())), "1".into()),
+            Claude::Failed {
+                message: "x".into()
+            }
+        );
+        assert_eq!(
+            status_of(Ok(r#"{"loggedIn":false}"#.into()), "1".into()),
+            Claude::LoggedOut {
+                version: "1".into()
+            }
+        );
+        assert!(matches!(
+            status_of(Ok("not json".into()), String::new()),
+            Claude::Failed { .. }
+        ));
     }
 
     #[test]
@@ -2264,15 +2726,15 @@ mod tests {
             &[],
             &default_body(),
             B,
-            settings(Model::Fable, Effort::Xhigh),
+            settings(Model::Opus, Effort::Xhigh),
         );
         let at = |flag: &str| args.iter().position(|a| a == flag).unwrap();
-        assert_eq!(args[at("--model") + 1], "fable");
+        assert_eq!(args[at("--model") + 1], "opus");
         assert_eq!(args[at("--effort") + 1], "xhigh");
         // Every call kind takes the setting the same way, and still gives the model no tools and no settings.
-        let mail = mail_args("2026-11-02", B, settings(Model::Opus, Effort::Low));
-        let edit = edit_args(B, settings(Model::Haiku, Effort::Max));
-        for (args, model, effort) in [(mail, "opus", "low"), (edit, "haiku", "max")] {
+        let mail = mail_args("2026-11-02", B, settings(Model::Haiku, Effort::Low));
+        let edit = edit_args(B, settings(Model::Sonnet, Effort::Max));
+        for (args, model, effort) in [(mail, "haiku", "low"), (edit, "sonnet", "max")] {
             let at = |flag: &str| args.iter().position(|a| a == flag).unwrap();
             assert_eq!(args[at("--model") + 1], model);
             assert_eq!(args[at("--effort") + 1], effort);
@@ -2306,8 +2768,8 @@ mod tests {
 
     #[test]
     fn a_model_and_effort_are_sent_to_the_screen_as_lowercase_names() {
-        let sent = serde_json::to_value(settings(Model::Fable, Effort::Xhigh)).unwrap();
-        assert_eq!(sent, json!({"model": "fable", "effort": "xhigh"}));
+        let sent = serde_json::to_value(settings(Model::Opus, Effort::Xhigh)).unwrap();
+        assert_eq!(sent, json!({"model": "opus", "effort": "xhigh"}));
     }
 
     #[test]
@@ -2335,14 +2797,53 @@ mod tests {
     }
 
     #[test]
+    fn each_model_has_the_effort_the_documentation_recommends() {
+        assert_eq!(recommended_effort(Model::Haiku), Effort::Medium);
+        assert_eq!(recommended_effort(Model::Sonnet), Effort::High);
+        assert_eq!(recommended_effort(Model::Opus), Effort::Medium);
+    }
+
+    #[test]
+    fn saving_a_model_without_an_effort_saves_its_recommended_effort() {
+        let dir = temp_dir("settings-recommended");
+        for (model, effort) in [
+            ("haiku", Effort::Medium),
+            ("sonnet", Effort::High),
+            ("opus", Effort::Medium),
+        ] {
+            let saved = save_settings(&dir, "mailSummary", model, None).unwrap();
+            assert_eq!(saved.mail_summary.effort, effort, "{model}");
+            assert_eq!(load_settings(&dir), saved);
+        }
+        // An effort that is sent is kept as it is.
+        let saved = save_settings(&dir, "mailSummary", "sonnet", Some("max")).unwrap();
+        assert_eq!(saved.mail_summary, settings(Model::Sonnet, Effort::Max));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_model_saved_earlier_that_is_no_longer_offered_gives_the_default_model() {
+        let read = parse_settings(
+            r#"{"slackSummary":{"model":"fable","effort":"max"},"mailSummary":{"model":"fable","effort":"low"}}"#,
+        );
+        assert_eq!(read.slack_summary, settings(Model::Sonnet, Effort::Max));
+        assert_eq!(read.mail_summary, settings(Model::Sonnet, Effort::Low));
+        assert_eq!(Model::parse("fable"), None);
+        assert_eq!(
+            parse_settings(r#"{"model":"fable","effort":"high"}"#),
+            all(settings(Model::Sonnet, Effort::High))
+        );
+    }
+
+    #[test]
     fn a_settings_file_reads_each_valid_value_of_each_purpose_and_defaults_the_rest() {
         let read = parse_settings(
             r#"{"slackSummary":{"model":"opus","effort":"max"},"mailSummary":{"model":"haiku","effort":"low"},
-                "promptChat":{"model":"fable","effort":"xhigh"},"proofread":{"model":"sonnet","effort":"high"}}"#,
+                "promptChat":{"model":"sonnet","effort":"xhigh"},"proofread":{"model":"sonnet","effort":"high"}}"#,
         );
         assert_eq!(read.slack_summary, settings(Model::Opus, Effort::Max));
         assert_eq!(read.mail_summary, settings(Model::Haiku, Effort::Low));
-        assert_eq!(read.prompt_chat, settings(Model::Fable, Effort::Xhigh));
+        assert_eq!(read.prompt_chat, settings(Model::Sonnet, Effort::Xhigh));
         assert_eq!(read.proofread, settings(Model::Sonnet, Effort::High));
         // One bad value does not spoil the other, and a bad purpose does not spoil the others.
         let read = parse_settings(
@@ -2422,7 +2923,7 @@ mod tests {
         let chosen = [
             settings(Model::Haiku, Effort::Low),
             settings(Model::Opus, Effort::High),
-            settings(Model::Fable, Effort::Max),
+            settings(Model::Sonnet, Effort::Max),
             settings(Model::Sonnet, Effort::Xhigh),
         ];
         for (p, s) in ModelPurpose::ALL.into_iter().zip(chosen) {
@@ -2442,19 +2943,19 @@ mod tests {
     fn settings_load_gives_what_save_wrote_and_the_defaults_for_no_file() {
         let dir = temp_dir("settings");
         assert_eq!(load_settings(&dir), ClaudeSettings::default());
-        let saved = save_settings(&dir, "promptChat", "fable", "high").unwrap();
+        let saved = save_settings(&dir, "promptChat", "opus", Some("high")).unwrap();
         assert_eq!(
             saved,
             ClaudeSettings::default().with(
                 ModelPurpose::PromptChat,
-                settings(Model::Fable, Effort::High)
+                settings(Model::Opus, Effort::High)
             )
         );
         assert_eq!(load_settings(&dir), saved);
         assert!(!dir.join(SETTINGS_TMP_FILE).exists());
         assert!(std::fs::read_to_string(dir.join(SETTINGS_FILE))
             .unwrap()
-            .contains("\"fable\""));
+            .contains("\"opus\""));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2468,15 +2969,15 @@ mod tests {
         )
         .unwrap();
         let old = settings(Model::Opus, Effort::High);
-        let saved = save_settings(&dir, "proofread", "haiku", "low").unwrap();
+        let saved = save_settings(&dir, "proofread", "haiku", Some("low")).unwrap();
         assert_eq!(saved.proofread, settings(Model::Haiku, Effort::Low));
         assert_eq!(
             [saved.slack_summary, saved.mail_summary, saved.prompt_chat],
             [old; 3]
         );
         // The file now holds an entry per purpose, so the old pair no longer decides anything.
-        let again = save_settings(&dir, "mailSummary", "fable", "max").unwrap();
-        assert_eq!(again.mail_summary, settings(Model::Fable, Effort::Max));
+        let again = save_settings(&dir, "mailSummary", "opus", Some("max")).unwrap();
+        assert_eq!(again.mail_summary, settings(Model::Opus, Effort::Max));
         assert_eq!(again.proofread, settings(Model::Haiku, Effort::Low));
         assert_eq!(again.slack_summary, old);
         assert_eq!(load_settings(&dir), again);
@@ -2487,22 +2988,24 @@ mod tests {
     fn a_value_outside_the_lists_is_refused_in_japanese_and_nothing_is_written() {
         let dir = temp_dir("settings-refused");
         for (purpose, model, effort, message) in [
-            ("proofread", "gpt", "low", "モデル"),
-            ("proofread", "sonnet", "none", "effort"),
-            ("proofread", "", "medium", "モデル"),
-            ("proofread", "sonnet", "", "effort"),
-            ("proofread", "sonnet --tools Bash", "medium", "モデル"),
-            ("", "sonnet", "medium", "用途"),
-            ("all", "sonnet", "medium", "用途"),
-            ("Proofread", "sonnet", "medium", "用途"),
+            ("proofread", "gpt", Some("low"), "モデル"),
+            ("proofread", "fable", Some("low"), "モデル"),
+            ("proofread", "fable", None, "モデル"),
+            ("proofread", "sonnet", Some("none"), "effort"),
+            ("proofread", "", Some("medium"), "モデル"),
+            ("proofread", "sonnet", Some(""), "effort"),
+            ("proofread", "sonnet --tools Bash", Some("medium"), "モデル"),
+            ("", "sonnet", Some("medium"), "用途"),
+            ("all", "sonnet", None, "用途"),
+            ("Proofread", "sonnet", Some("medium"), "用途"),
         ] {
             let e = save_settings(&dir, purpose, model, effort).unwrap_err();
             assert!(e.contains("不正です") && e.contains(message), "{e}");
         }
         assert!(!dir.join(SETTINGS_FILE).exists());
-        save_settings(&dir, "proofread", "haiku", "low").unwrap();
-        assert!(save_settings(&dir, "proofread", "bad", "low").is_err());
-        assert!(save_settings(&dir, "bad", "haiku", "low").is_err());
+        save_settings(&dir, "proofread", "haiku", Some("low")).unwrap();
+        assert!(save_settings(&dir, "proofread", "bad", Some("low")).is_err());
+        assert!(save_settings(&dir, "bad", "haiku", Some("low")).is_err());
         assert_eq!(
             load_settings(&dir).proofread,
             settings(Model::Haiku, Effort::Low)

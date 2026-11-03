@@ -2,7 +2,7 @@
 // whose proposals are applied to the field. Only the save button writes them (Rust keeps them in the settings folder).
 import type { TodoPrompt } from "./bindings/TodoPrompt";
 import { createChat } from "./claude-chat.js";
-import { redrawClaudeItems, showPromptModel } from "./claude.js";
+import { redrawPromptRow, showPromptModel } from "./claude.js";
 import { $, tag } from "./dom.js";
 import { CLAUDE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -28,7 +28,7 @@ let resetTimer = 0;
 // The conversation with Claude about the field's text (claude-chat.ts). Applying a proposal fills the field and does not save.
 const chat = createChat({
   prefix: "prompt",
-  loginNote: "Claude にログインすると、会話で編集できます",
+  loginNote: "設定の Claude タブで接続すると、会話で編集できます",
   text: () => (saved !== null ? draft : null),
   apply: (text) => {
     draft = text;
@@ -57,7 +57,7 @@ export async function loadPromptState() {
   } catch (e) {
     return showError(e);
   }
-  redrawClaudeItems();
+  redrawPromptRow();
   refreshPrompt();
 }
 
@@ -135,7 +135,7 @@ export function initPrompt() {
     if (next === null) return refreshPrompt();
     saved = next;
     toast("保存しました");
-    redrawClaudeItems();
+    redrawPromptRow();
     refreshPrompt();
   };
   // The edits in the field are lost, so it takes two presses: the first arms, and leaving the button or 4 seconds disarms.
@@ -155,7 +155,7 @@ export function initPrompt() {
     draft = saved.body;
     $<HTMLTextAreaElement>("prompt-body").value = draft;
     toast("デフォルトに戻しました");
-    redrawClaudeItems();
+    redrawPromptRow();
     refreshPrompt();
   };
   $("prompt-reset").onblur = disarmReset;

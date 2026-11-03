@@ -4,9 +4,12 @@ import type { AppInfo } from "./bindings/AppInfo";
 import type { Channel } from "./bindings/Channel";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
+import type { ClaudeConnection } from "./bindings/ClaudeConnection";
 import type { Effort } from "./bindings/Effort";
 import type { Inbox } from "./bindings/Inbox";
+import type { KeySaved } from "./bindings/KeySaved";
 import type { MailSummary } from "./bindings/MailSummary";
+import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { PendingImage } from "./bindings/PendingImage";
@@ -89,10 +92,21 @@ export interface Commands {
     args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string };
     result: boolean;
   };
+  // Whether Claude can be used with the method in use (the subscription logged in, or an API key that is not refused).
   claude_status: { args: undefined; result: Claude };
+  // The settings card's view: the method in use, the subscription's and the API key's own states, and the usable state (`claude`) of the method in use.
+  claude_connection: { args: undefined; result: ClaudeConnection };
+  // Checks the key at Anthropic and, only if it works, stores it. With `switch` it also makes the key the method and logs Claude Code out (unless the key was the method already);
+  // without it only the key is replaced. `logoutError` says that the key was stored but the logout could not be confirmed.
+  claude_key_save: { args: { key: string; switch: boolean }; result: KeySaved };
+  // The API key method needs a stored key; choosing it logs Claude Code out. The subscription only changes the method.
+  claude_method_set: { args: { method: Method }; result: null };
+  // Deletes the stored key; the method goes back to the subscription if the key was in use.
+  claude_key_delete: { args: undefined; result: null };
   // The model and effort of each purpose of the `claude -p` calls (A-2): the saved ones, or the defaults. Saving one purpose answers the settings of all of them.
   claude_model_settings: { args: undefined; result: ClaudeSettings };
-  claude_model_settings_save: { args: { purpose: keyof ClaudeSettings; model: Model; effort: Effort }; result: ClaudeSettings };
+  // Without `effort`, the model's recommended effort is saved.
+  claude_model_settings_save: { args: { purpose: keyof ClaudeSettings; model: Model; effort?: Effort }; result: ClaudeSettings };
   // The thread's messages in the order the thread has them; `text` is each body as plain text.
   claude_summarize_mail: { args: { subject: string; messages: { from: string; dateMs: number; text: string }[] }; result: MailSummary };
   // The instructions of the Slack summary: the one in use, saved (the default body removes the saved one), or back to the default. Each answers the state after it.

@@ -52,7 +52,7 @@ const slackDate = (ms: number) => {
 
 const chat = createChat({
   prefix: "slack",
-  loginNote: "Claude にログインすると、校正できます",
+  loginNote: "設定の Claude タブで接続すると、校正できます",
   text: () => draft?.text ?? null,
   apply: (text) => {
     draft!.text = text;

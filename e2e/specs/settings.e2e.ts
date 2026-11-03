@@ -1,4 +1,4 @@
-import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "update";
 
@@ -223,17 +223,436 @@ describe("settings: Slack", () => {
 });
 
 describe("settings: Claude", () => {
-  for (const [state, status, name, label] of [
-    ["ready", claudeReady, "claude@example.com", "ログイン中"],
-    ["loggedOut", claudeLoggedOut, "ログインしていません", "未ログイン"],
+  const row = (n: number) => $(`#claude-items .item:nth-child(${n})`);
+
+  for (const [state, status, meta, label] of [
+    ["ready", claudeReady, "claude@example.com ・ Max プラン ・ Claude Code 2.0.0", "ログイン中"],
+    ["loggedOut", claudeLoggedOut, "ログインしていません。ターミナルで claude auth login を実行してください", "未ログイン"],
     ["missing", claudeMissing, "Claude Code が見つかりません", "未導入"],
   ] as const) {
-    it(`shows the ${state} state`, async () => {
+    it(`shows the subscription row first, with its ${state} state`, async () => {
       await openSettings([], status, "claude");
-      await expect($("#claude-items .item-name")).toHaveText(name);
-      await expect($("#claude-items .status")).toHaveText(label);
+      await expect(row(1).$(".item-name")).toHaveText("サブスクリプション");
+      await expect(row(1).$(".item-meta")).toHaveText(expect.stringContaining(meta));
+      await expect(row(1).$(".status")).toHaveText(label);
     });
   }
+
+  it("keeps the 3 cards of the tab in one tab panel: connection, model and effort, prompt", async () => {
+    await openSettings([], claudeReady, "claude");
+    await expect($("#settings-panel-claude")).toHaveAttribute("role", "tabpanel");
+    expect(await textsOf("#settings-panel-claude > .card .card-head h2")).toEqual(["Claude", "モデルと effort", "プロンプト"]);
+    await expect($("#settings-panel-claude > .card:nth-child(1) #claude-items")).toExist();
+    await expect($("#settings-panel-claude > .card:nth-child(2) #claude-models")).toExist();
+    await expect($("#settings-panel-claude > .card:nth-child(3) #claude-prompt")).toExist();
+    await expect($("#claude-recheck")).toBeDisplayed();
+    await expect($("#claude-help")).toBeDisplayed();
+  });
+
+  it("lists the subscription and the API key as 2 radio rows, the method in use checked, and no key form while no row asks for it", async () => {
+    await openSettings([], claudeReady, "claude");
+    await expect($("#claude-items")).toHaveAttribute("role", "radiogroup");
+    expect(await count("#claude-items .item")).toBe(2);
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    await expect(row(2).$('input[type="radio"]')).not.toBeSelected();
+    await expect(row(2).$(".item-name")).toHaveText("API キー");
+    await expect(row(2).$(".item-meta")).toHaveText("呼び出しごとに課金されます");
+    await expect(row(2).$(".status")).toHaveText("未登録");
+    await expect($("#claude-key")).not.toBeDisplayed();
+  });
+
+  it("asks only claude_status at start, and claude_connection once the Claude tab is first shown", async () => {
+    await openSettings([], claudeReady);
+    expect(await callsOf("claude_status")).toHaveLength(1);
+    expect(await callsOf("claude_connection")).toEqual([]);
+    await openTab("claude");
+    await expect(row(1).$(".status")).toHaveText("ログイン中");
+    expect(await callsOf("claude_connection")).toHaveLength(1);
+    await openTab("slack");
+    await openTab("claude");
+    expect(await callsOf("claude_connection")).toHaveLength(1);
+    expect(await callsOf("claude_status")).toHaveLength(1);
+  });
+
+  it("redraws the rows and the usable state with one claude_connection when the check ↻ is pressed", async () => {
+    await openSettings([], claudeReady, "claude");
+    const status = await mock("claude_status", claudeReady);
+    const card = await mock("claude_connection", connection("subscription", claudeLoggedOut, { state: "none" }));
+    await $("#claude-recheck").click();
+    await waitForCalls(card);
+    await expect(row(1).$(".status")).toHaveText("未ログイン");
+    await expect($("#claude-btn")).not.toBeDisplayed();
+    expect(await callsOf(card)).toHaveLength(1);
+    expect(await callsOf(status)).toEqual([]);
+  });
+
+  it("keeps the model selects and the prompt row as they were when only the connection is redrawn", async () => {
+    await openSettings([], claudeReady, "claude");
+    await expect($("#claude-models select")).toExist();
+    await browser.waitUntil(async () => (await textsOf("#claude-prompt .status"))[0] !== "確認中");
+    const marks = () => browser.execute(() => {
+      const w = window as unknown as { __marks__?: Element[] };
+      const now = [document.querySelector("#claude-models select"), document.querySelector("#claude-prompt .item")] as Element[];
+      w.__marks__ ??= now;
+      return now.every((e, i) => e === w.__marks__![i]);
+    });
+    expect(await marks()).toBe(true);
+    const card = await mock("claude_connection", connection("subscription", claudeLoggedOut, { state: "none" }));
+    await $("#claude-recheck").click();
+    await waitForCalls(card);
+    await expect(row(1).$(".status")).toHaveText("未ログイン");
+    expect(await marks()).toBe(true);
+  });
+
+  it("shows Claude as failed when claude_status fails at start", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: rejects("状態を読めません"), claude_connection: connection("subscription", claudeMissing, { state: "none" }) });
+    await expect($("#claude-btn")).not.toBeDisplayed();
+  });
+});
+
+describe("settings: Claude API key", () => {
+  const row = (n: number) => $(`#claude-items .item:nth-child(${n})`);
+  const radio = (n: number) => row(n).$('input[type="radio"]');
+  const key = "sk-ant-api03-example";
+  const keyReady = { state: "ready", workspaceId: "wrkspc_01" } as const;
+  // The app with the key stored (and the subscription in use unless `method` says otherwise), settings open on the Claude tab.
+  async function withKey(method: "subscription" | "apiKey", apiKey: Parameters<typeof connection>[2] = keyReady) {
+    const usable = method === "apiKey" ? claudeKeyReady : claudeReady;
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: usable, claude_connection: connection(method, claudeReady, apiKey) });
+    await $("#nav-settings").click();
+    await openTab("claude");
+  }
+  const types = (text: string) => browser.execute((t) => {
+    const input = document.getElementById("claude-key-input") as HTMLInputElement;
+    input.value = t;
+  }, text);
+
+  it("shows the stored key with its workspace and the billing note, and the buttons that paste it again and delete it", async () => {
+    await withKey("subscription");
+    await expect(row(2).$(".item-meta")).toHaveText("ワークスペース wrkspc_01 ・ 呼び出しごとに課金されます");
+    await expect(row(2).$(".status")).toHaveText("確認済み");
+    await expect(row(2).$(".text-btn")).toHaveText("貼り直す");
+    await expect(row(2).$('button[aria-label="API キーの接続を解除"]')).toBeDisplayed();
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+  });
+
+  it("shows the API key row as in use with no email in the usable state", async () => {
+    await withKey("apiKey");
+    await expect(row(2).$('input[type="radio"]')).toBeSelected();
+    await expect(row(1).$('input[type="radio"]')).not.toBeSelected();
+    await expect(row(1).$(".status")).toHaveText("ログイン中");
+    await expect($("#claude-btn")).toHaveAttribute("aria-label", "Claude: API キー");
+  });
+
+  it("tells a key Anthropic refuses from one it could not ask about, and keeps the buttons", async () => {
+    await withKey("apiKey", { state: "rejected", message: "キーが使えません。Console で確かめて、貼り直してください" });
+    await expect(row(2).$(".status")).toHaveText("使えません");
+    await expect(row(2).$(".item-meta")).toHaveElementClass("warn");
+    await expect(row(2).$(".text-btn")).toBeDisplayed();
+    await withKey("apiKey", { state: "unverified", message: "キーを確認できません: Anthropic に接続できません" });
+    await expect(row(2).$(".status")).toHaveText("確認できません");
+    await expect(row(2).$(".item-meta")).toHaveText(expect.stringContaining("Anthropic に接続できません"));
+  });
+
+  it("only opens the key field when the radio of the API key row is pressed with no key stored: no method change, no logout", async () => {
+    await openSettings([], claudeReady, "claude");
+    await mock("claude_method_set", null);
+    await mock("claude_key_save", { logoutError: null });
+    await radio(2).click();
+    await expect($("#claude-key")).toBeDisplayed();
+    await expect($("#claude-key-input")).toHaveAttribute("type", "password");
+    await expect($("#claude-key-input")).toBeFocused();
+    expect(await callsOf("claude_method_set")).toEqual([]);
+    expect(await callsOf("claude_key_save")).toEqual([]);
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    // The press checked the radio of the row; the redraw sets it back to the method really in use.
+    await expect(radio(2)).not.toBeSelected();
+  });
+
+  it("only opens the key field when the radio of a refused key is pressed: no method change, no logout", async () => {
+    await withKey("subscription", { state: "rejected", message: "キーが使えません。Console で確かめて、貼り直してください" });
+    await mock("claude_method_set", null);
+    await radio(2).click();
+    await expect($("#claude-key")).toBeDisplayed();
+    await expect($("#claude-key-input")).toBeFocused();
+    expect(await callsOf("claude_method_set")).toEqual([]);
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    await expect(radio(2)).not.toBeSelected();
+  });
+
+  it("does not switch when the text of a row is clicked or double-clicked, nor when an arrow key is pressed on a radio", async () => {
+    await withKey("subscription");
+    await mock("claude_method_set", null);
+    await mock("claude_key_delete", null);
+    await row(2).$(".item-name").click();
+    await row(2).$(".item-name").doubleClick();
+    await row(2).$(".item-meta").doubleClick();
+    await radio(1).click();
+    await browser.keys("ArrowDown");
+    await browser.pause(300);
+    expect(await callsOf("claude_method_set")).toEqual([]);
+    expect(await callsOf("claude_key_delete")).toEqual([]);
+    await expect(radio(1)).toBeSelected();
+    await expect(radio(2)).not.toBeSelected();
+  });
+
+  it("disables the radios, the row buttons and ↻ while a change of the method is on its way", async () => {
+    await withKey("subscription");
+    const set = await mock("claude_method_set", holds);
+    await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
+    await radio(2).click();
+    await waitForCalls(set);
+    await expect(radio(1)).toBeDisabled();
+    await expect(radio(2)).toBeDisabled();
+    await expect(row(2).$(".text-btn")).toBeDisabled();
+    await expect(row(2).$('button[aria-label="API キーの接続を解除"]')).toBeDisabled();
+    await expect($("#claude-recheck")).toBeDisabled();
+    await release(set, null);
+    await expect(radio(1)).not.toBeDisabled();
+    await expect(radio(2)).not.toBeDisabled();
+    await expect(row(2).$(".text-btn")).not.toBeDisabled();
+    await expect($("#claude-recheck")).not.toBeDisabled();
+  });
+
+  it("disables ↻ and the key field's button while the states are being read", async () => {
+    await openSettings([], claudeReady, "claude");
+    await radio(2).click();
+    await expect($("#claude-key")).toBeDisplayed();
+    await expect($("#claude-key button")).not.toBeDisabled();
+    const card = await mock("claude_connection", holds);
+    await $("#claude-recheck").click();
+    await waitForCalls(card);
+    await expect($("#claude-recheck")).toBeDisabled();
+    await expect($("#claude-key button")).toBeDisabled();
+    await release(card, connection("subscription", claudeReady, { state: "none" }));
+    await expect($("#claude-recheck")).not.toBeDisabled();
+    await expect($("#claude-key button")).not.toBeDisabled();
+  });
+
+  it("shows one failed row with the error and no radio when claude_connection itself fails, and nothing can be pressed", async () => {
+    await withKey("subscription");
+    await mock("claude_method_set", null);
+    const card = await mock("claude_connection", rejects("接続の確認に失敗しました"));
+    await $("#claude-recheck").click();
+    await waitForCalls(card);
+    await expect($("#error")).toHaveText(expect.stringContaining("接続の確認に失敗しました"));
+    expect(await count("#claude-items .item")).toBe(1);
+    expect(await count('#claude-items input[type="radio"]')).toBe(0);
+    await expect(row(1).$(".status")).toHaveText("確認できません");
+    await expect(row(1).$(".item-meta")).toHaveText(expect.stringContaining("接続の確認に失敗しました"));
+    // The usable state could not be read either: Claude counts as failed.
+    await expect($("#claude-btn")).not.toBeDisplayed();
+    await row(1).click();
+    expect(await callsOf("claude_method_set")).toEqual([]);
+  });
+
+  it("registers the key with claude_key_save, empties the field as soon as it is read, and shows the key in use after the states are asked again", async () => {
+    await openSettings([], claudeReady, "claude");
+    await radio(2).click();
+    const save = await mock("claude_key_save", { logoutError: null });
+    const card = await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
+    await types(`  ${key}  `);
+    await $("#claude-key button").click();
+    expect(await waitForCalls(save)).toEqual([{ key: `  ${key}  `, switch: true }]);
+    await waitForCalls(card);
+    await expect($("#claude-key-input")).toHaveValue("");
+    await expect($("#claude-key")).not.toBeDisplayed();
+    await expect(row(2).$('input[type="radio"]')).toBeSelected();
+    await expect(row(2).$(".status")).toHaveText("確認済み");
+    await expect(row(1).$(".status")).toHaveText("未ログイン");
+    await expect($("#claude-btn")).toHaveAttribute("aria-label", "Claude: API キー");
+  });
+
+  it("refuses a key that is not usable: the error is shown, the field is emptied and stays open, and the states stay as they were", async () => {
+    await openSettings([], claudeReady, "claude");
+    await radio(2).click();
+    await mock("claude_key_save", rejects("Admin キー（sk-ant-admin…）は使えません。通常の API キーを貼ってください"));
+    await types("sk-ant-admin01-example");
+    await $("#claude-key button").click();
+    await expect($("#error")).toHaveText(expect.stringContaining("Admin キー"));
+    await expect($("#claude-key-input")).toHaveValue("");
+    await expect($("#claude-key")).toBeDisplayed();
+    await expect(row(2).$(".status")).toHaveText("未登録");
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    await expect($("#claude-btn")).toBeDisplayed();
+  });
+
+  it("closes the key field when the key was kept but Claude Code could not be logged out, and shows that text as the error", async () => {
+    await openSettings([], claudeReady, "claude");
+    await radio(2).click();
+    await mock("claude_key_save", { logoutError: "Claude Code のログアウトを確認できませんでした。ターミナルで claude auth logout を実行してください" });
+    await mock("claude_connection", connection("apiKey", claudeReady, keyReady));
+    await types(key);
+    await $("#claude-key button").click();
+    await expect($("#error")).toHaveText(expect.stringContaining("claude auth logout"));
+    await expect($("#claude-key")).not.toBeDisplayed();
+    await expect(row(2).$('input[type="radio"]')).toBeSelected();
+  });
+
+  it("ignores a second send while the first is on its way, and keeps the typed key", async () => {
+    await openSettings([], claudeReady, "claude");
+    await radio(2).click();
+    const save = await mock("claude_key_save", holds);
+    await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
+    await types(key);
+    await $("#claude-key button").click();
+    await waitForCalls(save);
+    await expect($("#claude-key button")).toBeDisabled();
+    await types("sk-ant-api03-second");
+    await browser.execute(
+      (id) => {
+        if (!window.__e2e_once__(id)) return;
+        (document.getElementById("claude-key") as HTMLFormElement).requestSubmit();
+      },
+      onceId(),
+    );
+    await expect($("#claude-key-input")).toHaveValue("sk-ant-api03-second");
+    expect(await callsOf(save)).toHaveLength(1);
+    await release(save, { logoutError: null });
+    await expect($("#claude-key")).not.toBeDisplayed();
+  });
+
+  it("pastes the key again with 貼り直す: only the key is sent to be replaced (switch false), the method stays and the field closes", async () => {
+    await withKey("subscription");
+    await row(2).$(".text-btn").click();
+    const save = await mock("claude_key_save", { logoutError: null });
+    const method = await mock("claude_method_set", null);
+    await mock("claude_connection", connection("subscription", claudeReady, { state: "ready", workspaceId: "wrkspc_02" }));
+    await types(key);
+    await $("#claude-key button").click();
+    expect(await waitForCalls(save)).toEqual([{ key, switch: false }]);
+    await expect($("#claude-key")).not.toBeDisplayed();
+    await expect($("#claude-key-input")).toHaveValue("");
+    await expect(row(2).$(".item-meta")).toHaveText(expect.stringContaining("wrkspc_02"));
+    await expect(radio(1)).toBeSelected();
+    expect(await callsOf(method)).toEqual([]);
+  });
+
+  it("closes the field of 貼り直す and shows the logout that could not be confirmed, while the key is in use", async () => {
+    await withKey("apiKey");
+    await row(2).$(".text-btn").click();
+    await mock("claude_key_save", { logoutError: "Claude Code のログアウトを確認できませんでした。ターミナルで claude auth logout を実行してください" });
+    await mock("claude_connection", connection("apiKey", claudeReady, keyReady));
+    await types(key);
+    await $("#claude-key button").click();
+    await expect($("#error")).toHaveText(expect.stringContaining("claude auth logout"));
+    await expect($("#claude-key")).not.toBeDisplayed();
+    await expect(radio(2)).toBeSelected();
+  });
+
+  it("sends switch true when the field was opened by the radio of a refused key, and false when it was opened by 貼り直す", async () => {
+    await withKey("subscription", { state: "rejected", message: "キーが使えません。Console で確かめて、貼り直してください" });
+    const save = await mock("claude_key_save", rejects("このキーは使えません。Console で確かめて、貼り直してください"));
+    await radio(2).click();
+    await types(key);
+    await $("#claude-key button").click();
+    expect(await waitForCalls(save)).toEqual([{ key, switch: true }]);
+    // The field stays open after a refusal; closing it and opening it again with 貼り直す changes what a save does.
+    await row(2).$(".text-btn").click();
+    await row(2).$(".text-btn").click();
+    await expect($("#claude-key")).toBeDisplayed();
+    await types(key);
+    await $("#claude-key button").click();
+    expect(await waitForCalls(save, 2)).toEqual([{ key, switch: true }, { key, switch: false }]);
+  });
+
+  it("switches to the stored key with claude_method_set when its radio is pressed", async () => {
+    await withKey("subscription");
+    const set = await mock("claude_method_set", null);
+    await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
+    await radio(2).click();
+    expect(await waitForCalls(set)).toEqual([{ method: "apiKey" }]);
+    await expect(row(2).$('input[type="radio"]')).toBeSelected();
+    await expect(row(1).$(".status")).toHaveText("未ログイン");
+    await expect($("#claude-key")).not.toBeDisplayed();
+  });
+
+  it("shows the error and leaves the method as it was when the switch fails", async () => {
+    await withKey("subscription");
+    await mock("claude_method_set", rejects("資格情報の読み取りに失敗: x"));
+    await radio(2).click();
+    await expect($("#error")).toHaveText(expect.stringContaining("資格情報の読み取りに失敗"));
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+  });
+
+  it("goes back to the subscription with claude_method_set, and keeps the key", async () => {
+    await withKey("apiKey");
+    const set = await mock("claude_method_set", null);
+    await mock("claude_key_delete", null);
+    await mock("claude_connection", connection("subscription", claudeReady, keyReady));
+    await radio(1).click();
+    expect(await waitForCalls(set)).toEqual([{ method: "subscription" }]);
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    await expect(row(2).$(".status")).toHaveText("確認済み");
+    expect(await callsOf("claude_key_delete")).toEqual([]);
+  });
+
+  it("calls nothing when the radio of the method in use is pressed", async () => {
+    await withKey("subscription");
+    await mock("claude_method_set", null);
+    await radio(1).click();
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    expect(await callsOf("claude_method_set")).toEqual([]);
+  });
+
+  it("opens the key field with 貼り直す without calling anything, and closes it with the same button", async () => {
+    await withKey("subscription");
+    await mock("claude_method_set", null);
+    await row(2).$(".text-btn").click();
+    await expect($("#claude-key")).toBeDisplayed();
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    expect(await callsOf("claude_method_set")).toEqual([]);
+    await row(2).$(".text-btn").click();
+    await expect($("#claude-key")).not.toBeDisplayed();
+  });
+
+  it("deletes the key with claude_key_delete only after the confirmation, and shows it as not registered", async () => {
+    await withKey("apiKey");
+    const del = await mock("claude_key_delete", null);
+    await mock("claude_connection", connection("subscription", claudeLoggedOut, { state: "none" }));
+    await row(2).$('button[aria-label="API キーの接続を解除"]').click();
+    await expect($('[role="alertdialog"]')).toHaveText(expect.stringContaining("Claude Code はログアウトされたまま"));
+    expect(await callsOf("claude_key_delete")).toEqual([]);
+    await $('[role="alertdialog"]').$("button=解除").click();
+    expect(await waitForCalls(del)).toEqual([null]);
+    await expect(row(2).$(".status")).toHaveText("未登録");
+    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    await expect(row(1).$(".status")).toHaveText("未ログイン");
+    await expect($("#claude-btn")).not.toBeDisplayed();
+  });
+
+  it("deletes nothing when the confirmation is cancelled", async () => {
+    await withKey("subscription");
+    await mock("claude_key_delete", null);
+    await row(2).$('button[aria-label="API キーの接続を解除"]').click();
+    await $('[role="alertdialog"]').$("button=キャンセル").click();
+    expect(await callsOf("claude_key_delete")).toEqual([]);
+    await expect(row(2).$(".status")).toHaveText("確認済み");
+  });
+
+  it("says in the ? hint how to get a key and that switching logs Claude Code out", async () => {
+    await openSettings([], claudeReady, "claude");
+    await $("#claude-help").click();
+    const hint = $('[role="dialog"][aria-label="Claude の使い方"]');
+    await expect(hint).toHaveText(expect.stringContaining("Console"));
+    await expect(hint).toHaveText(expect.stringContaining("ワークスペースに限定したキー"));
+    await expect(hint).toHaveText(expect.stringContaining("資格情報の保管場所"));
+    await expect(hint).toHaveText(expect.stringContaining("Claude Code はログアウトされる"));
+  });
+
+  it("shows API キー instead of the email in the Claude popup of the side menu while the key is in use", async () => {
+    await withKey("apiKey");
+    await $("#claude-btn").click();
+    const popup = $("#account-popup");
+    await expect(popup).toHaveText(expect.stringContaining("API キー"));
+    await expect(popup).not.toHaveText(expect.stringContaining("claude@example.com"));
+    await expect(popup.$(".status")).toHaveText("使用中");
+  });
+
+  it("hides the Claude avatar while the key is refused", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: { state: "failed", message: "キーが使えません" }, claude_connection: connection("apiKey", claudeReady, { state: "rejected", message: "キーが使えません" }) });
+    await expect($("#claude-btn")).not.toBeDisplayed();
+  });
 });
 
 describe("settings: Claude model and effort", () => {
@@ -244,13 +663,13 @@ describe("settings: Claude model and effort", () => {
     ["promptChat", "プロンプトの会話", "Todo の要約プロンプトを Claude と編集するとき"],
     ["proofread", "Slack に貼る文章の校正", "Slack に貼る画面の「Claude と校正」"],
   ];
-  const selectOf = (purpose: Purpose, kind: "model" | "effort") => $(`#claude-items select[data-purpose="${purpose}"][data-kind="${kind}"]`);
+  const selectOf = (purpose: Purpose, kind: "model" | "effort") => $(`#claude-models select[data-purpose="${purpose}"][data-kind="${kind}"]`);
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
   const choose = (purpose: Purpose, kind: "model" | "effort", value: string) =>
     browser.execute(
       (id, p, k, v) => {
         if (!window.__e2e_once__(id)) return;
-        const select = document.querySelector<HTMLSelectElement>(`#claude-items select[data-purpose="${p}"][data-kind="${k}"]`)!;
+        const select = document.querySelector<HTMLSelectElement>(`#claude-models select[data-purpose="${p}"][data-kind="${k}"]`)!;
         select.value = v;
         select.dispatchEvent(new Event("change", { bubbles: true }));
       },
@@ -260,13 +679,13 @@ describe("settings: Claude model and effort", () => {
       value,
     );
   const optionTexts = (select: ChainablePromiseElement) => select.$$("option").map((o) => o.getText());
-  const drawnSelects = () => browser.execute(() => document.querySelectorAll("#claude-items select").length);
+  const drawnSelects = () => browser.execute(() => document.querySelectorAll("#claude-models select").length);
 
   for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
-    it(`has its block between the Claude state and the Todo prompt, with the defaults selected for the four purposes, while Claude is ${state}`, async () => {
+    it(`has its own card with the defaults selected for the four purposes, while Claude is ${state}`, async () => {
       await openSettings([], status, "claude");
-      await expect($("#claude-items > :nth-child(2) .item-name")).toHaveText("モデルと effort");
-      await expect($("#claude-items > :nth-child(3) .item-name")).toHaveText("Todo の要約プロンプト");
+      await expect($("#claude-models")).toBeDisplayed();
+      await expect($("#claude-prompt .item-name")).toHaveText("Todo の要約プロンプト");
       expect(await drawnSelects()).toBe(8);
       for (const [purpose] of PURPOSES) {
         await expect(selectOf(purpose, "model")).toHaveValue("sonnet");
@@ -277,7 +696,7 @@ describe("settings: Claude model and effort", () => {
 
   it("names the four purposes in order, each with where it is used, and labels its selects", async () => {
     await openSettings([], claudeReady, "claude");
-    const whos = await textsOf("#claude-items .model-grid .who");
+    const whos = await textsOf("#claude-models .model-grid .who");
     expect(whos).toEqual(PURPOSES.map(([, name, meta]) => `${name}${meta}`));
     for (const [purpose, name] of PURPOSES) {
       await expect(selectOf(purpose, "model")).toHaveAttribute("aria-label", `${name}のモデル`);
@@ -285,12 +704,26 @@ describe("settings: Claude model and effort", () => {
     }
   });
 
-  it("offers the four models and the five efforts for each purpose, marking the defaults", async () => {
+  it("offers the three models and the five efforts for each purpose, with no Fable and no default marks", async () => {
     await openSettings([], claudeReady, "claude");
     for (const [purpose] of PURPOSES) {
-      expect(await optionTexts(selectOf(purpose, "model"))).toEqual(["Haiku", "Sonnet（デフォルト）", "Opus", "Fable"]);
-      expect(await optionTexts(selectOf(purpose, "effort"))).toEqual(["low", "medium（デフォルト）", "high", "xhigh", "max"]);
+      expect(await optionTexts(selectOf(purpose, "model"))).toEqual(["Haiku", "Sonnet", "Opus"]);
+      expect(await optionTexts(selectOf(purpose, "effort"))).toEqual(["low", "medium", "high", "xhigh", "max"]);
     }
+  });
+
+  it("heads the columns 用途, モデル and effort, and says once that the default is Sonnet and medium", async () => {
+    await openSettings([], claudeReady, "claude");
+    expect(await textsOf("#claude-models .model-grid .th")).toEqual(["用途", "モデル", "effort"]);
+    await expect($("#claude-models .model-note")).toHaveText("次の呼び出しから使います。デフォルトは Sonnet と medium");
+  });
+
+  it("does not wrap the description of a purpose onto a second line", async () => {
+    await openSettings([], claudeReady, "claude");
+    const wrapped = await browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>("#claude-models .model-grid .who .item-meta")].map((e) => e.getBoundingClientRect().height > 20),
+    );
+    expect(wrapped).toEqual([false, false, false, false]);
   });
 
   it("shows the saved model and effort of each purpose", async () => {
@@ -299,7 +732,7 @@ describe("settings: Claude model and effort", () => {
       slack_load: slackLoad,
       slack_check: checked([]),
       claude_model_settings: {
-        slackSummary: { model: "fable", effort: "xhigh" },
+        slackSummary: { model: "opus", effort: "xhigh" },
         mailSummary: { model: "haiku", effort: "low" },
         promptChat: { model: "opus", effort: "high" },
         proofread: { model: "sonnet", effort: "max" },
@@ -307,7 +740,7 @@ describe("settings: Claude model and effort", () => {
     });
     await $("#nav-settings").click();
     await openTab("claude");
-    await expect(selectOf("slackSummary", "model")).toHaveValue("fable");
+    await expect(selectOf("slackSummary", "model")).toHaveValue("opus");
     await expect(selectOf("slackSummary", "effort")).toHaveValue("xhigh");
     await expect(selectOf("mailSummary", "model")).toHaveValue("haiku");
     await expect(selectOf("mailSummary", "effort")).toHaveValue("low");
@@ -318,11 +751,11 @@ describe("settings: Claude model and effort", () => {
   });
 
   for (const [purpose, name] of PURPOSES) {
-    it(`saves ${name} with claude_model_settings_save, sending the purpose and both values, and leaves the other purposes alone`, async () => {
+    it(`saves ${name} with claude_model_settings_save: a model alone without an effort, and an effort with its model, and leaves the other purposes alone`, async () => {
       await openSettings([], claudeReady, "claude");
       const save = await mock("claude_model_settings_save", { ...claudeSettings, [purpose]: { model: "opus", effort: "medium" } });
       await choose(purpose, "model", "opus");
-      expect(await waitForCalls(save)).toEqual([{ purpose, model: "opus", effort: "medium" }]);
+      expect(await waitForCalls(save)).toEqual([{ purpose, model: "opus" }]);
       await expect(selectOf(purpose, "model")).toHaveValue("opus");
       const saveEffort = await mock("claude_model_settings_save", { ...claudeSettings, [purpose]: { model: "opus", effort: "max" } });
       await choose(purpose, "effort", "max");
@@ -334,6 +767,20 @@ describe("settings: Claude model and effort", () => {
       }
     });
   }
+
+  it("draws the effort Rust saved for the model after a change of the model", async () => {
+    await openSettings([], claudeReady, "claude");
+    for (const [model, effort] of [["sonnet", "high"], ["opus", "medium"], ["haiku", "medium"]] as const) {
+      const save = await mock("claude_model_settings_save", { ...claudeSettings, mailSummary: { model, effort } });
+      await choose("mailSummary", "model", model);
+      expect(await waitForCalls(save)).toEqual([{ purpose: "mailSummary", model }]);
+      await expect(selectOf("mailSummary", "model")).toHaveValue(model);
+      await expect(selectOf("mailSummary", "effort")).toHaveValue(effort);
+      await expect(selectOf("mailSummary", "effort")).toHaveAttribute("data-effort", effort);
+    }
+    // The other purposes keep their own effort.
+    await expect(selectOf("proofread", "effort")).toHaveValue("medium");
+  });
 
   it("puts the selection back and shows the error when it cannot be saved", async () => {
     await openSettings([], claudeReady, "claude");
@@ -349,7 +796,7 @@ describe("settings: Claude model and effort", () => {
     await $("#nav-settings").click();
     await openTab("claude");
     await expect($("#error")).toHaveText(expect.stringContaining("設定を読めません"));
-    await expect($("#claude-items > :nth-child(2) .item-name")).toHaveText("Todo の要約プロンプト");
+    await expect($("#claude-prompt .item-name")).toHaveText("Todo の要約プロンプト");
     expect(await drawnSelects()).toBe(0);
   });
 
@@ -368,6 +815,76 @@ describe("settings: Claude model and effort", () => {
     await expect(selectOf("slackSummary", "effort")).toBeEnabled();
   });
 
+  describe("effort colors", () => {
+    const background = (purpose: Purpose) => selectOf(purpose, "effort").getCSSProperty("background-color");
+    const colorOf = (purpose: Purpose) => selectOf(purpose, "effort").getCSSProperty("color");
+
+    it("marks each effort select with its value in data-effort, and follows a change, a save and a failed save", async () => {
+      await boot({
+        inbox: inbox(),
+        slack_load: slackLoad,
+        slack_check: checked([]),
+        claude_model_settings: {
+          slackSummary: { model: "sonnet", effort: "low" },
+          mailSummary: { model: "sonnet", effort: "medium" },
+          promptChat: { model: "sonnet", effort: "high" },
+          proofread: { model: "sonnet", effort: "xhigh" },
+        },
+      });
+      await $("#nav-settings").click();
+      await openTab("claude");
+      await expect(selectOf("slackSummary", "effort")).toHaveAttribute("data-effort", "low");
+      await expect(selectOf("mailSummary", "effort")).toHaveAttribute("data-effort", "medium");
+      await expect(selectOf("promptChat", "effort")).toHaveAttribute("data-effort", "high");
+      await expect(selectOf("proofread", "effort")).toHaveAttribute("data-effort", "xhigh");
+      // The model selects carry none.
+      await expect(selectOf("slackSummary", "model")).not.toHaveAttribute("data-effort");
+      // A change is followed at once, while the save is still on its way.
+      const save = await mock("claude_model_settings_save", holds);
+      await choose("slackSummary", "effort", "max");
+      await waitForCalls(save);
+      await expect(selectOf("slackSummary", "effort")).toHaveAttribute("data-effort", "max");
+      await release(save, { ...claudeSettings, slackSummary: { model: "sonnet", effort: "max" } });
+      await expect(selectOf("slackSummary", "effort")).toHaveAttribute("data-effort", "max");
+      // A failed save puts the value, and its mark, back.
+      await mock("claude_model_settings_save", rejects("effort が不正です"));
+      await choose("slackSummary", "effort", "low");
+      await expect($("#error")).toHaveText(expect.stringContaining("effort が不正です"));
+      await expect(selectOf("slackSummary", "effort")).toHaveValue("max");
+      await expect(selectOf("slackSummary", "effort")).toHaveAttribute("data-effort", "max");
+    });
+
+    it("gives each effort its own colors: the same background and text for equal values, and different ones for different values", async () => {
+      await boot({
+        inbox: inbox(),
+        slack_load: slackLoad,
+        slack_check: checked([]),
+        claude_model_settings: {
+          slackSummary: { model: "sonnet", effort: "low" },
+          mailSummary: { model: "sonnet", effort: "medium" },
+          promptChat: { model: "sonnet", effort: "high" },
+          proofread: { model: "sonnet", effort: "max" },
+        },
+      });
+      await $("#nav-settings").click();
+      await openTab("claude");
+      const seen = new Set<string>();
+      for (const [purpose] of PURPOSES) {
+        const bg = (await background(purpose)).value;
+        const fg = (await colorOf(purpose)).value;
+        expect(bg).not.toBe(fg);
+        seen.add(`${bg}/${fg}`);
+      }
+      expect(seen.size).toBe(4);
+      // xhigh differs from the four above.
+      const save = await mock("claude_model_settings_save", { ...claudeSettings, proofread: { model: "sonnet", effort: "xhigh" } });
+      await choose("proofread", "effort", "xhigh");
+      await waitForCalls(save);
+      seen.add(`${(await background("proofread")).value}/${(await colorOf("proofread")).value}`);
+      expect(seen.size).toBe(5);
+    });
+  });
+
   it("says in the ? hint that each of the four Claude calls has its own setting", async () => {
     await openSettings([], claudeReady, "claude");
     await $("#claude-help").click();
@@ -378,10 +895,10 @@ describe("settings: Claude model and effort", () => {
 });
 
 describe("settings: Todo prompt", () => {
-  const row = () => $("#claude-items > :nth-child(3)");
+  const row = () => $("#claude-prompt .item");
 
   for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
-    it(`has its row under the Claude state while Claude is ${state}`, async () => {
+    it(`has its row in the prompt card while Claude is ${state}`, async () => {
       await openSettings([], status, "claude");
       await expect(row().$(".item-name")).toHaveText("Todo の要約プロンプト");
       await expect(row().$(".status")).toHaveText("デフォルト");
@@ -400,7 +917,7 @@ describe("settings: Todo prompt", () => {
 
   it("opens the prompt screen with 確認・編集 and shows the saved instructions there", async () => {
     await openSettings([], claudeReady, "claude");
-    await expect($("#claude-items .item-name")).toHaveText("claude@example.com");
+    await expect($("#claude-items .item-meta")).toHaveText(expect.stringContaining("claude@example.com"));
     await expect(row().$(".status")).toHaveText("デフォルト");
     await row().$(".text-btn").click();
     await expect($("#prompt")).toBeDisplayed();

@@ -27,7 +27,7 @@ let popupKey = "";
 
 export const accountButtons = () => [...$("account-list").children] as HTMLElement[];
 
-// Closes the popup if it is Claude's (Claude is no longer logged in).
+// Closes the popup if it is Claude's (Claude can no longer be used).
 export function closeClaudePopup() {
   if (claudePopup) closePopup();
 }
@@ -100,7 +100,7 @@ function placePopup(button: HTMLElement) {
   popup.style.top = `${Math.max(8, Math.min(button.getBoundingClientRect().top, innerHeight - popup.offsetHeight - 8))}px`;
 }
 
-// Claude's popup: who is logged in and the plan. Nothing to change here; the settings hold the rest.
+// Claude's popup: who is logged in and the plan (or "API キー" when a key is in use). Nothing to change here; the settings hold the rest.
 function toggleClaudePopup() {
   if (claudePopup) return closePopup();
   popupAccount = null;
@@ -108,7 +108,7 @@ function toggleClaudePopup() {
   claudePopup = true;
   for (const b of accountButtons()) b.setAttribute("aria-expanded", "false");
   $("claude-btn").setAttribute("aria-expanded", "true");
-  // The button is only shown while Claude is logged in.
+  // The button is only shown while Claude can be used.
   const claude = getClaude() as Extract<Claude, { state: "ready" }>;
   const avatar = el("avatar claude");
   avatar.innerHTML = CLAUDE_SVG;
@@ -119,9 +119,9 @@ function toggleClaudePopup() {
   };
   $("account-popup").replaceChildren(
     avatar,
-    el("popup-email", claude.email),
+    el("popup-email", claude.method === "apiKey" ? "API キー" : claude.email),
     el("popup-plan", claude.plan ? `Claude ・ ${claude.plan} プラン` : "Claude"),
-    tag("span", "status ok", "ログイン中"),
+    tag("span", "status ok", claude.method === "apiKey" ? "使用中" : "ログイン中"),
     open,
   );
   $("account-popup").hidden = false;

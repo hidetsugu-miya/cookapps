@@ -186,7 +186,8 @@
           <button class="text-btn">追加</button>
         </form>
       </section>
-      <section id="settings-panel-claude" class="card" role="tabpanel" aria-labelledby="settings-tab-claude" hidden>
+      <div id="settings-panel-claude" role="tabpanel" aria-labelledby="settings-tab-claude" hidden>
+      <section class="card">
         <div class="card-head">
           <h2>
             <span class="logo claude"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span>Claude
@@ -198,8 +199,21 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4"/><path d="M12 17h.01"/></svg>
           </button>
         </div>
-        <div id="claude-items"></div>
+        <div id="claude-items" role="radiogroup" aria-label="接続方式"></div>
+        <form id="claude-key" class="card-add" hidden>
+          <input id="claude-key-input" type="password" autocomplete="off" aria-label="API キー" placeholder="API キー（sk-ant-…）">
+          <button class="text-btn primary">確認して保存</button>
+        </form>
       </section>
+      <section class="card">
+        <div class="card-head"><h2>モデルと effort</h2></div>
+        <div id="claude-models"></div>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>プロンプト</h2></div>
+        <div id="claude-prompt"></div>
+      </section>
+      </div>
       <section id="settings-panel-update" class="card" role="tabpanel" aria-labelledby="settings-tab-update" hidden>
         <div class="card-head">
           <h2>

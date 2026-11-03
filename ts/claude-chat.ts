@@ -13,7 +13,7 @@ export interface ChatTurnPayload {
 
 export interface ChatConfig {
   prefix: string;
-  // What the note says while Claude is not logged in.
+  // What the note says while Claude cannot be used.
   loginNote: string;
   // The text the conversation is about now; null while there is none, which turns the conversation off.
   text: () => string | null;

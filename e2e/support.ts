@@ -4,6 +4,7 @@
 import type { Channel } from "../ts/bindings/Channel";
 import type { Checked } from "../ts/bindings/Checked";
 import type { Claude } from "../ts/bindings/Claude";
+import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
@@ -299,6 +300,16 @@ export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general" }];
 // What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by.
 export const checked = (missingScopes: string[] | null): Checked => ({ ...workspace, missingScopes });
 
-export const claudeReady: Claude = { state: "ready", email: "claude@example.com", plan: "Max", version: "2.0.0" };
+export const claudeReady: Claude = { state: "ready", email: "claude@example.com", plan: "Max", version: "2.0.0", method: "subscription" };
 export const claudeLoggedOut: Claude = { state: "loggedOut", version: "2.0.0" };
 export const claudeMissing: Claude = { state: "missing" };
+// The usable state with an API key in use: no email and no plan.
+export const claudeKeyReady: Claude = { state: "ready", email: "", plan: "", version: "2.0.0", method: "apiKey" };
+
+// What `claude_connection` answers: the method in use, the subscription's state and the API key's state, and the usable state (`claude`; by default the subscription's own, or the key ready when the key is in use).
+export const connection = (
+  method: ClaudeConnection["method"],
+  subscription: Claude,
+  apiKey: ClaudeConnection["apiKey"],
+  claude: Claude = method === "apiKey" ? claudeKeyReady : subscription,
+): ClaudeConnection => ({ method, subscription, apiKey, claude });
