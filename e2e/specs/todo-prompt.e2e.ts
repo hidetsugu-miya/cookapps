@@ -465,11 +465,13 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
   const choose = (scope: string, kind: "model" | "effort", value: string) =>
     browser.execute(
-      (sc, k, v) => {
+      (id, sc, k, v) => {
+        if (!window.__e2e_once__(id)) return;
         const select = document.querySelector<HTMLSelectElement>(`${sc} select[data-purpose="promptChat"][data-kind="${k}"]`)!;
         select.value = v;
         select.dispatchEvent(new Event("change", { bubbles: true }));
       },
+      onceId(),
       scope,
       kind,
       value,

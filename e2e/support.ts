@@ -27,7 +27,7 @@ declare global {
 
 // When the result of `browser.execute` is lost, webdriver runs the same script again after the script timeout. The cause was found only for the script right after `refresh` (`boot`); CI also showed lost results of other commands.
 // A script that must not run twice (a press, a key, a release) takes a fresh `onceId()` and returns at once when `window.__e2e_once__(id)` is false (e2e/fixtures.js).
-// A script that only reads, or only sets a value, needs no id.
+// A script that only reads, or only sets a value without firing an event the app acts on, needs no id.
 let onceCount = 0;
 export const onceId = () => `once-${++onceCount}`;
 

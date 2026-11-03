@@ -248,11 +248,13 @@ describe("settings: Claude model and effort", () => {
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
   const choose = (purpose: Purpose, kind: "model" | "effort", value: string) =>
     browser.execute(
-      (p, k, v) => {
+      (id, p, k, v) => {
+        if (!window.__e2e_once__(id)) return;
         const select = document.querySelector<HTMLSelectElement>(`#claude-items select[data-purpose="${p}"][data-kind="${k}"]`)!;
         select.value = v;
         select.dispatchEvent(new Event("change", { bubbles: true }));
       },
+      onceId(),
       purpose,
       kind,
       value,
