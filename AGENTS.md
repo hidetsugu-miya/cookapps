@@ -188,7 +188,7 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 - On a rate limit (429 or 403 `rateLimitExceeded`), interactive operations retry up to 2 times (they follow `Retry-After`, capped at 30 seconds).
   Auto sync does not retry. It backs off per account (`SyncState`).
 - There is no coverage tool.
-- CI runs on macOS only. Windows is not built, linted, tested or released in CI, and it has not been checked on a real Windows machine.
+- CI checks and releases macOS only. Windows is not built, linted, tested or released in CI, and it has not been checked on a real Windows machine.
 
 ## Open questions
 
