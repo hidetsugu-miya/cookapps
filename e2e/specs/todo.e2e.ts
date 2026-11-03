@@ -432,10 +432,20 @@ const showGrips = () =>
 
 // Drags the grip of the row `name` with the pointer (press, move over each of `over`, release).
 async function dragRow(name: string, ...over: ChainablePromiseElement[]) {
-  await showGrips();
-  let drag = browser.action("pointer").move({ origin: rowOf(name).$(".grip") }).down();
-  for (const target of over) drag = drag.move({ origin: target });
-  await drag.up().perform();
+  const drag = async () => {
+    await showGrips();
+    let action = browser.action("pointer").move({ origin: rowOf(name).$(".grip") }).down();
+    for (const target of over) action = action.move({ origin: target });
+    await action.up().perform();
+  };
+  try {
+    await drag();
+  } catch (error) {
+    // The timed refresh can redraw the list after the row was found, and a loaded machine widens that gap: start again on the new row.
+    if (!String(error).includes("no longer attached")) throw error;
+    await browser.releaseActions();
+    await drag();
+  }
 }
 
 // Records every row and project that gets the drop mark from now on (a task's ID or a project's view), since the mark is gone when the drag ends.

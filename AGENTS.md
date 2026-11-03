@@ -155,6 +155,7 @@ No check is repeated in two layers.
 - Tests never touch a real external service, the keychain or the real config folder.
   E2E builds use a separate identifier and an in-memory keyring.
 - E2E mocks live only in `e2e/`.
+- Each E2E run takes a free WebDriver port, so runs from several worktrees can overlap.
 
 ```sh
 npm run lint        # Biome (lint only)
