@@ -52,7 +52,7 @@ export const config = {
   ],
   framework: "mocha",
   reporters: ["spec"],
-  // On the macOS runner a `browser.execute` that loses its result costs the 3 s script timeout plus a retry, which used up the default 5 s of one `waitUntil`; 15 s fits that and stays far under the test's 60 s.
+  // A `browser.execute` that loses its result costs the 3 s script timeout plus a retry, which used up the default 5 s of one `waitUntil`; 15 s fits that and stays far under the test's 60 s.
   waitforTimeout: 15000,
   mochaOpts: { ui: "bdd", timeout: 60000 },
   logLevel: "warn",
@@ -66,7 +66,7 @@ export const config = {
       capability["wdio:tauriServiceOptions"].embeddedPort = ports[i];
     });
   },
-  // On the macOS runner the result of `browser.execute` is sometimes lost, and the plugin then waits for the default 30 s before webdriver retries the command and it recovers.
+  // The result of `browser.execute` is sometimes lost (locally too; see `boot` in e2e/support.ts), and the plugin then waits for the default 30 s before webdriver retries the command and it recovers. Waiting longer does not bring the result back.
   // The scripts of the specs finish at once, so a short limit turns that wait into 3 s.
   before: async () => {
     await browser.setTimeout({ script: 3000 });

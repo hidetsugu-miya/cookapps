@@ -25,7 +25,7 @@ declare global {
   }
 }
 
-// On the macOS runner the result of `browser.execute` is sometimes lost, and webdriver then runs the same script again.
+// When the result of `browser.execute` is lost, webdriver runs the same script again after the script timeout. The cause was found only for the script right after `refresh` (`boot`); CI also showed lost results of other commands.
 // A script that must not run twice (a press, a key, a release) takes a fresh `onceId()` and returns at once when `window.__e2e_once__(id)` is false (e2e/fixtures.js).
 // A script that only reads, or only sets a value, needs no id.
 let onceCount = 0;
@@ -40,6 +40,8 @@ export async function boot(fixtures: Record<string, unknown> = {}) {
     (window as unknown as { __e2e_old_page__: boolean }).__e2e_old_page__ = true;
   }, fixtures);
   await browser.refresh();
+  // A script sent about 1 ms after `refresh` lost its result in 5 of 5 stalls in the local logs; with this pause, 15 local runs had none. Polling cannot replace it, because a poll is such a script.
+  await browser.pause(200);
   await browser.waitUntil(
     () => browser.execute(() => document.readyState === "complete" && !(window as unknown as { __e2e_old_page__?: boolean }).__e2e_old_page__),
     { timeoutMsg: "page did not load" },
