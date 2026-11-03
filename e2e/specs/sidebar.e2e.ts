@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, task, todoData, waitForCalls, waitForText } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, task, todoData, waitForCalls } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -27,14 +27,14 @@ describe("sidebar", () => {
     await expect($(".tooltip")).not.toBeDisplayed();
   });
 
-  for (const [name, status, label] of [
-    ["Claude Code is missing", claudeMissing, "未導入"],
-    ["Claude is logged out", claudeLoggedOut, "未ログイン"],
+  for (const [name, status] of [
+    ["Claude Code is missing", claudeMissing],
+    ["Claude is logged out", claudeLoggedOut],
   ] as const) {
     it(`hides the Claude avatar when ${name}`, async () => {
       await boot({ inbox: inbox(), claude_status: status });
-      // The settings card is hidden but drawn from the same answer: once it shows the state, the sidebar has heard it too.
-      await waitForText("#claude-items .status", label);
+      // The mock answers at once, so by the next script the sidebar has heard it.
+      await waitForCalls("claude_status");
       await expect($("#claude-btn")).not.toBeDisplayed();
     });
   }
@@ -75,7 +75,7 @@ describe("sidebar", () => {
 
   it("keeps settings at the bottom edge with no account, no Claude and no update button", async () => {
     await boot({ inbox: { ...inbox(), accounts: [], threads: [], historyIds: {} }, claude_status: claudeMissing });
-    await waitForText("#claude-items .status", "未導入");
+    await waitForCalls("claude_status");
     expect(await bottomGroup()).toEqual(["nav-settings"]);
     // The bottom group ends 16px above the window's bottom edge.
     expect(await browser.execute(() => Math.round(innerHeight - document.getElementById("nav-settings")!.getBoundingClientRect().bottom))).toBe(16);
