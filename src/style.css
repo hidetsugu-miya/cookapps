@@ -278,6 +278,7 @@ button.review-chip:hover { background: var(--hover); }
 .menu .tag { margin-left: auto; }
 .review-src { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #777; }
 .review-src svg { width: 13px; height: 13px; flex: none; color: var(--slack); }
+.review-omitted, .review-target-cut { font-size: 12px; color: var(--warn); }
 .review-err { margin: 0; }
 .review-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .review-keys { margin-right: auto; font-size: 11px; color: #999; }
