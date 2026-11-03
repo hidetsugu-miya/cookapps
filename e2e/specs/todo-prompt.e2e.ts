@@ -1,4 +1,4 @@
-import { boot, callsOf, count, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, promptEdit, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, count, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 // What Claude answers when the request changes nothing.
@@ -28,11 +28,16 @@ async function openPrompt(claude: unknown = claudeReady, state = todoPrompt) {
 
 // Cmd+Enter (Ctrl+Enter off macOS) in the request field, sent as the key event the app listens for; `composing` makes it the Enter that confirms an IME conversion.
 const pressSend = (composing = false) =>
-  browser.execute((c) => {
-    const mac = /Mac/.test(navigator.platform);
-    const key = new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, isComposing: c, bubbles: true, cancelable: true });
-    document.getElementById("prompt-input")!.dispatchEvent(key);
-  }, composing);
+  browser.execute(
+    (id, c) => {
+      if (!window.__e2e_once__(id)) return;
+      const mac = /Mac/.test(navigator.platform);
+      const key = new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, isComposing: c, bubbles: true, cancelable: true });
+      document.getElementById("prompt-input")!.dispatchEvent(key);
+    },
+    onceId(),
+    composing,
+  );
 
 // Puts `lines` lines in the request field as typing does (value, then input).
 const fillLines = (lines: number) =>
@@ -460,11 +465,13 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
   const choose = (scope: string, kind: "model" | "effort", value: string) =>
     browser.execute(
-      (sc, k, v) => {
+      (id, sc, k, v) => {
+        if (!window.__e2e_once__(id)) return;
         const select = document.querySelector<HTMLSelectElement>(`${sc} select[data-purpose="promptChat"][data-kind="${k}"]`)!;
         select.value = v;
         select.dispatchEvent(new Event("change", { bubbles: true }));
       },
+      onceId(),
       scope,
       kind,
       value,

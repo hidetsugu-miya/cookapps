@@ -16,6 +16,10 @@ Object.defineProperty(document, "hidden", { get: () => false });
 Object.defineProperty(document, "visibilityState", { get: () => "visible" });
 window.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 16);
 
+// Lets a script run once even when the driver runs it twice: see `onceId` in e2e/support.ts.
+const ran = new Set();
+window.__e2e_once__ = (id) => !ran.has(id) && !!ran.add(id);
+
 const core = window.__TAURI__.core;
 const real = core.invoke.bind(core);
 const fixtures = JSON.parse(sessionStorage.getItem("e2e-fixtures") ?? "{}");
