@@ -731,6 +731,10 @@ describe("todo detail", () => {
     await expect($(`${ROWS} .due`)).toHaveText(`${year + 1}年04月01日 15:00`);
     await $(ROWS).click();
     await expect($("#todo-detail .field:nth-child(2) .field-value")).toHaveText(expect.stringContaining(`${year + 1}年04月01日 15:00`));
+    data.tasks[0].due = { date: today, time: "12:00", string: "today 12:00", recurring: false };
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await expect($(`${ROWS} .due`)).toHaveText("12:00");
   });
 });
 
