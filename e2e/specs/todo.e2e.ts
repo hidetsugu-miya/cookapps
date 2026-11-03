@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, copiedTexts, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, holds, inbox, mock, onceId, pickFile, rejects, release, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -999,7 +999,7 @@ describe("todo detail description copy", () => {
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
     expect(await copiedTexts()).toEqual([description]);
     await expect($(".toast")).toHaveText("説明をコピーしました");
-    expect(await count("#todo-detail textarea")).toBe(0);
+    expect(await count("#todo-detail .desc-edit")).toBe(0);
     await expect($(desc)).toBeDisplayed();
   });
 
@@ -1017,7 +1017,7 @@ describe("todo detail description copy", () => {
     });
     // Past the delay before a press starts the editor.
     await browser.pause(500);
-    expect(await count("#todo-detail textarea")).toBe(0);
+    expect(await count("#todo-detail .desc-edit")).toBe(0);
     await expect($(desc)).toBeDisplayed();
   });
 
@@ -1031,7 +1031,7 @@ describe("todo detail description copy", () => {
     });
     // Past the delay before a press starts the editor.
     await browser.pause(500);
-    expect(await count("#todo-detail textarea")).toBe(0);
+    expect(await count("#todo-detail .desc-edit")).toBe(0);
     await expect($(desc)).toBeDisplayed();
   });
 
@@ -1048,14 +1048,14 @@ describe("todo detail description copy", () => {
     await expect($("#todo-detail")).not.toBeDisplayed();
     await $(ROWS).click();
     await expect($(desc)).toBeDisplayed();
-    expect(await count("#todo-detail textarea")).toBe(0);
+    expect(await count("#todo-detail .desc-edit")).toBe(0);
   });
 
   it("still opens the editor on a plain press of the description", async () => {
     await openReport();
     await $(desc).click();
-    await expect($("#todo-detail textarea")).toBeDisplayed();
-    await expect($("#todo-detail textarea")).toHaveValue(description);
+    await expect($("#todo-detail .desc-edit")).toBeDisplayed();
+    await expect($("#todo-detail .desc-edit")).toHaveValue(description);
   });
 
   it("shows neither the icon nor the menu item for an empty description", async () => {
@@ -1319,5 +1319,391 @@ describe("todo detail due date clear button", () => {
     await expect($("#todo-detail .name")).toHaveValue("Plan trip");
     await expect($("#todo-detail .field:nth-child(2) .field-value")).toHaveText("期限なし");
     await expect($(clear)).not.toExist();
+  });
+});
+
+describe("todo detail comments", () => {
+  const field = '#todo-detail [data-field="comment"]';
+  const sendButton = "#todo-detail .c-send";
+  const rows = "#todo-detail .c-row";
+  const chip = "#todo-detail .c-chip";
+
+  // Alice's comment with a Markdown body (posted today), Bob's with a file that has an address, and a third of only a file with none (its text is the file's name).
+  const thread = [
+    comment("c1", "Alice Example", "- point one\n- point **two**", { date: today, time: "09:30" }),
+    comment("c2", "Bob Example", "See attached", undefined, { fileName: "plan.md", fileUrl: "https://files.example.com/plan.md" }),
+    comment("c3", "Alice Example", "memo.txt", undefined, { fileName: "memo.txt", fileUrl: null }),
+  ];
+  const uploaded = { file_url: "https://files.example.com/a.txt", file_name: "報告.txt", file_size: 5, file_type: "text/plain", resource_type: "file", upload_state: "completed" };
+
+  // The Todo screen with the detail of "Write report" (k1) open; `answer` is what the comments command answers from the start.
+  async function openReport(answer: unknown = thread) {
+    await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady, todoist_comments: answer });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await expect($("#todo-detail .comments")).toBeDisplayed();
+  }
+
+  // Runs the timed refresh now: the page's visibilitychange makes it load again.
+  const refreshNow = () => browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+  // Cmd+Enter (Ctrl+Enter off macOS) in the comment field, sent as the key event the app listens for.
+  const pressSend = () =>
+    browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      const mac = /Mac/.test(navigator.platform);
+      const key = new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, bubbles: true, cancelable: true });
+      document.querySelector('#todo-detail [data-field="comment"]')!.dispatchEvent(key);
+    }, onceId());
+  const heightOf = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().height, selector);
+  const blur = () => browser.execute(() => (document.activeElement as HTMLElement).blur());
+
+  it("draws each comment with its author's initials, name, date, Markdown text and file card, under a heading with the count", async () => {
+    await openReport();
+    await waitForCount(rows, 3);
+    await expect($("#todo-detail .c-head")).toHaveText(expect.stringContaining("コメント"));
+    await expect($("#todo-detail .c-count")).toHaveText("3");
+    expect(await textsOf("#todo-detail .c-author")).toEqual(["Alice Example", "Bob Example", "Alice Example"]);
+    expect(await textsOf("#todo-detail .c-row .avatar")).toEqual(["AE", "BE", "AE"]);
+    // Today shows the time alone; another year shows the year too.
+    expect(await textsOf("#todo-detail .c-date")).toEqual(["09:30", "2000年01月02日 08:20", "2000年01月02日 08:20"]);
+    expect(await count("#todo-detail .c-text li")).toBe(2);
+    expect(await count("#todo-detail .c-text strong")).toBe(1);
+    // The text of a comment of only a file is the file's name, which the card says: it is not drawn twice.
+    expect(await textsOf("#todo-detail .c-text")).toHaveLength(2);
+    await expect($("#todo-detail .comments")).toHaveText(expect.stringContaining("See attached"));
+  });
+
+  it("draws a file with an address as a link to it, and one without as a card that is no link", async () => {
+    await openReport();
+    await waitForCount(rows, 3);
+    const cards = await browser.execute(() => [...document.querySelectorAll("#todo-detail .c-file")].map((e) => ({ tag: e.tagName, href: e.getAttribute("href"), text: e.textContent })));
+    expect(cards).toEqual([
+      { tag: "A", href: "https://files.example.com/plan.md", text: "plan.md" },
+      { tag: "DIV", href: null, text: "memo.txt" },
+    ]);
+  });
+
+  it("keeps only http(s) links in a comment and drops scripts", async () => {
+    await openReport([comment("c1", "Alice Example", "[bad](javascript:alert(1)) [ok](https://example.com/x) <script>window.__pwned = 1</script>")]);
+    await waitForCount(rows, 1);
+    const links = await browser.execute(() => [...document.querySelectorAll("#todo-detail .c-text a[href]")].map((a) => a.getAttribute("href")));
+    expect(links).toEqual(["https://example.com/x"]);
+    expect(await count("#todo-detail .c-text script")).toBe(0);
+  });
+
+  it("fetches the comments once when the task is opened, and not again on a redraw of the same task", async () => {
+    await openReport();
+    expect(await waitForCalls("todoist_comments")).toEqual([{ taskId: "k1", projectId: "p1" }]);
+    await waitForCount(rows, 3);
+    const data = todoData();
+    data.tasks[0].content = "Write report v2";
+    await mock("todoist_load", data);
+    await refreshNow();
+    await expect($("#todo-detail .name")).toHaveValue("Write report v2");
+    await waitForCount(rows, 3);
+    expect(await callsOf("todoist_comments")).toHaveLength(1);
+    // Opened again after the list: a new opening fetches again.
+    await $("#todo-back").click();
+    await $(ROWS).click();
+    expect(await waitForCalls("todoist_comments", 2)).toHaveLength(2);
+  });
+
+  it("fetches for the other task when a subtask is opened", async () => {
+    await openTask();
+    await waitForCalls("todoist_comments");
+    await subRowOf("Book flights").click();
+    await expect($("#todo-detail .name")).toHaveValue("Book flights");
+    expect(await waitForCalls("todoist_comments", 2)).toEqual([
+      { taskId: "k2", projectId: "p1" },
+      { taskId: "k3", projectId: "p1" },
+    ]);
+  });
+
+  it("says so when the task has no comments, and shows no count", async () => {
+    await openReport([]);
+    await expect($("#todo-detail .c-note")).toHaveText("コメントはまだありません");
+    expect(await textsOf("#todo-detail .c-count")).toEqual([""]);
+    await expect($(field)).toBeDisplayed();
+  });
+
+  it("shows a failed fetch in the section, not as the screen's error", async () => {
+    await openReport(rejects("boom"));
+    await expect($("#todo-detail .c-note.fail")).toHaveText(expect.stringContaining("boom"));
+    await expect($("#error")).not.toBeDisplayed();
+    await expect($(field)).toBeDisplayed();
+  });
+
+  it("shows what it holds while it fetches, and keeps what an answer for a task no longer open brings", async () => {
+    await openTodo();
+    const first = await mock("todoist_comments", holds);
+    await $(ROWS).click();
+    await waitForCalls(first);
+    await expect($("#todo-detail .c-note")).toHaveText(expect.stringContaining("読み込み中"));
+    await $("#todo-back").click();
+    await release(first, [comment("c1", "Alice Example", "late")]);
+    await browser.pause(200);
+    expect(await count(rows)).toBe(0);
+    const second = await mock("todoist_comments", holds);
+    await $(ROWS).click();
+    await waitForCalls(second);
+    // The earlier answer was kept, and shows while the new fetch is on its way.
+    await waitForCount(rows, 1);
+    await release(second, []);
+    await waitForCount(rows, 0);
+    await expect($("#todo-detail .c-note")).toHaveText("コメントはまだありません");
+  });
+
+  it("shows the token form when the fetch finds that a token is needed", async () => {
+    await openReport([]);
+    await $("#todo-back").click();
+    const comments = await mock("todoist_comments", holds);
+    await $(ROWS).click();
+    await waitForCalls(comments);
+    const load = await mock("todoist_load", null);
+    await release(comments, null);
+    await expect($("#todo-token")).toBeDisplayed();
+    expect((await callsOf(load)).length).toBeGreaterThan(0);
+  });
+
+  it("folds the comments under the heading and shows them again, with the field staying", async () => {
+    await openReport();
+    await waitForCount(rows, 3);
+    await $("#todo-detail .c-head").click();
+    await expect($("#todo-detail .c-head")).toHaveAttribute("aria-expanded", "false");
+    await expect($("#todo-detail .c-list")).not.toBeDisplayed();
+    await expect($(field)).toBeDisplayed();
+    await $("#todo-detail .c-head").click();
+    await expect($("#todo-detail .c-head")).toHaveAttribute("aria-expanded", "true");
+    await expect($(rows)).toBeDisplayed();
+  });
+
+  it("sends the typed text with todoist_add_comment, adds the answer to the list and empties the field", async () => {
+    await openReport();
+    await waitForCount(rows, 3);
+    const add = await mock("todoist_add_comment", comment("c4", "Alice Example", "Looks good", { date: today, time: "10:00" }));
+    await $(field).setValue("Looks good");
+    await $(sendButton).click();
+    expect(await waitForCalls(add)).toEqual([{ taskId: "k1", content: "Looks good", attachment: null }]);
+    await waitForCount(rows, 4);
+    expect((await textsOf("#todo-detail .c-text")).at(-1)).toBe("Looks good");
+    await expect($("#todo-detail .c-count")).toHaveText("4");
+    await expect($(field)).toHaveValue("");
+    await expect($(sendButton)).toBeDisabled();
+  });
+
+  it("enables the send button for non-blank text only", async () => {
+    await openReport([]);
+    await expect($(sendButton)).toBeDisabled();
+    await $(field).setValue("  ");
+    await expect($(sendButton)).toBeDisabled();
+    await $(field).setValue("x");
+    await expect($(sendButton)).toBeEnabled();
+  });
+
+  it("takes Enter as a line break and sends on Cmd+Enter, with the line breaks kept", async () => {
+    await openReport([]);
+    const add = await mock("todoist_add_comment", comment("c4", "Alice Example", "a\nb"));
+    await $(field).setValue("a");
+    await browser.keys("Enter");
+    await browser.keys("b");
+    await expect($(field)).toHaveValue("a\nb");
+    expect(await callsOf(add)).toEqual([]);
+    await pressSend();
+    expect(await waitForCalls(add)).toEqual([{ taskId: "k1", content: "a\nb", attachment: null }]);
+    await waitForCount(rows, 1);
+    await expect($(field)).toHaveValue("");
+  });
+
+  it("grows the field with its text up to 6 lines, then scrolls", async () => {
+    await openReport([]);
+    const fill = (n: number) =>
+      browser.execute((lines) => {
+        const area = document.querySelector('#todo-detail [data-field="comment"]') as HTMLTextAreaElement;
+        area.value = Array.from({ length: lines }, (_, i) => `行${i + 1}`).join("\n");
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      }, n);
+    const one = await heightOf(field);
+    await fill(3);
+    const three = await heightOf(field);
+    await fill(9);
+    expect(three).toBeGreaterThan(one);
+    expect(await heightOf(field)).toBe(one + 5 * 20);
+  });
+
+  it("shows a spinner and waits on the send button while the comment is on its way, and the field keeps its text", async () => {
+    await openReport([]);
+    const add = await mock("todoist_add_comment", holds);
+    await $(field).setValue("slow one");
+    await $(sendButton).click();
+    await waitForCalls(add);
+    await expect($(`${sendButton} .spin`)).toExist();
+    await expect($(sendButton)).toBeDisabled();
+    await expect($(field)).toHaveValue("slow one");
+    await release(add, comment("c4", "Alice Example", "slow one"));
+    await waitForCount(rows, 1);
+    await expect($(`${sendButton} .spin`)).not.toExist();
+    await expect($(field)).toHaveValue("");
+  });
+
+  it("keeps the text and shows the error when adding the comment fails", async () => {
+    await openReport([]);
+    const add = await mock("todoist_add_comment", rejects("add failed"));
+    await $(field).setValue("keep me");
+    await $(sendButton).click();
+    await waitForCalls(add);
+    await expect($("#error")).toHaveText(expect.stringContaining("add failed"));
+    await expect($(field)).toHaveValue("keep me");
+    await expect($(sendButton)).toBeEnabled();
+    expect(await count(rows)).toBe(0);
+  });
+
+  it("takes the load that shows the token form when adding finds that a token is needed", async () => {
+    await openReport([]);
+    await mock("todoist_add_comment", null);
+    const load = await mock("todoist_load", null);
+    await $(field).setValue("hello");
+    await $(sendButton).click();
+    await expect($("#todo-token")).toBeDisplayed();
+    expect((await callsOf(load)).length).toBeGreaterThan(0);
+  });
+
+  it("opens the file picker from the clip, and the picker is not in the detail", async () => {
+    await openReport([]);
+    await expect($("#comment-file")).not.toBeDisplayed();
+    expect(await browser.execute(() => document.getElementById("comment-file")!.closest("#todo-detail"))).toBeNull();
+    await browser.execute(() => {
+      const w = window as unknown as { __picks__: number };
+      w.__picks__ = 0;
+      // The real click would open the native panel.
+      document.getElementById("comment-file")!.click = () => void w.__picks__++;
+    });
+    await $("#todo-detail .c-clip").click();
+    expect(await browser.execute(() => (window as unknown as { __picks__: number }).__picks__)).toBe(1);
+  });
+
+  it("shows the picked file as a chip that takes it off again, and a second pick replaces the first", async () => {
+    await openReport([]);
+    await pickFile("first.txt", "1");
+    await expect($(chip)).toHaveText(expect.stringContaining("first.txt"));
+    await expect($(sendButton)).toBeEnabled();
+    await pickFile("second.txt", "2");
+    await expect($(chip)).toHaveText(expect.stringContaining("second.txt"));
+    await expect($(chip)).not.toHaveText(expect.stringContaining("first.txt"));
+    await $(`${chip} .icon-btn`).click();
+    await expect($(chip)).not.toBeDisplayed();
+    await expect($(sendButton)).toBeDisabled();
+  });
+
+  it("uploads the picked file with its name in the header, then adds the comment with the attachment and the text", async () => {
+    await openReport([]);
+    const upload = await mock("todoist_upload", uploaded);
+    const add = await mock("todoist_add_comment", comment("c4", "Alice Example", "Here it is", { date: today, time: "10:00" }, { fileName: "報告.txt", fileUrl: uploaded.file_url }));
+    await $(field).setValue("Here it is");
+    await pickFile("報告.txt", "hello");
+    await $(sendButton).click();
+    const calls = await waitForCalls(add);
+    // The upload came first: its answer is the attachment.
+    expect(await callsOf(upload)).toEqual([{ bytes: [104, 101, 108, 108, 111], headers: { "x-file-name": "%E5%A0%B1%E5%91%8A.txt" } }]);
+    expect(calls).toEqual([{ taskId: "k1", content: "Here it is", attachment: uploaded }]);
+    await waitForCount(rows, 1);
+    await expect($(`${rows} .c-file`)).toHaveText("報告.txt");
+    await expect($(chip)).not.toBeDisplayed();
+    await expect($(field)).toHaveValue("");
+  });
+
+  it("sends a file alone with an empty text, and the card is drawn without the text", async () => {
+    await openReport([]);
+    await mock("todoist_upload", uploaded);
+    const add = await mock("todoist_add_comment", comment("c4", "Alice Example", "報告.txt", { date: today, time: "10:00" }, { fileName: "報告.txt", fileUrl: uploaded.file_url }));
+    await pickFile("報告.txt", "hello");
+    await $(sendButton).click();
+    expect(await waitForCalls(add)).toEqual([{ taskId: "k1", content: "", attachment: uploaded }]);
+    await waitForCount(rows, 1);
+    expect(await count(`${rows} .c-text`)).toBe(0);
+  });
+
+  it("keeps the text and the file, adds nothing and shows the error when the upload fails", async () => {
+    await openReport([]);
+    const upload = await mock("todoist_upload", rejects("upload failed"));
+    const add = await mock("todoist_add_comment", comment("c4", "Alice Example", "x"));
+    await $(field).setValue("keep me");
+    await pickFile("a.txt", "x");
+    await $(sendButton).click();
+    await waitForCalls(upload);
+    await expect($("#error")).toHaveText(expect.stringContaining("upload failed"));
+    expect(await callsOf(add)).toEqual([]);
+    await expect($(field)).toHaveValue("keep me");
+    await expect($(chip)).toHaveText(expect.stringContaining("a.txt"));
+    await expect($(sendButton)).toBeEnabled();
+  });
+
+  it("refuses a file over 100 MB on the screen before it is read, and takes one of exactly 100 MB", async () => {
+    await openReport([]);
+    const upload = await mock("todoist_upload", uploaded);
+    await pickFile("big.bin", "x", 100 * 1024 * 1024 + 1);
+    await expect($("#error")).toHaveText(expect.stringContaining("100 MB"));
+    await expect($(chip)).not.toBeDisplayed();
+    expect(await callsOf(upload)).toEqual([]);
+    await pickFile("edge.bin", "x", 100 * 1024 * 1024);
+    await expect($(chip)).toHaveText(expect.stringContaining("edge.bin"));
+  });
+
+  it("keeps the draft over a redraw of the detail", async () => {
+    await openReport([]);
+    await $(field).setValue("draft text");
+    await pickFile("keep.txt", "x");
+    await blur();
+    const data = todoData();
+    data.tasks[0].content = "Write report v2";
+    await mock("todoist_load", data);
+    await refreshNow();
+    await expect($("#todo-detail .name")).toHaveValue("Write report v2");
+    await expect($(field)).toHaveValue("draft text");
+    await expect($(chip)).toHaveText(expect.stringContaining("keep.txt"));
+  });
+
+  it("waits with the redraw while the comment field has text, and does not while it is empty", async () => {
+    await openReport([]);
+    const data = todoData();
+    data.tasks[0].content = "Write report v2";
+    await $(field).setValue("typing");
+    await mock("todoist_load", data);
+    await refreshNow();
+    await browser.pause(500);
+    await expect($("#todo-detail .name")).toHaveValue("Write report");
+    await expect($(field)).toBeFocused();
+    // Emptied in the page: clearing through the driver would blur the field.
+    await browser.execute(() => {
+      const area = document.querySelector('#todo-detail [data-field="comment"]') as HTMLTextAreaElement;
+      area.value = "";
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await refreshNow();
+    await expect($("#todo-detail .name")).toHaveValue("Write report v2");
+    await expect($(field)).toBeFocused();
+  });
+
+  it("keeps each task's draft when another task is opened and the first again", async () => {
+    await openTask();
+    await $(field).setValue("trip note");
+    await pickFile("trip.txt", "x");
+    await subRowOf("Book flights").click();
+    await expect($("#todo-detail .name")).toHaveValue("Book flights");
+    await expect($(field)).toHaveValue("");
+    await expect($(chip)).not.toBeDisplayed();
+    await $("#todo-detail .parent-link").click();
+    await expect($("#todo-detail .name")).toHaveValue("Plan trip");
+    await expect($(field)).toHaveValue("trip note");
+    await expect($(chip)).toHaveText(expect.stringContaining("trip.txt"));
+  });
+
+  it("edits the description in its own textarea, not the comment field", async () => {
+    await boot({ inbox: inbox(), todoist_load: withDescription(), slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await $("#todo-detail .desc").click();
+    await expect($("#todo-detail .desc-edit")).toBeFocused();
+    await expect($("#todo-detail .desc-edit")).toHaveValue(description);
+    await expect($(field)).toHaveValue("");
   });
 });

@@ -377,17 +377,17 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .desc-copy { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; user-select: none; -webkit-user-select: none; }
 #todo-detail .desc-copy svg { width: 16px; height: 16px; }
 #todo-detail .desc-wrap:not(:hover):not(:focus-within) .desc-copy { visibility: hidden; }
-#todo-detail .desc > :first-child { margin-top: 0; }
-#todo-detail .desc > :last-child { margin-bottom: 0; }
-#todo-detail .desc p, #todo-detail .desc ul, #todo-detail .desc ol, #todo-detail .desc pre, #todo-detail .desc blockquote { margin: 0 0 8px; }
-#todo-detail .desc h1, #todo-detail .desc h2, #todo-detail .desc h3 { margin: 12px 0 6px; font-size: 15px; }
-#todo-detail .desc ul { list-style: disc; }
-#todo-detail .desc ul, #todo-detail .desc ol { padding-left: 22px; }
-#todo-detail .desc a { color: var(--accent); }
-#todo-detail .desc code { padding: 1px 4px; border-radius: 4px; background: var(--code); font-family: ui-monospace, monospace; font-size: 12px; }
-#todo-detail .desc pre { padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 6px; background: var(--code); overflow-x: auto; }
-#todo-detail .desc pre code { padding: 0; background: none; }
-#todo-detail .desc blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
+#todo-detail .md > :first-child { margin-top: 0; }
+#todo-detail .md > :last-child { margin-bottom: 0; }
+#todo-detail .md p, #todo-detail .md ul, #todo-detail .md ol, #todo-detail .md pre, #todo-detail .md blockquote { margin: 0 0 8px; }
+#todo-detail .md h1, #todo-detail .md h2, #todo-detail .md h3 { margin: 12px 0 6px; font-size: 15px; }
+#todo-detail .md ul { list-style: disc; }
+#todo-detail .md ul, #todo-detail .md ol { padding-left: 22px; }
+#todo-detail .md a { color: var(--accent); }
+#todo-detail .md code { padding: 1px 4px; border-radius: 4px; background: var(--code); font-family: ui-monospace, monospace; font-size: 12px; }
+#todo-detail .md pre { padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 6px; background: var(--code); overflow-x: auto; }
+#todo-detail .md pre code { padding: 0; background: none; }
+#todo-detail .md blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
 #todo-detail .desc-wrap:hover .desc { background: var(--hover); }
 #todo-detail .desc:focus-visible { outline: 2px solid var(--accent); }
 #todo-detail .desc.empty { color: #999; }
@@ -408,6 +408,37 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .add-sub input { flex: 1; border: 0; font: inherit; padding: 4px; }
 .add-sub input:focus { outline: none; }
 .icon-btn.confirm { width: auto; padding: 0 12px; font: inherit; }
+/* The comments of the open task: a heading that folds them, rows of avatar, name, date, text and file, and the field that adds one. */
+.comments { margin: 24px 16px 16px 50px; }
+.c-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 0 0 8px; border: 0; border-bottom: 1px solid var(--line); background: transparent; font: inherit; font-size: 13px; font-weight: bold; color: #333; text-align: left; cursor: pointer; }
+.c-chevron { display: inline-flex; transform: rotate(90deg); transition: transform .15s; }
+.c-head[aria-expanded="false"] .c-chevron { transform: none; }
+.c-chevron svg { width: 14px; height: 14px; }
+.c-count { font-weight: normal; color: #888; }
+.c-list { display: flex; flex-direction: column; gap: 18px; padding-top: 14px; }
+.c-row { display: flex; align-items: flex-start; gap: 12px; }
+.c-main { flex: 1; min-width: 0; }
+.c-meta { display: flex; align-items: baseline; gap: 8px; }
+.c-date { font-size: 12px; color: #888; }
+.c-text { margin-top: 2px; line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.c-file { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; color: #666; text-decoration: none; }
+a.c-file:hover { background: var(--hover); }
+.c-file svg { width: 28px; height: 28px; color: #aaa; flex: none; }
+.c-file-name { min-width: 0; font-weight: bold; overflow-wrap: anywhere; }
+.c-note { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #888; }
+.c-note.fail { color: var(--warn); }
+.c-form { margin-top: 16px; }
+.c-box { display: flex; align-items: flex-end; gap: 2px; box-sizing: border-box; min-height: 36px; padding: 0 4px 0 16px; border: 1px solid var(--chip-line); border-radius: 18px; background: #fff; }
+.c-box:focus-within { outline: 2px solid var(--accent); border-color: transparent; }
+/* 6 lines of 20px and the padding above and below them. */
+.c-box .c-input { flex: 1; min-width: 0; width: auto; padding: 7px 0; max-height: 134px; }
+.c-clip, .c-send { flex: none; width: 28px; height: 28px; margin: 3px 0; }
+.c-clip svg, .c-send svg { width: 16px; height: 16px; }
+.c-send { color: var(--accent); }
+.c-chip { display: flex; align-items: center; gap: 4px; width: fit-content; max-width: 100%; box-sizing: border-box; margin-top: 8px; padding: 2px 4px 2px 12px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--bar); font-size: 12px; }
+.c-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-chip .icon-btn { width: 22px; height: 22px; flex: none; }
+.c-chip .icon-btn svg { width: 12px; height: 12px; }
 
 .menu { position: fixed; z-index: 10; min-width: 160px; padding: 4px; border: 1px solid var(--chip-line); border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; }
 .menu button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; text-align: left; cursor: pointer; }

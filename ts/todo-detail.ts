@@ -4,7 +4,8 @@ import { $, composing, onEnter, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
 import { CLOSE_SVG, COPY_SVG, DATE_SVG, MAIL_SVG, PLUS_SVG, RETURN_SVG } from "./icons.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
-import { accountSet, dueLabel, linkedMail, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
+import { commentsSection, fitCommentInput } from "./todo-comments.js";
+import { accountSet, dueLabel, linkedMail, markdownHtml, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
 import { checkBox, openMailFromTodo, renderList } from "./todo-list.js";
 import { moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
@@ -211,15 +212,6 @@ function subtaskRow(s: TaskItem["subtasks"][number]) {
   return li;
 }
 
-// Only http(s) links stay: a relative link would resolve to the app's own origin, which Rust's on_navigation allows, and replace the screen.
-// An http(s) link navigates this page and on_navigation opens it in the default browser, as a plain-text mail body's links do.
-// No form controls or styles: they could draw a fake field over the screen. No id or name: they could shadow the screen's own elements for $().
-const DESC_SANITIZE = {
-  ALLOWED_URI_REGEXP: /^https?:/i,
-  FORBID_TAGS: ["form", "input", "button", "textarea", "select", "style"],
-  FORBID_ATTR: ["style", "id", "name"],
-};
-
 function growDesc(area: HTMLTextAreaElement) {
   area.style.height = "auto";
   area.style.height = `${area.scrollHeight}px`;
@@ -230,9 +222,8 @@ function descParts(t: TaskItem): HTMLElement[] {
   if (todoState.descEdit?.id !== t.id) {
     // Another task was opened: what was typed for the old one is dropped.
     todoState.descEdit = null;
-    const view = tag("div", t.description ? "desc" : "desc empty");
-    // breaks: a single newline is a line break, as Todoist descriptions are written line by line.
-    if (t.description) view.innerHTML = DOMPurify.sanitize(marked.parse(t.description, { breaks: true }), DESC_SANITIZE);
+    const view = tag("div", t.description ? "desc md" : "desc empty");
+    if (t.description) view.innerHTML = markdownHtml(t.description);
     else view.textContent = "説明を追加";
     view.dataset.field = "desc";
     view.tabIndex = 0;
@@ -242,7 +233,7 @@ function descParts(t: TaskItem): HTMLElement[] {
     const edit = () => {
       todoState.descEdit = { id: t.id, value: t.description };
       renderDetail();
-      const area = $("todo-detail").querySelector("textarea")!;
+      const area = $("todo-detail").querySelector<HTMLTextAreaElement>(".desc-edit")!;
       area.focus();
       area.setSelectionRange(area.value.length, area.value.length);
     };
@@ -325,6 +316,8 @@ export function renderDetail() {
   const active = document.activeElement as HTMLInputElement;
   const field = $("todo-detail").contains(active) ? active.dataset.field : null;
   const caret = active.selectionStart;
+  // The comments are fetched when this task was not the one shown: another task, or no detail at all.
+  const fresh = !!$("todo-detail").hidden || $("todo-detail").dataset.task !== t.id;
   // What was typed into the subtask field of this task is not lost to the redraw.
   const typed = $("todo-detail").dataset.task === t.id ? $("todo-detail").querySelector<HTMLInputElement>('[data-field="sub"]')?.value ?? "" : "";
   todoMode("detail");
@@ -407,7 +400,7 @@ export function renderDetail() {
     });
   });
   add.append(input);
-  parts.push(title, subs, add);
+  parts.push(title, subs, add, commentsSection(t.id, t.projectId, fresh));
 
   const main = tag("div", "detail-main");
   main.append(...parts);
@@ -415,8 +408,9 @@ export function renderDetail() {
   side.append(projectField(t), dueField(t));
   $("todo-detail").replaceChildren(main, side);
   $("todo-detail").dataset.task = t.id;
-  const area = $("todo-detail").querySelector("textarea");
+  const area = $("todo-detail").querySelector<HTMLTextAreaElement>(".desc-edit");
   if (area) growDesc(area);
+  fitCommentInput();
   if (field) {
     const again = $("todo-detail").querySelector<HTMLInputElement>(`[data-field="${field}"]`);
     again?.focus();
