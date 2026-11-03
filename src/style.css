@@ -455,8 +455,6 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .model-grid select[data-effort] { background: var(--eff-bg); color: var(--eff); }
 #prompt-model select[data-effort] { color: var(--eff); }
 /* The connection rows of the Claude card: a radio picks the method in use. */
-.item.pick { cursor: pointer; }
-.item.pick:hover { background: var(--bar); }
 .item .radio { width: 16px; height: 16px; flex: none; margin: 0; accent-color: var(--accent); }
 .avatar.key { background: var(--soft); color: var(--accent); }
 .item-name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

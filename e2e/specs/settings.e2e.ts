@@ -274,6 +274,7 @@ describe("settings: Claude", () => {
 
 describe("settings: Claude API key", () => {
   const row = (n: number) => $(`#claude-items .item:nth-child(${n})`);
+  const radio = (n: number) => row(n).$('input[type="radio"]');
   const key = "sk-ant-api03-example";
   const keyReady = { state: "ready", workspaceId: "wrkspc_01" } as const;
   // The app with the key stored (and the subscription in use unless `method` says otherwise), settings open on the Claude tab.
@@ -315,11 +316,11 @@ describe("settings: Claude API key", () => {
     await expect(row(2).$(".item-meta")).toHaveText(expect.stringContaining("Anthropic に接続できません"));
   });
 
-  it("only opens the key field when the API key row is pressed with no key stored: no method change, no logout", async () => {
+  it("only opens the key field when the radio of the API key row is pressed with no key stored: no method change, no logout", async () => {
     await openSettings([], claudeReady, "claude");
     await mock("claude_method_set", null);
     await mock("claude_key_save", null);
-    await row(2).click();
+    await radio(2).click();
     await expect($("#claude-key")).toBeDisplayed();
     await expect($("#claude-key-input")).toHaveAttribute("type", "password");
     await expect($("#claude-key-input")).toBeFocused();
@@ -328,32 +329,43 @@ describe("settings: Claude API key", () => {
     await expect(row(1).$('input[type="radio"]')).toBeSelected();
   });
 
-  it("only opens the key field when the row of a refused key is pressed: no method change, no logout", async () => {
+  it("only opens the key field when the radio of a refused key is pressed: no method change, no logout", async () => {
     await withKey("subscription", { state: "rejected", message: "キーが使えません。Console で確かめて、貼り直してください" });
     await mock("claude_method_set", null);
-    await row(2).click();
+    await radio(2).click();
     await expect($("#claude-key")).toBeDisplayed();
     await expect($("#claude-key-input")).toBeFocused();
     expect(await callsOf("claude_method_set")).toEqual([]);
     await expect(row(1).$('input[type="radio"]')).toBeSelected();
   });
 
-  it("does not switch when the click ends a text selection inside the API key row", async () => {
+  it("does not switch when the text of a row is clicked or double-clicked, nor when an arrow key is pressed on a radio", async () => {
+    await withKey("subscription");
+    await mock("claude_method_set", null);
+    await mock("claude_key_delete", null);
+    await row(2).$(".item-name").click();
+    await row(2).$(".item-name").doubleClick();
+    await row(2).$(".item-meta").doubleClick();
+    await radio(1).click();
+    await browser.keys("ArrowDown");
+    await browser.pause(300);
+    expect(await callsOf("claude_method_set")).toEqual([]);
+    expect(await callsOf("claude_key_delete")).toEqual([]);
+    await expect(radio(1)).toBeSelected();
+    await expect(radio(2)).not.toBeSelected();
+  });
+
+  it("disables the radios while a change of the method is on its way", async () => {
     await withKey("subscription");
     await mock("claude_method_set", null);
     await browser.execute(() => {
-      const name = document.querySelector<HTMLElement>("#claude-items .item:nth-child(2) .item-name")!;
-      const range = document.createRange();
-      range.selectNodeContents(name);
-      const sel = getSelection()!;
-      sel.removeAllRanges();
-      sel.addRange(range);
-      // The click a drag selection ends in; element.click() does not press the mouse, so the selection stays.
-      name.click();
+      const w = window as unknown as { __TAURI__: { core: { invoke: (c: string, a?: unknown) => Promise<unknown> } } };
+      const original = w.__TAURI__.core.invoke;
+      w.__TAURI__.core.invoke = (c, a) => (c === "claude_method_set" ? new Promise(() => {}) : original(c, a));
     });
-    await browser.pause(300);
-    expect(await callsOf("claude_method_set")).toEqual([]);
-    await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    await radio(2).click();
+    await expect(radio(1)).toBeDisabled();
+    await expect(radio(2)).toBeDisabled();
   });
 
   it("shows one failed row with the error and no radio when claude_connection itself fails, and nothing can be pressed", async () => {
@@ -373,7 +385,7 @@ describe("settings: Claude API key", () => {
 
   it("registers the key with claude_key_save, empties the field as soon as it is read, and shows the key in use after the states are asked again", async () => {
     await openSettings([], claudeReady, "claude");
-    await row(2).click();
+    await radio(2).click();
     const save = await mock("claude_key_save", null);
     await mock("claude_status", claudeKeyReady);
     const card = await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
@@ -391,7 +403,7 @@ describe("settings: Claude API key", () => {
 
   it("refuses a key that is not usable: the error is shown, the field is emptied and stays open, and the states stay as they were", async () => {
     await openSettings([], claudeReady, "claude");
-    await row(2).click();
+    await radio(2).click();
     await mock("claude_key_save", rejects("Admin キー（sk-ant-admin…）は使えません。通常の API キーを貼ってください"));
     await types("sk-ant-admin01-example");
     await $("#claude-key button").click();
@@ -405,7 +417,7 @@ describe("settings: Claude API key", () => {
 
   it("closes the key field when the key was kept but Claude Code could not be logged out, and shows that error", async () => {
     await openSettings([], claudeReady, "claude");
-    await row(2).click();
+    await radio(2).click();
     await mock("claude_key_save", rejects("Claude Code のログアウトを確認できませんでした。ターミナルで claude auth logout を実行してください"));
     await mock("claude_status", claudeKeyReady);
     await mock("claude_connection", connection("apiKey", claudeReady, keyReady));
@@ -416,12 +428,12 @@ describe("settings: Claude API key", () => {
     await expect(row(2).$('input[type="radio"]')).toBeSelected();
   });
 
-  it("switches to the stored key with claude_method_set when its row is pressed", async () => {
+  it("switches to the stored key with claude_method_set when its radio is pressed", async () => {
     await withKey("subscription");
     const set = await mock("claude_method_set", null);
     await mock("claude_status", claudeKeyReady);
     await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
-    await row(2).click();
+    await radio(2).click();
     expect(await waitForCalls(set)).toEqual([{ method: "apiKey" }]);
     await expect(row(2).$('input[type="radio"]')).toBeSelected();
     await expect(row(1).$(".status")).toHaveText("未ログイン");
@@ -431,7 +443,7 @@ describe("settings: Claude API key", () => {
   it("shows the error and leaves the method as it was when the switch fails", async () => {
     await withKey("subscription");
     await mock("claude_method_set", rejects("資格情報の読み取りに失敗: x"));
-    await row(2).click();
+    await radio(2).click();
     await expect($("#error")).toHaveText(expect.stringContaining("資格情報の読み取りに失敗"));
     await expect(row(1).$('input[type="radio"]')).toBeSelected();
   });
@@ -442,17 +454,17 @@ describe("settings: Claude API key", () => {
     await mock("claude_key_delete", null);
     await mock("claude_status", claudeReady);
     await mock("claude_connection", connection("subscription", claudeReady, keyReady));
-    await row(1).click();
+    await radio(1).click();
     expect(await waitForCalls(set)).toEqual([{ method: "subscription" }]);
     await expect(row(1).$('input[type="radio"]')).toBeSelected();
     await expect(row(2).$(".status")).toHaveText("確認済み");
     expect(await callsOf("claude_key_delete")).toEqual([]);
   });
 
-  it("calls nothing when the row of the method in use is pressed", async () => {
+  it("calls nothing when the radio of the method in use is pressed", async () => {
     await withKey("subscription");
     await mock("claude_method_set", null);
-    await row(1).click();
+    await radio(1).click();
     await expect(row(1).$('input[type="radio"]')).toBeSelected();
     expect(await callsOf("claude_method_set")).toEqual([]);
   });

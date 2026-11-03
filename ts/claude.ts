@@ -30,19 +30,16 @@ let keyFormOpen = false;
 // A change of the method or the key is on its way: the rows wait.
 let changing = false;
 
-// A connection row: the radio that picks the method, then `row` (an `itemRow`). Pressing the row, but not a button in it, picks it.
+// A connection row: the radio that picks the method, then `row` (an `itemRow`). Only pressing the radio picks it; the radios have no shared name, so the arrow keys move none of them.
+// Every `pick` ends in a redraw, which sets the radios back to the method really in use.
 function pickRow(row: HTMLElement, method: Method, pick: () => void) {
   const radio = tag("input", "radio");
   radio.type = "radio";
-  radio.name = "claude-method";
   radio.checked = connection?.method === method;
   radio.disabled = changing;
   radio.setAttribute("aria-label", method === "apiKey" ? "API キーを使う" : "サブスクリプションを使う");
   row.prepend(radio);
-  row.classList.add("pick");
-  row.onclick = (e) => {
-    if (!changing && !(e.target as Element).closest("button") && !getSelection()?.toString()) pick();
-  };
+  radio.onclick = pick;
   return row;
 }
 
@@ -119,7 +116,7 @@ function pickSubscription() {
   changeConnection(() => invoke("claude_method_set", { method: "subscription" }));
 }
 
-// Without a stored key, or with one Anthropic refuses, pressing the row only opens the field (nothing is switched or logged out); with a usable one, it switches to it.
+// Without a stored key, or with one Anthropic refuses, pressing its radio only opens the field (nothing is switched or logged out); with a usable one, it switches to it.
 function pickKey() {
   if (connection?.apiKey.state === "none" || connection?.apiKey.state === "rejected") {
     keyFormOpen = true;
