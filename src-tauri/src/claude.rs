@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -36,14 +36,18 @@ const SETTINGS_FILE: &str = "claude-settings.json";
 const SETTINGS_TMP_FILE: &str = "claude-settings.json.tmp";
 /// Characters of a message that reach the model.
 const INPUT_LIMIT: usize = 10_000;
-/// Characters of a Slack thread's first message, and of the linked message, that reach the summary when the thread does not fit `INPUT_LIMIT`.
+/// Characters of a Slack thread's first message that reach the summary when the thread does not fit `INPUT_LIMIT`.
 const PART_LIMIT: usize = 2_000;
+/// Characters of the linked message (what the task is about) that reach the summary when the thread does not fit `INPUT_LIMIT`.
+const TARGET_LIMIT: usize = 4_000;
 /// Characters of the latest replies of such a thread, filled with whole messages from the newest back.
 const LATEST_LIMIT: usize = 3_000;
 /// Characters of the points that stand for the middle of such a thread in the final call.
 const MIDDLE_LIMIT: usize = 3_000;
 /// The middle is summarised in chunks of at most `INPUT_LIMIT` characters, and at most this many chunks (the ones nearest the end of the thread).
 const MAX_CHUNKS: usize = 5;
+/// The chunk calls together may start for this many times the time limit of one call; past it no new chunk starts.
+const CHUNK_BUDGET_CALLS: u32 = 3;
 /// How many `claude` processes run at once, for the Slack and the mail summaries together.
 static CLAUDE_SLOTS: Semaphore = Semaphore::const_new(2);
 /// How long a call waits for a free slot before it gives up.
@@ -1110,7 +1114,7 @@ fn render(kept: &[(Part, String)], middle: Option<(String, Vec<String>)>) -> Str
 }
 
 /// How the thread `lines` (oldest first, `target` the linked one) is read. When all of it, with its headings, fits `INPUT_LIMIT`, it is read whole in one call.
-/// Otherwise the first message and the linked one are cut at `PART_LIMIT`, the newest messages are taken whole from the newest back within `LATEST_LIMIT`
+/// Otherwise the first message is cut at `PART_LIMIT` and the linked one at `TARGET_LIMIT`, the newest messages are taken whole from the newest back within `LATEST_LIMIT`
 /// (a newest message longer than that is cut to it), and the rest is the middle, grouped into chunks. No message is in two places.
 fn plan_thread(lines: &[String], target: usize) -> Plan {
     let whole = |kept| Plan {
@@ -1149,10 +1153,17 @@ fn plan_thread(lines: &[String], target: usize) -> Plan {
         } else {
             Part::First
         },
-        cut(&lines[0], PART_LIMIT),
+        cut(
+            &lines[0],
+            if target == 0 {
+                TARGET_LIMIT
+            } else {
+                PART_LIMIT
+            },
+        ),
     );
     if target != 0 {
-        pick(target, Part::Target, cut(&lines[target], PART_LIMIT));
+        pick(target, Part::Target, cut(&lines[target], TARGET_LIMIT));
     }
     let mut used = 0;
     for i in (1..n).rev().filter(|i| *i != target) {
@@ -1177,6 +1188,16 @@ fn plan_thread(lines: &[String], target: usize) -> Plan {
         chunks,
         skipped,
     }
+}
+
+/// The order the chunks are summarised in: the newest first, since the ones nearest the end of the thread matter most (their points stay in `Plan::chunks` order).
+fn chunk_order(count: usize) -> impl Iterator<Item = usize> {
+    (0..count).rev()
+}
+
+/// Whether the next chunk may start: not once a chunk has failed (a stalled network or a refused login would fail them all), and not once the `budget` is spent.
+fn may_start_chunk(elapsed: Duration, budget: Duration, failed: bool) -> bool {
+    !failed && elapsed < budget
 }
 
 /// The points of the chunks (`groups`, each non-empty and with its points on one line each) as lines `- {point}`, at most `cap` characters with their line breaks.
@@ -1577,8 +1598,9 @@ async fn summarize_chunk(
 }
 
 /// Summarises a Slack thread into a task with `claude -p`, following the instructions saved in `dir`. The thread's messages and the names of `projects` (ID and name) are sent to Anthropic through Claude Code.
-/// A thread too long for one call has its middle summarised first, one chunk at a time (`CLAUDE_SLOTS` is 2 and a slot is waited for 60 seconds, so not all at once);
-/// a chunk that fails is logged (never its text) and its messages count as omitted, while a failure of the final call is an error. The summary's project is kept only when it is one of `projects`.
+/// A thread too long for one call has its middle summarised first, one chunk at a time (`CLAUDE_SLOTS` is 2 and a slot is waited for 60 seconds, so not all at once), the newest chunk first.
+/// No new chunk starts once the chunk calls together have run `CHUNK_BUDGET_CALLS` times the time limit of one call, or once a chunk has failed (it is logged, never its text).
+/// The chunks not run and the one that failed count as omitted, while a failure of the final call is an error. The summary's project is kept only when it is one of `projects`.
 pub async fn summarize(
     dir: &Path,
     thread: &Thread,
@@ -1595,17 +1617,21 @@ pub async fn summarize(
     })
     .await
     .map_err(|e| e.to_string())??;
-    let mut points = Vec::with_capacity(plan.chunks.len());
-    for chunk in &plan.chunks {
-        points.push(
-            match summarize_chunk(&chunk.text, settings, &connection).await {
-                Ok(got) => Some(got),
-                Err(e) => {
-                    log_failure("claude_summarize_slack_chunk", "-", e.log);
-                    None
-                }
-            },
-        );
+    let budget = settings.timeout(SUMMARY_TIMEOUT) * CHUNK_BUDGET_CALLS;
+    let started = Instant::now();
+    let mut failed = false;
+    let mut points: Vec<Option<Vec<String>>> = vec![None; plan.chunks.len()];
+    for i in chunk_order(plan.chunks.len()) {
+        if !may_start_chunk(started.elapsed(), budget, failed) {
+            break;
+        }
+        match summarize_chunk(&plan.chunks[i].text, settings, &connection).await {
+            Ok(got) => points[i] = Some(got),
+            Err(e) => {
+                log_failure("claude_summarize_slack_chunk", "-", e.log);
+                failed = true;
+            }
+        }
     }
     let (message, left_out) = final_message(&plan, &points);
     let boundary = new_boundary()?;
@@ -3390,9 +3416,9 @@ mod tests {
         assert_eq!(
             plan.kept
                 .iter()
-                .filter(|(_, l)| l.chars().count() == PART_LIMIT)
-                .count(),
-            2
+                .map(|(_, l)| l.chars().count())
+                .collect::<Vec<_>>(),
+            [PART_LIMIT, TARGET_LIMIT]
         );
     }
 
@@ -3443,7 +3469,7 @@ mod tests {
     }
 
     #[test]
-    fn the_first_message_and_the_target_are_cut_at_the_part_limit() {
+    fn the_first_message_is_cut_at_the_part_limit_and_the_target_at_the_target_limit() {
         let lines = vec![
             "あ".repeat(PART_LIMIT * 3),
             "い".repeat(PART_LIMIT * 3),
@@ -3451,7 +3477,59 @@ mod tests {
         ];
         let plan = plan_thread(&lines, 1);
         assert_eq!(plan.kept[0].1.chars().count(), PART_LIMIT);
-        assert_eq!(plan.kept[1].1.chars().count(), PART_LIMIT);
+        assert_eq!(plan.kept[1].1.chars().count(), TARGET_LIMIT);
+    }
+
+    #[test]
+    fn a_target_that_is_the_first_message_is_cut_at_the_target_limit() {
+        let lines = vec!["あ".repeat(PART_LIMIT * 3), "い".repeat(INPUT_LIMIT)];
+        let plan = plan_thread(&lines, 0);
+        assert_eq!(plan.kept[0].0, Part::Target);
+        assert_eq!(plan.kept[0].1.chars().count(), TARGET_LIMIT);
+    }
+
+    #[test]
+    fn the_first_the_target_and_the_latest_at_their_limits_leave_the_final_call_within_the_input_limit(
+    ) {
+        // The first at 2,000, the target at 4,000 and the latest at 3,000 (two whole messages of 1,499 and a line break), with chunk points of any size.
+        let mut lines = vec!["あ".repeat(3_000), "い".repeat(6_000)];
+        lines.extend(thread_lines(10, 1_499));
+        let plan = plan_thread(&lines, 1);
+        assert_eq!(plan.kept[0].1.chars().count(), PART_LIMIT);
+        assert_eq!(plan.kept[1].1.chars().count(), TARGET_LIMIT);
+        let latest: usize = plan
+            .kept
+            .iter()
+            .filter(|(p, _)| *p == Part::Latest)
+            .map(|(_, l)| l.chars().count() + 1)
+            .sum();
+        assert_eq!(latest - 1, 2 * 1_499 + 1);
+        assert!(!plan.chunks.is_empty());
+        let big = vec![points(&["う".repeat(5_000).as_str(); 10]); plan.chunks.len()];
+        let message = final_message(&plan, &big).0;
+        assert!(
+            message.chars().count() <= INPUT_LIMIT,
+            "{}",
+            message.chars().count()
+        );
+        assert!(message.contains("[途中の"), "the points still stand");
+        assert!(message.contains(&"い".repeat(TARGET_LIMIT)));
+    }
+
+    #[test]
+    fn the_chunks_are_summarised_newest_first() {
+        assert_eq!(chunk_order(4).collect::<Vec<_>>(), [3, 2, 1, 0]);
+        assert_eq!(chunk_order(0).count(), 0);
+    }
+
+    #[test]
+    fn a_chunk_starts_only_inside_the_budget_and_before_any_failure() {
+        let budget = Duration::from_secs(180);
+        assert!(may_start_chunk(Duration::ZERO, budget, false));
+        assert!(may_start_chunk(Duration::from_secs(179), budget, false));
+        assert!(!may_start_chunk(budget, budget, false));
+        assert!(!may_start_chunk(Duration::from_secs(400), budget, false));
+        assert!(!may_start_chunk(Duration::ZERO, budget, true));
     }
 
     #[test]
