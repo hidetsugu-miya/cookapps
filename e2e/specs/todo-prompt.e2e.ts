@@ -9,11 +9,11 @@ const input = () => $("#prompt-input");
 const apply = () => $(".diff-foot .text-btn.primary");
 const reject = () => $(".diff-foot .text-btn:not(.primary)");
 
-// The rows of the Claude card are drawn again for each answer: wait until both are in.
+// The rows of the Claude tab are drawn again for each answer: wait until the connection rows and the prompt row are in.
 const settled = () =>
   browser.waitUntil(async () => {
-    const statuses = await textsOf("#claude-items .status");
-    return statuses.length === 2 && !statuses.includes("確認中");
+    const statuses = [...(await textsOf("#claude-items .status")), ...(await textsOf("#claude-prompt .status"))];
+    return statuses.length === 3 && !statuses.includes("確認中");
   });
 
 // The app with the settings open and the prompt screen opened from its row; `state` is what `claude_todo_prompt` answers.
@@ -22,7 +22,7 @@ async function openPrompt(claude: unknown = claudeReady, state = todoPrompt) {
   await $("#nav-settings").click();
   await $("#settings-tab-claude").click();
   await settled();
-  await $("#claude-items .item:nth-child(3) .text-btn").click();
+  await $("#claude-prompt .text-btn").click();
   await expect($("#prompt")).toBeDisplayed();
 }
 
@@ -94,8 +94,8 @@ describe("todo prompt screen", () => {
     await expect($("#prompt-save")).toBeDisabled();
     await expect($(".toast")).toHaveText(expect.stringContaining("保存しました"));
     await $("#prompt-back").click();
-    await waitForText("#claude-items .status", "編集済み");
-    expect(await textsOf("#claude-items .status")).toEqual(["ログイン中", "編集済み"]);
+    await waitForText("#claude-prompt .status", "編集済み");
+    expect(await textsOf("#claude-items .status")).toEqual(["ログイン中", "未登録"]);
   });
 
   it("shows the error and keeps the field unsaved when the save is refused", async () => {
@@ -123,8 +123,8 @@ describe("todo prompt screen", () => {
     await expect($("#prompt-reset")).toBeDisabled();
     await mock("claude_todo_prompt", todoPrompt);
     await $("#prompt-back").click();
-    await waitForText("#claude-items .status", "デフォルト");
-    expect(await textsOf("#claude-items .status")).toEqual(["ログイン中", "デフォルト"]);
+    await waitForText("#claude-prompt .status", "デフォルト");
+    expect(await textsOf("#claude-items .status")).toEqual(["ログイン中", "未登録"]);
   });
 
   it("disarms デフォルトに戻す when the button is left, and sends nothing", async () => {
@@ -160,7 +160,7 @@ describe("todo prompt screen", () => {
     // The settings read the instructions again; opening the screen does not.
     await waitForCalls("claude_todo_prompt", reads + 1);
     await settled();
-    await $("#claude-items .item:nth-child(3) .text-btn").click();
+    await $("#claude-prompt .text-btn").click();
     await expect(body()).toHaveValue("Typed by hand");
     await expect($("#prompt-status")).toBeDisplayed();
     await expect($("#prompt-log .chat-user")).toHaveText("短くして");
@@ -456,7 +456,7 @@ describe("todo prompt screen: clearing the conversation", () => {
 
 describe("todo prompt screen: the model and effort of the conversation", () => {
   const selectOf = (kind: "model" | "effort") => $(`#prompt-model select[data-purpose="promptChat"][data-kind="${kind}"]`);
-  const settingsSelect = (kind: "model" | "effort") => $(`#claude-items select[data-purpose="promptChat"][data-kind="${kind}"]`);
+  const settingsSelect = (kind: "model" | "effort") => $(`#claude-models select[data-purpose="promptChat"][data-kind="${kind}"]`);
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
   const choose = (scope: string, kind: "model" | "effort", value: string) =>
     browser.execute(
@@ -485,7 +485,7 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
     await expect(selectOf("model")).toBeDisplayed();
     await expect(selectOf("effort")).toBeDisplayed();
     expect(await count("#prompt-model select")).toBe(2);
-    expect(await selectOf("model").$$("option").map((o) => o.getText())).toEqual(["Haiku", "Sonnet", "Opus", "Fable"]);
+    expect(await selectOf("model").$$("option").map((o) => o.getText())).toEqual(["Haiku", "Sonnet", "Opus"]);
     expect(await selectOf("effort").$$("option").map((o) => o.getText())).toEqual(["low", "medium", "high", "xhigh", "max"]);
     await expect(selectOf("model")).toHaveAttribute("aria-label", "モデル");
     await expect(selectOf("effort")).toHaveAttribute("aria-label", "effort");
@@ -509,11 +509,11 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
     expect((await callsOf("claude_model_settings")).length).toBeGreaterThan(0);
   });
 
-  it("saves a change with the purpose promptChat and both values, and the settings show it", async () => {
+  it("saves a model with the purpose promptChat and no effort, an effort with both, and the settings show it", async () => {
     await openPrompt();
     const save = await mock("claude_model_settings_save", { ...claudeSettings, promptChat: { model: "opus", effort: "medium" } });
     await choose("#prompt-model", "model", "opus");
-    expect(await waitForCalls(save)).toEqual([{ purpose: "promptChat", model: "opus", effort: "medium" }]);
+    expect(await waitForCalls(save)).toEqual([{ purpose: "promptChat", model: "opus" }]);
     await expect(selectOf("model")).toHaveValue("opus");
     const saveEffort = await mock("claude_model_settings_save", { ...claudeSettings, promptChat: { model: "opus", effort: "max" } });
     await choose("#prompt-model", "effort", "max");
@@ -525,20 +525,33 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
     await expect(settingsSelect("model")).toHaveValue("opus");
     await expect(settingsSelect("effort")).toHaveValue("max");
     // The other purposes are as they were.
-    await expect($('#claude-items select[data-purpose="proofread"][data-kind="model"]')).toHaveValue("sonnet");
+    await expect($('#claude-models select[data-purpose="proofread"][data-kind="model"]')).toHaveValue("sonnet");
   });
 
   it("shows a change made in the settings", async () => {
     await openPrompt();
     await $("#prompt-back").click();
     const save = await mock("claude_model_settings_save", { ...claudeSettings, promptChat: { model: "sonnet", effort: "high" } });
-    await choose("#claude-items", "effort", "high");
+    await choose("#claude-models", "effort", "high");
     expect(await waitForCalls(save)).toEqual([{ purpose: "promptChat", model: "sonnet", effort: "high" }]);
     await expect(settingsSelect("effort")).toHaveValue("high");
     // What the file now holds: opening the prompt screen reads it again.
     await mock("claude_model_settings", { ...claudeSettings, promptChat: { model: "sonnet", effort: "high" } });
-    await $("#claude-items .item:nth-child(3) .text-btn").click();
+    await $("#claude-prompt .text-btn").click();
     await expect(selectOf("effort")).toHaveValue("high");
+  });
+
+  it("draws the effort Rust saved for the model, and colors the effort text by its value without a background", async () => {
+    await openPrompt();
+    await expect(selectOf("effort")).toHaveAttribute("data-effort", "medium");
+    const medium = await selectOf("effort").getCSSProperty("color");
+    const save = await mock("claude_model_settings_save", { ...claudeSettings, promptChat: { model: "sonnet", effort: "high" } });
+    await choose("#prompt-model", "model", "sonnet");
+    expect(await waitForCalls(save)).toEqual([{ purpose: "promptChat", model: "sonnet" }]);
+    await expect(selectOf("effort")).toHaveValue("high");
+    await expect(selectOf("effort")).toHaveAttribute("data-effort", "high");
+    expect((await selectOf("effort").getCSSProperty("color")).value).not.toBe(medium.value);
+    expect((await selectOf("effort").getCSSProperty("background-color")).value).toBe("rgba(0,0,0,0)");
   });
 
   it("puts the selection back and shows the error when it cannot be saved", async () => {

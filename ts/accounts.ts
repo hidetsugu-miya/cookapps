@@ -100,7 +100,7 @@ function placePopup(button: HTMLElement) {
   popup.style.top = `${Math.max(8, Math.min(button.getBoundingClientRect().top, innerHeight - popup.offsetHeight - 8))}px`;
 }
 
-// Claude's popup: who is logged in and the plan. Nothing to change here; the settings hold the rest.
+// Claude's popup: who is logged in and the plan (or "API キー" when a key is in use). Nothing to change here; the settings hold the rest.
 function toggleClaudePopup() {
   if (claudePopup) return closePopup();
   popupAccount = null;
@@ -119,9 +119,9 @@ function toggleClaudePopup() {
   };
   $("account-popup").replaceChildren(
     avatar,
-    el("popup-email", claude.email),
+    el("popup-email", claude.method === "apiKey" ? "API キー" : claude.email),
     el("popup-plan", claude.plan ? `Claude ・ ${claude.plan} プラン` : "Claude"),
-    tag("span", "status ok", "ログイン中"),
+    tag("span", "status ok", claude.method === "apiKey" ? "使用中" : "ログイン中"),
     open,
   );
   $("account-popup").hidden = false;

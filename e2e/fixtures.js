@@ -43,6 +43,8 @@ const answers = {
   set_badge: null,
   ...fixtures,
 };
+// The settings card's view of the connection follows the usable state (the subscription is the method in use) unless a spec gives its own.
+answers.claude_connection ??= { method: "subscription", subscription: answers.claude_status, apiKey: { state: "none" } };
 window.__e2e_mocks__ = {};
 window.__e2e_calls__ = {};
 

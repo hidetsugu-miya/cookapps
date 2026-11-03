@@ -1,4 +1,4 @@
-:root { --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; }
+:root { --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 body { font-family: -apple-system, sans-serif; font-size: 14px; margin: 0; display: flex; }
@@ -439,13 +439,26 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .day-picks .text-btn { width: 40px; padding: 0; }
 .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 20px; border-top: 1px solid var(--line); }
 .item .who { flex: 1; min-width: 0; }
-.item select, .model-grid select { height: 32px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; font: inherit; color: #333; }
+.item select, .model-grid select { height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; font: inherit; color: #333; }
 .item select:focus, .model-grid select:focus { outline: 2px solid var(--accent); border-color: transparent; }
-/* The model and effort of the four purposes: the name and where it is used, then two selects. */
-.model-block { border-top: 1px solid var(--line); }
-.model-head { display: flex; align-items: baseline; gap: 8px; padding: 12px 20px 6px; }
-.model-grid { display: grid; grid-template-columns: minmax(0, 1fr) 176px 176px; gap: 8px; align-items: center; padding: 4px 12px 14px 20px; }
+/* The Claude tab holds three cards (the connection, the model and effort of the four purposes, the prompt), so its panel is no card itself. */
+.model-note { padding: 0 20px 4px; }
+.model-grid { display: grid; grid-template-columns: minmax(0, 1fr) 108px 100px; gap: 6px 8px; align-items: center; padding: 4px 12px 14px 20px; }
 .model-grid .who { min-width: 0; }
+.model-grid .th { padding-bottom: 2px; color: var(--muted); font-size: 12px; }
+/* An effort select is colored by its value (data-effort): calm for low, warmer as it rises. The prompt screen's frameless select takes the text color only. */
+select[data-effort="low"] { --eff: var(--effort-low); --eff-bg: var(--effort-low-bg); }
+select[data-effort="medium"] { --eff: var(--effort-medium); --eff-bg: var(--effort-medium-bg); }
+select[data-effort="high"] { --eff: var(--effort-high); --eff-bg: var(--effort-high-bg); }
+select[data-effort="xhigh"] { --eff: var(--effort-xhigh); --eff-bg: var(--effort-xhigh-bg); }
+select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max-bg); }
+.model-grid select[data-effort] { background: var(--eff-bg); color: var(--eff); }
+#prompt-model select[data-effort] { color: var(--eff); }
+/* The connection rows of the Claude card: a radio picks the method in use. */
+.item.pick { cursor: pointer; }
+.item.pick:hover { background: var(--bar); }
+.item .radio { width: 16px; height: 16px; flex: none; margin: 0; accent-color: var(--accent); }
+.avatar.key { background: var(--soft); color: var(--accent); }
 .item-name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-meta { color: #666; font-size: 12px; overflow-wrap: anywhere; }
 .item-meta.warn { color: var(--warn); }
