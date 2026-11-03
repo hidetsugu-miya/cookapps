@@ -422,6 +422,187 @@ describe("todo projects and subtasks", () => {
   });
 });
 
+// The E2E driver never hovers, so a row's grip stays hidden (visibility) and takes no pointer event: show the grips for the drag.
+// The window is not painted either, so a row that a toggle opened stays shrunk to no height by its slide: end the slides, or its grip cannot be pressed.
+const showGrips = () =>
+  browser.execute(() => {
+    for (const a of document.getAnimations()) a.finish();
+    for (const g of document.querySelectorAll<HTMLElement>("#todo-list .grip")) g.style.visibility = "visible";
+  });
+
+// Drags the grip of the row `name` with the pointer (press, move over each of `over`, release).
+async function dragRow(name: string, ...over: ChainablePromiseElement[]) {
+  await showGrips();
+  let drag = browser.action("pointer").move({ origin: rowOf(name).$(".grip") }).down();
+  for (const target of over) drag = drag.move({ origin: target });
+  await drag.up().perform();
+}
+
+// Records every row and project that gets the drop mark from now on (a task's ID or a project's view), since the mark is gone when the drag ends.
+const watchDrops = () =>
+  browser.execute(() => {
+    const w = window as unknown as { __drops__: string[] };
+    w.__drops__ = [];
+    new MutationObserver((records) => {
+      for (const r of records) {
+        const el = r.target as HTMLElement;
+        if (el.classList.contains("drop")) w.__drops__.push(el.dataset.id ?? el.dataset.view ?? "");
+      }
+    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["class"] });
+  });
+const dropsSeen = () => browser.execute(() => (window as unknown as { __drops__: string[] }).__drops__);
+const marginsOf = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].map((l) => l.style.marginLeft));
+const projectOf = (id: string) => $(`#projects .proj[data-view="${id}"]`);
+
+// What Todoist answers once "Write report" (k1) is the last subtask of "Plan trip" (k2).
+function reportUnderTrip(data = todoData()) {
+  const [report, trip] = data.tasks;
+  report.parent = { id: trip.id, content: trip.content };
+  trip.subtasks.push({ id: report.id, content: report.content, done: false, due: report.due });
+  trip.subTotal++;
+  return data;
+}
+
+// What Todoist answers once "Book flights" (k3) has left "Plan trip" (k2) and is a top-level task.
+function flightsAlone() {
+  const data = todoData();
+  const [, trip, flights] = data.tasks;
+  flights.parent = null;
+  trip.subtasks = [];
+  trip.subTotal = 0;
+  return data;
+}
+
+describe("todo: moving a task by its grip", () => {
+  // The Work project: "Write report" and "Plan trip" (closed).
+  async function openWork() {
+    await openTodo();
+    await projectOf("p1").click();
+    await waitForCount(ROWS, 2);
+  }
+
+  it("makes the task a subtask of the row it is dropped on, marking that row on the way, and shows it under that task", async () => {
+    await openWork();
+    const moveUnder = await mock("todoist_move_under", true);
+    await mock("todoist_load", reportUnderTrip());
+    await watchDrops();
+    await dragRow("Write report", rowOf("Plan trip"));
+    expect(await waitForCalls(moveUnder)).toEqual([{ id: "k1", parentId: "k2" }]);
+    expect(await dropsSeen()).toEqual(["k2"]);
+    // "Plan trip" opens to show it, last among its subtasks, and the count follows.
+    await waitForCount(ROWS, 3);
+    expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Plan trip"), expect.stringContaining("Book flights"), expect.stringContaining("Write report")]);
+    expect(await marginsOf()).toEqual(["0px", "28px", "28px"]);
+    await expect(rowOf("Plan trip")).toHaveText(expect.stringContaining("0/2"));
+    await expect(rowOf("Plan trip").$(".toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect($(".dragging, .drop")).not.toExist();
+  });
+
+  it("does the same in the 今日 list, where the subtask names its parent", async () => {
+    const data = todoData();
+    data.tasks[1].due = data.tasks[0].due;
+    data.tasks[1].bucket = "today";
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 2);
+    const moveUnder = await mock("todoist_move_under", true);
+    await mock("todoist_load", reportUnderTrip(data));
+    await dragRow("Write report", rowOf("Plan trip"));
+    expect(await waitForCalls(moveUnder)).toEqual([{ id: "k1", parentId: "k2" }]);
+    await expect(rowOf("Write report").$(".parent")).toHaveText("Plan trip");
+  });
+
+  it("does not mark or accept the task itself, a task below it or its parent", async () => {
+    await openWork();
+    await rowOf("Plan trip").$(".toggle").click();
+    await waitForCount(ROWS, 3);
+    await rowOf("Book flights").$(".toggle").click();
+    await waitForCount(ROWS, 4);
+    const moveUnder = await mock("todoist_move_under", true);
+    await watchDrops();
+    // "Plan trip" over its subtask, that one's subtask and itself.
+    await dragRow("Plan trip", rowOf("Book flights"), rowOf("Pick seat"), rowOf("Plan trip"));
+    // "Book flights" over its parent and its own subtask.
+    await dragRow("Book flights", rowOf("Plan trip"), rowOf("Pick seat"));
+    expect(await dropsSeen()).toEqual([]);
+    expect(await callsOf(moveUnder)).toEqual([]);
+    await expect($(".dragging, .drop")).not.toExist();
+  });
+
+  it("takes a subtask out of its parent with 親タスクから外す, which moves it to its own project, and shows it at the top level", async () => {
+    await openWork();
+    await rowOf("Plan trip").$(".toggle").click();
+    await waitForCount(ROWS, 3);
+    // Only a subtask's row has the button.
+    expect(await count(`${ROWS} .unparent-row`)).toBe(1);
+    await expect(rowOf("Book flights").$(".unparent-row")).toHaveAttribute("aria-label", "親タスクから外す");
+    const move = await mock("todoist_move", true);
+    await mock("todoist_load", flightsAlone());
+    // The row buttons show on hover, which the driver never does: press it in the page.
+    await browser.execute(() => document.querySelector<HTMLElement>("#todo-list .unparent-row")!.click());
+    expect(await waitForCalls(move)).toEqual([{ id: "k3", projectId: "p1" }]);
+    expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Write report"), expect.stringContaining("Plan trip"), expect.stringContaining("Book flights")]);
+    expect(await marginsOf()).toEqual(["0px", "0px", "0px"]);
+    expect(await count(`${ROWS} .unparent-row`)).toBe(0);
+    await expect(rowOf("Plan trip").$(".toggle")).not.toExist();
+  });
+
+  it("makes a subtask stand alone when it is dropped on the project it is in, but marks that project for no other task", async () => {
+    await openWork();
+    await rowOf("Plan trip").$(".toggle").click();
+    await waitForCount(ROWS, 3);
+    const move = await mock("todoist_move", true);
+    await mock("todoist_load", flightsAlone());
+    await watchDrops();
+    await dragRow("Write report", projectOf("p1"));
+    expect(await dropsSeen()).toEqual([]);
+    expect(await callsOf(move)).toEqual([]);
+    await dragRow("Book flights", projectOf("p1"));
+    expect(await waitForCalls(move)).toEqual([{ id: "k3", projectId: "p1" }]);
+    expect(await dropsSeen()).toEqual(["p1"]);
+    expect(await marginsOf()).toEqual(["0px", "0px", "0px"]);
+    expect(await count(`${ROWS} .unparent-row`)).toBe(0);
+  });
+
+  it("moves a subtask to another project when it is dropped on it, and shows it there as a task of its own", async () => {
+    await openWork();
+    await rowOf("Plan trip").$(".toggle").click();
+    await waitForCount(ROWS, 3);
+    const move = await mock("todoist_move", true);
+    // What Todoist answers once "Book flights" (k3) and its subtask are in Design (p2), out of "Plan trip".
+    const moved = todoData();
+    const [, trip, flights, seat] = moved.tasks;
+    flights.parent = null;
+    flights.projectId = "p2";
+    seat.projectId = "p2";
+    trip.subtasks = [];
+    trip.subTotal = 0;
+    await mock("todoist_load", moved);
+    await dragRow("Book flights", projectOf("p2"));
+    expect(await waitForCalls(move)).toEqual([{ id: "k3", projectId: "p2" }]);
+    await waitForCount(ROWS, 2);
+    await expect(rowOf("Plan trip").$(".toggle")).not.toExist();
+    await projectOf("p2").click();
+    await waitForCount(ROWS, 1);
+    expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Book flights")]);
+    expect(await marginsOf()).toEqual(["0px"]);
+    expect(await count(`${ROWS} .unparent-row`)).toBe(0);
+  });
+
+  it("puts the row back, closed again, and shows the error when making it a subtask fails", async () => {
+    await openWork();
+    const moveUnder = await mock("todoist_move_under", rejects("Todoist に接続できません"));
+    await dragRow("Write report", rowOf("Plan trip"));
+    await waitForCalls(moveUnder);
+    // The reload brings back what Todoist has: "Write report" at the top level and "Plan trip" closed.
+    await waitForCount(ROWS, 2);
+    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Write report"), expect.stringContaining("Plan trip")]);
+    expect(await marginsOf()).toEqual(["0px", "0px"]);
+    await expect(rowOf("Plan trip").$(".toggle")).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
 describe("todo detail", () => {
   it("has the project and the date in a side pane, and no priority", async () => {
     await openTodo();

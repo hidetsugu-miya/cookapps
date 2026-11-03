@@ -44,6 +44,7 @@ User-facing text is in `README.md` and `docs/`.
 | ID | Feature | What it does |
 |----|---------|--------------|
 | T-1 | Todoist | Work with Todoist tasks in per-project and today lists and a detail view (description, subtasks, and a three-dot menu to copy the task link or the description, or delete it; the description can also be copied by selecting its text, which does not start editing, or with an icon shown on hover), and create a task from a mail. Authentication is a personal API token, and the settings screen shows the connection and unlinks it |
+| T-2 | Nest and unnest tasks | In the task list (a project's list and the flat "today" list), drag the grip at the left end of a row (pointer events) onto another task's row to make the dragged task, with its own subtasks, the last subtask of that task (`todoist_move_under`, which sends `parent_id` to `POST /tasks/{id}/move`). The row under the pointer is marked while it can take the drop; the task itself, a task below it and its current parent cannot. The parent opens so the moved row shows. A subtask is made a top-level task again with the "親タスクから外す" button of its row, or by dropping it on the project it is in in the side list (`todoist_move` with its current project ID, which Todoist makes the last top-level task of that project). The screen changes first and a failure is undone by the reload, as for the other task changes; the depth limit is not checked on the screen, Todoist's error is shown |
 
 ### Slack
 

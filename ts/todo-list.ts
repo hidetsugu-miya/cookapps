@@ -1,16 +1,16 @@
-// The Todo screen's side list of projects and the task list: rows, the grip that moves a task to a project, and the name edited in place.
+// The Todo screen's side list of projects and the task list: rows, the grip that moves a task to a project or under another task, and the name edited in place.
 import type { MailRef } from "./bindings/MailRef";
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, tag } from "./dom.js";
-import { CHEVRON_SVG, DATE_SVG, DAY_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, SUB_SVG } from "./icons.js";
+import { CHEVRON_SVG, DATE_SVG, DAY_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, OUTDENT_SVG, SUB_SVG } from "./icons.js";
 import { rowButton, rows } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { openThread } from "./thread.js";
 import { updateAddMode } from "./todo-add.js";
 import { openDuePop, openProjectMenu } from "./todo-detail.js";
-import { accountSet, dueLabel, editingField, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
-import { moveTask, saveTask, setTaskDone } from "./todo-write.js";
+import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
+import { moveTask, moveUnder, saveTask, setTaskDone } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
 import { showError } from "./view.js";
 
@@ -180,6 +180,7 @@ function taskRows(t: TaskItem, showProject: boolean, accounts: Set<string | unde
 function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>) {
   const mail = linkedMail(t, accounts);
   const li = tag("li", `task${showProject ? "" : " single"}`);
+  li.dataset.id = t.id;
   li.onclick = () => {
     // A drag that starts in the name field and ends elsewhere on the row clicks the row; the edit keeps it.
     if (li.querySelector(".row-edit")) return;
@@ -223,6 +224,8 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
     rowButton("due-row", "期限を変更", DATE_SVG, (button) => openDuePop(button, t)),
     rowButton("project-row", "プロジェクトを移動", FOLDER_SVG, (button) => openProjectMenu(button, t)),
   );
+  // A subtask stands alone in its own project, at the end of the top-level tasks.
+  if (t.parent) actions.append(rowButton("unparent-row", "親タスクから外す", OUTDENT_SVG, () => moveTask(t.id, t.projectId)));
   if (mail) actions.append(rowButton("mail-row", "メールを開く", MAIL_SVG, () => openMailFromTodo(mail)));
   actions.append(rowButton("open-row", "Todoist で開く", OPEN_SVG, () => invoke("todoist_open", { id: t.id }).catch(showError)));
   trail.append(tag("span", `due${t.bucket === "overdue" ? " over" : ""}`, t.due ? dueLabel(t.due) : ""), actions);
@@ -230,12 +233,21 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
   return li;
 }
 
-// The grip at a row's left edge: drag it onto a project in the side list to move the task there.
+// What the task `t` may be dropped on at `el`: a project in the side list (not "today"; the project it is in only when it is a subtask, which then stands alone),
+// or the row of another task it may become a subtask of.
+function dropTarget(el: Element | null | undefined, t: TaskItem) {
+  const proj = el?.closest<HTMLElement>("#projects .proj");
+  if (proj) return proj.dataset.view !== "today" && (viewProjectId(proj.dataset.view!) !== t.projectId || t.parent) ? proj : null;
+  const row = el?.closest<HTMLElement>("#todo-list li.task");
+  return row && canMoveUnder(t, row.dataset.id!) ? row : null;
+}
+
+// The grip at a row's left edge: drag it onto a project in the side list to move the task there, or onto another task's row to make it that task's subtask.
 // Pointer events, not HTML5 drag and drop, which clashes with the window's file drop.
 function gripOf(li: HTMLElement, t: TaskItem) {
   const grip = tag("span", "grip");
   grip.setAttribute("role", "img");
-  grip.setAttribute("aria-label", "ドラッグしてプロジェクトへ移動");
+  grip.setAttribute("aria-label", "ドラッグしてプロジェクトまたは親タスクへ移動");
   grip.innerHTML = GRIP_SVG;
   // The row opens the task on click; the grip must not, nor the click that ends a drag.
   grip.onclick = (e) => e.stopPropagation();
@@ -261,10 +273,8 @@ function gripOf(li: HTMLElement, t: TaskItem) {
         document.body.classList.add("dragging-task");
       }
       // Read before the ghost moves, so the move does not force a style recalculation each time.
-      const b = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("#projects .proj");
+      const next = dropTarget(document.elementFromPoint(e.clientX, e.clientY), t);
       ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`;
-      // Not the "today" list, nor the project the task is in.
-      const next = b && b.dataset.view !== "today" && viewProjectId(b.dataset.view!) !== t.projectId ? b : null;
       if (next === over) return;
       over?.classList.remove("drop");
       next?.classList.add("drop");
@@ -279,7 +289,10 @@ function gripOf(li: HTMLElement, t: TaskItem) {
       document.removeEventListener("pointercancel", cancel, true);
       document.removeEventListener("keydown", onKey);
       if (!ghost) return;
-      const projectId = drop && over ? viewProjectId((over as HTMLElement).dataset.view!) : null;
+      // A project of the side list has a `data-view`, a task's row a `data-id`.
+      const target = drop ? (over as HTMLElement | null) : null;
+      const projectId = target?.dataset.view && viewProjectId(target.dataset.view);
+      const parentId = target?.dataset.id;
       (ghost as HTMLElement).remove();
       ghost = null;
       (over as HTMLElement | null)?.classList.remove("drop");
@@ -291,6 +304,7 @@ function gripOf(li: HTMLElement, t: TaskItem) {
       document.addEventListener("click", swallow, true);
       setTimeout(() => document.removeEventListener("click", swallow, true));
       if (projectId) moveTask(t.id, projectId);
+      else if (parentId) moveUnder(t.id, parentId);
       // Only a redraw held back during the drag; the next refresh fetches.
       else if (todoState.undrawn) renderTodo();
     };

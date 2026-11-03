@@ -73,6 +73,7 @@ export interface Commands {
     result: boolean | null;
   };
   todoist_move: { args: { id: string; projectId: string }; result: boolean | null };
+  todoist_move_under: { args: { id: string; parentId: string }; result: boolean | null };
   todoist_delete: { args: { id: string }; result: boolean | null };
   todoist_open: { args: { id: string }; result: null };
   slack_load: { args: undefined; result: SlackLoad };
