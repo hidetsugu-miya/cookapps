@@ -1376,10 +1376,11 @@ describe("todo detail comments", () => {
   it("draws a file with an address as a link to it, and one without as a card that is no link", async () => {
     await openReport();
     await waitForCount(rows, 3);
-    const cards = await browser.execute(() => [...document.querySelectorAll("#todo-detail .c-file")].map((e) => ({ tag: e.tagName, href: e.getAttribute("href"), text: e.textContent })));
+    const cards = await browser.execute(() => [...document.querySelectorAll("#todo-detail .c-file")].map((e) => ({ tag: e.tagName, href: e.getAttribute("href"), title: e.getAttribute("title"), text: e.textContent })));
+    // The title is the host the card goes to, which the file's name may not say.
     expect(cards).toEqual([
-      { tag: "A", href: "https://files.example.com/plan.md", text: "plan.md" },
-      { tag: "DIV", href: null, text: "memo.txt" },
+      { tag: "A", href: "https://files.example.com/plan.md", title: "files.example.com", text: "plan.md" },
+      { tag: "DIV", href: null, title: null, text: "memo.txt" },
     ]);
   });
 
@@ -1400,6 +1401,15 @@ describe("todo detail comments", () => {
     expect(attrs).toEqual([]);
   });
 
+  it("drops svg and math from a comment", async () => {
+    await openReport([comment("c1", "Alice Example", 'before <svg width="9999" height="9999"><a href="https://example.com/s"><rect width="9999" height="9999"></rect></a></svg> <math><mi>x</mi></math> after')]);
+    await waitForCount(rows, 1);
+    expect(await count("#todo-detail .c-text svg")).toBe(0);
+    expect(await count("#todo-detail .c-text math")).toBe(0);
+    const foreign = await browser.execute(() => [...document.querySelectorAll("#todo-detail .c-text *")].filter((e) => e.namespaceURI !== "http://www.w3.org/1999/xhtml").length);
+    expect(foreign).toBe(0);
+  });
+
   it("fetches the comments once when the task is opened, and not again on a redraw of the same task", async () => {
     await openReport();
     expect(await waitForCalls("todoist_comments")).toEqual([{ taskId: "k1", projectId: "p1" }]);
@@ -1415,6 +1425,18 @@ describe("todo detail comments", () => {
     await $("#todo-back").click();
     await $(ROWS).click();
     expect(await waitForCalls("todoist_comments", 2)).toHaveLength(2);
+  });
+
+  it("fetches the comments of the open task again when the Todo screen is shown again", async () => {
+    await openReport();
+    await waitForCalls("todoist_comments");
+    await $("#nav-mail").click();
+    await $("#nav-todo").click();
+    expect(await waitForCalls("todoist_comments", 2)).toEqual([
+      { taskId: "k1", projectId: "p1" },
+      { taskId: "k1", projectId: "p1" },
+    ]);
+    await waitForCount(rows, 3);
   });
 
   it("fetches for the other task when a subtask is opened", async () => {
@@ -1566,6 +1588,24 @@ describe("todo detail comments", () => {
     expect(await count(rows)).toBe(0);
   });
 
+  it("shows a comment once when the fetch answers before the add does", async () => {
+    await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady, todoist_comments: holds });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await expect($("#todo-detail .comments")).toBeDisplayed();
+    const added = comment("c4", "Alice Example", "Looks good", { date: today, time: "10:00" });
+    const add = await mock("todoist_add_comment", holds);
+    await $(field).setValue("Looks good");
+    await $(sendButton).click();
+    await waitForCalls(add);
+    await release("todoist_comments", [added]);
+    await waitForCount(rows, 1);
+    await release(add, added);
+    await expect($(sendButton)).toBeDisabled();
+    await browser.pause(300);
+    expect(await count(rows)).toBe(1);
+  });
+
   it("takes the load that shows the token form when adding finds that a token is needed", async () => {
     await openReport([]);
     await mock("todoist_add_comment", null);
@@ -1618,6 +1658,30 @@ describe("todo detail comments", () => {
     await expect($(`${rows} .c-file`)).toHaveText("報告.txt");
     await expect($(chip)).not.toBeDisplayed();
     await expect($(field)).toHaveValue("");
+  });
+
+  it("uploads the file once when the add fails and is sent again, and again after the file is replaced", async () => {
+    await openReport([]);
+    const upload = await mock("todoist_upload", uploaded);
+    await mock("todoist_add_comment", rejects("add failed"));
+    await pickFile("報告.txt", "hello");
+    await $(sendButton).click();
+    await waitForCalls("todoist_add_comment");
+    await expect($("#error")).toHaveText(expect.stringContaining("add failed"));
+    const add = await mock("todoist_add_comment", comment("c4", "Alice Example", "報告.txt", { date: today, time: "10:00" }, { fileName: "報告.txt", fileUrl: uploaded.file_url }));
+    await $(sendButton).click();
+    expect(await waitForCalls(add)).toEqual([{ taskId: "k1", content: "", attachment: uploaded }]);
+    expect(await callsOf(upload)).toHaveLength(1);
+    // A file picked after a failed add is uploaded on its own.
+    await mock("todoist_add_comment", rejects("add failed"));
+    await pickFile("other.txt", "x");
+    await $(sendButton).click();
+    await waitForCalls("todoist_add_comment");
+    await pickFile("third.txt", "y");
+    await mock("todoist_add_comment", comment("c5", "Alice Example", "third.txt"));
+    await $(sendButton).click();
+    await waitForCalls("todoist_add_comment");
+    expect(await callsOf(upload)).toHaveLength(3);
   });
 
   it("sends a file alone with an empty text, and the card is drawn without the text", async () => {

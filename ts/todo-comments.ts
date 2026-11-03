@@ -2,7 +2,7 @@
 // They are not part of the task load: they are fetched when a task's detail is opened, and the section draws itself in place when an answer arrives.
 import type { Comment } from "./bindings/Comment";
 import { $, composing, isMac, tag } from "./dom.js";
-import { avatarColor, initials } from "./format.js";
+import { avatarColor, hostOf, initials } from "./format.js";
 import { CHEVRON_SVG, CLIP_SVG, CLOSE_SVG, FILE_SVG, SEND_SVG } from "./icons.js";
 import { invoke, invokeRaw, type Upload } from "./ipc.js";
 import { dueLabel, markdownHtml, todoState } from "./todo-data.js";
@@ -13,10 +13,11 @@ const MAX_FILE_BYTES = 100 * 1024 * 1024;
 // The header that carries the file's name to `todoist_upload`, percent-encoded (the body is the file's bytes alone).
 const FILE_NAME_HEADER = "x-file-name";
 
-// What was typed for a task, and the file picked for it.
+// What was typed for a task, and the file picked for it, with the upload's answer once it succeeded (a retry after a failed add reuses it, as long as the file is the same).
 interface Draft {
   text: string;
   file: File | null;
+  uploaded: Upload | null;
 }
 
 // Per task, in memory only: what was fetched or added, what was typed, the failure of the last fetch, and the requests and the fold in progress.
@@ -28,7 +29,7 @@ const sending = new Set<string>();
 const folded = new Set<string>();
 
 function draftOf(taskId: string) {
-  const draft = drafts.get(taskId) ?? { text: "", file: null };
+  const draft = drafts.get(taskId) ?? { text: "", file: null, uploaded: null };
   drafts.set(taskId, draft);
   return draft;
 }
@@ -65,7 +66,11 @@ function commentRow(c: Comment) {
   if (c.attachment) {
     // A card with no address is not a link.
     const card = c.attachment.fileUrl ? tag("a", "c-file") : tag("div", "c-file");
-    if (card instanceof HTMLAnchorElement) card.href = c.attachment.fileUrl!;
+    if (card instanceof HTMLAnchorElement) {
+      card.href = c.attachment.fileUrl!;
+      // The name is the sender's to write and can differ from where the card goes: the host shows where.
+      card.title = hostOf(c.attachment.fileUrl!);
+    }
     card.insertAdjacentHTML("beforeend", FILE_SVG);
     card.append(tag("span", "c-file-name", c.attachment.fileName));
     main.append(card);
@@ -111,6 +116,7 @@ function drawComposer(v: View) {
   remove.disabled = busy;
   remove.onclick = () => {
     draft.file = null;
+    draft.uploaded = null;
     drawComposer(v);
   };
   v.chip.replaceChildren(tag("span", "c-chip-name", draft.file.name), remove);
@@ -149,7 +155,9 @@ function filePicker() {
     const taskId = todoState.open;
     if (!file || !taskId) return;
     if (file.size > MAX_FILE_BYTES) return showError("ファイルが大きすぎます（100 MB まで）");
-    draftOf(taskId).file = file;
+    const draft = draftOf(taskId);
+    draft.file = file;
+    draft.uploaded = null;
     redraw(taskId, true);
   };
   document.body.append(input);
@@ -180,6 +188,12 @@ async function load(taskId: string, projectId: string) {
   if (tokenNeeded) loadTodo();
 }
 
+// The Todo screen shown again with a task's detail still open: its comments are fetched, as for a detail that was not showing.
+export function fetchOpenComments() {
+  const task = todoState.open ? todoState.taskById.get(todoState.open) : undefined;
+  if (task) load(task.id, task.projectId);
+}
+
 // Uploads the picked file, if any, then adds the comment. A failure shows the error and keeps the draft; a token that is needed takes the load that shows its form.
 async function send(taskId: string) {
   const draft = draftOf(taskId);
@@ -191,15 +205,20 @@ async function send(taskId: string) {
   try {
     let attachment: Upload | null = null;
     if (draft.file) {
-      const bytes = new Uint8Array(await draft.file.arrayBuffer());
-      attachment = await invokeRaw("todoist_upload", bytes, { [FILE_NAME_HEADER]: encodeURIComponent(draft.file.name) });
+      if (!draft.uploaded) {
+        const bytes = new Uint8Array(await draft.file.arrayBuffer());
+        draft.uploaded = await invokeRaw("todoist_upload", bytes, { [FILE_NAME_HEADER]: encodeURIComponent(draft.file.name) });
+      }
+      attachment = draft.uploaded;
     }
     const comment = draft.file && attachment === null ? null : await invoke("todoist_add_comment", { taskId, content: draft.text, attachment });
     if (comment === null) tokenNeeded = true;
     else {
-      held.set(taskId, [...(held.get(taskId) ?? []), comment]);
+      // A fetch that answered first may hold the comment already.
+      held.set(taskId, [...(held.get(taskId) ?? []).filter((x) => x.id !== comment.id), comment]);
       draft.text = "";
       draft.file = null;
+      draft.uploaded = null;
       // The redraw below puts the empty draft in the field; one already drawn is emptied here, since the field is not rebuilt by an answer.
       if (view?.taskId === taskId) view.input.value = "";
     }

@@ -6,6 +6,7 @@ import { closeDetail } from "./calendar-detail.js";
 import { closeHint } from "./hint.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
 import { loadTodo, renderTodo } from "./todo.js";
+import { fetchOpenComments } from "./todo-comments.js";
 import { todoState } from "./todo-data.js";
 import { show } from "./view.js";
 
@@ -60,6 +61,7 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   } else if (name === "todo") {
     show("todo");
     if (todoState.kept) renderTodo();
+    fetchOpenComments();
     // The backend keeps the completed tasks of the last load; they are fetched again only while `doneStale` is set (until a load has fetched from Todoist).
     loadTodo(false, todoState.todo === null || todoState.kept);
   } else if (name === "settings") {
