@@ -131,6 +131,11 @@ export function canMoveUnder(t: TaskItem, id: string) {
   return !!target && id !== t.id && id !== t.parent?.id && !isUnder(target, t.id);
 }
 
+const recount = (p: TaskItem) => {
+  p.subDone = p.subtasks.filter((s) => s.done).length;
+  p.subTotal = p.subtasks.length;
+};
+
 // Takes `t` out of the subtask list of its parent, which counts one less, and makes `t` a top-level task.
 function leaveParent(t: TaskItem) {
   const old = t.parent && todoState.taskById.get(t.parent.id);
@@ -139,11 +144,6 @@ function leaveParent(t: TaskItem) {
   old.subtasks = old.subtasks.filter((s) => s.id !== t.id);
   recount(old);
 }
-
-const recount = (p: TaskItem) => {
-  p.subDone = p.subtasks.filter((s) => s.done).length;
-  p.subTotal = p.subtasks.length;
-};
 
 // Moves a task and the rows of its subtasks, which Todoist moves with it, into a project.
 // The task becomes a top-level task there, a subtask too: moving it into its own project makes it stand alone.
@@ -179,8 +179,7 @@ export function settleLocal(id: string, done: boolean | null) {
     else s.done = done;
     // Active subtasks first, then the completed ones.
     p.subtasks.sort((a, b) => Number(a.done) - Number(b.done));
-    p.subDone = p.subtasks.filter((x) => x.done).length;
-    p.subTotal = p.subtasks.length;
+    recount(p);
   }
   // shortcut: a reopened subtask keeps its place among the done ones, and has no row; the next reload fixes it.
   if (done !== false) todo.tasks = todo.tasks.filter((t) => t.id !== id && !isUnder(t, id));

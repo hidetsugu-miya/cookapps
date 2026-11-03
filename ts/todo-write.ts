@@ -73,6 +73,12 @@ export async function todoCall<C extends Write>(
 export const saveTask = (id: string, fields: TaskFields) =>
   todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields), !("content" in fields));
 export const moveTask = (id: string, projectId: string) => todoCall("todoist_move", { id, projectId }, null, () => moveLocal(id, projectId));
-export const moveUnder = (id: string, parentId: string) => todoCall("todoist_move_under", { id, parentId }, null, () => moveUnderLocal(id, parentId));
+export async function moveUnder(id: string, parentId: string) {
+  // The local move opens the parent so the moved row shows: a failed call closes it again if it was closed.
+  const wasOpen = todoState.openTasks.has(parentId);
+  const answer = await todoCall("todoist_move_under", { id, parentId }, null, () => moveUnderLocal(id, parentId));
+  if (answer === null && !wasOpen) todoState.openTasks.delete(parentId);
+  return answer;
+}
 export const setTaskDone = (id: string, done: boolean, box: HTMLInputElement) =>
   todoCall("todoist_set_done", { id, done }, box, () => settleLocal(id, done));

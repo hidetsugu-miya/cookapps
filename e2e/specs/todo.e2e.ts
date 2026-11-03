@@ -423,8 +423,10 @@ describe("todo projects and subtasks", () => {
 });
 
 // The E2E driver never hovers, so a row's grip stays hidden (visibility) and takes no pointer event: show the grips for the drag.
+// The window is not painted either, so a row that a toggle opened stays shrunk to no height by its slide: end the slides, or its grip cannot be pressed.
 const showGrips = () =>
   browser.execute(() => {
+    for (const a of document.getAnimations()) a.finish();
     for (const g of document.querySelectorAll<HTMLElement>("#todo-list .grip")) g.style.visibility = "visible";
   });
 
@@ -560,6 +562,44 @@ describe("todo: moving a task by its grip", () => {
     expect(await dropsSeen()).toEqual(["p1"]);
     expect(await marginsOf()).toEqual(["0px", "0px", "0px"]);
     expect(await count(`${ROWS} .unparent-row`)).toBe(0);
+  });
+
+  it("moves a subtask to another project when it is dropped on it, and shows it there as a task of its own", async () => {
+    await openWork();
+    await rowOf("Plan trip").$(".toggle").click();
+    await waitForCount(ROWS, 3);
+    const move = await mock("todoist_move", true);
+    // What Todoist answers once "Book flights" (k3) and its subtask are in Design (p2), out of "Plan trip".
+    const moved = todoData();
+    const [, trip, flights, seat] = moved.tasks;
+    flights.parent = null;
+    flights.projectId = "p2";
+    seat.projectId = "p2";
+    trip.subtasks = [];
+    trip.subTotal = 0;
+    await mock("todoist_load", moved);
+    await dragRow("Book flights", projectOf("p2"));
+    expect(await waitForCalls(move)).toEqual([{ id: "k3", projectId: "p2" }]);
+    await waitForCount(ROWS, 2);
+    await expect(rowOf("Plan trip").$(".toggle")).not.toExist();
+    await projectOf("p2").click();
+    await waitForCount(ROWS, 1);
+    expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Book flights")]);
+    expect(await marginsOf()).toEqual(["0px"]);
+    expect(await count(`${ROWS} .unparent-row`)).toBe(0);
+  });
+
+  it("puts the row back, closed again, and shows the error when making it a subtask fails", async () => {
+    await openWork();
+    const moveUnder = await mock("todoist_move_under", rejects("Todoist に接続できません"));
+    await dragRow("Write report", rowOf("Plan trip"));
+    await waitForCalls(moveUnder);
+    // The reload brings back what Todoist has: "Write report" at the top level and "Plan trip" closed.
+    await waitForCount(ROWS, 2);
+    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Write report"), expect.stringContaining("Plan trip")]);
+    expect(await marginsOf()).toEqual(["0px", "0px"]);
+    await expect(rowOf("Plan trip").$(".toggle")).toHaveAttribute("aria-expanded", "false");
   });
 });
 
