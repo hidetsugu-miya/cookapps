@@ -715,6 +715,27 @@ describe("todo detail", () => {
     await $("#todo-detail .field:nth-child(2) .field-value").click();
     await expect($(".due-pop .chip-input")).toHaveValue("every day");
   });
+
+  it("shows a due date as a zero-padded month and day, with the year when it is not this year", async () => {
+    const year = Number(today.slice(0, 4));
+    const monthDay = today.endsWith("-03-05") ? "03月06日" : "03月05日";
+    const thisYear = `${year}-${monthDay.slice(0, 2)}-${monthDay.slice(3, 5)}`;
+    const data = todoData();
+    data.tasks[0].due = { date: thisYear, time: null, string: thisYear, recurring: false };
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await expect($(`${ROWS} .due`)).toHaveText(monthDay);
+    data.tasks[0].due = { date: `${year + 1}-04-01`, time: "15:00", string: "next year", recurring: false };
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await expect($(`${ROWS} .due`)).toHaveText(`${year + 1}年04月01日 15:00`);
+    await $(ROWS).click();
+    await expect($("#todo-detail .field:nth-child(2) .field-value")).toHaveText(expect.stringContaining(`${year + 1}年04月01日 15:00`));
+    data.tasks[0].due = { date: today, time: "12:00", string: "today 12:00", recurring: false };
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await expect($(`${ROWS} .due`)).toHaveText("12:00");
+  });
 });
 
 // The Markdown source of the description the next specs copy.

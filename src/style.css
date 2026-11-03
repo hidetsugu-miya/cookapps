@@ -310,7 +310,7 @@ button.review-chip:hover { background: var(--hover); }
 .body .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
 .body .t svg { width: 14px; height: 14px; color: #888; flex: none; }
 .ptag { display: flex; align-items: center; gap: 6px; color: #666; font-size: 12px; overflow: hidden; white-space: nowrap; }
-.task .trail { min-width: 76px; position: relative; }
+.task .trail { min-width: 92px; position: relative; }
 /* Over the name, so the column is only as wide as the due date. */
 .task .row-actions { position: absolute; right: 0; top: 50%; transform: translateY(-50%); padding-left: 8px; background: var(--hover); }
 .due { color: #666; font-size: 12px; white-space: nowrap; padding-right: 8px; }

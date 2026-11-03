@@ -76,12 +76,14 @@ export function viewTasks(view: string) {
   return tasks.filter((t) => t.projectId === id && !t.parent);
 }
 
-// "今日" for today (or its time), else "10/27", with the time if there is one.
+// "今日" for today (or its time), else "10月07日", with the year in another year ("2027年04月01日"), and with the time if there is one.
 export function dueLabel(due: { date: string; time: string | null }) {
-  const today = due.date === isoDate(new Date());
-  const [, m, d] = due.date.split("-").map(Number);
-  if (today) return due.time ?? "今日";
-  return due.time ? `${m}/${d} ${due.time}` : `${m}/${d}`;
+  const today = isoDate(new Date());
+  if (due.date === today) return due.time ?? "今日";
+  const [y, m, d] = due.date.split("-");
+  const day = `${m}月${d}日`;
+  const date = y === today.slice(0, 4) ? day : `${y}年${day}`;
+  return due.time ? `${date} ${due.time}` : date;
 }
 
 // The thread a task links to, only when it is of an account cookapps has: a description can name any address.
