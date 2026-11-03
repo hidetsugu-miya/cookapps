@@ -209,7 +209,6 @@ npx tauri build --bundles nsis
 ```
 
 インストーラーは `src-tauri/target/release/bundle/nsis/` に `cookapps_{バージョン}_x64-setup.exe` として出ます。
-GitHub Actions の CI（windows-latest）も、版を上げたコミットが main に push されて CI がそのタグを付けるたびに同じインストーラーを作り、成果物 `cookapps-windows-installer` として残します。
 コード署名はしていないので、実行すると Windows の SmartScreen が警告を出すことがあります。
 `client_secret.json` は、セットアップの手順の場所（`%APPDATA%\jp.mysis.cookapps\`）に置きます。
 
@@ -224,7 +223,7 @@ Claude Code から受信トレイと予定を扱う MCP サーバー `cookapps-m
 
 - 静的: 書式、lint、型、バージョンの一致
 - 単体: Rust の処理（`cargo test`）
-- E2E: 本物の WebView（macOS は WKWebView、Windows は WebView2）で画面を動かす。コマンドの結果はモックで返す
+- E2E: 本物の WebView（WKWebView）で画面を動かす（CI では macOS で流す）。コマンドの結果はモックで返す
 
 CI（`.github/workflows/ci.yml`）と同じチェックは、次のコマンドでローカルでも流せます。
 
