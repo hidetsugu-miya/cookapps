@@ -176,7 +176,7 @@ pub(crate) struct InlineImage<'a> {
 }
 
 /// `%40` becomes `@`. A `%` not followed by two hex digits stays as it is.
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let (mut out, mut i) = (Vec::with_capacity(bytes.len()), 0);
     while i < bytes.len() {

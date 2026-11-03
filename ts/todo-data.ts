@@ -91,13 +91,27 @@ export const linkedMail = (t: TaskItem, accounts: Set<string | undefined>) => (t
 export const accountSet = () => new Set(accountButtons().map((b) => b.dataset.account));
 
 // Whether a text field holds what the user is typing (a field of the open task, or a name being edited in the list); a redraw would replace it with Todoist's older value.
-// The subtask field counts only while it has text: it is emptied on Enter, and the redraw must show the subtask just added.
+// The subtask field and the comment field count only while they have text: the first is emptied on Enter, and the redraw must show the subtask just added; the second is emptied once its comment is sent.
 export function editingField() {
   if (todoState.dragging) return true;
   const a = document.activeElement as HTMLElement;
   if ($("todo-list").contains(a)) return a.matches(".row-edit");
-  return $("todo-detail").contains(a) && a.matches("textarea, input:not([type=checkbox])") && (a.dataset.field !== "sub" || (a as HTMLInputElement).value !== "");
+  return $("todo-detail").contains(a) && a.matches("textarea, input:not([type=checkbox])") && ((a.dataset.field !== "sub" && a.dataset.field !== "comment") || (a as HTMLInputElement).value !== "");
 }
+
+// Only http(s) links stay: a relative link would resolve to the app's own origin, which Rust's on_navigation allows, and replace the screen.
+// An http(s) link navigates this page and on_navigation opens it in the default browser, as a plain-text mail body's links do.
+// No form controls or styles: they could draw a fake field over the screen. No id or name: they could shadow the screen's own elements for $().
+// No svg or math: the transparent link area of an SVG could be spread over the screen. No label, for or class: a comment from another collaborator could style `<label for="trash" class="scrim">` over the whole screen, so that any click presses a hidden button of the mail detail by its id, or `<a class="scrim">` so that any click opens an outside site. No data-*: the screen reads them as its own state (`data-field`, `data-id`). The `.md` styles are element selectors and need none of them.
+const MARKDOWN_SANITIZE = {
+  ALLOWED_URI_REGEXP: /^https?:/i,
+  FORBID_TAGS: ["form", "input", "button", "textarea", "select", "style", "label", "svg", "math"],
+  FORBID_ATTR: ["style", "id", "name", "class", "for"],
+  ALLOW_DATA_ATTR: false,
+};
+
+// The HTML of a description or a comment, which Todoist keeps as Markdown. breaks: a single newline is a line break, as they are written line by line.
+export const markdownHtml = (markdown: string) => DOMPurify.sanitize(marked.parse(markdown, { breaks: true }), MARKDOWN_SANITIZE);
 
 // What the screen shows for a due text the calendar picked (`YYYY-MM-DD`, with ` HH:MM` for a task with a time), or an empty one (no due date).
 // Other text is Todoist's to read, so the task stays as it is until the reload.

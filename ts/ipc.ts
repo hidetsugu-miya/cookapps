@@ -12,6 +12,7 @@ import type { MailSummary } from "./bindings/MailSummary";
 import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
+import type { Comment } from "./bindings/Comment";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -27,6 +28,8 @@ import type { Week } from "./bindings/Week";
 import type { Workspace } from "./bindings/Workspace";
 
 type Account = { account: string };
+// What Todoist says about an uploaded file (`file_name`, `file_url`, `file_type`, ...): it is handed back as the attachment of a comment, as it is.
+export type Upload = Record<string, unknown>;
 type Thread = { account: string; id: string };
 type Mail = { subject: string; from: string; date: string; body: string };
 
@@ -79,6 +82,12 @@ export interface Commands {
   todoist_move_under: { args: { id: string; parentId: string }; result: boolean | null };
   todoist_delete: { args: { id: string }; result: boolean | null };
   todoist_open: { args: { id: string }; result: null };
+  // A task's comments, oldest first. `projectId` is the task's project, whose collaborators name the authors. null: a token is needed.
+  todoist_comments: { args: { taskId: string; projectId: string }; result: Comment[] | null };
+  // The file as raw bytes, sent with `invokeRaw` (its name travels in the `x-file-name` header); answers what Todoist says about it. null: a token is needed.
+  todoist_upload: { args: Uint8Array; result: Upload | null };
+  // `attachment` is what `todoist_upload` answered. null: a token is needed.
+  todoist_add_comment: { args: { taskId: string; content: string; attachment: Upload | null }; result: Comment | null };
   slack_load: { args: undefined; result: SlackLoad };
   slack_check: { args: { teamId: string }; result: Checked };
   slack_add_workspace: { args: { token: string }; result: Workspace[] };
@@ -127,11 +136,19 @@ export interface Commands {
   set_badge: { args: { count: number }; result: null };
 }
 
-export type ArgsOf<C extends keyof Commands> = Commands[C]["args"] extends undefined ? [] : [Commands[C]["args"]];
+// The commands that take JSON arguments; `todoist_upload` takes raw bytes (`invokeRaw`).
+type JsonCommand = Exclude<keyof Commands, "todoist_upload">;
+
+export type ArgsOf<C extends JsonCommand> = Commands[C]["args"] extends undefined ? [] : [Commands[C]["args"]];
 
 // Read once, as the app always did: the E2E build replaces `core` with a wrapper before this module runs (e2e/fixtures.js).
 const { invoke: tauriInvoke } = window.__TAURI__.core;
 
-export function invoke<C extends keyof Commands>(command: C, ...args: ArgsOf<C>): Promise<Commands[C]["result"]> {
+export function invoke<C extends JsonCommand>(command: C, ...args: ArgsOf<C>): Promise<Commands[C]["result"]> {
   return tauriInvoke(command, args[0]) as Promise<Commands[C]["result"]>;
+}
+
+// Calls a command with raw bytes as its body (Tauri's raw IPC). The rest of its arguments are the `headers`; a header value is ASCII, so the caller percent-encodes a name.
+export function invokeRaw(command: "todoist_upload", body: Uint8Array, headers: Record<string, string>): Promise<Commands["todoist_upload"]["result"]> {
+  return tauriInvoke(command, body, { headers }) as Promise<Commands["todoist_upload"]["result"]>;
 }

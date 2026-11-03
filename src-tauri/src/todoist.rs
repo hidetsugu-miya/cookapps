@@ -901,7 +901,7 @@ fn rejected(e: &ApiError) -> bool {
 async fn fetch_all<T: DeserializeOwned>(
     http: &reqwest::Client,
     token: &str,
-    path: &'static str,
+    path: &str,
     query: Vec<(&'static str, String)>,
     max_pages: usize,
 ) -> Result<Vec<T>, ApiError> {
@@ -1439,6 +1439,385 @@ pub async fn todoist_delete(
     let url = task_api_url(&id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let done = request(&auth, &state, command, Method::DELETE, &url, None).await?;
     Ok(done.map(|_| true))
+}
+
+/// A task's comments are read up to this many pages (200 each), and so are a project's collaborators.
+// shortcut: past these the rest is dropped, upgrade if a task ever collects that many comments.
+const MAX_COMMENT_PAGES: usize = 5;
+/// Todoist refuses a comment longer than this many characters.
+const COMMENT_LIMIT: usize = 15000;
+/// What the author is called when Todoist's lists do not name them.
+const UNKNOWN_AUTHOR: &str = "不明";
+/// What a file is called when Todoist names neither the file nor its address.
+const UNNAMED_FILE: &str = "添付ファイル";
+/// The header of `todoist_upload` that carries the file's name, percent-encoded: the body is the file's bytes alone.
+const FILE_NAME_HEADER: &str = "x-file-name";
+/// The upload may carry a big file over a slow line; the shared client's 30 seconds would cut it.
+const UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+#[derive(Deserialize)]
+struct ApiComment {
+    id: String,
+    posted_uid: Option<String>,
+    #[serde(default)]
+    content: String,
+    /// An object with `file_name`, `file_url` and more, or null.
+    file_attachment: Option<Value>,
+    #[serde(default)]
+    is_deleted: bool,
+    /// RFC 3339.
+    posted_at: Option<String>,
+}
+
+/// `GET /user`: the user the token belongs to.
+#[derive(Deserialize)]
+struct ApiUser {
+    id: String,
+    #[serde(default)]
+    full_name: String,
+}
+
+#[derive(Deserialize)]
+struct ApiCollaborator {
+    id: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// When a comment was posted, in local time.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct Posted {
+    /// `YYYY-MM-DD`.
+    date: String,
+    /// `HH:MM`.
+    time: Option<String>,
+}
+
+/// The file of a comment.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct CommentFile {
+    file_name: String,
+    /// Only an `https://` address: anything else is dropped, and the name is shown without a link.
+    file_url: Option<String>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct Comment {
+    id: String,
+    /// The author's name, or "不明".
+    author: String,
+    posted: Option<Posted>,
+    content: String,
+    attachment: Option<CommentFile>,
+}
+
+/// The file a comment carries; `None` when Todoist names neither its file nor its address.
+fn file_of(attachment: &Value) -> Option<CommentFile> {
+    let text = |key: &str| {
+        attachment
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+    };
+    let (name, url) = (text("file_name"), text("file_url"));
+    if name.is_none() && url.is_none() {
+        return None;
+    }
+    Some(CommentFile {
+        file_name: name.unwrap_or(UNNAMED_FILE).to_owned(),
+        file_url: url.filter(|u| u.starts_with("https://")).map(str::to_owned),
+    })
+}
+
+/// The comments that were not deleted, oldest first (one with no readable time comes first).
+fn live_comments(comments: Vec<ApiComment>) -> Vec<ApiComment> {
+    let mut live: Vec<ApiComment> = comments.into_iter().filter(|c| !c.is_deleted).collect();
+    live.sort_by_key(|c| {
+        c.posted_at
+            .as_deref()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+    });
+    live
+}
+
+/// Whether the collaborators are needed to name the authors of `comments`: someone wrote one who is not the user (`me`, unknown when `None`).
+fn needs_collaborators(comments: &[ApiComment], me: Option<&str>) -> bool {
+    comments
+        .iter()
+        .any(|c| c.posted_uid.as_deref().is_some_and(|uid| Some(uid) != me))
+}
+
+/// Author names by user ID: the collaborators', then the user's own.
+fn author_names(
+    me: Option<ApiUser>,
+    collaborators: Vec<ApiCollaborator>,
+) -> HashMap<String, String> {
+    let named = collaborators
+        .into_iter()
+        .map(|c| (c.id, c.name))
+        .chain(me.map(|u| (u.id, u.full_name)));
+    named.filter(|(_, name)| !name.trim().is_empty()).collect()
+}
+
+fn comment_of<Tz: TimeZone>(tz: &Tz, c: &ApiComment, names: &HashMap<String, String>) -> Comment {
+    let posted = c
+        .posted_at
+        .as_deref()
+        .and_then(|t| parse_due(tz, t))
+        .map(|(date, time)| Posted {
+            date: date.to_string(),
+            time: time.map(|t| t.format("%H:%M").to_string()),
+        });
+    Comment {
+        id: c.id.clone(),
+        author: c
+            .posted_uid
+            .as_ref()
+            .and_then(|uid| names.get(uid))
+            .map_or(UNKNOWN_AUTHOR, String::as_str)
+            .to_owned(),
+        posted,
+        content: c.content.clone(),
+        attachment: c.file_attachment.as_ref().and_then(file_of),
+    }
+}
+
+/// The body of `POST /comments`. Blank text with a file sends the file's name as the text, since Todoist wants at least one character.
+fn comment_body(task_id: &str, content: &str, attachment: Option<&Value>) -> Result<Value, String> {
+    if attachment.is_some_and(|a| !a.is_object()) {
+        return Err("添付ファイルが不正です".into());
+    }
+    let content = match (content.trim(), attachment) {
+        ("", None) => return Err("コメントを入力してください".into()),
+        ("", Some(file)) => file
+            .get("file_name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or(UNNAMED_FILE),
+        (text, _) => text,
+    };
+    if content.chars().count() > COMMENT_LIMIT {
+        return Err(format!(
+            "コメントは {COMMENT_LIMIT} 文字以内で入力してください"
+        ));
+    }
+    let mut body = json!({ "task_id": task_id, "content": content });
+    if let Some(file) = attachment {
+        body["attachment"] = file.clone();
+    }
+    Ok(body)
+}
+
+/// The name and the bytes of an upload: the body must be the file's raw bytes, and the header its name, percent-encoded.
+fn upload_parts<'a>(
+    name: Option<&str>,
+    body: &'a tauri::ipc::InvokeBody,
+) -> Result<(String, &'a [u8]), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = body else {
+        return Err("ファイルを読めません".into());
+    };
+    let name = name.map(crate::images::percent_decode).unwrap_or_default();
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("ファイル名がありません".into());
+    }
+    Ok((name.to_owned(), bytes))
+}
+
+/// A GET that answers one JSON object.
+async fn get_json<T: DeserializeOwned>(
+    http: &reqwest::Client,
+    token: &str,
+    path: &str,
+) -> Result<T, ApiError> {
+    let text = send(http, Method::GET, token, path, &[], None)
+        .await?
+        .ok_or_else(token_rejected)?;
+    parse(&text)
+}
+
+/// The names of the people who wrote `comments`: the user's own (`GET /user`) and, only when someone else wrote one and the project is known,
+/// the project's collaborators. A failure is logged and leaves those names out; the comments still show, their authors as "不明".
+async fn comment_names(
+    http: &reqwest::Client,
+    token: &str,
+    command: &str,
+    comments: &[ApiComment],
+    project_id: Option<&str>,
+) -> HashMap<String, String> {
+    let me = get_json::<ApiUser>(http, token, "/user")
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))
+        .ok();
+    let wanted = needs_collaborators(comments, me.as_ref().map(|u| u.id.as_str()));
+    let collaborators = match project_id.filter(|_| wanted) {
+        Some(id) => fetch_all::<ApiCollaborator>(
+            http,
+            token,
+            &format!("/projects/{id}/collaborators"),
+            Vec::new(),
+            MAX_COMMENT_PAGES,
+        )
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))
+        .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    author_names(me, collaborators)
+}
+
+/// The comments of a task, oldest first, deleted ones left out. `project_id` is the task's project, whose collaborators name the authors.
+/// `None` means a token is needed.
+#[tauri::command]
+pub async fn todoist_comments(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    task_id: String,
+    project_id: String,
+) -> Result<Option<Vec<Comment>>, String> {
+    let command = "todoist_comments";
+    valid_id(&task_id, "タスク ID").map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    valid_id(&project_id, "プロジェクト ID").map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let Some(token) = state
+        .token()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+    else {
+        return Ok(None);
+    };
+    let fetched = fetch_all::<ApiComment>(
+        auth.http(),
+        &token,
+        "/comments",
+        vec![("task_id", task_id)],
+        MAX_COMMENT_PAGES,
+    )
+    .await;
+    let comments = match fetched {
+        Ok(all) => live_comments(all),
+        Err(e) if rejected(&e) => {
+            state.forget_token().await;
+            return Ok(None);
+        }
+        Err(e) => return Err(log_failure(command, TOKEN_USER, e)),
+    };
+    // Nothing to name: Todoist is not asked about the user or the project.
+    if comments.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let names = comment_names(auth.http(), &token, command, &comments, Some(&project_id)).await;
+    Ok(Some(
+        comments
+            .iter()
+            .map(|c| comment_of(&Local, c, &names))
+            .collect(),
+    ))
+}
+
+/// Uploads the file the body holds (raw bytes; `x-file-name` is its name, percent-encoded) and answers Todoist's description of it, which `todoist_add_comment` takes as the attachment.
+/// The name goes to Todoist as a field too, so that a Japanese name survives. `None` means a token is needed.
+#[tauri::command]
+pub async fn todoist_upload(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Option<Value>, String> {
+    let command = "todoist_upload";
+    let header = request
+        .headers()
+        .get(FILE_NAME_HEADER)
+        .and_then(|v| v.to_str().ok());
+    let (name, bytes) = upload_parts(header, request.body())
+        .map(|(name, bytes)| (name, bytes.to_vec()))
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let Some(token) = state
+        .token()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+    else {
+        return Ok(None);
+    };
+    let form = reqwest::multipart::Form::new()
+        .text("file_name", name.clone())
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(bytes).file_name(name),
+        );
+    let res = auth
+        .http()
+        .post(format!("{API_URL}/uploads"))
+        .bearer_auth(&token)
+        .multipart(form)
+        .timeout(UPLOAD_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e.to_string()))?;
+    let Some(text) = answer(res)
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+    else {
+        state.forget_token().await;
+        return Ok(None);
+    };
+    parse(&text)
+        .map(Some)
+        .map_err(|e| log_failure(command, TOKEN_USER, e))
+}
+
+/// Adds a comment to a task and answers it as the list shows it. `attachment` is what `todoist_upload` answered. `None` means a token is needed and nothing was added.
+#[tauri::command]
+pub async fn todoist_add_comment(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    task_id: String,
+    content: String,
+    attachment: Option<Value>,
+) -> Result<Option<Comment>, String> {
+    let command = "todoist_add_comment";
+    valid_id(&task_id, "タスク ID").map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let body = comment_body(&task_id, &content, attachment.as_ref())
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let Some(created) = request(
+        &auth,
+        &state,
+        command,
+        Method::POST,
+        "/comments",
+        Some(body),
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let created: ApiComment = serde_json::from_value(created).map_err(|e| {
+        log_failure(
+            command,
+            TOKEN_USER,
+            format!("Todoist の応答を読めません: {e}"),
+        )
+    })?;
+    // The comment is the user's own, so only the user is looked up.
+    let names = match state.token().await {
+        Ok(Some(token)) => {
+            comment_names(
+                auth.http(),
+                &token,
+                command,
+                std::slice::from_ref(&created),
+                None,
+            )
+            .await
+        }
+        _ => HashMap::new(),
+    };
+    Ok(Some(comment_of(&Local, &created, &names)))
 }
 
 /// Opens the task in the browser (Todoist's web app).
@@ -2538,5 +2917,237 @@ mod tests {
             assert_eq!(with_plain_due(summary(Some(due))).due, None, "{due}");
         }
         assert_eq!(with_plain_due(summary(None)).due, None);
+    }
+
+    fn api_comment(id: &str, uid: Option<&str>, at: Option<&str>) -> ApiComment {
+        ApiComment {
+            id: id.into(),
+            posted_uid: uid.map(str::to_owned),
+            content: format!("body {id}"),
+            file_attachment: None,
+            is_deleted: false,
+            posted_at: at.map(str::to_owned),
+        }
+    }
+
+    fn comment_ids(comments: &[ApiComment]) -> Vec<&str> {
+        comments.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn comments_drop_the_deleted_ones_and_come_oldest_first() {
+        let mut gone = api_comment("c0", Some("1"), Some("2026-11-01T00:00:00Z"));
+        gone.is_deleted = true;
+        let live = live_comments(vec![
+            api_comment("c3", Some("1"), Some("2026-11-03T10:00:00.123456Z")),
+            gone,
+            api_comment("c1", Some("1"), Some("2026-11-01T09:00:00Z")),
+            api_comment("c2", Some("1"), Some("2026-11-02T23:30:00+09:00")),
+            api_comment("c9", Some("1"), None),
+        ]);
+        assert_eq!(comment_ids(&live), ["c9", "c1", "c2", "c3"]);
+    }
+
+    #[test]
+    fn comments_keep_their_order_when_posted_at_the_same_time() {
+        let at = Some("2026-11-01T09:00:00Z");
+        let live = live_comments(vec![
+            api_comment("b", Some("1"), at),
+            api_comment("a", Some("1"), at),
+        ]);
+        assert_eq!(comment_ids(&live), ["b", "a"]);
+    }
+
+    #[test]
+    fn a_file_keeps_only_an_https_address_and_falls_back_on_a_name() {
+        let file = |v: Value| file_of(&v);
+        assert_eq!(
+            file(json!({"file_name": "a.pdf", "file_url": "https://files.todoist.com/a.pdf"})),
+            Some(CommentFile {
+                file_name: "a.pdf".into(),
+                file_url: Some("https://files.todoist.com/a.pdf".into()),
+            })
+        );
+        for url in [
+            "http://files.todoist.com/a.pdf",
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "HTTPS://example.com/",
+        ] {
+            let kept = file(json!({"file_name": "a.pdf", "file_url": url})).unwrap();
+            assert_eq!(kept.file_url, None, "{url}");
+            assert_eq!(kept.file_name, "a.pdf");
+        }
+        let unnamed = file(json!({"file_url": "https://files.todoist.com/a.pdf"})).unwrap();
+        assert_eq!(unnamed.file_name, UNNAMED_FILE);
+        assert!(unnamed.file_url.is_some());
+        let blank = file(json!({"file_name": "  ", "file_url": "https://example.com/x"})).unwrap();
+        assert_eq!(blank.file_name, UNNAMED_FILE);
+        assert_eq!(file(json!({})), None);
+        assert_eq!(file(json!(null)), None);
+        assert_eq!(file(json!("a.pdf")), None);
+    }
+
+    #[test]
+    fn collaborators_are_needed_only_when_someone_else_wrote_a_comment() {
+        let mine = [
+            api_comment("a", Some("7"), None),
+            api_comment("b", Some("7"), None),
+        ];
+        assert!(!needs_collaborators(&mine, Some("7")));
+        assert!(!needs_collaborators(&[], Some("7")));
+        let others = [
+            api_comment("a", Some("7"), None),
+            api_comment("b", Some("8"), None),
+        ];
+        assert!(needs_collaborators(&others, Some("7")));
+        // The user could not be read: nobody is known to be the user.
+        assert!(needs_collaborators(&mine, None));
+        // No author at all names nobody.
+        assert!(!needs_collaborators(&[api_comment("a", None, None)], None));
+    }
+
+    #[test]
+    fn authors_are_named_by_the_user_then_the_collaborators_and_the_rest_are_unknown() {
+        let names = author_names(
+            Some(ApiUser {
+                id: "7".into(),
+                full_name: "Me Example".into(),
+            }),
+            vec![
+                ApiCollaborator {
+                    id: "7".into(),
+                    name: "Me Old".into(),
+                },
+                ApiCollaborator {
+                    id: "8".into(),
+                    name: "Bob Example".into(),
+                },
+                ApiCollaborator {
+                    id: "9".into(),
+                    name: " ".into(),
+                },
+            ],
+        );
+        let author =
+            |uid: Option<&str>| comment_of(&jst(), &api_comment("c", uid, None), &names).author;
+        assert_eq!(author(Some("7")), "Me Example");
+        assert_eq!(author(Some("8")), "Bob Example");
+        assert_eq!(author(Some("9")), UNKNOWN_AUTHOR);
+        assert_eq!(author(Some("10")), UNKNOWN_AUTHOR);
+        assert_eq!(author(None), UNKNOWN_AUTHOR);
+        assert!(author_names(None, vec![]).is_empty());
+    }
+
+    #[test]
+    fn a_comment_carries_its_local_time_text_and_file() {
+        let mut c = api_comment("c1", Some("7"), Some("2026-11-02T20:30:00.5Z"));
+        c.file_attachment =
+            Some(json!({"file_name": "a.pdf", "file_url": "https://example.com/a.pdf"}));
+        let got = comment_of(&jst(), &c, &HashMap::new());
+        assert_eq!(
+            got.posted,
+            Some(Posted {
+                date: "2026-11-03".into(),
+                time: Some("05:30".into()),
+            })
+        );
+        assert_eq!(got.content, "body c1");
+        assert_eq!(got.attachment.unwrap().file_name, "a.pdf");
+        let none = comment_of(&jst(), &api_comment("c2", None, None), &HashMap::new());
+        assert_eq!((none.posted, none.attachment), (None, None));
+        let bad = comment_of(
+            &jst(),
+            &api_comment("c3", None, Some("soon")),
+            &HashMap::new(),
+        );
+        assert_eq!(bad.posted, None);
+    }
+
+    #[test]
+    fn a_comment_answer_is_read_with_its_unknown_fields_and_a_null_file() {
+        let c: ApiComment = serde_json::from_value(json!({
+            "id": "c1", "posted_uid": "7", "content": "hi", "file_attachment": null,
+            "uids_to_notify": [], "is_deleted": false, "posted_at": "2026-11-02T10:00:00Z", "reactions": null,
+        }))
+        .unwrap();
+        assert_eq!(c.file_attachment, None);
+        let sparse: ApiComment = serde_json::from_value(json!({"id": "c2"})).unwrap();
+        assert_eq!((sparse.content.as_str(), sparse.is_deleted), ("", false));
+    }
+
+    #[test]
+    fn a_comment_body_trims_the_text_and_sends_the_task() {
+        let file = json!({"file_name": "a.pdf", "file_url": "https://example.com/a.pdf"});
+        assert_eq!(
+            comment_body("k1", "  hello \n", None).unwrap(),
+            json!({"task_id": "k1", "content": "hello"})
+        );
+        assert_eq!(
+            comment_body("k1", "see", Some(&file)).unwrap(),
+            json!({"task_id": "k1", "content": "see", "attachment": file})
+        );
+    }
+
+    #[test]
+    fn a_comment_of_only_a_file_sends_the_files_name_as_its_text() {
+        let file = json!({"file_name": "報告.pdf"});
+        assert_eq!(
+            comment_body("k1", " \n", Some(&file)).unwrap()["content"],
+            "報告.pdf"
+        );
+        assert_eq!(
+            comment_body("k1", "", Some(&json!({"file_name": " "}))).unwrap()["content"],
+            UNNAMED_FILE
+        );
+        assert_eq!(
+            comment_body("k1", "", Some(&json!({}))).unwrap()["content"],
+            UNNAMED_FILE
+        );
+    }
+
+    #[test]
+    fn a_comment_body_refuses_blank_text_without_a_file_and_a_file_that_is_not_an_object() {
+        assert!(comment_body("k1", "  \n", None).is_err());
+        for bad in [json!("a.pdf"), json!(["a"]), json!(null), json!(3)] {
+            assert_eq!(
+                comment_body("k1", "text", Some(&bad)),
+                Err("添付ファイルが不正です".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn a_comment_body_refuses_text_over_the_limit_counted_in_characters() {
+        let at_limit = "あ".repeat(COMMENT_LIMIT);
+        assert!(comment_body("k1", &at_limit, None).is_ok());
+        // Spaces around the text do not count.
+        assert!(comment_body("k1", &format!(" {at_limit} "), None).is_ok());
+        let over = comment_body("k1", &format!("{at_limit}あ"), None);
+        assert!(over.unwrap_err().contains("15000"));
+    }
+
+    #[test]
+    fn an_upload_needs_raw_bytes_and_a_name_that_is_decoded() {
+        let raw = tauri::ipc::InvokeBody::Raw(vec![1, 2, 3]);
+        assert_eq!(
+            upload_parts(Some("%E5%A0%B1%E5%91%8A%20a.pdf"), &raw).unwrap(),
+            ("報告 a.pdf".to_owned(), &[1u8, 2, 3][..])
+        );
+        assert_eq!(upload_parts(Some("a%2Bb.txt"), &raw).unwrap().0, "a+b.txt");
+        for name in [None, Some(""), Some("%20%20")] {
+            assert_eq!(
+                upload_parts(name, &raw),
+                Err("ファイル名がありません".to_owned())
+            );
+        }
+        let json = tauri::ipc::InvokeBody::Json(json!([1, 2, 3]));
+        assert_eq!(
+            upload_parts(Some("a.txt"), &json),
+            Err("ファイルを読めません".to_owned())
+        );
+        // An empty file is Todoist's to refuse.
+        let empty = tauri::ipc::InvokeBody::Raw(vec![]);
+        assert!(upload_parts(Some("a.txt"), &empty).unwrap().1.is_empty());
     }
 }

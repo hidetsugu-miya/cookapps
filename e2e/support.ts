@@ -6,6 +6,7 @@ import type { Checked } from "../ts/bindings/Checked";
 import type { Claude } from "../ts/bindings/Claude";
 import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
+import type { Comment } from "../ts/bindings/Comment";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
@@ -250,6 +251,35 @@ export const todoData = (): Todo => {
     tasks: [task("k1", "Write report", "p1", "today"), trip, flights, seat],
   };
 };
+
+// A comment of Todoist: `posted` is a local `{date, time}` as Rust answers it.
+export const comment = (id: string, author: string, content: string, posted: Comment["posted"] = { date: "2000-01-02", time: "08:20" }, attachment: Comment["attachment"] = null): Comment => ({
+  id,
+  author,
+  posted,
+  content,
+  attachment,
+});
+
+// Picks a file for the comment field the way the file panel does: the file goes into the hidden input and `change` follows. The panel itself is never opened.
+// `size` makes the file report that size without holding that many bytes.
+export const pickFile = (name: string, content: string, size?: number) =>
+  browser.execute(
+    (id, n, c, sz) => {
+      if (!window.__e2e_once__(id)) return;
+      const file = new File([c], n, { type: "text/plain" });
+      if (sz !== undefined) Object.defineProperty(file, "size", { value: sz });
+      const data = new DataTransfer();
+      data.items.add(file);
+      const input = document.getElementById("comment-file") as HTMLInputElement;
+      input.files = data.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    onceId(),
+    name,
+    content,
+    size,
+  );
 
 // ---- Slack and Claude ----
 
