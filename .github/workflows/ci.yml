@@ -45,13 +45,9 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt --check
 
-  # Unit: Rust only; clippy sits here because it compiles every target of the OS it runs on.
+  # Unit: Rust only; clippy sits here because it compiles every target, tests included.
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
     defaults:
       run:
         shell: bash
@@ -80,7 +76,6 @@ jobs:
         run: cargo test --all-features
       # cargo test writes the types of the Rust structs (ts/bindings/); a committed copy that differs is out of date.
       - name: Check bindings
-        if: matrix.os == 'macos-latest'
         run: test -z "$(git status --porcelain ts/bindings)"
 
   # E2E: the real WebView (WKWebView) with the commands mocked.

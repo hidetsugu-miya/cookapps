@@ -177,7 +177,7 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 | Job | Environment | Checks |
 |-----|-------------|--------|
 | `static` | macos-latest | version match, `npm run lint`, `npm run build:ts`, `npm run e2e:check`, cargo fmt |
-| `test` | macos-latest, windows-latest | clippy (`--all-targets --all-features`), cargo test (`--all-features`), bindings diff (macOS only) |
+| `test` | macos-latest | clippy (`--all-targets --all-features`), cargo test (`--all-features`), bindings diff |
 | `e2e` | macos-latest | `npm run e2e:build`, `npm run e2e` |
 | `tag` | ubuntu-latest (main pushes only; after `static`, `test` and `e2e`) | the annotated tag `v{version}` of `src-tauri/Cargo.toml`, made unless it already exists (a push that does not raise the version is not a release) |
 | `release` | macos-latest (main pushes with a new version tag only; after `tag`) | the signed `.app`, its updater files and `latest.json`, put in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
@@ -188,7 +188,7 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 - On a rate limit (429 or 403 `rateLimitExceeded`), interactive operations retry up to 2 times (they follow `Retry-After`, capped at 30 seconds).
   Auto sync does not retry. It backs off per account (`SyncState`).
 - There is no coverage tool.
-- Windows support is built, linted and unit-tested in CI (the `test` job), but there is no Windows E2E or release, and it has not been checked on a real Windows machine.
+- CI runs on macOS only. Windows is not built, linted, tested or released in CI, and it has not been checked on a real Windows machine.
 
 ## Open questions
 
