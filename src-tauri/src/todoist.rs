@@ -482,6 +482,16 @@ fn task_api_url(id: &str, action: Option<&str>) -> Result<String, String> {
     })
 }
 
+/// The URL and body that move task `id` under `parent_id`, as its last subtask. Both IDs come from the frontend, and a task cannot be its own parent.
+fn move_under_request(id: &str, parent_id: &str) -> Result<(String, Value), String> {
+    let url = task_api_url(id, Some("move"))?;
+    task_api_url(parent_id, None)?;
+    if id == parent_id {
+        return Err("タスクを自分自身のサブタスクにはできません".into());
+    }
+    Ok((url, json!({ "parent_id": parent_id })))
+}
+
 fn task_web_url(id: &str) -> Result<String, String> {
     valid_id(id, "タスク ID")?;
     Ok(format!("{WEB_TASK_URL}/{id}"))
@@ -1403,6 +1413,21 @@ pub async fn todoist_move(
     move_task(&auth, &state, "todoist_move", &id, Some(&project_id)).await
 }
 
+/// Moves a task under another task, as that task's last subtask. Todoist refuses a parent that is below the task, or a tree that would be too deep.
+#[tauri::command]
+pub async fn todoist_move_under(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    id: String,
+    parent_id: String,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_move_under";
+    let (url, body) =
+        move_under_request(&id, &parent_id).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let done = request(&auth, &state, command, Method::POST, &url, Some(body)).await?;
+    Ok(done.map(|_| true))
+}
+
 /// Deletes a task for good; Todoist cannot undo it, so the screen asks twice.
 #[tauri::command]
 pub async fn todoist_delete(
@@ -1633,6 +1658,33 @@ mod tests {
         assert_eq!(
             task_web_url("6XGg").unwrap(),
             "https://app.todoist.com/app/task/6XGg"
+        );
+    }
+
+    #[test]
+    fn move_under_request_sends_only_the_parent() {
+        assert_eq!(
+            move_under_request("6XGg", "7YHh").unwrap(),
+            ("/tasks/6XGg/move".to_owned(), json!({"parent_id": "7YHh"}))
+        );
+    }
+
+    #[test]
+    fn move_under_request_refuses_bad_ids_and_a_task_under_itself() {
+        for (id, parent_id) in [
+            ("", "7YHh"),
+            ("6XGg", ""),
+            ("a/b", "7YHh"),
+            ("6XGg", "../x"),
+        ] {
+            assert!(
+                move_under_request(id, parent_id).is_err(),
+                "{id} {parent_id}"
+            );
+        }
+        assert_eq!(
+            move_under_request("6XGg", "6XGg").unwrap_err(),
+            "タスクを自分自身のサブタスクにはできません"
         );
     }
 

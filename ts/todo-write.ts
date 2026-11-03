@@ -2,7 +2,7 @@
 import { $ } from "./dom.js";
 import { invoke, type Commands } from "./ipc.js";
 import { loadTodo, renderTodo } from "./todo.js";
-import { editingField, isDueToday, moveLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
+import { editingField, isDueToday, moveLocal, moveUnderLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
 import { showError } from "./view.js";
 
 // Reloads shortly after the last call, so a run of changes costs one load. Completed tasks are fetched again only when asked for by one of them.
@@ -26,7 +26,7 @@ function scheduleTodoReload(withDone: boolean) {
 }
 
 // The commands todoCall sends: they answer true or false, or null when a token is needed.
-type Write = "todoist_add" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_move" | "todoist_delete";
+type Write = "todoist_add" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_move" | "todoist_move_under" | "todoist_delete";
 const send = invoke as (command: Write, args: unknown) => Promise<boolean | null>;
 
 // Runs a change, then reloads whether it worked or not, so the screen shows what Todoist has.
@@ -73,5 +73,6 @@ export async function todoCall<C extends Write>(
 export const saveTask = (id: string, fields: TaskFields) =>
   todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields), !("content" in fields));
 export const moveTask = (id: string, projectId: string) => todoCall("todoist_move", { id, projectId }, null, () => moveLocal(id, projectId));
+export const moveUnder = (id: string, parentId: string) => todoCall("todoist_move_under", { id, parentId }, null, () => moveUnderLocal(id, parentId));
 export const setTaskDone = (id: string, done: boolean, box: HTMLInputElement) =>
   todoCall("todoist_set_done", { id, done }, box, () => settleLocal(id, done));

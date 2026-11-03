@@ -125,10 +125,47 @@ function isUnder(t: TaskItem, id: string) {
   return false;
 }
 
-// A task and the rows of its subtasks, which Todoist moves with it.
-// shortcut: a subtask that has a row, moved to another project, is not redrawn as a task there, and the parent's subtasks[] keeps its content and due; the next reload fixes them.
+// Whether the task `t` may be dropped on the row of the task `id`: not on itself, not on a task below it, and not on the parent it already has.
+export function canMoveUnder(t: TaskItem, id: string) {
+  const target = todoState.taskById.get(id);
+  return !!target && id !== t.id && id !== t.parent?.id && !isUnder(target, t.id);
+}
+
+// Takes `t` out of the subtask list of its parent, which counts one less, and makes `t` a top-level task.
+function leaveParent(t: TaskItem) {
+  const old = t.parent && todoState.taskById.get(t.parent.id);
+  t.parent = null;
+  if (!old) return;
+  old.subtasks = old.subtasks.filter((s) => s.id !== t.id);
+  recount(old);
+}
+
+const recount = (p: TaskItem) => {
+  p.subDone = p.subtasks.filter((s) => s.done).length;
+  p.subTotal = p.subtasks.length;
+};
+
+// Moves a task and the rows of its subtasks, which Todoist moves with it, into a project.
+// The task becomes a top-level task there, a subtask too: moving it into its own project makes it stand alone.
 export function moveLocal(id: string, projectId: string) {
-  for (const t of todoState.todo!.tasks) if (t.id === id || isUnder(t, id)) t.projectId = projectId;
+  const t = todoState.taskById.get(id);
+  if (t) leaveParent(t);
+  for (const x of todoState.todo!.tasks) if (x.id === id || isUnder(x, id)) x.projectId = projectId;
+}
+
+// Moves a task and the rows of its subtasks under the task `parentId`, as its last subtask, in that task's project. The parent is opened so the moved row shows.
+export function moveUnderLocal(id: string, parentId: string) {
+  const t = todoState.taskById.get(id);
+  const parent = todoState.taskById.get(parentId);
+  if (!t || !parent) return;
+  leaveParent(t);
+  t.parent = { id: parent.id, content: parent.content };
+  parent.subtasks.push({ id: t.id, content: t.content, done: false, due: t.due });
+  // Active subtasks first, then the completed ones.
+  parent.subtasks.sort((a, b) => Number(a.done) - Number(b.done));
+  recount(parent);
+  for (const x of todoState.todo!.tasks) if (x.id === id || isUnder(x, id)) x.projectId = parent.projectId;
+  todoState.openTasks.add(parentId);
 }
 
 // Completes (`done` true), reopens (false) or deletes (null) a task. In the subtask list of the task holding it, it turns done, open or goes, and the counts follow.

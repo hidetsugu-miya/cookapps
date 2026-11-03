@@ -146,6 +146,7 @@ pub fn run() {
             todoist::todoist_set_done,
             todoist::todoist_update,
             todoist::todoist_move,
+            todoist::todoist_move_under,
             todoist::todoist_delete,
             todoist::todoist_open,
             slack::slack_load,

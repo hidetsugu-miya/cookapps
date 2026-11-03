@@ -324,7 +324,7 @@ button.review-chip:hover { background: var(--hover); }
 .grip svg { width: 14px; height: 14px; stroke-width: 2.4; }
 .task:not(:hover):not(:focus-within) .grip { visibility: hidden; }
 .task.dragging { opacity: .4; }
-.proj.drop { background: var(--soft); box-shadow: inset 0 0 0 2px var(--accent); }
+.proj.drop, .task.drop { background: var(--soft); box-shadow: inset 0 0 0 2px var(--accent); }
 body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
 .drag-ghost { position: fixed; left: 0; top: 0; z-index: 30; max-width: 280px; padding: 6px 12px; border-radius: 8px; background: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .body .parent { color: #888; font-size: 12px; flex: none; }
