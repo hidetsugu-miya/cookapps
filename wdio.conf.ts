@@ -53,6 +53,7 @@ export const config = {
   framework: "mocha",
   reporters: ["spec"],
   // A `browser.execute` that loses its result costs the 3 s script timeout plus a retry, which used up the default 5 s of one `waitUntil`; 15 s fits that and stays far under the test's 60 s.
+  // This is also the default of `expect` and `waitFor*`, so a failing check waits this long.
   waitforTimeout: 15000,
   mochaOpts: { ui: "bdd", timeout: 60000 },
   logLevel: "warn",
