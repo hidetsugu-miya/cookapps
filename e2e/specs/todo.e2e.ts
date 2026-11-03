@@ -443,7 +443,8 @@ async function dragRow(name: string, ...over: ChainablePromiseElement[]) {
   } catch (error) {
     // The timed refresh can redraw the list after the row was found, and a loaded machine widens that gap: start again on the new row.
     if (!String(error).includes("no longer attached")) throw error;
-    await browser.releaseActions();
+    // The failed press may still have the app's listeners on the document, and the driver's release sends no pointerup after a failure (its pointer is always 1).
+    await browser.execute(() => document.dispatchEvent(new PointerEvent("pointercancel", { pointerId: 1 })));
     await drag();
   }
 }
