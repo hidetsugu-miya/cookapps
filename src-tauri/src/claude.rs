@@ -55,6 +55,8 @@ const MIN_CHUNK_TIME: Duration = Duration::from_secs(30);
 static CHUNK_SLOT: Semaphore = Semaphore::const_new(1);
 /// The sentence after a message that `plan_thread` cut (see `cut_note`), so the model knows the rest was not read.
 const CUT_NOTE: &str = "（このメッセージは長いため、ここで切っています。続きは読めていません）";
+/// The line that ends the last message sent when replies after it were not read (see `note_unread`).
+const UNREAD_NOTE: &str = "（これより新しい返信は読めていません）";
 /// How many `claude` processes run at once, for the Slack and the mail summaries together.
 static CLAUDE_SLOTS: Semaphore = Semaphore::const_new(2);
 /// How long a call waits for a free slot before it gives up.
@@ -1144,15 +1146,20 @@ fn chunk_lines(lines: &[&str], limit: usize, max: usize) -> (Vec<Chunk>, usize) 
     (chunks, lines.len() - taken)
 }
 
-/// The messages as sections: a heading line, then the lines under it; neighbours of one part share a section. `middle` (its heading and the lines under it) goes right after the first message.
+/// The messages as sections: a heading line, then the lines under it; neighbours of one part share a section. `middle` (its heading and the lines under it) goes right after the first kept message
+/// when that is the thread's first message or the linked one, and otherwise at the very start: after a message of a section that goes on (the latest replies), it would come between the messages of one section.
 fn render(kept: &[(Part, String)], middle: Option<(String, Vec<String>)>) -> String {
     let mut sections: Vec<(String, Vec<&str>)> = Vec::new();
+    let after_first = matches!(kept.first(), Some((Part::First | Part::Target, _)));
+    if let (false, Some((label, points))) = (after_first, &middle) {
+        sections.push((label.clone(), points.iter().map(String::as_str).collect()));
+    }
     for (i, (part, line)) in kept.iter().enumerate() {
         match sections.last_mut() {
             Some((label, lines)) if label.as_str() == part.label() => lines.push(line),
             _ => sections.push((part.label().to_owned(), vec![line])),
         }
-        if let (0, Some((label, points))) = (i, &middle) {
+        if let (0, true, Some((label, points))) = (i, after_first, &middle) {
             sections.push((label.clone(), points.iter().map(String::as_str).collect()));
         }
     }
@@ -1253,11 +1260,13 @@ fn chunk_time(elapsed: Duration, budget: Duration, limit: Duration) -> Duration 
 }
 
 /// The points of the chunks (`groups`, each non-empty and with its points on one line each) as lines `- {point}`, at most `cap` characters with their line breaks.
-/// Each group has the same share of `cap`: whole points from its start while they fit, and if its first point alone does not, that point cut to the share.
+/// Each group has an equal share of what is left of `cap` (so what a group leaves unused goes to the groups after it): whole points from its start while they fit,
+/// and if its first point alone does not, that point cut to the share.
 fn limit_points(groups: &[Vec<String>], cap: usize) -> Vec<String> {
-    let share = cap / groups.len().max(1);
+    let mut left = cap;
     let mut out = Vec::new();
-    for group in groups {
+    for (i, group) in groups.iter().enumerate() {
+        let share = left / (groups.len() - i);
         let mut used = 0;
         for point in group {
             let line = format!("- {point}");
@@ -1266,6 +1275,7 @@ fn limit_points(groups: &[Vec<String>], cap: usize) -> Vec<String> {
                 if used == 0 {
                     let cut_line = cut(&line, share.saturating_sub(1));
                     if !cut_line.is_empty() {
+                        used = cut_line.chars().count() + 1;
                         out.push(cut_line);
                     }
                 }
@@ -1274,8 +1284,34 @@ fn limit_points(groups: &[Vec<String>], cap: usize) -> Vec<String> {
             used += cost;
             out.push(line);
         }
+        left -= used;
     }
     out
+}
+
+/// The note that follows the last message kept when the read of the thread stopped short: a line break and an indent (the note continues the message, like its other lines) and `UNREAD_NOTE`.
+fn unread_note() -> String {
+    format!("\n  {UNREAD_NOTE}")
+}
+
+/// Puts `unread_note` at the end of the last message of `plan.kept`, which is not the end of the thread when replies were left unread.
+/// It is done before `final_message`, so that its count of characters includes the note. Where the note would push the kept messages past `INPUT_LIMIT`,
+/// that last message is cut by the excess first (and says so, as every cut message does).
+fn note_unread(plan: &mut Plan) {
+    let note = unread_note();
+    let excess = (render(&plan.kept, None).chars().count() + note.chars().count())
+        .saturating_sub(INPUT_LIMIT);
+    let Some((part, text)) = plan.kept.last_mut() else {
+        return;
+    };
+    if excess > 0 {
+        let (fitted, cut) = fit_noted(text, text.chars().count().saturating_sub(excess));
+        *text = fitted;
+        if *part == Part::Target && cut {
+            plan.target_cut = true;
+        }
+    }
+    text.push_str(&note);
 }
 
 /// What the final call reads for a thread planned as `plan`, given the points of each of its chunks (`None` for a chunk that failed), and how many messages
@@ -1654,7 +1690,7 @@ async fn summarize_chunk(
 /// Summarises a Slack thread into a task with `claude -p`, following the instructions saved in `dir`. The thread's messages and the names of `projects` (ID and name) are sent to Anthropic through Claude Code.
 /// A thread too long for one call has its middle summarised first, one chunk at a time over every summary (`CHUNK_SLOT`, which leaves a slot of `CLAUDE_SLOTS` for the conversations), the newest chunk first.
 /// The chunk calls together have `CHUNK_BUDGET`, and the wait for `CHUNK_SLOT` is part of it: no chunk starts with less than `MIN_CHUNK_TIME` of it left, and the one running is cut off at it (`chunk_time`), which fails it like any other failure.
-/// The wait for a slot of `CLAUDE_SLOTS` inside `ask` (`SLOT_WAIT`) is not part of it. A chunk that cannot get `CHUNK_SLOT` within the budget fails too.
+/// The wait for a slot of `CLAUDE_SLOTS` inside `ask` (`SLOT_WAIT`) is not part of it. A chunk that cannot get `CHUNK_SLOT` before less than `MIN_CHUNK_TIME` of the budget is left fails too.
 /// No new chunk starts once a chunk has failed (it is logged, never its text). The final call keeps its own time limit.
 /// The chunks not run and the one that failed count as omitted, while a failure of the final call is an error. The summary's project is kept only when it is one of `projects`.
 pub async fn summarize(
@@ -1662,7 +1698,10 @@ pub async fn summarize(
     thread: &Thread,
     projects: &[(String, String)],
 ) -> Result<Summary, SummaryError> {
-    let plan = plan_thread(&thread.lines, thread.target, thread.has_first);
+    let mut plan = plan_thread(&thread.lines, thread.target, thread.has_first);
+    if thread.unread > 0 {
+        note_unread(&mut plan);
+    }
     let dir = dir.to_owned();
     let (body, settings, connection) = tokio::task::spawn_blocking(move || {
         Ok::<_, String>((
@@ -1676,7 +1715,9 @@ pub async fn summarize(
     let started = Instant::now();
     let mut points: Vec<Option<Vec<String>>> = vec![None; plan.chunks.len()];
     for i in chunk_order(plan.chunks.len()) {
-        let wait = CHUNK_BUDGET.saturating_sub(started.elapsed());
+        let wait = CHUNK_BUDGET
+            .saturating_sub(started.elapsed())
+            .saturating_sub(MIN_CHUNK_TIME);
         let Ok(Ok(_slot)) = tokio::time::timeout(wait, CHUNK_SLOT.acquire()).await else {
             log_failure(
                 "claude_summarize_slack_chunk",
@@ -3799,6 +3840,82 @@ mod tests {
         let message = final_message(&plan, &[points(&["a"]), points(&["b"])]).0;
         assert!(!message.contains("[スレッドの最初のメッセージ]"));
         assert!(plan.chunks[0].text.starts_with(&marker(0)));
+    }
+
+    #[test]
+    fn points_never_come_between_the_messages_of_one_section() {
+        // The kept messages begin with a Latest section (the target is the newest message), so the points must not land inside it.
+        let lines = thread_lines(60, 600);
+        let plan = plan_thread(&lines, 59, false);
+        assert_eq!(plan.kept[0].0, Part::Latest);
+        let message = final_message(&plan, &[points(&["a"]), points(&["b"])]).0;
+        assert!(message.starts_with("[途中の"), "{message}");
+        assert_eq!(message.matches("[最新の返信]").count(), 1, "{message}");
+        // With the first message, they still follow it.
+        let plan = plan_thread(&lines, 59, true);
+        let message = final_message(&plan, &[points(&["a"]), points(&["b"])]).0;
+        assert!(
+            message.starts_with("[スレッドの最初のメッセージ]"),
+            "{message}"
+        );
+        let at = |needle: &str| message.find(needle).unwrap();
+        assert!(at("[スレッドの最初のメッセージ]") < at("[途中の"));
+        assert!(at("[途中の") < at("[最新の返信]"));
+        assert_eq!(message.matches("[最新の返信]").count(), 1, "{message}");
+    }
+
+    #[test]
+    fn what_a_chunk_leaves_of_its_share_goes_to_the_chunks_after_it() {
+        let long = "あ".repeat(100);
+        let groups = vec![vec!["a".to_owned()], vec![long]];
+        // Equal shares of 60 would cut the second point to 29 characters; the first leaves most of its share.
+        let lines = limit_points(&groups, 60);
+        assert_eq!(lines[0], "- a");
+        assert_eq!(lines[1].chars().count(), 60 - 4 - 1);
+        assert!(lines.iter().map(|l| l.chars().count() + 1).sum::<usize>() <= 60);
+        // With room for everyone, nothing is cut.
+        let lines = limit_points(&[vec!["a".to_owned()], vec!["b".to_owned()]], 100);
+        assert_eq!(lines, ["- a", "- b"]);
+    }
+
+    #[test]
+    fn a_thread_with_unread_replies_ends_with_a_note_that_is_counted_in_the_input() {
+        let lines = thread_lines(30, 600);
+        let mut plan = plan_thread(&lines, 15, true);
+        let before = plan.kept.last().unwrap().1.clone();
+        note_unread(&mut plan);
+        assert_eq!(
+            plan.kept.last().unwrap().1,
+            format!("{before}\n  {UNREAD_NOTE}")
+        );
+        let (message, _) = final_message(&plan, &[points(&["a"]), points(&["b"])]);
+        assert!(message.ends_with(UNREAD_NOTE), "{message}");
+        assert!(message.chars().count() <= INPUT_LIMIT);
+    }
+
+    #[test]
+    fn the_unread_note_never_pushes_the_input_past_the_limit() {
+        // A thread that just fits whole: the note is made room for by cutting the last message, which says so.
+        let lines = vec!["U1: a".to_owned(), "い".repeat(INPUT_LIMIT - 40)];
+        let mut plan = plan_thread(&lines, 0, true);
+        assert!(plan.chunks.is_empty());
+        note_unread(&mut plan);
+        let message = final_message(&plan, &[]).0;
+        assert!(
+            message.chars().count() <= INPUT_LIMIT,
+            "{}",
+            message.chars().count()
+        );
+        assert!(
+            message.ends_with(&format!("{CUT_NOTE}\n  {UNREAD_NOTE}")),
+            "{message}"
+        );
+        // A linked message cut for the note is reported as cut.
+        let mut plan = plan_thread(&["あ".repeat(INPUT_LIMIT - 20)], 0, true);
+        assert!(!plan.target_cut);
+        note_unread(&mut plan);
+        assert!(plan.target_cut);
+        assert!(final_message(&plan, &[]).0.chars().count() <= INPUT_LIMIT);
     }
 
     #[test]

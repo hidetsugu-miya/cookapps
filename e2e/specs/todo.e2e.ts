@@ -181,7 +181,7 @@ describe("todo", () => {
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
     await $(".review").waitForExist();
-    await expect($(".review .review-omitted")).toHaveText("途中の 12 件は要約に含まれていません");
+    await expect($(".review .review-omitted")).toHaveText("12 件のメッセージは要約に含まれていません");
     await $(".review .review-add").click();
     const [sent] = await waitForCalls(addFromSlack);
     expect(sent).not.toHaveProperty("omitted");
