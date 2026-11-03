@@ -150,7 +150,7 @@ No check is repeated in two layers.
 |-------|----------------|-------|------------------------|
 | Static | Format, lint, types, Rust-TS type match, version match | cargo fmt, clippy, Biome (lint only), tsc, bindings diff, `scripts/check-version.sh` | Behavior |
 | Unit | Pure Rust logic (parsing API responses, validating input, computing dates, IDs and URLs, converting errors) | cargo test | Screens, WebView |
-| E2E | Screen behavior (how command results are drawn, the commands and arguments an operation calls, how errors show) | WebdriverIO (real WKWebView and WebView2, commands mocked) | Processing inside Rust |
+| E2E | Screen behavior (how command results are drawn, the commands and arguments an operation calls, how errors show) | WebdriverIO (real WKWebView, commands mocked) | Processing inside Rust |
 
 - Frontend TS holds only drawing and operation. Logic that needs a test is a pure Rust function.
 - Tests never touch a real external service, the keychain or the real config folder.
@@ -178,9 +178,8 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 |-----|-------------|--------|
 | `static` | macos-latest | version match, `npm run lint`, `npm run build:ts`, `npm run e2e:check`, cargo fmt |
 | `test` | macos-latest, windows-latest | clippy (`--all-targets --all-features`), cargo test (`--all-features`), bindings diff (macOS only) |
-| `e2e` | macos-latest, windows-latest | `npm run e2e:build`, `npm run e2e` |
+| `e2e` | macos-latest | `npm run e2e:build`, `npm run e2e` |
 | `tag` | ubuntu-latest (main pushes only; after `static`, `test` and `e2e`) | the annotated tag `v{version}` of `src-tauri/Cargo.toml`, made unless it already exists (a push that does not raise the version is not a release) |
-| `installer` | windows-latest (main pushes with a new version tag only; after `tag`) | the nsis installer artifact |
 | `release` | macos-latest (main pushes with a new version tag only; after `tag`) | the signed `.app`, its updater files and `latest.json`, put in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
 ## Known limitations
@@ -189,7 +188,7 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 - On a rate limit (429 or 403 `rateLimitExceeded`), interactive operations retry up to 2 times (they follow `Retry-After`, capped at 30 seconds).
   Auto sync does not retry. It backs off per account (`SyncState`).
 - There is no coverage tool.
-- Windows support is built and tested in CI, but it has not been checked on a real Windows machine.
+- Windows support is built, linted and unit-tested in CI (the `test` job), but there is no Windows E2E or release, and it has not been checked on a real Windows machine.
 
 ## Open questions
 
