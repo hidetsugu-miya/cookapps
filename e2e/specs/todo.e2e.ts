@@ -1391,6 +1391,15 @@ describe("todo detail comments", () => {
     expect(await count("#todo-detail .c-text script")).toBe(0);
   });
 
+  it("drops label, for, class and data-* from a comment, so that it cannot cover the screen or press its buttons", async () => {
+    await openReport([comment("c1", "Alice Example", '<label for="trash" class="scrim" data-field="x">cover</label> <a class="scrim" data-field="y" href="https://example.com/">go</a>')]);
+    await waitForCount(rows, 1);
+    expect(await count("#todo-detail .c-text label")).toBe(0);
+    expect(await count("#todo-detail .c-text a[href]")).toBe(1);
+    const attrs = await browser.execute(() => [...document.querySelectorAll("#todo-detail .c-text *")].flatMap((e) => e.getAttributeNames().filter((n) => n === "for" || n === "class" || n.startsWith("data-"))));
+    expect(attrs).toEqual([]);
+  });
+
   it("fetches the comments once when the task is opened, and not again on a redraw of the same task", async () => {
     await openReport();
     expect(await waitForCalls("todoist_comments")).toEqual([{ taskId: "k1", projectId: "p1" }]);

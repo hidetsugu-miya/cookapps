@@ -102,10 +102,12 @@ export function editingField() {
 // Only http(s) links stay: a relative link would resolve to the app's own origin, which Rust's on_navigation allows, and replace the screen.
 // An http(s) link navigates this page and on_navigation opens it in the default browser, as a plain-text mail body's links do.
 // No form controls or styles: they could draw a fake field over the screen. No id or name: they could shadow the screen's own elements for $().
+// No label, for or class: a comment from another collaborator could style `<label for="trash" class="scrim">` over the whole screen, so that any click presses a hidden button of the mail detail by its id, or `<a class="scrim">` so that any click opens an outside site. No data-*: the screen reads them as its own state (`data-field`, `data-id`). The `.md` styles are element selectors and need none of them.
 const MARKDOWN_SANITIZE = {
   ALLOWED_URI_REGEXP: /^https?:/i,
-  FORBID_TAGS: ["form", "input", "button", "textarea", "select", "style"],
-  FORBID_ATTR: ["style", "id", "name"],
+  FORBID_TAGS: ["form", "input", "button", "textarea", "select", "style", "label"],
+  FORBID_ATTR: ["style", "id", "name", "class", "for"],
+  ALLOW_DATA_ATTR: false,
 };
 
 // The HTML of a description or a comment, which Todoist keeps as Markdown. breaks: a single newline is a line break, as they are written line by line.
