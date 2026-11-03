@@ -1,4 +1,4 @@
-import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "update";
 
@@ -248,11 +248,13 @@ describe("settings: Claude model and effort", () => {
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
   const choose = (purpose: Purpose, kind: "model" | "effort", value: string) =>
     browser.execute(
-      (p, k, v) => {
+      (id, p, k, v) => {
+        if (!window.__e2e_once__(id)) return;
         const select = document.querySelector<HTMLSelectElement>(`#claude-items select[data-purpose="${p}"][data-kind="${k}"]`)!;
         select.value = v;
         select.dispatchEvent(new Event("change", { bubbles: true }));
       },
+      onceId(),
       purpose,
       kind,
       value,
@@ -479,10 +481,15 @@ describe("settings: tabs", () => {
   const selected = () => browser.execute(() => [...document.querySelectorAll('#settings-tabs [role="tab"]')].filter((t) => t.getAttribute("aria-selected") === "true").map((t) => t.id));
   // Left or right pressed on the selected tab, as the key event the app listens for.
   const pressArrow = (key: "ArrowLeft" | "ArrowRight") =>
-    browser.execute((k) => {
-      const current = document.querySelector('#settings-tabs [role="tab"][aria-selected="true"]')!;
-      current.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
-    }, key);
+    browser.execute(
+      (id, k) => {
+        if (!window.__e2e_once__(id)) return;
+        const current = document.querySelector('#settings-tabs [role="tab"][aria-selected="true"]')!;
+        current.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+      },
+      onceId(),
+      key,
+    );
 
   it("has the six tabs in order, in a tablist, each controlling the card it names", async () => {
     await openSettings([]);

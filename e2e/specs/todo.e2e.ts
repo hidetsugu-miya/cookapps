@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeMissing, claudeReady, copiedTexts, count, holds, inbox, mock, rejects, release, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeMissing, claudeReady, copiedTexts, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -381,11 +381,12 @@ describe("todo projects and subtasks", () => {
     await rowOf("Plan trip").$(".toggle").click();
     await waitForCount(ROWS, 3);
     // Two presses in one turn: the second lands while the rows are still sliding shut.
-    await browser.execute(() => {
+    await browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
       const t = [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].find((l) => l.textContent?.includes("Plan trip"))!.querySelector<HTMLElement>(".toggle")!;
       t.click();
       t.click();
-    });
+    }, onceId());
     await waitForCount(ROWS, 2);
     await expect(rowOf("Plan trip").$(".toggle")).toHaveAttribute("aria-expanded", "false");
     await expect(rowOf("Book flights")).not.toExist();
@@ -451,7 +452,8 @@ async function dragRow(name: string, ...over: ChainablePromiseElement[]) {
 
 // Records every row and project that gets the drop mark from now on (a task's ID or a project's view), since the mark is gone when the drag ends.
 const watchDrops = () =>
-  browser.execute(() => {
+  browser.execute((id) => {
+    if (!window.__e2e_once__(id)) return;
     const w = window as unknown as { __drops__: string[] };
     w.__drops__ = [];
     new MutationObserver((records) => {
@@ -460,7 +462,7 @@ const watchDrops = () =>
         if (el.classList.contains("drop")) w.__drops__.push(el.dataset.id ?? el.dataset.view ?? "");
       }
     }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["class"] });
-  });
+  }, onceId());
 const dropsSeen = () => browser.execute(() => (window as unknown as { __drops__: string[] }).__drops__);
 const marginsOf = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].map((l) => l.style.marginLeft));
 const projectOf = (id: string) => $(`#projects .proj[data-view="${id}"]`);
@@ -550,7 +552,7 @@ describe("todo: moving a task by its grip", () => {
     const move = await mock("todoist_move", true);
     await mock("todoist_load", flightsAlone());
     // The row buttons show on hover, which the driver never does: press it in the page.
-    await browser.execute(() => document.querySelector<HTMLElement>("#todo-list .unparent-row")!.click());
+    await browser.execute((id) => window.__e2e_once__(id) && document.querySelector<HTMLElement>("#todo-list .unparent-row")!.click(), onceId());
     expect(await waitForCalls(move)).toEqual([{ id: "k3", projectId: "p1" }]);
     expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Write report"), expect.stringContaining("Plan trip"), expect.stringContaining("Book flights")]);
     expect(await marginsOf()).toEqual(["0px", "0px", "0px"]);
@@ -753,7 +755,7 @@ describe("todo detail menu", () => {
   }
 
   // Runs the timed refresh now: the page's visibilitychange makes it load again.
-  const refreshNow = () => browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
+  const refreshNow = () => browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
 
   it("shows the three-dot button only in a task's detail, and the screen has no reload, disconnect or trash button", async () => {
     await openTodo();
@@ -929,7 +931,7 @@ describe("todo detail description copy", () => {
     // Not inside the description's role="button".
     expect(await browser.execute(() => document.querySelector("#todo-detail .desc-copy")!.closest(".desc"))).toBeNull();
     // A hidden button takes no WebDriver click, so the press is made in the page.
-    await browser.execute(() => document.querySelector<HTMLElement>("#todo-detail .desc-copy")!.click());
+    await browser.execute((id) => window.__e2e_once__(id) && document.querySelector<HTMLElement>("#todo-detail .desc-copy")!.click(), onceId());
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
     expect(await copiedTexts()).toEqual([description]);
     await expect($(".toast")).toHaveText("説明をコピーしました");
@@ -971,10 +973,11 @@ describe("todo detail description copy", () => {
 
   it("does not start the editor when 戻る is pressed within the delay after the press", async () => {
     await openReport();
-    await browser.execute(() => {
+    await browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
       document.querySelector<HTMLElement>("#todo-detail .desc")!.click();
       document.getElementById("todo-back")!.click();
-    });
+    }, onceId());
     // Past the delay before a press starts the editor: it would find the hidden detail and no textarea.
     await browser.pause(500);
     await expect($("#todo-list")).toBeDisplayed();
@@ -1015,7 +1018,7 @@ describe("todo completed tasks after an offline answer", () => {
   it("asks for the completed tasks again on each timed refresh until an answer is not from the cache, and an offline answer later does not ask again", async () => {
     await openOffline();
     // The timed refresh: the page's visibilitychange makes it load again.
-    const refreshNow = () => browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
+    const refreshNow = () => browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
     let loads = await mock("todoist_load", offlineData());
     await refreshNow();
     expect(await withDone(loads)).toEqual([true]);
@@ -1216,7 +1219,7 @@ describe("todo detail due date clear button", () => {
     // A sibling of the date button, not inside it.
     expect(await browser.execute(() => document.querySelector("#todo-detail .field-clear")!.closest(".field-value"))).toBe(null);
     // A hidden button takes no WebDriver click, so the press is made in the page.
-    await browser.execute(() => document.querySelector<HTMLElement>("#todo-detail .field-clear")!.click());
+    await browser.execute((id) => window.__e2e_once__(id) && document.querySelector<HTMLElement>("#todo-detail .field-clear")!.click(), onceId());
     expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: "" }]);
     await expect($("#todo-detail .field:nth-child(2) .field-value")).toHaveText("期限なし");
     await expect($(".due-pop")).not.toExist();
@@ -1239,7 +1242,7 @@ describe("todo detail due date clear button", () => {
     await $("#nav-todo").click();
     await $(ROWS).click();
     const update = await mock("todoist_update", true);
-    const press = () => browser.execute(() => document.querySelector<HTMLElement>("#todo-detail .field-clear")!.click());
+    const press = () => browser.execute((id) => window.__e2e_once__(id) && document.querySelector<HTMLElement>("#todo-detail .field-clear")!.click(), onceId());
     await press();
     await expect($(clear)).toHaveAttribute("aria-label", "もう一度押すと繰り返しごと日付をクリア");
     expect(await callsOf(update)).toEqual([]);

@@ -19,6 +19,18 @@ import type { TodoPrompt } from "../ts/bindings/TodoPrompt";
 import type { Week } from "../ts/bindings/Week";
 import type { Workspace } from "../ts/bindings/Workspace";
 
+declare global {
+  interface Window {
+    __e2e_once__(id: string): boolean;
+  }
+}
+
+// When the result of `browser.execute` is lost, webdriver runs the same script again after the script timeout. The cause was found only for the script right after `refresh` (`boot`); CI also showed lost results of other commands.
+// A script whose second run would change what the spec checks (a press, a key, a release) takes a fresh `onceId()` and returns at once when `window.__e2e_once__(id)` is false (e2e/fixtures.js).
+// Any other script needs no id. An element's `.click()` can be run again the same way, and this guard does not cover it.
+let onceCount = 0;
+export const onceId = () => `once-${++onceCount}`;
+
 // The app asks for its data while loading, before a spec can mock anything: hand it over through the fixture layer (e2e/fixtures.js) and reload.
 // Mocks and recorded calls are page state, so a reload also clears them; call `mock` after `boot`.
 export async function boot(fixtures: Record<string, unknown> = {}) {
@@ -28,6 +40,8 @@ export async function boot(fixtures: Record<string, unknown> = {}) {
     (window as unknown as { __e2e_old_page__: boolean }).__e2e_old_page__ = true;
   }, fixtures);
   await browser.refresh();
+  // A script sent about 1 ms after `refresh` lost its result in 5 of 5 stalls in the local logs; with this pause, 15 local runs had none. Polling cannot replace it, because a poll is such a script.
+  await browser.pause(200);
   await browser.waitUntil(
     () => browser.execute(() => document.readyState === "complete" && !(window as unknown as { __e2e_old_page__?: boolean }).__e2e_old_page__),
     { timeoutMsg: "page did not load" },
@@ -57,7 +71,15 @@ export const holds = { __e2e_hold__: true };
 
 // Answers the oldest waiting call of `command` with `value`. Wait for the call first (`waitForCalls`).
 export const release = (command: string, value: unknown) =>
-  browser.execute((c, v) => (window as unknown as { __e2e_release__: Record<string, ((v: unknown) => void)[]> }).__e2e_release__[c].shift()!(v), command, value);
+  browser.execute(
+    (id, c, v) => {
+      if (!window.__e2e_once__(id)) return;
+      (window as unknown as { __e2e_release__: Record<string, ((v: unknown) => void)[]> }).__e2e_release__[c].shift()!(v);
+    },
+    onceId(),
+    command,
+    value,
+  );
 
 // The arguments of every call of `command` so far.
 export const callsOf = (command: string) =>
@@ -95,10 +117,11 @@ export const copiedTexts = () => browser.execute(() => (window as unknown as { _
 
 // Cmd+Z (Ctrl+Z off macOS), sent to the page as the key event the app listens for.
 export const pressUndo = () =>
-  browser.execute(() => {
+  browser.execute((id) => {
+    if (!window.__e2e_once__(id)) return;
     const mac = /Mac/.test(navigator.platform);
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: mac, ctrlKey: !mac, bubbles: true }));
-  });
+  }, onceId());
 
 // The row of the thread with `subject` in the unread or read list.
 export const rowOf = (list: "unread-threads" | "read-threads", subject: string) =>
