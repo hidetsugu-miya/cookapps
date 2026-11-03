@@ -23,7 +23,7 @@ const EDIT_TIMEOUT: Duration = Duration::from_secs(120);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 /// A high effort thinks longer (`--effort max` took 61 seconds on a small input), so every call gets this long from `high` up.
 const HIGH_EFFORT_TIMEOUT: Duration = Duration::from_secs(300);
-/// The model and effort in use; absent until the first save.
+/// The model and effort of each purpose; absent until the first save.
 const SETTINGS_FILE: &str = "claude-settings.json";
 const SETTINGS_TMP_FILE: &str = "claude-settings.json.tmp";
 /// Characters of a message that reach the model.
@@ -155,6 +155,73 @@ impl ModelSettings {
             Effort::High | Effort::Xhigh | Effort::Max => HIGH_EFFORT_TIMEOUT,
             Effort::Low | Effort::Medium => base,
         }
+    }
+}
+
+/// The `claude -p` calls whose model and effort are chosen apart (A-2).
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum ModelPurpose {
+    SlackSummary,
+    MailSummary,
+    PromptChat,
+    Proofread,
+}
+
+impl ModelPurpose {
+    const ALL: [Self; 4] = [
+        Self::SlackSummary,
+        Self::MailSummary,
+        Self::PromptChat,
+        Self::Proofread,
+    ];
+
+    /// The names the screen sends and the settings file uses as keys.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SlackSummary => "slackSummary",
+            Self::MailSummary => "mailSummary",
+            Self::PromptChat => "promptChat",
+            Self::Proofread => "proofread",
+        }
+    }
+
+    /// The purpose `name` spells, only if it is in the list.
+    fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.as_str() == name)
+    }
+}
+
+/// The model and effort of every purpose (A-2).
+#[derive(Serialize, Debug, PartialEq, Clone, Copy, Default)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSettings {
+    pub slack_summary: ModelSettings,
+    pub mail_summary: ModelSettings,
+    pub prompt_chat: ModelSettings,
+    pub proofread: ModelSettings,
+}
+
+impl ClaudeSettings {
+    fn for_purpose(self, purpose: ModelPurpose) -> ModelSettings {
+        match purpose {
+            ModelPurpose::SlackSummary => self.slack_summary,
+            ModelPurpose::MailSummary => self.mail_summary,
+            ModelPurpose::PromptChat => self.prompt_chat,
+            ModelPurpose::Proofread => self.proofread,
+        }
+    }
+
+    /// These settings with `purpose` set to `settings`; the others stay as they are.
+    fn with(mut self, purpose: ModelPurpose, settings: ModelSettings) -> Self {
+        match purpose {
+            ModelPurpose::SlackSummary => self.slack_summary = settings,
+            ModelPurpose::MailSummary => self.mail_summary = settings,
+            ModelPurpose::PromptChat => self.prompt_chat = settings,
+            ModelPurpose::Proofread => self.proofread = settings,
+        }
+        self
     }
 }
 
@@ -567,41 +634,58 @@ fn todo_prompt(dir: &Path) -> TodoPrompt {
     }
 }
 
-#[derive(Serialize)]
-struct SettingsFile {
-    model: String,
-    effort: String,
-}
-
-/// The settings a settings file holds. Each value that is missing or not in its list gives its default; a file that cannot be read gives both.
-fn parse_settings(text: &str) -> ModelSettings {
-    let file: Value = serde_json::from_str(text).unwrap_or_default();
-    let named = |key: &str| file[key].as_str().map(str::to_owned).unwrap_or_default();
+/// The model and effort `entry` holds. Each value that is missing or not in its list gives its default.
+fn parse_entry(entry: &Value) -> ModelSettings {
+    let named = |key: &str| entry[key].as_str().map(str::to_owned).unwrap_or_default();
     ModelSettings {
         model: Model::parse(&named("model")).unwrap_or_default(),
         effort: Effort::parse(&named("effort")).unwrap_or_default(),
     }
 }
 
-fn load_settings(dir: &Path) -> ModelSettings {
+/// The settings a settings file holds, one entry per purpose. A purpose without an entry takes the top-level `model` and `effort` of the old one-pair form,
+/// so a choice made before the purposes were split is kept. A file that cannot be read gives the defaults.
+fn parse_settings(text: &str) -> ClaudeSettings {
+    let file: Value = serde_json::from_str(text).unwrap_or_default();
+    let old = parse_entry(&file);
+    let entry = |purpose: ModelPurpose| {
+        let entry = &file[purpose.as_str()];
+        if entry.is_object() {
+            parse_entry(entry)
+        } else {
+            old
+        }
+    };
+    ClaudeSettings {
+        slack_summary: entry(ModelPurpose::SlackSummary),
+        mail_summary: entry(ModelPurpose::MailSummary),
+        prompt_chat: entry(ModelPurpose::PromptChat),
+        proofread: entry(ModelPurpose::Proofread),
+    }
+}
+
+fn load_settings(dir: &Path) -> ClaudeSettings {
     std::fs::read_to_string(dir.join(SETTINGS_FILE))
         .map(|text| parse_settings(&text))
         .unwrap_or_default()
 }
 
-/// Saves `model` and `effort` (what the screen sent, checked against the lists here) and returns them.
-fn save_settings(dir: &Path, model: &str, effort: &str) -> Result<ModelSettings, String> {
-    let settings = ModelSettings {
+/// Saves `model` and `effort` for `purpose` (what the screen sent, checked against the lists here), keeps the other purposes as they are, and returns all of them.
+fn save_settings(
+    dir: &Path,
+    purpose: &str,
+    model: &str,
+    effort: &str,
+) -> Result<ClaudeSettings, String> {
+    let purpose = ModelPurpose::parse(purpose).ok_or("用途が不正です")?;
+    let chosen = ModelSettings {
         model: Model::parse(model).ok_or("モデルが不正です")?,
         effort: Effort::parse(effort).ok_or("effort が不正です")?,
     };
+    let settings = load_settings(dir).with(purpose, chosen);
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let (path, tmp) = (dir.join(SETTINGS_FILE), dir.join(SETTINGS_TMP_FILE));
-    let text = serde_json::to_string_pretty(&SettingsFile {
-        model: settings.model.as_str().to_owned(),
-        effort: settings.effort.as_str().to_owned(),
-    })
-    .map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     write_synced(&tmp, &text)
         .and_then(|()| std::fs::rename(&tmp, &path))
         .map_err(|e| format!("{} を書けません: {e}", path.display()))?;
@@ -943,10 +1027,14 @@ pub async fn summarize(
     let boundary = new_boundary()?;
     let input = summary_input(message, &boundary);
     let dir = dir.to_owned();
-    let (body, settings) =
-        tokio::task::spawn_blocking(move || (load_prompt(&dir), load_settings(&dir)))
-            .await
-            .map_err(|e| e.to_string())?;
+    let (body, settings) = tokio::task::spawn_blocking(move || {
+        (
+            load_prompt(&dir),
+            load_settings(&dir).for_purpose(ModelPurpose::SlackSummary),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let out = ask(
         summary_args(&today(), projects, &body, &boundary, settings),
         input,
@@ -993,9 +1081,9 @@ pub async fn claude_todo_prompt_reset(app: tauri::AppHandle) -> Result<TodoPromp
         .map_err(|e| log_failure(command, "-", e))
 }
 
-/// The model and effort the `claude -p` calls use (A-2), or the defaults when nothing is saved.
+/// The model and effort of each purpose of the `claude -p` calls (A-2), or the defaults when nothing is saved.
 #[tauri::command]
-pub async fn claude_model_settings(app: tauri::AppHandle) -> Result<ModelSettings, String> {
+pub async fn claude_model_settings(app: tauri::AppHandle) -> Result<ClaudeSettings, String> {
     let command = "claude_model_settings";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     tokio::task::spawn_blocking(move || load_settings(&dir))
@@ -1003,16 +1091,17 @@ pub async fn claude_model_settings(app: tauri::AppHandle) -> Result<ModelSetting
         .map_err(|e| e.to_string())
 }
 
-/// Saves the model and effort (each must be one the settings offer) and returns them.
+/// Saves the model and effort of one purpose (each must be one the settings offer) and returns the settings of all purposes.
 #[tauri::command]
 pub async fn claude_model_settings_save(
     app: tauri::AppHandle,
+    purpose: String,
     model: String,
     effort: String,
-) -> Result<ModelSettings, String> {
+) -> Result<ClaudeSettings, String> {
     let command = "claude_model_settings_save";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
-    tokio::task::spawn_blocking(move || save_settings(&dir, &model, &effort))
+    tokio::task::spawn_blocking(move || save_settings(&dir, &purpose, &model, &effort))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| log_failure(command, "-", e))
@@ -1030,7 +1119,7 @@ pub async fn claude_edit_todo_prompt(
     chat_edit(
         &app,
         "claude_edit_todo_prompt",
-        ("指示", edit_args),
+        ("指示", edit_args, ModelPurpose::PromptChat),
         body,
         history,
         instruction,
@@ -1050,7 +1139,7 @@ pub async fn claude_proofread_slack(
     chat_edit(
         &app,
         "claude_proofread_slack",
-        ("文章", proofread_args),
+        ("文章", proofread_args, ModelPurpose::Proofread),
         text,
         history,
         instruction,
@@ -1061,18 +1150,18 @@ pub async fn claude_proofread_slack(
 /// The arguments of a conversation's `claude` call, from the boundary of its text.
 type ArgsFor = fn(&str, ModelSettings) -> Vec<String>;
 
-/// The call behind the two conversations: `target` is what `body` is called and the arguments that carry its system prompt.
+/// The call behind the two conversations: `target` is what `body` is called, the arguments that carry its system prompt, and the purpose whose model and effort it uses.
 async fn chat_edit(
     app: &tauri::AppHandle,
     command: &str,
-    target: (&str, ArgsFor),
+    target: (&str, ArgsFor, ModelPurpose),
     body: String,
     history: Vec<ChatTurn>,
     instruction: String,
 ) -> Result<PromptEdit, String> {
-    let (noun, args) = target;
+    let (noun, args, purpose) = target;
     let dir = config_dir(app).map_err(|e| log_failure(command, "-", e))?;
-    let settings = tokio::task::spawn_blocking(move || load_settings(&dir))
+    let settings = tokio::task::spawn_blocking(move || load_settings(&dir).for_purpose(purpose))
         .await
         .map_err(|e| log_failure(command, "-", e.to_string()))?;
     let boundary = new_boundary().map_err(|e| log_failure(command, "-", e))?;
@@ -1105,9 +1194,11 @@ pub async fn claude_summarize_mail(
 ) -> Result<MailSummary, String> {
     let command = "claude_summarize_mail";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
-    let settings = tokio::task::spawn_blocking(move || load_settings(&dir))
-        .await
-        .map_err(|e| log_failure(command, "-", e.to_string()))?;
+    let settings = tokio::task::spawn_blocking(move || {
+        load_settings(&dir).for_purpose(ModelPurpose::MailSummary)
+    })
+    .await
+    .map_err(|e| log_failure(command, "-", e.to_string()))?;
     let boundary = new_boundary().map_err(|e| log_failure(command, "-", e))?;
     let input =
         mail_input(&subject, &messages, &boundary).map_err(|e| log_failure(command, "-", e))?;
@@ -2235,21 +2326,33 @@ mod tests {
         }
     }
 
+    fn all(settings: ModelSettings) -> ClaudeSettings {
+        ClaudeSettings::default()
+            .with(ModelPurpose::SlackSummary, settings)
+            .with(ModelPurpose::MailSummary, settings)
+            .with(ModelPurpose::PromptChat, settings)
+            .with(ModelPurpose::Proofread, settings)
+    }
+
     #[test]
-    fn a_settings_file_reads_each_valid_value_and_defaults_the_rest() {
-        assert_eq!(
-            parse_settings(r#"{"model":"opus","effort":"max"}"#),
-            settings(Model::Opus, Effort::Max)
+    fn a_settings_file_reads_each_valid_value_of_each_purpose_and_defaults_the_rest() {
+        let read = parse_settings(
+            r#"{"slackSummary":{"model":"opus","effort":"max"},"mailSummary":{"model":"haiku","effort":"low"},
+                "promptChat":{"model":"fable","effort":"xhigh"},"proofread":{"model":"sonnet","effort":"high"}}"#,
         );
-        // One bad value does not spoil the other.
-        assert_eq!(
-            parse_settings(r#"{"model":"opus","effort":"ultra"}"#),
-            settings(Model::Opus, Effort::Medium)
+        assert_eq!(read.slack_summary, settings(Model::Opus, Effort::Max));
+        assert_eq!(read.mail_summary, settings(Model::Haiku, Effort::Low));
+        assert_eq!(read.prompt_chat, settings(Model::Fable, Effort::Xhigh));
+        assert_eq!(read.proofread, settings(Model::Sonnet, Effort::High));
+        // One bad value does not spoil the other, and a bad purpose does not spoil the others.
+        let read = parse_settings(
+            r#"{"slackSummary":{"model":"opus","effort":"ultra"},"mailSummary":{"model":"gpt","effort":"low"},
+                "promptChat":{"model":1},"proofread":"max"}"#,
         );
-        assert_eq!(
-            parse_settings(r#"{"model":"gpt","effort":"low"}"#),
-            settings(Model::Sonnet, Effort::Low)
-        );
+        assert_eq!(read.slack_summary, settings(Model::Opus, Effort::Medium));
+        assert_eq!(read.mail_summary, settings(Model::Sonnet, Effort::Low));
+        assert_eq!(read.prompt_chat, ModelSettings::default());
+        assert_eq!(read.proofread, ModelSettings::default());
         for text in [
             "",
             "{",
@@ -2258,20 +2361,96 @@ mod tests {
             "null",
             r#"{"model":1,"effort":null}"#,
             r#"{"model":"Opus","effort":"HIGH"}"#,
+            r#"{"slackSummary":{"model":"Opus","effort":"HIGH"}}"#,
         ] {
-            assert_eq!(parse_settings(text), ModelSettings::default(), "{text}");
+            assert_eq!(parse_settings(text), ClaudeSettings::default(), "{text}");
         }
+    }
+
+    #[test]
+    fn the_old_one_pair_file_is_the_start_value_of_every_purpose() {
+        let old = settings(Model::Opus, Effort::High);
+        assert_eq!(
+            parse_settings(r#"{"model":"opus","effort":"high"}"#),
+            all(old)
+        );
+        // A bad value of the old pair gives the default for that value, in every purpose.
+        assert_eq!(
+            parse_settings(r#"{"model":"opus","effort":"ultra"}"#),
+            all(settings(Model::Opus, Effort::Medium))
+        );
+        // A purpose that has its own entry does not take the old pair.
+        let read = parse_settings(
+            r#"{"model":"opus","effort":"high","mailSummary":{"model":"haiku","effort":"low"}}"#,
+        );
+        assert_eq!(read.mail_summary, settings(Model::Haiku, Effort::Low));
+        assert_eq!(read.slack_summary, old);
+        assert_eq!(read.prompt_chat, old);
+        assert_eq!(read.proofread, old);
+    }
+
+    #[test]
+    fn a_purpose_is_looked_up_by_its_name_and_nothing_else_is_one() {
+        for p in ModelPurpose::ALL {
+            assert_eq!(ModelPurpose::parse(p.as_str()), Some(p));
+        }
+        for bad in [
+            "",
+            "SlackSummary",
+            "slack_summary",
+            " proofread",
+            "all",
+            "summary",
+        ] {
+            assert_eq!(ModelPurpose::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_purpose_names_are_the_keys_of_the_settings_sent_to_the_screen() {
+        let mut sent = serde_json::to_value(ClaudeSettings::default()).unwrap();
+        let keys: Vec<&str> = ModelPurpose::ALL.iter().map(|p| p.as_str()).collect();
+        for key in &keys {
+            assert!(sent[key].is_object(), "{key}");
+        }
+        assert_eq!(sent.as_object_mut().unwrap().len(), keys.len());
+    }
+
+    #[test]
+    fn for_purpose_gives_the_purposes_own_settings_and_with_changes_only_that_one() {
+        let mut all_set = ClaudeSettings::default();
+        let chosen = [
+            settings(Model::Haiku, Effort::Low),
+            settings(Model::Opus, Effort::High),
+            settings(Model::Fable, Effort::Max),
+            settings(Model::Sonnet, Effort::Xhigh),
+        ];
+        for (p, s) in ModelPurpose::ALL.into_iter().zip(chosen) {
+            all_set = all_set.with(p, s);
+        }
+        for (p, s) in ModelPurpose::ALL.into_iter().zip(chosen) {
+            assert_eq!(all_set.for_purpose(p), s);
+        }
+        let changed = all_set.with(ModelPurpose::MailSummary, ModelSettings::default());
+        assert_eq!(changed.mail_summary, ModelSettings::default());
+        assert_eq!(changed.slack_summary, chosen[0]);
+        assert_eq!(changed.prompt_chat, chosen[2]);
+        assert_eq!(changed.proofread, chosen[3]);
     }
 
     #[test]
     fn settings_load_gives_what_save_wrote_and_the_defaults_for_no_file() {
         let dir = temp_dir("settings");
-        assert_eq!(load_settings(&dir), ModelSettings::default());
+        assert_eq!(load_settings(&dir), ClaudeSettings::default());
+        let saved = save_settings(&dir, "promptChat", "fable", "high").unwrap();
         assert_eq!(
-            save_settings(&dir, "fable", "high"),
-            Ok(settings(Model::Fable, Effort::High))
+            saved,
+            ClaudeSettings::default().with(
+                ModelPurpose::PromptChat,
+                settings(Model::Fable, Effort::High)
+            )
         );
-        assert_eq!(load_settings(&dir), settings(Model::Fable, Effort::High));
+        assert_eq!(load_settings(&dir), saved);
         assert!(!dir.join(SETTINGS_TMP_FILE).exists());
         assert!(std::fs::read_to_string(dir.join(SETTINGS_FILE))
             .unwrap()
@@ -2280,22 +2459,54 @@ mod tests {
     }
 
     #[test]
+    fn saving_one_purpose_leaves_the_others_and_keeps_the_old_pair_for_them() {
+        let dir = temp_dir("settings-purposes");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(SETTINGS_FILE),
+            r#"{"model":"opus","effort":"high"}"#,
+        )
+        .unwrap();
+        let old = settings(Model::Opus, Effort::High);
+        let saved = save_settings(&dir, "proofread", "haiku", "low").unwrap();
+        assert_eq!(saved.proofread, settings(Model::Haiku, Effort::Low));
+        assert_eq!(
+            [saved.slack_summary, saved.mail_summary, saved.prompt_chat],
+            [old; 3]
+        );
+        // The file now holds an entry per purpose, so the old pair no longer decides anything.
+        let again = save_settings(&dir, "mailSummary", "fable", "max").unwrap();
+        assert_eq!(again.mail_summary, settings(Model::Fable, Effort::Max));
+        assert_eq!(again.proofread, settings(Model::Haiku, Effort::Low));
+        assert_eq!(again.slack_summary, old);
+        assert_eq!(load_settings(&dir), again);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_value_outside_the_lists_is_refused_in_japanese_and_nothing_is_written() {
         let dir = temp_dir("settings-refused");
-        for (model, effort) in [
-            ("gpt", "low"),
-            ("sonnet", "none"),
-            ("", "medium"),
-            ("sonnet", ""),
-            ("sonnet --tools Bash", "medium"),
+        for (purpose, model, effort, message) in [
+            ("proofread", "gpt", "low", "モデル"),
+            ("proofread", "sonnet", "none", "effort"),
+            ("proofread", "", "medium", "モデル"),
+            ("proofread", "sonnet", "", "effort"),
+            ("proofread", "sonnet --tools Bash", "medium", "モデル"),
+            ("", "sonnet", "medium", "用途"),
+            ("all", "sonnet", "medium", "用途"),
+            ("Proofread", "sonnet", "medium", "用途"),
         ] {
-            let e = save_settings(&dir, model, effort).unwrap_err();
-            assert!(e.contains("不正です"), "{e}");
+            let e = save_settings(&dir, purpose, model, effort).unwrap_err();
+            assert!(e.contains("不正です") && e.contains(message), "{e}");
         }
         assert!(!dir.join(SETTINGS_FILE).exists());
-        save_settings(&dir, "haiku", "low").unwrap();
-        assert!(save_settings(&dir, "bad", "low").is_err());
-        assert_eq!(load_settings(&dir), settings(Model::Haiku, Effort::Low));
+        save_settings(&dir, "proofread", "haiku", "low").unwrap();
+        assert!(save_settings(&dir, "proofread", "bad", "low").is_err());
+        assert!(save_settings(&dir, "bad", "haiku", "low").is_err());
+        assert_eq!(
+            load_settings(&dir).proofread,
+            settings(Model::Haiku, Effort::Low)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

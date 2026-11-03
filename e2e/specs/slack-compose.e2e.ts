@@ -78,6 +78,19 @@ describe("slack compose screen", () => {
     expect(await callsOf(preview)).toEqual([]);
   });
 
+  it("opens the settings on the Slack tab from 設定を開く in that notice", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady });
+    await waitForCount("#unread-threads li", 2);
+    await openMail("First unread", "Hello from Alice");
+    await mock("slack_preview", slackPreview);
+    await $("#thread-slack").click();
+    await $(".toast").$("button=設定を開く").click();
+    await expect($("#settings")).toBeDisplayed();
+    await expect($("#settings-tab-slack")).toHaveAttribute("aria-selected", "true");
+    await expect($("#settings-panel-slack")).toBeDisplayed();
+    await expect($("#settings-panel-google")).not.toBeDisplayed();
+  });
+
   it("does not pick a destination by itself, so 貼る stays disabled until one is chosen", async () => {
     await openCompose();
     await expect(target()).toHaveText("選んでください");

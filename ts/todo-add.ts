@@ -138,7 +138,7 @@ function failedRow(job: PendingAdd) {
   // Rust's wording for a token that cannot read the message (slack.rs read_error).
   if (job.failed?.includes("権限がありません")) {
     const open = tag("button", "text-btn", "設定を開く");
-    open.onclick = () => setScreen("settings");
+    open.onclick = () => setScreen("settings", "slack");
     row.append(open);
   }
   row.append(closeButton(() => removePending(job)));

@@ -225,7 +225,7 @@ async function openCompose() {
   }
   if (stale()) return;
   if (!loaded.workspaces.length)
-    return toast("Slack のワークスペースを設定で追加してください", { label: "設定を開く", run: () => setScreen("settings") });
+    return toast("Slack のワークスペースを設定で追加してください", { label: "設定を開く", run: () => setScreen("settings", "slack") });
   [workspaces, recent] = [loaded.workspaces, loaded.recent];
   // A workspace that was removed meanwhile cannot be posted to.
   if (draft?.target && !workspaces.some((w) => w.teamId === draft!.target!.teamId)) draft.target = null;
