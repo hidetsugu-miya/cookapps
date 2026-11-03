@@ -1589,7 +1589,8 @@ describe("todo detail comments", () => {
   });
 
   it("shows a comment once when the fetch answers before the add does", async () => {
-    await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady, todoist_comments: holds });
+    await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady });
+    await mock("todoist_comments", holds);
     await $("#nav-todo").click();
     await $(ROWS).click();
     await expect($("#todo-detail .comments")).toBeDisplayed();
