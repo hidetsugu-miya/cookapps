@@ -65,7 +65,7 @@ const NO_WINDOW: u32 = 0x0800_0000;
 
 /// What `claude` is here: usable (logged in, or given an API key), not logged in, not installed, or unreadable.
 /// With the API key `method`, `email` and `plan` are empty: a key says nothing about who owns it.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(tag = "state", rename_all = "camelCase")]
@@ -243,7 +243,7 @@ impl ClaudeSettings {
 }
 
 /// The settings card of the Claude connection (A-4): the method in use, the subscription's own state and the API key's own state,
-/// so each row shows its state whichever is in use.
+/// so each row shows its state whichever is in use, and `claude`, the usable state the whole screen follows (what `claude_status` answers).
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -252,6 +252,16 @@ pub struct ClaudeConnection {
     pub method: Method,
     pub subscription: Claude,
     pub api_key: ApiKeyState,
+    pub claude: Claude,
+}
+
+/// What saving a key answers. The key is stored whenever this is answered; `logout_error` says that Claude Code could not be shown to be logged out.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct KeySaved {
+    pub logout_error: Option<String>,
 }
 
 /// What a message is turned into: the task's name, its description, when it is due (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM` as the schema asks; the model may still break it),
@@ -376,6 +386,18 @@ fn parse_status(out: &str, version: String) -> Result<Claude, String> {
         version,
         method: Method::Subscription,
     })
+}
+
+/// The usable state of the method in use, from the states the card already holds: the subscription's own, or an API key's
+/// (which needs the version of Claude Code, and the subscription's status carries it).
+fn usable_claude(method: Method, subscription: &Claude, key: &ApiKeyState) -> Claude {
+    match (method, subscription) {
+        (Method::Subscription, _) => subscription.clone(),
+        (Method::ApiKey, Claude::Ready { version, .. } | Claude::LoggedOut { version }) => {
+            api_key_claude(version.clone(), key)
+        }
+        (Method::ApiKey, other) => other.clone(),
+    }
 }
 
 /// Whether `claude` can be used with the stored API key: a key that works, or one Anthropic could not be asked about, is usable;
@@ -1034,25 +1056,34 @@ fn args_of(args: &[&str]) -> Vec<String> {
     args.iter().map(|a| (*a).to_owned()).collect()
 }
 
-/// The subscription's own state: `claude` with every credential variable taken out, so a key in the environment cannot make it look logged in.
-fn read_status() -> Claude {
-    // Two processes, run side by side: the answer waits for the slower one, not for both.
-    let (version, status) = std::thread::scope(|scope| {
-        let version = scope.spawn(read_version);
-        let status = run(
-            &args_of(&["auth", "status", "--json"]),
-            "",
-            STATUS_TIMEOUT,
-            &Connection::Subscription,
-        );
-        (version.join().unwrap(), status)
-    });
-    let version = version.map(|out| parse_version(&out)).unwrap_or_default();
-    match status {
+/// `claude auth status --json` with every credential variable taken out, so a key in the environment cannot make it look logged in.
+fn run_auth_status() -> Result<String, RunError> {
+    run(
+        &args_of(&["auth", "status", "--json"]),
+        "",
+        STATUS_TIMEOUT,
+        &Connection::Subscription,
+    )
+}
+
+/// The subscription's state from what `claude auth status` printed.
+fn status_of(out: Result<String, RunError>, version: String) -> Claude {
+    match out {
         Err(RunError::NotInstalled) => Claude::Missing,
         Err(RunError::Failed(message)) => Claude::Failed { message },
         Ok(out) => parse_status(&out, version).unwrap_or_else(|message| Claude::Failed { message }),
     }
+}
+
+/// The subscription's own state.
+fn read_status() -> Claude {
+    // Two processes, run side by side: the answer waits for the slower one, not for both.
+    let (version, status) = std::thread::scope(|scope| {
+        let version = scope.spawn(read_version);
+        (version.join().unwrap(), run_auth_status())
+    });
+    let version = version.map(|out| parse_version(&out)).unwrap_or_default();
+    status_of(status, version)
 }
 
 fn read_version() -> Result<String, RunError> {
@@ -1106,7 +1137,8 @@ pub async fn claude_status(app: tauri::AppHandle) -> Result<Claude, String> {
     Ok(status)
 }
 
-/// The settings card's view of the connection: the method, and the state of the subscription and of the API key, each on its own.
+/// The settings card's view of the connection: the method, and the state of the subscription and of the API key, each on its own,
+/// with the usable state of the method in use, so one call (and one read of each state) refreshes the card and the whole screen.
 /// A keychain failure stays in the key row (`Unverified`); the rest of the card is still answered.
 #[tauri::command]
 pub async fn claude_connection(app: tauri::AppHandle) -> Result<ClaudeConnection, String> {
@@ -1117,16 +1149,32 @@ pub async fn claude_connection(app: tauri::AppHandle) -> Result<ClaudeConnection
         blocking(read_status),
         read_key_state()
     );
+    let (method, subscription) = (method?, subscription?);
+    let api_key = key_state_or_unverified(api_key.map_err(|e| log_failure(command, "-", e)));
+    let claude = usable_claude(method, &subscription, &api_key);
+    if let Claude::Failed { message } = &claude {
+        log_failure(command, "-", message.clone());
+    }
     Ok(ClaudeConnection {
-        method: method?,
-        subscription: subscription?,
-        api_key: key_state_or_unverified(api_key.map_err(|e| log_failure(command, "-", e))),
+        method,
+        subscription,
+        api_key,
+        claude,
     })
 }
 
 const LOGOUT_REMAINS: &str = "Claude Code のログアウトを確認できませんでした。ターミナルで claude auth logout を実行してください";
 
-/// Logs the subscription out of Claude Code (`claude auth logout`) and reads its status again: still logged in is an error.
+/// Whether the status read after a logout shows Claude Code logged out (or absent). Anything else, including a status that could not be read, is an error.
+fn logout_outcome(status: &Claude) -> Result<(), String> {
+    match status {
+        Claude::LoggedOut { .. } | Claude::Missing => Ok(()),
+        _ => Err(LOGOUT_REMAINS.to_owned()),
+    }
+}
+
+/// Logs the subscription out of Claude Code (`claude auth logout`) and reads its status again (`claude auth status` alone):
+/// still logged in, or a status that cannot be read, is an error.
 /// Without Claude Code there is nothing to log out of.
 fn logout_subscription() -> Result<(), String> {
     let logout = run(
@@ -1138,33 +1186,45 @@ fn logout_subscription() -> Result<(), String> {
     if matches!(logout, Err(RunError::NotInstalled)) {
         return Ok(());
     }
-    match read_status() {
-        Claude::Ready { .. } => Err(LOGOUT_REMAINS.to_owned()),
-        _ => Ok(()),
-    }
+    logout_outcome(&status_of(run_auth_status(), String::new()))
 }
 
-/// Checks `key` at Anthropic, and only a working one is stored and made the method (the order: check, keychain, method file, logout).
-/// Switching to the key logs the subscription out of Claude Code; if it is still logged in afterwards the switch stays and the error says so.
+/// Checks `key` at Anthropic, and only a working one is stored (the order: check, keychain, method file, logout).
+/// With `switch` the key also becomes the method, and the subscription is logged out of Claude Code unless the key was the method already;
+/// without it only the key is replaced and the method stays. The key is stored when the logout could not be confirmed: that is answered as `logout_error`, not as an error.
 #[tauri::command]
-pub async fn claude_key_save(app: tauri::AppHandle, key: String) -> Result<(), String> {
+pub async fn claude_key_save(
+    app: tauri::AppHandle,
+    key: String,
+    switch: bool,
+) -> Result<KeySaved, String> {
     let command = "claude_key_save";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let key = claude_auth::check_key_format(&key).map_err(|e| log_failure(command, "-", e))?;
     if let Some(message) = claude_auth::refusal(&claude_auth::check_key(API_BASE, &key).await) {
         return Err(log_failure(command, "-", message));
     }
-    blocking(move || {
+    let logout_error = blocking(move || {
         claude_auth::write_key(&key)?;
-        claude_auth::save_method(&dir, Method::ApiKey)?;
-        logout_subscription()
+        let was = claude_auth::load_method(&dir);
+        if switch {
+            claude_auth::save_method(&dir, Method::ApiKey)?;
+        }
+        Ok::<_, String>(if claude_auth::should_logout(switch, was) {
+            logout_subscription().err()
+        } else {
+            None
+        })
     })
     .await?
-    .map_err(|e| log_failure(command, "-", e))
+    .map_err(|e| log_failure(command, "-", e))?;
+    Ok(KeySaved {
+        logout_error: logout_error.map(|e| log_failure(command, "-", e)),
+    })
 }
 
 /// Chooses the method. The API key needs a stored key that Anthropic does not reject (one that cannot be asked about is let through);
-/// switching to it logs the subscription out of Claude Code (see `claude_key_save`). A rejected key changes and logs out nothing.
+/// switching to it logs the subscription out of Claude Code unless the key was the method already (see `claude_key_save`). A rejected key changes and logs out nothing.
 /// Going back to the subscription only changes the method.
 #[tauri::command]
 pub async fn claude_method_set(app: tauri::AppHandle, method: Method) -> Result<(), String> {
@@ -1182,8 +1242,13 @@ pub async fn claude_method_set(app: tauri::AppHandle, method: Method) -> Result<
                 return Err(log_failure(command, "-", message));
             }
             blocking(move || {
+                let was = claude_auth::load_method(&dir);
                 claude_auth::save_method(&dir, method)?;
-                logout_subscription()
+                if claude_auth::should_logout(true, was) {
+                    logout_subscription()
+                } else {
+                    Ok(())
+                }
             })
             .await?
         }
@@ -1544,12 +1609,126 @@ mod tests {
             method: Method::ApiKey,
             subscription: Claude::Missing,
             api_key: ApiKeyState::None,
+            claude: Claude::Missing,
         })
         .unwrap();
         assert_eq!(
             sent,
-            json!({"method": "apiKey", "subscription": {"state": "missing"}, "apiKey": {"state": "none"}})
+            json!({"method": "apiKey", "subscription": {"state": "missing"}, "apiKey": {"state": "none"}, "claude": {"state": "missing"}})
         );
+    }
+
+    #[test]
+    fn a_saved_key_answers_the_logout_that_remains_in_camel_case() {
+        assert_eq!(
+            serde_json::to_value(KeySaved { logout_error: None }).unwrap(),
+            json!({"logoutError": null})
+        );
+        assert_eq!(
+            serde_json::to_value(KeySaved {
+                logout_error: Some("x".into())
+            })
+            .unwrap(),
+            json!({"logoutError": "x"})
+        );
+    }
+
+    #[test]
+    fn the_usable_state_follows_the_method_in_use() {
+        let ready = Claude::Ready {
+            email: "a@example.com".into(),
+            plan: "Max".into(),
+            version: "2.1.314".into(),
+            method: Method::Subscription,
+        };
+        let key = ApiKeyState::Ready { workspace_id: None };
+        // The subscription in use: its own state, whatever the key is.
+        assert_eq!(
+            usable_claude(Method::Subscription, &ready, &ApiKeyState::None),
+            ready
+        );
+        let logged_out = Claude::LoggedOut {
+            version: "2.1.314".into(),
+        };
+        assert_eq!(
+            usable_claude(Method::Subscription, &logged_out, &key),
+            logged_out
+        );
+        // The key in use: usable with the version the subscription's status carries, logged in or not.
+        let by_key = Claude::Ready {
+            email: String::new(),
+            plan: String::new(),
+            version: "2.1.314".into(),
+            method: Method::ApiKey,
+        };
+        assert_eq!(usable_claude(Method::ApiKey, &ready, &key), by_key);
+        assert_eq!(usable_claude(Method::ApiKey, &logged_out, &key), by_key);
+        assert!(matches!(
+            usable_claude(Method::ApiKey, &logged_out, &ApiKeyState::None),
+            Claude::Failed { .. }
+        ));
+        // No Claude Code, or a status that could not be read: that is the state.
+        assert_eq!(
+            usable_claude(Method::ApiKey, &Claude::Missing, &key),
+            Claude::Missing
+        );
+        let failed = Claude::Failed {
+            message: "x".into(),
+        };
+        assert_eq!(usable_claude(Method::ApiKey, &failed, &key), failed);
+    }
+
+    #[test]
+    fn only_a_logged_out_or_absent_claude_code_counts_as_logged_out() {
+        assert_eq!(logout_outcome(&Claude::Missing), Ok(()));
+        assert_eq!(
+            logout_outcome(&Claude::LoggedOut {
+                version: "1".into()
+            }),
+            Ok(())
+        );
+        let ready = Claude::Ready {
+            email: String::new(),
+            plan: String::new(),
+            version: "1".into(),
+            method: Method::Subscription,
+        };
+        for status in [
+            ready,
+            Claude::Failed {
+                message: "x".into(),
+            },
+        ] {
+            assert_eq!(
+                logout_outcome(&status),
+                Err(LOGOUT_REMAINS.to_owned()),
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_subscription_status_comes_from_what_auth_status_printed() {
+        assert_eq!(
+            status_of(Err(RunError::NotInstalled), "1".into()),
+            Claude::Missing
+        );
+        assert_eq!(
+            status_of(Err(RunError::Failed("x".into())), "1".into()),
+            Claude::Failed {
+                message: "x".into()
+            }
+        );
+        assert_eq!(
+            status_of(Ok(r#"{"loggedIn":false}"#.into()), "1".into()),
+            Claude::LoggedOut {
+                version: "1".into()
+            }
+        );
+        assert!(matches!(
+            status_of(Ok("not json".into()), String::new()),
+            Claude::Failed { .. }
+        ));
     }
 
     #[test]

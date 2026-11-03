@@ -3,7 +3,7 @@
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Workspace } from "./bindings/Workspace";
 import { calendarFirstDay, setCalendarFirstDay } from "./calendar.js";
-import { loadModelSettings } from "./claude.js";
+import { loadModelSettings, showClaudeTab } from "./claude.js";
 import { $, tag } from "./dom.js";
 import { avatarColor, hostOf, initials, WEEKDAYS } from "./format.js";
 import { LINK_SVG } from "./icons.js";
@@ -37,6 +37,8 @@ export function selectSettingsTab(name: SettingsTab) {
   closeHint();
   $("error").hidden = true;
   $("settings").scrollTop = 0;
+  // The connection is asked about only once the Claude tab is shown.
+  if (name === "claude") showClaudeTab();
   // The tokens are asked about only once the Slack tab is shown.
   if (name === "slack" && workspaces.some((w) => !wsChecks.has(w.teamId))) drawWorkspaces(workspaces, settingsSeq);
 }

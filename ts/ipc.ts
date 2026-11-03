@@ -7,6 +7,7 @@ import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
 import type { Effort } from "./bindings/Effort";
 import type { Inbox } from "./bindings/Inbox";
+import type { KeySaved } from "./bindings/KeySaved";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
@@ -93,10 +94,11 @@ export interface Commands {
   };
   // Whether Claude can be used with the method in use (the subscription logged in, or an API key that is not refused).
   claude_status: { args: undefined; result: Claude };
-  // The settings card's view: the method in use, and the subscription's and the API key's own states.
+  // The settings card's view: the method in use, the subscription's and the API key's own states, and the usable state (`claude`) of the method in use.
   claude_connection: { args: undefined; result: ClaudeConnection };
-  // Checks the key at Anthropic and, only if it works, stores it, makes it the method and logs Claude Code out (an error says when the logout did not hold). null: done.
-  claude_key_save: { args: { key: string }; result: null };
+  // Checks the key at Anthropic and, only if it works, stores it. With `switch` it also makes the key the method and logs Claude Code out (unless the key was the method already);
+  // without it only the key is replaced. `logoutError` says that the key was stored but the logout could not be confirmed.
+  claude_key_save: { args: { key: string; switch: boolean }; result: KeySaved };
   // The API key method needs a stored key; choosing it logs Claude Code out. The subscription only changes the method.
   claude_method_set: { args: { method: Method }; result: null };
   // Deletes the stored key; the method goes back to the subscription if the key was in use.

@@ -27,8 +27,16 @@ let connection: ClaudeConnection | null = null;
 let connectionError: string | null = null;
 // The key field is open (to register a key, or to paste it again).
 let keyFormOpen = false;
+// The open key field switches to the key when it is saved (it was opened by the radio), or only replaces the key and leaves the method (it was opened by "貼り直す").
+let keyFormSwitch = false;
 // A change of the method or the key is on its way: the rows wait.
 let changing = false;
+// How many reads of the state have started; only the answer of the latest is used (as for `saves`).
+let reads = 0;
+// The latest read has not answered yet.
+let reading = false;
+// The connection card was asked for (the Claude tab was shown once).
+let connectionAsked = false;
 
 // A connection row: the radio that picks the method, then `row` (an `itemRow`). Only pressing the radio picks it; the radios have no shared name, so the arrow keys move none of them.
 // Every `pick` ends in a redraw, which sets the radios back to the method really in use.
@@ -73,7 +81,8 @@ function keyRow(key: ApiKeyState) {
   paste.disabled = changing;
   paste.onclick = () => {
     keyFormOpen = !keyFormOpen;
-    redrawClaudeItems();
+    keyFormSwitch = false;
+    redrawConnection();
     if (keyFormOpen) $("claude-key-input").focus();
   };
   const unlink = tag("button", "icon-btn");
@@ -112,7 +121,7 @@ function connectionRows() {
 
 function pickSubscription() {
   keyFormOpen = false;
-  if (connection?.method === "subscription") return redrawClaudeItems();
+  if (connection?.method === "subscription") return redrawConnection();
   changeConnection(() => invoke("claude_method_set", { method: "subscription" }));
 }
 
@@ -120,43 +129,46 @@ function pickSubscription() {
 function pickKey() {
   if (connection?.apiKey.state === "none" || connection?.apiKey.state === "rejected") {
     keyFormOpen = true;
-    redrawClaudeItems();
+    keyFormSwitch = true;
+    redrawConnection();
     return $("claude-key-input").focus();
   }
   keyFormOpen = false;
-  if (connection?.method === "apiKey") return redrawClaudeItems();
+  if (connection?.method === "apiKey") return redrawConnection();
   changeConnection(() => invoke("claude_method_set", { method: "apiKey" }));
 }
 
 // Runs a change of the method or the key, then asks for the states again, so every row and the sidebar show what is now true.
-// A failure shows its error; the field stays open unless the method was switched anyway (a switch whose logout did not hold keeps the key).
-async function changeConnection(change: () => Promise<null>) {
+// A failure shows its error and the field stays open. A change that was made but left something undone answers it as text (the key was saved,
+// but Claude Code could not be shown to be logged out): the field closes and the text is shown as the error.
+async function changeConnection(change: () => Promise<string | null>) {
   if (changing) return;
-  const before = connection?.method;
   changing = true;
   $("error").hidden = true;
-  redrawClaudeItems();
+  redrawConnection();
   let failed = false;
+  let remaining: string | null = null;
   try {
-    await change();
+    remaining = await change();
   } catch (e) {
     failed = true;
     showError(e);
   }
   changing = false;
-  await refreshClaude();
-  if (!failed || (connection?.method === "apiKey" && before !== "apiKey")) keyFormOpen = false;
-  redrawClaudeItems();
+  await loadConnection();
+  if (!failed) keyFormOpen = false;
+  redrawConnection();
+  if (remaining) showError(remaining);
 }
 
-// Takes the answer of `claude_status`: the sidebar's Claude avatar (only while Claude is usable), the settings card, and the Todo add field follow.
+// Takes the usable state (`claude_status`, or the `claude` of `claude_connection`): the sidebar's Claude avatar (only while Claude is usable), the settings card, and the Todo add field follow.
 function applyClaude(next: Claude | null) {
   claude = next;
   $("claude-btn").hidden = next?.state !== "ready";
   setClaudeReady(next?.state === "ready");
   if (next?.state === "ready") $("claude-btn").setAttribute("aria-label", `Claude: ${next.method === "apiKey" ? "API キー" : next.email}`);
   else closeClaudePopup();
-  redrawClaudeItems();
+  redrawConnection();
   updateAddMode();
   refreshPrompt();
   refreshSlackCompose();
@@ -238,7 +250,7 @@ function syncModelSelects() {
 
 // The selects show the saved values until the save succeeds; a failure puts them back and shows the error.
 // The selects are not drawn again by the save itself, so the one the user operated keeps its place and gets the focus back that disabling it took away.
-// When the card was drawn again meanwhile (a read or a Claude check), the operated select is gone, and the select of the same purpose and kind that is shown gets the focus.
+// When the card was drawn again meanwhile (a read of the saved settings), the operated select is gone, and the select of the same purpose and kind that is shown gets the focus.
 // A change of the model sends the model alone, and Rust saves the effort the model is recommended with; a change of the effort sends both.
 async function saveModel(purpose: Purpose, change: { model: Model } | { effort: Effort }, operated: HTMLSelectElement) {
   if (savingModel || modelSettings === null) return;
@@ -275,45 +287,86 @@ export async function loadModelSettings() {
   }
   if (savingModel || saves !== started) return;
   modelSettings = read;
-  redrawClaudeItems();
+  redrawModels();
   redrawPromptModel();
 }
 
-// The three cards: the connection rows (and the key field), the model and effort, and the Todo prompt (the last two are shown whether or not Claude is usable).
-export function redrawClaudeItems() {
+// The connection card: the rows, the key field, and the buttons that wait while a change or a read is on its way (or, for the key field, while the states are not known).
+function redrawConnection() {
   $("claude-items").replaceChildren(...connectionRows());
   $("claude-key").hidden = !keyFormOpen;
+  $<HTMLButtonElement>("claude-recheck").disabled = changing || reading;
+  $("claude-key").querySelector("button")!.disabled = changing || connection === null;
+}
+
+// The model and effort card (shown whether or not Claude is usable).
+function redrawModels() {
   $("claude-models").replaceChildren(...modelBlock());
+}
+
+// The Todo prompt card (shown whether or not Claude is usable).
+export function redrawPromptRow() {
   $("claude-prompt").replaceChildren(promptRow());
 }
 
-// Asks for the usable state and for the connection card's view together.
-// A failure of the usable state is shown as its failed state; a failure of the connection leaves it null, shows the error, and the card shows one failed row nothing can be pressed on.
+// Asks for the usable state alone (at start, when the settings are not shown); a failure is shown as its failed state.
 export async function refreshClaude() {
-  const button = $<HTMLButtonElement>("claude-recheck");
-  button.disabled = true;
+  const read = ++reads;
+  reading = true;
+  applyClaude(null);
+  let next: Claude;
+  try {
+    next = await invoke("claude_status");
+  } catch (e) {
+    next = { state: "failed", message: String(e) };
+  }
+  if (read !== reads) return;
+  reading = false;
+  applyClaude(next);
+}
+
+// Asks for the connection card's view, which carries the usable state, in one call, and the card and the whole screen follow.
+// A failure leaves the connection null, shows the error, and the card shows one failed row nothing can be pressed on; Claude is then in its failed state.
+async function loadConnection() {
+  connectionAsked = true;
+  const read = ++reads;
+  reading = true;
   connection = null;
   connectionError = null;
   applyClaude(null);
-  const [status, card] = await Promise.allSettled([invoke("claude_status"), invoke("claude_connection")]);
-  if (card.status === "fulfilled") connection = card.value;
-  else {
-    connectionError = String(card.reason);
-    showError(card.reason);
+  try {
+    const next = await invoke("claude_connection");
+    if (read !== reads) return;
+    reading = false;
+    connection = next;
+    applyClaude(next.claude);
+  } catch (e) {
+    if (read !== reads) return;
+    reading = false;
+    connectionError = String(e);
+    showError(e);
+    applyClaude({ state: "failed", message: String(e) });
   }
-  applyClaude(status.status === "fulfilled" ? status.value : { state: "failed", message: String(status.reason) });
-  button.disabled = false;
+}
+
+// The Claude tab was shown: the connection is asked for the first time (a start without the settings never asks, so it never asks Anthropic about a key).
+export function showClaudeTab() {
+  if (!connectionAsked) loadConnection();
 }
 
 export function initClaude() {
-  $("claude-recheck").onclick = refreshClaude;
+  redrawConnection();
+  redrawPromptRow();
+  $("claude-recheck").onclick = loadConnection;
   $("claude-key").onsubmit = async (e) => {
     e.preventDefault();
+    if (changing) return;
     const input = $<HTMLInputElement>("claude-key-input");
     const key = input.value;
+    const switchTo = keyFormSwitch;
     // The key is never shown: the field is emptied as soon as it is read.
     input.value = "";
-    await changeConnection(() => invoke("claude_key_save", { key }));
+    await changeConnection(async () => (await invoke("claude_key_save", { key, switch: switchTo })).logoutError);
     if (keyFormOpen) input.focus();
   };
   $("claude-help").onclick = (e) =>
@@ -325,7 +378,7 @@ export function initClaude() {
           ["Claude Code を入れる"],
           ["ターミナルで ", code("claude auth login"), " を実行してログインする（サブスクリプション）"],
           ["API キーを使うときは、Anthropic の Console で、ワークスペースに限定したキーを作る"],
-          ["キーを貼って「確認して保存」を押す。キーは OS の資格情報の保管場所に入れ、画面には出さない。キーに切り替えると、この Mac の Claude Code はログアウトされる（戻すときは ", code("claude auth login"), "）"],
+          ["キーを貼って「確認して保存」を押す。キーは OS の資格情報の保管場所に入れ、画面には出さない。キーに切り替えると、この端末の Claude Code はログアウトされる（戻すときは ", code("claude auth login"), "）"],
           ["↻ で状態を確かめ直す"],
         ],
         "Slack のメッセージの本文（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります。Slack に貼る文章を Claude と校正するときは、編集欄の文章、会話、依頼を、「校正する」か送信を押したときだけ送ります。モデルと effort は、Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正のそれぞれに選べます",

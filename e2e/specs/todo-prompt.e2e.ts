@@ -1,4 +1,4 @@
-import { boot, callsOf, count, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 // What Claude answers when the request changes nothing.
@@ -290,6 +290,13 @@ describe("todo prompt screen: the conversation with Claude", () => {
     await expect(input()).toBeEnabled();
     const edit = await ask("もう一度", answer);
     expect(await callsOf(edit)).toEqual([{ body: "Default body", history: [{ role: "user", text: "短くして" }], instruction: "もう一度" }]);
+  });
+
+  it("takes a request while an API key is in use", async () => {
+    await openPrompt(claudeKeyReady);
+    await expect(input()).toBeEnabled();
+    const edit = await ask("短くして");
+    expect(await callsOf(edit)).toEqual([{ body: "Default body", history: [], instruction: "短くして" }]);
   });
 
   for (const [name, claude] of [["not logged in", claudeLoggedOut], ["missing", claudeMissing]] as const) {

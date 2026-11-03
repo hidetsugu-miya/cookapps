@@ -1,6 +1,6 @@
 //! How `claude -p` is signed in (A-4): with the Claude subscription of the machine, or with an Anthropic API key kept in the keychain.
-//! The method is saved in `claude-auth.json`; the key never leaves the keychain except as an environment variable of a `claude` child process.
-use std::{fmt, path::Path, time::Duration};
+//! The method is saved in `claude-auth.json`; the key goes only to the models check and to the environment of a `claude` child process.
+use std::{fmt, path::Path, sync::OnceLock, time::Duration};
 
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -96,7 +96,9 @@ impl fmt::Debug for Connection {
 impl Connection {
     /// The environment changes that make `claude` use exactly this sign-in.
     /// `claude` prefers `ANTHROPIC_AUTH_TOKEN` to `ANTHROPIC_API_KEY`, so a key is set and the token is taken out;
-    /// the subscription needs none of the three variables, as any of them would take the call away from it.
+    /// the variables that name another host (`ANTHROPIC_BASE_URL`) or another provider (Bedrock, Vertex, Foundry) are taken out too,
+    /// so the key is sent to the host it was checked against and to nowhere else.
+    /// The subscription needs none of the three credential variables, as any of them would take the call away from it.
     pub fn env(&self) -> Vec<EnvChange> {
         match self {
             Self::Subscription => vec![
@@ -106,10 +108,20 @@ impl Connection {
             ],
             Self::ApiKey(key) => vec![
                 EnvChange::Remove("ANTHROPIC_AUTH_TOKEN"),
+                EnvChange::Remove("ANTHROPIC_BASE_URL"),
+                EnvChange::Remove("CLAUDE_CODE_USE_BEDROCK"),
+                EnvChange::Remove("CLAUDE_CODE_USE_VERTEX"),
+                EnvChange::Remove("CLAUDE_CODE_USE_FOUNDRY"),
                 EnvChange::Set("ANTHROPIC_API_KEY", key.clone()),
             ],
         }
     }
+}
+
+/// Whether saving or choosing the API key logs the subscription out of Claude Code: when the call switches to the key (`switch`)
+/// and the key was not already the method in use, so a login made again by hand while the key is in use is not undone.
+pub fn should_logout(switch: bool, current: Method) -> bool {
+    switch && current != Method::ApiKey
 }
 
 /// The sign-in for `method` with the stored `key`; the API key method without a key is an error.
@@ -202,9 +214,22 @@ fn classify(status: u16, workspace_id: Option<String>) -> KeyCheck {
     }
 }
 
+/// The client of every check, built once; `None` when it cannot be built (the next check tries again).
+fn http_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Some(client);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(CHECK_TIMEOUT)
+        .build()
+        .ok()?;
+    Some(CLIENT.get_or_init(|| client))
+}
+
 /// Asks the models endpoint of `base` with `key`. The answer's text is not read, and the key is in no message.
 pub async fn check_key(base: &str, key: &str) -> KeyCheck {
-    let Ok(http) = reqwest::Client::builder().timeout(CHECK_TIMEOUT).build() else {
+    let Some(http) = http_client() else {
         return KeyCheck::Unverified("通信を始められません".to_owned());
     };
     let sent = http
@@ -378,14 +403,32 @@ mod tests {
     }
 
     #[test]
-    fn a_key_is_set_and_the_auth_token_that_beats_it_is_taken_out() {
+    fn a_key_is_set_and_what_beats_it_or_redirects_it_is_taken_out() {
         assert_eq!(
             Connection::ApiKey("sk-ant-x".into()).env(),
             [
                 EnvChange::Remove("ANTHROPIC_AUTH_TOKEN"),
+                EnvChange::Remove("ANTHROPIC_BASE_URL"),
+                EnvChange::Remove("CLAUDE_CODE_USE_BEDROCK"),
+                EnvChange::Remove("CLAUDE_CODE_USE_VERTEX"),
+                EnvChange::Remove("CLAUDE_CODE_USE_FOUNDRY"),
                 EnvChange::Set("ANTHROPIC_API_KEY", "sk-ant-x".into()),
             ]
         );
+    }
+
+    #[test]
+    fn only_a_switch_away_from_another_method_logs_the_subscription_out() {
+        assert!(should_logout(true, Method::Subscription));
+        assert!(!should_logout(true, Method::ApiKey));
+        assert!(!should_logout(false, Method::Subscription));
+        assert!(!should_logout(false, Method::ApiKey));
+    }
+
+    #[test]
+    fn the_checks_share_one_client() {
+        let (a, b) = (http_client().unwrap(), http_client().unwrap());
+        assert!(std::ptr::eq(a, b));
     }
 
     #[test]
@@ -607,5 +650,18 @@ mod tests {
             panic!("expected Unverified");
         };
         assert!(!message.contains("secret"), "{message}");
+    }
+
+    #[test]
+    fn the_shared_client_reaches_a_local_port_again_and_again() {
+        for _ in 0..2 {
+            let (base, server) =
+                serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            assert_eq!(
+                check_at(&base, "sk-ant-x"),
+                KeyCheck::Valid { workspace_id: None }
+            );
+            server.join().unwrap();
+        }
     }
 }

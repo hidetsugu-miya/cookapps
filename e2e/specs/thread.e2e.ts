@@ -1,5 +1,5 @@
 import {
-  account, boot, callsOf, claudeLoggedOut, claudeReady, count, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, waitForCalls, waitForCount, waitForText,
+  account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 describe("thread", () => {
@@ -120,12 +120,25 @@ describe("thread AI summary", () => {
     await expect(summaryButton()).toBeDisplayed();
     // The recheck button is on the settings screen; click it in the page as the settings screen would.
     const recheck = () => browser.execute(() => document.getElementById("claude-recheck")!.click());
-    await mock("claude_status", claudeLoggedOut);
+    await mock("claude_connection", connection("subscription", claudeLoggedOut, { state: "none" }));
     await recheck();
     await expect(summaryButton()).not.toBeDisplayed();
-    await mock("claude_status", claudeReady);
+    await mock("claude_connection", connection("subscription", claudeReady, { state: "none" }));
     await recheck();
     await expect(summaryButton()).toBeDisplayed();
+  });
+
+  it("shows the icon and sends the thread while an API key is in use", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeKeyReady });
+    await waitForCount("#unread-threads li", 2);
+    const detail = quote("Quote");
+    await open("First unread", detail);
+    await expect(summaryButton()).toBeDisplayed();
+    const call = await mock("claude_summarize_mail", summary);
+    await summaryButton().click();
+    expect(await waitForCalls(call)).toHaveLength(1);
+    await waitForCount("#mail-summary li", 2);
+    expect(await textsOf("#mail-summary li")).toEqual(summary.points);
   });
 
   it("sends the thread only when the icon is pressed, as text, and shows the points", async () => {

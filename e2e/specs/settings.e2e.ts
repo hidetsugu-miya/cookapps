@@ -261,14 +261,52 @@ describe("settings: Claude", () => {
     await expect($("#claude-key")).not.toBeDisplayed();
   });
 
-  it("redraws the rows when the check ↻ is pressed", async () => {
+  it("asks only claude_status at start, and claude_connection once the Claude tab is first shown", async () => {
+    await openSettings([], claudeReady);
+    expect(await callsOf("claude_status")).toHaveLength(1);
+    expect(await callsOf("claude_connection")).toEqual([]);
+    await openTab("claude");
+    await expect(row(1).$(".status")).toHaveText("ログイン中");
+    expect(await callsOf("claude_connection")).toHaveLength(1);
+    await openTab("slack");
+    await openTab("claude");
+    expect(await callsOf("claude_connection")).toHaveLength(1);
+    expect(await callsOf("claude_status")).toHaveLength(1);
+  });
+
+  it("redraws the rows and the usable state with one claude_connection when the check ↻ is pressed", async () => {
     await openSettings([], claudeReady, "claude");
-    const status = await mock("claude_status", claudeLoggedOut);
+    const status = await mock("claude_status", claudeReady);
     const card = await mock("claude_connection", connection("subscription", claudeLoggedOut, { state: "none" }));
     await $("#claude-recheck").click();
-    await waitForCalls(status);
     await waitForCalls(card);
     await expect(row(1).$(".status")).toHaveText("未ログイン");
+    await expect($("#claude-btn")).not.toBeDisplayed();
+    expect(await callsOf(card)).toHaveLength(1);
+    expect(await callsOf(status)).toEqual([]);
+  });
+
+  it("keeps the model selects and the prompt row as they were when only the connection is redrawn", async () => {
+    await openSettings([], claudeReady, "claude");
+    await expect($("#claude-models select")).toExist();
+    await browser.waitUntil(async () => (await textsOf("#claude-prompt .status"))[0] !== "確認中");
+    const marks = () => browser.execute(() => {
+      const w = window as unknown as { __marks__?: Element[] };
+      const now = [document.querySelector("#claude-models select"), document.querySelector("#claude-prompt .item")] as Element[];
+      w.__marks__ ??= now;
+      return now.every((e, i) => e === w.__marks__![i]);
+    });
+    expect(await marks()).toBe(true);
+    const card = await mock("claude_connection", connection("subscription", claudeLoggedOut, { state: "none" }));
+    await $("#claude-recheck").click();
+    await waitForCalls(card);
+    await expect(row(1).$(".status")).toHaveText("未ログイン");
+    expect(await marks()).toBe(true);
+  });
+
+  it("shows Claude as failed when claude_status fails at start", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: rejects("状態を読めません"), claude_connection: connection("subscription", claudeMissing, { state: "none" }) });
+    await expect($("#claude-btn")).not.toBeDisplayed();
   });
 });
 
@@ -319,7 +357,7 @@ describe("settings: Claude API key", () => {
   it("only opens the key field when the radio of the API key row is pressed with no key stored: no method change, no logout", async () => {
     await openSettings([], claudeReady, "claude");
     await mock("claude_method_set", null);
-    await mock("claude_key_save", null);
+    await mock("claude_key_save", { logoutError: null });
     await radio(2).click();
     await expect($("#claude-key")).toBeDisplayed();
     await expect($("#claude-key-input")).toHaveAttribute("type", "password");
@@ -327,6 +365,8 @@ describe("settings: Claude API key", () => {
     expect(await callsOf("claude_method_set")).toEqual([]);
     expect(await callsOf("claude_key_save")).toEqual([]);
     await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    // The press checked the radio of the row; the redraw sets it back to the method really in use.
+    await expect(radio(2)).not.toBeSelected();
   });
 
   it("only opens the key field when the radio of a refused key is pressed: no method change, no logout", async () => {
@@ -337,6 +377,7 @@ describe("settings: Claude API key", () => {
     await expect($("#claude-key-input")).toBeFocused();
     expect(await callsOf("claude_method_set")).toEqual([]);
     await expect(row(1).$('input[type="radio"]')).toBeSelected();
+    await expect(radio(2)).not.toBeSelected();
   });
 
   it("does not switch when the text of a row is clicked or double-clicked, nor when an arrow key is pressed on a radio", async () => {
@@ -355,16 +396,37 @@ describe("settings: Claude API key", () => {
     await expect(radio(2)).not.toBeSelected();
   });
 
-  it("disables the radios while a change of the method is on its way", async () => {
+  it("disables the radios, the row buttons and ↻ while a change of the method is on its way", async () => {
     await withKey("subscription");
     const set = await mock("claude_method_set", holds);
+    await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
     await radio(2).click();
     await waitForCalls(set);
     await expect(radio(1)).toBeDisabled();
     await expect(radio(2)).toBeDisabled();
+    await expect(row(2).$(".text-btn")).toBeDisabled();
+    await expect(row(2).$('button[aria-label="API キーの接続を解除"]')).toBeDisabled();
+    await expect($("#claude-recheck")).toBeDisabled();
     await release(set, null);
     await expect(radio(1)).not.toBeDisabled();
     await expect(radio(2)).not.toBeDisabled();
+    await expect(row(2).$(".text-btn")).not.toBeDisabled();
+    await expect($("#claude-recheck")).not.toBeDisabled();
+  });
+
+  it("disables ↻ and the key field's button while the states are being read", async () => {
+    await openSettings([], claudeReady, "claude");
+    await radio(2).click();
+    await expect($("#claude-key")).toBeDisplayed();
+    await expect($("#claude-key button")).not.toBeDisabled();
+    const card = await mock("claude_connection", holds);
+    await $("#claude-recheck").click();
+    await waitForCalls(card);
+    await expect($("#claude-recheck")).toBeDisabled();
+    await expect($("#claude-key button")).toBeDisabled();
+    await release(card, connection("subscription", claudeReady, { state: "none" }));
+    await expect($("#claude-recheck")).not.toBeDisabled();
+    await expect($("#claude-key button")).not.toBeDisabled();
   });
 
   it("shows one failed row with the error and no radio when claude_connection itself fails, and nothing can be pressed", async () => {
@@ -378,6 +440,8 @@ describe("settings: Claude API key", () => {
     expect(await count('#claude-items input[type="radio"]')).toBe(0);
     await expect(row(1).$(".status")).toHaveText("確認できません");
     await expect(row(1).$(".item-meta")).toHaveText(expect.stringContaining("接続の確認に失敗しました"));
+    // The usable state could not be read either: Claude counts as failed.
+    await expect($("#claude-btn")).not.toBeDisplayed();
     await row(1).click();
     expect(await callsOf("claude_method_set")).toEqual([]);
   });
@@ -385,12 +449,11 @@ describe("settings: Claude API key", () => {
   it("registers the key with claude_key_save, empties the field as soon as it is read, and shows the key in use after the states are asked again", async () => {
     await openSettings([], claudeReady, "claude");
     await radio(2).click();
-    const save = await mock("claude_key_save", null);
-    await mock("claude_status", claudeKeyReady);
+    const save = await mock("claude_key_save", { logoutError: null });
     const card = await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
     await types(`  ${key}  `);
     await $("#claude-key button").click();
-    expect(await waitForCalls(save)).toEqual([{ key: `  ${key}  ` }]);
+    expect(await waitForCalls(save)).toEqual([{ key: `  ${key}  `, switch: true }]);
     await waitForCalls(card);
     await expect($("#claude-key-input")).toHaveValue("");
     await expect($("#claude-key")).not.toBeDisplayed();
@@ -414,11 +477,10 @@ describe("settings: Claude API key", () => {
     await expect($("#claude-btn")).toBeDisplayed();
   });
 
-  it("closes the key field when the key was kept but Claude Code could not be logged out, and shows that error", async () => {
+  it("closes the key field when the key was kept but Claude Code could not be logged out, and shows that text as the error", async () => {
     await openSettings([], claudeReady, "claude");
     await radio(2).click();
-    await mock("claude_key_save", rejects("Claude Code のログアウトを確認できませんでした。ターミナルで claude auth logout を実行してください"));
-    await mock("claude_status", claudeKeyReady);
+    await mock("claude_key_save", { logoutError: "Claude Code のログアウトを確認できませんでした。ターミナルで claude auth logout を実行してください" });
     await mock("claude_connection", connection("apiKey", claudeReady, keyReady));
     await types(key);
     await $("#claude-key button").click();
@@ -427,10 +489,76 @@ describe("settings: Claude API key", () => {
     await expect(row(2).$('input[type="radio"]')).toBeSelected();
   });
 
+  it("ignores a second send while the first is on its way, and keeps the typed key", async () => {
+    await openSettings([], claudeReady, "claude");
+    await radio(2).click();
+    const save = await mock("claude_key_save", holds);
+    await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
+    await types(key);
+    await $("#claude-key button").click();
+    await waitForCalls(save);
+    await expect($("#claude-key button")).toBeDisabled();
+    await types("sk-ant-api03-second");
+    await browser.execute(
+      (id) => {
+        if (!window.__e2e_once__(id)) return;
+        (document.getElementById("claude-key") as HTMLFormElement).requestSubmit();
+      },
+      onceId(),
+    );
+    await expect($("#claude-key-input")).toHaveValue("sk-ant-api03-second");
+    expect(await callsOf(save)).toHaveLength(1);
+    await release(save, { logoutError: null });
+    await expect($("#claude-key")).not.toBeDisplayed();
+  });
+
+  it("pastes the key again with 貼り直す: only the key is sent to be replaced (switch false), the method stays and the field closes", async () => {
+    await withKey("subscription");
+    await row(2).$(".text-btn").click();
+    const save = await mock("claude_key_save", { logoutError: null });
+    const method = await mock("claude_method_set", null);
+    await mock("claude_connection", connection("subscription", claudeReady, { state: "ready", workspaceId: "wrkspc_02" }));
+    await types(key);
+    await $("#claude-key button").click();
+    expect(await waitForCalls(save)).toEqual([{ key, switch: false }]);
+    await expect($("#claude-key")).not.toBeDisplayed();
+    await expect($("#claude-key-input")).toHaveValue("");
+    await expect(row(2).$(".item-meta")).toHaveText(expect.stringContaining("wrkspc_02"));
+    await expect(radio(1)).toBeSelected();
+    expect(await callsOf(method)).toEqual([]);
+  });
+
+  it("closes the field of 貼り直す and shows the logout that could not be confirmed, while the key is in use", async () => {
+    await withKey("apiKey");
+    await row(2).$(".text-btn").click();
+    await mock("claude_key_save", { logoutError: "Claude Code のログアウトを確認できませんでした。ターミナルで claude auth logout を実行してください" });
+    await mock("claude_connection", connection("apiKey", claudeReady, keyReady));
+    await types(key);
+    await $("#claude-key button").click();
+    await expect($("#error")).toHaveText(expect.stringContaining("claude auth logout"));
+    await expect($("#claude-key")).not.toBeDisplayed();
+    await expect(radio(2)).toBeSelected();
+  });
+
+  it("sends switch true when the field was opened by the radio of a refused key, and false when it was opened by 貼り直す", async () => {
+    await withKey("subscription", { state: "rejected", message: "キーが使えません。Console で確かめて、貼り直してください" });
+    const save = await mock("claude_key_save", rejects("このキーは使えません。Console で確かめて、貼り直してください"));
+    await radio(2).click();
+    await types(key);
+    await $("#claude-key button").click();
+    expect(await waitForCalls(save)).toEqual([{ key, switch: true }]);
+    // The field stays open after a refusal; closing it and opening it again with 貼り直す changes what a save does.
+    await row(2).$(".text-btn").click();
+    await row(2).$(".text-btn").click();
+    await expect($("#claude-key")).toBeDisplayed();
+    await types(key);
+    await $("#claude-key button").click();
+    expect(await waitForCalls(save, 2)).toEqual([{ key, switch: true }, { key, switch: false }]);
+  });
+
   it("switches to the stored key with claude_method_set when its radio is pressed", async () => {
     await withKey("subscription");
     const set = await mock("claude_method_set", null);
-    await mock("claude_status", claudeKeyReady);
     await mock("claude_connection", connection("apiKey", claudeLoggedOut, keyReady));
     await radio(2).click();
     expect(await waitForCalls(set)).toEqual([{ method: "apiKey" }]);
@@ -451,7 +579,6 @@ describe("settings: Claude API key", () => {
     await withKey("apiKey");
     const set = await mock("claude_method_set", null);
     await mock("claude_key_delete", null);
-    await mock("claude_status", claudeReady);
     await mock("claude_connection", connection("subscription", claudeReady, keyReady));
     await radio(1).click();
     expect(await waitForCalls(set)).toEqual([{ method: "subscription" }]);
@@ -482,7 +609,6 @@ describe("settings: Claude API key", () => {
   it("deletes the key with claude_key_delete only after the confirmation, and shows it as not registered", async () => {
     await withKey("apiKey");
     const del = await mock("claude_key_delete", null);
-    await mock("claude_status", claudeLoggedOut);
     await mock("claude_connection", connection("subscription", claudeLoggedOut, { state: "none" }));
     await row(2).$('button[aria-label="API キーの接続を解除"]').click();
     await expect($('[role="alertdialog"]')).toHaveText(expect.stringContaining("Claude Code はログアウトされたまま"));

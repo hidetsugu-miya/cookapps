@@ -5,6 +5,6 @@ import type { Method } from "./Method";
 
 /**
  * The settings card of the Claude connection (A-4): the method in use, the subscription's own state and the API key's own state,
- * so each row shows its state whichever is in use.
+ * so each row shows its state whichever is in use, and `claude`, the usable state the whole screen follows (what `claude_status` answers).
  */
-export type ClaudeConnection = { method: Method, subscription: Claude, apiKey: ApiKeyState, };
+export type ClaudeConnection = { method: Method, subscription: Claude, apiKey: ApiKeyState, claude: Claude, };

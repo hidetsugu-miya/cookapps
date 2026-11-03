@@ -3,7 +3,7 @@ import { $ } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { toast } from "./toast.js";
 
-// Whether `claude` is logged in: the AI summary button is shown only then, in a thread.
+// Whether `claude` can be used: the AI summary button is shown only then, in a thread.
 let claudeReady = false;
 const syncSummaryButton = () => {
   $("thread-summary").hidden = $("thread").hidden || !claudeReady;

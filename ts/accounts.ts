@@ -27,7 +27,7 @@ let popupKey = "";
 
 export const accountButtons = () => [...$("account-list").children] as HTMLElement[];
 
-// Closes the popup if it is Claude's (Claude is no longer logged in).
+// Closes the popup if it is Claude's (Claude can no longer be used).
 export function closeClaudePopup() {
   if (claudePopup) closePopup();
 }
@@ -108,7 +108,7 @@ function toggleClaudePopup() {
   claudePopup = true;
   for (const b of accountButtons()) b.setAttribute("aria-expanded", "false");
   $("claude-btn").setAttribute("aria-expanded", "true");
-  // The button is only shown while Claude is logged in.
+  // The button is only shown while Claude can be used.
   const claude = getClaude() as Extract<Claude, { state: "ready" }>;
   const avatar = el("avatar claude");
   avatar.innerHTML = CLAUDE_SVG;

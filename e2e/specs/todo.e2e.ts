@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeMissing, claudeReady, copiedTexts, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, copiedTexts, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -85,6 +85,17 @@ describe("todo", () => {
     await expect($(".review .review-src")).toHaveText(expect.stringContaining("Example Team"));
     // Nothing is created until the user confirms.
     expect(await callsOf(addFromSlack)).toEqual([]);
+  });
+
+  it("summarizes a Slack link while an API key is in use", async () => {
+    await openTodo(claudeKeyReady);
+    const summarize = await mock("todoist_summarize_slack", slackSummary);
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await expect($("#todo-add-button")).toHaveText("要約する");
+    await $("#todo-add-button").click();
+    expect(await waitForCalls(summarize)).toEqual([{ url: slackMessageUrl }]);
+    await $(".review").waitForExist();
+    await expect($(".review .review-name")).toHaveValue("Reply to the vendor");
   });
 
   it("adds the summary as it is, to the inbox and due today unless it has a date, when 追加 is pressed", async () => {

@@ -306,5 +306,10 @@ export const claudeMissing: Claude = { state: "missing" };
 // The usable state with an API key in use: no email and no plan.
 export const claudeKeyReady: Claude = { state: "ready", email: "", plan: "", version: "2.0.0", method: "apiKey" };
 
-// What `claude_connection` answers: the method in use, the subscription's state and the API key's state.
-export const connection = (method: ClaudeConnection["method"], subscription: Claude, apiKey: ClaudeConnection["apiKey"]): ClaudeConnection => ({ method, subscription, apiKey });
+// What `claude_connection` answers: the method in use, the subscription's state and the API key's state, and the usable state (`claude`; by default the subscription's own, or the key ready when the key is in use).
+export const connection = (
+  method: ClaudeConnection["method"],
+  subscription: Claude,
+  apiKey: ClaudeConnection["apiKey"],
+  claude: Claude = method === "apiKey" ? claudeKeyReady : subscription,
+): ClaudeConnection => ({ method, subscription, apiKey, claude });
