@@ -82,7 +82,7 @@ function purposeSelects(purpose: Purpose, name: string, compact: boolean) {
   const now = modelSettings![purpose];
   const select = <T extends string>(kind: "model" | "effort", options: [T, string, string][], value: T) => {
     const el = tag("select");
-    el.setAttribute("aria-label", name ? `${name}の${kind === "model" ? "モデル" : "effort"}` : kind === "model" ? "モデル" : "effort");
+    el.setAttribute("aria-label", name ? `${name}の${kind === "model" ? "モデル" : " effort"}` : kind === "model" ? "モデル" : "effort");
     el.dataset.purpose = purpose;
     el.dataset.kind = kind;
     for (const [v, long, short] of options) el.append(new Option(compact ? short : long, v, false, v === value));
