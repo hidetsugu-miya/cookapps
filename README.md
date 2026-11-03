@@ -226,9 +226,9 @@ Claude Code から受信トレイと予定を扱う MCP サーバー `cookapps-m
 
 - 静的: 書式、lint、型、バージョンの一致
 - 単体: Rust の処理（`cargo test`）
-- E2E: 本物の WebView（WKWebView）で画面を動かす（CI では macOS で流す）。コマンドの結果はモックで返す
+- E2E: 本物の WebView（WKWebView）で画面を動かす。コマンドの結果はモックで返す
 
-CI（`.github/workflows/ci.yml`）と同じチェックは、次のコマンドでローカルでも流せます。
+チェックは GitHub Actions では流さず、次のコマンドでローカルで流します。
 
 ```sh
 npm ci

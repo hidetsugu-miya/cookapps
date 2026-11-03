@@ -85,7 +85,7 @@ User-facing text is in `README.md` and `docs/`.
   - It is enough to trash and archive.
   - A permanent delete (one that skips the trash) needs `https://mail.google.com/`.
 - The Calendar scope is `calendar.readonly`.
-- Updates use `tauri-plugin-updater`. A push to main that raises the version makes CI tag it `v{version}`, and then the `release` job makes `cookapps.app.tar.gz`, its `.sig` and `latest.json` (`scripts/make-latest-json.sh`) and puts them in a GitHub Release.
+- Updates use `tauri-plugin-updater`. Pushing the annotated tag `v{version}` starts the `release` job, which makes `cookapps.app.tar.gz`, its `.sig` and `latest.json` (`scripts/make-latest-json.sh`) and puts them in a GitHub Release.
   The app reads `releases/latest/download/latest.json` (`plugins.updater.endpoints` in `tauri.conf.json`) and verifies the download with the public key `plugins.updater.pubkey`.
   `bundle.createUpdaterArtifacts` is not in `tauri.conf.json`; the `release` job passes it with `--config`, so a local build needs no signing key.
 - The refresh token is stored locally so the user does not log in at every start.
@@ -174,15 +174,12 @@ scripts/check-version.sh   # the version in Cargo.toml, tauri.conf.json and Carg
 
 ## CI
 
-CI is `.github/workflows/ci.yml`, with one job per layer.
+CI is `.github/workflows/release.yml`, and only a pushed tag `v*` starts it.
+Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions, so a push to main or a pull request runs nothing.
 
-| Job | Environment | Checks |
-|-----|-------------|--------|
-| `static` | macos-latest | version match, `npm run lint`, `npm run build:ts`, `npm run e2e:check`, cargo fmt |
-| `test` | macos-latest | clippy (`--all-targets --all-features`), cargo test (`--all-features`), bindings diff |
-| `e2e` | macos-latest | `npm run e2e:build`, `npm run e2e` |
-| `tag` | ubuntu-latest (main pushes only; after `static`, `test` and `e2e`) | the annotated tag `v{version}` of `src-tauri/Cargo.toml`, made unless it already exists (a push that does not raise the version is not a release) |
-| `release` | macos-latest (main pushes with a new version tag only; after `tag`) | the signed `.app`, its updater files and `latest.json`, put in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| Job | Environment | What it does |
+|-----|-------------|--------------|
+| `release` | macos-latest | checks that the tag is the version of its commit, then puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
 ## Known limitations
 
@@ -190,7 +187,7 @@ CI is `.github/workflows/ci.yml`, with one job per layer.
 - On a rate limit (429 or 403 `rateLimitExceeded`), interactive operations retry up to 2 times (they follow `Retry-After`, capped at 30 seconds).
   Auto sync does not retry. It backs off per account (`SyncState`).
 - There is no coverage tool.
-- CI checks and releases macOS only. Windows is not built, linted, tested or released in CI, and it has not been checked on a real Windows machine.
+- CI releases macOS only. Windows is not built or released, and it has not been checked on a real Windows machine.
 
 ## Open questions
 
