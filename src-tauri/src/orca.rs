@@ -187,17 +187,36 @@ fn line_of(agent: &Value) -> String {
 /// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level Claude agents of a live terminal, newest first.
 /// A field that is absent or of another type is left out, not an error.
 pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
-    // The pane of an agent is "{tabId}:{leafId}" of its terminal.
-    let handles: Vec<(String, &str)> = terminals["terminals"]
+    // The pane of an agent is "{tabId}:{leafId}" of its terminal. A terminal that lost its tab is orphaned and still runs:
+    // its ids are made up from the pty, and the pane it had is `recordedPaneKey`. Only one Orca says is Claude's is used, and not when two recorded the same pane,
+    // for a post must not reach a shell or the wrong session. A live terminal of the pane comes first.
+    let (orphaned, live): (Vec<&Value>, Vec<&Value>) = terminals["terminals"]
         .as_array()
         .into_iter()
         .flatten()
+        .partition(|t| t["orphaned"] == true);
+    let orphaned: Vec<&Value> = orphaned
+        .into_iter()
+        .filter(|t| t["agentIdentity"] == "claude")
+        .collect();
+    let recorded = |t: &Value| text_of(t, "recordedPaneKey").map(str::to_owned);
+    let handles: Vec<(String, &str)> = live
+        .into_iter()
         .filter_map(|t| {
             Some((
                 format!("{}:{}", text_of(t, "tabId")?, text_of(t, "leafId")?),
                 text_of(t, "handle")?,
             ))
         })
+        .chain(orphaned.iter().filter_map(|t| {
+            let pane = recorded(t)?;
+            let alone = orphaned
+                .iter()
+                .filter(|o| recorded(o).as_ref() == Some(&pane))
+                .count()
+                == 1;
+            alone.then_some((pane, text_of(t, "handle")?))
+        }))
         .collect();
     let mut rows: Vec<(i64, OrcaRow)> = Vec::new();
     for worktree in ps["worktrees"].as_array().into_iter().flatten() {
@@ -900,6 +919,56 @@ mod tests {
         assert_eq!(
             groups,
             [OrcaGroup::Working, OrcaGroup::Waiting, OrcaGroup::Done]
+        );
+    }
+
+    #[test]
+    fn an_orphaned_terminal_is_found_by_the_pane_it_recorded() {
+        let orphan = |handle: &str, pane: Option<&str>| {
+            let mut t = json!({"handle": handle, "tabId": "pty:p", "leafId": "pty:p", "orphaned": true, "agentIdentity": "claude"});
+            if let Some(pane) = pane {
+                t["recordedPaneKey"] = json!(pane);
+            }
+            t
+        };
+        let handle_of = |list: Value| {
+            rows_of(
+                &ps(&[agent("tabA:leaf1", "working")]),
+                &json!({"terminals": list}),
+            )[0]
+            .handle
+            .clone()
+        };
+        assert_eq!(
+            handle_of(json!([orphan("term_o", Some("tabA:leaf1"))])).as_deref(),
+            Some("term_o")
+        );
+        // A live terminal of the pane comes first, wherever it is in the list.
+        assert_eq!(
+            handle_of(json!([
+                orphan("term_o", Some("tabA:leaf1")),
+                {"handle": "term_1", "tabId": "tabA", "leafId": "leaf1"},
+            ]))
+            .as_deref(),
+            Some("term_1")
+        );
+        // An orphan of another pane, or one that recorded none, is not this agent's.
+        assert_eq!(
+            handle_of(json!([orphan("term_o", Some("tabZ:leafZ"))])),
+            None
+        );
+        assert_eq!(handle_of(json!([orphan("term_o", None)])), None);
+        // One that Orca does not say is Claude's may be a shell.
+        let mut shell = orphan("term_o", Some("tabA:leaf1"));
+        shell["agentIdentity"] = Value::Null;
+        assert_eq!(handle_of(json!([shell])), None);
+        // Two of the same pane cannot be told apart.
+        assert_eq!(
+            handle_of(json!([
+                orphan("term_o", Some("tabA:leaf1")),
+                orphan("term_p", Some("tabA:leaf1")),
+            ])),
+            None
         );
     }
 

@@ -67,8 +67,35 @@ function toolsNode(item: Extract<OrcaChatItem, { kind: "tools" }>) {
   return node;
 }
 
+// The agent's questions are never folded: the user has to read them to answer in the session.
+function questionNode(item: Extract<OrcaChatItem, { kind: "question" }>) {
+  const node = tag("div", "orca-question");
+  for (const q of item.questions) {
+    node.append(tag("div", "orca-question-text", q.text));
+    if (q.options.length) {
+      const options = tag("ul", "orca-question-options");
+      for (const o of q.options) {
+        const row = tag("li");
+        row.append(tag("span", "orca-question-label", o.label));
+        if (o.description) row.append(tag("span", "orca-question-desc", o.description));
+        options.append(row);
+      }
+      node.append(options);
+    }
+    if (q.answer !== null) node.append(tag("div", "orca-question-answer", `回答: ${q.answer}`));
+  }
+  if (item.waiting) node.append(tag("div", "orca-question-waiting", "回答待ち"));
+  return node;
+}
+
+function nodeOf(item: OrcaChatItem) {
+  if (item.kind === "user") return tag("div", "orca-user", item.text);
+  if (item.kind === "assistant") return markdownNode(item.text);
+  return item.kind === "question" ? questionNode(item) : toolsNode(item);
+}
+
 function itemNode(item: OrcaChatItem) {
-  const node = item.kind === "user" ? tag("div", "orca-user", item.text) : item.kind === "assistant" ? markdownNode(item.text) : toolsNode(item);
+  const node = nodeOf(item);
   node.dataset.id = item.id;
   return node;
 }
