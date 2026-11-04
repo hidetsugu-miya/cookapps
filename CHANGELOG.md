@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.39.0
+
+A-7 the Orca screen is now two panes (#31). A row of the list opens the history of its session on the right, with the box to post to it. The list's width can be dragged, each row shows the latest prompt, the state, the branch and the time, and "running" is now 作業中. Tool calls fold into one line that opens on a press. `+` switches the right pane to a new session, and its target is chosen from a menu with a filter. Only Claude sessions are listed, and the choice of agent is gone (A-6). A saved Orca server is read over an end-to-end encrypted WebSocket using Orca's pairing, with new updates as they come; this machine's Orca is read every 3 seconds. Written against Orca 1.4.248. Reading from a saved server was tested against known vectors and a local stand-in, not yet against a real server.
+
 ## v0.38.1
 
 The skill list of the Orca screen opens with a saved server as the target (#28). The CLI refuses to read the skills of another machine, so the list is that of the machine the app runs on, and it needs Orca running there. A failed read is tried again at most once a minute.
