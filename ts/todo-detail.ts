@@ -46,6 +46,9 @@ function monthPicker(shown: Date, current: string | null, pick: (iso: string) =>
   return box;
 }
 
+// The time at the end of what is typed in the due popover: "15:00" alone, or after a date or other words.
+const TYPED_TIME = /(?:^|\s)(\d{1,2}:\d{2})$/;
+
 // What the due popover edits. `text` is what its field starts with; `date` (`YYYY-MM-DD`) and `time` (`HH:MM`) are the day it marks and the time a picked day keeps,
 // null for none; a `recurring` due date gets the text field only, since a picked day would replace its repeat. `commit` gets the new text, only when it differs.
 export interface DueEdit {
@@ -58,6 +61,8 @@ export interface DueEdit {
 
 // The due popover opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
 // A one-off due date is written "2026-11-02 12:00", which Todoist reads back as is; a repeat keeps Todoist's text, which a date cannot hold.
+// The text in the field is confirmed by Enter or by a click elsewhere that closes the popover (what was typed is not lost); Escape cancels it.
+// A picked day keeps the time typed at the end of the field ("15:00" or "2026-11-06 15:00"), else the time the due date had.
 // The task's detail and the Slack summary card both open it; what is done with the new text is theirs.
 export function openDueEditor(anchor: Element, e: DueEdit) {
   const pop = tag("div", "menu due-pop");
@@ -65,23 +70,28 @@ export function openDueEditor(anchor: Element, e: DueEdit) {
   input.value = e.text;
   input.placeholder = "例: 明日 15時";
   input.setAttribute("aria-label", "期限（空欄で期限なし）");
+  const confirmText = () => {
+    if (input.value.trim() !== e.text) e.commit(input.value);
+  };
   input.onkeydown = (ev) => {
     if (composing(ev)) return;
     if (ev.key !== "Enter") return;
     closeMenu();
-    if (input.value.trim() !== e.text) e.commit(input.value);
+    confirmText();
   };
   const month = e.date ? addDays(e.date, 0) : new Date();
   pop.append(input);
   if (!e.recurring)
     pop.append(
       monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), e.date, (iso) => {
+        const typed = TYPED_TIME.exec(input.value.trim());
+        const time = typed ? typed[1].padStart(5, "0") : e.time;
         closeMenu();
-        if (iso === e.date) return;
-        e.commit(e.time ? `${iso} ${e.time}` : iso);
+        const value = time ? `${iso} ${time}` : iso;
+        if (value !== e.text) e.commit(value);
       }),
     );
-  showMenu(anchor, pop);
+  showMenu(anchor, pop, confirmText);
   input.focus();
   input.select();
 }

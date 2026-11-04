@@ -9,6 +9,9 @@ async function openTodo(claude: unknown = claudeReady) {
   await waitForCount("#todo-list li.task", 1);
 }
 
+// A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a popover (as in calendar.e2e.ts).
+const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
+
 describe("todo", () => {
   it("lists the projects and today's tasks, and a project's tasks when it is picked", async () => {
     await openTodo();
@@ -162,6 +165,50 @@ describe("todo", () => {
     await expect($(".review .review-due")).toHaveText("空なら今日");
     await $(".review .review-add").click();
     expect((await waitForCalls(addFromSlack))[0]).toMatchObject({ due: "", today: true });
+  });
+
+  it("sends the date and time typed in the due popover when 追加 is pressed without Enter", async () => {
+    const { addFromSlack } = await openSummaryCard();
+    await $(".review .review-due").click();
+    await $(".due-pop .chip-input").setValue("2026-11-06 15:00");
+    await press($(".review .review-add"));
+    expect((await waitForCalls(addFromSlack))[0]).toMatchObject({ due: "2026-11-06 15:00" });
+  });
+
+  it("confirms the text typed in the due popover when a click elsewhere closes it", async () => {
+    await openSummaryCard();
+    await $(".review .review-due").click();
+    await $(".due-pop .chip-input").setValue("2026-11-06 15:00");
+    await press($(".review .review-name"));
+    await expect($(".due-pop")).not.toExist();
+    await expect($(".review .review-due")).toHaveText("2026-11-06 15:00");
+  });
+
+  it("cancels the text typed in the due popover with Escape", async () => {
+    await openSummaryCard();
+    await $(".review .review-due").click();
+    await $(".due-pop .chip-input").setValue("2026-11-06 15:00");
+    await browser.keys("Escape");
+    await expect($(".due-pop")).not.toExist();
+    await expect($(".review .review-due")).toHaveText("2026-11-06");
+    await $(".review .review-name").click();
+    await expect($(".review .review-due")).toHaveText("2026-11-06");
+  });
+
+  it("keeps the time typed in the due popover when another day is picked, and when the same day is picked", async () => {
+    await openSummaryCard();
+    await $(".review .review-due").click();
+    await $(".due-pop .chip-input").setValue("2026-11-06 15:00");
+    await dayButton(20).click();
+    await expect($(".review .review-due")).toHaveText("2026-11-20 15:00");
+    await $(".review .review-due").click();
+    await $(".due-pop .chip-input").setValue("9:30");
+    await dayButton(12).click();
+    await expect($(".review .review-due")).toHaveText("2026-11-12 09:30");
+    await $(".review .review-due").click();
+    await $(".due-pop .chip-input").setValue("2026-11-12 18:45");
+    await dayButton(12).click();
+    await expect($(".review .review-due")).toHaveText("2026-11-12 18:45");
   });
 
   it("says 期限なし on the due chip when the card is for a project and the date is empty", async () => {
@@ -698,6 +745,16 @@ describe("todo detail", () => {
     await $(".due-pop .chip-input").setValue("明日");
     await browser.keys("Enter");
     expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: "明日" }]);
+  });
+
+  it("saves the due text typed in the side pane when a click elsewhere closes the popover", async () => {
+    await openTodo();
+    const update = await mock("todoist_update", true);
+    await $(ROWS).click();
+    await $("#todo-detail .field:nth-child(2) .field-value").click();
+    await $(".due-pop .chip-input").setValue("2026-11-06 15:00");
+    await press($("#todo-detail .detail-side .field-label"));
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: "2026-11-06 15:00" }]);
   });
 
   it("shows a one-off due date in the due field as a date and time, and a repeat as Todoist's text", async () => {
