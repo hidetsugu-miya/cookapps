@@ -680,11 +680,14 @@ button.status:hover { filter: brightness(.95); }
 .feed-ws { pointer-events: auto; position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; }
 .feed-main { min-width: 0; }
 .feed-meta { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
-.feed-hide, .feed-watch { position: absolute; top: 8px; visibility: hidden; }
+.feed-read, .feed-hide, .feed-watch { position: absolute; top: 8px; visibility: hidden; }
+.feed-read { right: 92px; }
 .feed-hide { right: 52px; }
 .feed-watch { right: 12px; }
-.feed-item.feed-keep .feed-hide, .feed-item.feed-keep .feed-watch { visibility: visible; }
-.feed-item:hover .feed-hide, .feed-item:focus-within .feed-hide, .feed-item:hover .feed-watch, .feed-item:focus-within .feed-watch { visibility: visible; }
+/* The two buttons over the end of the text get the hover background of the row, so that the text under them does not show through; `.icon-btn:hover` (more specific) still marks the button under the pointer. */
+.feed-read, .feed-hide { background: var(--hover); }
+.feed-item.feed-keep .feed-read, .feed-item.feed-keep .feed-hide, .feed-item.feed-keep .feed-watch { visibility: visible; }
+.feed-item:hover .feed-read, .feed-item:focus-within .feed-read, .feed-item:hover .feed-hide, .feed-item:focus-within .feed-hide, .feed-item:hover .feed-watch, .feed-item:focus-within .feed-watch { visibility: visible; }
 /* A watched row keeps its bookmark shown, and the date moves left of it. */
 .feed-item.watched .feed-watch { visibility: visible; }
 .feed-item.watched .feed-row { padding-right: 56px; }
