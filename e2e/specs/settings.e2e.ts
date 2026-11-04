@@ -682,9 +682,9 @@ describe("settings: Claude model and effort", () => {
     ["mailSummary", "メールの要約", "メール詳細の AI 要約"],
     ["promptChat", "プロンプトの会話", "Todo の要約プロンプトを Claude と編集するとき"],
     ["proofread", "Slack に貼る文章の校正", "Slack に貼る画面の「Claude と校正」"],
-    ["slackReply", "Slack の返信の校正", "スレッド詳細の「Claude と校正」"],
+    ["slackReply", "Slack のスレッドの相談", "スレッド詳細の Claude 欄"],
   ];
-  // The default effort of a purpose: medium, and high for the Slack reply.
+  // The default effort of a purpose: medium, and high for the Slack thread conversation.
   const defaultEffort = (purpose: Purpose) => (purpose === "slackReply" ? "high" : "medium");
   const selectOf = (purpose: Purpose, kind: "model" | "effort") => $(`#claude-models select[data-purpose="${purpose}"][data-kind="${kind}"]`);
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
@@ -738,7 +738,7 @@ describe("settings: Claude model and effort", () => {
   it("heads the columns 用途, モデル and effort, and says once that the default is Sonnet and medium, and Sonnet and high for the Slack reply", async () => {
     await openSettings([], claudeReady, "claude");
     expect(await textsOf("#claude-models .model-grid .th")).toEqual(["用途", "モデル", "effort"]);
-    await expect($("#claude-models .model-note")).toHaveText("次の呼び出しから使います。デフォルトは Sonnet と medium（Slack の返信の校正は Sonnet と high）");
+    await expect($("#claude-models .model-note")).toHaveText("次の呼び出しから使います。デフォルトは Sonnet と medium（Slack のスレッドの相談は Sonnet と high）");
   });
 
   it("does not wrap the description of a purpose onto a second line", async () => {
@@ -917,7 +917,7 @@ describe("settings: Claude model and effort", () => {
     await openSettings([], claudeReady, "claude");
     await $("#claude-help").click();
     await expect($('[role="dialog"][aria-label="Claude の使い方"] .foot')).toHaveText(
-      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack の返信の校正のそれぞれに選べます"),
+      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack のスレッドの相談のそれぞれに選べます"),
     );
   });
 });

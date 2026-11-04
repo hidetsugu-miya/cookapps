@@ -4,9 +4,13 @@ import type { ThreadAttachment } from "./ThreadAttachment";
 import type { ThreadBlock } from "./ThreadBlock";
 import type { ThreadFile } from "./ThreadFile";
 
-export type ThreadMessage = { ts: string, user: string | null, name: string, iconUrl: string | null, text: string, 
+export type ThreadMessage = { ts: string, user: string | null, name: string, iconUrl: string | null, 
 /**
- * What the screen draws of the message's text (S-12): the raw text read for its styles. `text` above stays a string that is not read for styles, and the screen does not draw it.
+ * What the screen shows of the message as plain text (S-7): the text while the screen draws it, then the text of the blocks and the attachments drawn. It goes to Claude; the screen does not draw it.
+ */
+text: string, 
+/**
+ * What the screen draws of the message's text (S-12): the raw text read for its styles.
  */
 rich: Array<RichBlock>, files: Array<ThreadFile>, 
 /**

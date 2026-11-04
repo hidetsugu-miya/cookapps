@@ -59,6 +59,23 @@ pub(crate) fn plain(text: String) -> Rich {
     }]
 }
 
+/// A text as plain text, for Claude (S-7): the blocks one under another, a quote line starting with `> `, no style marks.
+pub(crate) fn rich_plain(rich: &Rich) -> String {
+    let spans = |spans: &[Span]| spans.iter().map(|s| s.text.as_str()).collect::<String>();
+    rich.iter()
+        .map(|block| match block {
+            RichBlock::Paragraph { spans: s } => spans(s),
+            RichBlock::Quote { spans: s } => spans(s)
+                .split('\n')
+                .map(|line| format!("> {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            RichBlock::Code { text } => text.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[derive(Clone, Copy, Default, PartialEq)]
 struct Style {
     bold: bool,

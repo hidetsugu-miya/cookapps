@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, threadDetail, waitForCalls, waitForCount, workspace,
+  boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, textsOf, threadDetail, waitForCalls, waitForCount, workspace,
 } from "../support";
 
 const body = () => $("#slack-body");
@@ -303,6 +303,24 @@ describe("slack compose screen", () => {
 });
 
 describe("slack compose screen: proofreading with Claude", () => {
+  it("keeps its header text, the 校正する button, the text send button, the key hint and the diff card without コピー", async () => {
+    await openCompose();
+    await chooseGeneral();
+    await expect($("#slack-chat")).toHaveAttribute("aria-label", "Claude と校正");
+    await expect($("#slack-chat .chat-head")).toHaveText(expect.stringContaining("Claude と校正"));
+    await expect($("#slack-proofread")).toHaveText("校正する");
+    await expect($("#slack-send")).toHaveText("送信");
+    await expect($("#slack-input")).toHaveAttribute("placeholder", "どう直したいかを書く");
+    await expect($("#slack-keys")).not.toHaveText("");
+    await mock("claude_proofread_slack", proofreadEdit);
+    await $("#slack-proofread").click();
+    await waitForCount("#slack-log .chat-ai", 1);
+    expect(await textsOf("#slack-log .diff-foot .text-btn")).toEqual(["却下", "適用"]);
+    // The answer text and the send button keep their look: the line breaks of an answer are not kept here, and the send button is a text button.
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#slack-log .chat-ai")!).whiteSpace)).toBe("normal");
+    expect(await browser.execute(() => document.getElementById("slack-send")!.className)).toBe("text-btn primary chat-send");
+  });
+
   it("sends 校正してください with the text, and applying the proposal changes the edit field without posting", async () => {
     await openCompose();
     await chooseGeneral();
