@@ -7,7 +7,7 @@ import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { commentsSection, fitCommentInput } from "./todo-comments.js";
 import { accountSet, dueLabel, linkedMail, markdownHtml, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
 import { checkBox, openMailFromTodo, renderList } from "./todo-list.js";
-import { moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
+import { createLabel, moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
 import { copyText } from "./view.js";
 
@@ -168,6 +168,100 @@ function dueField(t: TaskItem) {
     row.append(clear);
   }
   return field("日付", row);
+}
+
+// The color of the label `name` among the labels to pick from.
+const labelColor = (name: string) => todoState.todo!.labels.find((l) => l.name === name)?.color ?? "var(--muted)";
+
+// The popover that sets the labels of the task `id`: a field that narrows the labels by what is typed over the list, each row toggling its label on the task.
+// Text that is none of the labels offers a last row that makes it. Enter does what the row of an exact match, else the create row, does.
+// The task's labels are read when a row is pressed, not when the popover opened: a refresh may have changed them since.
+function openLabelPicker(anchor: Element, id: string) {
+  const pop = tag("div", "menu label-pop");
+  const input = tag("input", "chip-input");
+  input.placeholder = "ラベルを検索または作成";
+  input.setAttribute("aria-label", "ラベルを検索または作成");
+  const list = tag("div", "label-list");
+  const toggle = (name: string) => {
+    const now = todoState.taskById.get(id)?.labels;
+    closeMenu();
+    // A refresh may have taken the task out of the list: its labels are unknown, and the whole list would be overwritten.
+    if (now) saveTask(id, { labels: now.includes(name) ? now.filter((n) => n !== name) : [...now, name] });
+  };
+  const create = (name: string) => {
+    const now = todoState.taskById.get(id)?.labels;
+    closeMenu();
+    if (now) createLabel(id, name, [...now, name]);
+  };
+  // What the typed text matches exactly (ignoring case), and what it is.
+  const exact = () => todoState.todo!.labels.find((l) => l.name.toLowerCase() === input.value.trim().toLowerCase());
+  const draw = () => {
+    const text = input.value.trim();
+    const on = todoState.taskById.get(id)?.labels ?? [];
+    const rows = todoState.todo!.labels
+      .filter((l) => l.name.toLowerCase().includes(text.toLowerCase()))
+      .map((l) => {
+        const b = tag("button");
+        b.type = "button";
+        b.setAttribute("aria-current", String(on.includes(l.name)));
+        const dot = tag("span", "pdot");
+        dot.style.background = l.color;
+        // The name comes from Todoist, and may be a collaborator's: text only.
+        b.append(dot, tag("span", "label-name", l.name));
+        b.onclick = () => toggle(l.name);
+        return b;
+      });
+    if (text && !exact()) {
+      const b = tag("button", "label-create");
+      b.type = "button";
+      b.insertAdjacentHTML("beforeend", PLUS_SVG);
+      b.append(`「${text}」を作成`);
+      b.onclick = () => create(text);
+      rows.push(b);
+    }
+    list.replaceChildren(...rows);
+  };
+  input.oninput = draw;
+  input.onkeydown = (ev) => {
+    if (composing(ev) || ev.key !== "Enter") return;
+    const text = input.value.trim();
+    if (!text) return;
+    const same = exact();
+    if (same) toggle(same.name);
+    else create(text);
+  };
+  draw();
+  pop.append(input, list);
+  showMenu(anchor, pop);
+  input.focus();
+}
+
+// The labels of `t`: a header with a button that opens the picker, and under it each label as a chip with a button that takes it off.
+function labelsField(t: TaskItem) {
+  const add = tag("button", "icon-btn field-add");
+  add.insertAdjacentHTML("beforeend", PLUS_SVG);
+  add.setAttribute("aria-label", "ラベルを追加");
+  add.onclick = () => openLabelPicker(add, t.id);
+  const head = tag("div", "field-head");
+  head.append(tag("div", "field-label", "ラベル"), add);
+  const f = tag("div", "field");
+  f.append(head);
+  if (t.labels.length) {
+    const chips = tag("div", "label-chips");
+    for (const name of t.labels) {
+      const chip = tag("span", "label-chip");
+      const dot = tag("span", "pdot");
+      dot.style.background = labelColor(name);
+      const x = tag("button", "icon-btn");
+      x.insertAdjacentHTML("beforeend", CLOSE_SVG);
+      x.setAttribute("aria-label", `ラベル「${name}」を外す`);
+      x.onclick = () => saveTask(t.id, { labels: (todoState.taskById.get(t.id)?.labels ?? t.labels).filter((n) => n !== name) });
+      chip.append(dot, tag("span", "label-name", name), x);
+      chips.append(chip);
+    }
+    f.append(chips);
+  }
+  return f;
 }
 
 // The subtasks being created, shown at the end of their parent's list: a row stays until the request fails, or, once it succeeded, until a load that began after it is drawn.
@@ -342,7 +436,11 @@ export function renderDetail() {
   const parts: HTMLElement[] = [head, ...descParts(t)];
   // A subtask's direct parent, when it has a row to open.
   const parent = t.parent && todoState.taskById.get(t.parent.id);
+  // The checkbox is beside the button, not in it: a button may hold no other control. Completing the parent takes the open task out of the list with it, and the detail falls back to the list.
   if (parent) {
+    const chip = tag("div", "parent-chip");
+    const parentBox = checkBox(PRIORITY_COLORS[parent.priority], false, "親タスクを完了にする");
+    parentBox.onchange = () => setTaskDone(parent.id, true, parentBox);
     const link = tag("button", "parent-link");
     link.insertAdjacentHTML("beforeend", RETURN_SVG);
     link.append(tag("span", "pl-label", "親タスク"), tag("span", "pl-name", parent.content));
@@ -350,7 +448,8 @@ export function renderDetail() {
       todoState.open = parent.id;
       renderTodo();
     };
-    parts.unshift(link);
+    chip.append(parentBox, link);
+    parts.unshift(chip);
   }
   const mail = linkedMail(t, accountSet());
   if (mail) {
@@ -405,7 +504,7 @@ export function renderDetail() {
   const main = tag("div", "detail-main");
   main.append(...parts);
   const side = tag("aside", "detail-side");
-  side.append(projectField(t), dueField(t));
+  side.append(projectField(t), dueField(t), labelsField(t));
   $("todo-detail").replaceChildren(main, side);
   $("todo-detail").dataset.task = t.id;
   const area = $("todo-detail").querySelector<HTMLTextAreaElement>(".desc-edit");

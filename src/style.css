@@ -346,8 +346,28 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .field-clear svg { width: 14px; height: 14px; }
 .field-clear.confirm { height: 24px; background: #fff; font-size: 12px; white-space: nowrap; }
 .field-row:not(:hover):not(:focus-within) .field-clear { visibility: hidden; }
-#todo-detail .parent-link { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: calc(100% - 66px); margin: 0 0 4px 50px; padding: 3px 6px; border: 0; border-radius: 8px; background: var(--hover); color: var(--accent); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
-#todo-detail .parent-link:hover { background: var(--soft); }
+/* The labels field: its header carries the button that adds, and the chips of the task's labels wrap under it. */
+.field-head { display: flex; align-items: center; justify-content: space-between; }
+.field-head .field-label { margin-bottom: 0; }
+.field-add { width: 24px; height: 24px; margin-right: -6px; }
+.field-add svg { width: 16px; height: 16px; }
+.label-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.label-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; box-sizing: border-box; padding: 2px 2px 2px 8px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; font-size: 12px; }
+.label-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.label-chip .icon-btn { width: 20px; height: 20px; border-radius: 10px; flex: none; }
+.label-chip .icon-btn svg { width: 12px; height: 12px; }
+/* The label popover: the field over a list that scrolls when it is long. */
+.label-pop { gap: 8px; padding: 8px; width: 232px; }
+.label-pop .chip-input { width: 100%; }
+.label-list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
+.label-pop button svg { width: 16px; height: 16px; flex: none; }
+.label-pop button { flex: none; }
+/* The parent chip: a checkbox that completes the parent, beside the button that opens it (a button may hold no checkbox). */
+#todo-detail .parent-chip { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: calc(100% - 66px); margin: 0 0 4px 50px; padding: 3px 6px; border-radius: 8px; background: var(--hover); }
+#todo-detail .parent-chip:hover { background: var(--soft); }
+#todo-detail .parent-chip .check { width: 16px; height: 16px; flex: none; }
+#todo-detail .parent-chip .check:hover::after, #todo-detail .parent-chip .check:checked::after { width: 4px; height: 7px; margin-top: -1px; }
+#todo-detail .parent-link { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 #todo-detail .parent-link:focus-visible { outline: 2px solid var(--accent); }
 #todo-detail .parent-link svg { width: 14px; height: 14px; flex: none; }
 .parent-link .pl-label { flex: none; color: var(--muted); }

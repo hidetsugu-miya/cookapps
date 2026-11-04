@@ -212,13 +212,24 @@ export function weekOfToday(firstDay = 0): Week {
 
 // ---- Todoist ----
 
+// The epoch milliseconds of `time` (`HH:MM`, midnight by default) `day` days from today, in local time: a due moment as the app counts it.
+export const moment = (day: number, time = "00:00") => {
+  const [h, m] = time.split(":").map(Number);
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + day, h, m).getTime();
+};
+
+// The local `YYYY-MM-DD` of `n` days from today.
+const dayFromToday = (n: number) => isoDate(new Date(moment(n)));
+
+// A task with a due date that fits its bucket: yesterday, today or tomorrow, no time.
 export const task = (id: string, content: string, projectId: string, bucket: "overdue" | "today" | "upcoming" | "none"): TaskItem => ({
   id,
   content,
   description: "",
   projectId,
   priority: 4,
-  due: bucket === "none" ? null : { date: today, time: null, string: "today", recurring: false },
+  due: bucket === "none" ? null : { date: dayFromToday({ overdue: -1, today: 0, upcoming: 1 }[bucket]), time: null, string: bucket, recurring: false },
   bucket,
   subtasks: [],
   subDone: 0,
@@ -226,7 +237,26 @@ export const task = (id: string, content: string, projectId: string, bucket: "ov
   mail: null,
   parent: null,
   url: `https://app.todoist.com/app/task/${id}`,
+  labels: [],
 });
+
+// Makes the page's clock read `at` (a local `YYYY-MM-DDTHH:MM:SS`) from now on, and keep running from there; another call sets it again.
+// The page's `Date` is replaced for `new Date()` and `Date.now()` only: the app is not told, so it notices the new time at its next count.
+export const setClock = (at: string) =>
+  browser.execute((time) => {
+    const w = window as unknown as { __e2e_real_date__?: DateConstructor; __e2e_offset__: number; Date: DateConstructor };
+    w.__e2e_real_date__ ??= w.Date;
+    const Real = w.__e2e_real_date__;
+    w.__e2e_offset__ = new Real(time).getTime() - Real.now();
+    if (w.Date === Real)
+      w.Date = new Proxy(Real, {
+        construct: (target, args) => (args.length === 0 ? new target(Real.now() + w.__e2e_offset__) : new target(...(args as [number]))),
+        get: (target, prop) => (prop === "now" ? () => Real.now() + w.__e2e_offset__ : Reflect.get(target, prop)),
+      });
+  }, at);
+
+// The task `t` due today at `time` (`HH:MM`), or with no time.
+export const dueToday = (t: TaskItem, time: string | null): TaskItem => ({ ...t, bucket: "today", due: { date: today, time, string: "today", recurring: false } });
 
 // The task `t` as a row under `parent`, and as an entry of the parent's subtask list.
 const under = (parent: TaskItem, t: TaskItem): TaskItem => {
@@ -247,6 +277,10 @@ export const todoData = (): Todo => {
       { id: "p2", name: "Design", color: "#246fe0", inbox: false, parentId: "p1", depth: 1 },
       { id: "p3", name: "Sketch", color: "#eb8909", inbox: false, parentId: "p2", depth: 2 },
       { id: "p4", name: "Home", color: "#d1453b", inbox: false, parentId: null, depth: 0 },
+    ],
+    labels: [
+      { name: "Errand", color: "#42A393" },
+      { name: "Urgent", color: "#B8255F" },
     ],
     tasks: [task("k1", "Write report", "p1", "today"), trip, flights, seat],
   };

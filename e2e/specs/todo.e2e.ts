@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, holds, inbox, mock, onceId, pickFile, rejects, release, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -664,7 +664,7 @@ describe("todo detail", () => {
     await openTodo();
     await $(ROWS).click();
     await expect($("#todo-detail .detail-side")).toBeDisplayed();
-    expect(await textsOf("#todo-detail .detail-side .field-label")).toEqual(["プロジェクト", "日付"]);
+    expect(await textsOf("#todo-detail .detail-side .field-label")).toEqual(["プロジェクト", "日付", "ラベル"]);
     expect(await textsOf("#todo-detail .detail-side .field-value")).toEqual(["Work", "今日"]);
     await expect($("#todo-detail .chip")).not.toExist();
     await expect($("#todo-detail")).not.toHaveText(expect.stringContaining("優先度"));
@@ -1135,11 +1135,45 @@ describe("todo detail of a subtask", () => {
     await expect($("#todo-detail .name")).toHaveValue("Book flights");
     await expect($("#todo-detail .parent-link")).toHaveText(expect.stringContaining("親タスク"));
     await expect($("#todo-detail .parent-link")).toHaveText(expect.stringContaining("Plan trip"));
-    // A real button, above the name row.
+    // A real button, in a chip above the name row.
     expect(await $("#todo-detail .parent-link").getTagName()).toBe("button");
-    expect(await browser.execute(() => document.querySelector("#todo-detail .parent-link")!.nextElementSibling!.className)).toBe("head");
+    expect(await browser.execute(() => document.querySelector("#todo-detail .parent-link")!.parentElement!.className)).toBe("parent-chip");
+    expect(await browser.execute(() => document.querySelector("#todo-detail .parent-chip")!.nextElementSibling!.className)).toBe("head");
     await $("#todo-detail .parent-link").click();
     await expect($("#todo-detail .name")).toHaveValue("Plan trip");
+  });
+
+  it("puts a round checkbox at the left of the parent chip, beside the button and not inside it", async () => {
+    await openTask("Book flights");
+    const box = $('#todo-detail .parent-chip input[type="checkbox"]');
+    await expect(box).toBeDisplayed();
+    await expect(box).toHaveAttribute("aria-label", "親タスクを完了にする");
+    expect(
+      await browser.execute(() => {
+        const chip = document.querySelector("#todo-detail .parent-chip")!;
+        const radius = getComputedStyle(chip.querySelector(".check")!).borderRadius;
+        return [chip.firstElementChild!.matches("input.check"), chip.children.length, document.querySelector("#todo-detail .parent-link input") === null, radius];
+      }),
+    ).toEqual([true, 2, true, "50%"]);
+    // The subtask count and the chevron of the reference are not drawn.
+    await expect($("#todo-detail .parent-chip")).not.toHaveText(expect.stringContaining("/"));
+  });
+
+  it("completes the parent with its checkbox, which takes the open subtask out too: the detail falls back to the list and the parent is not opened", async () => {
+    await openTask("Book flights");
+    const done = await mock("todoist_set_done", true);
+    // What Todoist has after the parent is completed: it and its subtasks are gone.
+    const after = todoData();
+    after.tasks = after.tasks.filter((t) => t.id === "k1");
+    await mock("todoist_load", after);
+    await $('#todo-detail .parent-chip input[type="checkbox"]').click();
+    expect(await waitForCalls(done)).toEqual([{ id: "k2", done: true }]);
+    await expect($("#todo-detail")).not.toBeDisplayed();
+    await expect($("#todo-list")).toBeDisplayed();
+    await waitForCount(ROWS, 1);
+    await expect($("#todo-list")).toHaveText(expect.stringContaining("Write report"));
+    await expect($("#todo-list")).not.toHaveText(expect.stringContaining("Plan trip"));
+    expect(await callsOf(done)).toHaveLength(1);
   });
 
   it("shows only the direct parent of a subtask whose parent is a subtask too", async () => {
@@ -1779,5 +1813,220 @@ describe("todo detail comments", () => {
     await expect($("#todo-detail .desc-edit")).toBeFocused();
     await expect($("#todo-detail .desc-edit")).toHaveValue(description);
     await expect($(field)).toHaveValue("");
+  });
+});
+
+describe("todo detail labels", () => {
+  const add = '#todo-detail button[aria-label="ラベルを追加"]';
+  const chips = "#todo-detail .label-chip";
+  const names = "#todo-detail .label-chip .label-name";
+  const input = ".label-pop input";
+  const rows = ".label-pop .label-list button";
+  const removeButton = (name: string) => $(`#todo-detail button[aria-label="ラベル「${name}」を外す"]`);
+  // Runs the timed refresh now: the page's visibilitychange makes it load again.
+  const refreshNow = () => browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+
+  // What Todoist answers once "Write report" (k1) has `labels`; `more` are labels to pick from besides Errand and Urgent.
+  const dataWith = (labels: string[], more: string[] = []) => {
+    const data = todoData();
+    data.tasks[0].labels = labels;
+    for (const name of more) data.labels.push({ name, color: "#808080" });
+    return data;
+  };
+
+  // The Todo screen with the detail of "Write report" open, carrying `labels` (and `more` to pick from).
+  // The answer of the reload that follows a change is `after`, with `afterMore` to pick from.
+  async function openReport(labels: string[], after: string[] = labels, more: string[] = [], afterMore: string[] = more) {
+    await boot({ inbox: inbox(), todoist_load: dataWith(labels, more), slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await expect($("#todo-detail .name")).toHaveValue("Write report");
+    await mock("todoist_load", dataWith(after, afterMore));
+  }
+
+  it("has a ラベル field after the date with a + button, and nothing under it while the task has no labels", async () => {
+    await openReport([]);
+    await expect($("#todo-detail .field:nth-child(3) .field-label")).toHaveText("ラベル");
+    await expect($(add)).toBeDisplayed();
+    expect(await count(chips)).toBe(0);
+    expect(await browser.execute(() => document.querySelector("#todo-detail .field:nth-child(3)")!.children.length)).toBe(1);
+  });
+
+  it("shows each label as a chip with its color dot and its name as text, never as markup", async () => {
+    await openReport(["Urgent", "<b>Bold</b>"]);
+    await waitForCount(chips, 2);
+    expect(await textsOf(names)).toEqual(["Urgent", "<b>Bold</b>"]);
+    expect(await count("#todo-detail .label-chip b")).toBe(0);
+    // Urgent is #B8255F in the labels to pick from.
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#todo-detail .label-chip .pdot")!).backgroundColor)).toBe("rgb(184, 37, 95)");
+  });
+
+  it("takes a label off with its × button: todoist_update gets the labels that remain, and the chip goes at once", async () => {
+    await openReport(["Urgent", "Errand"], ["Errand"]);
+    const update = await mock("todoist_update", true);
+    await removeButton("Urgent").click();
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", labels: ["Errand"] }]);
+    expect(await textsOf(names)).toEqual(["Errand"]);
+  });
+
+  it("sends an empty list when the last label is taken off, and the chips go", async () => {
+    await openReport(["Errand"], []);
+    const update = await mock("todoist_update", true);
+    await removeButton("Errand").click();
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", labels: [] }]);
+    await waitForCount(chips, 0);
+    expect(await browser.execute(() => document.querySelector("#todo-detail .field:nth-child(3)")!.children.length)).toBe(1);
+  });
+
+  it("opens a popover with a search field and every label, marks those on the task, and a pressed row puts its label on the task and closes it", async () => {
+    await openReport(["Urgent"], ["Urgent", "Errand"]);
+    const update = await mock("todoist_update", true);
+    await $(add).click();
+    await expect($(".label-pop")).toBeDisplayed();
+    expect(await browser.execute(() => document.querySelector(".label-pop")!.classList.contains("menu") && document.querySelector(".label-pop")!.parentElement === document.body)).toBe(true);
+    await expect($(input)).toHaveAttribute("placeholder", "ラベルを検索または作成");
+    expect(await textsOf(rows)).toEqual(["Errand", "Urgent"]);
+    expect(await browser.execute((s) => [...document.querySelectorAll(s)].map((b) => b.getAttribute("aria-current")), rows)).toEqual(["false", "true"]);
+    await (await $$(rows))[0].click();
+    await expect($(".label-pop")).not.toExist();
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", labels: ["Urgent", "Errand"] }]);
+    expect(await textsOf(names)).toEqual(["Urgent", "Errand"]);
+  });
+
+  it("takes a label off from its row in the popover", async () => {
+    await openReport(["Urgent"], []);
+    const update = await mock("todoist_update", true);
+    await $(add).click();
+    await (await $$(rows))[1].click();
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", labels: [] }]);
+  });
+
+  it("narrows the labels by the typed text ignoring case, and offers to create text that is no label's exact name", async () => {
+    await openReport([]);
+    await $(add).click();
+    await $(input).setValue("ERR");
+    expect(await textsOf(rows)).toEqual(["Errand", "「ERR」を作成"]);
+    await expect($(".label-pop .label-create")).toBeDisplayed();
+    await $(input).setValue("zzz");
+    expect(await textsOf(rows)).toEqual(["「zzz」を作成"]);
+    await $(input).setValue("errand");
+    expect(await textsOf(rows)).toEqual(["Errand"]);
+    await expect($(".label-pop .label-create")).not.toExist();
+  });
+
+  it("acts on Enter as an exact match's row, which toggles that label with its own spelling", async () => {
+    await openReport([], ["Errand"]);
+    const update = await mock("todoist_update", true);
+    const create = await mock("todoist_create_label", true);
+    await $(add).click();
+    await $(input).setValue("  eRRand ");
+    await browser.keys("Enter");
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", labels: ["Errand"] }]);
+    expect(await callsOf(create)).toEqual([]);
+    await expect($(".label-pop")).not.toExist();
+  });
+
+  it("makes a new label with Enter on text that matches none: todoist_create_label gets the task's whole list with the new name, and the chip is drawn at once", async () => {
+    await openReport(["Urgent"], ["Urgent", "Fresh"], [], ["Fresh"]);
+    const create = await mock("todoist_create_label", true);
+    const update = await mock("todoist_update", true);
+    await $(add).click();
+    await $(input).setValue(" Fresh ");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ id: "k1", name: "Fresh", labels: ["Urgent", "Fresh"] }]);
+    expect(await callsOf(update)).toEqual([]);
+    await expect($(".label-pop")).not.toExist();
+    expect(await textsOf(names)).toEqual(["Urgent", "Fresh"]);
+    // It is among the labels to pick from now.
+    await $(add).click();
+    expect(await textsOf(rows)).toEqual(["Errand", "Urgent", "Fresh"]);
+  });
+
+  it("makes a new label with its create row too", async () => {
+    await openReport([], ["Fresh"], [], ["Fresh"]);
+    const create = await mock("todoist_create_label", true);
+    await $(add).click();
+    await $(input).setValue("Fresh");
+    await $(".label-pop .label-create").click();
+    expect(await waitForCalls(create)).toEqual([{ id: "k1", name: "Fresh", labels: ["Fresh"] }]);
+    await expect($(".label-pop")).not.toExist();
+  });
+
+  it("shows a refusal of the new label's name, and the reload takes the chip back", async () => {
+    await openReport([]);
+    await mock("todoist_create_label", rejects("ラベルの名前は 128 文字までです"));
+    await $(add).click();
+    await $(input).setValue("x");
+    await browser.keys("Enter");
+    await expect($("#error")).toHaveText(expect.stringContaining("ラベルの名前は 128 文字までです"));
+    await waitForCount(chips, 0);
+  });
+
+  it("scrolls the list of a long label list inside the popover, which stays in the window", async () => {
+    await openReport([], [], Array.from({ length: 40 }, (_, i) => `Label ${i + 1}`));
+    await $(add).click();
+    expect(
+      await browser.execute(() => {
+        const list = document.querySelector<HTMLElement>(".label-list")!;
+        const pop = document.querySelector(".label-pop")!.getBoundingClientRect();
+        return [getComputedStyle(list).overflowY, list.scrollHeight > list.clientHeight, pop.top >= 0 && pop.bottom <= innerHeight];
+      }),
+    ).toEqual(["auto", true, true]);
+  });
+
+  it("keeps the popover and what was typed in it over a background redraw of the detail", async () => {
+    await openReport([]);
+    await $(add).click();
+    await $(input).setValue("er");
+    const data = dataWith([]);
+    data.tasks[0].content = "Write report v2";
+    await mock("todoist_load", data);
+    await refreshNow();
+    await expect($("#todo-detail .name")).toHaveValue("Write report v2");
+    await expect($(".label-pop")).toExist();
+    await expect($(input)).toHaveValue("er");
+    await expect($(input)).toBeFocused();
+  });
+});
+
+describe("todo count by due moment", () => {
+  const button = "#nav-todo";
+  const badge = "#nav-todo .nav-count";
+  // Runs the timed refresh now: the page's visibilitychange makes it load again.
+  const refreshNow = () => browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+  const noon = () => {
+    const data = todoData();
+    data.tasks[0] = dueToday(data.tasks[0], "12:00");
+    return data;
+  };
+
+  it("keeps today's meaning in the 今日 list and its count in the project pane, and counts on the button only the tasks whose due moment has come, with no fetch", async () => {
+    await boot({ inbox: inbox(), todoist_load: noon(), slack_load: slackLoad, claude_status: claudeReady });
+    await setClock(`${today}T07:00:00`);
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 1);
+    await expect($("#todo-list")).toHaveText(expect.stringContaining("Write report"));
+    await expect($('#projects .proj[data-view="today"] .count')).toHaveText("1");
+    await expect($(badge)).not.toBeDisplayed();
+    await expect($(button)).toHaveAttribute("aria-label", "Todo");
+    // From now on a load never answers, so only the clock can change the button.
+    await mock("todoist_load", holds);
+    await setClock(`${today}T12:00:00`);
+    await browser.waitUntil(async () => (await $(button).getAttribute("aria-label")) === "Todo（期限到来 1 件）", { timeoutMsg: "the count never saw 12:00" });
+    await expect($(badge)).toHaveText("1");
+    await expect($('#projects .proj[data-view="today"] .count')).toHaveText("1");
+    await expect($("#todo-list")).toHaveText(expect.stringContaining("Write report"));
+  });
+
+  it("counts with the clock at each fetch: not at 11:59, from 12:00", async () => {
+    await boot({ inbox: inbox(), todoist_load: noon(), slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 1);
+    await setClock(`${today}T11:59:00`);
+    await refreshNow();
+    await browser.waitUntil(async () => !(await $(badge).isDisplayed()), { timeoutMsg: "the count was shown before 12:00" });
+    await setClock(`${today}T12:00:00`);
+    await refreshNow();
+    await expect($(badge)).toHaveText("1");
   });
 });

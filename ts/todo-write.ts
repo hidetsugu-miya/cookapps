@@ -2,7 +2,7 @@
 import { $ } from "./dom.js";
 import { invoke, type Commands } from "./ipc.js";
 import { loadTodo, renderTodo } from "./todo.js";
-import { editingField, isDueToday, moveLocal, moveUnderLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
+import { addLabelLocal, editingField, moveLocal, moveUnderLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
 import { showError } from "./view.js";
 
 // Reloads shortly after the last call, so a run of changes costs one load. Completed tasks are fetched again only when asked for by one of them.
@@ -26,7 +26,7 @@ function scheduleTodoReload(withDone: boolean) {
 }
 
 // The commands todoCall sends: they answer true or false, or null when a token is needed.
-type Write = "todoist_add" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_move" | "todoist_move_under" | "todoist_delete";
+type Write = "todoist_add" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_create_label" | "todoist_move" | "todoist_move_under" | "todoist_delete";
 const send = invoke as (command: Write, args: unknown) => Promise<boolean | null>;
 
 // Runs a change, then reloads whether it worked or not, so the screen shows what Todoist has.
@@ -50,7 +50,7 @@ export async function todoCall<C extends Write>(
     if (apply) {
       apply();
       todoState.taskById = new Map(todoState.todo!.tasks.map((t) => [t.id, t]));
-      setTodoCount(todoState.todo!.tasks.filter(isDueToday).length);
+      setTodoCount(todoState.todo!.tasks);
       // The screen no longer matches the last load, so a quiet reload must not skip drawing as unchanged.
       todoState.text = null;
       // Like a load: a field being typed in keeps what was typed, and the redraw waits.
@@ -72,6 +72,9 @@ export async function todoCall<C extends Write>(
 
 export const saveTask = (id: string, fields: TaskFields) =>
   todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields), !("content" in fields));
+// Makes the label `name` and puts it on the task `id`, whose labels are `labels` (the new name in them) afterwards.
+export const createLabel = (id: string, name: string, labels: string[]) =>
+  todoCall("todoist_create_label", { id, name, labels }, null, () => addLabelLocal(id, name));
 export const moveTask = (id: string, projectId: string) => todoCall("todoist_move", { id, projectId }, null, () => moveLocal(id, projectId));
 export async function moveUnder(id: string, parentId: string) {
   // The local move opens the parent so the moved row shows: a failed call closes it again if it was closed.

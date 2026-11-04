@@ -1,5 +1,6 @@
 // The Todo screen: which part it shows, loading and refreshing from Todoist, and the header's back button and the menu of the open task.
 import type { Offline } from "./bindings/Offline";
+import type { TaskItem } from "./bindings/TaskItem";
 import type { Todo } from "./bindings/Todo";
 import { $, tag } from "./dom.js";
 import { pad2 } from "./format.js";
@@ -8,7 +9,7 @@ import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { currentScreen } from "./nav.js";
 import { renderDetail } from "./todo-detail.js";
-import { editingField, isDueToday, projectOf, setTodoCount, settleLocal, todoState } from "./todo-data.js";
+import { editingField, projectOf, recountTodo, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
 import { cancelTodoReload, todoCall } from "./todo-write.js";
 import { copyText, showError } from "./view.js";
@@ -39,7 +40,7 @@ export function showTokenForm(note = "") {
   todoState.kept = false;
   // The disconnect cleared the backend's completed tasks too.
   todoState.doneStale = true;
-  setTodoCount(0);
+  setTodoCount([]);
   todoState.open = null;
   $("todo-notice").replaceChildren();
   todoMode("token");
@@ -94,7 +95,7 @@ export async function loadTodo(quiet = false, withDone = true) {
     todoState.kept = false;
     todoState.countOff = false;
     // Also while a field is being typed in, when nothing is drawn below.
-    setTodoCount(data.tasks.filter(isDueToday).length);
+    setTodoCount(data.tasks);
     todoState.projectById = new Map(data.projects.map((p) => [p.id, p]));
     todoState.taskById = new Map(data.tasks.map((t) => [t.id, t]));
     drawTodoNotice(data.offline);
@@ -193,7 +194,7 @@ async function showKeptTodo() {
   todoState.kept = true;
   todoState.projectById = new Map(kept.projects.map((p) => [p.id, p]));
   todoState.taskById = new Map(kept.tasks.map((t) => [t.id, t]));
-  setTodoCount(kept.tasks.filter(isDueToday).length);
+  setTodoCount(kept.tasks);
   if (currentScreen() === "todo") renderTodo();
 }
 
@@ -202,19 +203,19 @@ async function loadTodoCount() {
   if (currentScreen() === "todo" || document.hidden || todoState.countOff || todoState.writes) return;
   // A change that started or ended while fetching makes the answer older than the screen's count.
   const seq = todoState.seq;
-  let count = 0;
+  let tasks: TaskItem[] = [];
   try {
     const data = await invoke("todoist_load", { withDone: todoState.doneStale });
     if (data) {
       if (!data.offline) todoState.doneStale = false;
-      count = data.tasks.filter(isDueToday).length;
+      tasks = data.tasks;
     } else todoState.countOff = true;
   } catch {
     // A failure keeps the last count, so the Dock badge does not drop the Todo part meanwhile.
     return;
   }
   // The Todo screen sets the count itself, and its data is newer than this fetch.
-  if (currentScreen() !== "todo" && !todoState.writes && seq === todoState.seq) setTodoCount(count);
+  if (currentScreen() !== "todo" && !todoState.writes && seq === todoState.seq) setTodoCount(tasks);
 }
 
 // The timed refresh, also when the window comes back. The backend asks Todoist for the changes only, so it is cheap; the completed tasks are fetched again only while `doneStale` is set.
@@ -264,5 +265,7 @@ export function initTodo() {
   showKeptTodo();
   loadTodoCount();
   setInterval(refreshTodo, TODO_REFRESH_MS);
+  // A due moment passes with no fetch: count again from the tasks last given. Not held back while the window is hidden or a field is typed in; it draws only the count.
+  setInterval(recountTodo, TODO_REFRESH_MS);
   document.addEventListener("visibilitychange", refreshTodo);
 }
