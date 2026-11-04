@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.32.0
+
+S-11 the Slack thread draws the blocks and attachments of a message (#10): headers, sections, fields, context, dividers, attachment color bars, titles and fields. A button with a URL opens in the default browser, one without shows its name only, and select menus are left out. Images are fetched only when "画像を表示" is pressed on a message, from any public https server, with no Slack token, so that server sees the user's IP address. The list and what is sent to Claude are unchanged. A real Slack message was not tried.
+
 ## v0.31.1
 
 The inbox list lost its heading and its manual reload button, and the Slack list its heading and its unread count (the count stays on the Slack button). A failed inbox load is now tried again by itself, after 60 seconds and then twice as long each time up to 5 minutes, and a login that ends while the list is not on screen reloads it at the next sync round. The update button moved out of the side menu into a popup at the bottom right (#9), with the same action as a button in the update tab of settings; "あとで" closes it for that version until the app quits, and a toast stacks above it. The popup was not tried with a real update.
