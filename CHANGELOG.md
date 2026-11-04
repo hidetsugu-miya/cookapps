@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.38.1
+
+The skill list of the Orca screen opens with a saved server as the target (#28). The CLI refuses to read the skills of another machine, so the list is that of the machine the app runs on, and it needs Orca running there. A failed read is tried again at most once a minute.
+
 ## v0.38.0
 
 A-6 a new Orca screen lists the agents running in Orca as waiting for input, running and done, and posts to them through the `orca` CLI: a further instruction to a selected session, or a new agent in a chosen worktree (#25). No conversation is kept. For a Claude destination, `/` at the start of the text opens a list of the installed skills. The target is this machine or a saved Orca server, kept in `orca-settings.json`. A saved Orca server was not tried.
