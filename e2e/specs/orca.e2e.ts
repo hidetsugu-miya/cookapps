@@ -1080,7 +1080,7 @@ describe("orca: projects", () => {
     expect(await textsOf("#orca-heading")).toEqual(["プロジェクト"]);
     await $("#orca-bell").click();
     await expect($("#orca-bell")).toHaveAttribute("aria-pressed", "false");
-    await waitForCount("#orca-feed .orca-project", 2);
+    await waitForCount("#orca-feed .orca-project", 4);
     await expect($("#orca-feed .orca-row")).not.toExist();
   });
 
@@ -1299,8 +1299,9 @@ describe("orca: projects", () => {
       await sendTerminal(termData("cookapps % hello 端末"));
       await browser.waitUntil(async () => (await screenText()).includes("hello 端末"), { timeoutMsg: "the output never showed" });
       await $("#orca-term .xterm-screen").click();
-      await browser.keys(["l", "s", "Enter"]);
-      await browser.waitUntil(async () => (await written(write)) === "ls\r", { timeoutMsg: `the keys were not sent: ${await written(write)}` });
+      // The driver gives a typed letter the keyCode of its lower case (s is 115, which xterm.js reads as F4), so p to z are not typed here.
+      await browser.keys(["c", "d", "Enter"]);
+      await browser.waitUntil(async () => (await written(write)) === "cd\r", { timeoutMsg: `the keys were not sent: ${await written(write)}` });
       expect((await callsOf(write)).every((c) => (c as { id: string }).id === "pty_1")).toBe(true);
       // A narrower pane (the divider dragged to the right) has fewer columns, which Rust is told.
       await dragDivider(0.5);
@@ -1403,8 +1404,8 @@ describe("orca: projects", () => {
       await tabOf(zsh).$(".orca-tab-btn").click();
       expect((await waitForCalls(read))[0]).toEqual({ handle: "term_example-app_zsh", environment: "Studio" });
       await $("#orca-term .xterm-screen").click();
-      await browser.keys(["l", "s"]);
-      await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "ls", { timeoutMsg: "the keys were not sent" });
+      await browser.keys(["c", "d"]);
+      await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "cd", { timeoutMsg: "the keys were not sent" });
       expect((await callsOf(input)).every((c) => (c as { handle: string; environment: string }).handle === "term_example-app_zsh" && (c as { environment: string }).environment === "Studio")).toBe(true);
     });
 
