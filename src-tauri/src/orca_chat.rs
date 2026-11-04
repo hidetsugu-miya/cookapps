@@ -364,13 +364,13 @@ fn questions_of(input: &Value) -> Option<Vec<OrcaQuestion>> {
     (!questions.is_empty()).then_some(questions)
 }
 
-/// The answer to `question` in the output of a call of `ASK_TOOL`. An answer ends at a quote followed by the next question or by the end of the list.
-fn answer_of(output: &str, question: &str) -> Option<String> {
+/// The answer to `question` in the output of a call of `ASK_TOOL`. It ends where the next question starts, or at the end of the list.
+fn answer_of(output: &str, question: &str, next: Option<&str>) -> Option<String> {
     let rest = output.split_once(&format!("\"{question}\"=\""))?.1;
-    let end = [rest.find("\", \""), rest.find("\". "), rest.rfind('"')]
-        .into_iter()
-        .flatten()
-        .min()?;
+    let end = match next {
+        Some(next) => rest.find(&format!("\", \"{next}\"=\"")),
+        None => rest.rfind("\". You can now").or_else(|| rest.rfind('"')),
+    }?;
     Some(rest[..end].to_owned())
 }
 
@@ -698,10 +698,13 @@ fn items_of(held: &[Held], page_starts: &HashSet<String>) -> Vec<OrcaChatItem> {
                         None => calls_total > results_total,
                     },
                     questions: questions
-                        .into_iter()
-                        .map(|q| OrcaQuestion {
-                            answer: output.and_then(|o| answer_of(o, &q.text)),
-                            ..q
+                        .iter()
+                        .enumerate()
+                        .map(|(i, q)| OrcaQuestion {
+                            answer: output.and_then(|o| {
+                                answer_of(o, &q.text, questions.get(i + 1).map(|n| n.text.as_str()))
+                            }),
+                            ..q.clone()
                         })
                         .collect(),
                 }
@@ -1977,13 +1980,22 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_ends_at_the_quote_that_closes_it() {
+    fn an_answer_ends_where_the_next_question_starts_or_at_the_end_of_the_list() {
+        let answer = |output: &str, next| answer_of(output, "Q", next);
         assert_eq!(
-            answer_of("\"Q\"=\"say \"hi\" twice\". You can", "Q").as_deref(),
-            Some("say \"hi\" twice")
+            answer("\"Q\"=\"say \"hi\". Then, \"go\"\". You can now go", None).as_deref(),
+            Some("say \"hi\". Then, \"go\"")
         );
-        assert_eq!(answer_of("\"Q\"=\"a\"", "Q").as_deref(), Some("a"));
-        assert_eq!(answer_of("\"Other\"=\"a\"", "Q"), None);
+        assert_eq!(
+            answer(
+                "\"Q\"=\"a\", \"b\"\", \"N\"=\"c\". You can now go",
+                Some("N")
+            )
+            .as_deref(),
+            Some("a\", \"b\"")
+        );
+        assert_eq!(answer("\"Q\"=\"a\"", None).as_deref(), Some("a"));
+        assert_eq!(answer("\"Other\"=\"a\"", None), None);
     }
 
     #[test]
