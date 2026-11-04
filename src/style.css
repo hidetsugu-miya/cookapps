@@ -705,6 +705,30 @@ a.icon-btn { text-decoration: none; }
 .st-file { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; box-sizing: border-box; padding: 6px 12px; border: 1px solid var(--chip-line); border-radius: 12px; font-size: 12px; color: #444; text-decoration: none; overflow-wrap: anywhere; }
 a.st-file:hover { background: var(--hover); }
 .st-file svg { width: 16px; height: 16px; flex: none; color: #888; }
+/* The blocks and attachments of a message (S-11). An attachment's bar takes the color Rust passed in --att. */
+.st-blocks, .st-att { display: flex; flex-direction: column; gap: 6px; margin-top: 3px; min-width: 0; }
+.st-bh { margin: 4px 0 0; font-size: 15px; overflow-wrap: anywhere; }
+.st-sec { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.st-sec-main { flex: 1; min-width: 0; }
+.st-sec .st-text, .st-att .st-text { margin: 0; }
+.st-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 16px; margin-top: 6px; }
+.st-field { min-width: 0; }
+.st-field b { display: block; font-size: 12px; color: var(--muted); }
+.st-ctx { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.st-ctx a, .st-att a { color: var(--accent); }
+.st-ctx-img { width: 16px; height: 16px; border-radius: 4px; }
+.st-acc-img { flex: none; width: 56px; height: 56px; border-radius: 8px; object-fit: cover; }
+.st-hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
+.st-alt { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.st-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.st-acts .text-btn { display: inline-flex; align-items: center; box-sizing: border-box; height: 28px; padding: 0 12px; font: inherit; font-size: 13px; text-decoration: none; }
+.st-sec > .text-btn { flex: none; display: inline-flex; align-items: center; height: 28px; padding: 0 12px; font: inherit; font-size: 13px; text-decoration: none; }
+.st-acts .text-btn:disabled, .st-sec > .text-btn:disabled { opacity: .6; cursor: default; }
+.st-att { padding-left: 12px; border-left: 4px solid var(--att, var(--chip-line)); }
+.st-att-author, .st-att-foot { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.st-att-title { margin: 0; font-weight: 600; overflow-wrap: anywhere; text-decoration: none; }
+a.st-att-title:hover { text-decoration: underline; }
+.st-images { margin-top: 8px; }
 .st-note { margin: 0 24px 8px; padding: 8px 12px; border-radius: 12px; background: var(--soft); color: var(--ins); font-size: 13px; }
 #st-note.pending { margin: 0 24px 8px; }
 #st-card .review { margin: 0 24px 10px; }

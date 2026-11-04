@@ -22,6 +22,10 @@ use crate::{
     claude::Thread,
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
     images::{fetch_slack_files, run_limited, SlackFileCache},
+    slack_blocks::{
+        image_urls, mentioned_users, message_attachments, message_blocks, ThreadAttachment,
+        ThreadBlock,
+    },
     slack_emoji,
 };
 
@@ -1367,7 +1371,7 @@ const REFRESH_BUSY_SECS: u32 = 60;
 const RATE_LIMIT_DEFAULT: Duration = Duration::from_secs(60);
 const RATE_LIMIT_MAX: Duration = Duration::from_secs(10 * 60);
 /// Shown for a user, channel or mention Slack could not name.
-const UNKNOWN_NAME: &str = "不明";
+pub(crate) const UNKNOWN_NAME: &str = "不明";
 /// Where a link goes when the workspace's own address is not known.
 const SLACK_HOME: &str = "https://slack.com/";
 /// Attached images asked for at once.
@@ -1461,6 +1465,11 @@ pub struct ThreadMessage {
     icon_url: Option<String>,
     text: String,
     files: Vec<ThreadFile>,
+    /// Drawn in place of `text` when not empty (S-11): the message has a block other than `rich_text`.
+    blocks: Vec<ThreadBlock>,
+    attachments: Vec<ThreadAttachment>,
+    /// The https addresses of the images of `blocks` and `attachments`, once each; the screen asks for them only when the user presses "画像を表示".
+    image_urls: Vec<String>,
 }
 
 /// A thread, oldest message first (the thread's own message is the first). `truncated` is whether it goes on past what was read.
@@ -2255,7 +2264,7 @@ fn url_len(rest: &str, prev: Option<char>) -> Option<usize> {
 }
 
 /// The `:name:` codes of Slack's text as Unicode emoji (`:+1::skin-tone-2:` with its tone). A code that is no emoji of ours (a custom emoji) and the inside of a web address stay as they are.
-fn emojify(text: &str) -> String {
+pub(crate) fn emojify(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let (mut rest, mut prev) = (text, None);
     while let Some(c) = rest.chars().next() {
@@ -2312,7 +2321,7 @@ fn text_piece(piece: &str, offset: usize, code: &[Range<usize>]) -> String {
 }
 
 /// Slack's mrkdwn as plain text (`token_text`, `text_piece`). It is drawn as text, never as markup.
-fn plain_text(text: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
+pub(crate) fn plain_text(text: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
     let code = code_spans(text);
     let mut offset = 0;
     pieces(text)
@@ -2332,7 +2341,7 @@ fn plain_text(text: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
 }
 
 /// The users `text` mentions (`<@U1>`, `<@U1|name>`), in order, each once.
-fn mention_ids(text: &str) -> Vec<String> {
+pub(crate) fn mention_ids(text: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     pieces(text)
         .into_iter()
@@ -2413,6 +2422,8 @@ fn thread_slim(m: &Value) -> Value {
         "user": m["user"],
         "text": m["text"],
         "files": m["files"],
+        "blocks": m["blocks"],
+        "attachments": m["attachments"],
         "username": m["username"],
         "bot_profile": m["bot_profile"],
     })
@@ -2425,7 +2436,12 @@ fn thread_message(
     name_of: &dyn Fn(&str) -> Option<String>,
 ) -> ThreadMessage {
     let sender = bot_of(m).or(user);
+    let blocks = message_blocks(&m["blocks"], name_of);
+    let attachments = message_attachments(&m["attachments"], name_of);
     ThreadMessage {
+        image_urls: image_urls(&blocks, &attachments),
+        blocks,
+        attachments,
         ts: m["ts"].as_str().unwrap_or_default().to_owned(),
         user: m["user"]
             .as_str()
@@ -3199,6 +3215,7 @@ pub async fn slack_thread(
                 .map(str::to_owned)
                 .into_iter()
                 .chain(mention_ids(m["text"].as_str().unwrap_or_default()))
+                .chain(mentioned_users(m))
                 .collect::<Vec<_>>()
         })
         .filter(|user| valid_channel(user) && seen.insert(user.clone()));
