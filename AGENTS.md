@@ -187,7 +187,8 @@ scripts/check-version.sh   # the version in Cargo.toml, tauri.conf.json and Carg
 
 CI is `.github/workflows/release.yml`, and only a pushed tag `v*` starts it.
 Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions, so a push to main or a pull request runs no workflow of this repository (GitHub Pages still builds `docs/` on a push to main).
-A change reaches main through a pull request, and the machine that ran the checks sends their results as the commit statuses `e2e` and `review`. A release is the merge of the pull request that raises the version, followed by its tag.
+A change reaches main through a pull request, and the machine that ran the checks sends their results as the commit statuses `e2e` and `review`.
+A release is the merge of the pull request that raises the version, followed by its tag.
 
 | Job | Environment | What it does |
 |-----|-------------|--------------|
