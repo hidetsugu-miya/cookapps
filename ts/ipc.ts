@@ -16,9 +16,11 @@ import type { Comment } from "./bindings/Comment";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { SlackLoad } from "./bindings/SlackLoad";
+import type { SlackThread } from "./bindings/SlackThread";
 import type { Summary } from "./bindings/Summary";
 import type { Sync } from "./bindings/Sync";
 import type { Target } from "./bindings/Target";
+import type { Timeline } from "./bindings/Timeline";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { Todo } from "./bindings/Todo";
 import type { TodoPrompt } from "./bindings/TodoPrompt";
@@ -26,6 +28,7 @@ import type { UpdateInfo } from "./bindings/UpdateInfo";
 import type { UpdateMode } from "./bindings/UpdateMode";
 import type { Week } from "./bindings/Week";
 import type { Workspace } from "./bindings/Workspace";
+import type { WorkspaceIcon } from "./bindings/WorkspaceIcon";
 
 type Account = { account: string };
 // What Todoist says about an uploaded file (`file_name`, `file_url`, `file_type`, ...): it is handed back as the attachment of a comment, as it is.
@@ -103,6 +106,17 @@ export interface Commands {
     args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string };
     result: boolean;
   };
+  // The newest 20 messages of the joined channels (no direct messages) of every workspace, newest first; `failed` are workspaces that could not be read at all,
+  // `missing` the scopes a token lacks (users:read, files:read among them), `refreshSecs` the wait until the next read. Messages are kept in memory only.
+  slack_timeline: { args: undefined; result: Timeline };
+  // The whole thread starting at `ts`, oldest first. For a reply pass its `threadTs`, not its own `ts`.
+  slack_thread: { args: { teamId: string; channel: string; ts: string }; result: SlackThread };
+  // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched).
+  slack_reply: { args: { teamId: string; channel: string; threadTs: string; text: string }; result: boolean };
+  // The attached images (a thread file's `thumbUrl`) as data: URIs by URL; the token goes to files.slack.com only. What cannot be fetched is not in the map.
+  slack_file_images: { args: { teamId: string; urls: string[] }; result: Record<string, string> };
+  // The user's own icon in each workspace.
+  slack_icons: { args: undefined; result: WorkspaceIcon[] };
   // Whether Claude can be used with the method in use (the subscription logged in, or an API key that is not refused).
   claude_status: { args: undefined; result: Claude };
   // The settings card's view: the method in use, the subscription's and the API key's own states, and the usable state (`claude`) of the method in use.
@@ -128,6 +142,8 @@ export interface Commands {
   claude_edit_todo_prompt: { args: { body: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions. Nothing is saved.
   claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
+  // The same for the reply to a Slack thread (its own model and effort, `slackReply`). Only the reply text, the conversation and the request are sent, never the thread's messages.
+  claude_proofread_reply: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

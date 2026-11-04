@@ -324,12 +324,13 @@ export const slackMessageUrl = "https://example-team.slack.com/archives/C0123ABC
 // What `todoist_summarize_slack` answers for `slackMessageUrl`.
 export const slackSummary: Summary = { content: "Reply to the vendor", description: "- Asked for a quote\n- Wants an answer by Friday", due: "2026-11-06", projectId: null, omitted: 0, targetCut: false };
 
-// What `claude_model_settings` answers (the same as the base answer in e2e/fixtures.js): the defaults, Sonnet and medium, for the four purposes.
+// What `claude_model_settings` answers (the same as the base answer in e2e/fixtures.js): the defaults, Sonnet and medium, and Sonnet and high for the Slack reply.
 export const claudeSettings: ClaudeSettings = {
   slackSummary: { model: "sonnet", effort: "medium" },
   mailSummary: { model: "sonnet", effort: "medium" },
   promptChat: { model: "sonnet", effort: "medium" },
   proofread: { model: "sonnet", effort: "medium" },
+  slackReply: { model: "sonnet", effort: "high" },
 };
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
@@ -361,8 +362,8 @@ export const proofreadEdit: PromptEdit = {
 // What `slack_channels` answers: the channels of the workspace `workspace`.
 export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general" }];
 
-// What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by.
-export const checked = (missingScopes: string[] | null): Checked => ({ ...workspace, missingScopes });
+// What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by. `missingOptional` is the same for users:read and files:read.
+export const checked = (missingScopes: string[] | null, missingOptional: string[] | null = []): Checked => ({ ...workspace, missingScopes, missingOptional });
 
 export const claudeReady: Claude = { state: "ready", email: "claude@example.com", plan: "Max", version: "2.0.0", method: "subscription" };
 export const claudeLoggedOut: Claude = { state: "loggedOut", version: "2.0.0" };

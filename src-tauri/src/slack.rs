@@ -1,7 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -17,6 +17,7 @@ use crate::{
     auth::{config_dir, delete_entry, Auth},
     claude::Thread,
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
+    images::{fetch_slack_files, run_limited, ImageCache},
 };
 
 /// Every request goes here and nowhere else: nothing from outside is put into the URL.
@@ -124,7 +125,9 @@ pub struct SlackState {
     /// Held while the keychain and `slack-workspaces.json` are updated together.
     files: tokio::sync::Mutex<()>,
     /// Each workspace's channel list, in memory only.
-    channels: Mutex<HashMap<String, (Instant, Vec<Channel>)>>,
+    channels: Arc<ChannelCache>,
+    /// What the timeline and the thread keep between two reads, in memory only.
+    timeline: Arc<TimelineCache>,
 }
 
 fn valid_channel(id: &str) -> bool {
@@ -339,13 +342,33 @@ const HISTORY_SCOPES: [&str; 4] = [
     "mpim:history",
 ];
 
-/// The history scopes an `x-oauth-scopes` header lacks; reading a message needs all four.
-fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
-    HISTORY_SCOPES
-        .into_iter()
+/// The scopes of `wanted` that an `x-oauth-scopes` header lacks.
+fn missing_scopes(scopes: &str, wanted: &[&'static str]) -> Vec<&'static str> {
+    wanted
+        .iter()
+        .copied()
         .filter(|wanted| !scopes.split(',').any(|s| s.trim() == *wanted))
         .collect()
 }
+
+/// The history scopes an `x-oauth-scopes` header lacks; reading a message needs all four.
+fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
+    missing_scopes(scopes, &HISTORY_SCOPES)
+}
+
+/// The scopes only the timeline and the thread use: names and icons (`users:read`) and attached images (`files:read`).
+/// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`.
+const OPTIONAL_SCOPES: [&str; 2] = ["users:read", "files:read"];
+
+/// Every scope the timeline wants, which the list answer says a workspace's token lacks.
+const TIMELINE_SCOPES: [&str; 6] = [
+    "channels:read",
+    "groups:read",
+    "channels:history",
+    "groups:history",
+    "users:read",
+    "files:read",
+];
 
 /// The message for a failed `conversations.replies`: a missing scope says which workspace's token to replace, and which scope it lacks.
 fn read_error(e: SlackError, team: &str) -> String {
@@ -439,13 +462,19 @@ fn slim(m: &Value) -> Value {
     })
 }
 
-/// `messages` (a page of `conversations.replies`) added to `read` without the messages whose `ts` is in `seen` (a later page may repeat the parent), each kept as `slim`.
+/// `messages` (a page of `conversations.replies`) added to `read` without the messages whose `ts` is in `seen` (a later page may repeat the parent), each kept as `keep` makes it
+/// (`slim` for the summary).
 /// `seen` holds the `ts` of every message added so far, so one set serves all the pages.
-fn add_page(read: &mut Vec<Value>, seen: &mut std::collections::HashSet<String>, messages: &Value) {
+fn add_page(
+    read: &mut Vec<Value>,
+    seen: &mut HashSet<String>,
+    messages: &Value,
+    keep: fn(&Value) -> Value,
+) {
     for m in messages.as_array().into_iter().flatten() {
         match m["ts"].as_str() {
             Some(ts) if !seen.insert(ts.to_owned()) => {}
-            _ => read.push(slim(m)),
+            _ => read.push(keep(m)),
         }
     }
 }
@@ -714,16 +743,16 @@ async fn token_of(team_id: &str) -> Result<String, String> {
         .ok_or_else(|| NO_TOKEN.to_owned())
 }
 
-/// `auth.test` with `token`: which workspace and user the token is, and the history scopes it lacks (`None` when Slack did not say).
+/// `auth.test` with `token`: which workspace and user the token is, and the `x-oauth-scopes` the token has (`None` when Slack did not say).
 async fn identify_scoped(
     http: &reqwest::Client,
     token: &str,
-) -> Result<(Workspace, Option<Vec<&'static str>>), SlackError> {
+) -> Result<(Workspace, Option<String>), SlackError> {
     let (reply, scopes) = call_scoped(http, token, "auth.test", Payload::Empty).await?;
     let workspace = workspace_of(&reply).ok_or_else(|| {
         SlackError::from("Slack の返答にワークスペースの ID がありません".to_owned())
     })?;
-    Ok((workspace, scopes.as_deref().map(missing_history_scopes)))
+    Ok((workspace, scopes))
 }
 
 /// `auth.test` with `token`: which workspace and user the token is.
@@ -851,6 +880,7 @@ pub async fn slack_load(
 }
 
 /// A workspace as `auth.test` describes it now. `missing_scopes` is `None` when Slack sent no scopes to judge by.
+/// `missing_optional` is the same for `OPTIONAL_SCOPES` (`users:read`, `files:read`), which the token can do without.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -859,6 +889,7 @@ pub struct Checked {
     #[serde(flatten)]
     workspace: Workspace,
     missing_scopes: Option<Vec<&'static str>>,
+    missing_optional: Option<Vec<&'static str>>,
 }
 
 /// Asks Slack who the stored token of the workspace is; an error says why it is not usable.
@@ -868,9 +899,12 @@ pub async fn slack_check(auth: State<'_, Auth>, team_id: String) -> Result<Check
         Ok(token) if is_bot_token(&token) => Err(BOT_TOKEN.to_owned()),
         Ok(token) => identify_scoped(auth.http(), &token)
             .await
-            .map(|(workspace, missing_scopes)| Checked {
+            .map(|(workspace, scopes)| Checked {
                 workspace,
-                missing_scopes,
+                missing_scopes: scopes.as_deref().map(missing_history_scopes),
+                missing_optional: scopes
+                    .as_deref()
+                    .map(|s| missing_scopes(s, &OPTIONAL_SCOPES)),
             })
             .map_err(String::from),
         Err(e) => Err(e),
@@ -936,6 +970,7 @@ pub async fn slack_remove_workspace(
     .await
     .map_err(|e| log_failure(command, &team_id, e))?;
     state.channels.lock().unwrap().remove(&team_id);
+    state.timeline.forget(&team_id);
     if let Some(token) = token {
         if let Err(e) = call(auth.http(), &token, "auth.revoke", Payload::Empty).await {
             log_failure("slack_revoke", &team_id, e);
@@ -976,25 +1011,43 @@ pub async fn slack_channels(
 ) -> Result<Vec<Channel>, String> {
     let command = "slack_channels";
     if !refresh {
-        let cache = state.channels.lock().unwrap();
-        if let Some((_, list)) = cache
-            .get(&team_id)
-            .filter(|(at, _)| channels_fresh(at.elapsed()))
-        {
-            return Ok(list.clone());
+        if let Some(list) = fresh_channels(&state.channels, &team_id) {
+            return Ok(list);
         }
     }
     let token = token_of(&team_id)
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
-    let list = fetch_channels(auth.http(), &token)
+    fetch_and_keep_channels(auth.http(), &state.channels, &team_id, &token)
         .await
-        .map_err(|e| log_failure(command, &team_id, e))?;
-    state
-        .channels
+        .map_err(|e| log_failure(command, &team_id, e))
+}
+
+/// A workspace's channel list and when it was read, by `team_id`.
+type ChannelCache = Mutex<HashMap<String, (Instant, Vec<Channel>)>>;
+
+/// The channel list kept for the workspace, if it is younger than `CHANNELS_TTL`.
+fn fresh_channels(cache: &ChannelCache, team_id: &str) -> Option<Vec<Channel>> {
+    cache
         .lock()
         .unwrap()
-        .insert(team_id, (Instant::now(), list.clone()));
+        .get(team_id)
+        .filter(|(at, _)| channels_fresh(at.elapsed()))
+        .map(|(_, list)| list.clone())
+}
+
+/// Asks Slack for the workspace's channels and keeps the list.
+async fn fetch_and_keep_channels(
+    http: &reqwest::Client,
+    cache: &ChannelCache,
+    team_id: &str,
+    token: &str,
+) -> Result<Vec<Channel>, String> {
+    let list = fetch_channels(http, token).await?;
+    cache
+        .lock()
+        .unwrap()
+        .insert(team_id.to_owned(), (Instant::now(), list.clone()));
     Ok(list)
 }
 
@@ -1047,6 +1100,69 @@ pub fn check_message_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// One `conversations.replies` call; a failure says which workspace's token to replace.
+async fn read_replies(
+    http: &reqwest::Client,
+    token: &str,
+    team: &str,
+    params: Vec<(&'static str, String)>,
+) -> Result<Value, String> {
+    call(http, token, "conversations.replies", Payload::Form(&params))
+        .await
+        .map_err(|e| read_error(e, team))
+}
+
+/// The messages `read_pages` read, oldest first (the thread's own message first), and whether the thread goes on past them.
+struct Pages {
+    pages: Vec<Value>,
+    more: bool,
+}
+
+/// The thread `thread_ts` of `channel`, read in pages of `REPLY_PAGE_SIZE` up to `REPLY_PAGES` pages, each message kept as `keep` makes it.
+/// A later page that cannot be read ends the read there (logged): what was read is used and `more` is true. The first page failing is an error.
+async fn read_pages(
+    http: &reqwest::Client,
+    token: &str,
+    team: &str,
+    team_id: &str,
+    channel: &str,
+    thread_ts: &str,
+    keep: fn(&Value) -> Value,
+) -> Result<Pages, String> {
+    let mut pages: Vec<Value> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut cursor = None;
+    let mut more;
+    let mut read_pages = 0;
+    loop {
+        let reply = match read_replies(
+            http,
+            token,
+            team,
+            replies_params(channel, thread_ts, None, cursor.as_deref()),
+        )
+        .await
+        {
+            Ok(reply) => reply,
+            // A later page that cannot be read ends the read there: what was read is used, and the rest counts as unread.
+            Err(e) if read_pages > 0 => {
+                log_failure("slack_message_context", team_id, e);
+                more = true;
+                break;
+            }
+            Err(e) => return Err(e),
+        };
+        add_page(&mut pages, &mut seen, &reply["messages"], keep);
+        read_pages += 1;
+        cursor = next_cursor(&reply);
+        more = truncated(&reply);
+        if cursor.is_none() || read_pages == REPLY_PAGES {
+            break;
+        }
+    }
+    Ok(Pages { pages, more })
+}
+
 /// The thread of the Slack message `url` points at, read with the token of the link's workspace: the whole thread, in pages of `REPLY_PAGE_SIZE` up to `REPLY_PAGES` pages,
 /// whether the link is to its first message or to a reply. A linked message the pages did not reach is read on its own.
 pub async fn message_context(
@@ -1060,52 +1176,23 @@ pub async fn message_context(
     let workspaces = load_workspaces(dir).await?;
     let workspace = workspace_for_host(&workspaces, &link.host).ok_or(NO_WORKSPACE)?;
     let token = token_of(&workspace.team_id).await?;
-    let read = |params: Vec<(&'static str, String)>| {
-        let token = &token;
-        async move {
-            call(http, token, "conversations.replies", Payload::Form(&params))
-                .await
-                .map_err(|e| read_error(e, &workspace.team))
-        }
-    };
-    let mut pages: Vec<Value> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut cursor = None;
-    let mut more;
-    let mut read_pages = 0;
-    loop {
-        let reply = match read(replies_params(
-            &link.channel,
-            &thread_ts,
-            None,
-            cursor.as_deref(),
-        ))
-        .await
-        {
-            Ok(reply) => reply,
-            // A later page that cannot be read ends the read there: what was read is used, and the rest counts as unread.
-            Err(e) if read_pages > 0 => {
-                log_failure("slack_message_context", &workspace.team_id, e);
-                more = true;
-                break;
-            }
-            Err(e) => return Err(e),
-        };
-        add_page(&mut pages, &mut seen, &reply["messages"]);
-        read_pages += 1;
-        cursor = next_cursor(&reply);
-        more = truncated(&reply);
-        if cursor.is_none() || read_pages == REPLY_PAGES {
-            break;
-        }
-    }
+    let Pages { pages, more } = read_pages(
+        http,
+        &token,
+        &workspace.team,
+        &workspace.team_id,
+        &link.channel,
+        &thread_ts,
+        slim,
+    )
+    .await?;
     let alone = if more && !pages.iter().any(|m| m["ts"] == message_ts) {
-        let reply = read(replies_params(
-            &link.channel,
-            &thread_ts,
-            Some(&message_ts),
-            None,
-        ))
+        let reply = read_replies(
+            http,
+            &token,
+            &workspace.team,
+            replies_params(&link.channel, &thread_ts, Some(&message_ts), None),
+        )
         .await?;
         reply["messages"].as_array().cloned().unwrap_or_default()
     } else {
@@ -1130,6 +1217,41 @@ pub fn slack_preview(subject: &str, from: &str, date: &str, body: &str) -> Strin
     mail_text(subject, from, date, body)
 }
 
+/// Checks the destination and the text, and posts `text` to the channel or as a reply in `thread_ts`'s thread. A failure is logged under `command` and returned.
+/// The text goes to Slack only here, on the user's click.
+async fn send_post(
+    http: &reqwest::Client,
+    command: &str,
+    team_id: &str,
+    channel: &str,
+    thread_ts: Option<&str>,
+    text: &str,
+) -> Result<(), String> {
+    if token_key(team_id).is_err()
+        || !valid_channel(channel)
+        || thread_ts.is_some_and(|t| !valid_ts(t))
+    {
+        return Err(log_failure(command, team_id, BAD_TARGET));
+    }
+    let text = post_text(text).map_err(|e| log_failure(command, team_id, e))?;
+    let token = token_of(team_id)
+        .await
+        .map_err(|e| log_failure(command, team_id, e))?;
+    let mut message = json!({
+        "channel": channel,
+        "text": text,
+        "unfurl_links": false,
+        "unfurl_media": false,
+    });
+    if let Some(ts) = thread_ts {
+        message["thread_ts"] = ts.into();
+    }
+    call(http, &token, "chat.postMessage", Payload::Json(&message))
+        .await
+        .map_err(|e| log_failure(command, team_id, e))?;
+    Ok(())
+}
+
 /// Posts `text` (what the user edited) to the channel, or as a reply in `thread_ts`'s thread, and remembers the destination.
 /// The text goes to Slack only here, on the user's click.
 #[tauri::command]
@@ -1143,34 +1265,15 @@ pub async fn slack_post(
     text: String,
 ) -> Result<bool, String> {
     let command = "slack_post";
-    let user = token_key(&team_id);
-    if user.is_err()
-        || !valid_channel(&channel)
-        || thread_ts.as_deref().is_some_and(|t| !valid_ts(t))
-    {
-        return Err(log_failure(command, &team_id, BAD_TARGET));
-    }
-    let text = post_text(&text).map_err(|e| log_failure(command, &team_id, e))?;
-    let token = token_of(&team_id)
-        .await
-        .map_err(|e| log_failure(command, &team_id, e))?;
-    let mut message = json!({
-        "channel": channel,
-        "text": text,
-        "unfurl_links": false,
-        "unfurl_media": false,
-    });
-    if let Some(ts) = &thread_ts {
-        message["thread_ts"] = ts.clone().into();
-    }
-    call(
+    send_post(
         auth.http(),
-        &token,
-        "chat.postMessage",
-        Payload::Json(&message),
+        command,
+        &team_id,
+        &channel,
+        thread_ts.as_deref(),
+        &text,
     )
-    .await
-    .map_err(|e| log_failure(command, &team_id, e))?;
+    .await?;
     // The post is done: failing to remember where is only logged.
     let new = Recent {
         team_id: team_id.clone(),
@@ -1195,6 +1298,956 @@ pub async fn slack_post(
         log_failure(command, &team_id, e);
     }
     Ok(true)
+}
+
+// The Slack timeline (S-5), the thread (S-6) and its reply (S-6, S-7). Nothing about messages is saved to disk.
+
+/// The most messages the timeline lists.
+const TIMELINE_MAX: usize = 20;
+/// Messages `conversations.history` is asked for per channel.
+const HISTORY_LIMIT: &str = "20";
+/// Channels of one workspace whose history is read at the same time.
+const HISTORY_CONCURRENCY: usize = 4;
+/// `users.info` calls at the same time, and the most one list or thread makes: the users past it are asked about by the next read.
+const USER_CONCURRENCY: usize = 4;
+const USER_LOOKUPS: usize = 40;
+/// How long a user is remembered; one Slack could not describe is asked about again sooner.
+const USER_TTL: Duration = Duration::from_secs(60 * 60);
+const USER_MISS_TTL: Duration = Duration::from_secs(5 * 60);
+/// The shortest wait between two reads of the timeline, and how many calls a minute one round may use (Tier 3 allows about 50).
+const REFRESH_MIN_SECS: u32 = 120;
+const CALLS_PER_MINUTE: usize = 40;
+/// Shown for a user, channel or mention Slack could not name.
+const UNKNOWN_NAME: &str = "不明";
+/// Where a link goes when the workspace's own address is not known.
+const SLACK_HOME: &str = "https://slack.com/";
+/// Attached images asked for at once.
+const FILE_IMAGES_MAX: usize = 20;
+
+/// A message of the timeline as the screen draws it. The text is plain text (`plain_text`), never markup.
+/// `thread_ts` is set only for a reply that was also sent to the channel; open its thread with `thread_ts ?? ts`.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineMessage {
+    team_id: String,
+    team: String,
+    workspace_url: Option<String>,
+    channel: String,
+    channel_name: String,
+    ts: String,
+    thread_ts: Option<String>,
+    user: Option<String>,
+    name: String,
+    icon_url: Option<String>,
+    text: String,
+    reply_count: u32,
+    permalink: String,
+    has_files: bool,
+}
+
+/// A workspace the timeline could not read at all.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineFailure {
+    team_id: String,
+    team: String,
+    error: String,
+}
+
+/// The scopes of `TIMELINE_SCOPES` a workspace's token lacks.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineMissing {
+    team_id: String,
+    team: String,
+    scopes: Vec<&'static str>,
+}
+
+/// The newest messages of every joined channel of every workspace, newest first, and when to read again.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct Timeline {
+    messages: Vec<TimelineMessage>,
+    failed: Vec<TimelineFailure>,
+    missing: Vec<TimelineMissing>,
+    refresh_secs: u32,
+}
+
+/// An attached file of a thread's message. `thumb_url` is set only for an image Slack serves a 360px preview of;
+/// `permalink` opens the file in Slack.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadFile {
+    id: String,
+    name: String,
+    mimetype: String,
+    thumb_url: Option<String>,
+    permalink: Option<String>,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadMessage {
+    ts: String,
+    user: Option<String>,
+    name: String,
+    icon_url: Option<String>,
+    text: String,
+    files: Vec<ThreadFile>,
+}
+
+/// A thread, oldest message first (the thread's own message is the first). `truncated` is whether it goes on past what was read.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct SlackThread {
+    team_id: String,
+    channel: String,
+    ts: String,
+    messages: Vec<ThreadMessage>,
+    truncated: bool,
+}
+
+/// The user's own icon in a workspace; `name` is the user's name there.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceIcon {
+    team_id: String,
+    name: String,
+    icon_url: Option<String>,
+}
+
+/// A user as the screen shows them: a name, and an icon address when Slack gave an https one.
+#[derive(Debug, PartialEq, Clone)]
+struct SlackUser {
+    name: String,
+    icon_url: Option<String>,
+}
+
+/// A listed message of a channel, before the names are put to it.
+#[derive(Debug, PartialEq, Clone)]
+struct Raw {
+    team_id: String,
+    channel: String,
+    channel_name: String,
+    ts: String,
+    thread_ts: Option<String>,
+    user: Option<String>,
+    /// The sender of a message a bot or an app wrote, which names itself.
+    bot: Option<SlackUser>,
+    text: String,
+    reply_count: u32,
+    has_files: bool,
+}
+
+/// (team, user) -> when it was asked, and what Slack said (`None`: it could not say).
+type UserCache = HashMap<(String, String), (Instant, Option<SlackUser>)>;
+
+/// What the timeline and the thread keep between reads, in memory only.
+#[derive(Default)]
+struct TimelineCache {
+    users: Mutex<UserCache>,
+    /// (team, channel) -> the listed messages of its last read, which stand in for a channel that cannot be read now.
+    history: Mutex<HashMap<(String, String), Vec<Raw>>>,
+}
+
+impl TimelineCache {
+    fn forget(&self, team_id: &str) {
+        self.users.lock().unwrap().retain(|(t, _), _| t != team_id);
+        self.history
+            .lock()
+            .unwrap()
+            .retain(|(t, _), _| t != team_id);
+    }
+
+    fn user(&self, team_id: &str, user: &str) -> Option<SlackUser> {
+        let users = self.users.lock().unwrap();
+        users
+            .get(&(team_id.to_owned(), user.to_owned()))
+            .and_then(|(_, found)| found.clone())
+    }
+
+    /// Whether Slack should be asked about the user: it never was, or the answer is old.
+    fn needs_lookup(&self, team_id: &str, user: &str) -> bool {
+        let users = self.users.lock().unwrap();
+        users
+            .get(&(team_id.to_owned(), user.to_owned()))
+            .is_none_or(|(at, found)| !user_fresh(at.elapsed(), found.is_some()))
+    }
+
+    fn put_user(&self, team_id: &str, user: &str, found: Option<SlackUser>) {
+        self.users.lock().unwrap().insert(
+            (team_id.to_owned(), user.to_owned()),
+            (Instant::now(), found),
+        );
+    }
+
+    fn channel_history(&self, team_id: &str, channel: &str) -> Option<Vec<Raw>> {
+        self.history
+            .lock()
+            .unwrap()
+            .get(&(team_id.to_owned(), channel.to_owned()))
+            .cloned()
+    }
+
+    /// The workspace's remembered messages become `kept`, by channel.
+    fn replace_history(&self, team_id: &str, kept: HashMap<String, Vec<Raw>>) {
+        let mut history = self.history.lock().unwrap();
+        history.retain(|(t, _), _| t != team_id);
+        history.extend(
+            kept.into_iter()
+                .map(|(channel, list)| ((team_id.to_owned(), channel), list)),
+        );
+    }
+}
+
+/// Whether a remembered user is still good: an hour for one Slack described, five minutes for one it could not.
+fn user_fresh(age: Duration, found: bool) -> bool {
+    age < if found { USER_TTL } else { USER_MISS_TTL }
+}
+
+/// Whether a message of `conversations.history` belongs in the timeline: a message with no subtype or one of the subtypes a person or a bot posts with,
+/// that has text or a file. Joins, leaves and every other subtype are left out.
+fn is_listed(m: &Value) -> bool {
+    if m["type"] != "message" {
+        return false;
+    }
+    if !matches!(
+        m["subtype"].as_str(),
+        None | Some("thread_broadcast" | "file_share" | "me_message" | "bot_message")
+    ) {
+        return false;
+    }
+    let text = m["text"].as_str().is_some_and(|t| !t.trim().is_empty());
+    let files = m["files"].as_array().is_some_and(|f| !f.is_empty());
+    text || files
+}
+
+/// `https://…` as it is, and nothing else: an icon or an image address from Slack is used only over https.
+fn https_url(url: Option<&str>) -> Option<String> {
+    let url = url?;
+    (Url::parse(url).ok()?.scheme() == "https").then(|| url.to_owned())
+}
+
+/// The first of `names` that is not blank.
+fn first_name(names: &[&Value]) -> Option<String> {
+    names
+        .iter()
+        .filter_map(|n| n.as_str())
+        .map(str::trim)
+        .find(|n| !n.is_empty())
+        .map(str::to_owned)
+}
+
+/// The user a `users.info` reply describes: the display name, else the real name, else the account name; the icon is the 72px one, else the 48px one.
+fn user_of(reply: &Value) -> Option<SlackUser> {
+    let user = &reply["user"];
+    let profile = &user["profile"];
+    Some(SlackUser {
+        name: first_name(&[
+            &profile["display_name"],
+            &profile["real_name"],
+            &user["name"],
+        ])?,
+        icon_url: https_url(profile["image_72"].as_str())
+            .or_else(|| https_url(profile["image_48"].as_str())),
+    })
+}
+
+/// The sender of a message a bot or an app wrote (`username` or `bot_profile.name`, and `bot_profile.icons.image_48`), which asks Slack nothing.
+fn bot_of(m: &Value) -> Option<SlackUser> {
+    Some(SlackUser {
+        name: first_name(&[&m["bot_profile"]["name"], &m["username"]])?,
+        icon_url: https_url(m["bot_profile"]["icons"]["image_48"].as_str()),
+    })
+}
+
+/// A message's `ts` as (seconds, microseconds), so that two are compared as numbers and not as strings. One that is not a `ts` is the oldest.
+fn ts_key(ts: &str) -> (u64, u64) {
+    let (sec, micro) = ts.split_once('.').unwrap_or((ts, "0"));
+    (sec.parse().unwrap_or(0), micro.parse().unwrap_or(0))
+}
+
+/// The listed message of a channel, or `None` when it does not belong in the timeline or has no usable `ts`.
+fn raw_of(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
+    if !is_listed(m) {
+        return None;
+    }
+    let ts = m["ts"].as_str().filter(|t| valid_ts(t))?;
+    Some(Raw {
+        team_id: team_id.to_owned(),
+        channel: channel.id.clone(),
+        channel_name: channel.name.clone(),
+        ts: ts.to_owned(),
+        // The parent of a thread carries its own `ts` as `thread_ts`; only a reply names another.
+        thread_ts: m["thread_ts"]
+            .as_str()
+            .filter(|t| *t != ts && valid_ts(t))
+            .map(str::to_owned),
+        user: m["user"]
+            .as_str()
+            .filter(|u| valid_channel(u))
+            .map(str::to_owned),
+        bot: bot_of(m),
+        text: m["text"].as_str().unwrap_or_default().to_owned(),
+        reply_count: m["reply_count"]
+            .as_u64()
+            .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
+        has_files: m["files"].as_array().is_some_and(|f| !f.is_empty()),
+    })
+}
+
+/// The newest `TIMELINE_MAX` of `all`, newest first by `ts` as a number, without a message listed twice (the same team, channel and `ts`).
+fn merge_timeline(mut all: Vec<Raw>) -> Vec<Raw> {
+    all.sort_by_key(|m| std::cmp::Reverse(ts_key(&m.ts)));
+    let mut seen = HashSet::new();
+    all.retain(|m| seen.insert((m.team_id.clone(), m.channel.clone(), m.ts.clone())));
+    all.truncate(TIMELINE_MAX);
+    all
+}
+
+/// How long to wait before the next read: at least `REFRESH_MIN_SECS`, and long enough that one call per channel stays within `CALLS_PER_MINUTE`.
+fn refresh_secs(channels: usize) -> u32 {
+    let by_rate = channels.saturating_mul(60).div_ceil(CALLS_PER_MINUTE);
+    u32::try_from(by_rate)
+        .unwrap_or(u32::MAX)
+        .max(REFRESH_MIN_SECS)
+}
+
+/// The base of a workspace's links: `https://{host}/` of its address, or Slack's home when that is not an https Slack address.
+fn link_base(workspace_url: &str) -> String {
+    Url::parse(workspace_url)
+        .ok()
+        .filter(|u| u.scheme() == "https" && u.port().is_none() && u.username().is_empty())
+        .and_then(|u| {
+            let host = u.host_str()?;
+            (host == "slack.com" || host.ends_with(".slack.com"))
+                .then(|| format!("https://{host}/"))
+        })
+        .unwrap_or_else(|| SLACK_HOME.to_owned())
+}
+
+/// The link to a message: `{workspace}/archives/{channel}/p{ts without the dot}`, and for a reply `?thread_ts=…&cid=…`. `parse_url` reads it back.
+fn permalink(workspace_url: &str, channel: &str, ts: &str, thread_ts: Option<&str>) -> String {
+    let mut link = format!(
+        "{}archives/{channel}/p{}",
+        link_base(workspace_url),
+        ts.replace('.', "")
+    );
+    if let Some(parent) = thread_ts {
+        link.push_str(&format!("?thread_ts={parent}&cid={channel}"));
+    }
+    link
+}
+
+/// A piece of Slack's mrkdwn: text, or what is between `<` and `>`.
+enum Piece<'a> {
+    Text(&'a str),
+    Token(&'a str),
+}
+
+/// `text` cut into text and `<…>` tokens, in order. A `<` with no `>` after it is text.
+fn pieces(text: &str) -> Vec<Piece<'_>> {
+    let (mut out, mut rest) = (Vec::new(), text);
+    while let Some(start) = rest.find('<') {
+        let Some(len) = rest[start + 1..].find('>') else {
+            break;
+        };
+        out.push(Piece::Text(&rest[..start]));
+        out.push(Piece::Token(&rest[start + 1..start + 1 + len]));
+        rest = &rest[start + len + 2..];
+    }
+    out.push(Piece::Text(rest));
+    out
+}
+
+/// Slack escapes `&`, `<` and `>` in text; `&amp;` is undone last.
+fn unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// The text of one `<…>`: a mention (`<@U1>` as `@name`, `@不明` when no name is known), a channel (`<#C1|name>` as `#name`), a broadcast (`<!here>` as `@here`),
+/// a link (`<https://a|label>` as `label`, `<https://a>` as `https://a`).
+fn token_text(token: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
+    let (target, label) = match token.split_once('|') {
+        Some((target, label)) => (target, Some(label).filter(|l| !l.is_empty())),
+        None => (token, None),
+    };
+    if let Some(id) = target.strip_prefix('@') {
+        let name = name_of(id)
+            .or_else(|| label.map(unescape))
+            .unwrap_or_else(|| UNKNOWN_NAME.to_owned());
+        return format!("@{name}");
+    }
+    if target.starts_with('#') {
+        return format!(
+            "#{}",
+            label.map_or_else(|| UNKNOWN_NAME.to_owned(), unescape)
+        );
+    }
+    if let Some(command) = target.strip_prefix('!') {
+        let base = command.split('^').next().unwrap_or_default();
+        return match (base, label) {
+            ("date", Some(label)) => unescape(label),
+            ("date", None) => String::new(),
+            (_, Some(label)) if label.starts_with('@') || label.starts_with('#') => unescape(label),
+            (_, Some(label)) => format!("@{}", unescape(label)),
+            ("subteam", None) => format!("@{UNKNOWN_NAME}"),
+            (base, None) => format!("@{base}"),
+        };
+    }
+    label.map_or_else(|| unescape(target), unescape)
+}
+
+/// Slack's mrkdwn as plain text (`token_text`, and `&lt; &gt; &amp;` undone). It is drawn as text, never as markup.
+fn plain_text(text: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
+    pieces(text)
+        .into_iter()
+        .map(|p| match p {
+            Piece::Text(t) => unescape(t),
+            Piece::Token(t) => token_text(t, name_of),
+        })
+        .collect()
+}
+
+/// The users `text` mentions (`<@U1>`, `<@U1|name>`), in order, each once.
+fn mention_ids(text: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    pieces(text)
+        .into_iter()
+        .filter_map(|p| match p {
+            Piece::Token(t) => t.strip_prefix('@'),
+            Piece::Text(_) => None,
+        })
+        .filter_map(|t| t.split('|').next())
+        .filter(|id| valid_channel(id))
+        .filter(|id| seen.insert(*id))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A message of the timeline with its names put to it. `user` is what Slack said about the sender (a bot's message names itself).
+fn timeline_message(
+    raw: &Raw,
+    workspace: &Workspace,
+    user: Option<SlackUser>,
+    name_of: &dyn Fn(&str) -> Option<String>,
+) -> TimelineMessage {
+    let sender = raw.bot.clone().or(user);
+    TimelineMessage {
+        team_id: workspace.team_id.clone(),
+        team: workspace.team.clone(),
+        workspace_url: Some(link_base(&workspace.url)).filter(|b| b != SLACK_HOME),
+        channel: raw.channel.clone(),
+        channel_name: raw.channel_name.clone(),
+        ts: raw.ts.clone(),
+        thread_ts: raw.thread_ts.clone(),
+        user: raw.user.clone(),
+        name: sender
+            .as_ref()
+            .map_or_else(|| UNKNOWN_NAME.to_owned(), |u| u.name.clone()),
+        icon_url: sender.and_then(|u| u.icon_url),
+        text: plain_text(&raw.text, name_of),
+        reply_count: raw.reply_count,
+        permalink: permalink(
+            &workspace.url,
+            &raw.channel,
+            &raw.ts,
+            raw.thread_ts.as_deref(),
+        ),
+        has_files: raw.has_files,
+    }
+}
+
+/// The 360px preview of an attached file, only for an image that Slack hosts itself and serves: not an external file, not one removed or hidden by the plan's limit, and only over https.
+fn thumb_url(file: &Value) -> Option<String> {
+    let image = file["mimetype"]
+        .as_str()
+        .is_some_and(|m| m.starts_with("image/"));
+    let served = file["is_external"] != true
+        && !matches!(file["mode"].as_str(), Some("tombstone" | "hidden_by_limit"));
+    if !(image && served) {
+        return None;
+    }
+    https_url(file["thumb_360"].as_str())
+}
+
+fn file_of(file: &Value) -> Option<ThreadFile> {
+    let id = file["id"].as_str().filter(|i| !i.is_empty())?;
+    Some(ThreadFile {
+        id: id.to_owned(),
+        name: first_name(&[&file["name"], &file["title"]]).unwrap_or_else(|| "ファイル".to_owned()),
+        mimetype: file["mimetype"].as_str().unwrap_or_default().to_owned(),
+        thumb_url: thumb_url(file),
+        permalink: https_url(file["permalink"].as_str()),
+    })
+}
+
+/// The fields of a message of `conversations.replies` that the thread screen uses.
+fn thread_slim(m: &Value) -> Value {
+    json!({
+        "ts": m["ts"],
+        "user": m["user"],
+        "text": m["text"],
+        "files": m["files"],
+        "username": m["username"],
+        "bot_profile": m["bot_profile"],
+    })
+}
+
+/// A message of a thread with its names put to it.
+fn thread_message(
+    m: &Value,
+    user: Option<SlackUser>,
+    name_of: &dyn Fn(&str) -> Option<String>,
+) -> ThreadMessage {
+    let sender = bot_of(m).or(user);
+    ThreadMessage {
+        ts: m["ts"].as_str().unwrap_or_default().to_owned(),
+        user: m["user"]
+            .as_str()
+            .filter(|u| valid_channel(u))
+            .map(str::to_owned),
+        name: sender
+            .as_ref()
+            .map_or_else(|| UNKNOWN_NAME.to_owned(), |u| u.name.clone()),
+        icon_url: sender.and_then(|u| u.icon_url),
+        text: plain_text(m["text"].as_str().unwrap_or_default(), name_of),
+        files: m["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(file_of)
+            .collect(),
+    }
+}
+
+/// Asks Slack who `id` is (`users.info`). `None` when it cannot say: the scope is missing, or the call failed.
+async fn fetch_user(
+    http: &reqwest::Client,
+    token: &str,
+    team_id: &str,
+    id: &str,
+) -> Option<SlackUser> {
+    let form = [("user", id.to_owned())];
+    match call(http, token, "users.info", Payload::Form(&form)).await {
+        Ok(reply) => user_of(&reply),
+        // Without `users:read` every user fails alike: that is the token's state, not worth a line for each.
+        Err(e) if e.code.as_deref() == Some("missing_scope") => None,
+        Err(e) => {
+            log_failure("slack_users", team_id, e);
+            None
+        }
+    }
+}
+
+/// Asks about the `(team, token, user)` entries of `wanted` that the cache has no fresh answer for, at most `USER_CONCURRENCY` at a time, and keeps the answers.
+async fn lookup_users(
+    http: &reqwest::Client,
+    cache: &Arc<TimelineCache>,
+    wanted: Vec<(String, String, String)>,
+) {
+    let jobs = wanted
+        .into_iter()
+        .filter(|(team, _, user)| cache.needs_lookup(team, user))
+        .map(|(team, token, user)| {
+            let (http, cache) = (http.clone(), Arc::clone(cache));
+            async move {
+                let found = fetch_user(&http, &token, &team, &user).await;
+                cache.put_user(&team, &user, found);
+            }
+        });
+    run_limited(jobs, USER_CONCURRENCY).await;
+}
+
+/// What reading one workspace gave: its token (empty when it could not be read), the scopes the token has, how many channels it is in, and the messages or why none.
+struct WorkspaceRead {
+    workspace: Workspace,
+    token: String,
+    scopes: Option<String>,
+    channels: usize,
+    outcome: Result<Vec<Raw>, String>,
+}
+
+/// Reads the joined channels of the workspace, `HISTORY_CONCURRENCY` at a time. A channel that cannot be read keeps the messages of its last read; the workspace fails only when no channel could be read.
+async fn fill_workspace(
+    http: &reqwest::Client,
+    channels: &ChannelCache,
+    cache: &TimelineCache,
+    read: &mut WorkspaceRead,
+) -> Result<Vec<Raw>, String> {
+    let team_id = read.workspace.team_id.clone();
+    read.token = token_of(&team_id).await?;
+    if is_bot_token(&read.token) {
+        return Err(BOT_TOKEN.into());
+    }
+    let list = match fresh_channels(channels, &team_id) {
+        Some(list) => list,
+        None => fetch_and_keep_channels(http, channels, &team_id, &read.token).await?,
+    };
+    read.channels = list.len();
+    let jobs = list.iter().cloned().map(|channel| {
+        let (http, token, team) = (
+            http.clone(),
+            read.token.clone(),
+            read.workspace.team.clone(),
+        );
+        async move {
+            let form = [
+                ("channel", channel.id.clone()),
+                ("limit", HISTORY_LIMIT.to_owned()),
+            ];
+            let got = call_scoped(&http, &token, "conversations.history", Payload::Form(&form))
+                .await
+                .map_err(|e| read_error(e, &team));
+            (channel, got)
+        }
+    });
+    let (mut all, mut kept, mut read_ok, mut first_error) = (Vec::new(), HashMap::new(), 0, None);
+    for (channel, got) in run_limited(jobs, HISTORY_CONCURRENCY).await {
+        match got {
+            Ok((reply, scopes)) => {
+                read_ok += 1;
+                read.scopes = read.scopes.take().or(scopes);
+                let found: Vec<Raw> = reply["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|m| raw_of(&team_id, &channel, m))
+                    .collect();
+                all.extend(found.iter().cloned());
+                kept.insert(channel.id, found);
+            }
+            Err(e) => {
+                first_error.get_or_insert(e);
+                if let Some(old) = cache.channel_history(&team_id, &channel.id) {
+                    all.extend(old.iter().cloned());
+                    kept.insert(channel.id, old);
+                }
+            }
+        }
+    }
+    cache.replace_history(&team_id, kept);
+    match first_error {
+        Some(e) if read_ok == 0 => Err(e),
+        Some(e) => {
+            log_failure("slack_timeline", &team_id, e);
+            Ok(all)
+        }
+        None => Ok(all),
+    }
+}
+
+async fn read_workspace(
+    http: reqwest::Client,
+    channels: Arc<ChannelCache>,
+    cache: Arc<TimelineCache>,
+    workspace: Workspace,
+) -> WorkspaceRead {
+    let mut read = WorkspaceRead {
+        workspace,
+        token: String::new(),
+        scopes: None,
+        channels: 0,
+        outcome: Ok(Vec::new()),
+    };
+    read.outcome = fill_workspace(&http, &channels, &cache, &mut read).await;
+    if read.outcome.is_err() && read.scopes.is_none() && !read.token.is_empty() {
+        // The failure may be a missing scope: `auth.test` says which the token has.
+        read.scopes = call_scoped(&http, &read.token, "auth.test", Payload::Empty)
+            .await
+            .ok()
+            .and_then(|(_, scopes)| scopes);
+    }
+    read
+}
+
+/// The newest `TIMELINE_MAX` messages of the joined public and private channels (no direct messages) of every workspace, newest first.
+/// A workspace that cannot be read at all is in `failed`; the scopes a token lacks are in `missing`. Messages are kept in memory only.
+#[tauri::command]
+pub async fn slack_timeline(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    state: State<'_, SlackState>,
+) -> Result<Timeline, String> {
+    let command = "slack_timeline";
+    let dir = config_dir(&app)?;
+    migrate(&dir, auth.http(), &state).await;
+    let workspaces = load_workspaces(&dir)
+        .await
+        .map_err(|e| log_failure(command, "-", e))?;
+    let http = auth.http().clone();
+    let jobs = workspaces.iter().cloned().map(|w| {
+        read_workspace(
+            http.clone(),
+            Arc::clone(&state.channels),
+            Arc::clone(&state.timeline),
+            w,
+        )
+    });
+    let mut reads = run_limited(jobs, workspaces.len().max(1)).await;
+    reads.sort_by_key(|r| {
+        workspaces
+            .iter()
+            .position(|w| w.team_id == r.workspace.team_id)
+    });
+
+    let (mut all, mut failed, mut missing, mut channels) = (Vec::new(), Vec::new(), Vec::new(), 0);
+    let mut no_names = HashSet::new();
+    for read in &reads {
+        channels += read.channels;
+        let lacks = read
+            .scopes
+            .as_deref()
+            .map(|s| missing_scopes(s, &TIMELINE_SCOPES))
+            .unwrap_or_default();
+        if lacks.contains(&"users:read") {
+            no_names.insert(read.workspace.team_id.as_str());
+        }
+        if !lacks.is_empty() {
+            missing.push(TimelineMissing {
+                team_id: read.workspace.team_id.clone(),
+                team: read.workspace.team.clone(),
+                scopes: lacks,
+            });
+        }
+        match &read.outcome {
+            Ok(found) => all.extend(found.iter().cloned()),
+            Err(error) => {
+                log_failure(command, &read.workspace.team_id, error.as_str());
+                failed.push(TimelineFailure {
+                    team_id: read.workspace.team_id.clone(),
+                    team: read.workspace.team.clone(),
+                    error: error.clone(),
+                });
+            }
+        }
+    }
+    let top = merge_timeline(all);
+
+    // Names: the senders and the people the texts mention, once each, in the order the list shows them.
+    let token_of_team: HashMap<&str, &str> = reads
+        .iter()
+        .map(|r| (r.workspace.team_id.as_str(), r.token.as_str()))
+        .collect();
+    let mut seen = HashSet::new();
+    let wanted: Vec<(String, String, String)> = top
+        .iter()
+        .flat_map(|m| {
+            let sender = m.bot.is_none().then_some(m.user.clone()).flatten();
+            sender
+                .into_iter()
+                .chain(mention_ids(&m.text))
+                .map(|user| (m.team_id.clone(), user))
+                .collect::<Vec<_>>()
+        })
+        .filter(|(team, _)| !no_names.contains(team.as_str()))
+        .filter(|pair| seen.insert(pair.clone()))
+        .take(USER_LOOKUPS)
+        .filter_map(|(team, user)| {
+            let token = token_of_team.get(team.as_str())?.to_string();
+            Some((team, token, user))
+        })
+        .collect();
+    lookup_users(&http, &state.timeline, wanted).await;
+
+    let messages = top
+        .iter()
+        .filter_map(|raw| {
+            let workspace = workspaces.iter().find(|w| w.team_id == raw.team_id)?;
+            let user = raw
+                .user
+                .as_deref()
+                .and_then(|u| state.timeline.user(&raw.team_id, u));
+            let name_of = |id: &str| state.timeline.user(&raw.team_id, id).map(|u| u.name);
+            Some(timeline_message(raw, workspace, user, &name_of))
+        })
+        .collect();
+    Ok(Timeline {
+        messages,
+        failed,
+        missing,
+        refresh_secs: refresh_secs(channels),
+    })
+}
+
+/// The whole thread that starts with the message `ts` of `channel` (pages of 200, up to 20 pages, as the summary reads it), oldest first, with names, icons and the attached files.
+/// Give a reply's `thread_ts`, not its own `ts`.
+#[tauri::command]
+pub async fn slack_thread(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    state: State<'_, SlackState>,
+    team_id: String,
+    channel: String,
+    ts: String,
+) -> Result<SlackThread, String> {
+    let command = "slack_thread";
+    if token_key(&team_id).is_err() || !valid_channel(&channel) || !valid_ts(&ts) {
+        return Err(log_failure(command, &team_id, BAD_TARGET));
+    }
+    let workspaces = load_workspaces(&config_dir(&app)?)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    let workspace = workspaces
+        .iter()
+        .find(|w| w.team_id == team_id)
+        .ok_or_else(|| log_failure(command, &team_id, NO_WORKSPACE))?;
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    let Pages { pages, more } = read_pages(
+        auth.http(),
+        &token,
+        &workspace.team,
+        &team_id,
+        &channel,
+        &ts,
+        thread_slim,
+    )
+    .await
+    .map_err(|e| log_failure(command, &team_id, e))?;
+
+    let mut seen = HashSet::new();
+    let wanted: Vec<(String, String, String)> = pages
+        .iter()
+        .flat_map(|m| {
+            let sender = bot_of(m).is_none().then(|| m["user"].as_str()).flatten();
+            sender
+                .map(str::to_owned)
+                .into_iter()
+                .chain(mention_ids(m["text"].as_str().unwrap_or_default()))
+                .collect::<Vec<_>>()
+        })
+        .filter(|user| valid_channel(user) && seen.insert(user.clone()))
+        .take(USER_LOOKUPS)
+        .map(|user| (team_id.clone(), token.clone(), user))
+        .collect();
+    lookup_users(auth.http(), &state.timeline, wanted).await;
+
+    let name_of = |id: &str| state.timeline.user(&team_id, id).map(|u| u.name);
+    let messages = pages
+        .iter()
+        .map(|m| {
+            let user = m["user"]
+                .as_str()
+                .and_then(|u| state.timeline.user(&team_id, u));
+            thread_message(m, user, &name_of)
+        })
+        .collect();
+    Ok(SlackThread {
+        team_id,
+        channel,
+        ts,
+        messages,
+        truncated: more,
+    })
+}
+
+/// Posts `text` as a reply in the thread `thread_ts` of `channel`, as S-1 posts (the same checks, `unfurl_*` off, the same Japanese errors).
+/// The recent destinations of S-1 are not touched. The text goes to Slack only here, on the user's click.
+#[tauri::command]
+pub async fn slack_reply(
+    auth: State<'_, Auth>,
+    team_id: String,
+    channel: String,
+    thread_ts: String,
+    text: String,
+) -> Result<bool, String> {
+    send_post(
+        auth.http(),
+        "slack_reply",
+        &team_id,
+        &channel,
+        Some(&thread_ts),
+        &text,
+    )
+    .await?;
+    Ok(true)
+}
+
+/// The attached images at `urls` (a thread's `thumb_url`s) as data: URIs by URL. The workspace's token goes to `files.slack.com` and nowhere else
+/// (`images::fetch_slack_files`); anything else, an image that cannot be fetched, and a token without `files:read` are left out of the map.
+#[tauri::command]
+pub async fn slack_file_images(
+    cache: State<'_, ImageCache>,
+    team_id: String,
+    urls: Vec<String>,
+) -> Result<HashMap<String, Arc<str>>, String> {
+    let command = "slack_file_images";
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    let urls = urls.into_iter().take(FILE_IMAGES_MAX).collect();
+    Ok(fetch_slack_files(&cache, &token, urls).await)
+}
+
+/// The user's own icon in each workspace (`auth.test` says who the token is, `users.info` what their icon is). A workspace that cannot say has no icon.
+#[tauri::command]
+pub async fn slack_icons(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    state: State<'_, SlackState>,
+) -> Result<Vec<WorkspaceIcon>, String> {
+    let command = "slack_icons";
+    let workspaces = load_workspaces(&config_dir(&app)?)
+        .await
+        .map_err(|e| log_failure(command, "-", e))?;
+    let http = auth.http().clone();
+    let team_ids: Vec<String> = workspaces.iter().map(|w| w.team_id.clone()).collect();
+    let jobs = team_ids.into_iter().map(|team_id| {
+        let http = http.clone();
+        async move {
+            let who = async {
+                let token = token_of(&team_id).await.ok()?;
+                let (reply, _) = call_scoped(&http, &token, "auth.test", Payload::Empty)
+                    .await
+                    .ok()?;
+                let user = reply["user_id"].as_str().filter(|u| valid_channel(u))?;
+                Some((team_id.clone(), token, user.to_owned()))
+            }
+            .await;
+            (team_id, who)
+        }
+    });
+    let own: HashMap<String, (String, String, String)> = run_limited(jobs, workspaces.len().max(1))
+        .await
+        .into_iter()
+        .filter_map(|(team_id, who)| Some((team_id, who?)))
+        .collect();
+    lookup_users(&http, &state.timeline, own.values().cloned().collect()).await;
+    Ok(workspaces
+        .iter()
+        .map(|w| {
+            let user = own
+                .get(&w.team_id)
+                .and_then(|(_, _, user)| state.timeline.user(&w.team_id, user));
+            WorkspaceIcon {
+                team_id: w.team_id.clone(),
+                name: user
+                    .as_ref()
+                    .map_or_else(|| w.user.clone(), |u| u.name.clone()),
+                icon_url: user.and_then(|u| u.icon_url),
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -1943,6 +2996,7 @@ mod tests {
             &mut read,
             &mut seen,
             &json!([msg("1.1", "U1", "p"), msg("1.2", "U2", "a")]),
+            slim,
         );
         add_page(
             &mut read,
@@ -1952,6 +3006,7 @@ mod tests {
                 msg("1.3", "U3", "b"),
                 msg("1.3", "U3", "b")
             ]),
+            slim,
         );
         let ts: Vec<_> = read.iter().map(|m| m["ts"].as_str().unwrap()).collect();
         assert_eq!(ts, ["1.1", "1.2", "1.3"]);
@@ -1967,13 +3022,13 @@ mod tests {
             "ts": "1.1", "user": "U1", "text": "p", "reply_count": 3,
             "blocks": [{"type": "rich_text"}], "files": [{"id": "F1"}], "attachments": []
         });
-        add_page(&mut read, &mut seen, &json!([full]));
+        add_page(&mut read, &mut seen, &json!([full]), slim);
         assert_eq!(
             read[0],
             json!({"ts": "1.1", "user": "U1", "text": "p", "reply_count": 3})
         );
         // A page that is not a list adds nothing.
-        add_page(&mut read, &mut seen, &json!(null));
+        add_page(&mut read, &mut seen, &json!(null), slim);
         assert_eq!(read.len(), 1);
     }
 }
