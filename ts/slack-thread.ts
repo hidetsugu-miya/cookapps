@@ -40,6 +40,11 @@ let thread: SlackThread | null = null;
 let readError: string | null = null;
 // Only the latest read may draw.
 let readSeq = 0;
+// The messages stay at the newest one while the user has not scrolled up from the bottom, as the Orca timeline does (orca-chat.ts): within BOTTOM_PX of it counts as the bottom.
+// `lastTop` is the scroll position last seen or set, so that an upward move (the user's) can be told from the box shrinking.
+const BOTTOM_PX = 40;
+let stick = true;
+let lastTop = 0;
 
 // What is being written in a thread and the conversation about it, by thread.
 interface Draft {
@@ -173,6 +178,7 @@ async function showImages(m: ThreadMessage, button: HTMLButtonElement) {
   row.replaceWith(messageNode(latest));
   loadIcons([latest.iconUrl]);
   loadThumbs(thread, current!.key);
+  follow();
 }
 
 function imagesBar(m: ThreadMessage) {
@@ -245,18 +251,28 @@ async function loadThumbs(t: SlackThread, key: string) {
     }
     if (current?.key !== key) return;
     settleThumbs(i + IMAGE_BATCH >= urls.length);
+    follow();
   }
 }
 
-// Draws the messages (and the error of the last read above them). `where`: keep the scroll position, go to the end (after a reply), or go to the top (another thread).
-function drawMessages(where: "keep" | "end" | "top") {
+// Goes to the end of the messages while they follow it: a placeholder or an image changes the height of what is above the end.
+function follow() {
+  if (!stick) return;
+  const box = $("st-msgs");
+  box.scrollTop = box.scrollHeight;
+  lastTop = box.scrollTop;
+}
+
+// Draws the messages (and the error of the last read above them). `where`: keep the scroll position, or go to the end (another thread, and after a reply).
+function drawMessages(where: "keep" | "end") {
   const box = $("st-msgs");
   const top = box.scrollTop;
   const nodes: Node[] = [];
   if (readError !== null) {
     const row = tag("div", "pending fail");
     const retry = tag("button", "text-btn", "再読み込み");
-    retry.onclick = () => readThread("keep");
+    // With nothing drawn yet this is still the opening of the thread.
+    retry.onclick = () => readThread(thread ? "keep" : "end");
     row.append(tag("span", "sp", `読み込めませんでした: ${readError}`), retry);
     nodes.push(row);
   }
@@ -273,14 +289,17 @@ function drawMessages(where: "keep" | "end" | "top") {
     nodes.push(row);
   }
   box.replaceChildren(...nodes);
-  box.scrollTop = where === "end" ? box.scrollHeight : where === "top" ? 0 : top;
   if (thread) {
     loadIcons(thread.messages.map((m) => m.iconUrl));
+    // The thumbnails already here replace their placeholders at once, which changes the height before the position is set.
     loadThumbs(thread, current!.key);
   }
+  if (where === "end") stick = true;
+  box.scrollTop = where === "end" ? box.scrollHeight : top;
+  lastTop = box.scrollTop;
 }
 
-async function readThread(where: "keep" | "end" | "top") {
+async function readThread(where: "keep" | "end") {
   const open = current!;
   const seq = ++readSeq;
   const redraw = thread === null || readError !== null;
@@ -348,7 +367,7 @@ export function openSlackThread(m: TimelineMessage) {
     () => {},
   );
   refreshSlackThread();
-  readThread(same ? "keep" : "top");
+  readThread(same && thread ? "keep" : "end");
 }
 
 async function reply() {
@@ -450,6 +469,16 @@ export function initSlackThread() {
     reply();
   };
   chat.init();
+  const box = $("st-msgs");
+  // The user moved up from the bottom: stop following. Moving down to within BOTTOM_PX of the bottom follows again.
+  box.onscroll = () => {
+    const up = box.scrollTop < lastTop;
+    lastTop = box.scrollTop;
+    if (box.scrollHeight - box.scrollTop - box.clientHeight <= BOTTOM_PX) stick = true;
+    else if (up) stick = false;
+  };
+  // `load` does not bubble: the capture listener sees every image drawn in the box, whenever it finishes (the thumbnails, and the images of blocks and attachments).
+  box.addEventListener("load", follow, true);
   initSplit($("slack-thread"), $("reply-split"));
   refreshSlackThread();
 }
