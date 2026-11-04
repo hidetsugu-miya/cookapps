@@ -8,6 +8,9 @@ import { $ } from "./dom.js";
 import { isoDate } from "./format.js";
 import { setNavCount } from "./view.js";
 
+// What a label created from the screen is drawn in until the reload brings Todoist's color: Todoist's default, charcoal.
+const NEW_LABEL_COLOR = "#808080";
+
 export const todoState = {
   // The last data from the backend, or null while a token is needed.
   todo: null as Todo | null,
@@ -55,11 +58,43 @@ export interface TaskFields {
   content?: string;
   description?: string;
   dueString?: string;
+  // The task's whole list of label names.
+  labels?: string[];
 }
 
 // Open tasks that "今日" lists: overdue or due today.
 export const isDueToday = (t: TaskItem) => t.bucket === "overdue" || t.bucket === "today";
-export const setTodoCount = (count: number) => setNavCount("nav-todo", count, "Todo", "今日");
+
+// When a task falls due, in epoch milliseconds: its local date and time (`Due` is already in local time), 00:00 of its date when it has no time. null with no due date.
+export function dueMoment(t: TaskItem) {
+  if (!t.due) return null;
+  const [y, m, d] = t.due.date.split("-").map(Number);
+  const [hh, mm] = (t.due.time ?? "00:00").split(":").map(Number);
+  return new Date(y, m - 1, d, hh, mm).getTime();
+}
+
+// The tasks the sidebar's Todo count is made of, kept so the count can be made again as time passes without a fetch.
+let counted: TaskItem[] = [];
+
+// Counts the open tasks whose due moment has come (to the minute, as a moment is a whole minute) on the Todo button, and passes the moments still ahead to the Dock (`upcoming`).
+export function recountTodo() {
+  const now = Date.now();
+  let passed = 0;
+  const upcoming: number[] = [];
+  for (const t of counted) {
+    const at = dueMoment(t);
+    if (at === null) continue;
+    if (at <= now) passed++;
+    else upcoming.push(at);
+  }
+  setNavCount("nav-todo", passed, "Todo", "期限到来", upcoming);
+}
+
+// Remembers `tasks` (the open tasks, subtasks included) as what the count is made of, and counts them. An empty list clears the count.
+export function setTodoCount(tasks: TaskItem[]) {
+  counted = tasks;
+  recountTodo();
+}
 
 export const inboxOf = () => todoState.todo!.projects.find((p) => p.inbox);
 export const projectOf = (id: string) => todoState.projectById.get(id);
@@ -116,6 +151,14 @@ export const markdownHtml = (markdown: string) => DOMPurify.sanitize(marked.pars
 // What the screen shows for a due text the calendar picked (`YYYY-MM-DD`, with ` HH:MM` for a task with a time), or an empty one (no due date).
 // Other text is Todoist's to read, so the task stays as it is until the reload.
 export const PICKED_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
+
+// Puts the label `name`, just created, on the task `id`, and among the labels to pick from if it is not there.
+export function addLabelLocal(id: string, name: string) {
+  const t = todoState.taskById.get(id);
+  if (t && !t.labels.includes(name)) t.labels = [...t.labels, name];
+  const { labels } = todoState.todo!;
+  if (!labels.some((l) => l.name === name)) labels.push({ name, color: NEW_LABEL_COLOR });
+}
 
 // shortcut: the list is not re-sorted after a due date change; the next reload fixes it.
 export function patchTask(id: string, { dueString, ...fields }: TaskFields) {

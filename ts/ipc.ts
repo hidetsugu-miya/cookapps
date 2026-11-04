@@ -75,9 +75,11 @@ export interface Commands {
   };
   todoist_set_done: { args: { id: string; done: boolean }; result: boolean | null };
   todoist_update: {
-    args: { id: string; content?: string; description?: string; dueString?: string };
+    args: { id: string; content?: string; description?: string; dueString?: string; labels?: string[] };
     result: boolean | null;
   };
+  // Makes the personal label `name` and sets the task's labels to `labels` (its whole list, the new name in it).
+  todoist_create_label: { args: { id: string; name: string; labels: string[] }; result: boolean | null };
   todoist_move: { args: { id: string; projectId: string }; result: boolean | null };
   todoist_move_under: { args: { id: string; parentId: string }; result: boolean | null };
   todoist_delete: { args: { id: string }; result: boolean | null };
@@ -133,7 +135,8 @@ export interface Commands {
   check_update: { args: undefined; result: UpdateInfo | null };
   install_update: { args: undefined; result: null };
   restart_app: { args: undefined; result: null };
-  set_badge: { args: { count: number }; result: null };
+  // `count`: what is due or unread now. `upcoming`: the due moments (epoch milliseconds) of open tasks still ahead, which Rust adds once the clock passes them.
+  set_badge: { args: { count: number; upcoming: number[] }; result: null };
 }
 
 // The commands that take JSON arguments; `todoist_upload` takes raw bytes (`invokeRaw`).

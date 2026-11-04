@@ -21,4 +21,8 @@ parent: ParentRef | null,
 /**
  * The task in Todoist's web app, for "copy link". Empty in a cache written before this field existed, and for an ID `task_web_url` refuses.
  */
-url: string, };
+url: string, 
+/**
+ * The names of its labels. Empty in a cache written before this field existed.
+ */
+labels: Array<string>, };

@@ -36,8 +36,8 @@ const CONTENT_LIMIT: usize = 500;
 const PAGE_LIMIT: &str = "200";
 // shortcut: past these many pages (200 items each) the rest is dropped, upgrade if the list ever grows that long.
 const MAX_DONE_PAGES: usize = 5;
-/// The Sync API's `resource_types`: the active tasks and the projects.
-const SYNC_RESOURCES: &str = r#"["items","projects"]"#;
+/// The Sync API's `resource_types`: the active tasks, the projects and the personal labels.
+const SYNC_RESOURCES: &str = r#"["items","projects","labels"]"#;
 /// The completed-tasks endpoint takes a range of up to 3 months; completed subtasks older than that are not counted.
 const DONE_DAYS: i64 = 90;
 /// Todoist's `charcoal`, which a client shows for a color name it does not know.
@@ -97,6 +97,9 @@ struct ApiTask {
     checked: bool,
     #[serde(default)]
     is_deleted: bool,
+    /// The names of its labels, personal or shared.
+    #[serde(default)]
+    labels: Vec<String>,
 }
 
 fn natural_priority() -> u8 {
@@ -121,6 +124,20 @@ struct ApiProject {
     is_deleted: bool,
 }
 
+/// A personal label. Shared labels are not in the sync answer; they appear only in a task's `labels`.
+#[derive(Deserialize, Clone)]
+struct ApiLabel {
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    color: String,
+    #[serde(default)]
+    item_order: i64,
+    #[serde(default)]
+    is_deleted: bool,
+}
+
 /// The Sync API's answer: with `full_sync` everything active, otherwise only what changed since the `sync_token` that was sent.
 #[derive(Deserialize)]
 struct SyncResponse {
@@ -131,16 +148,21 @@ struct SyncResponse {
     items: Vec<ApiTask>,
     #[serde(default)]
     projects: Vec<ApiProject>,
+    #[serde(default)]
+    labels: Vec<ApiLabel>,
 }
 
 impl SyncResponse {
-    /// Whether the answer reports no change: applying it leaves the tasks and projects as they were.
+    /// Whether the answer reports no change: applying it leaves the tasks, projects and labels as they were.
     fn is_unchanged(&self) -> bool {
-        !self.full_sync && self.items.is_empty() && self.projects.is_empty()
+        !self.full_sync
+            && self.items.is_empty()
+            && self.projects.is_empty()
+            && self.labels.is_empty()
     }
 }
 
-/// The active tasks and the projects as the last sync left them.
+/// The active tasks, the projects and the personal labels as the last sync left them.
 #[derive(Default)]
 struct SyncData {
     /// The token the data was fetched with: another one means another account, whose data this is not.
@@ -149,6 +171,7 @@ struct SyncData {
     sync_token: Option<String>,
     tasks: Vec<ApiTask>,
     projects: Vec<ApiProject>,
+    labels: Vec<ApiLabel>,
 }
 
 /// Puts `changed` into `list` by id: a known one is replaced in place (so the order stays), an unknown one is added, and one that is `gone` is removed.
@@ -171,11 +194,12 @@ fn upsert<T>(
     }
 }
 
-/// Brings `data` up to date with a sync answer. Completed and deleted tasks and archived and deleted projects drop out.
+/// Brings `data` up to date with a sync answer. Completed and deleted tasks, archived and deleted projects and deleted labels drop out.
 /// `done` (the completed subtasks) follows the tasks that were completed, reopened or deleted since.
 fn apply_sync(data: &mut SyncData, done: &mut Vec<ApiTask>, res: SyncResponse) {
     let task_gone = |t: &ApiTask| t.checked || t.is_deleted;
     let project_gone = |p: &ApiProject| p.is_archived || p.is_deleted;
+    let label_gone = |l: &ApiLabel| l.is_deleted;
     let changed: HashSet<&str> = res.items.iter().map(|t| t.id.as_str()).collect();
     done.retain(|d| !changed.contains(d.id.as_str()));
     // build_todo reads only the subtasks.
@@ -192,6 +216,7 @@ fn apply_sync(data: &mut SyncData, done: &mut Vec<ApiTask>, res: SyncResponse) {
             .into_iter()
             .filter(|p| !project_gone(p))
             .collect();
+        data.labels = res.labels.into_iter().filter(|l| !label_gone(l)).collect();
     } else {
         upsert(&mut data.tasks, res.items, |t| &t.id, task_gone);
         // The tasks of a project that is gone are not reported again.
@@ -203,6 +228,7 @@ fn apply_sync(data: &mut SyncData, done: &mut Vec<ApiTask>, res: SyncResponse) {
             .collect();
         data.tasks.retain(|t| !gone.contains(t.project_id.as_str()));
         upsert(&mut data.projects, res.projects, |p| &p.id, project_gone);
+        upsert(&mut data.labels, res.labels, |l| &l.id, label_gone);
     }
     data.sync_token = Some(res.sync_token);
 }
@@ -296,6 +322,9 @@ pub struct TaskItem {
     /// The task in Todoist's web app, for "copy link". Empty in a cache written before this field existed, and for an ID `task_web_url` refuses.
     #[serde(default)]
     url: String,
+    /// The names of its labels. Empty in a cache written before this field existed.
+    #[serde(default)]
+    labels: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -314,11 +343,24 @@ pub struct ProjectItem {
     depth: u32,
 }
 
+/// A label to pick for a task.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct LabelItem {
+    name: String,
+    /// `#RRGGBB`.
+    color: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 pub struct Todo {
     projects: Vec<ProjectItem>,
+    /// The labels to pick from: the personal ones by their order, then the names only active tasks carry (shared labels), by name. Empty in a cache written before this field existed.
+    #[serde(default)]
+    labels: Vec<LabelItem>,
     /// Every active task whose parent is active too (a subtask has `parent` set), by due date.
     tasks: Vec<TaskItem>,
     /// Set only when Todoist could not be reached and this is the last fetched content; never stored in the cache.
@@ -497,11 +539,12 @@ fn task_web_url(id: &str) -> Result<String, String> {
     Ok(format!("{WEB_TASK_URL}/{id}"))
 }
 
-/// The body of a task update holding only the fields given; an empty `due_string` clears the due date.
+/// The body of a task update holding only the fields given; an empty `due_string` clears the due date, and an empty `labels` removes every label.
 fn update_body(
     content: Option<&str>,
     description: Option<&str>,
     due_string: Option<&str>,
+    labels: Option<&[String]>,
 ) -> Result<Value, String> {
     let mut body = serde_json::Map::new();
     if let Some(c) = content {
@@ -521,6 +564,9 @@ fn update_body(
             d.trim()
         };
         body.insert("due_string".into(), d.into());
+    }
+    if let Some(l) = labels {
+        body.insert("labels".into(), l.into());
     }
     if body.is_empty() {
         return Err("変更する項目がありません".into());
@@ -633,11 +679,38 @@ fn order_projects(mut projects: Vec<ApiProject>) -> Vec<(ApiProject, u32)> {
     out
 }
 
+/// The labels to pick from: the personal ones by `item_order`, then the names found on active tasks that are not among them, by name.
+/// Todoist's sync answer leaves out shared labels, which show only in a task's `labels`; they are drawn in `charcoal`, as is a personal label with an unknown color.
+fn label_items(mut personal: Vec<ApiLabel>, tasks: &[ApiTask]) -> Vec<LabelItem> {
+    personal.sort_by_key(|l| l.item_order);
+    let known: HashSet<String> = personal.iter().map(|l| l.name.clone()).collect();
+    let mut out: Vec<LabelItem> = personal
+        .into_iter()
+        .map(|l| LabelItem {
+            color: color_hex(&l.color).to_owned(),
+            name: l.name,
+        })
+        .collect();
+    let mut shared: Vec<&str> = tasks
+        .iter()
+        .flat_map(|t| t.labels.iter().map(String::as_str))
+        .filter(|n| !known.contains(*n))
+        .collect();
+    shared.sort_unstable();
+    shared.dedup();
+    out.extend(shared.into_iter().map(|name| LabelItem {
+        name: name.to_owned(),
+        color: color_hex("charcoal").to_owned(),
+    }));
+    out
+}
+
 /// Top-level active tasks, then every active subtask whose parent is active, with their subtasks and counts. A subtask is a row of its
 /// own (with `parent` set), so a list can nest it and its detail can open. `completed` are the recently completed tasks: those under an
 /// active task count as its done subtasks. Dates are judged in `tz`.
 fn build_todo<Tz: TimeZone>(
     projects: Vec<ApiProject>,
+    labels: Vec<ApiLabel>,
     tasks: Vec<ApiTask>,
     completed: &[ApiTask],
     today: NaiveDate,
@@ -692,6 +765,7 @@ fn build_todo<Tz: TimeZone>(
             due,
             parent,
             url: task_web_url(&t.id).unwrap_or_default(),
+            labels: t.labels.clone(),
         }
     };
     let mut items: Vec<_> = tasks
@@ -720,6 +794,7 @@ fn build_todo<Tz: TimeZone>(
         (None, None) => std::cmp::Ordering::Equal,
     });
     Todo {
+        labels: label_items(labels, &tasks),
         projects: projects
             .into_iter()
             .map(|(p, depth)| ProjectItem {
@@ -1056,6 +1131,7 @@ pub async fn todoist_load(
     );
     let todo = build_todo(
         sync.projects.clone(),
+        sync.labels.clone(),
         sync.tasks.clone(),
         &done,
         Local::now().date_naive(),
@@ -1226,8 +1302,8 @@ async fn set_due_today(
     id: &str,
 ) -> Result<Option<bool>, String> {
     let url = task_api_url(id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let body =
-        update_body(None, None, Some("today")).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let body = update_body(None, None, Some("today"), None)
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let done = request(auth, state, command, Method::POST, &url, Some(body)).await?;
     Ok(done.map(|_| true))
 }
@@ -1381,7 +1457,7 @@ pub async fn todoist_set_done(
     Ok(sent.map(|_| true))
 }
 
-/// Changes the fields given; an empty `due_string` clears the due date.
+/// Changes the fields given; an empty `due_string` clears the due date, and `labels` is the task's whole list of label names (empty removes them all).
 #[tauri::command]
 pub async fn todoist_update(
     auth: State<'_, Auth>,
@@ -1390,6 +1466,7 @@ pub async fn todoist_update(
     content: Option<String>,
     description: Option<String>,
     due_string: Option<String>,
+    labels: Option<Vec<String>>,
 ) -> Result<Option<bool>, String> {
     let command = "todoist_update";
     let url = task_api_url(&id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
@@ -1397,8 +1474,55 @@ pub async fn todoist_update(
         content.as_deref(),
         description.as_deref(),
         due_string.as_deref(),
+        labels.as_deref(),
     )
     .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let done = request(&auth, &state, command, Method::POST, &url, Some(body)).await?;
+    Ok(done.map(|_| true))
+}
+
+/// Todoist refuses a label name longer than this many characters (`POST /api/v1/labels`).
+const LABEL_LIMIT: usize = 128;
+
+/// The name of a new label, trimmed; refused when empty or longer than Todoist takes.
+fn label_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("ラベルの名前を入力してください".into());
+    }
+    if name.chars().count() > LABEL_LIMIT {
+        return Err(format!("ラベルの名前は {LABEL_LIMIT} 文字までです"));
+    }
+    Ok(name)
+}
+
+/// Creates the personal label `name`, then sets the task's labels to `labels` (its whole list, the new name in it).
+/// The label stays created when the update fails; the screen's reload shows what Todoist has.
+#[tauri::command]
+pub async fn todoist_create_label(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    id: String,
+    name: String,
+    labels: Vec<String>,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_create_label";
+    let url = task_api_url(&id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let name = label_name(&name).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let body = update_body(None, None, None, Some(&labels))
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let created = request(
+        &auth,
+        &state,
+        command,
+        Method::POST,
+        "/labels",
+        Some(json!({ "name": name })),
+    )
+    .await?;
+    if created.is_none() {
+        return Ok(None);
+    }
     let done = request(&auth, &state, command, Method::POST, &url, Some(body)).await?;
     Ok(done.map(|_| true))
 }
@@ -1897,7 +2021,14 @@ mod tests {
     }
 
     fn todo(tasks: Vec<ApiTask>, completed: Vec<ApiTask>) -> Todo {
-        build_todo(vec![], tasks, &completed, date("2026-10-29"), &jst())
+        build_todo(
+            vec![],
+            vec![],
+            tasks,
+            &completed,
+            date("2026-10-29"),
+            &jst(),
+        )
     }
 
     #[test]
@@ -2070,11 +2201,11 @@ mod tests {
     #[test]
     fn update_body_holds_only_the_given_fields() {
         assert_eq!(
-            update_body(Some("a"), None, None).unwrap(),
+            update_body(Some("a"), None, None, None).unwrap(),
             json!({"content": "a"})
         );
         assert_eq!(
-            update_body(None, Some("memo"), Some("明日")).unwrap(),
+            update_body(None, Some("memo"), Some("明日"), None).unwrap(),
             json!({"description": "memo", "due_string": "明日"})
         );
     }
@@ -2082,7 +2213,7 @@ mod tests {
     #[test]
     fn update_body_clears_the_due_date_with_an_empty_string() {
         assert_eq!(
-            update_body(None, None, Some("  ")).unwrap(),
+            update_body(None, None, Some("  "), None).unwrap(),
             json!({"due_string": "no date"})
         );
     }
@@ -2090,15 +2221,147 @@ mod tests {
     #[test]
     fn update_body_keeps_an_empty_description() {
         assert_eq!(
-            update_body(None, Some(""), None).unwrap(),
+            update_body(None, Some(""), None, None).unwrap(),
             json!({"description": ""})
         );
     }
 
     #[test]
     fn update_body_refuses_an_empty_name_and_no_fields() {
-        assert!(update_body(Some(" "), None, None).is_err());
-        assert!(update_body(None, None, None).is_err());
+        assert!(update_body(Some(" "), None, None, None).is_err());
+        assert!(update_body(None, None, None, None).is_err());
+    }
+
+    #[test]
+    fn update_body_sends_the_labels_and_an_empty_list_removes_them_all() {
+        let two = ["a".to_owned(), "b c".to_owned()];
+        assert_eq!(
+            update_body(None, None, None, Some(&two)).unwrap(),
+            json!({"labels": ["a", "b c"]})
+        );
+        assert_eq!(
+            update_body(None, None, None, Some(&[])).unwrap(),
+            json!({"labels": []})
+        );
+        assert_eq!(
+            update_body(Some("x"), None, None, Some(&two[..1])).unwrap(),
+            json!({"content": "x", "labels": ["a"]})
+        );
+    }
+
+    #[test]
+    fn a_label_name_is_trimmed_and_limited() {
+        assert_eq!(label_name("  仕事 ").unwrap(), "仕事");
+        assert!(label_name("").is_err());
+        assert!(label_name(" \u{3000} ").is_err());
+        assert!(label_name(&"あ".repeat(LABEL_LIMIT)).is_ok());
+        assert_eq!(
+            label_name(&"あ".repeat(LABEL_LIMIT + 1)).unwrap_err(),
+            "ラベルの名前は 128 文字までです"
+        );
+    }
+
+    fn api_label(id: &str, name: &str, color: &str, order: i64) -> ApiLabel {
+        ApiLabel {
+            id: id.into(),
+            name: name.into(),
+            color: color.into(),
+            item_order: order,
+            is_deleted: false,
+        }
+    }
+
+    #[test]
+    fn a_task_and_the_answer_carry_label_names() {
+        let t = task(json!({"id": "A", "labels": ["x", "y"]}));
+        assert_eq!(t.labels, ["x", "y"]);
+        assert!(task(json!({"id": "A"})).labels.is_empty());
+        let r = sync_res(json!({
+            "sync_token": "t",
+            "labels": [{"id": "L1", "name": "仕事", "color": "red", "item_order": 2, "is_deleted": false}],
+        }));
+        assert_eq!(r.labels[0].name, "仕事");
+        assert_eq!(r.labels[0].item_order, 2);
+        assert!(!r.is_unchanged());
+    }
+
+    #[test]
+    fn labels_are_replaced_by_a_full_sync_and_upserted_otherwise() {
+        let (mut data, mut done) = synced(json!({
+            "sync_token": "t1", "full_sync": true,
+            "labels": [{"id": "L1", "name": "a"}, {"id": "L2", "name": "b"}],
+        }));
+        let names = |d: &SyncData| d.labels.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&data), ["a", "b"]);
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t2",
+                "labels": [{"id": "L1", "name": "a2"}, {"id": "L3", "name": "c"}],
+            })),
+        );
+        assert_eq!(names(&data), ["a2", "b", "c"]);
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t3",
+                "labels": [{"id": "L2", "is_deleted": true}, {"id": "L9", "name": "z", "is_deleted": true}],
+            })),
+        );
+        assert_eq!(names(&data), ["a2", "c"]);
+        apply_sync(
+            &mut data,
+            &mut done,
+            sync_res(json!({
+                "sync_token": "t4", "full_sync": true,
+                "labels": [{"id": "L5", "name": "e"}, {"id": "L6", "name": "f", "is_deleted": true}],
+            })),
+        );
+        assert_eq!(names(&data), ["e"]);
+    }
+
+    #[test]
+    fn the_labels_to_pick_are_the_personal_ones_then_the_shared_names_on_tasks() {
+        let tasks = vec![
+            task(json!({"id": "A", "labels": ["共有b", "仕事", "共有a"]})),
+            task(json!({"id": "B", "labels": ["共有a", "メモ"]})),
+        ];
+        let personal = vec![
+            api_label("L2", "メモ", "blue", 2),
+            api_label("L1", "仕事", "berry_red", 1),
+            api_label("L3", "未使用", "nope", 3),
+        ];
+        let t = build_todo(vec![], personal, tasks, &[], date("2026-10-29"), &jst());
+        let got: Vec<_> = t
+            .labels
+            .iter()
+            .map(|l| (l.name.as_str(), l.color.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("仕事", "#B8255F"),
+                ("メモ", "#4180FF"),
+                ("未使用", "#808080"),
+                ("共有a", "#808080"),
+                ("共有b", "#808080"),
+            ]
+        );
+        assert_eq!(t.tasks[0].labels, ["共有b", "仕事", "共有a"]);
+    }
+
+    #[test]
+    fn a_cache_without_labels_still_reads() {
+        let mut v = serde_json::to_value(cached_todo()).unwrap();
+        v.as_object_mut().unwrap().remove("labels");
+        for t in v["tasks"].as_array_mut().unwrap() {
+            t.as_object_mut().unwrap().remove("labels");
+        }
+        let todo: Todo = serde_json::from_value(v).unwrap();
+        assert!(todo.labels.is_empty());
+        assert!(todo.tasks[0].labels.is_empty());
     }
 
     #[test]
@@ -2382,6 +2645,7 @@ mod tests {
                 project("a", "A", "berry_red", false, 1),
             ],
             vec![],
+            vec![],
             &[],
             date("2026-10-29"),
             &jst(),
@@ -2436,6 +2700,7 @@ mod tests {
     fn a_project_item_carries_its_parent() {
         let t = build_todo(
             vec![project("a", "A", "", false, 1), child("a", "c", 1)],
+            vec![],
             vec![],
             &[],
             date("2026-10-29"),
@@ -2659,7 +2924,14 @@ mod tests {
             "full_sync": true,
             "items": [{"id": "A", "content": "親"}, {"id": "S", "parent_id": "A", "checked": true}],
         }));
-        let t = build_todo(vec![], data.tasks, &done, date("2026-10-29"), &jst());
+        let t = build_todo(
+            vec![],
+            vec![],
+            data.tasks,
+            &done,
+            date("2026-10-29"),
+            &jst(),
+        );
         assert_eq!(t.tasks.len(), 1);
         assert_eq!((t.tasks[0].sub_done, t.tasks[0].sub_total), (1, 1));
     }
@@ -2676,7 +2948,7 @@ mod tests {
         let tasks = vec![task(
             json!({"id": "t1", "content": "a", "project_id": "p1", "priority": 4, "due": {"date": "2026-10-29", "string": "today"}}),
         )];
-        build_todo(projects, tasks, &[], date("2026-10-29"), &jst())
+        build_todo(projects, vec![], tasks, &[], date("2026-10-29"), &jst())
     }
 
     #[test]

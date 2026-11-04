@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, inbox, mock, task, todoData, waitForCalls } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, moment, setClock, task, today, todoData, waitForCalls } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -81,14 +81,46 @@ describe("sidebar", () => {
     expect(await browser.execute(() => Math.round(innerHeight - document.getElementById("nav-settings")!.getBoundingClientRect().bottom))).toBe(16);
   });
 
-  it("sets the Dock badge to the unread threads plus the overdue and today tasks", async () => {
+  // Waits until the last set_badge call is `args`.
+  const waitForBadge = (args: { count: number; upcoming: number[] }) =>
+    browser.waitUntil(async () => JSON.stringify((await callsOf("set_badge")).at(-1)) === JSON.stringify(args), {
+      timeoutMsg: `set_badge was not called with ${JSON.stringify(args)}`,
+    });
+
+  it("sets the Dock badge to the unread threads plus the tasks that are due, and sends the moments of those still ahead", async () => {
     const todo = todoData();
     todo.tasks.push(task("k5", "Late bill", "p0", "overdue"), task("k6", "Someday", "p0", "upcoming"));
-    // 2 unread threads, and "Write report" (today) and "Late bill" (overdue).
+    // 2 unread threads, and "Write report" (today, no time) and "Late bill" (yesterday); "Someday" is due tomorrow 00:00.
     await boot({ inbox: inbox(), todoist_load: todo, claude_status: claudeReady });
-    await browser.waitUntil(async () => JSON.stringify((await callsOf("set_badge")).at(-1)) === JSON.stringify({ count: 4 }), {
-      timeoutMsg: "set_badge was not called with 4",
-    });
+    await waitForBadge({ count: 4, upcoming: [moment(1)] });
+  });
+
+  it("counts a task from its due moment: a time ahead and tomorrow are not counted, a time that has come and a day with no time are, and no due date never is", async () => {
+    const todo = todoData();
+    todo.tasks.push(
+      dueToday(task("k5", "Morning", "p0", "today"), "08:00"),
+      dueToday(task("k6", "Noon", "p0", "today"), "12:00"),
+      dueToday(task("k7", "All day", "p0", "today"), null),
+      task("k8", "Yesterday", "p0", "overdue"),
+      task("k9", "Tomorrow", "p0", "upcoming"),
+    );
+    await boot({ inbox: inbox(), todoist_load: todo, claude_status: claudeReady });
+    // A load that never answers: only the clock can move the count from here.
+    const load = await mock("todoist_load", holds);
+    await setClock(`${today}T07:59:00`);
+    // 2 unread threads; "Write report", "All day" and "Yesterday" (00:00) have come; "Morning", "Noon" and "Tomorrow" are ahead.
+    await waitForBadge({ count: 5, upcoming: [moment(0, "08:00"), moment(0, "12:00"), moment(1)] });
+    await expect($("#nav-todo .nav-count")).toHaveText("3");
+    await expect($("#nav-todo")).toHaveAttribute("aria-label", "Todo（期限到来 3 件）");
+    // 08:00:30 is 08:00 to the minute, and 12:00 comes on the dot.
+    await setClock(`${today}T08:00:30`);
+    await waitForBadge({ count: 6, upcoming: [moment(0, "12:00"), moment(1)] });
+    await expect($("#nav-todo .nav-count")).toHaveText("4");
+    await setClock(`${today}T12:00:00`);
+    await waitForBadge({ count: 7, upcoming: [moment(1)] });
+    await expect($("#nav-todo .nav-count")).toHaveText("5");
+    // A held load is not an answer: the count came from the remembered tasks.
+    expect((await callsOf(load)).length).toBeLessThanOrEqual(1);
   });
 
   it("shows no update button when this is the latest version", async () => {

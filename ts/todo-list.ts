@@ -43,7 +43,7 @@ export function renderProjects() {
     if (isDueToday(t)) today++;
     if (!t.parent) counts.set(t.projectId, (counts.get(t.projectId) ?? 0) + 1);
   }
-  setTodoCount(today);
+  setTodoCount(todo.tasks);
   const parents = new Set(todo.projects.map((p) => p.parentId));
   // The projects under a closed one, however deep.
   const hidden = new Set<string>();
