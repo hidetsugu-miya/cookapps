@@ -779,7 +779,8 @@ describe("slack thread: asking Claude", () => {
     await expect(pane).toHaveAttribute("aria-label", "Claude");
     expect(await textsOf("#reply-chat .chat-head")).toEqual(["クリア"]);
     expect(await count("#reply-chat .chat-head svg")).toBe(1);
-    expect(await count("#reply-proofread, .proofread-row")).toBe(0);
+    // The Slack compose screen keeps its own row (S-4).
+    expect(await count("#reply-proofread, #reply-chat .proofread-row")).toBe(0);
     await expect($("#reply-input")).toHaveAttribute("placeholder", "Claude に頼みたいことを書く");
     await expect($("#reply-send")).toHaveAttribute("aria-label", "送信");
     await expect($("#reply-send")).toHaveText("");
