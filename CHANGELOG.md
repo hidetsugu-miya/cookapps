@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.33.0
+
+S-12 the Slack thread draws Slack's own styles (#12): bold, italic, strike, inline code, code blocks and `>` quotes, in a message's text and in the mrkdwn texts of its blocks and attachments. A tag stays text, URLs stay links except inside a code, and a line starting with `>>>` stays text. The list and what is sent to Claude are unchanged. The contents of an attached `.md` file are not shown. A real Slack message was not tried.
+
 ## v0.32.0
 
 S-11 the Slack thread draws the blocks and attachments of a message (#10): headers, sections, fields, context, dividers, attachment color bars, titles and fields. A button with a URL opens in the default browser, one without shows its name only, and select menus are left out. Images are fetched only when "画像を表示" is pressed on a message, from any public https server, with no Slack token, so that server sees the user's IP address. The list and what is sent to Claude are unchanged. A real Slack message was not tried.
