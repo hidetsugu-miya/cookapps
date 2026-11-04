@@ -29,7 +29,8 @@ GitHub にもファイルにも書かない。
 
 - `order` には `free` の全 issue を 1 回ずつ書き、`fixed` は書かない。
 - 依存先（`blocked_by` に挙げた issue）は、依存元より前に置く。
-- 同梱の組は `order` で隣り合わせる。`size:heavy` は組に入れない。1 組は 3 件まで。
+- 同梱の組は `order` で隣り合わせる。`size:heavy` は組に入れない。1 組は 3 件まで。`groups` には `free` の issue だけを書く。
+- `fixed` の issue は、依存先にだけ書ける。
 - `needs:owner` の issue も並べる。未決定の中身は推測せず、本文から分かる関連だけで置く。
 - 古い順から動かす issue と、関連を付けた issue には、`reasons` に一行の理由を書く。
 
@@ -38,5 +39,5 @@ GitHub にもファイルにも書かない。
 JSON だけを返す。
 
 ```json
-{"order":[32,42,33],"groups":[],"blocked_by":{"33":[42]},"reasons":{"33":"#42 が Orca の左ペインを作り直す（ts/orca.ts）ので、その後に置く"}}
+{"order":[32,50,42,33],"groups":[[32,50]],"blocked_by":{"33":[42]},"reasons":{"33":"#42 が Orca の左ペインを作り直す（ts/orca.ts）ので、その後に置く"}}
 ```
