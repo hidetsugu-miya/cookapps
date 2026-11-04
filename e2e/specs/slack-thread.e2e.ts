@@ -357,6 +357,69 @@ describe("slack thread: where it opens", () => {
     await imageLoaded();
     await browser.waitUntil(atBottom);
   });
+
+  // The long thread opened, scrolled up to 50 and left; `slack_thread` answers `value` on the next opening of the same row.
+  async function leaveScrolled(value: unknown) {
+    await openDetail({}, slackThread(long()));
+    await browser.waitUntil(atBottom);
+    await scrollTo(50);
+    // The scroll event of the move is dispatched before the next frame.
+    await browser.pause(200);
+    await $("#st-back").click();
+    const read = await mock("slack_thread", value);
+    await $("#slack-feed .feed-open").click();
+    await waitForCalls(read);
+    return read;
+  }
+
+  it("keeps the scroll position when the same thread is opened again, while it is read and after", async () => {
+    const read = await leaveScrolled(holds);
+    expect((await box()).top).toBe(50);
+    await release(read, slackThread(long()));
+    await browser.pause(200);
+    expect((await box()).top).toBe(50);
+  });
+
+  it("keeps the scroll position when the thread is read again from 再読み込み", async () => {
+    await leaveScrolled(rejects("読めません"));
+    await $("#st-msgs .pending.fail").waitForExist();
+    expect((await box()).top).toBe(50);
+    const read = await mock("slack_thread", slackThread(long()));
+    // The error is above the messages and out of view at 50: press it without scrolling to it.
+    await browser.execute(() => document.querySelector<HTMLElement>("#st-msgs .pending.fail .text-btn")!.click());
+    await waitForCalls(read);
+    await browser.waitUntil(async () => (await count("#st-msgs .pending.fail")) === 0);
+    expect((await box()).top).toBe(50);
+  });
+
+  it("opens at the newest message when 再読み込み reads a thread whose first read failed", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([listMessage()]), claude_status: claudeReady });
+    await mock("slack_thread", rejects("読めません"));
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 1);
+    await $("#slack-feed .feed-open").click();
+    await $("#st-msgs .pending.fail").waitForExist();
+    await mock("slack_thread", slackThread(long()));
+    await $("#st-msgs .pending.fail .text-btn").click();
+    await waitForCount("#st-msgs .st-msg", 12);
+    await browser.waitUntil(atBottom);
+  });
+
+  it("opens at the newest message when the thread was left before its read ended", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([listMessage()]), claude_status: claudeReady });
+    const read = await mock("slack_thread", holds);
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 1);
+    await $("#slack-feed .feed-open").click();
+    await waitForCalls(read);
+    await $("#st-back").click();
+    await release(read, slackThread(long()));
+    await waitForCount("#st-msgs .st-msg", 12);
+    await mock("slack_thread", slackThread(long()));
+    await $("#slack-feed .feed-open").click();
+    await expect($("#slack-thread")).toBeDisplayed();
+    await browser.waitUntil(atBottom);
+  });
 });
 
 describe("slack thread: blocks and attachments", () => {

@@ -45,6 +45,8 @@ let readSeq = 0;
 const BOTTOM_PX = 40;
 let stick = true;
 let lastTop = 0;
+// Going to the end did not take effect because the pane was hidden (its height is 0 then): the thread opens at the end when it is shown again.
+let endPending = false;
 
 // What is being written in a thread and the conversation about it, by thread.
 interface Draft {
@@ -294,7 +296,10 @@ function drawMessages(where: "keep" | "end") {
     // The thumbnails already here replace their placeholders at once, which changes the height before the position is set.
     loadThumbs(thread, current!.key);
   }
-  if (where === "end") stick = true;
+  if (where === "end") {
+    stick = true;
+    endPending = !!$("slack-thread").hidden;
+  }
   box.scrollTop = where === "end" ? box.scrollHeight : top;
   lastTop = box.scrollTop;
 }
@@ -302,7 +307,7 @@ function drawMessages(where: "keep" | "end") {
 async function readThread(where: "keep" | "end") {
   const open = current!;
   const seq = ++readSeq;
-  const redraw = thread === null || readError !== null;
+  const redraw = thread === null || readError !== null || endPending;
   readError = null;
   // A thread that is held and showing no error looks the same now: it is drawn once, when the read ends.
   if (redraw) drawMessages(where);
@@ -337,6 +342,7 @@ export function openSlackThread(m: TimelineMessage) {
     imagesShown.clear();
     blockImages.clear();
     closeCard();
+    endPending = false;
   }
   note(null);
   $("st-error").hidden = true;
@@ -367,7 +373,7 @@ export function openSlackThread(m: TimelineMessage) {
     () => {},
   );
   refreshSlackThread();
-  readThread(same && thread ? "keep" : "end");
+  readThread(same && thread && !endPending ? "keep" : "end");
 }
 
 async function reply() {
@@ -470,15 +476,18 @@ export function initSlackThread() {
   };
   chat.init();
   const box = $("st-msgs");
-  // The user moved up from the bottom: stop following. Moving down to within BOTTOM_PX of the bottom follows again.
+  // The user moved up from the bottom: stop following. Moving down to within BOTTOM_PX of the bottom follows again; a position cut by a redraw is not a move down.
   box.onscroll = () => {
-    const up = box.scrollTop < lastTop;
+    const moved = box.scrollTop - lastTop;
     lastTop = box.scrollTop;
-    if (box.scrollHeight - box.scrollTop - box.clientHeight <= BOTTOM_PX) stick = true;
-    else if (up) stick = false;
+    const near = box.scrollHeight - box.scrollTop - box.clientHeight <= BOTTOM_PX;
+    if (moved < 0 && !near) stick = false;
+    else if (moved > 0 && near) stick = true;
   };
-  // `load` does not bubble: the capture listener sees every image drawn in the box, whenever it finishes (the thumbnails, and the images of blocks and attachments).
-  box.addEventListener("load", follow, true);
+  // `load` does not bubble: the capture listener sees every image drawn in the box, whenever it finishes (the thumbnails, and the images of blocks and attachments). An avatar has a fixed size and changes no height.
+  box.addEventListener("load", (e) => {
+    if (!(e.target as Element).classList.contains("av-img")) follow();
+  }, true);
   initSplit($("slack-thread"), $("reply-split"));
   refreshSlackThread();
 }
