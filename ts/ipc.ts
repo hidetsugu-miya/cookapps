@@ -9,6 +9,7 @@ import type { Effort } from "./bindings/Effort";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
 import type { MailSummary } from "./bindings/MailSummary";
+import type { MarkAll } from "./bindings/MarkAll";
 import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
@@ -107,9 +108,9 @@ export interface Commands {
     args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string };
     result: boolean;
   };
-  // The newest 20 unread and the newest 5 read messages of the joined channels (no direct messages) of every workspace, together newest first (S-8); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
+  // The newest 20 unread messages of the joined channels (no direct messages) of every workspace, newest first (S-8), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
-  // `unreadTotal` the unread messages among all those held (the Slack button's badge). Messages are kept in memory only.
+  // `unreadTotal` the unread messages among all those held (the Slack button's badge), `markableChannels` the channels "すべて既読にする" would move. Messages are kept in memory only.
   // With `cached` true nothing is asked of Slack: the list is made again from what Rust holds (after a channel was hidden or put back).
   slack_timeline: { args: { cached: boolean } | undefined; result: Timeline };
   // The channels kept off the Slack list, in the order they were hidden, with the channel's name (its ID when the name is not known). Slack itself is not told (its mute cannot be read).
@@ -118,6 +119,14 @@ export interface Commands {
   slack_unhide_channel: { args: { teamId: string; channel: string }; result: boolean };
   // Sets the channel's read position to the message `ts` in Slack (`conversations.mark`), only when it is later than the one held; true when it was sent.
   slack_mark_read: { args: { teamId: string; channel: string; ts: string }; result: boolean };
+  // Sets the read position of every channel with an unread message (among all those held) to its newest unread message; the channels kept off the list and the workspaces whose token cannot write it are left out.
+  slack_mark_all_read: { args: undefined; result: MarkAll };
+  // Watches the thread `ts` (its own message's ts): the replies that exist now are not new. With `seenTs` (what `slack_unwatch` answered) it is put back as it was and Slack is asked nothing.
+  slack_watch: { args: { teamId: string; channel: string; ts: string; seenTs?: string | null }; result: boolean };
+  // Lets the thread go; answers the reply it had been seen up to (null: it was not watched).
+  slack_unwatch: { args: { teamId: string; channel: string; ts: string }; result: string | null };
+  // The watched thread was opened: its new replies count as seen, up to the newest reply the last check found or `latestTs` (the newest reply the thread detail read), whichever is later (asks Slack nothing).
+  slack_watch_seen: { args: { teamId: string; channel: string; ts: string; latestTs?: string | null }; result: boolean };
   // The whole thread starting at `ts`, oldest first. For a reply pass its `threadTs`, not its own `ts`.
   slack_thread: { args: { teamId: string; channel: string; ts: string }; result: SlackThread };
   // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched).

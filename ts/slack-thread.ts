@@ -291,6 +291,9 @@ async function readThread(where: "keep" | "end" | "top") {
     const t = await invoke("slack_thread", { teamId: open.teamId, channel: open.channel, ts: open.ts });
     if (seq !== readSeq) return;
     thread = t;
+    // A watched thread is seen up to the newest reply read (Rust leaves a thread that is not watched alone).
+    const newest = t.messages[t.messages.length - 1];
+    if (t.messages.length > 1) invoke("slack_watch_seen", { teamId: open.teamId, channel: open.channel, ts: open.ts, latestTs: newest.ts }).catch(() => {});
   } catch (e) {
     if (seq !== readSeq) return;
     readError = String(e);

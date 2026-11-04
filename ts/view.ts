@@ -32,6 +32,8 @@ export function show(view: View) {
   $("slack-thread").hidden = view !== "slack-thread";
   // The mail header is the thread's toolbar: the list and the login screen have none.
   $("mail-header").hidden = view !== "thread";
+  // The inbox has its own header (the unread operation); the login screen has none.
+  $("inbox-header").hidden = view !== "list";
   $("main").hidden = own;
   $("login").hidden = view !== "login";
   $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();

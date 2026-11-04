@@ -7,6 +7,7 @@ import { load, removeRow } from "./inbox.js";
 import { invoke } from "./ipc.js";
 import { openThread } from "./thread.js";
 import { makeTodo } from "./todo-add.js";
+import { toast } from "./toast.js";
 import { setNavCount, showError } from "./view.js";
 
 // Threads being archived / trashed ("account/id"); a list reload or sync must not bring them back meanwhile.
@@ -48,6 +49,96 @@ export function updateBadge() {
   if (count === badge) return;
   badge = count;
   setNavCount("nav-mail", count, "受信トレイ", "未読");
+  syncMarkAll();
+}
+
+// "すべて既読にする" is pressable while a thread is unread and no run of it is on its way.
+let markAllBusy = false;
+function syncMarkAll() {
+  $<HTMLButtonElement>("mail-mark-all").disabled = markAllBusy || badge === 0;
+}
+
+// The keys of the threads the last "すべて既読にする" made read, for its "元に戻す". A newer run replaces them.
+let lastMarked: string[] = [];
+// Requests at once.
+const MARK_PARALLEL = 4;
+
+// Runs `run` on every item, `limit` at a time.
+async function pool<T>(items: T[], limit: number, run: (item: T) => Promise<void>) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await run(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+// Makes the threads of `list` read (or unread) in Gmail with `set_read`, one request each. The rows change first; a row whose request fails goes back and the failures are reported once.
+// The read box of a row stays disabled while its request is on its way, so that a sync leaves the row as it is (as for a single toggle). Returns the keys of the threads that were changed.
+async function markRows(list: { t: ThreadItem; li: HTMLLIElement }[], read: boolean) {
+  $("error").hidden = true;
+  const boxes = list.map(({ t, li }) => {
+    const box = li.querySelector<HTMLInputElement>(".read-box")!;
+    box.disabled = true;
+    setReadState(t, li, read);
+    return box;
+  });
+  updateBadge();
+  const done: string[] = [];
+  const failed: unknown[] = [];
+  let relogin = false;
+  await pool(
+    list.map((r, i) => ({ ...r, box: boxes[i] })),
+    MARK_PARALLEL,
+    async ({ t, li, box }) => {
+      try {
+        const ok = await invoke("set_read", { account: t.account, id: t.id, read });
+        if (ok === null) {
+          relogin = true;
+          setReadState(t, li, !read);
+        } else {
+          done.push(rowKey(t));
+        }
+      } catch (e) {
+        setReadState(t, li, !read);
+        failed.push(e);
+      } finally {
+        box.disabled = false;
+      }
+    },
+  );
+  updateBadge();
+  if (failed.length) showError(`${failed.length} 件を更新できませんでした: ${failed[0]}`);
+  if (relogin) load(true);
+  return done;
+}
+
+// Makes every unread thread of the list read. The notice offers to make the ones that were changed unread again.
+export async function markAllRead() {
+  if (markAllBusy) return;
+  const targets = [...rows]
+    .filter(([key, r]) => r.t.unread && !pending.has(key) && !r.li.querySelector<HTMLInputElement>(".read-box")!.disabled)
+    .map(([, r]) => r);
+  if (!targets.length) return;
+  markAllBusy = true;
+  syncMarkAll();
+  const done = await markRows(targets, true);
+  markAllBusy = false;
+  syncMarkAll();
+  lastMarked = done;
+  if (done.length) toast(`${done.length} 件を既読にしました`, { label: "元に戻す", run: undoMarkAll });
+}
+
+// Makes the threads the last run changed unread again, those still in the list.
+async function undoMarkAll() {
+  const list = lastMarked.flatMap((key) => rows.get(key) ?? []);
+  lastMarked = [];
+  if (markAllBusy || !list.length) return;
+  markAllBusy = true;
+  syncMarkAll();
+  const done = await markRows(list, false);
+  markAllBusy = false;
+  syncMarkAll();
+  if (done.length) toast("元に戻しました");
 }
 
 // Puts the row in its section, unread above read, in date order.
