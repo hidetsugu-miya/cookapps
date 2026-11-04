@@ -71,7 +71,8 @@ export interface DueEdit {
   date: string | null;
   time: string | null;
   recurring: boolean;
-  commit: (dueString: string) => void;
+  // `outside`: a click elsewhere confirmed it, and that click has not ended yet.
+  commit: (dueString: string, outside?: boolean) => void;
 }
 
 // The due popover opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
@@ -105,7 +106,11 @@ export function openDueEditor(anchor: Element, e: DueEdit) {
         if (value !== e.text) e.commit(value);
       }),
     );
-  showMenu(anchor, pop, confirmText);
+  // A click elsewhere is not a decision to lose a repeat, which clearing the date takes two presses for; Enter on the empty field still is.
+  showMenu(anchor, pop, () => {
+    if (e.recurring && !input.value.trim()) return;
+    if (input.value.trim() !== e.text) e.commit(input.value, true);
+  });
   input.focus();
   input.select();
 }
@@ -117,7 +122,8 @@ export function openDuePop(anchor: Element, t: TaskItem) {
     date: due?.date ?? null,
     time: due?.time ?? null,
     recurring: !!due?.recurring,
-    commit: (dueString) => saveTask(t.id, { dueString }),
+    // A click elsewhere is still on its way: a redraw now would drop it, so the reload draws the new date.
+    commit: (dueString, outside) => saveTask(t.id, { dueString }, !outside),
   });
 }
 
