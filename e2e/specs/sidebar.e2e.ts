@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, moment, ownIcon, pngUri, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, moment, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -39,41 +39,110 @@ describe("sidebar", () => {
     });
   }
 
-  it("manual: shows the update button with the new version, and on a press replaces the app and restarts it", async () => {
+  const popup = () => $("#update-pop");
+  const rectOf = (selector: string) =>
+    browser.execute((s) => {
+      const r = document.querySelector(s)!.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width };
+    }, selector);
+  // Runs the settings card's "今すぐ確認" as the settings screen would, so the popup can be checked without leaving the screen.
+  const recheck = () => browser.execute(() => document.getElementById("update-recheck")!.click());
+
+  it("manual: shows the popup at the bottom right with the new version, and on a press replaces the app and restarts it", async () => {
     await boot({ inbox: inbox(), claude_status: claudeReady, update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
-    const button = $("#update-btn");
-    await button.waitForDisplayed();
-    await expect(button).toHaveAttribute("aria-label", "v9.9.9 に更新");
+    await popup().waitForDisplayed();
+    await expect($("#update-pop-title")).toHaveText("v9.9.9 があります");
+    await expect($("#update-pop-text")).toHaveText("入れ替えて再起動します");
+    await expect($("#update-later")).toHaveText("あとで");
+    await expect($("#update-go")).toHaveText("更新して再起動");
+    // 320px wide, 24px from the right and bottom edges, and it takes no focus.
+    const rect = await rectOf("#update-pop");
+    expect({ width: rect.width, right: await browser.execute(() => innerWidth), bottom: await browser.execute(() => innerHeight) }).toEqual({ width: 320, right: rect.right + 24, bottom: rect.bottom + 24 });
+    expect(await browser.execute(() => document.getElementById("update-pop")!.contains(document.activeElement))).toBe(false);
     await expect($("#nav-settings .nav-dot")).toBeDisplayed();
     await expect($("#nav-settings")).toHaveAttribute("aria-label", "設定（v9.9.9 があります）");
-    // The update button comes first in the bottom group, above Claude.
-    expect(await bottomGroup()).toEqual(["update-btn", "claude-btn", "nav-settings"]);
+    // The sidebar has no update button any more: the bottom group is Claude, then settings.
+    expect(await bottomGroup()).toEqual(["claude-btn", "nav-settings"]);
     expect(await callsOf("install_update")).toEqual([]);
     const install = await mock("install_update", null);
     const restart = await mock("restart_app", null);
-    await button.click();
+    await $("#update-go").click();
     expect(await waitForCalls(restart)).toEqual([null]);
     expect(await callsOf(install)).toEqual([null]);
   });
 
-  it("auto: replaces the app by itself, then the button restarts the app and nothing else", async () => {
+  it("auto: replaces the app by itself, then the popup asks for a restart and the button restarts the app and nothing else", async () => {
     await boot({ inbox: inbox(), claude_status: claudeReady, update_mode: "auto", check_update: { version: "9.9.9", installed: false } });
     expect(await waitForCalls("install_update")).toEqual([null]);
-    const button = $("#update-btn");
-    await expect(button).toHaveAttribute("aria-label", "再起動して v9.9.9 にする");
+    await popup().waitForDisplayed();
+    await expect($("#update-pop-title")).toHaveText("新しい版の準備ができました");
+    await expect($("#update-pop-text")).toHaveText("再起動すると v9.9.9 になります");
+    await expect($("#update-go")).toHaveText("再起動");
     expect(await callsOf("restart_app")).toEqual([]);
     // From now on the backend says the app is replaced.
     const check = await mock("check_update", { version: "9.9.9", installed: true });
     const install = await mock("install_update", null);
     const restart = await mock("restart_app", null);
-    await button.click();
+    await $("#update-go").click();
     expect(await waitForCalls(restart)).toEqual([null]);
     await waitForCalls(check);
     expect(await callsOf(install)).toEqual([]);
-    await expect(button).toHaveAttribute("aria-label", "再起動して v9.9.9 にする");
+    await expect(popup()).toBeDisplayed();
+    await expect($("#update-go")).toHaveText("再起動");
   });
 
-  it("keeps settings at the bottom edge with no account, no Claude and no update button", async () => {
+  it("waits while the update is on its way, and on a failure shows the error and keeps the popup", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady, update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
+    await popup().waitForDisplayed();
+    const install = await mock("install_update", holds);
+    const restart = await mock("restart_app", null);
+    await $("#update-go").click();
+    await waitForCalls(install);
+    await expect($("#update-go")).toBeDisabled();
+    await release(install, rejects("disk full"));
+    await expect($("#error")).toHaveText(expect.stringContaining("disk full"));
+    await expect(popup()).toBeDisplayed();
+    await expect($("#update-go")).toBeEnabled();
+    expect(await callsOf(restart)).toEqual([]);
+  });
+
+  it("closes with あとで for that version only: the same version stays away, a newer one shows it, and the dot stays", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady, update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
+    await popup().waitForDisplayed();
+    await $("#update-later").click();
+    await expect(popup()).not.toBeDisplayed();
+    await expect($("#nav-settings .nav-dot")).toBeDisplayed();
+    await expect($("#settings-tab-update .tab-dot")).toExist();
+    const same = await mock("check_update", { version: "9.9.9", installed: false });
+    await recheck();
+    await waitForCalls(same);
+    await browser.pause(300);
+    await expect(popup()).not.toBeDisplayed();
+    const newer = await mock("check_update", { version: "9.9.10", installed: false });
+    await recheck();
+    await waitForCalls(newer);
+    await popup().waitForDisplayed();
+    await expect($("#update-pop-title")).toHaveText("v9.9.10 があります");
+  });
+
+  it("stacks a toast above the popup while it shows, and puts it back at the corner when the popup closes", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady, update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
+    await waitForCount("#unread-threads li", 2);
+    await popup().waitForDisplayed();
+    await mock("archive", true);
+    const row = rowOf("unread-threads", "First unread");
+    await row.moveTo();
+    await row.$(".archive-row").click();
+    await expect($(".toast")).toBeDisplayed();
+    const toast = await rectOf(".toast");
+    const pop = await rectOf("#update-pop");
+    expect(toast.bottom).toBeLessThanOrEqual(pop.top);
+    expect(toast.right).toBe(pop.right);
+    await $("#update-later").click();
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".toast")!).bottom)).toBe("24px");
+  });
+
+  it("keeps settings at the bottom edge with no account, no Claude and no update", async () => {
     await boot({ inbox: { ...inbox(), accounts: [], threads: [], historyIds: {} }, claude_status: claudeMissing });
     await waitForCalls("claude_status");
     expect(await bottomGroup()).toEqual(["nav-settings"]);
@@ -131,10 +200,10 @@ describe("sidebar", () => {
     await expect($("#nav-slack")).toHaveAttribute("aria-label", "Slack");
   });
 
-  it("shows no update button when this is the latest version", async () => {
+  it("shows no update popup when this is the latest version", async () => {
     await boot({ inbox: inbox(), claude_status: claudeReady });
     await waitForCalls("check_update");
-    await expect($("#update-btn")).not.toBeDisplayed();
+    await expect(popup()).not.toBeDisplayed();
     await expect($("#nav-settings .nav-dot")).not.toBeDisplayed();
     await expect($("#nav-settings")).toHaveAttribute("aria-label", "設定");
   });

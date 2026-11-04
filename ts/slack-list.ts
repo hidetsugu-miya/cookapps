@@ -283,7 +283,7 @@ function drawFeed() {
   loadIcons([...shownUnread, ...shownRead].map((m) => m.iconUrl));
 }
 
-// The muted "残り N チャンネルを読み込み中" in the heading while some channels were not reached by any read yet.
+// The muted "残り N チャンネルを読み込み中" above the notice while some channels were not reached by any read yet.
 function drawPending() {
   const left = timeline?.pendingChannels ?? 0;
   const label = $("slack-pending");
@@ -291,17 +291,9 @@ function drawPending() {
   label.textContent = left > 0 ? `残り ${left} チャンネルを読み込み中` : "";
 }
 
-// The muted "未読 N 件" in the heading: the unread rows of the answer (the button shows the ones still hidden).
-function drawUnreadCount() {
-  const label = $("slack-unread");
-  label.hidden = timeline === null;
-  label.textContent = timeline ? `未読 ${timeline.messages.filter((m) => m.unread).length} 件` : "";
-}
-
 // Draws the list's parts when the list is on screen; it is drawn from what is held when it is shown (`revealSlackList`).
 function draw() {
   if ($("slack-list").hidden) return;
-  drawUnreadCount();
   drawPending();
   drawNotice();
   drawFeed();

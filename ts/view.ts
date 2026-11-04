@@ -30,12 +30,12 @@ export function show(view: View) {
   $("slack-compose").hidden = view !== "slack";
   $("slack-list").hidden = view !== "slack-list";
   $("slack-thread").hidden = view !== "slack-thread";
-  $("mail-header").hidden = own;
+  // The mail header is the thread's toolbar: the list and the login screen have none.
+  $("mail-header").hidden = view !== "thread";
   $("main").hidden = own;
   $("login").hidden = view !== "login";
   $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
   $("threads").hidden = view !== "list";
-  $("reload").hidden = view !== "list";
   $("thread").hidden = view !== "thread";
   syncSummaryButton();
   $("back").hidden = view !== "thread";
@@ -43,8 +43,6 @@ export function show(view: View) {
   $("thread-todo").hidden = view !== "thread";
   $("trash").hidden = view !== "thread";
   $("archive").hidden = view !== "thread";
-  $("mail-header").classList.toggle("detail", view === "thread");
-  $("title").hidden = view === "thread";
   $("main").scrollTop = view === "list" ? listScroll : 0;
 }
 

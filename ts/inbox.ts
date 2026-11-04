@@ -84,6 +84,11 @@ export const historyIds = new Map<string, string>();
 // Set when a load answers; the kept list of the last run, which is drawn first at startup, must not come after it.
 let inboxLoaded = false;
 
+// There is no reload button: a load that failed (the call, or an account in its answer) is repeated by the sync round once this long has passed since the last load.
+const RELOAD_RETRY_MS = 60000;
+let needsReload = false;
+let lastLoad = 0;
+
 function drawThreads(inbox: Inbox) {
   const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
   rows.clear();
@@ -115,10 +120,12 @@ export async function showKeptInbox() {
 export async function load() {
   const seq = ++loadSeq;
   loading++;
+  lastLoad = Date.now();
   $("error").hidden = true;
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
+    needsReload = Object.keys(inbox.failed).length > 0;
     inboxLoaded = true;
     renderAccounts(inbox);
     if (inbox.accounts.length === 0) return show("login");
@@ -126,6 +133,7 @@ export async function load() {
     for (const [account, id] of Object.entries(inbox.historyIds)) historyIds.set(account, id);
     drawThreads(inbox);
   } catch (e) {
+    if (seq === loadSeq) needsReload = true;
     showError(e);
   } finally {
     loading--;
@@ -198,8 +206,11 @@ let syncFails = 0;
 let syncing = false;
 
 // Brings the list up to date with Gmail through `sync`, without leaving the current view.
+// A failed load is repeated first (a failed load leaves no history IDs to sync from).
 async function syncAll() {
-  if (syncing || loading || document.hidden || historyIds.size === 0) return;
+  if (loading || document.hidden) return;
+  if (needsReload && Date.now() - lastLoad >= RELOAD_RETRY_MS) return load();
+  if (syncing || historyIds.size === 0) return;
   syncing = true;
   const seq = loadSeq;
   let failure: unknown = null;
@@ -217,14 +228,19 @@ async function syncAll() {
   } finally {
     syncing = false;
   }
-  syncFails = failure ? syncFails + 1 : 0;
-  if (syncFails === 3) showError(`自動同期に失敗しています: ${failure}`);
+  if (failure) {
+    syncFails++;
+    if (syncFails === 3) showError(`自動同期に失敗しています: ${failure}`);
+  } else {
+    // The sync works again: the notice of the failures goes (only that one, not an error shown for something else).
+    if (syncFails >= 3) $("error").hidden = true;
+    syncFails = 0;
+  }
 }
 
 export function initInbox() {
   setInterval(syncAll, SYNC_MS);
   document.addEventListener("visibilitychange", syncAll);
-  $("reload").onclick = load;
   // Cmd+Z (Ctrl+Z off macOS) undoes the last removal; in a text field it stays that field's own undo.
   document.addEventListener("keydown", (e) => {
     if (e.metaKey !== isMac || e.ctrlKey === isMac || e.altKey || e.shiftKey || e.key !== "z" || composing(e) || !lastRemoved) return;
