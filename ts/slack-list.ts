@@ -107,7 +107,11 @@ function itemOf(m: TimelineMessage, key: string) {
   read.setAttribute("aria-label", "既読にする");
   read.dataset.key = `${key}/read`;
   read.innerHTML = CHECK_SVG;
-  read.onclick = () => readOne(m);
+  // A double click is two clicks (the second has `detail` 2): the first removes the row, so the second must not read the row that moved under the pointer.
+  read.onclick = (e) => {
+    if (e.detail > 1) return;
+    readOne(m);
+  };
   const hide = tag("button", "icon-btn feed-hide");
   hide.type = "button";
   hide.setAttribute("aria-label", `#${m.channelName} を一覧に出さない`);
@@ -264,7 +268,9 @@ function rowOf(m: TimelineMessage, key: string) {
   press.setAttribute("aria-label", `${m.name} #${m.channelName} ${note ?? m.text.trim().slice(0, 80)}`);
   // A thread that cannot be read has nothing to open; its bookmark lets it go.
   press.disabled = status === "unreadable";
-  press.onclick = () => {
+  press.onclick = (e) => {
+    // The second click of a double click on a check lands here when the row moved under the pointer: it opens nothing.
+    if (e.detail > 1 && Date.now() - lastCheckAt < DOUBLE_CLICK_MS) return;
     listScroll = feed().scrollTop;
     readRow(m);
     openSlackThread(m);
@@ -273,10 +279,11 @@ function rowOf(m: TimelineMessage, key: string) {
   return row;
 }
 
-// Opening a message sets its channel's read position to it: the row and the older ones of the channel become read at once (an unread row leaves the list, a watched one or one with unread replies stays and is no longer bold), and Slack is told.
-// Nothing changes when the row is read already, or when the token cannot write the position (the next read would show it unread again). A failure is logged by Rust; the next read shows Slack's value.
 // The latest `slack_mark_read` on its way: a list made from the cache before Rust has the new position would bring the rows back unread.
 let marking: Promise<unknown> = Promise.resolve();
+// When the check beside a row was last pressed, and how long after it a second click of a double click can come.
+let lastCheckAt = 0;
+const DOUBLE_CLICK_MS = 500;
 
 // What reading a row does, which opening it and the check beside it (S-15) both do: the position, the new replies of a watched thread and the unread replies. The result holds the request of the position (none when nothing is sent) and ends when all three requests have.
 function readRow(m: TimelineMessage) {
@@ -300,7 +307,9 @@ async function readOne(m: TimelineMessage) {
   // No answer is used while the requests are on their way (as for S-9): one that began before could bring the row back.
   changing++;
   loadSeq++;
+  lastCheckAt = Date.now();
   let failed = false;
+  let otherFailed = false;
   try {
     const { mark, done } = readRow(m);
     draw();
@@ -309,14 +318,17 @@ async function readOne(m: TimelineMessage) {
     } catch {
       failed = true;
     }
-    await done;
+    otherFailed = (await done).some((r) => r.status === "rejected");
   } finally {
     changing--;
   }
   if (failed) showError("既読を Slack に送れませんでした");
+  else if (otherFailed) showError("既読にできませんでした");
   load(true);
 }
 
+// Opening a message sets its channel's read position to it: the row and the older ones of the channel become read at once (an unread row leaves the list, a watched one or one with unread replies stays and is no longer bold), and Slack is told.
+// Nothing changes when the row is read already, or when the token cannot write the position (the next read would show it unread again). A failure is logged by Rust; the next read shows Slack's value.
 function markRead(m: TimelineMessage): Promise<unknown> | undefined {
   // A watched row moves the position to the newest unread message Rust holds of its thread (its own message, or a reply also sent to the channel); another row to its own message.
   const to = m.watch ? m.watch.unreadTo : m.unread ? m.ts : null;
@@ -359,9 +371,12 @@ function notAfter(a: string, b: string) {
 
 // Opening a watched row clears its "新しい返信" at once; Rust moves the position the replies are counted from. A failure is ignored: the next read shows the count again.
 function seeWatched(m: TimelineMessage) {
-  if (m.watch) {
-    m.watch.newReplies = 0;
-    m.watch.uncounted = false;
+  // The row the button was drawn with may be an older copy of the one held (a read of the same content does not draw it again): clear both.
+  const held = timeline?.watched.find((x) => threadKeyOf(x) === threadKeyOf(m));
+  for (const x of [m, held]) {
+    if (!x?.watch) continue;
+    x.watch.newReplies = 0;
+    x.watch.uncounted = false;
   }
   // A read that is on its way may answer with the old count: once Rust has the new position, the list is made again from its cache (as `markRead` does).
   const during = isLoading();
@@ -467,15 +482,14 @@ async function markAllRead() {
     return;
   }
   disarmMarkAll();
-  const writes = (teamId: string) => !timeline!.missing.some((x) => x.teamId === teamId && lacksWrite(x));
-  const rows = timeline.messages.filter((m) => writes(m.teamId));
-  for (const m of timeline.watched) if (writes(m.teamId)) m.unread = false;
+  const rows = timeline.messages.filter((m) => canWrite(m.teamId));
+  for (const m of timeline.watched) if (canWrite(m.teamId)) m.unread = false;
   const everyWorkspaceWrites = timeline.missing.every((x) => !lacksWrite(x));
   unreadCount = everyWorkspaceWrites ? 0 : Math.max(0, unreadCount - rows.filter((m) => m.unread).length);
   dropReplies(timeline.messages);
   for (const m of timeline.messages) m.unreadReplies = null;
   // What stays is unread still, in a workspace that cannot write the position; a row that was there only for its replies goes.
-  timeline.messages = timeline.messages.filter((m) => m.unread && !writes(m.teamId));
+  timeline.messages = timeline.messages.filter((m) => m.unread && !canWrite(m.teamId));
   timeline.markableChannels = 0;
   timeline.unreadThreads = 0;
   drawBadge();

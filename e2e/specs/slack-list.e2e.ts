@@ -1554,4 +1554,85 @@ describe("slack list", () => {
     await browser.waitUntil(async () => (await layout()).join() === ["未読", "unread:first", "unread:other", "unread:second"].join());
     await expect($("#slack-thread")).not.toBeDisplayed();
   });
+
+  it("says that the row could not be read when slack_thread_seen fails for a row with unread replies alone, and brings the row back with the list made again from Rust's cache", async () => {
+    const message = withReplies();
+    await openList(timeline([message]));
+    await waitForCount("#slack-feed .feed-row", 1);
+    const seen = await mock("slack_thread_seen", rejects("失敗しました"));
+    const mark = await mock("slack_mark_read", true);
+    const fresh = await mock("slack_timeline", timeline([message]));
+    await $("#slack-feed .feed-read").click();
+    await waitForCalls(seen);
+    await expect($("#error")).toHaveText(expect.stringContaining("既読にできませんでした"));
+    expect(await waitForCalls(fresh)).toEqual([{ cached: true }]);
+    expect(await callsOf(mark)).toEqual([]);
+    await waitForCount("#slack-feed .feed-row", 1);
+    await expect($("#slack-thread")).not.toBeDisplayed();
+  });
+
+  it("clears 新しい返信 at once for a check drawn before a read of the same content replaced the list", async () => {
+    const watched = watchedSample();
+    await openUnread(unreadSample(), { watched, refreshSecs: 1 });
+    // The periodic read answers the same content: the list is not drawn again, and the check keeps the row it was drawn with.
+    const read = await mock("slack_timeline", timeline(unreadSample(), { watched: watchedSample(), refreshSecs: 1 }));
+    await waitForCalls(read);
+    await browser.pause(300);
+    const seen = await mock("slack_watch_seen", holds);
+    expect(await count("#slack-feed .feed-new")).toBe(1);
+    await (await readButton("Watched read")).click();
+    await waitForCalls(seen);
+    expect(await count("#slack-feed .feed-new")).toBe(0);
+  });
+
+  it("ignores the second click of a double click on the check and on the row that moved under the pointer, and opens a thread with a double click on a row", async () => {
+    const messages = unreadSample();
+    const mark = await openUnread(messages);
+    const thread = await mock("slack_thread", slackThread([threadMessage(messages[1].ts, "Bob Example", "other")]));
+    await mock("slack_timeline", timeline([messages[1]]));
+    // The first click reads "first" and "second" and redraws at once, so that "other" is under the pointer for the second click, which lands on its row.
+    await browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      const click = (element: Element, detail: number) => element.dispatchEvent(new MouseEvent("click", { detail, bubbles: true }));
+      click(document.querySelector("#slack-feed .feed-read")!, 1);
+      click(document.querySelector("#slack-feed .feed-open")!, 2);
+    }, onceId());
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[0].ts }]);
+    expect(await layout()).toEqual(["未読", "unread:other"]);
+    await browser.pause(300);
+    expect(await callsOf(thread)).toEqual([]);
+    await expect($("#slack-thread")).not.toBeDisplayed();
+    // Past the double-click time, a double click on a row opens its thread as before.
+    await browser.pause(400);
+    await browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      document.querySelector("#slack-feed .feed-open")!.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+    }, onceId());
+    await expect($("#slack-thread")).toBeDisplayed();
+    expect(await callsOf(thread)).toHaveLength(1);
+  });
+
+  it("uses no answer of a read that began before the check, and makes the list again from the cache once the requests are done", async () => {
+    const messages = unreadSample();
+    await openList(timeline(messages, { refreshSecs: 2 }));
+    await waitForCount("#slack-feed .feed-row", 3);
+    // The periodic read is on its way when the check is pressed.
+    const read = await mock("slack_timeline", holds);
+    await waitForCalls(read);
+    const mark = await mock("slack_mark_read", holds);
+    await (await readButton("first")).click();
+    await waitForCalls(mark);
+    expect(await layout()).toEqual(["未読", "unread:other"]);
+    // The older answer still has the rows: it comes before slack_mark_read ends and is passed over.
+    await release(read, timeline(messages));
+    await browser.pause(300);
+    expect(await layout()).toEqual(["未読", "unread:other"]);
+    await release(mark, true);
+    await waitForCalls(read, 2);
+    await browser.pause(300);
+    const cached = (await callsOf(read)).slice(1);
+    expect(cached.every((call) => JSON.stringify(call) === JSON.stringify({ cached: true }))).toBe(true);
+    for (let i = 0; i < cached.length; i++) await release(read, timeline([messages[1]]));
+    await browser.waitUntil(async () => (await layout()).join() === ["未読", "unread:other"].join());
+  });
 });
