@@ -1,4 +1,4 @@
-// The accounts: the sidebar avatars, the popup of an account (or of Claude), the Google card of the settings, logging in and removing an account.
+// The accounts: the sidebar avatars, the popup of an account (or of Claude, or of a Slack workspace), the Google card of the settings, logging in and removing an account.
 import type { Claude } from "./bindings/Claude";
 import { calendarNeedsLogin, loadCalendar, resetCalendar } from "./calendar.js";
 import { getClaude } from "./claude.js";
@@ -11,6 +11,7 @@ import { rows, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { itemRow } from "./settings.js";
+import { decorateAvatar } from "./slack-view.js";
 import { goBack, opened } from "./thread.js";
 import { show, showError } from "./view.js";
 
@@ -20,6 +21,20 @@ let inboxIssues: { needsLogin: string[]; failed: Record<string, string> } = { ne
 let popupAccount: string | null = null;
 // Whether the Claude avatar's popup is open (it is drawn in the same #account-popup).
 let claudePopup = false;
+// The workspace whose popup is open (the Slack tray's avatar; drawn in the same #account-popup), or null.
+let popupWorkspace: string | null = null;
+// The workspaces of the Slack tray, as the Slack screen last drew them.
+let tray: WorkspaceEntry[] = [];
+
+// A workspace of the Slack tray: its own icon (the https URL on Slack's image host, fetched by slack-view.ts, or null for the initial on the workspace's color), and what the last read of its messages found.
+export interface WorkspaceEntry {
+  teamId: string;
+  team: string;
+  user: string;
+  iconUrl: string | null;
+  status: [string, string];
+  lines: string[];
+}
 // The account whose removal the popup is asking to confirm, or null.
 let confirmingRemoval: string | null = null;
 // What the popup shows now; it is redrawn only when this changes, so a sync does not drop a text selection.
@@ -33,7 +48,7 @@ export function closeClaudePopup() {
 }
 
 // Whether the popup of an account or of Claude is open.
-export const popupOpen = () => popupAccount !== null || claudePopup;
+export const popupOpen = () => popupAccount !== null || claudePopup || popupWorkspace !== null;
 
 // Sidebar avatars of every account, a re-login row for each account that needs it, and an error row for each that failed to load.
 export function renderAccounts({ accounts, needsLogin, failed }: { accounts: string[]; needsLogin: string[]; failed: Record<string, string> }) {
@@ -75,9 +90,10 @@ export function renderAccounts({ accounts, needsLogin, failed }: { accounts: str
 export function closePopup() {
   popupAccount = null;
   claudePopup = false;
+  popupWorkspace = null;
   confirmingRemoval = null;
   $("account-popup").hidden = true;
-  for (const b of accountButtons()) b.setAttribute("aria-expanded", "false");
+  for (const b of [...accountButtons(), ...trayButtons()]) b.setAttribute("aria-expanded", "false");
   $("claude-btn").setAttribute("aria-expanded", "false");
 }
 
@@ -85,12 +101,69 @@ function togglePopup(account: string) {
   if (popupAccount === account) return closePopup();
   popupAccount = account;
   claudePopup = false;
+  popupWorkspace = null;
   confirmingRemoval = null;
   popupKey = "";
   $("account-popup").hidden = false;
   for (const b of accountButtons()) b.setAttribute("aria-expanded", String(b.dataset.account === account));
+  for (const b of trayButtons()) b.setAttribute("aria-expanded", "false");
   $("claude-btn").setAttribute("aria-expanded", "false");
   refreshPopup();
+}
+
+const trayButtons = () => [...$("slack-workspace-list").children] as HTMLElement[];
+
+// The Slack tray: one avatar per workspace, with its own icon when it has one. Drawn by the Slack screen; an open popup follows the new state.
+export function renderWorkspaceTray(items: WorkspaceEntry[]) {
+  tray = items;
+  $("slack-workspace-list").replaceChildren(
+    ...items.map((w) => {
+      const button = document.createElement("button");
+      button.className = "avatar account-btn";
+      button.dataset.team = w.teamId;
+      decorateAvatar(button, w.team, w.iconUrl);
+      button.setAttribute("aria-label", w.team);
+      button.setAttribute("aria-haspopup", "dialog");
+      button.setAttribute("aria-controls", "account-popup");
+      button.setAttribute("aria-expanded", String(w.teamId === popupWorkspace));
+      button.onclick = () => toggleWorkspacePopup(w.teamId);
+      return button;
+    }),
+  );
+  refreshPopup();
+}
+
+function toggleWorkspacePopup(teamId: string) {
+  if (popupWorkspace === teamId) return closePopup();
+  closePopup();
+  popupWorkspace = teamId;
+  popupKey = "";
+  $("account-popup").hidden = false;
+  for (const b of trayButtons()) b.setAttribute("aria-expanded", String(b.dataset.team === teamId));
+  refreshPopup();
+}
+
+// A workspace's popup: its name, the user, the state of the last read, and the way to the Slack settings.
+function drawWorkspacePopup() {
+  const w = tray.find((x) => x.teamId === popupWorkspace);
+  const button = trayButtons().find((b) => b.dataset.team === popupWorkspace);
+  if (!w || !button) return closePopup();
+  const popup = $("account-popup");
+  const key = JSON.stringify(["workspace", w]);
+  if (key !== popupKey) {
+    popupKey = key;
+    const hadFocus = popup.contains(document.activeElement);
+    const avatar = el("avatar");
+    decorateAvatar(avatar, w.team, w.iconUrl);
+    const open = tag("button", "text-btn", "設定を開く");
+    open.onclick = () => {
+      closePopup();
+      setScreen("settings", "slack");
+    };
+    popup.replaceChildren(avatar, el("popup-email", w.team), el("popup-plan", w.user), tag("span", `status ${w.status[0]}`, w.status[1]), ...w.lines.map((l) => el("popup-status", l)), open);
+    if (hadFocus) button.focus();
+  }
+  placePopup(button);
 }
 
 // Puts the popup right of the sidebar at its avatar's height, inside the window.
@@ -104,9 +177,10 @@ function placePopup(button: HTMLElement) {
 function toggleClaudePopup() {
   if (claudePopup) return closePopup();
   popupAccount = null;
+  popupWorkspace = null;
   confirmingRemoval = null;
   claudePopup = true;
-  for (const b of accountButtons()) b.setAttribute("aria-expanded", "false");
+  for (const b of [...accountButtons(), ...trayButtons()]) b.setAttribute("aria-expanded", "false");
   $("claude-btn").setAttribute("aria-expanded", "true");
   // The button is only shown while Claude can be used.
   const claude = getClaude() as Extract<Claude, { state: "ready" }>;
@@ -170,6 +244,7 @@ export function renderGoogleCard() {
 export function refreshPopup() {
   renderGoogleCard();
   if (claudePopup) return placePopup($("claude-btn"));
+  if (popupWorkspace !== null) return drawWorkspacePopup();
   if (popupAccount === null) return;
   const a = popupAccount;
   const button = accountButtons().find((b) => b.dataset.account === a);
@@ -272,12 +347,16 @@ export function initAccounts() {
   $("claude-btn").onclick = toggleClaudePopup;
   // Another avatar or the popup handles its own click.
   document.addEventListener("pointerdown", (e) => {
-    if ((popupAccount !== null || claudePopup) && !(e.target as Element).closest("#account-popup, .account-btn")) closePopup();
+    if (popupOpen() && !(e.target as Element).closest("#account-popup, .account-btn")) closePopup();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || (popupAccount === null && !claudePopup)) return;
+    if (e.key !== "Escape" || !popupOpen()) return;
     const inside = $("account-popup").contains(document.activeElement);
-    const button = claudePopup ? $("claude-btn") : accountButtons().find((b) => b.dataset.account === popupAccount);
+    const button = claudePopup
+      ? $("claude-btn")
+      : popupWorkspace !== null
+        ? trayButtons().find((b) => b.dataset.team === popupWorkspace)
+        : accountButtons().find((b) => b.dataset.account === popupAccount);
     closePopup();
     if (inside) button?.focus();
   });

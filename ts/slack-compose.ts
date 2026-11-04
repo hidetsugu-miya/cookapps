@@ -10,7 +10,8 @@ import { $, tag } from "./dom.js";
 import { unescapeHtml } from "./format.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
-import { currentScreen, setScreen, showSlackScreen, showThreadScreen } from "./nav.js";
+import { currentScreen, setScreen, showComposeScreen, showThreadScreen } from "./nav.js";
+import { initSplit } from "./split.js";
 import { type OpenThread, opened } from "./thread.js";
 import { toast } from "./toast.js";
 import { showError } from "./view.js";
@@ -243,7 +244,7 @@ async function openCompose() {
   $("slack-subject").textContent = current.subject || "(件名なし)";
   $("slack-error").hidden = true;
   drawTarget();
-  showSlackScreen();
+  showComposeScreen();
   // The log is drawn already (by the answers, or by the new draft's reset); only its scroll position was lost while the screen was hidden.
   refreshSlackCompose();
   const log = $("slack-log");
@@ -272,7 +273,7 @@ async function post() {
     posting = false;
     refreshSlackCompose();
     // The error line is on the compose screen: when the screen was left, or another mail's draft took its place, a toast tells instead.
-    if (currentScreen() === "slack" && draft === d) return showComposeError(e);
+    if (currentScreen() === "compose" && draft === d) return showComposeError(e);
     return toast(`${wsName(t.teamId)} の ${label(t)} に貼れませんでした: ${e}`);
   }
   posting = false;
@@ -283,65 +284,9 @@ async function post() {
     chat.reset();
     chat.clearInput();
     drawTarget();
-    if (currentScreen() === "slack") back();
+    if (currentScreen() === "compose") back();
   }
   refreshSlackCompose();
-}
-
-// The Claude pane is a third to a half as wide as #slack-main (the CSS clamp holds it there too), kept as a ratio so a resized window keeps it.
-const MIN_RATIO = 1 / 3;
-const MAX_RATIO = 1 / 2;
-const KEY_STEP = 0.02;
-let ratio = MIN_RATIO;
-
-function setRatio(next: number) {
-  ratio = Math.min(MAX_RATIO, Math.max(MIN_RATIO, next));
-  $("slack-main").style.setProperty("--chat-w", `${ratio * 100}%`);
-  $("slack-split").setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
-}
-
-function initSplit() {
-  const split = $("slack-split");
-  const main = $("slack-main");
-  setRatio(ratio);
-  // The divider is dragged with pointer events on the document, so the drag goes on when the pointer leaves it. Dragging left widens the Claude pane.
-  split.onpointerdown = (down) => {
-    if (down.button !== 0) return;
-    down.preventDefault();
-    const pointer = down.pointerId;
-    main.classList.add("dragging");
-    // The box is read once; the writes of a drag are gathered into one per animation frame.
-    const box = main.getBoundingClientRect();
-    let pending: number | null = null;
-    let frame = 0;
-    const flush = () => {
-      frame = 0;
-      if (pending !== null) setRatio(pending);
-      pending = null;
-    };
-    const move = (e: PointerEvent) => {
-      if (e.pointerId !== pointer) return;
-      pending = (box.right - e.clientX) / box.width;
-      if (!frame) frame = requestAnimationFrame(flush);
-    };
-    const end = (e: PointerEvent) => {
-      if (e.pointerId !== pointer) return;
-      cancelAnimationFrame(frame);
-      flush();
-      main.classList.remove("dragging");
-      document.removeEventListener("pointermove", move, true);
-      document.removeEventListener("pointerup", end, true);
-      document.removeEventListener("pointercancel", end, true);
-    };
-    document.addEventListener("pointermove", move, true);
-    document.addEventListener("pointerup", end, true);
-    document.addEventListener("pointercancel", end, true);
-  };
-  split.onkeydown = (e) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    e.preventDefault();
-    setRatio(ratio + (e.key === "ArrowLeft" ? KEY_STEP : -KEY_STEP));
-  };
 }
 
 export function initSlackCompose() {
@@ -371,7 +316,7 @@ export function initSlackCompose() {
   $("slack-reset").onblur = disarmReset;
   $("slack-proofread").onclick = () => chat.send("校正してください");
   chat.init();
-  initSplit();
+  initSplit($("slack-main"), $("slack-split"));
   drawTarget();
   refreshSlackCompose();
 }

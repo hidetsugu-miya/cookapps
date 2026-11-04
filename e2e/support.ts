@@ -12,14 +12,20 @@ import type { Info } from "../ts/bindings/Info";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
+import type { SlackThread } from "../ts/bindings/SlackThread";
 import type { Summary } from "../ts/bindings/Summary";
 import type { TaskItem } from "../ts/bindings/TaskItem";
 import type { ThreadDetail } from "../ts/bindings/ThreadDetail";
+import type { ThreadFile } from "../ts/bindings/ThreadFile";
 import type { ThreadItem } from "../ts/bindings/ThreadItem";
+import type { ThreadMessage } from "../ts/bindings/ThreadMessage";
+import type { Timeline } from "../ts/bindings/Timeline";
+import type { TimelineMessage } from "../ts/bindings/TimelineMessage";
 import type { Todo } from "../ts/bindings/Todo";
 import type { TodoPrompt } from "../ts/bindings/TodoPrompt";
 import type { Week } from "../ts/bindings/Week";
 import type { Workspace } from "../ts/bindings/Workspace";
+import type { WorkspaceIcon } from "../ts/bindings/WorkspaceIcon";
 
 declare global {
   interface Window {
@@ -364,6 +370,60 @@ export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general" }];
 
 // What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by. `missingOptional` is the same for users:read and files:read.
 export const checked = (missingScopes: string[] | null, missingOptional: string[] | null = []): Checked => ({ ...workspace, missingScopes, missingOptional });
+
+// A Slack timestamp `minutes` minutes ago ("1700000000.000100"); `n` tells apart messages of the same minute.
+export const slackTs = (minutes: number, n = 0) => `${Math.floor(Date.now() / 1000) - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
+
+// The permalink of the message with `ts` in the channel `C0123ABCD` of `workspace`.
+export const permalinkOf = (ts: string) => `${workspace.url}archives/C0123ABCD/p${ts.replace(".", "")}`;
+
+// A message of the Slack list (`slack_timeline`), by `name` in `#channelName`; `extra` overrides any field.
+export const timelineMessage = (ts: string, name: string, channelName: string, text: string, extra: Partial<TimelineMessage> = {}): TimelineMessage => ({
+  teamId: workspace.teamId,
+  team: workspace.team,
+  workspaceUrl: workspace.url,
+  channel: "C0123ABCD",
+  channelName,
+  ts,
+  threadTs: null,
+  user: "U1",
+  name,
+  iconUrl: null,
+  text,
+  replyCount: 0,
+  permalink: permalinkOf(ts),
+  hasFiles: false,
+  ...extra,
+});
+
+// What `slack_timeline` answers.
+export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({ messages, failed: [], missing: [], refreshSecs: 120, ...extra });
+
+// A message of a thread (`slack_thread`).
+export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, files: [], ...extra });
+
+// An attached file; an image has a thumbnail URL on files.slack.com.
+export const slackFile = (id: string, name: string, extra: Partial<ThreadFile> = {}): ThreadFile => ({ id, name, mimetype: "image/png", thumbUrl: null, permalink: `https://example-team.slack.com/files/U1/${id}/${name}`, ...extra });
+export const thumbUrlOf = (id: string) => `https://files.slack.com/files-tmb/T1-${id}/thumb_360.png`;
+
+// What `slack_thread` answers: the thread that starts at the first message.
+export const slackThread = (messages: ThreadMessage[]): SlackThread => ({ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[0].ts, messages, truncated: false });
+
+// What `slack_icons` answers: the user's own icon in `workspace`.
+export const ownIcon = (iconUrl: string | null): WorkspaceIcon[] => [{ teamId: workspace.teamId, name: workspace.user, iconUrl }];
+
+// A 1x1 transparent PNG as a data: URI, what `fetch_images` and `slack_file_images` answer for an image.
+export const pngUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+// What `claude_proofread_reply` answers when Claude proposes changing the reply `before` to `after`.
+export const replyEdit = (before: string, after: string): PromptEdit => ({
+  reply: "言い回しを直しました",
+  body: after,
+  diff: [
+    { kind: "del", text: before },
+    { kind: "ins", text: after },
+  ],
+});
 
 export const claudeReady: Claude = { state: "ready", email: "claude@example.com", plan: "Max", version: "2.0.0", method: "subscription" };
 export const claudeLoggedOut: Claude = { state: "loggedOut", version: "2.0.0" };

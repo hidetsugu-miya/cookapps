@@ -35,6 +35,10 @@ const answers = {
   todoist_connected: false,
   todoist_comments: [],
   slack_load: { workspaces: [], recent: [] },
+  slack_timeline: { messages: [], failed: [], missing: [], refreshSecs: 120 },
+  slack_icons: [],
+  slack_file_images: {},
+  fetch_images: {},
   claude_status: { state: "missing" },
   claude_model_settings: Object.fromEntries(
     ["slackSummary", "mailSummary", "promptChat", "proofread", "slackReply"].map((purpose) => [purpose, { model: "sonnet", effort: purpose === "slackReply" ? "high" : "medium" }]),

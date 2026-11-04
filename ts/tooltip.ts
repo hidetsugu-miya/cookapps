@@ -11,11 +11,11 @@ function hideTip() {
   tip.hidden = true;
 }
 
-// Right of a sidebar control, below any other; kept inside the window. While the account popup is open it covers that area, so the sidebar's account and Claude avatars show none.
+// Right of a sidebar control, below any other; kept inside the window. While the account popup is open it covers that area, so the sidebar's account, workspace and Claude avatars show none.
 function showTip(target: Element) {
   hideTip();
   const inSidebar = target.closest("#sidebar");
-  if (popupOpen() && target.closest("#account-list, #claude-btn")) return;
+  if (popupOpen() && target.closest("#account-list, #slack-workspace-list, #claude-btn")) return;
   tipTimer = setTimeout(() => {
     tip.textContent = target.getAttribute("aria-label");
     tip.hidden = false;
@@ -28,7 +28,7 @@ function showTip(target: Element) {
 }
 
 // Delegated, so rows and avatars built later get tooltips too.
-const TIP_TARGET = "button[aria-label], input[aria-label]";
+const TIP_TARGET = "button[aria-label], input[aria-label], a.icon-btn[aria-label]";
 const targetOf = (e: Event) => (e.target as Element).closest?.(TIP_TARGET);
 
 export function initTooltip() {

@@ -10,6 +10,8 @@ import { initMenu } from "./menu.js";
 import { initNav } from "./nav.js";
 import { initSettings } from "./settings.js";
 import { initSlackCompose } from "./slack-compose.js";
+import { initSlackList } from "./slack-list.js";
+import { initSlackThread } from "./slack-thread.js";
 import { initThread } from "./thread.js";
 import { initToast } from "./toast.js";
 import { initTodo } from "./todo.js";
@@ -34,6 +36,8 @@ initClaude();
 initHint();
 initSettings();
 initSlackCompose();
+initSlackList();
+initSlackThread();
 
 showKeptInbox();
 refreshClaude();
