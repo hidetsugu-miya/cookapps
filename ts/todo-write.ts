@@ -70,8 +70,8 @@ export async function todoCall<C extends Write>(
   return answer;
 }
 
-export const saveTask = (id: string, fields: TaskFields) =>
-  todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields), !("content" in fields));
+export const saveTask = (id: string, fields: TaskFields, redraw = !("content" in fields)) =>
+  todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields), redraw);
 // Makes the label `name` and puts it on the task `id`, whose labels are `labels` (the new name in them) afterwards.
 export const createLabel = (id: string, name: string, labels: string[]) =>
   todoCall("todoist_create_label", { id, name, labels }, null, () => addLabelLocal(id, name));
