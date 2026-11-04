@@ -48,10 +48,10 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
 #main { flex: 1; overflow-y: auto; padding: 8px 24px 32px 32px; }
-#main::-webkit-scrollbar, #cal-scroll::-webkit-scrollbar, #todo-main::-webkit-scrollbar, #settings::-webkit-scrollbar, #slack-feed::-webkit-scrollbar, #st-msgs::-webkit-scrollbar { width: 12px; }
-#main::-webkit-scrollbar-track, #cal-scroll::-webkit-scrollbar-track, #todo-main::-webkit-scrollbar-track, #settings::-webkit-scrollbar-track, #slack-feed::-webkit-scrollbar-track, #st-msgs::-webkit-scrollbar-track { background: var(--bar); }
-#main::-webkit-scrollbar-thumb, #cal-scroll::-webkit-scrollbar-thumb, #todo-main::-webkit-scrollbar-thumb, #settings::-webkit-scrollbar-thumb, #slack-feed::-webkit-scrollbar-thumb, #st-msgs::-webkit-scrollbar-thumb { background: var(--chip-line); border-radius: 6px; border: 3px solid var(--bar); }
-#main::-webkit-scrollbar-thumb:hover, #cal-scroll::-webkit-scrollbar-thumb:hover, #todo-main::-webkit-scrollbar-thumb:hover, #settings::-webkit-scrollbar-thumb:hover, #slack-feed::-webkit-scrollbar-thumb:hover, #st-msgs::-webkit-scrollbar-thumb:hover { background: var(--side-fg); }
+#main::-webkit-scrollbar, #cal-scroll::-webkit-scrollbar, #todo-main::-webkit-scrollbar, #settings::-webkit-scrollbar, #slack-feed::-webkit-scrollbar, #orca-feed::-webkit-scrollbar, #st-msgs::-webkit-scrollbar { width: 12px; }
+#main::-webkit-scrollbar-track, #cal-scroll::-webkit-scrollbar-track, #todo-main::-webkit-scrollbar-track, #settings::-webkit-scrollbar-track, #slack-feed::-webkit-scrollbar-track, #orca-feed::-webkit-scrollbar-track, #st-msgs::-webkit-scrollbar-track { background: var(--bar); }
+#main::-webkit-scrollbar-thumb, #cal-scroll::-webkit-scrollbar-thumb, #todo-main::-webkit-scrollbar-thumb, #settings::-webkit-scrollbar-thumb, #slack-feed::-webkit-scrollbar-thumb, #orca-feed::-webkit-scrollbar-thumb, #st-msgs::-webkit-scrollbar-thumb { background: var(--chip-line); border-radius: 6px; border: 3px solid var(--bar); }
+#main::-webkit-scrollbar-thumb:hover, #cal-scroll::-webkit-scrollbar-thumb:hover, #todo-main::-webkit-scrollbar-thumb:hover, #settings::-webkit-scrollbar-thumb:hover, #slack-feed::-webkit-scrollbar-thumb:hover, #orca-feed::-webkit-scrollbar-thumb:hover, #st-msgs::-webkit-scrollbar-thumb:hover { background: var(--side-fg); }
 
 #login { display: flex; justify-content: center; padding: 64px; }
 #relogin { margin-bottom: 8px; }
@@ -470,7 +470,7 @@ a.c-file:hover { background: var(--hover); }
 .c-chip .icon-btn { width: 22px; height: 22px; flex: none; }
 .c-chip .icon-btn svg { width: 12px; height: 12px; }
 
-.menu { position: fixed; z-index: 10; min-width: 160px; padding: 4px; border: 1px solid var(--chip-line); border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; }
+.menu { position: fixed; z-index: 10; overflow-y: auto; min-width: 160px; padding: 4px; border: 1px solid var(--chip-line); border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; }
 .menu button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
 .menu button[aria-current="true"] { font-weight: bold; }
@@ -662,6 +662,45 @@ button.status:hover { filter: brightness(.95); }
 .proofread-row .text-btn { height: 28px; padding: 0 12px; border-color: var(--accent); color: var(--accent); font-size: 12px; font-weight: bold; }
 .proofread-row .text-btn:disabled { opacity: .4; cursor: default; }
 .proofread-row .text-btn:disabled:hover { background: #fff; }
+
+/* The Orca screen (A-6): a row per agent, grouped by what it waits for, and the composer pinned under the list. */
+#orca { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#orca-header { padding: 14px 24px 10px 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#orca-header h1 { flex: none; margin-right: 8px; }
+#orca-header .icon-btn { margin-left: auto; color: #444746; border-radius: 50%; }
+button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
+#orca-notice:not(:empty) { padding: 8px 32px 0; }
+#orca-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }
+.orca-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; column-gap: 12px; width: 100%; min-height: 60px; box-sizing: border-box; padding: 10px 16px; border: 0; border-radius: 12px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.orca-row:hover:not(:disabled) { background: var(--hover); }
+.orca-row[aria-pressed="true"] { background: var(--soft); }
+.orca-row:disabled { cursor: default; }
+.orca-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.orca-row.waiting .orca-dot { background: var(--warn); }
+.orca-row.done .orca-dot { background: var(--muted); }
+.orca-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.orca-branch { margin-left: 8px; font-size: 12px; color: var(--muted); }
+.orca-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #444; }
+.orca-side { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.orca-agent { padding: 2px 8px; border: 1px solid var(--chip-line); border-radius: 10px; }
+#orca-form { flex: none; padding: 12px 24px 20px 32px; border-top: 1px solid var(--line); background: var(--bar); }
+#orca-error { margin-bottom: 8px; }
+.orca-dest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+.orca-dest .review-chip { height: 28px; padding: 0 12px; border-radius: 14px; font-size: 12px; }
+.orca-dest .review-chip.on { border-color: var(--accent); background: var(--soft); color: var(--ins); }
+.orca-dest .text-btn { height: 28px; padding: 0 12px; border-radius: 14px; font: inherit; }
+#orca-form .composer { position: relative; flex-direction: row; align-items: flex-end; gap: 12px; padding: 10px 12px; }
+#orca-input { flex: 1; min-width: 0; }
+#orca-send { flex: none; height: 44px; padding: 0 20px; border-radius: 22px; font: inherit; }
+#orca-send:disabled { opacity: .4; cursor: default; }
+#orca-send:disabled:hover { background: var(--accent); filter: none; }
+/* The skill list above the composer: the frame and the shadow of #account-popup, at most 8 rows of 32px before it scrolls. */
+#orca-complete { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 10; box-sizing: border-box; max-height: 272px; overflow-y: auto; padding: 4px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
+.orca-skill { display: flex; align-items: center; gap: 12px; height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; cursor: pointer; }
+.orca-skill[aria-selected="true"] { background: var(--soft); }
+.orca-skill code { flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.orca-skill span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
 
 /* The Slack list: a row per message, newest first. The dot on the avatar is the workspace's color. */
 #slack-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }

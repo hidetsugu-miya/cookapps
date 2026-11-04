@@ -7,6 +7,7 @@ mod disk_cache;
 pub mod gmail;
 pub mod image_senders;
 pub mod images;
+pub mod orca;
 pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
@@ -262,6 +263,11 @@ pub fn run() {
             claude::claude_edit_todo_prompt,
             claude::claude_proofread_slack,
             claude::claude_chat_thread,
+            orca::orca_overview,
+            orca::orca_set_target,
+            orca::orca_send,
+            orca::orca_launch,
+            orca::orca_skills,
             update::app_info,
             update::update_mode,
             update::set_update_mode,

@@ -8,6 +8,7 @@ import { initHint } from "./hint.js";
 import { initInbox, load, showKeptInbox } from "./inbox.js";
 import { initMenu } from "./menu.js";
 import { initNav } from "./nav.js";
+import { initOrca } from "./orca.js";
 import { initSettings } from "./settings.js";
 import { initSlackCompose } from "./slack-compose.js";
 import { initSlackList } from "./slack-list.js";
@@ -38,6 +39,7 @@ initSettings();
 initSlackCompose();
 initSlackList();
 initSlackThread();
+initOrca();
 
 showKeptInbox();
 refreshClaude();

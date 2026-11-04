@@ -47,6 +47,9 @@ const answers = {
   slack_unhide_channel: true,
   slack_icons: [],
   slack_file_images: {},
+  // No orca command: the Orca screen reads once and stops.
+  orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [] },
+  orca_skills: [],
   fetch_images: {},
   claude_status: { state: "missing" },
   claude_model_settings: Object.fromEntries(

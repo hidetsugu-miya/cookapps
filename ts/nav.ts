@@ -4,6 +4,7 @@ import { $ } from "./dom.js";
 import { showCalendar } from "./calendar.js";
 import { closeDetail } from "./calendar-detail.js";
 import { closeHint } from "./hint.js";
+import { showOrca } from "./orca.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
 import { showSlackList } from "./slack-list.js";
 import { loadTodo, renderTodo } from "./todo.js";
@@ -11,7 +12,7 @@ import { fetchOpenComments } from "./todo-comments.js";
 import { todoState } from "./todo-data.js";
 import { show } from "./view.js";
 
-export type Screen = "mail" | "calendar" | "todo" | "slack" | "settings";
+export type Screen = "mail" | "calendar" | "todo" | "slack" | "orca" | "settings";
 
 // Which screen the sidebar selected, or "compose" while the Slack compose screen is open (the sidebar then still shows the inbox).
 // Background work reads it; only the sidebar and the compose screen's open and close change it.
@@ -19,7 +20,7 @@ let screen: Screen | "compose" = "mail";
 export const currentScreen = () => screen;
 
 function markNav(name: Screen) {
-  for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"], ["nav-todo", "todo"], ["nav-slack", "slack"], ["nav-settings", "settings"]]) {
+  for (const [id, target] of [["nav-mail", "mail"], ["nav-calendar", "calendar"], ["nav-todo", "todo"], ["nav-slack", "slack"], ["nav-orca", "orca"], ["nav-settings", "settings"]]) {
     if (target === name) $(id).setAttribute("aria-current", "page");
     else $(id).removeAttribute("aria-current");
   }
@@ -80,6 +81,8 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
     loadTodo(false, todoState.todo === null || todoState.kept);
   } else if (name === "slack") {
     showSlackList();
+  } else if (name === "orca") {
+    showOrca();
   } else if (name === "settings") {
     show("settings");
     selectSettingsTab(tab ?? "google");
@@ -95,6 +98,7 @@ export function initNav() {
   $("nav-calendar").onclick = () => setScreen("calendar");
   $("nav-todo").onclick = () => setScreen("todo");
   $("nav-slack").onclick = () => setScreen("slack");
+  $("nav-orca").onclick = () => setScreen("orca");
   syncTrays();
   $("nav-settings").onclick = () => setScreen("settings");
 }

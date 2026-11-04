@@ -9,6 +9,10 @@ import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
+import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
+import type { OrcaRow } from "../ts/bindings/OrcaRow";
+import type { OrcaSkill } from "../ts/bindings/OrcaSkill";
+import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
@@ -490,3 +494,24 @@ export const connection = (
   apiKey: ClaudeConnection["apiKey"],
   claude: Claude = method === "apiKey" ? claudeKeyReady : subscription,
 ): ClaudeConnection => ({ method, subscription, apiKey, claude });
+
+// The Orca screen (A-6). `minutes` is how long ago the state began (the time of a running or waiting agent) or the agent ended (a done one).
+export const orcaRow = (repo: string, branch: string, line: string, extra: Partial<OrcaRow> & { minutes?: number } = {}): OrcaRow => {
+  const { minutes = 2, ...rest } = extra;
+  return { group: "working", repo, branch, line, agent: "Claude", atMs: Date.now() - minutes * 60_000 - 5_000, handle: `term_${repo}`, ...rest };
+};
+
+export const orcaWorktree = (repo: string, branch: string): OrcaWorktree => ({ path: `/work/${repo}`, repo, branch });
+
+// What `orca_overview` answers: a read that worked, this machine's, unless `extra` says another.
+export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], extra: Partial<OrcaOverview> = {}): OrcaOverview => ({
+  state: "ready",
+  message: "",
+  target: null,
+  environments: [],
+  rows,
+  worktrees,
+  ...extra,
+});
+
+export const orcaSkill = (command: string, description = ""): OrcaSkill => ({ command, description });

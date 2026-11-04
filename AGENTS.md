@@ -28,7 +28,7 @@ A new requirement gets a section there and an entry here.
 | Calendar | `requirements/calendar.md` | C-1 View, C-2 Event detail, C-3 First day of the week |
 | Tasks | `requirements/tasks.md` | T-1 Todoist, T-2 Nest and unnest tasks, T-3 Comments, T-4 Labels, T-5 Count by due moment |
 | Slack | `requirements/slack.md` | S-1 Paste a mail into Slack, S-2 Summarize a Slack message into a Todo, S-3 Edit the Todo summary prompt, S-4 Proofread the text to paste into Slack with Claude, S-5 Slack list, S-6 Slack thread, S-7 Ask Claude about the thread, S-8 Slack list: unread and read, S-9 Keep a channel off the Slack list, S-10 Emoji in Slack text, S-11 Blocks and attachments in the thread, S-12 Slack styles in the thread, S-13 Watch threads and the header of the Slack list, S-14 Unread replies in the Slack list, S-15 Mark one Slack row read |
-| Integration | `requirements/integration.md` | A-1 Claude integration, A-2 Claude model and effort, A-4 Claude connection, A-3 Settings tabs, A-5 Side menu by screen |
+| Integration | `requirements/integration.md` | A-1 Claude integration, A-2 Claude model and effort, A-4 Claude connection, A-3 Settings tabs, A-5 Side menu by screen, A-6 Orca |
 | Updates | `requirements/updates.md` | U-1 Auto update, U-2 Update settings and version |
 
 ### Out of scope
@@ -50,7 +50,7 @@ A new requirement gets a section there and an entry here.
 - The refresh token is stored locally so the user does not log in at every start.
 - Tokens go in the OS keychain (macOS Keychain, Windows Credential Manager), never in a plain file.
 - The list of accounts (email addresses only) is saved in `accounts.json` in the app config directory.
-- The last weeks of the calendar, with the details of their events (place, description, Meet link and so on), are saved in `calendar-cache.json` in the same place; the first day of the week is in `calendar-settings.json`, and the model and effort of the five purposes of the Claude calls are in `claude-settings.json`. The method the Claude calls sign in with is in `claude-auth.json` there, and the Anthropic API key is in the OS keychain (service `jp.mysis.cookapps.claude`).
+- The last weeks of the calendar, with the details of their events (place, description, Meet link and so on), are saved in `calendar-cache.json` in the same place; the first day of the week is in `calendar-settings.json`, the model and effort of the five purposes of the Claude calls are in `claude-settings.json`, and the Orca to talk to (this machine or a saved environment) is in `orca-settings.json`. The method the Claude calls sign in with is in `claude-auth.json` there, and the Anthropic API key is in the OS keychain (service `jp.mysis.cookapps.claude`).
 - If the OAuth consent screen is "External" and in "Testing", refresh tokens expire after 7 days.
   - Use an "Internal" consent screen, or publish an "External" one.
 
@@ -70,7 +70,7 @@ requirements/  the requirements, one file per area
 - The frontend is plain TypeScript, HTML and CSS.
   `ts/` is split into one module per screen.
 - The backend is Rust.
-  Each service has its own module: `gmail.rs`, `calendar.rs`, `todoist.rs`, `slack.rs`, `claude.rs`.
+  Each service has its own module: `gmail.rs`, `calendar.rs`, `todoist.rs`, `slack.rs`, `claude.rs`, `orca.rs`.
   The modules are in the library crate (`src-tauri/src/lib.rs`), and `main.rs` only calls `cookapps_lib::run()`.
 - Internal functions take the config directory (`&Path`), not an `AppHandle`, so `cookapps-mcp` can share them.
 - The Rust version is pinned in `rust-toolchain.toml` and in the CI workflow. Keep them equal.

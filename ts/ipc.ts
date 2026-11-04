@@ -14,6 +14,8 @@ import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
+import type { OrcaOverview } from "./bindings/OrcaOverview";
+import type { OrcaSkill } from "./bindings/OrcaSkill";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
@@ -165,6 +167,16 @@ export interface Commands {
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
   // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread).
   claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
+  // The agents that run in the Orca in use (the saved target: this machine, or a saved environment; with nothing saved the first environment, else this machine) and its worktrees. Never rejects for a read that failed: `state` says "missing" (no orca command) or "failed" (with `message`); `environments` are listed in both.
+  orca_overview: { args: undefined; result: OrcaOverview };
+  // Saves the target: a saved environment's name, or null for this machine.
+  orca_set_target: { args: { environment: string | null }; result: null };
+  // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.
+  orca_send: { args: { handle: string; text: string; environment: string | null }; result: null };
+  // Starts `agent` ("claude" or "codex") in the worktree at `path` with `text` as its first prompt.
+  orca_launch: { args: { agent: string; path: string; text: string; environment: string | null }; result: null };
+  // The skills of Claude Code on that Orca, as the commands to type (`/name`, `/plugin:name`), sorted.
+  orca_skills: { args: { environment: string | null }; result: OrcaSkill[] };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };
