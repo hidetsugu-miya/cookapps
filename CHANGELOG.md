@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.31.0
+
+S-10 the Slack list and thread show the standard emoji of `:tada:`-style codes (the crate `emojis`, then a table of Slack's names generated from iamcal/emoji-data, MIT, in `slack_emoji.rs`, with skin tones). A workspace's own emoji stay as `:name:`, and codes in URLs, links, mentions, code and right after an ASCII letter or digit are not converted. S-1 and S-2 are unchanged. A real Slack message was not tried.
+
 ## v0.30.0
 
 S-8 the Slack list split by `last_read` (`conversations.info`, confirmed on channels with the owner's real tokens) into at most 20 unread (10 first, the rest behind a button) and 5 read, a badge on the Slack button (`20+` above 20), opening a row marks it read on Slack (`conversations.mark`, optional `channels:write` and `groups:write`, which Slack makes include channel management), and the list is now read on every screen while the window is visible. S-9 a channel kept off the list (`slack-hidden.json`, IDs only; a hover icon on the row, undo, and a card in the Slack settings tab), because Slack's mute cannot be read (`users.prefs.get` answers `missing_scope`, `needed=read`, a legacy scope no new app can have). The real hover look of the hide icon, a real `conversations.mark` and the real read with these tokens in the app were not tried.
