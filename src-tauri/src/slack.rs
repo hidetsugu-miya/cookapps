@@ -23,8 +23,8 @@ use crate::{
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
     images::{fetch_slack_files, run_limited, SlackFileCache},
     slack_blocks::{
-        image_urls, mentioned_users, message_attachments, message_blocks, ThreadAttachment,
-        ThreadBlock,
+        image_urls, mentioned_users, message_attachments, message_blocks, message_plain,
+        ThreadAttachment, ThreadBlock,
     },
     slack_emoji,
     slack_mrkdwn::{self, Rich},
@@ -449,23 +449,27 @@ fn unread_replies(more: bool, reply_count: Option<u64>, read: usize, alone: bool
     }
 }
 
-/// The text of a message as sent to the summary: who wrote it (an ID: names need a scope the app does not ask for) and what.
-/// The lines of the text after the first are indented by two spaces, so a line at the start of a line is always a heading or a sender and
-/// no text of a message can pass as one (the summary instructions say so). A line break of any kind counts: `\r\n`, `\r`, and the ones `str::lines` of a reader may take for one
+/// `text` trimmed, with every line after the first indented by two spaces, so a line at the start of a line is always a heading or a sender and
+/// no text of a message can pass as one (the summary and thread conversation instructions say so). A line break of any kind counts: `\r\n`, `\r`, and the ones `str::lines` of a reader may take for one
 /// (U+2028, U+2029, U+0085, a vertical tab and a form feed).
-fn message_line(m: &Value) -> String {
-    let text = m["text"]
-        .as_str()
-        .unwrap_or_default()
-        .replace("\r\n", "\n")
+pub(crate) fn indent_continuation(text: &str) -> String {
+    text.replace("\r\n", "\n")
         .replace(
             ['\r', '\u{2028}', '\u{2029}', '\u{85}', '\u{b}', '\u{c}'],
             "\n",
-        );
+        )
+        .trim()
+        .split('\n')
+        .collect::<Vec<_>>()
+        .join("\n  ")
+}
+
+/// The text of a message as sent to the summary: who wrote it (an ID: names need a scope the app does not ask for) and what, the lines after the first indented (`indent_continuation`).
+fn message_line(m: &Value) -> String {
     format!(
         "{}: {}",
         m["user"].as_str().unwrap_or("?"),
-        text.trim().split('\n').collect::<Vec<_>>().join("\n  ")
+        indent_continuation(m["text"].as_str().unwrap_or_default())
     )
 }
 
@@ -1464,8 +1468,9 @@ pub struct ThreadMessage {
     user: Option<String>,
     name: String,
     icon_url: Option<String>,
+    /// What the screen shows of the message as plain text (S-7): the text while the screen draws it, then the text of the blocks and the attachments drawn. It goes to Claude; the screen does not draw it.
     text: String,
-    /// What the screen draws of the message's text (S-12): the raw text read for its styles. `text` above stays a string that is not read for styles, and the screen does not draw it.
+    /// What the screen draws of the message's text (S-12): the raw text read for its styles.
     rich: Rich,
     files: Vec<ThreadFile>,
     /// Drawn under (or in place of) `text` (S-11); empty when `text` alone is drawn.
@@ -2448,6 +2453,8 @@ fn thread_message(
         bot_of(m).is_some() || m["text"].as_str().is_none_or(|t| t.trim().is_empty());
     let (blocks, show_text) = message_blocks(&m["blocks"], draw_rich_text, name_of);
     let attachments = message_attachments(&m["attachments"], name_of);
+    let text_for_claude =
+        message_plain(&plain_text(text, name_of), show_text, &blocks, &attachments);
     ThreadMessage {
         image_urls: image_urls(&blocks, &attachments),
         blocks,
@@ -2462,7 +2469,7 @@ fn thread_message(
             .as_ref()
             .map_or_else(|| UNKNOWN_NAME.to_owned(), |u| u.name.clone()),
         icon_url: sender.and_then(|u| u.icon_url),
-        text: plain_text(text, name_of),
+        text: text_for_claude,
         // A message posted with `mrkdwn: false` shows its marks as they are.
         rich: if m["mrkdwn"] == false {
             slack_mrkdwn::plain(plain_text(text, name_of))

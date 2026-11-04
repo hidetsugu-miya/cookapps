@@ -1,7 +1,7 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
 import {
   attachment, boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
-  para, plain, quote, span, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings,
+  copiedTexts, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings,
 } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
@@ -761,19 +761,43 @@ describe("slack thread: Todo", () => {
   });
 });
 
-describe("slack thread: proofreading with Claude", () => {
+describe("slack thread: asking Claude", () => {
   const log = "#reply-log";
   const apply = () => $("#reply-log .diff-foot .text-btn.primary");
+  const thread = [
+    { name: "Alice Example", ts: root, text: rootText },
+    { name: "Bob Example", ts: reply1, text: "Looks fine to me." },
+  ];
+  const ask = async (text: string) => {
+    await $("#reply-input").setValue(text);
+    await $("#reply-send").click();
+  };
 
-  it("sends 校正してください with the reply text, and applying the proposal fills the field without posting", async () => {
+  it("has the Claude icon and クリア in the header, no 校正する button, an arrow send button, no key hints and the new placeholder", async () => {
+    await openDetail();
+    const pane = $("#reply-chat");
+    await expect(pane).toHaveAttribute("aria-label", "Claude");
+    expect(await textsOf("#reply-chat .chat-head")).toEqual(["クリア"]);
+    expect(await count("#reply-chat .chat-head svg")).toBe(1);
+    expect(await count("#reply-proofread, .proofread-row")).toBe(0);
+    await expect($("#reply-input")).toHaveAttribute("placeholder", "Claude に頼みたいことを書く");
+    await expect($("#reply-send")).toHaveAttribute("aria-label", "送信");
+    await expect($("#reply-send")).toHaveText("");
+    expect(await count("#reply-send svg")).toBe(1);
+    // The keys are not told on either side, and still work.
+    expect(await count("#st-keys, #reply-keys")).toBe(0);
+    expect(await count("#st-reply .composer-hint, #reply-form .composer-hint")).toBe(0);
+  });
+
+  it("sends the reply text, the messages of the thread, the conversation and the request, and applying the proposal fills the field without posting", async () => {
     await openDetail();
     const post = await mock("slack_reply", true);
-    const edit = await mock("claude_proofread_reply", replyEdit("確認おねがいします", "ご確認をお願いします"));
+    const edit = await mock("claude_chat_thread", replyEdit("確認おねがいします", "ご確認をお願いします"));
     await input().setValue("確認おねがいします");
-    await $("#reply-proofread").click();
-    expect(await waitForCalls(edit)).toEqual([{ text: "確認おねがいします", history: [], instruction: "校正してください" }]);
+    await ask("丁寧にして");
+    expect(await waitForCalls(edit)).toEqual([{ text: "確認おねがいします", thread, history: [], instruction: "丁寧にして" }]);
     await waitForCount(`${log} .chat-ai`, 1);
-    await expect($(`${log} .chat-user`)).toHaveText("校正してください");
+    await expect($(`${log} .chat-user`)).toHaveText("丁寧にして");
     await expect($(`${log} .diff-ins`)).toHaveText("+ ご確認をお願いします");
     await apply().click();
     await expect(input()).toHaveValue("ご確認をお願いします");
@@ -782,22 +806,87 @@ describe("slack thread: proofreading with Claude", () => {
     await expect($("#slack-thread")).toBeDisplayed();
   });
 
-  it("sends only the reply text, the conversation and the request, never the thread's messages", async () => {
+  it("can be asked while the reply is blank, and an applied reply draft makes 返信する usable without posting", async () => {
     await openDetail();
-    const edit = await mock("claude_proofread_reply", replyEdit("a", "b"));
+    const post = await mock("slack_reply", true);
+    const edit = await mock("claude_chat_thread", replyEdit("", "確認しました。"));
+    await expect(send()).toBeDisabled();
+    await expect($("#reply-send")).toBeEnabled();
+    await ask("返信案を書いて");
+    expect(await waitForCalls(edit)).toEqual([{ text: "", thread, history: [], instruction: "返信案を書いて" }]);
+    await waitForCount(`${log} .chat-ai`, 1);
+    await expect(apply()).toBeEnabled();
+    await apply().click();
+    await expect(input()).toHaveValue("確認しました。");
+    await expect(send()).toBeEnabled();
+    expect(await callsOf(post)).toEqual([]);
+  });
+
+  it("sends no thread while the thread is not read", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([listMessage()]), claude_status: claudeReady });
+    await mock("slack_thread", rejects("読めません"));
+    const edit = await mock("claude_chat_thread", replyEdit("", "案"));
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 1);
+    await $("#slack-feed .feed-row").click();
+    await expect($("#st-msgs .pending.fail")).toBeDisplayed();
+    await ask("どう返す？");
+    expect(await waitForCalls(edit)).toEqual([{ text: "", thread: [], history: [], instruction: "どう返す？" }]);
+  });
+
+  it("sends the text of a message as the thread gives it, and the conversation on the second request", async () => {
+    const blocks = slackThread([threadMessage(root, "Deploy Bot", "alt", { text: "Deploy done\nOpen (https://a.example/x)" })]);
+    await openDetail({}, blocks);
+    const edit = await mock("claude_chat_thread", replyEdit("", "案"));
+    await ask("要約して");
+    const [first] = await waitForCalls(edit);
+    expect((first as { thread: unknown }).thread).toEqual([{ name: "Deploy Bot", ts: root, text: "Deploy done\nOpen (https://a.example/x)" }]);
+    await waitForCount(`${log} .chat-ai`, 1);
+    await ask("もっと短く");
+    const calls = (await waitForCalls(edit, 2)) as { history: unknown; instruction: string }[];
+    expect(calls[1].history).toEqual([
+      { role: "user", text: "要約して" },
+      { role: "assistant", text: "言い回しを直しました" },
+    ]);
+    expect(calls[1].instruction).toBe("もっと短く");
+  });
+
+  it("lists コピー between 却下 and 適用, and copies the whole proposed text with a notice", async () => {
+    await openDetail();
+    await mock("claude_chat_thread", replyEdit("My reply", "My better reply"));
     await input().setValue("My reply");
-    await $("#reply-input").setValue("敬語にして");
-    await $("#reply-send").click();
-    const [call] = await waitForCalls(edit);
-    expect(Object.keys(call as object).sort()).toEqual(["history", "instruction", "text"]);
-    expect(JSON.stringify(call)).not.toContain(rootText);
+    await ask("直して");
+    await waitForCount(`${log} .chat-ai`, 1);
+    expect(await textsOf(`${log} .diff-foot .text-btn`)).toEqual(["却下", "コピー", "適用"]);
+    await stubClipboard();
+    await $(`${log} .diff-foot .text-btn:nth-of-type(2)`).click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
+    expect(await copiedTexts()).toEqual(["My better reply"]);
+    await expect($(".toast")).toHaveText("コピーしました");
+    // Copying neither applies nor closes the proposal.
+    await expect(input()).toHaveValue("My reply");
+    expect(await count(`${log} .diff-foot .text-btn`)).toBe(3);
+  });
+
+  it("shows the clipboard's refusal and keeps the proposal", async () => {
+    await openDetail();
+    await mock("claude_chat_thread", replyEdit("a", "b"));
+    await input().setValue("a");
+    await ask("直して");
+    await waitForCount(`${log} .chat-ai`, 1);
+    await browser.execute(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => Promise.reject(new Error("denied")) } });
+    });
+    await $(`${log} .diff-foot .text-btn:nth-of-type(2)`).click();
+    await expect($("#error")).toHaveText("Error: denied");
+    expect(await count(`${log} .diff-foot .text-btn`)).toBe(3);
   });
 
   it("cannot apply an old proposal once the field was changed", async () => {
     await openDetail();
-    await mock("claude_proofread_reply", replyEdit("My reply", "My better reply"));
+    await mock("claude_chat_thread", replyEdit("My reply", "My better reply"));
     await input().setValue("My reply");
-    await $("#reply-proofread").click();
+    await ask("直して");
     await waitForCount(`${log} .chat-ai`, 1);
     await expect(apply()).toBeEnabled();
     await input().setValue("My reply, edited");
@@ -805,23 +894,43 @@ describe("slack thread: proofreading with Claude", () => {
     await expect($(`${log} .diff-stale`)).toBeDisplayed();
   });
 
-  it("cannot be asked while the reply is blank, and is off with a note while Claude is not logged in", async () => {
-    await openDetail();
-    await expect($("#reply-proofread")).toBeDisabled();
-    await expect($("#reply-send")).toBeDisabled();
+  it("is off with a note while Claude is not logged in, and the reply itself can still be posted", async () => {
     await openDetail({ claude_status: claudeLoggedOut });
     await input().setValue("My reply");
-    await expect($("#reply-proofread")).toBeDisabled();
+    await expect($("#reply-send")).toBeDisabled();
+    await expect($("#reply-input")).toBeDisabled();
     await expect($("#reply-chat-note")).toBeDisplayed();
-    // The reply itself can still be posted.
     await expect(send()).toBeEnabled();
+  });
+
+  it("sends a request with Cmd+Enter (Ctrl+Enter off macOS) and keeps Enter as a line break", async () => {
+    await openDetail();
+    const edit = await mock("claude_chat_thread", replyEdit("", "案"));
+    await $("#reply-input").setValue("1 行目");
+    await browser.execute(
+      (id) => {
+        if (!window.__e2e_once__(id)) return;
+        document.getElementById("reply-input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      },
+      onceId(),
+    );
+    expect(await callsOf(edit)).toEqual([]);
+    await browser.execute(
+      (id) => {
+        if (!window.__e2e_once__(id)) return;
+        const isMac = /Mac/.test(navigator.platform);
+        document.getElementById("reply-input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: isMac, ctrlKey: !isMac, bubbles: true, cancelable: true }));
+      },
+      onceId(),
+    );
+    expect(await waitForCalls(edit)).toEqual([{ text: "", thread, history: [], instruction: "1 行目" }]);
   });
 
   it("forgets the conversation with two presses of クリア", async () => {
     await openDetail();
-    await mock("claude_proofread_reply", replyEdit("My reply", "My better reply"));
+    await mock("claude_chat_thread", replyEdit("My reply", "My better reply"));
     await input().setValue("My reply");
-    await $("#reply-proofread").click();
+    await ask("直して");
     await waitForCount(`${log} .chat-ai`, 1);
     await $("#reply-clear").click();
     await expect($("#reply-clear")).toHaveText("もう一度押すとクリア");
@@ -833,9 +942,9 @@ describe("slack thread: proofreading with Claude", () => {
     const other = slackTs(20, 3);
     const messages = [listMessage(), timelineMessage(other, "Carol Example", "general", "Another thread")];
     await openDetail({}, base(), messages);
-    const edit = await mock("claude_proofread_reply", holds);
+    const edit = await mock("claude_chat_thread", holds);
     await input().setValue("My reply");
-    await $("#reply-proofread").click();
+    await ask("直して");
     await waitForCalls(edit);
     await $("#st-back").click();
     await mock("slack_thread", slackThread([threadMessage(other, "Carol Example", "Another thread")]));
@@ -847,7 +956,7 @@ describe("slack thread: proofreading with Claude", () => {
     expect(await count(`${log} .chat-diff`)).toBe(0);
   });
 
-  it("shows the model and effort of the Slack reply under the request field, Sonnet and high by default, and saves a change as slackReply", async () => {
+  it("shows the model and effort of the Slack thread under the request field, Sonnet and high by default, and saves a change as slackReply", async () => {
     await openDetail();
     const model = $('#reply-model select[data-kind="model"]');
     const effort = $('#reply-model select[data-kind="effort"]');
@@ -864,6 +973,48 @@ describe("slack thread: proofreading with Claude", () => {
     expect(await waitForCalls(save)).toEqual([{ purpose: "slackReply", model: "opus" }]);
     await expect(model).toHaveValue("opus");
     await expect(effort).toHaveValue("medium");
+  });
+});
+
+describe("slack thread: the lines of the two sides", () => {
+  const edge = (selector: string, side: "top" | "bottom") => browser.execute((s, k) => document.querySelector(s)!.getBoundingClientRect()[k], selector, side);
+  const lines = (id: string, n: number) =>
+    browser.execute(
+      (field, count) => {
+        const area = document.getElementById(field) as HTMLTextAreaElement;
+        area.value = Array.from({ length: count }, (_, i) => `line ${i + 1}`).join("\n");
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+      id,
+      n,
+    );
+  const aligned = async () => {
+    expect(await edge("#reply-chat .chat-head", "bottom")).toBe(await edge("#st-head", "bottom"));
+    expect(await edge("#reply-chat .chat-foot", "top")).toBe(await edge("#st-reply", "top"));
+  };
+
+  it("puts the line under the headers and the line over the fields at the same height", async () => {
+    await openDetail();
+    await aligned();
+  });
+
+  it("keeps them there when the reply field grows, and when the request field grows", async () => {
+    await openDetail();
+    const before = await edge("#st-reply", "top");
+    await lines("st-input", 12);
+    expect(await edge("#st-reply", "top")).toBeLessThan(before);
+    await aligned();
+    await lines("st-input", 1);
+    await lines("reply-input", 6);
+    await aligned();
+    await lines("st-input", 12);
+    await aligned();
+  });
+
+  it("keeps them there while the login note shows over the request field", async () => {
+    await openDetail({ claude_status: claudeLoggedOut });
+    await expect($("#reply-chat-note")).toBeDisplayed();
+    await aligned();
   });
 });
 

@@ -1,6 +1,6 @@
-// The conversation with Claude that edits a text, shared by the Todo prompt screen (S-3) and the Slack compose screen (S-4):
+// The conversation with Claude that edits a text, shared by the Todo prompt screen (S-3), the Slack compose screen (S-4) and the Slack thread (S-7):
 // the log with its diff cards, the request field that grows with its text, and the clear button. A proposal is applied to the owner's text, and the owner decides what to do with it.
-// The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-keys`, `-form` and `-chat-note`.
+// The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-form` and `-chat-note`, and `-keys` unless `keyHint` is false.
 import type { DiffLine } from "./bindings/DiffLine";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import { getClaude } from "./claude.js";
@@ -25,6 +25,10 @@ export interface ChatConfig {
   changed: () => void;
   // True while the owner's text must not be replaced (a proposal cannot be applied then).
   locked?: () => boolean;
+  // Adds a "コピー" button to an open proposal, between "却下" and "適用"; it is called with the proposed text, straight from the click. Without it there is no such button.
+  copy?: (text: string) => void;
+  // Whether the `-keys` element tells the keys of the request field (default true); the owner that says it elsewhere, or not at all, passes false and has no such element.
+  keyHint?: boolean;
 }
 
 // A change Claude proposed: the whole new text, the lines that differ, and the text when it was asked (an `open` proposal applies only to that text).
@@ -94,6 +98,7 @@ export function createChat(cfg: ChatConfig) {
       const stale = tag("span", "diff-stale", "編集欄が変わったため適用できません");
       const reject = tag("button", "text-btn", "却下");
       const apply = tag("button", "text-btn primary", "適用");
+      const copy = cfg.copy ? tag("button", "text-btn", "コピー") : null;
       reject.onclick = () => {
         p.state = "rejected";
         draw();
@@ -103,8 +108,9 @@ export function createChat(cfg: ChatConfig) {
         p.state = "applied";
         draw();
       };
+      if (copy) copy.onclick = () => cfg.copy!(p.body);
       applyControls.push({ proposal: p, apply, stale });
-      foot.append(stale, reject, apply);
+      foot.append(stale, reject, ...(copy ? [copy] : []), apply);
     }
     card.append(foot);
     return card;
@@ -225,7 +231,7 @@ export function createChat(cfg: ChatConfig) {
     };
     $(id("clear")).onblur = disarmClear;
     $(id("chat-note")).textContent = cfg.loginNote;
-    $(id("keys")).textContent = isMac ? "↩ で改行、⌘↩ で送信" : "Enter で改行、Ctrl+Enter で送信";
+    if (cfg.keyHint !== false) $(id("keys")).textContent = isMac ? "↩ で改行、⌘↩ で送信" : "Enter で改行、Ctrl+Enter で送信";
     const input = $<HTMLTextAreaElement>(id("input"));
     input.oninput = growInput;
     // Enter is a line break; Cmd+Enter (Ctrl+Enter off macOS) sends, unless it only confirms an IME conversion.

@@ -191,7 +191,7 @@ const PURPOSES: { key: Purpose; name: string; meta: string }[] = [
   { key: "mailSummary", name: "メールの要約", meta: "メール詳細の AI 要約" },
   { key: "promptChat", name: "プロンプトの会話", meta: "Todo の要約プロンプトを Claude と編集するとき" },
   { key: "proofread", name: "Slack に貼る文章の校正", meta: "Slack に貼る画面の「Claude と校正」" },
-  { key: "slackReply", name: "Slack の返信の校正", meta: "スレッド詳細の「Claude と校正」" },
+  { key: "slackReply", name: "Slack のスレッドの相談", meta: "スレッド詳細の Claude 欄" },
 ];
 
 // value, the text.
@@ -222,7 +222,7 @@ function purposeSelects(purpose: Purpose, name: string) {
 // The block of the five purposes with its column headings, shown whether or not Claude is usable; none until the settings are read.
 function modelBlock() {
   if (modelSettings === null) return [];
-  const note = tag("div", "item-meta model-note", "次の呼び出しから使います。デフォルトは Sonnet と medium（Slack の返信の校正は Sonnet と high）");
+  const note = tag("div", "item-meta model-note", "次の呼び出しから使います。デフォルトは Sonnet と medium（Slack のスレッドの相談は Sonnet と high）");
   const grid = tag("div", "model-grid");
   grid.append(tag("div", "th", "用途"), tag("div", "th", "モデル"), tag("div", "th", "effort"));
   for (const p of PURPOSES) {
@@ -234,7 +234,7 @@ function modelBlock() {
 }
 
 // The two selects under a Claude pane's request field, without a frame: the model and effort of the pane's purpose, the same values as the settings'.
-// The prompt screen's pane (the prompt conversation) and the Slack thread's pane (the reply proofreading) have them.
+// The prompt screen's pane (the prompt conversation) and the Slack thread's pane (the Slack thread conversation) have them.
 const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["reply-model", "slackReply"]];
 
 function redrawModelSlot(id: string) {
@@ -388,7 +388,7 @@ export function initClaude() {
           ["キーを貼って「確認して保存」を押す。キーは OS の資格情報の保管場所に入れ、画面には出さない。キーに切り替えると、この端末の Claude Code はログアウトされる（戻すときは ", code("claude auth login"), "）"],
           ["↻ で状態を確かめ直す"],
         ],
-        "Slack のメッセージとそのスレッドの、送信者の ID と本文のテキスト（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります。Slack に貼る文章を Claude と校正するときは、編集欄の文章、会話、依頼を、「校正する」か送信を押したときだけ送ります。Slack のスレッドに返信する文章を Claude と校正するときは、返信の文章、会話、依頼だけを、同じく「校正する」か送信を押したときだけ送ります（スレッドのメッセージは送りません）。モデルと effort は、Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack の返信の校正のそれぞれに選べます",
+        "Slack のメッセージとそのスレッドの、送信者の ID と本文のテキスト（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります。Slack に貼る文章を Claude と校正するときは、編集欄の文章、会話、依頼を、「校正する」か送信を押したときだけ送ります。Slack のスレッドの詳細で Claude に相談するときは、返信欄の文章、スレッドのメッセージ（送信者の名前、日時、画面に出ている本文）、会話、依頼を、同じく送信を押したときだけ送ります。モデルと effort は、Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack のスレッドの相談のそれぞれに選べます",
       ),
     );
 }

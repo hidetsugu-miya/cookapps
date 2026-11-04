@@ -442,7 +442,7 @@ export const ownIcon = (iconUrl: string | null): WorkspaceIcon[] => [{ teamId: w
 // A 1x1 transparent PNG as a data: URI, what `fetch_images` and `slack_file_images` answer for an image.
 export const pngUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
-// What `claude_proofread_reply` answers when Claude proposes changing the reply `before` to `after`.
+// What `claude_chat_thread` answers when Claude proposes changing the reply `before` to `after`.
 export const replyEdit = (before: string, after: string): PromptEdit => ({
   reply: "言い回しを直しました",
   body: after,

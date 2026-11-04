@@ -151,8 +151,9 @@ export interface Commands {
   claude_edit_todo_prompt: { args: { body: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions. Nothing is saved.
   claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
-  // The same for the reply to a Slack thread (its own model and effort, `slackReply`). Only the reply text, the conversation and the request are sent, never the thread's messages.
-  claude_proofread_reply: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
+  // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
+  // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too.
+  claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

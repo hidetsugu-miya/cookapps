@@ -12,7 +12,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::slack::{emojify, mention_ids, plain_text, unescape, UNKNOWN_NAME};
-use crate::slack_mrkdwn::{parse, plain, Rich};
+use crate::slack_mrkdwn::{parse, plain, rich_plain, Rich};
 
 /// Looks a user up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -588,6 +588,104 @@ pub(crate) fn mentioned_users(message: &Value) -> Vec<String> {
     let mut seen = HashSet::new();
     found.retain(|id| seen.insert(id.clone()));
     found
+}
+
+/// A button as text: its name, and its address when it has one.
+fn button_line(b: &ThreadButton) -> String {
+    match &b.url {
+        Some(url) => format!("{} ({url})", b.text),
+        None => b.text.clone(),
+    }
+}
+
+/// The description of an image, when it has one.
+fn alt_line(i: &ThreadImage) -> Option<String> {
+    (!i.alt.is_empty()).then(|| i.alt.clone())
+}
+
+/// The text of a block, a line to an item, for Claude (S-7). A divider has none.
+fn block_lines(b: &ThreadBlock, out: &mut Vec<String>) {
+    match b {
+        ThreadBlock::Header { text } => out.push(text.clone()),
+        ThreadBlock::Section {
+            text,
+            fields,
+            accessory,
+        } => {
+            out.extend(text.iter().map(rich_plain));
+            out.extend(fields.iter().map(rich_plain));
+            match accessory {
+                Some(ThreadAccessory::Button(button)) => out.push(button_line(button)),
+                Some(ThreadAccessory::Image(image)) => out.extend(alt_line(image)),
+                None => {}
+            }
+        }
+        ThreadBlock::Context { elements } => {
+            for e in elements {
+                match e {
+                    ThreadContext::Text { text } => out.push(rich_plain(text)),
+                    ThreadContext::Image(image) => out.extend(alt_line(image)),
+                }
+            }
+        }
+        ThreadBlock::Divider => {}
+        ThreadBlock::Image { image, title } => {
+            out.extend(alt_line(image));
+            out.extend(title.clone());
+        }
+        ThreadBlock::Actions { buttons } => out.extend(buttons.iter().map(button_line)),
+    }
+}
+
+/// The text of an attachment, a line to an item, for Claude (S-7).
+fn attachment_lines(a: &ThreadAttachment, out: &mut Vec<String>) {
+    out.extend(a.pretext.iter().map(rich_plain));
+    out.extend(a.author_name.clone());
+    out.extend(a.title.as_ref().map(|t| match &a.title_link {
+        Some(link) => format!("{t} ({link})"),
+        None => t.clone(),
+    }));
+    out.extend(a.text.iter().map(rich_plain));
+    for f in &a.fields {
+        let value = rich_plain(&f.value);
+        out.push(match (f.title.is_empty(), value.is_empty()) {
+            (false, false) => format!("{}: {value}", f.title),
+            (true, _) => value,
+            (_, true) => f.title.clone(),
+        });
+    }
+    out.extend(a.footer.clone());
+    out.extend(a.actions.iter().map(button_line));
+    a.blocks.iter().for_each(|b| block_lines(b, out));
+    let before = out.len();
+    out.extend(a.image.iter().filter_map(alt_line));
+    // The thumbnail repeats the image's description.
+    if let Some(thumb) = a.thumb.iter().find_map(alt_line) {
+        if !out[before..].contains(&thumb) {
+            out.push(thumb);
+        }
+    }
+    out.extend(a.fallback.clone());
+}
+
+/// What the screen shows of a message, as plain text for Claude (S-7): the message's text (only while the screen draws it, `show_text`), then its blocks and its attachments, a line to an item.
+/// A block or an attachment that is not drawn has no text here either; an image is its description.
+pub(crate) fn message_plain(
+    text: &str,
+    show_text: bool,
+    blocks: &[ThreadBlock],
+    attachments: &[ThreadAttachment],
+) -> String {
+    let mut lines = Vec::new();
+    if show_text {
+        lines.push(text.to_owned());
+    }
+    blocks.iter().for_each(|b| block_lines(b, &mut lines));
+    attachments
+        .iter()
+        .for_each(|a| attachment_lines(a, &mut lines));
+    lines.retain(|l| !l.trim().is_empty());
+    lines.join("\n").trim().to_owned()
 }
 
 #[cfg(test)]
@@ -1357,5 +1455,81 @@ mod tests {
         found.sort();
         assert_eq!(found, vec!["U10"]);
         assert_eq!(mentioned_users(&json!({"text": "x"})), Vec::<String>::new());
+    }
+
+    /// What `message_plain` reads from a whole message of Slack's JSON, with the text the screen would show.
+    fn plain_of(m: Value, text: &str) -> String {
+        let draw_rich_text = m["bot"] == true;
+        let (b, show_text) = message_blocks(&m["blocks"], draw_rich_text, &|_| None);
+        let a = message_attachments(&m["attachments"], &|_| None);
+        message_plain(text, show_text, &b, &a)
+    }
+
+    #[test]
+    fn the_plain_text_of_a_message_is_its_text_only_while_the_screen_draws_it() {
+        assert_eq!(plain_of(json!({}), "hi"), "hi");
+        // The blocks stand for the text (Slack's alternative text), so the text is not repeated.
+        let header =
+            json!({"type": "header", "text": {"type": "plain_text", "text": "Deploy done"}});
+        assert_eq!(
+            plain_of(json!({"blocks": [header.clone()]}), "alt text"),
+            "Deploy done"
+        );
+        // A block that could not be drawn sits beside a drawn one: the text is shown too.
+        assert_eq!(
+            plain_of(json!({"blocks": [header, {"type": "input"}]}), "alt text"),
+            "alt text\nDeploy done"
+        );
+        assert_eq!(plain_of(json!({}), "  "), "");
+    }
+
+    #[test]
+    fn the_plain_text_holds_the_text_of_every_drawn_block() {
+        let m = json!({"blocks": [
+            {"type": "header", "text": {"type": "plain_text", "text": "H"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "*bold* body"}, "fields": [{"type": "mrkdwn", "text": "f1"}, {"type": "mrkdwn", "text": "f2"}],
+             "accessory": {"type": "button", "text": {"type": "plain_text", "text": "Open"}, "url": "https://a.example/x"}},
+            {"type": "divider"},
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": "ctx"}, {"type": "image", "image_url": "https://a.example/i.png", "alt_text": "icon"}]},
+            {"type": "image", "image_url": "https://a.example/p.png", "alt_text": "chart", "title": {"type": "plain_text", "text": "Sales"}},
+            {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Ok"}}]},
+        ]});
+        assert_eq!(
+            plain_of(m, "alt"),
+            "H\nbold body\nf1\nf2\nOpen (https://a.example/x)\nctx\nicon\nchart\nSales\nOk"
+        );
+    }
+
+    #[test]
+    fn the_plain_text_holds_a_quote_with_its_marker_and_a_code_as_it_is() {
+        let m = json!({"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "&gt; q1\n&gt; q2\n```\nlet a = 1;\n```"}}]});
+        assert_eq!(plain_of(m, "alt"), "> q1\n> q2\nlet a = 1;");
+    }
+
+    #[test]
+    fn the_plain_text_holds_the_text_of_an_attachment() {
+        let m = json!({"attachments": [{
+            "pretext": "pre", "author_name": "Bot", "title": "Issue 1", "title_link": "https://a.example/1", "text": "body",
+            "fields": [{"title": "Status", "value": "open"}, {"title": "", "value": "lone"}, {"title": "OnlyTitle", "value": ""}],
+            "footer": "foot", "actions": [{"type": "button", "text": "Go", "url": "https://a.example/go"}],
+            "image_url": "https://a.example/i.png", "thumb_url": "https://a.example/t.png", "fallback": "card"
+        }]});
+        assert_eq!(
+            plain_of(m, "alt"),
+            "alt\npre\nBot\nIssue 1 (https://a.example/1)\nbody\nStatus: open\nlone\nOnlyTitle\nfoot\nGo (https://a.example/go)\ncard"
+        );
+    }
+
+    #[test]
+    fn the_plain_text_of_an_attachment_with_only_a_fallback_is_the_fallback() {
+        assert_eq!(
+            plain_of(json!({"attachments": [{"fallback": "only this"}]}), "t"),
+            "t\nonly this"
+        );
+        // An attachment with nothing to draw adds nothing.
+        assert_eq!(
+            plain_of(json!({"attachments": [{"color": "good"}]}), "t"),
+            "t"
+        );
     }
 }
