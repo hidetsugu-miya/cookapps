@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.39.2
+
+A Slack thread opened from the list opens at its newest message, and stays there while its images load (#32). Opening the same thread again keeps its position.
+
 ## v0.39.1
 
 A session whose Orca tab was closed while Claude kept running can be posted to again (#39). A question the agent asks is shown in the history unfolded, with its choices and the answer (#40). A Markdown table in the history, a Todo description or a Todo comment has ruled cells (#36).
