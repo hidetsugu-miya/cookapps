@@ -621,7 +621,7 @@ describe("slack list", () => {
     expect(await callsOf(mark)).toEqual([]);
   });
 
-  it("lowers the badge at once by the unread rows of the hidden channel, and reads the list again", async () => {
+  it("lowers the badge at once by the unread rows of the hidden channel, and makes the list again from Rust's cache, asking Slack nothing", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(withHidden()), claude_status: claudeReady });
     await expect(badge()).toHaveText("2");
     await $("#nav-slack").click();
@@ -630,7 +630,10 @@ describe("slack list", () => {
     await mock("slack_timeline", timeline([withHidden()[1]]));
     await $('button[aria-label="#dev を一覧に出さない"]').click();
     await expect(badge()).toHaveText("1");
-    await waitForCalls("slack_timeline");
+    expect(await waitForCalls("slack_timeline")).toEqual([{ cached: true }]);
+    await browser.pause(300);
+    // One cached read, and no full read of Slack on top of it.
+    expect(await callsOf("slack_timeline")).toEqual([{ cached: true }]);
     await expect($(".toast")).toHaveText(expect.stringContaining("元に戻す"));
   });
 
@@ -646,8 +649,35 @@ describe("slack list", () => {
     await mock("slack_timeline", timeline(withHidden()));
     await $(".toast button").click();
     expect(await waitForCalls(unhide)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD" }]);
+    expect(await waitForCalls("slack_timeline")).toEqual([{ cached: true }]);
     await waitForCount("#slack-feed .feed-row", 3);
     expect(await devRows()).toBe(3);
+    await browser.pause(300);
+    expect(await callsOf("slack_timeline")).toEqual([{ cached: true }]);
+  });
+
+  it("does not bring a hidden row back from a read that began before the channel was hidden, and picks up what that read left in the cache with one read from the cache", async () => {
+    await openList(timeline(withHidden(), { refreshSecs: 2 }));
+    await waitForCount("#slack-feed .feed-row", 3);
+    // The periodic read is on its way when the channel is hidden.
+    const read = await mock("slack_timeline", holds);
+    await waitForCalls(read);
+    await mock("slack_hide_channel", true);
+    await $('button[aria-label="#dev を一覧に出さない"]').click();
+    await waitForCalls(read, 2);
+    expect((await callsOf(read)).slice(1)).toEqual([{ cached: true }]);
+    // The older answer still has the rows of #dev: it is passed over.
+    await release(read, timeline(withHidden()));
+    await browser.pause(300);
+    expect(await textsOf("#slack-feed .feed-text")).toEqual(["from random"]);
+    // The read from the cache that follows it, for what it left in the cache (the latest request is a cached one), and the answer to the request before.
+    await waitForCalls(read, 3);
+    expect((await callsOf(read)).slice(1)).toEqual([{ cached: true }, { cached: true }]);
+    await release(read, timeline([withHidden()[1]]));
+    await release(read, timeline([withHidden()[1]]));
+    await browser.pause(300);
+    expect(await textsOf("#slack-feed .feed-text")).toEqual(["from random"]);
+    expect(await count("#slack-feed .feed-row")).toBe(1);
   });
 
   it("brings the rows back and says so when slack_hide_channel fails", async () => {

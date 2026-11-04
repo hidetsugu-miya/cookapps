@@ -27,7 +27,13 @@ let timeline: Timeline | null = null;
 let loadError: string | null = null;
 // Only the latest read may draw; a read is on its way; when the last one started or ended.
 let loadSeq = 0;
-let loading = false;
+// Reads of Slack (full reads) on their way, which may be more than one when the latest passed over an older one; a read from Rust's cache is not one of them.
+let fullReads = 0;
+const isLoading = () => fullReads > 0;
+// Whether the latest request is a read from the cache.
+let latestCached = false;
+// Hide / put-back requests on their way: no answer is used meanwhile, so that an answer that began before the file changed cannot bring a hidden row back.
+let changing = 0;
 let lastTry = 0;
 // The version of `slackListVersion` the list was last made current with.
 let seenVersion = 0;
@@ -112,28 +118,33 @@ function dropChannel(teamId: string, channel: string) {
   draw();
 }
 
-// Keeps the channel off the list: its rows go at once, Rust saves it, and the notice offers to undo it. The list is read again, for the rows that fill the place.
+// Saves a channel kept off the list or put back. Every request before it is passed over (`loadSeq`), and none is answered until it is done (`changing`).
+async function saveHidden(command: "slack_hide_channel" | "slack_unhide_channel", teamId: string, channel: string) {
+  changing++;
+  loadSeq++;
+  try {
+    await invoke(command, { teamId, channel });
+    return true;
+  } catch (e) {
+    showError(e);
+    return false;
+  } finally {
+    changing--;
+  }
+}
+
+// Keeps the channel off the list: its rows go at once, Rust saves it, and the notice offers to undo it.
+// The list is made again from Rust's cache, which asks Slack nothing (rows that fill the place come from the messages held); on a failed save the rows come back the same way.
 async function hideChannel(m: TimelineMessage) {
   const { teamId, channel, channelName } = m;
   dropChannel(teamId, channel);
-  try {
-    await invoke("slack_hide_channel", { teamId, channel });
-  } catch (e) {
-    showError(e);
-    load();
-    return;
-  }
-  toast(`#${channelName} を一覧に出さないようにしました`, { label: "元に戻す", run: () => unhideChannel(teamId, channel) });
-  load();
+  if (await saveHidden("slack_hide_channel", teamId, channel)) toast(`#${channelName} を一覧に出さないようにしました`, { label: "元に戻す", run: () => unhideChannel(teamId, channel) });
+  load(true);
 }
 
 async function unhideChannel(teamId: string, channel: string) {
-  try {
-    await invoke("slack_unhide_channel", { teamId, channel });
-  } catch (e) {
-    showError(e);
-  }
-  load();
+  await saveHidden("slack_unhide_channel", teamId, channel);
+  load(true);
 }
 
 function rowOf(m: TimelineMessage, key: string) {
@@ -278,20 +289,30 @@ function draw() {
   drawFeed();
 }
 
-async function load() {
+// Reads the list. `cached` asks Rust to make it again from what it holds, with no call to Slack (after a channel was hidden or put back): it is not a read of Slack, so it does not move `lastTry`.
+// Only the latest request is used. A read of Slack that is passed over by a cached one still left what it read in Rust's cache, so one cached read follows it.
+async function load(cached = false) {
   const seq = ++loadSeq;
-  loading = true;
-  lastTry = Date.now();
+  latestCached = cached;
+  if (!cached) {
+    fullReads++;
+    lastTry = Date.now();
+  }
   let next: Timeline | null = null;
   let error = "";
   try {
-    next = await invoke("slack_timeline");
+    next = await invoke("slack_timeline", cached ? { cached: true } : undefined);
   } catch (e) {
     error = String(e);
   }
-  if (seq !== loadSeq) return;
-  loading = false;
-  lastTry = Date.now();
+  if (!cached) {
+    fullReads--;
+    lastTry = Date.now();
+  }
+  if (seq !== loadSeq || changing > 0) {
+    if (!cached && latestCached && changing === 0) load(true);
+    return;
+  }
   // A failed read keeps the list that was read before.
   if (next) {
     timeline = next;
@@ -352,13 +373,13 @@ export async function showSlackList() {
   );
   // Showing the screen again does not read again while a read is on its way, or while the list held is younger than the answer asked for.
   staleIfChanged();
-  if (loading || (timeline !== null && Date.now() - lastTry < timeline.refreshSecs * 1000)) return;
+  if (isLoading() || changing > 0 || (timeline !== null && Date.now() - lastTry < timeline.refreshSecs * 1000)) return;
   await load();
 }
 
 // Reads again when the list held is as old as the server asked for, on any screen, while the window is visible. Workspaces that settings added or removed are taken first.
 function refresh() {
-  if (document.hidden || loading) return;
+  if (document.hidden || isLoading() || changing > 0) return;
   staleIfChanged();
   const shared = getSlackWorkspaces();
   if (shared && (workspaces === null || shared.map((w) => w.teamId).join() !== workspaces.map((w) => w.teamId).join())) {
@@ -370,11 +391,11 @@ function refresh() {
   if (Date.now() - lastTry >= (timeline?.refreshSecs ?? 120) * 1000) load();
 }
 
-// Settings changed what the list shows: the list held is stale at once.
+// Settings put a channel back: the list is made again from Rust's cache once (no call to Slack), and the next full read brings what is not held.
 function staleIfChanged() {
   if (slackListVersion() === seenVersion) return;
   seenVersion = slackListVersion();
-  lastTry = 0;
+  if (workspaces?.length) load(true);
 }
 
 // The first read, for the badge: the workspaces, then the messages when there is a workspace.
@@ -384,7 +405,7 @@ async function start() {
   } catch {
     return;
   }
-  if (workspaces?.length && !loading) await load();
+  if (workspaces?.length && !isLoading()) await load();
 }
 
 export function initSlackList() {

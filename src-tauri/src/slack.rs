@@ -1397,7 +1397,7 @@ pub struct TimelineMessage {
 }
 
 /// A workspace the timeline could not read at all.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
@@ -1408,7 +1408,7 @@ pub struct TimelineFailure {
 }
 
 /// The scopes of `TIMELINE_SCOPES` a workspace's token lacks.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
@@ -1526,6 +1526,8 @@ struct TimelineCache {
     limited_until: Mutex<HashMap<String, Instant>>,
     /// The same for `conversations.info`, whose limit is the method's own: a 429 there does not stop the history reads.
     info_limited_until: Mutex<HashMap<String, Instant>>,
+    /// What the last full read found out about the workspaces that could not be read and the scopes tokens lack, which a read from the cache repeats.
+    notice: Mutex<(Vec<TimelineFailure>, Vec<TimelineMissing>)>,
     /// (team, channel) -> Slack's `last_read` of the channel, which the unread marks are judged by, and when Slack said it.
     read_marks: Mutex<HashMap<(String, String), (String, Instant)>>,
     /// team -> the scopes the token had when it last answered, so that a round that reads nothing still knows them.
@@ -1543,6 +1545,11 @@ impl TimelineCache {
             .retain(|(t, _), _| t != team_id);
         self.limited_until.lock().unwrap().remove(team_id);
         self.info_limited_until.lock().unwrap().remove(team_id);
+        {
+            let mut notice = self.notice.lock().unwrap();
+            notice.0.retain(|f| f.team_id != team_id);
+            notice.1.retain(|m| m.team_id != team_id);
+        }
         self.read_marks
             .lock()
             .unwrap()
@@ -1623,6 +1630,28 @@ impl TimelineCache {
 
     fn rate_limited(&self, team_id: &str) -> bool {
         stopped(&self.limited_until, team_id)
+    }
+
+    fn put_notice(&self, failed: &[TimelineFailure], missing: &[TimelineMissing]) {
+        *self.notice.lock().unwrap() = (failed.to_vec(), missing.to_vec());
+    }
+
+    /// What the last full read said, for the workspaces that are still connected.
+    fn notice_of(&self, workspaces: &[Workspace]) -> (Vec<TimelineFailure>, Vec<TimelineMissing>) {
+        let (failed, missing) = &*self.notice.lock().unwrap();
+        let connected = |team: &str| workspaces.iter().any(|w| w.team_id == team);
+        (
+            failed
+                .iter()
+                .filter(|f| connected(&f.team_id))
+                .cloned()
+                .collect(),
+            missing
+                .iter()
+                .filter(|m| connected(&m.team_id))
+                .cloned()
+                .collect(),
+        )
     }
 
     /// The workspace's `conversations.info` calls stop for `wait`.
@@ -2574,16 +2603,106 @@ async fn read_workspace(
     read
 }
 
+/// Every message the cache holds for the workspaces, without the channels kept off the list, newest first.
+fn held_messages(cache: &TimelineCache, workspaces: &[Workspace], hidden: &[Hidden]) -> Vec<Raw> {
+    let all = workspaces
+        .iter()
+        .flat_map(|w| cache.team_messages(&w.team_id))
+        .collect();
+    newest_first(visible_messages(all, hidden))
+}
+
+/// The messages the list shows (`select_timeline`) and the number of unread ones among all of `all` (newest first), by the read positions and the user IDs the cache holds.
+fn pick_timeline(cache: &TimelineCache, all: Vec<Raw>) -> (Vec<(Raw, bool)>, u32) {
+    let unread_of = |m: &Raw| {
+        is_unread(
+            &m.ts,
+            cache.last_read(&m.team_id, &m.channel).as_deref(),
+            m.user.as_deref(),
+            cache.own_user(&m.team_id).as_deref(),
+        )
+    };
+    let total = count_unread(&all, unread_of);
+    (select_timeline(all, unread_of), total)
+}
+
+/// The rows as the screen draws them, with the names the cache holds.
+fn timeline_messages(
+    cache: &TimelineCache,
+    workspaces: &[Workspace],
+    top: &[(Raw, bool)],
+) -> Vec<TimelineMessage> {
+    top.iter()
+        .filter_map(|(raw, unread)| {
+            let workspace = workspaces.iter().find(|w| w.team_id == raw.team_id)?;
+            let user = raw
+                .user
+                .as_deref()
+                .and_then(|u| cache.user(&raw.team_id, u));
+            let name_of = |id: &str| cache.user(&raw.team_id, id).map(|u| u.name);
+            Some(timeline_message(raw, workspace, user, &name_of, *unread))
+        })
+        .collect()
+}
+
+/// The list from what the cache holds, with no call to Slack: the same selection and counts as a full read over the messages, the read positions and the names kept,
+/// the notice of the last full read, and `pendingChannels` and `refreshSecs` from the channel lists kept (the channels kept off the list left out).
+/// What is not held (a channel put back whose history was dropped) comes with the next full read.
+fn cached_timeline(
+    cache: &TimelineCache,
+    channels: &ChannelCache,
+    workspaces: &[Workspace],
+    hidden: &[Hidden],
+) -> Timeline {
+    let (top, unread_total) = pick_timeline(cache, held_messages(cache, workspaces, hidden));
+    let (mut pending, mut largest) = (0, 0);
+    for w in workspaces {
+        let kept = channels
+            .lock()
+            .unwrap()
+            .get(&w.team_id)
+            .map(|(_, list)| list.clone());
+        if let Some(list) = kept {
+            let list = visible_channels(list, &hidden_of(hidden, &w.team_id));
+            pending += pending_channels(&list, &cache.team_history(&w.team_id));
+            largest = largest.max(list.len());
+        }
+    }
+    let (failed, missing) = cache.notice_of(workspaces);
+    Timeline {
+        messages: timeline_messages(cache, workspaces, &top),
+        failed,
+        missing,
+        refresh_secs: refresh_secs(pending, largest),
+        pending_channels: u32::try_from(pending).unwrap_or(u32::MAX),
+        unread_total,
+    }
+}
+
 /// The newest `UNREAD_MAX` unread and the newest `READ_MAX` read messages (`select_timeline`) of the joined public and private channels (no direct messages) of every workspace, together newest first.
 /// A workspace that cannot be read at all is in `failed`; the scopes a token lacks are in `missing`. Messages are kept in memory only.
+/// With `cached` true nothing is asked of Slack and no token is read: the list is made again from what the cache holds (`cached_timeline`), as after a channel was hidden or put back.
 #[tauri::command]
 pub async fn slack_timeline(
     app: AppHandle,
     auth: State<'_, Auth>,
     state: State<'_, SlackState>,
+    cached: Option<bool>,
 ) -> Result<Timeline, String> {
     let command = "slack_timeline";
     let dir = config_dir(&app)?;
+    if cached == Some(true) {
+        let workspaces = load_workspaces(&dir)
+            .await
+            .map_err(|e| log_failure(command, "-", e))?;
+        let hidden = load_hidden(&dir).await;
+        return Ok(cached_timeline(
+            &state.timeline,
+            &state.channels,
+            &workspaces,
+            &hidden,
+        ));
+    }
     migrate(&dir, auth.http(), &state).await;
     let workspaces = load_workspaces(&dir)
         .await
@@ -2667,16 +2786,10 @@ pub async fn slack_timeline(
     }
     refresh_read_marks(&http, &state.timeline, channels).await;
 
-    let unread_of = |m: &Raw| {
-        is_unread(
-            &m.ts,
-            state.timeline.last_read(&m.team_id, &m.channel).as_deref(),
-            m.user.as_deref(),
-            state.timeline.own_user(&m.team_id).as_deref(),
-        )
-    };
-    let unread_total = count_unread(&all, unread_of);
-    let top = select_timeline(all, unread_of);
+    // The file again: a channel hidden while the calls above were on their way is not listed or counted.
+    let hidden = load_hidden(&dir).await;
+    let all = visible_messages(all, &hidden);
+    let (top, unread_total) = pick_timeline(&state.timeline, all);
 
     // Names: the senders and the people the texts mention, once each, in the order the list shows them.
     let mut seen = HashSet::new();
@@ -2705,18 +2818,8 @@ pub async fn slack_timeline(
     .collect();
     lookup_users(&http, &state.timeline, wanted).await;
 
-    let messages = top
-        .iter()
-        .filter_map(|(raw, unread)| {
-            let workspace = workspaces.iter().find(|w| w.team_id == raw.team_id)?;
-            let user = raw
-                .user
-                .as_deref()
-                .and_then(|u| state.timeline.user(&raw.team_id, u));
-            let name_of = |id: &str| state.timeline.user(&raw.team_id, id).map(|u| u.name);
-            Some(timeline_message(raw, workspace, user, &name_of, *unread))
-        })
-        .collect();
+    let messages = timeline_messages(&state.timeline, &workspaces, &top);
+    state.timeline.put_notice(&failed, &missing);
     Ok(Timeline {
         messages,
         failed,
@@ -4181,6 +4284,96 @@ mod tests {
         // The count is the held messages, not the 20 the list shows.
         let many: Vec<Raw> = (0..30).map(|i| raw("C3", &format!("{i}.1"))).collect();
         assert_eq!(count_unread(&many, |_| true), 30);
+    }
+
+    /// A cache that holds `n` messages of the channel C1 of T1 (the i-th, 1-based, at `1700000000 + i` seconds) and `m` of C2, read at `now`.
+    fn cache_with(n: usize, m: usize) -> TimelineCache {
+        let cache = TimelineCache::default();
+        let one = |channel: &str, count: usize| -> Vec<Raw> {
+            (1..=count)
+                .map(|i| raw(channel, &format!("{}.000000", 1_700_000_000 + i)))
+                .collect()
+        };
+        let now = Instant::now();
+        let history = History::from([
+            ("C1".to_owned(), (now, one("C1", n))),
+            ("C2".to_owned(), (now, one("C2", m))),
+        ]);
+        cache.replace_history("T1", history);
+        cache
+    }
+
+    #[test]
+    fn a_list_made_from_the_cache_picks_by_the_read_positions_kept_and_counts_all_the_unread_held()
+    {
+        let cache = cache_with(30, 4);
+        let workspaces = vec![workspace("T1", "https://one.slack.com/")];
+        // C1: the newest 25 of its 30 are unread; C2 has no position known, so none of its 4 is unread.
+        cache.put_last_read("T1", "C1", "1700000005.000000");
+        let all = held_messages(&cache, &workspaces, &[]);
+        assert_eq!(all.len(), 34);
+        let (top, total) = pick_timeline(&cache, all);
+        assert_eq!(total, 25);
+        let unread: Vec<_> = top.iter().filter(|(_, u)| *u).collect();
+        let read: Vec<_> = top.iter().filter(|(_, u)| !*u).collect();
+        // 20 of the 25 are listed, and 5 read ones: the newest of C1's read ones and C2's.
+        assert_eq!((unread.len(), read.len()), (UNREAD_MAX, READ_MAX));
+        assert!(unread.iter().all(|(m, _)| m.channel == "C1"));
+    }
+
+    #[test]
+    fn a_list_made_from_the_cache_leaves_out_a_hidden_channel_and_its_unread_and_keeps_the_notice()
+    {
+        let cache = cache_with(3, 3);
+        let workspaces = vec![
+            workspace("T1", "https://one.slack.com/"),
+            workspace("T2", "https://two.slack.com/"),
+        ];
+        cache.put_last_read("T1", "C1", "1700000000.000000");
+        cache.put_last_read("T1", "C2", "1700000000.000000");
+        let failure = |team: &str| TimelineFailure {
+            team_id: team.into(),
+            team: format!("team {team}"),
+            error: "接続できません".into(),
+        };
+        cache.put_notice(&[failure("T1"), failure("T3")], &[]);
+        let channels: ChannelCache = Mutex::new(HashMap::from([(
+            "T1".to_owned(),
+            (
+                Instant::now(),
+                vec![channel("C1"), channel("C2"), channel("C3")],
+            ),
+        )]));
+        let none = cached_timeline(&cache, &channels, &workspaces, &[]);
+        assert_eq!(none.unread_total, 6);
+        assert_eq!(none.messages.len(), 6);
+        // C3 was never read, so it is pending; a notice of a workspace that is gone is not repeated.
+        assert_eq!(none.pending_channels, 1);
+        assert_eq!(none.failed, [failure("T1")]);
+        let hidden = [hidden("T1", "C2"), hidden("T1", "C3")];
+        let shown = cached_timeline(&cache, &channels, &workspaces, &hidden);
+        assert_eq!(shown.unread_total, 3);
+        assert!(shown.messages.iter().all(|m| m.channel == "C1"));
+        // The hidden C3 is not pending any more.
+        assert_eq!(shown.pending_channels, 0);
+        assert_eq!(shown.refresh_secs, REFRESH_MIN_SECS);
+        assert!(shown.messages.iter().all(|m| m.unread));
+    }
+
+    #[test]
+    fn a_list_made_from_the_cache_with_nothing_held_or_no_channel_list_is_empty_and_not_pending() {
+        let cache = TimelineCache::default();
+        let channels: ChannelCache = Mutex::new(HashMap::new());
+        let workspaces = vec![workspace("T1", "https://one.slack.com/")];
+        let list = cached_timeline(&cache, &channels, &workspaces, &[]);
+        assert!(list.messages.is_empty());
+        assert_eq!((list.unread_total, list.pending_channels), (0, 0));
+        assert_eq!(list.refresh_secs, REFRESH_MIN_SECS);
+        // Messages of a workspace that is not connected any more are not listed.
+        let cache = cache_with(2, 0);
+        assert!(cached_timeline(&cache, &channels, &[], &[])
+            .messages
+            .is_empty());
     }
 
     #[test]

@@ -109,7 +109,8 @@ export interface Commands {
   };
   // The newest 20 messages of the joined channels (no direct messages) of every workspace, newest first; `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet. Messages are kept in memory only.
-  slack_timeline: { args: undefined; result: Timeline };
+  // With `cached` true nothing is asked of Slack: the list is made again from what Rust holds (after a channel was hidden or put back).
+  slack_timeline: { args: { cached: boolean } | undefined; result: Timeline };
   // The channels kept off the Slack list, in the order they were hidden, with the channel's name (its ID when the name is not known). Slack itself is not told (its mute cannot be read).
   slack_hidden_list: { args: undefined; result: HiddenChannel[] };
   slack_hide_channel: { args: { teamId: string; channel: string }; result: boolean };
@@ -165,7 +166,8 @@ export interface Commands {
 // The commands that take JSON arguments; `todoist_upload` takes raw bytes (`invokeRaw`).
 type JsonCommand = Exclude<keyof Commands, "todoist_upload">;
 
-export type ArgsOf<C extends JsonCommand> = Commands[C]["args"] extends undefined ? [] : [Commands[C]["args"]];
+// A command whose arguments may be left out (`T | undefined`) takes them as an optional parameter.
+export type ArgsOf<C extends JsonCommand> = Commands[C]["args"] extends undefined ? [] : undefined extends Commands[C]["args"] ? [Commands[C]["args"]?] : [Commands[C]["args"]];
 
 // Read once, as the app always did: the E2E build replaces `core` with a wrapper before this module runs (e2e/fixtures.js).
 const { invoke: tauriInvoke } = window.__TAURI__.core;

@@ -1,4 +1,4 @@
-import { account, boot, checked, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "update";
 
@@ -1190,8 +1190,13 @@ describe("settings: Slack channels kept off the list", () => {
     await waitForCount("#slack-hidden .item", 2);
     const unhide = await mock("slack_unhide_channel", true);
     await mock("slack_hidden_list", [hiddenChannel("C2", "random")]);
+    await mock("slack_timeline", timeline([]));
     await $('button[aria-label="#general を一覧に戻す"]').click();
     expect(await waitForCalls(unhide)).toEqual([{ teamId: "T1", channel: "C0123ABCD" }]);
+    // The Slack list is made again from Rust's cache, with no read of Slack.
+    expect(await waitForCalls("slack_timeline")).toEqual([{ cached: true }]);
+    await browser.pause(300);
+    expect(await callsOf("slack_timeline")).toEqual([{ cached: true }]);
     await waitForCount("#slack-hidden .item", 1);
     await expect($("#slack-hidden-count")).toHaveText("1 件");
   });
