@@ -8,6 +8,7 @@ pub mod gmail;
 pub mod image_senders;
 pub mod images;
 pub mod slack;
+mod slack_emoji;
 pub mod todoist;
 pub mod update;
 

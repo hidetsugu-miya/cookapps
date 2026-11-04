@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    ops::Range,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -21,6 +22,7 @@ use crate::{
     claude::Thread,
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
     images::{fetch_slack_files, run_limited, SlackFileCache},
+    slack_emoji,
 };
 
 /// Every request goes here and nowhere else: nothing from outside is put into the URL.
@@ -2192,13 +2194,139 @@ fn token_text(token: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
     }
 }
 
-/// Slack's mrkdwn as plain text (`token_text`, and `&lt; &gt; &amp;` undone). It is drawn as text, never as markup.
+/// The skin tone of a `:skin-tone-N:` that starts `text` (N from 2 to 6; 1 is the default and Slack does not use it), and the length of the code.
+fn skin_tone_at(text: &str) -> Option<(emojis::SkinTone, usize)> {
+    use emojis::SkinTone;
+    let n = text.strip_prefix(":skin-tone-")?;
+    let tone = match n.as_bytes().first()? {
+        b'2' => SkinTone::Light,
+        b'3' => SkinTone::MediumLight,
+        b'4' => SkinTone::Medium,
+        b'5' => SkinTone::MediumDark,
+        b'6' => SkinTone::Dark,
+        _ => return None,
+    };
+    n[1..]
+        .starts_with(':')
+        .then_some((tone, ":skin-tone-".len() + 2))
+}
+
+/// The emoji of the `:name:` that starts `rest`, with the skin tone code after it, and the length of what it covers. `None` when it is no emoji of ours (a custom emoji).
+/// `prev` is the character before it: after an ASCII letter or digit it is no code (`10:30:45`, `host:id:123`).
+fn emoji_at(rest: &str, prev: Option<char>) -> Option<(&'static str, usize)> {
+    if prev.is_some_and(|p| p.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let body = rest.strip_prefix(':')?;
+    let n = body
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-')))
+        .unwrap_or(body.len());
+    if n == 0 || !body[n..].starts_with(':') {
+        return None;
+    }
+    let name = &body[..n];
+    // The crate first, then the table of Slack's other names; the tone is found through the crate for both.
+    let base = emojis::get_by_shortcode(name)
+        .map(emojis::Emoji::as_str)
+        .or_else(|| slack_emoji::get(name))?;
+    let len = n + 2;
+    match skin_tone_at(&rest[len..]) {
+        Some((tone, tone_len)) => Some((
+            emojis::get(base)
+                .and_then(|e| e.with_skin_tone(tone))
+                .map_or(base, emojis::Emoji::as_str),
+            len + tone_len,
+        )),
+        None => Some((base, len)),
+    }
+}
+
+/// The length of the web address that starts `rest` (up to the next white space), which is copied as it is. `None` for anything else.
+/// `prev` is the character before it, so that a scheme is only looked for at its start.
+fn url_len(rest: &str, prev: Option<char>) -> Option<usize> {
+    let is_scheme = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-');
+    if rest.starts_with(|c: char| c.is_ascii_alphabetic()) && !prev.is_some_and(is_scheme) {
+        let word = rest.find(|c: char| !is_scheme(c)).unwrap_or(rest.len());
+        if rest[word..].starts_with("://") {
+            return Some(rest.find(char::is_whitespace).unwrap_or(rest.len()));
+        }
+    }
+    None
+}
+
+/// The `:name:` codes of Slack's text as Unicode emoji (`:+1::skin-tone-2:` with its tone). A code that is no emoji of ours (a custom emoji) and the inside of a web address stay as they are.
+fn emojify(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let (mut rest, mut prev) = (text, None);
+    while let Some(c) = rest.chars().next() {
+        let (copied, len) = if let Some(len) = url_len(rest, prev) {
+            (&rest[..len], len)
+        } else if let Some((emoji, len)) = emoji_at(rest, prev) {
+            (emoji, len)
+        } else {
+            (&rest[..c.len_utf8()], c.len_utf8())
+        };
+        out.push_str(copied);
+        prev = copied.chars().last();
+        rest = &rest[len..];
+    }
+    out
+}
+
+/// The byte ranges of `text` that are a code block (```` ```…``` ````) or an inline code (`` `…` ``, closed on the same line). A mark with no partner is text.
+fn code_spans(text: &str) -> Vec<Range<usize>> {
+    let (mut out, mut at) = (Vec::new(), 0);
+    while let Some(start) = text[at..].find('`').map(|p| at + p) {
+        let rest = &text[start..];
+        let len = rest
+            .strip_prefix("```")
+            .and_then(|r| r.find("```"))
+            .map(|end| end + 6)
+            .or_else(|| {
+                let line = rest[1..].split('\n').next()?;
+                line.find('`').map(|end| end + 2)
+            });
+        match len {
+            Some(len) => {
+                out.push(start..start + len);
+                at = start + len;
+            }
+            None => at = start + 1,
+        }
+    }
+    out
+}
+
+/// One text piece of `plain_text`, which starts at byte `offset` of the whole text: `&lt; &gt; &amp;` undone, and the emoji codes converted outside `code` (`code_spans` of the whole text, so that a code may hold a `<…>`).
+fn text_piece(piece: &str, offset: usize, code: &[Range<usize>]) -> String {
+    let end = offset + piece.len();
+    let (mut out, mut at) = (String::new(), 0);
+    for span in code.iter().filter(|s| s.start < end && s.end > offset) {
+        let (from, to) = (span.start.max(offset) - offset, span.end.min(end) - offset);
+        out.push_str(&emojify(&unescape(&piece[at..from])));
+        out.push_str(&unescape(&piece[from..to]));
+        at = to;
+    }
+    out.push_str(&emojify(&unescape(&piece[at..])));
+    out
+}
+
+/// Slack's mrkdwn as plain text (`token_text`, `text_piece`). It is drawn as text, never as markup.
 fn plain_text(text: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
+    let code = code_spans(text);
+    let mut offset = 0;
     pieces(text)
         .into_iter()
         .map(|p| match p {
-            Piece::Text(t) => unescape(t),
-            Piece::Token(t) => token_text(t, name_of),
+            Piece::Text(t) => {
+                offset += t.len();
+                text_piece(t, offset - t.len(), &code)
+            }
+            Piece::Token(t) => {
+                // The `<` and the `>` are not in the token.
+                offset += t.len() + 2;
+                token_text(t, name_of)
+            }
         })
         .collect()
 }
@@ -4734,6 +4862,159 @@ mod tests {
         );
         // Only a web address is kept beside the label.
         assert_eq!(token_text("mailto:a@example.com|mail", &nobody), "mail");
+    }
+
+    #[test]
+    fn the_names_slack_users_type_most_become_emoji() {
+        for (name, emoji) in [
+            ("+1", "👍"),
+            ("-1", "👎"),
+            ("thumbsup", "👍"),
+            ("tada", "🎉"),
+            ("white_check_mark", "✅"),
+            ("eyes", "👀"),
+            ("pray", "🙏"),
+            ("bow", "🙇"),
+            ("sob", "😭"),
+            ("joy", "😂"),
+            ("warning", "⚠️"),
+            ("rocket", "🚀"),
+            ("fire", "🔥"),
+            ("memo", "📝"),
+        ] {
+            assert_eq!(emojify(&format!(":{name}:")), emoji, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_standard_names_of_slack_that_the_crate_lacks_come_from_the_table() {
+        for (name, emoji) in [
+            ("thinking_face", "🤔"),
+            ("hugging_face", "🤗"),
+            ("face_with_rolling_eyes", "🙄"),
+            ("robot_face", "🤖"),
+            ("man-bowing", "🙇‍♂️"),
+            ("woman-bowing", "🙇‍♀️"),
+            ("man-shrugging", "🤷‍♂️"),
+            ("woman-shrugging", "🤷‍♀️"),
+            ("man-gesturing-ok", "🙆‍♂️"),
+            ("flag-jp", "🇯🇵"),
+        ] {
+            // The crate does not know them, so only the table can answer.
+            assert!(emojis::get_by_shortcode(name).is_none(), "{name}");
+            assert_eq!(emojify(&format!(":{name}:")), emoji, "{name}");
+        }
+        // The skin tone goes the same way.
+        assert_eq!(emojify(":man-bowing::skin-tone-3:"), "🙇🏼‍♂️");
+        assert_eq!(emojify(":woman-shrugging::skin-tone-6:"), "🤷🏿‍♀️");
+        // A flag has no skin tone: the base emoji, and the code does not stay.
+        assert_eq!(emojify(":flag-jp::skin-tone-3:"), "🇯🇵");
+        // A custom emoji is not in the table.
+        assert_eq!(emojify(":my-team-logo:"), ":my-team-logo:");
+    }
+
+    #[test]
+    fn the_table_holds_only_sorted_names_the_crate_lacks() {
+        assert!(slack_emoji::EMOJI.windows(2).all(|w| w[0].0 < w[1].0));
+        for (name, emoji) in slack_emoji::EMOJI {
+            assert!(emojis::get_by_shortcode(name).is_none(), "{name}");
+            assert!(!emoji.is_empty(), "{name}");
+        }
+        assert_eq!(slack_emoji::get("thinking_face"), Some("🤔"));
+        assert_eq!(slack_emoji::get("tada"), None);
+        assert_eq!(slack_emoji::get(""), None);
+    }
+
+    #[test]
+    fn an_unknown_code_stays_as_it_is() {
+        assert_eq!(emojify(":partyparrot:"), ":partyparrot:");
+        assert_eq!(emojify("a :custom_one: b :tada:"), "a :custom_one: b 🎉");
+        // A code is no code after a letter or a digit, so the one that follows an unknown name stays too.
+        assert_eq!(emojify(":unknown:tada:"), ":unknown:tada:");
+    }
+
+    #[test]
+    fn a_skin_tone_follows_the_emoji_or_is_dropped_when_it_cannot_apply() {
+        assert_eq!(emojify(":+1::skin-tone-2:"), "👍🏻");
+        assert_eq!(emojify(":wave::skin-tone-4:"), "👋🏽");
+        assert_eq!(emojify(":+1::skin-tone-6:"), "👍🏿");
+        // An emoji with no skin tone gets the base emoji, and the code does not stay.
+        assert_eq!(emojify(":tada::skin-tone-3:"), "🎉");
+        // The code of an unknown emoji and a code with no emoji before it stay.
+        assert_eq!(emojify(":nope::skin-tone-3:"), ":nope::skin-tone-3:");
+        // A tone that Slack does not have is not a tone.
+        assert_eq!(emojify(":+1::skin-tone-7:"), "👍:skin-tone-7:");
+    }
+
+    #[test]
+    fn a_link_and_code_are_not_converted() {
+        let text = |t: &str| plain_text(t, &|_| None);
+        assert_eq!(
+            text("see https://a.example/:tada:/x :tada:"),
+            "see https://a.example/:tada:/x 🎉"
+        );
+        assert_eq!(text("`:tada:` :tada:"), "`:tada:` 🎉");
+        assert_eq!(text("```\n:tada:\n``` :tada:"), "```\n:tada:\n``` 🎉");
+        // A mark with no partner is text, and the rest is converted.
+        assert_eq!(text("`:tada:"), "`🎉");
+        assert_eq!(text("```:tada:"), "```🎉");
+        // The scheme is the word before `://`, so text before it is converted.
+        assert_eq!(
+            text(":tada:https://a.example/:tada:"),
+            "🎉https://a.example/:tada:"
+        );
+    }
+
+    #[test]
+    fn a_code_that_holds_a_token_is_still_a_code() {
+        let nobody = |_: &str| None;
+        // The code is found in the whole text, not in the pieces between the `<…>`.
+        assert_eq!(
+            plain_text("```\n<https://a.example>\n:tada:\n```", &nobody),
+            "```\nhttps://a.example\n:tada:\n```"
+        );
+        assert_eq!(
+            plain_text("`<@U1>` :tada: `x` &lt;:tada:&gt;", &nobody),
+            "`@不明` 🎉 `x` <🎉>"
+        );
+        // An escaped character inside a code is undone, and its codes stay.
+        assert_eq!(plain_text("`&lt;:tada:&gt;`", &nobody), "`<:tada:>`");
+    }
+
+    #[test]
+    fn an_inline_code_closes_on_its_own_line_only() {
+        let text = |t: &str| plain_text(t, &|_| None);
+        assert_eq!(text("a`b\n:tada:\nc`d"), "a`b\n🎉\nc`d");
+        assert_eq!(text("a`b :tada: c`d :tada:"), "a`b :tada: c`d 🎉");
+    }
+
+    #[test]
+    fn a_time_is_not_converted_and_codes_may_run_together_or_be_left_open() {
+        assert_eq!(emojify("10:30:45"), "10:30:45");
+        assert_eq!(emojify("at 10:30 and 12:00:00"), "at 10:30 and 12:00:00");
+        assert_eq!(emojify(":tada::tada::fire:"), "🎉🎉🔥");
+        assert_eq!(emojify(":tada"), ":tada");
+        assert_eq!(emojify("tada:"), "tada:");
+        assert_eq!(emojify("::"), "::");
+        assert_eq!(emojify(": :"), ": :");
+        assert_eq!(emojify("日本語:tada:です"), "日本語🎉です");
+        // After an ASCII letter or digit it is no code.
+        assert_eq!(emojify("00:ab:cd:ef"), "00:ab:cd:ef");
+        assert_eq!(emojify("host:id:123"), "host:id:123");
+        assert_eq!(emojify("ok:tada: 1:fire:"), "ok:tada: 1:fire:");
+        assert_eq!(emojify(""), "");
+    }
+
+    #[test]
+    fn plain_text_converts_text_and_leaves_the_inside_of_a_token() {
+        let nobody = |_: &str| None;
+        assert_eq!(
+            plain_text(
+                "&lt;:tada:&gt; <https://a.example/:tada:|:tada:> <@U1|:fire:> :fire:",
+                &nobody
+            ),
+            "<🎉> :tada: (https://a.example/:tada:) @:fire: 🔥"
+        );
     }
 
     #[test]
