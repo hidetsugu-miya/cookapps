@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.36.0
+
+The rows of the Slack list draw the blocks, attachments and styles of a message, so a bot's post reads as it does in the thread (#16); images are not fetched there. S-14 a thread with unread replies is listed in the unread section, with "未読の返信 N 件" opening and closing its replies under the row, and its replies count in the badge. Up to 20 threads are checked in one read with `conversations.replies`. Slack has no public API to write a thread's read position, so what was read here is kept in `slack-thread-seen.json` (IDs and timestamps only) and does not clear the thread in Slack. A real Slack workspace was not tried.
+
 ## v0.35.1
 
 The due popover no longer loses what was typed (#15): a click elsewhere, or pressing "追加" on the Slack card, confirms the text as Enter does, and Escape still cancels it. A picked day uses the time typed in the field (`15:00`, `15時`, `15時30分`, with 午前 or 午後, alone or after a date, 今日, 明日 or 明後日). A click elsewhere does not clear a repeating task's due date.
