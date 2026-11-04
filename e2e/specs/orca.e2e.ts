@@ -688,7 +688,8 @@ describe("orca: the session history", () => {
     // The older page arrives as a redraw from the start with no more to read.
     await sendChat(chatItems(many(0, 50), 0, false));
     await expect($("#orca-older")).not.toBeDisplayed();
-    expect(await scrollBox().offsetOf("m20")).toBeCloseTo(before, 0);
+    // scrollTop moves in whole pixels.
+    expect(Math.abs((await scrollBox().offsetOf("m20")) - before)).toBeLessThan(2);
     expect(await textsOf("#orca-items > *")).toHaveLength(50);
   });
 });
