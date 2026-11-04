@@ -1,7 +1,7 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
 import {
   attachment, boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
-  threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings,
+  para, plain, quote, span, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings,
 } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
@@ -223,8 +223,8 @@ describe("slack thread: blocks and attachments", () => {
   const alt = (text: string) => ({ url: null, alt: text });
   const blocks: ThreadBlock[] = [
     { type: "header", text: "Job succeeded" },
-    { type: "section", text: "Project: api", fields: ["When\nnow", "Branch\nmain"], accessory: { type: "button", text: "View Job", url: "https://app.example.com/jobs/1" } },
-    { type: "context", elements: [{ type: "text", text: "built by the bot" }] },
+    { type: "section", text: plain("Project: api"), fields: [plain("When\nnow"), plain("Branch\nmain")], accessory: { type: "button", text: "View Job", url: "https://app.example.com/jobs/1" } },
+    { type: "context", elements: [{ type: "text", text: plain("built by the bot") }] },
     { type: "divider" },
     { type: "actions", buttons: [{ text: "Rerun", url: null }, { text: "Docs", url: "https://docs.example.com/" }] },
   ];
@@ -249,6 +249,8 @@ describe("slack thread: blocks and attachments", () => {
     await expect($("#st-msgs .st-bh")).toHaveText("Job succeeded");
     expect(await textsOf("#st-msgs .st-sec-main > .st-text")).toEqual(["Project: api"]);
     expect(await textsOf("#st-msgs .st-fields .st-text")).toEqual(["When\nnow", "Branch\nmain"]);
+    // Each field is one box, whatever blocks it holds.
+    expect(await count("#st-msgs .st-fields > .st-field")).toBe(2);
     expect(await textsOf("#st-msgs .st-ctx")).toEqual(["built by the bot"]);
     expect(await count("#st-msgs hr.st-hr")).toBe(1);
     // Slack's alternative text is not drawn beside them.
@@ -257,7 +259,7 @@ describe("slack thread: blocks and attachments", () => {
   });
 
   it("draws the text of a message that has no blocks to draw, with its attachments under it", async () => {
-    await openDetail({}, bot({ attachments: [attachment({ title: "Build log", text: "All green" })] }));
+    await openDetail({}, bot({ attachments: [attachment({ title: "Build log", text: plain("All green") })] }));
     expect(await textsOf("#st-msgs .st-msg > div > .st-text")).toEqual(["CircleCI job succeeded!"]);
     expect(await textsOf("#st-msgs .st-att .st-att-title")).toEqual(["Build log"]);
     // The text comes before the attachment.
@@ -267,12 +269,12 @@ describe("slack thread: blocks and attachments", () => {
   it("draws an attachment: the color bar, pretext, author, linked title, text, fields, buttons and footer", async () => {
     const full = attachment({
       color: "#36a64f",
-      pretext: "Before the card",
+      pretext: plain("Before the card"),
       authorName: "CI bot",
       title: "Job #1",
       titleLink: "https://app.example.com/jobs/1",
-      text: "Passed",
-      fields: [{ title: "Project", value: "api" }, { title: "Branch", value: "main" }],
+      text: plain("Passed"),
+      fields: [{ title: "Project", value: plain("api") }, { title: "Branch", value: plain("main") }],
       actions: [{ text: "Open", url: "https://app.example.com/open" }],
       footer: "via CI",
     });
@@ -303,7 +305,7 @@ describe("slack thread: blocks and attachments", () => {
 
   it("draws every text as text: no markup, and only URLs are links", async () => {
     const markup = "<b>bold</b><img src=x onerror=alert(1)> see https://example.com/plan";
-    await openDetail({}, bot({ blocks: [{ type: "section", text: markup, fields: [markup], accessory: null }], attachments: [attachment({ title: markup, text: markup })] }));
+    await openDetail({}, bot({ blocks: [{ type: "section", text: plain(markup), fields: [plain(markup)], accessory: null }], attachments: [attachment({ title: markup, text: plain(markup) })] }));
     expect(await count("#st-msgs .st-blocks b, #st-msgs .st-blocks img, #st-msgs .st-att b, #st-msgs .st-att img")).toBe(0);
     expect((await textsOf("#st-msgs .st-sec-main > .st-text"))[0]).toBe(markup);
     expect((await textsOf("#st-msgs .st-att > .st-text"))[0]).toBe(markup);
@@ -354,7 +356,7 @@ describe("slack thread: blocks and attachments", () => {
       bot({
         blocks: [{ type: "header", text: `Header ${url}` }],
         attachments: [
-          attachment({ authorName: `Author ${url}`, title: `Title ${url}`, fields: [{ title: `Field ${url}`, value: "v" }], footer: `Footer ${url}` }),
+          attachment({ authorName: `Author ${url}`, title: `Title ${url}`, fields: [{ title: `Field ${url}`, value: plain("v") }], footer: `Footer ${url}` }),
           attachment({ title: `Linked ${url}`, titleLink: "https://example.com/t" }),
         ],
       }),
@@ -454,7 +456,7 @@ describe("slack thread: blocks and attachments", () => {
 
   it("draws the images of the blocks inside an attachment and of a section's accessory and a context too", async () => {
     const inner: ThreadBlock[] = [
-      { type: "section", text: "Report", fields: [], accessory: { type: "image", url: imageUrl, alt: "Thumb" } },
+      { type: "section", text: plain("Report"), fields: [], accessory: { type: "image", url: imageUrl, alt: "Thumb" } },
       { type: "context", elements: [{ type: "image", url: imageUrl, alt: "Logo" }] },
     ];
     await openDetail({}, bot({ attachments: [attachment({ blocks: inner })], imageUrls: [imageUrl] }));
@@ -462,6 +464,79 @@ describe("slack thread: blocks and attachments", () => {
     await $("#st-msgs .st-images .text-btn").click();
     expect(await waitForCalls(fetch)).toEqual([{ urls: [imageUrl] }]);
     await browser.waitUntil(async () => (await count("#st-msgs .st-att img")) === 2);
+  });
+});
+
+describe("slack thread: styles of a text (S-12)", () => {
+  const url = "https://example.com/plan";
+  // A thread of one message whose text Rust has read into `rich`.
+  const withRich = (extra: Parameters<typeof threadMessage>[3] = {}) => slackThread([threadMessage(root, "Alice Example", "raw text", extra)]);
+
+  it("draws bold, italic, strike and inline code as strong, em, s and code, and keeps the line breaks", async () => {
+    await openDetail({}, withRich({ rich: [para(span("a "), span("b", "b"), span(" "), span("i", "i"), span(" "), span("s", "s"), span(" "), span("c", "c"), span("\nnext "), span("all", "bis"))] }));
+    expect(await textsOf("#st-msgs .st-text strong")).toEqual(["b", "all"]);
+    expect(await textsOf("#st-msgs .st-text em")).toEqual(["i", "all"]);
+    expect(await textsOf("#st-msgs .st-text s")).toEqual(["s", "all"]);
+    expect(await textsOf("#st-msgs .st-text code")).toEqual(["c"]);
+    // A nested style is one element inside another.
+    expect(await count("#st-msgs .st-text strong > em > s")).toBe(1);
+    expect(await textsOf("#st-msgs .st-text")).toEqual(["a b i s c\nnext all"]);
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#st-msgs .st-text")!).whiteSpace)).toBe("pre-wrap");
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#st-msgs .st-text strong")!).fontWeight)).toMatch(/^(bold|[6-9]00)$/);
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#st-msgs .st-text s")!).textDecorationLine)).toContain("line-through");
+  });
+
+  it("draws a quote as a blockquote and a code block as a pre that scrolls sideways", async () => {
+    const long = `const line = "${"x".repeat(400)}"; // ${url}`;
+    await openDetail({}, withRich({ rich: [para(span("before")), quote(span("quoted "), span("bold", "b")), { type: "code", text: `${long}\nsecond` }, para(span("after"))] }));
+    expect(await textsOf("#st-msgs blockquote")).toEqual(["quoted bold"]);
+    expect(await count("#st-msgs blockquote strong")).toBe(1);
+    expect(await textsOf("#st-msgs pre > code")).toEqual([`${long}\nsecond`]);
+    expect(await textsOf("#st-msgs .st-text")).toEqual(["before", "after"]);
+    expect(
+      await browser.execute(() => {
+        const pre = document.querySelector<HTMLElement>("#st-msgs pre")!;
+        return [getComputedStyle(pre).overflowX, pre.scrollWidth > pre.clientWidth];
+      }),
+    ).toEqual(["auto", true]);
+    // An address in a code is not a link.
+    expect(await count("#st-msgs pre a")).toBe(0);
+  });
+
+  it("makes a link of a URL inside a style, and none of a URL inside an inline code", async () => {
+    await openDetail({}, withRich({ rich: [para(span(`see ${url}`, "b"), span(" "), span(url, "c"), span(" "), span(url, "i"))] }));
+    await expect($("#st-msgs .st-text strong a")).toHaveAttribute("href", url);
+    await expect($("#st-msgs .st-text em a")).toHaveAttribute("href", url);
+    expect(await count("#st-msgs .st-text code a")).toBe(0);
+    expect(await count("#st-msgs .st-text a")).toBe(2);
+  });
+
+  it("draws an HTML tag in a styled text as text", async () => {
+    const markup = "<b>x</b><img src=x onerror=alert(1)>";
+    await openDetail({}, withRich({ rich: [para(span(markup, "b"), span(markup, "c")), quote(span(markup)), { type: "code", text: markup }] }));
+    // The sender's name is a <b> of its own, so only the text's elements are looked at.
+    expect(await count("#st-msgs .st-text b, #st-msgs .st-text img, #st-msgs blockquote b, #st-msgs blockquote img, #st-msgs pre b, #st-msgs pre img")).toBe(0);
+    expect(await textsOf("#st-msgs strong, #st-msgs .st-text code, #st-msgs blockquote, #st-msgs pre")).toEqual([markup, markup, markup, markup]);
+  });
+
+  it("draws the styles of the mrkdwn texts of the blocks and the attachments", async () => {
+    const blocks: ThreadBlock[] = [
+      { type: "header", text: "*Header*" },
+      { type: "section", text: [para(span("Status: "), span("ok", "b"))], fields: [[para(span("Field ")), quote(span("quoted"))]], accessory: null },
+      { type: "context", elements: [{ type: "text", text: [para(span("by "), span("bot", "c"))] }] },
+    ];
+    const card = attachment({ text: [para(span("Card "), span("text", "i"))], fields: [{ title: "T", value: [{ type: "code", text: "x = 1" }] }] });
+    await openDetail({}, slackThread([threadMessage(root, "CircleCI", "alt", { blocks, showText: false, attachments: [card] })]));
+    expect(await textsOf("#st-msgs .st-sec-main > .st-text strong")).toEqual(["ok"]);
+    expect(await textsOf("#st-msgs .st-fields blockquote")).toEqual(["quoted"]);
+    // A field of a paragraph and a quote is still one box (the attachment's fields are its own).
+    expect(await count("#st-msgs .st-fields:not(.st-att .st-fields) > .st-field")).toBe(1);
+    expect(await textsOf("#st-msgs .st-ctx code")).toEqual(["bot"]);
+    expect(await textsOf("#st-msgs .st-att > .st-text em")).toEqual(["text"]);
+    expect(await textsOf("#st-msgs .st-att .st-field pre > code")).toEqual(["x = 1"]);
+    // A header is a plain text: its marks stay.
+    await expect($("#st-msgs .st-bh")).toHaveText("*Header*");
+    expect(await count("#st-msgs .st-bh strong")).toBe(0);
   });
 });
 

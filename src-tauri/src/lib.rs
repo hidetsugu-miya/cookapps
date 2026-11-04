@@ -10,6 +10,7 @@ pub mod images;
 pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
+mod slack_mrkdwn;
 pub mod todoist;
 pub mod update;
 
