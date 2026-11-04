@@ -2,7 +2,7 @@
 // whose proposals are applied to the field. Only the save button writes them (Rust keeps them in the settings folder).
 import type { TodoPrompt } from "./bindings/TodoPrompt";
 import { createChat } from "./claude-chat.js";
-import { redrawPromptRow, showPromptModel } from "./claude.js";
+import { redrawPromptRow, showModelSlot } from "./claude.js";
 import { $, tag } from "./dom.js";
 import { CLAUDE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -106,7 +106,7 @@ export async function openPrompt(from: Origin) {
   showPromptScreen();
   $("prompt-error").hidden = true;
   // Opened from Todo, the settings may not be read; the selects under the request field need them.
-  showPromptModel();
+  showModelSlot("prompt-model");
   if (draft === null) {
     if (saved === null) await loadPromptState();
     if (saved === null) return;

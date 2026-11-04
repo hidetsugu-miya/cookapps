@@ -58,6 +58,15 @@ pub struct UriCache<K>(Mutex<Entries<K>>);
 /// The external images fetched so far, by URL.
 pub type ImageCache = UriCache<String>;
 
+/// The attached images of Slack fetched so far, by (workspace, URL). `fetch_images` cannot read it.
+pub type SlackFileCache = UriCache<(String, String)>;
+
+impl SlackFileCache {
+    pub fn forget(&self, team_id: &str) {
+        self.retain(|k| k.0 != team_id);
+    }
+}
+
 impl<K: Eq + Hash + Clone> UriCache<K> {
     pub(crate) fn get(&self, key: &K) -> Option<Arc<str>> {
         self.0.lock().unwrap().uris.get(key).cloned()
@@ -516,16 +525,136 @@ fn http_client() -> &'static reqwest::Client {
     })
 }
 
-/// Splits `urls` into the images the cache holds, by URL, and the URLs still to fetch.
-/// A cached image counts into `total` like a fetched one and is left out when it does not fit.
-fn split_cached(
-    cache: &ImageCache,
+/// The only host a Slack token is sent to when an attached image is fetched.
+const SLACK_FILE_HOST: &str = "files.slack.com";
+
+/// Whether the Slack token may go to `url`: https, the default port, no user info, and the host exactly `files.slack.com`.
+pub(crate) fn is_slack_file_url(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.host_str() == Some(SLACK_FILE_HOST)
+}
+
+/// The client that fetches an attached image with the token: a redirect is not followed, so the token cannot be carried to another host.
+fn slack_file_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(FETCH_TIMEOUT)
+            .no_proxy()
+            .dns_resolver(PublicResolver)
+            .redirect(redirect::Policy::none())
+            .build()
+            .expect("reqwest client")
+    })
+}
+
+/// The fetch of one attached image with `Authorization: Bearer`. The caller has checked `url` with `is_slack_file_url` and `client` follows no redirect:
+/// a redirect answers with its status and is a failure. The error text never holds the URL or the token.
+async fn get_with_token(
+    client: &reqwest::Client,
+    url: Url,
+    token: &str,
+    budget: &Budget,
+) -> Result<Fetched, Failed> {
+    let mut res = client
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| failed(e.without_url().to_string()))?;
+    let status = res.status();
+    if !status.is_success() {
+        return Err((Some(status.as_u16()), "unexpected status".into()));
+    }
+    let mime = response_mime(
+        res.headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        res.content_length(),
+    )
+    .ok_or_else(|| failed("not an image, or over the size limit"))?;
+    let mut taken = 0;
+    let Some(bytes) = read_body(&mut res, budget, &mut taken).await else {
+        budget.give_back(taken);
+        return Err(failed("body over the size limit, or the read failed"));
+    };
+    Ok((mime, bytes))
+}
+
+/// The URLs of `urls` the token may be sent to, each once, at most `MAX_FETCHES`. The others are dropped here and never fetched.
+fn slack_file_urls(urls: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    urls.into_iter()
+        .filter(|u| {
+            Url::parse(u).is_ok_and(|parsed| is_slack_file_url(&parsed)) && seen.insert(u.clone())
+        })
+        .take(MAX_FETCHES)
+        .collect()
+}
+
+/// Fetches the attached images at `urls` of the Slack workspace `team_id` with its token and returns their data: URIs by URL.
+/// A URL that is not `is_slack_file_url` is skipped: it is not fetched, and never with the token. An image that cannot be fetched is left out.
+/// The token, the URL's path and query, and the bytes are in no log. The size limits, the budget and the cache are those of `fetch_images`.
+pub(crate) async fn fetch_slack_files(
+    cache: &SlackFileCache,
+    team_id: &str,
+    token: &str,
     urls: Vec<String>,
+) -> HashMap<String, Arc<str>> {
+    let mut used = 0;
+    let (mut out, missing) = split_cached(
+        cache,
+        slack_file_urls(urls),
+        |u| (team_id.to_owned(), u.to_owned()),
+        &mut used,
+    );
+    let budget = Arc::new(Budget(AtomicU64::new(MAX_TOTAL_BYTES - used)));
+    let jobs = missing.into_iter().map(|url| {
+        let (budget, token) = (budget.clone(), token.to_owned());
+        async move {
+            let parsed = Url::parse(&url).ok()?;
+            if budget.is_spent() {
+                return None;
+            }
+            match get_with_token(slack_file_client(), parsed.clone(), &token, &budget).await {
+                Ok((mime, bytes)) => Some((url, mime, bytes)),
+                Err((status, why)) => {
+                    let status = status.map_or("-".to_owned(), |s| s.to_string());
+                    eprintln!(
+                        "cookapps: slack_file_images url={} status={status} error={why}",
+                        log_url(&parsed)
+                    );
+                    None
+                }
+            }
+        }
+    });
+    for (url, mime, bytes) in run_limited(jobs, CONCURRENCY).await.into_iter().flatten() {
+        let uri: Arc<str> = data_uri(&mime, &bytes).into();
+        cache.put(
+            IMAGE_CACHE_BYTES,
+            (team_id.to_owned(), url.clone()),
+            Arc::clone(&uri),
+        );
+        out.insert(url, uri);
+    }
+    out
+}
+
+/// Splits `urls` into the images the cache holds (under the key `key` makes of the URL), by URL, and the URLs still to fetch.
+/// A cached image counts into `total` like a fetched one and is left out when it does not fit.
+fn split_cached<K: Eq + Hash + Clone>(
+    cache: &UriCache<K>,
+    urls: Vec<String>,
+    key: impl Fn(&str) -> K,
     total: &mut u64,
 ) -> (HashMap<String, Arc<str>>, Vec<String>) {
     let (mut cached, mut missing) = (HashMap::new(), Vec::new());
     for url in urls {
-        match cache.get(&url) {
+        match cache.get(&key(&url)) {
             Some(uri) => {
                 // The data: URI is base64, a third longer than the image.
                 if admit(total, uri.len() as u64 / 4 * 3) {
@@ -552,7 +681,7 @@ pub async fn fetch_images(
         .take(MAX_FETCHES)
         .collect();
     let mut used = 0;
-    let (mut out, missing) = split_cached(&cache, urls, &mut used);
+    let (mut out, missing) = split_cached(&cache, urls, str::to_owned, &mut used);
     let budget = Arc::new(Budget(AtomicU64::new(MAX_TOTAL_BYTES - used)));
     let session = Arc::new(Session::default());
     let jobs = missing
@@ -592,6 +721,122 @@ mod tests {
 
     fn url(s: &str) -> Url {
         Url::parse(s).unwrap()
+    }
+
+    /// Serves one canned response on a local port and sends back what the request said; returns its URL.
+    fn serve_once(response: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/file.png?secret=1",
+            listener.local_addr().unwrap()
+        );
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_lowercase()
+        });
+        (url, handle)
+    }
+
+    fn get_from(url: &str) -> Result<Fetched, Failed> {
+        let client = reqwest::Client::builder()
+            .redirect(redirect::Policy::none())
+            .build()
+            .unwrap();
+        let budget = Budget(AtomicU64::new(MAX_TOTAL_BYTES));
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(get_with_token(
+                &client,
+                url.parse().unwrap(),
+                "xoxp-secret",
+                &budget,
+            ))
+    }
+
+    const PNG: &str = "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc";
+    const HTML: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc";
+    const REDIRECT: &str = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+    #[test]
+    fn the_token_goes_only_to_https_files_slack_com_on_the_default_port_without_user_info() {
+        for ok in [
+            "https://files.slack.com/files-tmb/T1-F1-abc/img_360.png",
+            "https://FILES.slack.com/x",
+            "https://files.slack.com:443/x",
+        ] {
+            assert!(is_slack_file_url(&url(ok)), "{ok}");
+        }
+        for bad in [
+            "http://files.slack.com/x",
+            "https://files.slack.com:8443/x",
+            "https://user@files.slack.com/x",
+            "https://user:pw@files.slack.com/x",
+            "https://files.slack.com.evil.com/x",
+            "https://evil.com/files.slack.com",
+            "https://evilfiles.slack.com/x",
+            "https://a.files.slack.com/x",
+            "https://slack.com/x",
+            "https://files.slack.com./x",
+            "https://example.slack.com/x",
+            "https://avatars.slack-edge.com/x",
+            "https://files.slack.com@evil.com/x",
+            "ftp://files.slack.com/x",
+        ] {
+            assert!(!is_slack_file_url(&url(bad)), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_attached_image_is_fetched_with_the_bearer_token() {
+        let (u, server) = serve_once(PNG);
+        let (mime, bytes) = get_from(&u).unwrap();
+        assert_eq!(
+            (mime.as_str(), bytes.as_slice()),
+            ("image/png", &b"abc"[..])
+        );
+        assert!(server
+            .join()
+            .unwrap()
+            .contains("authorization: bearer xoxp-secret"));
+    }
+
+    #[test]
+    fn an_answer_that_is_not_an_image_is_a_failure() {
+        let (u, server) = serve_once(HTML);
+        assert!(get_from(&u).is_err());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_redirect_is_a_failure_and_is_not_followed() {
+        let (u, server) = serve_once(REDIRECT);
+        let (status, why) = get_from(&u).unwrap_err();
+        assert_eq!(status, Some(302));
+        assert!(
+            !why.contains("xoxp-secret") && !why.contains("secret=1"),
+            "{why}"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn only_slack_file_urls_are_fetched_with_the_token_each_once() {
+        let a = "https://files.slack.com/files-tmb/T1-F1-abc/img_360.png";
+        let list = slack_file_urls(vec![
+            "http://127.0.0.1:1/a.png".into(),
+            a.into(),
+            "https://evil.com/a.png".into(),
+            "not a url".into(),
+            a.into(),
+            "https://files.slack.com.evil.com/a.png".into(),
+        ]);
+        assert_eq!(list, vec![a.to_owned()]);
     }
 
     #[test]
@@ -649,6 +894,30 @@ mod tests {
     }
 
     #[test]
+    fn slack_files_are_kept_per_workspace_and_apart_from_the_images_of_mail() {
+        let files = SlackFileCache::default();
+        let key = |team: &str| (team.to_owned(), "https://files.slack.com/a".to_owned());
+        files.put(100, key("T1"), "data:1".into());
+        files.put(100, key("T2"), "data:2".into());
+        assert_eq!(files.get(&key("T1")).as_deref(), Some("data:1"));
+        // The URL alone does not find it in the cache of mail's images.
+        let mail = ImageCache::default();
+        assert!(mail.get(&"https://files.slack.com/a".to_owned()).is_none());
+        files.forget("T1");
+        assert!(files.get(&key("T1")).is_none());
+        assert_eq!(files.get(&key("T2")).as_deref(), Some("data:2"));
+        // Another workspace's copy is not taken for this one's.
+        let (cached, missing) = split_cached(
+            &files,
+            vec!["https://files.slack.com/a".to_owned()],
+            |u| ("T3".to_owned(), u.to_owned()),
+            &mut 0,
+        );
+        assert!(cached.is_empty());
+        assert_eq!(missing, ["https://files.slack.com/a"]);
+    }
+
+    #[test]
     fn split_cached_takes_the_cached_images_within_the_limits_and_lists_the_rest() {
         let cache = ImageCache::default();
         cache.put(100, "https://a/1".into(), "data:a".into());
@@ -659,14 +928,14 @@ mod tests {
             "https://a/2".to_owned(),
         ];
         let mut total = 0;
-        let (cached, missing) = split_cached(&cache, urls.clone(), &mut total);
+        let (cached, missing) = split_cached(&cache, urls.clone(), str::to_owned, &mut total);
         assert_eq!(cached.len(), 2);
         assert_eq!(&*cached["https://a/1"], "data:a");
         assert_eq!(missing, ["https://a/new"]);
         assert_eq!(total, 3 + 6);
         // With no room left a cached image is left out, not fetched again.
         let mut total = MAX_TOTAL_BYTES;
-        let (cached, missing) = split_cached(&cache, urls, &mut total);
+        let (cached, missing) = split_cached(&cache, urls, str::to_owned, &mut total);
         assert!(cached.is_empty());
         assert_eq!(missing, ["https://a/new"]);
     }

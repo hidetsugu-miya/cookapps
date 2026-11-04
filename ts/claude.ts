@@ -1,4 +1,4 @@
-// The Claude tab of the settings (the connection card, the model and effort selects of the four purposes, the prompt row), and the Claude state the sidebar's avatar and the Todo add field follow.
+// The Claude tab of the settings (the connection card, the model and effort selects of the five purposes, the prompt row), and the Claude state the sidebar's avatar and the Todo add field follow.
 import type { ApiKeyState } from "./bindings/ApiKeyState";
 import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
@@ -13,6 +13,7 @@ import { code, confirmUnlink, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { itemRow } from "./settings.js";
 import { refreshSlackCompose } from "./slack-compose.js";
+import { refreshSlackThread } from "./slack-thread.js";
 import { updateAddMode } from "./todo-add.js";
 import { promptRow, refreshPrompt } from "./todo-prompt.js";
 import { setClaudeReady, showError } from "./view.js";
@@ -172,6 +173,7 @@ function applyClaude(next: Claude | null) {
   updateAddMode();
   refreshPrompt();
   refreshSlackCompose();
+  refreshSlackThread();
 }
 
 // The model and effort of each purpose of the `claude -p` calls (A-2) as the selects show them; null until read.
@@ -189,6 +191,7 @@ const PURPOSES: { key: Purpose; name: string; meta: string }[] = [
   { key: "mailSummary", name: "メールの要約", meta: "メール詳細の AI 要約" },
   { key: "promptChat", name: "プロンプトの会話", meta: "Todo の要約プロンプトを Claude と編集するとき" },
   { key: "proofread", name: "Slack に貼る文章の校正", meta: "Slack に貼る画面の「Claude と校正」" },
+  { key: "slackReply", name: "Slack の返信の校正", meta: "スレッド詳細の「Claude と校正」" },
 ];
 
 // value, the text.
@@ -216,10 +219,10 @@ function purposeSelects(purpose: Purpose, name: string) {
   return [select("model", MODELS, now.model), select("effort", EFFORTS, now.effort)];
 }
 
-// The block of the four purposes with its column headings, shown whether or not Claude is usable; none until the settings are read.
+// The block of the five purposes with its column headings, shown whether or not Claude is usable; none until the settings are read.
 function modelBlock() {
   if (modelSettings === null) return [];
-  const note = tag("div", "item-meta model-note", "次の呼び出しから使います。デフォルトは Sonnet と medium");
+  const note = tag("div", "item-meta model-note", "次の呼び出しから使います。デフォルトは Sonnet と medium（Slack の返信の校正は Sonnet と high）");
   const grid = tag("div", "model-grid");
   grid.append(tag("div", "th", "用途"), tag("div", "th", "モデル"), tag("div", "th", "effort"));
   for (const p of PURPOSES) {
@@ -230,9 +233,13 @@ function modelBlock() {
   return [note, grid];
 }
 
-// The two selects under the prompt screen's request field: the model and effort of the prompt conversation, the same values as the settings'.
-export function redrawPromptModel() {
-  $("prompt-model").replaceChildren(...(modelSettings === null ? [] : purposeSelects("promptChat", "")));
+// The two selects under a Claude pane's request field, without a frame: the model and effort of the pane's purpose, the same values as the settings'.
+// The prompt screen's pane (the prompt conversation) and the Slack thread's pane (the reply proofreading) have them.
+const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["reply-model", "slackReply"]];
+
+function redrawModelSlot(id: string) {
+  const purpose = MODEL_SLOTS.find(([slot]) => slot === id)![1];
+  $(id).replaceChildren(...(modelSettings === null ? [] : purposeSelects(purpose, "")));
 }
 
 // Every select drawn, on the settings screen and on the prompt screen.
@@ -270,10 +277,10 @@ async function saveModel(purpose: Purpose, change: { model: Model } | { effort: 
   }
 }
 
-// Opens the prompt screen's selects: the settings are read the first time, and what was read is drawn if the selects are empty.
-export function showPromptModel() {
+// Opens a pane's selects: the settings are read the first time, and what was read is drawn if the selects are empty.
+export function showModelSlot(id: string) {
   if (modelSettings === null) loadModelSettings();
-  else if ($("prompt-model").childElementCount === 0) redrawPromptModel();
+  else if ($(id).childElementCount === 0) redrawModelSlot(id);
 }
 
 // Reads the saved model and effort; the card and the prompt screen follow. A read that a save overtook is dropped: the save's answer is newer.
@@ -288,7 +295,7 @@ export async function loadModelSettings() {
   if (savingModel || saves !== started) return;
   modelSettings = read;
   redrawModels();
-  redrawPromptModel();
+  for (const [id] of MODEL_SLOTS) redrawModelSlot(id);
 }
 
 // The connection card: the rows, the key field, and the buttons that wait while a change or a read is on its way (or, for the key field, while the states are not known).
@@ -381,7 +388,7 @@ export function initClaude() {
           ["キーを貼って「確認して保存」を押す。キーは OS の資格情報の保管場所に入れ、画面には出さない。キーに切り替えると、この端末の Claude Code はログアウトされる（戻すときは ", code("claude auth login"), "）"],
           ["↻ で状態を確かめ直す"],
         ],
-        "Slack のメッセージとそのスレッドの、送信者の ID と本文のテキスト（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります。Slack に貼る文章を Claude と校正するときは、編集欄の文章、会話、依頼を、「校正する」か送信を押したときだけ送ります。モデルと effort は、Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正のそれぞれに選べます",
+        "Slack のメッセージとそのスレッドの、送信者の ID と本文のテキスト（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります。Slack に貼る文章を Claude と校正するときは、編集欄の文章、会話、依頼を、「校正する」か送信を押したときだけ送ります。Slack のスレッドに返信する文章を Claude と校正するときは、返信の文章、会話、依頼だけを、同じく「校正する」か送信を押したときだけ送ります（スレッドのメッセージは送りません）。モデルと effort は、Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack の返信の校正のそれぞれに選べます",
       ),
     );
 }

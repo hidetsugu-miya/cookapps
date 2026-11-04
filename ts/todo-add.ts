@@ -88,19 +88,31 @@ export function updateAddMode() {
   line.append(hint);
 }
 
-// The Slack links being summarised, waiting for the user's confirmation, or that failed, above the list. Several may be there at once.
-// `el` is the row drawn for it: a row is replaced alone, so a card being typed in keeps its focus when another one changes.
-interface PendingAdd {
+// What the confirmation card of a summary needs to know about the message it came from: the link, its host, and where the task goes.
+// The Todo add field and the Slack thread both draw the card.
+export interface ReviewJob {
   url: string;
   host: string | null;
-  failed: string | null;
-  // Set when Claude has answered; the card then asks the user to confirm it.
-  summary: Summary | null;
   // Where the task goes: null is the inbox (a link pasted in "今日"). `today` is whether a task with no due date is due today.
   projectId: string | null;
   // The project Claude recommended (it is the first `projectId`), or null; the chip and the menu tag it.
   recommended: string | null;
   today: boolean;
+}
+
+// What the owner of the card does with it: drop it, learn that the task was added (`added` is its name; null when Todoist needs a token), and open the prompt screen (none: no link to it).
+export interface ReviewHooks {
+  remove: () => void;
+  added: (name: string | null) => void;
+  editPrompt?: () => void;
+}
+
+// The Slack links being summarised, waiting for the user's confirmation, or that failed, above the list. Several may be there at once.
+// `el` is the row drawn for it: a row is replaced alone, so a card being typed in keeps its focus when another one changes.
+interface PendingAdd extends ReviewJob {
+  failed: string | null;
+  // Set when Claude has answered; the card then asks the user to confirm it.
+  summary: Summary | null;
   el: HTMLElement | null;
 }
 const pendingAdds: PendingAdd[] = [];
@@ -115,7 +127,7 @@ function closeButton(onclick: () => void) {
 
 // Draws the job's row where it is, or at the end for a new job.
 function showPending(job: PendingAdd) {
-  const row = job.failed ? failedRow(job) : job.summary ? reviewCard(job, job.summary) : busyRow(job);
+  const row = job.failed ? failedRow(job) : job.summary ? reviewCard(job, job.summary, todoHooks(job)) : busyRow(job);
   if (job.el) job.el.replaceWith(row);
   else $("todo-pending").append(row);
   job.el = row;
@@ -145,6 +157,18 @@ function failedRow(job: PendingAdd) {
   return row;
 }
 
+// The card in the Todo add field: it goes away when dropped or added, and the list is read again after an add.
+const todoHooks = (job: PendingAdd): ReviewHooks => ({
+  remove: () => removePending(job),
+  added: (name) => {
+    removePending(job);
+    // null: a token is needed, and the load shows the token form.
+    if (name !== null) toast(`「${name}」を追加しました`);
+    loadTodo(false, false);
+  },
+  editPrompt: () => openPrompt("todo"),
+});
+
 function reviewField(label: string, control: HTMLElement) {
   const field = tag("label", "review-field");
   field.append(tag("span", "review-label", label), control);
@@ -152,7 +176,7 @@ function reviewField(label: string, control: HTMLElement) {
 }
 
 // The card that asks the user to confirm Claude's summary: name, description, due date and project can be changed, the link cannot (it ends the description).
-function reviewCard(job: PendingAdd, summary: Summary) {
+export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks) {
   const name = tag("input", "review-name");
   name.value = summary.content;
   const description = tag("textarea", "review-desc");
@@ -219,12 +243,15 @@ function reviewCard(job: PendingAdd, summary: Summary) {
   keys.append(tag("kbd", "", isMac ? "⌘" : "Ctrl"), tag("kbd", "", "Enter"), " で追加");
   const actions = tag("div", "review-actions");
   actions.append(keys, drop, add);
-  const editPrompt = tag("button", "link-btn", "プロンプトを編集");
-  editPrompt.type = "button";
-  editPrompt.onclick = () => openPrompt("todo");
   const head = tag("div", "review-head");
   head.insertAdjacentHTML("beforeend", CLAUDE_SVG);
-  head.append(tag("span", "review-head-text", "Claude の要約です。確かめてから追加してください"), editPrompt);
+  head.append(tag("span", "review-head-text", "Claude の要約です。確かめてから追加してください"));
+  if (hooks.editPrompt) {
+    const editPrompt = tag("button", "link-btn", "プロンプトを編集");
+    editPrompt.type = "button";
+    editPrompt.onclick = hooks.editPrompt;
+    head.append(editPrompt);
+  }
   const chips = tag("div", "review-chips");
   chips.append(dueChip, project);
   const body = tag("div", "review-body");
@@ -249,10 +276,7 @@ function reviewCard(job: PendingAdd, summary: Summary) {
         projectId: job.projectId,
         today: job.today,
       });
-      removePending(job);
-      // null: a token is needed, and the load shows the token form.
-      if (added !== null) toast(`「${added}」を追加しました`);
-      loadTodo(false, false);
+      hooks.added(added);
     } catch (e) {
       // The card stays as the user left it.
       error.textContent = `追加できませんでした: ${e}`;
@@ -263,7 +287,7 @@ function reviewCard(job: PendingAdd, summary: Summary) {
     }
   };
   add.onclick = commit;
-  drop.onclick = () => removePending(job);
+  drop.onclick = hooks.remove;
   // Enter in the name, or Cmd+Enter (Ctrl+Enter off macOS) anywhere on the card, adds. Escape does nothing: it would lose a summary by accident.
   card.onkeydown = (e) => {
     if (e.key !== "Enter" || composing(e) || !(e.target === name || (isMac ? e.metaKey : e.ctrlKey))) return;

@@ -35,8 +35,14 @@ const answers = {
   todoist_connected: false,
   todoist_comments: [],
   slack_load: { workspaces: [], recent: [] },
+  slack_timeline: { messages: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0 },
+  slack_icons: [],
+  slack_file_images: {},
+  fetch_images: {},
   claude_status: { state: "missing" },
-  claude_model_settings: Object.fromEntries(["slackSummary", "mailSummary", "promptChat", "proofread"].map((purpose) => [purpose, { model: "sonnet", effort: "medium" }])),
+  claude_model_settings: Object.fromEntries(
+    ["slackSummary", "mailSummary", "promptChat", "proofread", "slackReply"].map((purpose) => [purpose, { model: "sonnet", effort: purpose === "slackReply" ? "high" : "medium" }]),
+  ),
   claude_todo_prompt: { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false },
   app_info: { version: "1.2.3", updatable: true },
   // Manual, so that no spec replaces the app by accident; the real default (Rust) is auto.

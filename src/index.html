@@ -14,15 +14,19 @@
     <button id="nav-calendar" class="nav-item" aria-label="カレンダー" disabled>
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
     </button>
+    <div id="account-list" class="tray" aria-label="連携中の Google アカウント"></div>
     <button id="nav-todo" class="nav-item" aria-label="Todo">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>
       <span class="nav-count" aria-hidden="true" hidden></span>
     </button>
+    <button id="nav-slack" class="nav-item" aria-label="Slack">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/></svg>
+    </button>
+    <div id="slack-workspace-list" class="tray" aria-label="連携中のワークスペース" hidden></div>
     <div id="sidebar-bottom">
       <button id="update-btn" class="nav-item" aria-label="更新" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>
       </button>
-      <div id="account-list"></div>
       <button id="claude-btn" class="avatar account-btn claude" aria-label="Claude" aria-haspopup="dialog" aria-controls="account-popup" aria-expanded="false" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
       </button>
@@ -272,10 +276,71 @@
                 <button id="prompt-send" class="text-btn primary chat-send">送信</button>
               </div>
             </div>
-            <div id="prompt-model"></div>
+            <div id="prompt-model" class="chat-model"></div>
           </form>
         </aside>
       </div>
+    </section>
+    <section id="slack-list" hidden>
+      <header>
+        <h1>Slack</h1>
+        <span class="header-sub">新しい順に 20 件</span>
+        <span id="slack-pending" class="header-sub" hidden></span>
+      </header>
+      <div id="slack-notice"></div>
+      <div id="slack-feed"></div>
+    </section>
+    <section id="slack-thread" class="split-main" hidden>
+      <div id="st-detail">
+        <header id="st-head">
+          <button id="st-back" class="icon-btn" aria-label="戻る">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
+          </button>
+          <h1><span id="st-channel"></span><small id="st-team"></small></h1>
+          <a id="st-open" class="icon-btn" aria-label="Slack で開く">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+          </a>
+          <button id="st-todo" class="icon-btn" aria-label="Todo にする" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
+          </button>
+        </header>
+        <div id="st-msgs"></div>
+        <div id="st-note" role="status" hidden></div>
+        <div id="st-card"></div>
+        <div id="st-reply">
+          <p id="st-error" class="pending fail" role="alert" hidden></p>
+          <div class="composer">
+            <textarea id="st-input" class="chat-input" rows="3" aria-label="スレッドに返信" placeholder="スレッドに返信" autocomplete="off"></textarea>
+            <div class="composer-foot">
+              <span id="st-keys" class="composer-hint"></span>
+              <button id="st-send" class="text-btn primary" disabled>返信する</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="reply-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
+      <aside id="reply-chat" class="chat-pane split-chat" aria-label="Claude と校正">
+        <div class="chat-head">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+          Claude と校正
+          <button id="reply-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+        </div>
+        <div id="reply-log" class="chat-log"></div>
+        <p id="reply-chat-note" class="chat-note" hidden></p>
+        <form id="reply-form" class="chat-form">
+          <div class="proofread-row">
+            <button id="reply-proofread" type="button" class="text-btn" disabled>校正する</button>
+          </div>
+          <div class="composer">
+            <textarea id="reply-input" class="chat-input" rows="1" aria-label="Claude への依頼" placeholder="どう直したいかを書く" autocomplete="off"></textarea>
+            <div class="composer-foot">
+              <span id="reply-keys" class="composer-hint"></span>
+              <button id="reply-send" class="text-btn primary chat-send">送信</button>
+            </div>
+          </div>
+          <div id="reply-model" class="chat-model"></div>
+        </form>
+      </aside>
     </section>
     <section id="slack-compose" hidden>
       <header>
@@ -288,7 +353,7 @@
         <button id="slack-post" class="text-btn primary" disabled>貼る</button>
       </header>
       <p id="slack-error" class="pending fail" role="alert" hidden></p>
-      <div id="slack-main">
+      <div id="slack-main" class="split-main">
         <section id="slack-edit" aria-label="貼る内容">
           <div class="slack-target">
             <span class="prompt-label">貼り付け先</span>
@@ -302,8 +367,8 @@
             <textarea id="slack-body" spellcheck="false"></textarea>
           </div>
         </section>
-        <div id="slack-split" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
-        <aside id="slack-chat" class="chat-pane" aria-label="Claude と校正">
+        <div id="slack-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
+        <aside id="slack-chat" class="chat-pane split-chat" aria-label="Claude と校正">
           <div class="chat-head">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
             Claude と校正

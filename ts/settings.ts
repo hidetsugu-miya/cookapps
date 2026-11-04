@@ -9,7 +9,7 @@ import { avatarColor, hostOf, initials, WEEKDAYS } from "./format.js";
 import { LINK_SVG } from "./icons.js";
 import { closeHint, code, confirmUnlink, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
-import { appsLink, openPermissionPane, scopesBlock, SLACK_SCOPES } from "./permission-pane.js";
+import { appsLink, OPTIONAL_KINDS, openPermissionPane, scopesBlock, SLACK_SCOPES } from "./permission-pane.js";
 import { setSlackWorkspaces } from "./slack-workspaces.js";
 import { updateAddMode } from "./todo-add.js";
 import { showTokenForm } from "./todo.js";
@@ -69,7 +69,8 @@ export function itemRow({ avatar, name, meta, warn = false, status, actions = []
 }
 
 // What `slack_check` found about a workspace's token: usable, lacking scopes for reading messages, or not answered.
-type Check = { state: "ok" | "noRead"; missing: string[] } | { state: "error"; message: string };
+// `optional` are the scopes the token lacks and can do without (the workspace stays usable).
+type Check = { state: "ok" | "noRead"; missing: string[]; optional: string[] } | { state: "error"; message: string };
 
 // teamId -> the last `slack_check` of that workspace's token. A redraw after an add or a removal reuses it,
 // except for a workspace that is new, has a different user (its token was replaced), or was not usable.
@@ -83,7 +84,7 @@ function checkWorkspace(w: Workspace) {
     (r): Check => {
       const missing = r.missingScopes ?? [];
       c.bad = missing.length > 0;
-      return { state: c.bad ? "noRead" : "ok", missing };
+      return { state: c.bad ? "noRead" : "ok", missing, optional: r.missingOptional ?? [] };
     },
     (e): Check => {
       c.bad = true;
@@ -120,7 +121,7 @@ function workspaceRow(w: Workspace, result: Check | null) {
       ? `${result.missing.join("、")} の権限がありません。スコープを足して、トークンを貼り直してください`
       : result?.state === "error"
         ? result.message
-        : `${w.user} ・ ${hostOf(w.url)}`;
+        : [`${w.user} ・ ${hostOf(w.url)}`, ...(result?.optional.length ? [` ・ ${result.optional.map((s) => `${s}（${OPTIONAL_KINDS[s] ?? s}）`).join("、")}はありません。足すと Slack の画面に出ます`] : [])].join("");
   return itemRow({
     avatar,
     name: w.team,
@@ -309,6 +310,7 @@ export function initSettings() {
         [
           [appsLink(), " で、ワークスペースごとにアプリを作る"],
           ["「User Token Scopes」に次を足す", ...scopesBlock(SLACK_SCOPES)],
+          [code("users:read"), " と ", code("files:read"), " は、Slack の画面に送信者の名前とアイコン、添付画像を出すために使います。なくても、ほかのことはできます"],
           ["ワークスペースにインストールし、", code("xoxp-"), " で始まるトークンを下の欄に貼る"],
         ],
         "トークンは OS の資格情報の保管場所に入れ、画面には出しません",

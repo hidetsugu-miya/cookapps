@@ -218,6 +218,22 @@ async function loadTodoCount() {
   if (currentScreen() !== "todo" && !todoState.writes && seq === todoState.seq) setTodoCount(tasks);
 }
 
+// Todo data for a screen other than Todo (the Slack thread's summary card needs the projects): what is held (the kept content or an earlier load), else one read of Todoist.
+// False when Todoist needs a token. A read that fails throws. The Todo screen's own load still runs when it is opened.
+export async function ensureTodoData() {
+  if (todoState.todo) return true;
+  const data = await invoke("todoist_load", { withDone: todoState.doneStale });
+  if (!data) return false;
+  if (!data.offline) todoState.doneStale = false;
+  // Todo data arrived meanwhile (the Todo screen's load, the kept content): it is as new as this read, or newer.
+  if (todoState.todo) return true;
+  todoState.todo = data;
+  todoState.projectById = new Map(data.projects.map((p) => [p.id, p]));
+  todoState.taskById = new Map(data.tasks.map((t) => [t.id, t]));
+  setTodoCount(data.tasks);
+  return true;
+}
+
 // The timed refresh, also when the window comes back. The backend asks Todoist for the changes only, so it is cheap; the completed tasks are fetched again only while `doneStale` is set.
 // One at a time: while Todoist does not answer, the next rounds are skipped instead of piling up behind the backend's lock.
 let refreshingTodo = false;

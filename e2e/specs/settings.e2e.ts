@@ -202,6 +202,26 @@ describe("settings: Slack", () => {
     expect(scopes).toEqual(["im:history", "mpim:history"]);
   });
 
+  it("says which optional scopes the token lacks without calling the workspace short of permission", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([], ["users:read", "files:read"]), claude_status: claudeMissing });
+    await $("#nav-settings").click();
+    await openTab("slack");
+    const status = $("#slack-workspaces .status");
+    await expect(status).toHaveText("接続済み");
+    await expect(status).toHaveElementClass("ok");
+    await expect($("#slack-workspaces .item-meta")).not.toHaveElementClass("warn");
+    await expect($("#slack-workspaces .item-meta")).toHaveText(expect.stringContaining("users:read（送信者の名前とアイコン）、files:read（添付画像）はありません"));
+    // Nothing to fix in a pane: the label is no button.
+    await expect($("#slack-workspaces button.status")).not.toExist();
+  });
+
+  it("lists users:read and files:read with the other scopes in the setup hint", async () => {
+    await openSettings([], claudeMissing, "slack");
+    await $("#slack-help").click();
+    const scopes = await $$('[role="dialog"][aria-label="Slack の接続方法"] .scopes code').map((code) => code.getText());
+    expect(scopes).toEqual(["chat:write", "channels:read", "groups:read", "channels:history", "groups:history", "im:history", "mpim:history", "users:read", "files:read"]);
+  });
+
   it("asks before disconnecting: キャンセル sends nothing, 解除 calls slack_remove_workspace", async () => {
     await openSettings([], claudeMissing, "slack");
     const remove = await mock("slack_remove_workspace", []);
@@ -662,7 +682,10 @@ describe("settings: Claude model and effort", () => {
     ["mailSummary", "メールの要約", "メール詳細の AI 要約"],
     ["promptChat", "プロンプトの会話", "Todo の要約プロンプトを Claude と編集するとき"],
     ["proofread", "Slack に貼る文章の校正", "Slack に貼る画面の「Claude と校正」"],
+    ["slackReply", "Slack の返信の校正", "スレッド詳細の「Claude と校正」"],
   ];
+  // The default effort of a purpose: medium, and high for the Slack reply.
+  const defaultEffort = (purpose: Purpose) => (purpose === "slackReply" ? "high" : "medium");
   const selectOf = (purpose: Purpose, kind: "model" | "effort") => $(`#claude-models select[data-purpose="${purpose}"][data-kind="${kind}"]`);
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
   const choose = (purpose: Purpose, kind: "model" | "effort", value: string) =>
@@ -682,19 +705,19 @@ describe("settings: Claude model and effort", () => {
   const drawnSelects = () => browser.execute(() => document.querySelectorAll("#claude-models select").length);
 
   for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
-    it(`has its own card with the defaults selected for the four purposes, while Claude is ${state}`, async () => {
+    it(`has its own card with the defaults selected for the five purposes, while Claude is ${state}`, async () => {
       await openSettings([], status, "claude");
       await expect($("#claude-models")).toBeDisplayed();
       await expect($("#claude-prompt .item-name")).toHaveText("Todo の要約プロンプト");
-      expect(await drawnSelects()).toBe(8);
+      expect(await drawnSelects()).toBe(10);
       for (const [purpose] of PURPOSES) {
         await expect(selectOf(purpose, "model")).toHaveValue("sonnet");
-        await expect(selectOf(purpose, "effort")).toHaveValue("medium");
+        await expect(selectOf(purpose, "effort")).toHaveValue(defaultEffort(purpose));
       }
     });
   }
 
-  it("names the four purposes in order, each with where it is used, and labels its selects", async () => {
+  it("names the five purposes in order, each with where it is used, and labels its selects", async () => {
     await openSettings([], claudeReady, "claude");
     const whos = await textsOf("#claude-models .model-grid .who");
     expect(whos).toEqual(PURPOSES.map(([, name, meta]) => `${name}${meta}`));
@@ -712,10 +735,10 @@ describe("settings: Claude model and effort", () => {
     }
   });
 
-  it("heads the columns 用途, モデル and effort, and says once that the default is Sonnet and medium", async () => {
+  it("heads the columns 用途, モデル and effort, and says once that the default is Sonnet and medium, and Sonnet and high for the Slack reply", async () => {
     await openSettings([], claudeReady, "claude");
     expect(await textsOf("#claude-models .model-grid .th")).toEqual(["用途", "モデル", "effort"]);
-    await expect($("#claude-models .model-note")).toHaveText("次の呼び出しから使います。デフォルトは Sonnet と medium");
+    await expect($("#claude-models .model-note")).toHaveText("次の呼び出しから使います。デフォルトは Sonnet と medium（Slack の返信の校正は Sonnet と high）");
   });
 
   it("does not wrap the description of a purpose onto a second line", async () => {
@@ -723,7 +746,7 @@ describe("settings: Claude model and effort", () => {
     const wrapped = await browser.execute(() =>
       [...document.querySelectorAll<HTMLElement>("#claude-models .model-grid .who .item-meta")].map((e) => e.getBoundingClientRect().height > 20),
     );
-    expect(wrapped).toEqual([false, false, false, false]);
+    expect(wrapped).toEqual([false, false, false, false, false]);
   });
 
   it("shows the saved model and effort of each purpose", async () => {
@@ -736,10 +759,13 @@ describe("settings: Claude model and effort", () => {
         mailSummary: { model: "haiku", effort: "low" },
         promptChat: { model: "opus", effort: "high" },
         proofread: { model: "sonnet", effort: "max" },
+        slackReply: { model: "haiku", effort: "xhigh" },
       },
     });
     await $("#nav-settings").click();
     await openTab("claude");
+    await expect(selectOf("slackReply", "model")).toHaveValue("haiku");
+    await expect(selectOf("slackReply", "effort")).toHaveValue("xhigh");
     await expect(selectOf("slackSummary", "model")).toHaveValue("opus");
     await expect(selectOf("slackSummary", "effort")).toHaveValue("xhigh");
     await expect(selectOf("mailSummary", "model")).toHaveValue("haiku");
@@ -763,7 +789,7 @@ describe("settings: Claude model and effort", () => {
       await expect(selectOf(purpose, "effort")).toHaveValue("max");
       for (const [other] of PURPOSES.filter(([p]) => p !== purpose)) {
         await expect(selectOf(other, "model")).toHaveValue("sonnet");
-        await expect(selectOf(other, "effort")).toHaveValue("medium");
+        await expect(selectOf(other, "effort")).toHaveValue(defaultEffort(other));
       }
     });
   }
@@ -829,6 +855,7 @@ describe("settings: Claude model and effort", () => {
           mailSummary: { model: "sonnet", effort: "medium" },
           promptChat: { model: "sonnet", effort: "high" },
           proofread: { model: "sonnet", effort: "xhigh" },
+          slackReply: { model: "sonnet", effort: "high" },
         },
       });
       await $("#nav-settings").click();
@@ -864,6 +891,7 @@ describe("settings: Claude model and effort", () => {
           mailSummary: { model: "sonnet", effort: "medium" },
           promptChat: { model: "sonnet", effort: "high" },
           proofread: { model: "sonnet", effort: "max" },
+          slackReply: { model: "sonnet", effort: "high" },
         },
       });
       await $("#nav-settings").click();
@@ -876,7 +904,7 @@ describe("settings: Claude model and effort", () => {
         seen.add(`${bg}/${fg}`);
       }
       expect(seen.size).toBe(4);
-      // xhigh differs from the four above.
+      // xhigh differs from the four above (the Slack reply's high is promptChat's high).
       const save = await mock("claude_model_settings_save", { ...claudeSettings, proofread: { model: "sonnet", effort: "xhigh" } });
       await choose("proofread", "effort", "xhigh");
       await waitForCalls(save);
@@ -885,11 +913,11 @@ describe("settings: Claude model and effort", () => {
     });
   });
 
-  it("says in the ? hint that each of the four Claude calls has its own setting", async () => {
+  it("says in the ? hint that each of the five Claude calls has its own setting", async () => {
     await openSettings([], claudeReady, "claude");
     await $("#claude-help").click();
     await expect($('[role="dialog"][aria-label="Claude の使い方"] .foot')).toHaveText(
-      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正のそれぞれに選べます"),
+      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack の返信の校正のそれぞれに選べます"),
     );
   });
 });

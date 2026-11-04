@@ -17,7 +17,12 @@ const HISTORY_KINDS: Record<string, string> = {
   "mpim:history": "グループ DM",
 };
 const HISTORY_SCOPES = Object.keys(HISTORY_KINDS);
-export const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", ...HISTORY_SCOPES];
+// The scopes the token can do without: the Slack list shows names, icons and attached images only with them.
+export const OPTIONAL_KINDS: Record<string, string> = {
+  "users:read": "送信者の名前とアイコン",
+  "files:read": "添付画像",
+};
+export const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", ...HISTORY_SCOPES, ...Object.keys(OPTIONAL_KINDS)];
 
 // The Slack apps page (a link the default browser opens, by Rust's on_navigation) and a scope list with its copy button.
 export function appsLink() {

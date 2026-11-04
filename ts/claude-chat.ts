@@ -34,7 +34,7 @@ interface Proposal {
   base: string;
   state: "open" | "applied" | "rejected";
 }
-interface Turn {
+export interface Turn {
   role: "user" | "assistant";
   text: string;
   // An error shown in the conversation; it is not part of what Claude is sent.
@@ -48,7 +48,8 @@ const SENT_TURNS = 20;
 
 export function createChat(cfg: ChatConfig) {
   const id = (name: string) => `${cfg.prefix}-${name}`;
-  const turns: Turn[] = [];
+  // The conversation shown now. `use` swaps it for another (the Slack reply keeps one per thread); every change is made in place.
+  let turns: Turn[] = [];
   let sending = false;
   // Bumped when the conversation is forgotten: an answer that was asked before it belongs to a conversation that is gone, and is dropped.
   let generation = 0;
@@ -194,6 +195,14 @@ export function createChat(cfg: ChatConfig) {
     draw();
   }
 
+  // Shows another conversation (kept by the owner). An answer asked in the one shown before belongs to a conversation that is not shown any more, and is dropped.
+  function use(next: Turn[]) {
+    generation++;
+    turns = next;
+    disarmClear();
+    draw();
+  }
+
   function clearInput() {
     // Not `growInput`: the pane can be hidden, where `scrollHeight` reads 0 and would set the height to 0px.
     const input = $<HTMLTextAreaElement>(id("input"));
@@ -231,5 +240,5 @@ export function createChat(cfg: ChatConfig) {
     };
   }
 
-  return { init, draw, refresh, send, reset, clearInput };
+  return { init, draw, refresh, send, reset, use, clearInput };
 }
