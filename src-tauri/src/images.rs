@@ -58,6 +58,15 @@ pub struct UriCache<K>(Mutex<Entries<K>>);
 /// The external images fetched so far, by URL.
 pub type ImageCache = UriCache<String>;
 
+/// The attached images of Slack fetched so far, by (workspace, URL). `fetch_images` cannot read it.
+pub type SlackFileCache = UriCache<(String, String)>;
+
+impl SlackFileCache {
+    pub fn forget(&self, team_id: &str) {
+        self.retain(|k| k.0 != team_id);
+    }
+}
+
 impl<K: Eq + Hash + Clone> UriCache<K> {
     pub(crate) fn get(&self, key: &K) -> Option<Arc<str>> {
         self.0.lock().unwrap().uris.get(key).cloned()
@@ -586,16 +595,22 @@ fn slack_file_urls(urls: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-/// Fetches the attached images at `urls` of a Slack workspace with its token and returns their data: URIs by URL.
+/// Fetches the attached images at `urls` of the Slack workspace `team_id` with its token and returns their data: URIs by URL.
 /// A URL that is not `is_slack_file_url` is skipped: it is not fetched, and never with the token. An image that cannot be fetched is left out.
 /// The token, the URL's path and query, and the bytes are in no log. The size limits, the budget and the cache are those of `fetch_images`.
 pub(crate) async fn fetch_slack_files(
-    cache: &ImageCache,
+    cache: &SlackFileCache,
+    team_id: &str,
     token: &str,
     urls: Vec<String>,
 ) -> HashMap<String, Arc<str>> {
     let mut used = 0;
-    let (mut out, missing) = split_cached(cache, slack_file_urls(urls), &mut used);
+    let (mut out, missing) = split_cached(
+        cache,
+        slack_file_urls(urls),
+        |u| (team_id.to_owned(), u.to_owned()),
+        &mut used,
+    );
     let budget = Arc::new(Budget(AtomicU64::new(MAX_TOTAL_BYTES - used)));
     let jobs = missing.into_iter().map(|url| {
         let (budget, token) = (budget.clone(), token.to_owned());
@@ -619,22 +634,27 @@ pub(crate) async fn fetch_slack_files(
     });
     for (url, mime, bytes) in run_limited(jobs, CONCURRENCY).await.into_iter().flatten() {
         let uri: Arc<str> = data_uri(&mime, &bytes).into();
-        cache.put(IMAGE_CACHE_BYTES, url.clone(), Arc::clone(&uri));
+        cache.put(
+            IMAGE_CACHE_BYTES,
+            (team_id.to_owned(), url.clone()),
+            Arc::clone(&uri),
+        );
         out.insert(url, uri);
     }
     out
 }
 
-/// Splits `urls` into the images the cache holds, by URL, and the URLs still to fetch.
+/// Splits `urls` into the images the cache holds (under the key `key` makes of the URL), by URL, and the URLs still to fetch.
 /// A cached image counts into `total` like a fetched one and is left out when it does not fit.
-fn split_cached(
-    cache: &ImageCache,
+fn split_cached<K: Eq + Hash + Clone>(
+    cache: &UriCache<K>,
     urls: Vec<String>,
+    key: impl Fn(&str) -> K,
     total: &mut u64,
 ) -> (HashMap<String, Arc<str>>, Vec<String>) {
     let (mut cached, mut missing) = (HashMap::new(), Vec::new());
     for url in urls {
-        match cache.get(&url) {
+        match cache.get(&key(&url)) {
             Some(uri) => {
                 // The data: URI is base64, a third longer than the image.
                 if admit(total, uri.len() as u64 / 4 * 3) {
@@ -661,7 +681,7 @@ pub async fn fetch_images(
         .take(MAX_FETCHES)
         .collect();
     let mut used = 0;
-    let (mut out, missing) = split_cached(&cache, urls, &mut used);
+    let (mut out, missing) = split_cached(&cache, urls, str::to_owned, &mut used);
     let budget = Arc::new(Budget(AtomicU64::new(MAX_TOTAL_BYTES - used)));
     let session = Arc::new(Session::default());
     let jobs = missing
@@ -874,6 +894,30 @@ mod tests {
     }
 
     #[test]
+    fn slack_files_are_kept_per_workspace_and_apart_from_the_images_of_mail() {
+        let files = SlackFileCache::default();
+        let key = |team: &str| (team.to_owned(), "https://files.slack.com/a".to_owned());
+        files.put(100, key("T1"), "data:1".into());
+        files.put(100, key("T2"), "data:2".into());
+        assert_eq!(files.get(&key("T1")).as_deref(), Some("data:1"));
+        // The URL alone does not find it in the cache of mail's images.
+        let mail = ImageCache::default();
+        assert!(mail.get(&"https://files.slack.com/a".to_owned()).is_none());
+        files.forget("T1");
+        assert!(files.get(&key("T1")).is_none());
+        assert_eq!(files.get(&key("T2")).as_deref(), Some("data:2"));
+        // Another workspace's copy is not taken for this one's.
+        let (cached, missing) = split_cached(
+            &files,
+            vec!["https://files.slack.com/a".to_owned()],
+            |u| ("T3".to_owned(), u.to_owned()),
+            &mut 0,
+        );
+        assert!(cached.is_empty());
+        assert_eq!(missing, ["https://files.slack.com/a"]);
+    }
+
+    #[test]
     fn split_cached_takes_the_cached_images_within_the_limits_and_lists_the_rest() {
         let cache = ImageCache::default();
         cache.put(100, "https://a/1".into(), "data:a".into());
@@ -884,14 +928,14 @@ mod tests {
             "https://a/2".to_owned(),
         ];
         let mut total = 0;
-        let (cached, missing) = split_cached(&cache, urls.clone(), &mut total);
+        let (cached, missing) = split_cached(&cache, urls.clone(), str::to_owned, &mut total);
         assert_eq!(cached.len(), 2);
         assert_eq!(&*cached["https://a/1"], "data:a");
         assert_eq!(missing, ["https://a/new"]);
         assert_eq!(total, 3 + 6);
         // With no room left a cached image is left out, not fetched again.
         let mut total = MAX_TOTAL_BYTES;
-        let (cached, missing) = split_cached(&cache, urls, &mut total);
+        let (cached, missing) = split_cached(&cache, urls, str::to_owned, &mut total);
         assert!(cached.is_empty());
         assert_eq!(missing, ["https://a/new"]);
     }

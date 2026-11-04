@@ -112,7 +112,7 @@ function emptyNode() {
   }
   if (timeline === null && loadError === null) return loadingRow();
   // A read that failed with nothing to show: the error of the call, or of every workspace that could not be read.
-  const failure = timeline === null ? loadError : timeline.failed.length ? timeline.failed.map((f) => `${f.team}: ${f.error}`).join("、") : null;
+  const failure = loadError ?? (timeline?.failed.length ? timeline.failed.map((f) => `${f.team}: ${f.error}`).join("、") : null);
   if (failure !== null) {
     const row = tag("div", "pending fail");
     const retry = tag("button", "text-btn", "再読み込み");
@@ -192,10 +192,16 @@ export async function showSlackList() {
     const before = workspaces?.map((w) => w.teamId).join();
     workspaces = (await invoke("slack_load")).workspaces;
     setSlackWorkspaces(workspaces);
+    // The last workspace was removed: its rows and its failure go with it.
+    if (!workspaces.length) {
+      timeline = null;
+      loadError = null;
+    }
     // A workspace added or removed since the last read makes the list held stale at once.
     if (before !== undefined && before !== workspaces.map((w) => w.teamId).join()) lastTry = 0;
   } catch (e) {
-    workspaces = [];
+    // The workspaces known stay: the tray and the refresh go on with them.
+    workspaces ??= [];
     loadError = String(e);
   }
   drawTray();

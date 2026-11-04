@@ -20,7 +20,7 @@ use crate::{
     auth::{config_dir, delete_entry, Auth},
     claude::Thread,
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
-    images::{fetch_slack_files, run_limited, ImageCache},
+    images::{fetch_slack_files, run_limited, SlackFileCache},
 };
 
 /// Every request goes here and nowhere else: nothing from outside is put into the URL.
@@ -131,6 +131,8 @@ pub struct SlackState {
     channels: Arc<ChannelCache>,
     /// What the timeline and the thread keep between two reads, in memory only.
     timeline: Arc<TimelineCache>,
+    /// The attached images fetched so far, by workspace and URL, in memory only. Mail's `fetch_images` cannot read them.
+    images: SlackFileCache,
 }
 
 fn valid_channel(id: &str) -> bool {
@@ -992,6 +994,7 @@ pub async fn slack_remove_workspace(
     .map_err(|e| log_failure(command, &team_id, e))?;
     state.channels.lock().unwrap().remove(&team_id);
     state.timeline.forget(&team_id);
+    state.images.forget(&team_id);
     if let Some(token) = token {
         if let Err(e) = call(auth.http(), &token, "auth.revoke", Payload::Empty).await {
             log_failure("slack_revoke", &team_id, e);
@@ -1143,9 +1146,9 @@ struct Pages {
 /// A later page that cannot be read ends the read there (logged): what was read is used and `more` is true. The first page failing is an error.
 async fn read_pages(
     http: &reqwest::Client,
+    command: &str,
     token: &str,
-    team: &str,
-    team_id: &str,
+    workspace: &Workspace,
     channel: &str,
     thread_ts: &str,
     keep: fn(&Value) -> Value,
@@ -1159,7 +1162,7 @@ async fn read_pages(
         let reply = match read_replies(
             http,
             token,
-            team,
+            &workspace.team,
             replies_params(channel, thread_ts, None, cursor.as_deref()),
         )
         .await
@@ -1167,7 +1170,7 @@ async fn read_pages(
             Ok(reply) => reply,
             // A later page that cannot be read ends the read there: what was read is used, and the rest counts as unread.
             Err(e) if read_pages > 0 => {
-                log_failure("slack_message_context", team_id, e);
+                log_failure(command, &workspace.team_id, e);
                 more = true;
                 break;
             }
@@ -1199,9 +1202,9 @@ pub async fn message_context(
     let token = token_of(&workspace.team_id).await?;
     let Pages { pages, more } = read_pages(
         http,
+        "slack_message_context",
         &token,
-        &workspace.team,
-        &workspace.team_id,
+        workspace,
         &link.channel,
         &thread_ts,
         slim,
@@ -1502,6 +1505,8 @@ struct TimelineCache {
     limited_until: Mutex<HashMap<String, Instant>>,
     /// team -> the scopes the token had when it last answered, so that a round that reads nothing still knows them.
     scopes: Mutex<HashMap<String, String>>,
+    /// team -> the ID of the user the token is (`auth.test`), so that the icons do not ask again.
+    own: Mutex<HashMap<String, String>>,
 }
 
 impl TimelineCache {
@@ -1513,6 +1518,18 @@ impl TimelineCache {
             .retain(|(t, _), _| t != team_id);
         self.limited_until.lock().unwrap().remove(team_id);
         self.scopes.lock().unwrap().remove(team_id);
+        self.own.lock().unwrap().remove(team_id);
+    }
+
+    fn own_user(&self, team_id: &str) -> Option<String> {
+        self.own.lock().unwrap().get(team_id).cloned()
+    }
+
+    fn put_own_user(&self, team_id: &str, user: &str) {
+        self.own
+            .lock()
+            .unwrap()
+            .insert(team_id.to_owned(), user.to_owned());
     }
 
     fn user(&self, team_id: &str, user: &str) -> Option<SlackUser> {
@@ -1663,6 +1680,21 @@ fn https_url(url: Option<&str>) -> Option<String> {
     (Url::parse(url).ok()?.scheme() == "https").then(|| url.to_owned())
 }
 
+/// The hosts a user's or a bot's icon may come from: Slack's image host and its subdomains, and Gravatar.
+fn icon_host_ok(host: &str) -> bool {
+    host == "slack-edge.com" || host.ends_with(".slack-edge.com") || host == "secure.gravatar.com"
+}
+
+/// `https://…` of an allowed icon host (`icon_host_ok`) as it is, and nothing else: any other host gives no icon, and the initial shows.
+fn icon_url(url: Option<&str>) -> Option<String> {
+    let url = https_url(url)?;
+    Url::parse(&url)
+        .ok()?
+        .host_str()
+        .is_some_and(icon_host_ok)
+        .then_some(url)
+}
+
 /// The first of `names` that is not blank.
 fn first_name(names: &[&Value]) -> Option<String> {
     names
@@ -1683,8 +1715,8 @@ fn user_of(reply: &Value) -> Option<SlackUser> {
             &profile["real_name"],
             &user["name"],
         ])?,
-        icon_url: https_url(profile["image_72"].as_str())
-            .or_else(|| https_url(profile["image_48"].as_str())),
+        icon_url: icon_url(profile["image_72"].as_str())
+            .or_else(|| icon_url(profile["image_48"].as_str())),
     })
 }
 
@@ -1692,7 +1724,7 @@ fn user_of(reply: &Value) -> Option<SlackUser> {
 fn bot_of(m: &Value) -> Option<SlackUser> {
     Some(SlackUser {
         name: first_name(&[&m["bot_profile"]["name"], &m["username"]])?,
-        icon_url: https_url(m["bot_profile"]["icons"]["image_48"].as_str()),
+        icon_url: icon_url(m["bot_profile"]["icons"]["image_48"].as_str()),
     })
 }
 
@@ -1804,7 +1836,7 @@ fn unescape(s: &str) -> String {
 }
 
 /// The text of one `<…>`: a mention (`<@U1>` as `@name`, `@不明` when no name is known), a channel (`<#C1|name>` as `#name`), a broadcast (`<!here>` as `@here`),
-/// a link (`<https://a|label>` as `label`, `<https://a>` as `https://a`).
+/// a link (`<https://a|label>` as `label (https://a)`, `<https://a|https://a>` and `<https://a>` as `https://a`).
 fn token_text(token: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
     let (target, label) = match token.split_once('|') {
         Some((target, label)) => (target, Some(label).filter(|l| !l.is_empty())),
@@ -1833,7 +1865,17 @@ fn token_text(token: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
             (base, None) => format!("@{base}"),
         };
     }
-    label.map_or_else(|| unescape(target), unescape)
+    let url = unescape(target);
+    match label.map(unescape) {
+        // A labeled link keeps its address beside the label, so that `linkify` can open it.
+        Some(label)
+            if label != url && (url.starts_with("https://") || url.starts_with("http://")) =>
+        {
+            format!("{label} ({url})")
+        }
+        Some(label) => label,
+        None => url,
+    }
 }
 
 /// Slack's mrkdwn as plain text (`token_text`, and `&lt; &gt; &amp;` undone). It is drawn as text, never as markup.
@@ -1959,39 +2001,74 @@ fn thread_message(
     }
 }
 
-/// Asks Slack who `id` is (`users.info`). `None` when it cannot say: the scope is missing, or the call failed.
-async fn fetch_user(
-    http: &reqwest::Client,
-    token: &str,
-    team_id: &str,
-    id: &str,
-) -> Option<SlackUser> {
+/// What `users.info` said about a user.
+enum Lookup {
+    Found(SlackUser),
+    /// Slack could not say: the call failed, or the user has no usable name.
+    Unknown,
+    /// The token lacks `users:read`, so every other user fails alike.
+    NoScope,
+}
+
+/// Asks Slack who `id` is (`users.info`).
+async fn fetch_user(http: &reqwest::Client, token: &str, team_id: &str, id: &str) -> Lookup {
     let form = [("user", id.to_owned())];
     match call(http, token, "users.info", Payload::Form(&form)).await {
-        Ok(reply) => user_of(&reply),
+        Ok(reply) => user_of(&reply).map_or(Lookup::Unknown, Lookup::Found),
         // Without `users:read` every user fails alike: that is the token's state, not worth a line for each.
-        Err(e) if e.code.as_deref() == Some("missing_scope") => None,
+        Err(e) if e.code.as_deref() == Some("missing_scope") => Lookup::NoScope,
         Err(e) => {
             log_failure("slack_users", team_id, e);
-            None
+            Lookup::Unknown
         }
     }
 }
 
+/// Whether an `x-oauth-scopes` header (`None`: not known) says the token lacks `users:read`.
+fn lacks_users_read(scopes: Option<&str>) -> bool {
+    scopes.is_some_and(|s| !missing_scopes(s, &["users:read"]).is_empty())
+}
+
+/// The first `max` of `items` that Slack should be asked about (`needs`), so that the ones the cache already answers do not use up the share.
+fn needing_lookup<T>(
+    items: impl Iterator<Item = T>,
+    needs: impl Fn(&T) -> bool,
+    max: usize,
+) -> Vec<T> {
+    items.filter(|item| needs(item)).take(max).collect()
+}
+
 /// Asks about the `(team, token, user)` entries of `wanted` that the cache has no fresh answer for, at most `USER_CONCURRENCY` at a time, and keeps the answers.
+/// A workspace whose token lacks `users:read` (known from the cache, or from the first `missing_scope`) is asked no more in this call.
 async fn lookup_users(
     http: &reqwest::Client,
     cache: &Arc<TimelineCache>,
     wanted: Vec<(String, String, String)>,
 ) {
+    let no_scope: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(
+        wanted
+            .iter()
+            .filter(|(team, _, _)| lacks_users_read(cache.scopes(team).as_deref()))
+            .map(|(team, _, _)| team.clone())
+            .collect(),
+    ));
     let jobs = wanted
         .into_iter()
         .filter(|(team, _, user)| cache.needs_lookup(team, user))
         .map(|(team, token, user)| {
-            let (http, cache) = (http.clone(), Arc::clone(cache));
+            let (http, cache, no_scope) = (http.clone(), Arc::clone(cache), Arc::clone(&no_scope));
             async move {
-                let found = fetch_user(&http, &token, &team, &user).await;
-                cache.put_user(&team, &user, found);
+                if no_scope.lock().unwrap().contains(&team) {
+                    return;
+                }
+                match fetch_user(&http, &token, &team, &user).await {
+                    Lookup::Found(found) => cache.put_user(&team, &user, Some(found)),
+                    Lookup::Unknown => cache.put_user(&team, &user, None),
+                    Lookup::NoScope => {
+                        no_scope.lock().unwrap().insert(team.clone());
+                        cache.put_user(&team, &user, None);
+                    }
+                }
             }
         });
     run_limited(jobs, USER_CONCURRENCY).await;
@@ -2208,7 +2285,7 @@ pub async fn slack_timeline(
         .map(|r| (r.workspace.team_id.as_str(), r.token.as_str()))
         .collect();
     let mut seen = HashSet::new();
-    let wanted: Vec<(String, String, String)> = top
+    let wanted = top
         .iter()
         .flat_map(|m| {
             let sender = m.bot.is_none().then_some(m.user.clone()).flatten();
@@ -2219,13 +2296,18 @@ pub async fn slack_timeline(
                 .collect::<Vec<_>>()
         })
         .filter(|(team, _)| !no_names.contains(team.as_str()))
-        .filter(|pair| seen.insert(pair.clone()))
-        .take(USER_LOOKUPS)
-        .filter_map(|(team, user)| {
-            let token = token_of_team.get(team.as_str())?.to_string();
-            Some((team, token, user))
-        })
-        .collect();
+        .filter(|pair| seen.insert(pair.clone()));
+    let wanted: Vec<(String, String, String)> = needing_lookup(
+        wanted,
+        |(team, user)| state.timeline.needs_lookup(team, user),
+        USER_LOOKUPS,
+    )
+    .into_iter()
+    .filter_map(|(team, user)| {
+        let token = token_of_team.get(team.as_str())?.to_string();
+        Some((team, token, user))
+    })
+    .collect();
     lookup_users(&http, &state.timeline, wanted).await;
 
     let messages = top
@@ -2276,9 +2358,9 @@ pub async fn slack_thread(
         .map_err(|e| log_failure(command, &team_id, e))?;
     let Pages { pages, more } = read_pages(
         auth.http(),
+        command,
         &token,
-        &workspace.team,
-        &team_id,
+        workspace,
         &channel,
         &ts,
         thread_slim,
@@ -2287,7 +2369,7 @@ pub async fn slack_thread(
     .map_err(|e| log_failure(command, &team_id, e))?;
 
     let mut seen = HashSet::new();
-    let wanted: Vec<(String, String, String)> = pages
+    let wanted = pages
         .iter()
         .flat_map(|m| {
             let sender = bot_of(m).is_none().then(|| m["user"].as_str()).flatten();
@@ -2297,10 +2379,15 @@ pub async fn slack_thread(
                 .chain(mention_ids(m["text"].as_str().unwrap_or_default()))
                 .collect::<Vec<_>>()
         })
-        .filter(|user| valid_channel(user) && seen.insert(user.clone()))
-        .take(USER_LOOKUPS)
-        .map(|user| (team_id.clone(), token.clone(), user))
-        .collect();
+        .filter(|user| valid_channel(user) && seen.insert(user.clone()));
+    let wanted: Vec<(String, String, String)> = needing_lookup(
+        wanted,
+        |user| state.timeline.needs_lookup(&team_id, user),
+        USER_LOOKUPS,
+    )
+    .into_iter()
+    .map(|user| (team_id.clone(), token.clone(), user))
+    .collect();
     lookup_users(auth.http(), &state.timeline, wanted).await;
 
     let name_of = |id: &str| state.timeline.user(&team_id, id).map(|u| u.name);
@@ -2348,7 +2435,7 @@ pub async fn slack_reply(
 /// (`images::fetch_slack_files`); anything else, an image that cannot be fetched, and a token without `files:read` are left out of the map.
 #[tauri::command]
 pub async fn slack_file_images(
-    cache: State<'_, ImageCache>,
+    state: State<'_, SlackState>,
     team_id: String,
     urls: Vec<String>,
 ) -> Result<HashMap<String, Arc<str>>, String> {
@@ -2357,7 +2444,7 @@ pub async fn slack_file_images(
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
     let urls = urls.into_iter().take(FILE_IMAGES_MAX).collect();
-    Ok(fetch_slack_files(&cache, &token, urls).await)
+    Ok(fetch_slack_files(&state.images, &team_id, &token, urls).await)
 }
 
 /// The user's own icon in each workspace (`auth.test` says who the token is, `users.info` what their icon is). A workspace that cannot say has no icon.
@@ -2374,14 +2461,19 @@ pub async fn slack_icons(
     let http = auth.http().clone();
     let team_ids: Vec<String> = workspaces.iter().map(|w| w.team_id.clone()).collect();
     let jobs = team_ids.into_iter().map(|team_id| {
-        let http = http.clone();
+        let (http, cache) = (http.clone(), Arc::clone(&state.timeline));
         async move {
             let who = async {
                 let token = token_of(&team_id).await.ok()?;
+                // Who the token is does not change: ask `auth.test` once per workspace.
+                if let Some(user) = cache.own_user(&team_id) {
+                    return Some((team_id.clone(), token, user));
+                }
                 let (reply, _) = call_scoped(&http, &token, "auth.test", Payload::Empty)
                     .await
                     .ok()?;
                 let user = reply["user_id"].as_str().filter(|u| valid_channel(u))?;
+                cache.put_own_user(&team_id, user);
                 Some((team_id.clone(), token, user.to_owned()))
             }
             .await;
@@ -3348,5 +3440,101 @@ mod tests {
         assert_eq!(refresh_secs(0, HISTORY_BUDGET), 120);
         assert_eq!(refresh_secs(0, HISTORY_BUDGET + 1), 60);
         assert_eq!(refresh_secs(1, 3), 60);
+    }
+
+    #[test]
+    fn an_icon_comes_only_from_slacks_image_hosts_or_gravatar_over_https() {
+        for ok in [
+            "https://avatars.slack-edge.com/2024/a_72.jpg",
+            "https://slack-edge.com/a.png",
+            "https://secure.gravatar.com/avatar/x.jpg?s=72",
+        ] {
+            assert_eq!(icon_url(Some(ok)).as_deref(), Some(ok), "{ok}");
+        }
+        for bad in [
+            "http://avatars.slack-edge.com/a.jpg",
+            "https://evil.example/a.jpg",
+            "https://slack-edge.com.evil.example/a.jpg",
+            "https://notslack-edge.com/a.jpg",
+            "https://gravatar.com/avatar/x",
+            "https://www.gravatar.com/avatar/x",
+            "https://avatars.slack-edge.com@evil.example/a.jpg",
+            "data:image/png;base64,AAAA",
+            "not a url",
+        ] {
+            assert_eq!(icon_url(Some(bad)), None, "{bad}");
+        }
+        assert_eq!(icon_url(None), None);
+        // A user and a bot of another host have no icon, and keep their names.
+        let user = user_of(&json!({"user": {"name": "a", "profile": {"image_72": "https://evil.example/a.jpg", "image_48": "https://secure.gravatar.com/a.jpg"}}})).unwrap();
+        assert_eq!(
+            user.icon_url.as_deref(),
+            Some("https://secure.gravatar.com/a.jpg")
+        );
+        let bot = bot_of(&json!({"bot_profile": {"name": "b", "icons": {"image_48": "https://evil.example/b.png"}}})).unwrap();
+        assert_eq!((bot.name.as_str(), bot.icon_url), ("b", None));
+    }
+
+    #[test]
+    fn a_labeled_link_keeps_its_address_beside_the_label_unless_they_are_the_same() {
+        let nobody = |_: &str| None;
+        assert_eq!(
+            token_text("https://a.example/x|docs", &nobody),
+            "docs (https://a.example/x)"
+        );
+        assert_eq!(
+            token_text("https://a.example/x?a=1&amp;b=2|docs", &nobody),
+            "docs (https://a.example/x?a=1&b=2)"
+        );
+        assert_eq!(
+            token_text("https://a.example/x|https://a.example/x", &nobody),
+            "https://a.example/x"
+        );
+        assert_eq!(
+            token_text("https://a.example/x", &nobody),
+            "https://a.example/x"
+        );
+        // Only a web address is kept beside the label.
+        assert_eq!(token_text("mailto:a@example.com|mail", &nobody), "mail");
+    }
+
+    #[test]
+    fn the_users_to_ask_about_are_chosen_after_the_cached_ones_are_left_out() {
+        let cache = TimelineCache::default();
+        let users: Vec<String> = (0..USER_LOOKUPS + 5).map(|i| format!("U{i}")).collect();
+        // The first USER_LOOKUPS are known already: the ones past them are the ones to ask about.
+        for user in &users[..USER_LOOKUPS] {
+            cache.put_user(
+                "T1",
+                user,
+                Some(SlackUser {
+                    name: "n".into(),
+                    icon_url: None,
+                }),
+            );
+        }
+        let asked = needing_lookup(users.iter(), |u| cache.needs_lookup("T1", u), USER_LOOKUPS);
+        assert_eq!(asked, users[USER_LOOKUPS..].iter().collect::<Vec<_>>());
+        // At most `max` are chosen.
+        assert_eq!(needing_lookup(0..10, |_| true, 3), [0, 1, 2]);
+    }
+
+    #[test]
+    fn a_token_lacks_users_read_only_when_its_scopes_are_known() {
+        assert!(lacks_users_read(Some("channels:read,chat:write")));
+        assert!(lacks_users_read(Some("")));
+        assert!(!lacks_users_read(Some("channels:read, users:read")));
+        assert!(!lacks_users_read(None));
+    }
+
+    #[test]
+    fn the_own_user_of_a_workspace_is_remembered_until_it_is_forgotten() {
+        let cache = TimelineCache::default();
+        assert_eq!(cache.own_user("T1"), None);
+        cache.put_own_user("T1", "U1");
+        assert_eq!(cache.own_user("T1").as_deref(), Some("U1"));
+        assert_eq!(cache.own_user("T2"), None);
+        cache.forget("T1");
+        assert_eq!(cache.own_user("T1"), None);
     }
 }

@@ -130,6 +130,39 @@ describe("slack list", () => {
     await waitForCount("#slack-feed .feed-row", 2);
   });
 
+  it("offers 再読み込み when the read fails while a list with no message is held", async () => {
+    await openList(timeline([], { refreshSecs: 1 }));
+    await expect($("#slack-feed .feed-empty")).toHaveText("メッセージはありません");
+    await mock("slack_timeline", rejects("接続できません"));
+    await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: 接続できません"));
+    await mock("slack_timeline", timeline(sample()));
+    await $("#slack-feed .pending.fail .text-btn").click();
+    await waitForCount("#slack-feed .feed-row", 2);
+  });
+
+  it("drops the rows and the failure of the last workspace when it was removed", async () => {
+    await openList(timeline(sample()));
+    await waitForCount("#slack-feed .feed-row", 2);
+    await mock("slack_load", { workspaces: [], recent: [] });
+    await $("#nav-todo").click();
+    await $("#nav-slack").click();
+    await expect($("#slack-feed .feed-empty")).toHaveText(expect.stringContaining("ワークスペースが接続されていません"));
+    expect(await count("#slack-feed .feed-row")).toBe(0);
+    expect(await count("#slack-workspace-list button")).toBe(0);
+  });
+
+  it("keeps the workspaces, the rows and the refresh when slack_load fails", async () => {
+    await openList(timeline(sample(), { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 2);
+    await mock("slack_load", rejects("読めません"));
+    await $("#nav-todo").click();
+    await $("#nav-slack").click();
+    await waitForText("#slack-notice > div", "読み込めませんでした: 読めません");
+    expect(await count("#slack-workspace-list button")).toBe(1);
+    expect(await count("#slack-feed .feed-row")).toBe(2);
+    await waitForCalls("slack_timeline", 2);
+  });
+
   it("says there is nothing to show when the workspaces have no message", async () => {
     await openList(timeline([]));
     await expect($("#slack-feed .feed-empty")).toHaveText("メッセージはありません");

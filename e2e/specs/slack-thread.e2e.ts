@@ -68,6 +68,12 @@ describe("slack thread", () => {
     for (const time of await textsOf("#st-msgs .st-meta time")) expect(time).toMatch(/\d{1,2}:\d{2}/);
   });
 
+  it("says at the end of the messages that newer replies were not read when the thread was cut", async () => {
+    await openDetail({}, { ...base(), truncated: true });
+    expect(await textsOf("#st-msgs .st-sep")).toEqual(["返信 1 件", "これより新しい返信は読めていません"]);
+    expect(await browser.execute(() => document.querySelector("#st-msgs")!.lastElementChild!.className)).toBe("st-sep");
+  });
+
   it("has no separator for a thread of one message", async () => {
     await openDetail({}, slackThread([threadMessage(root, "Alice Example", rootText)]));
     expect(await count("#st-msgs .st-sep")).toBe(0);
@@ -295,6 +301,20 @@ describe("slack thread: reply", () => {
     await expect(input()).toBeEnabled();
   });
 
+  it("empties the field and says so when the reply ends after the thread was left and opened again", async () => {
+    await openDetail();
+    const post = await mock("slack_reply", holds);
+    await input().setValue("Posted while away");
+    await send().click();
+    await waitForCalls(post);
+    await $("#st-back").click();
+    await $("#slack-feed .feed-row").click();
+    await waitForCount("#st-msgs .st-msg", 2);
+    await release(post, true);
+    await expect(input()).toHaveValue("");
+    await expect($("#st-note")).toHaveText("スレッドに返信しました");
+  });
+
   it("keeps the reply per thread in memory, and starts another thread with an empty field", async () => {
     const other = slackTs(20, 3);
     const messages = [listMessage(), timelineMessage(other, "Carol Example", "general", "Another thread")];
@@ -342,6 +362,30 @@ describe("slack thread: Todo", () => {
     // The card sits above the reply field and has no link to the prompt screen.
     expect(await browser.execute(() => document.getElementById("st-card")!.compareDocumentPosition(document.getElementById("st-reply")!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
     expect(await count("#st-card .link-btn")).toBe(0);
+  });
+
+  it("shows the card of a summary that ends after the thread was left and opened again", async () => {
+    await openDetail(todo);
+    const summary = await mock("todoist_summarize_slack", holds);
+    await $("#st-todo").click();
+    await waitForCalls(summary);
+    await $("#st-back").click();
+    await $("#slack-feed .feed-row").click();
+    await waitForCount("#st-msgs .st-msg", 2);
+    await release(summary, slackSummary);
+    await expect(cardOf()).toBeDisplayed();
+  });
+
+  it("keeps an edited card when the same thread is opened again", async () => {
+    await openDetail(todo);
+    await mock("todoist_summarize_slack", slackSummary);
+    await $("#st-todo").click();
+    await expect(cardOf()).toBeDisplayed();
+    await $("#st-card .review-name").setValue("Edited name");
+    await $("#st-back").click();
+    await $("#slack-feed .feed-row").click();
+    await waitForCount("#st-msgs .st-msg", 2);
+    await expect($("#st-card .review-name")).toHaveValue("Edited name");
   });
 
   it("shows the button busy while the summary is on its way", async () => {

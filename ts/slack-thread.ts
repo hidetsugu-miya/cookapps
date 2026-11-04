@@ -31,6 +31,8 @@ interface Open {
   permalink: string;
 }
 let current: Open | null = null;
+// Whether `open` is the thread shown now: reopening the same thread makes a new object with the same key.
+const isOpen = (open: Open) => current?.key === open.key;
 // The thread as last read for `current`, and why the last read failed (null when it did not).
 let thread: SlackThread | null = null;
 let readError: string | null = null;
@@ -51,6 +53,8 @@ let summarizing = false;
 let todoConnected = false;
 // The attached images of the open thread as data: URIs, by their thumbnail URL.
 const thumbs = new Map<string, string>();
+// The thumbnail URLs asked for and not answered yet, so that a second read of the thread does not ask again.
+const inFlight = new Set<string>();
 
 const input = () => $<HTMLTextAreaElement>("st-input");
 const draft = () => (current ? drafts.get(current.key) : undefined);
@@ -171,15 +175,20 @@ function settleThumbs(over: boolean) {
 const IMAGE_BATCH = 20;
 
 async function loadThumbs(t: SlackThread, key: string) {
-  const urls = [...new Set(t.messages.flatMap((m) => m.files.flatMap((f) => (f.thumbUrl ? [f.thumbUrl] : []))))].filter((u) => !thumbs.has(u));
-  settleThumbs(urls.length === 0);
+  const wanted = [...new Set(t.messages.flatMap((m) => m.files.flatMap((f) => (f.thumbUrl ? [f.thumbUrl] : []))))].filter((u) => !thumbs.has(u));
+  settleThumbs(wanted.length === 0);
+  const urls = wanted.filter((u) => !inFlight.has(u));
   for (let i = 0; i < urls.length; i += IMAGE_BATCH) {
+    const batch = urls.slice(i, i + IMAGE_BATCH);
+    for (const u of batch) inFlight.add(u);
     try {
-      const got = await invoke("slack_file_images", { teamId: t.teamId, urls: urls.slice(i, i + IMAGE_BATCH) });
+      const got = await invoke("slack_file_images", { teamId: t.teamId, urls: batch });
       if (current?.key !== key) return;
       for (const [url, uri] of Object.entries(got)) thumbs.set(url, uri);
     } catch {
       // The chips stay.
+    } finally {
+      for (const u of batch) inFlight.delete(u);
     }
     if (current?.key !== key) return;
     settleThumbs(i + IMAGE_BATCH >= urls.length);
@@ -203,6 +212,8 @@ function drawMessages(where: "keep" | "end" | "top") {
       nodes.push(messageNode(m));
       if (i === 0 && thread!.messages.length > 1) nodes.push(tag("div", "st-sep", `返信 ${thread!.messages.length - 1} 件`));
     });
+    // The read stopped before the end of the thread: the last message shown is not the end.
+    if (thread.truncated) nodes.push(tag("div", "st-sep", "これより新しい返信は読めていません"));
   } else if (readError === null) {
     const row = tag("div", "pending");
     row.append(tag("span", "spin"), tag("span", "sp", "読み込んでいます…"));
@@ -219,8 +230,10 @@ function drawMessages(where: "keep" | "end" | "top") {
 async function readThread(where: "keep" | "end" | "top") {
   const open = current!;
   const seq = ++readSeq;
+  const redraw = thread === null || readError !== null;
   readError = null;
-  drawMessages(where);
+  // A thread that is held and showing no error looks the same now: it is drawn once, when the read ends.
+  if (redraw) drawMessages(where);
   try {
     const t = await invoke("slack_thread", { teamId: open.teamId, channel: open.channel, ts: open.ts });
     if (seq !== readSeq) return;
@@ -242,8 +255,9 @@ export function openSlackThread(m: TimelineMessage) {
   if (!same) {
     thread = null;
     thumbs.clear();
+    inFlight.clear();
+    closeCard();
   }
-  closeCard();
   note(null);
   $("st-error").hidden = true;
   $("st-channel").textContent = `#${m.channelName}`;
@@ -266,7 +280,7 @@ export function openSlackThread(m: TimelineMessage) {
   const open = current;
   invoke("todoist_connected").then(
     (connected) => {
-      if (current !== open) return;
+      if (!isOpen(open)) return;
       todoConnected = connected;
       refreshSlackThread();
     },
@@ -290,12 +304,12 @@ async function reply() {
     posting = false;
     refreshSlackThread();
     // The error line is on the thread; when another thread (or the list) is shown, a toast tells instead. The text is kept.
-    if (current === open && !$("slack-thread").hidden) return showReplyError(e);
+    if (isOpen(open) && !$("slack-thread").hidden) return showReplyError(e);
     return toast(`スレッドに返信できませんでした: ${e}`);
   }
   posting = false;
   d.text = "";
-  if (current === open && !$("slack-thread").hidden) {
+  if (isOpen(open) && !$("slack-thread").hidden) {
     input().value = "";
     grow();
     note("スレッドに返信しました");
@@ -303,7 +317,7 @@ async function reply() {
   } else {
     toast("スレッドに返信しました");
     // The next time it is opened it is read again.
-    if (current === open) thread = null;
+    if (isOpen(open)) thread = null;
   }
   refreshSlackThread();
 }
@@ -323,7 +337,7 @@ async function makeTodo() {
   try {
     // The card needs the projects of Todoist, which Todo screen may not have read yet.
     const [summary, ready] = await Promise.all([invoke("todoist_summarize_slack", { url: open.permalink }), ensureTodoData()]);
-    if (current !== open) return;
+    if (!isOpen(open)) return;
     if (summary === null || !ready) {
       todoConnected = false;
       return note("Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください", true);
@@ -344,7 +358,7 @@ async function makeTodo() {
     };
     $("st-card").replaceChildren(reviewCard({ url: open.permalink, host: hostOf(open.permalink), projectId, recommended: projectId, today: false }, summary, hooks));
   } catch (e) {
-    if (current === open) note(`要約できませんでした: ${e}`, true);
+    if (isOpen(open)) note(`要約できませんでした: ${e}`, true);
   } finally {
     summarizing = false;
     button.classList.remove("busy");
