@@ -668,13 +668,17 @@ button.status:hover { filter: brightness(.95); }
 #slack-pending { padding: 8px 32px 0; }
 #slack-notice:not(:empty) { padding-top: 8px; }
 #slack-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }
-.feed-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 14px; width: 100%; box-sizing: border-box; padding: 10px 16px; border: 0; border-radius: 12px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+/* A row holds links and a toggle, so it is no button: one button is stretched over it, what is drawn lies above and lets the press through, and only links and the toggle take it. z-index keeps the row's stack under the buttons beside it. */
+.feed-row { position: relative; z-index: 0; display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 14px; width: 100%; box-sizing: border-box; padding: 10px 16px; border-radius: 12px; }
+.feed-open { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 12px; background: transparent; cursor: pointer; }
+.feed-row > :not(.feed-open) { position: relative; z-index: 1; pointer-events: none; }
+.feed-row a, .feed-thread-toggle { pointer-events: auto; }
 .feed-item { position: relative; }
 .feed-item:hover .feed-row { background: var(--hover); }
-.feed-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.feed-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .feed-avatar { position: relative; }
-.feed-ws { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; }
-.feed-main { display: block; min-width: 0; }
+.feed-ws { pointer-events: auto; position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; }
+.feed-main { min-width: 0; }
 .feed-meta { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
 .feed-hide, .feed-watch { position: absolute; top: 8px; visibility: hidden; }
 .feed-hide { right: 52px; }
@@ -687,7 +691,7 @@ button.status:hover { filter: brightness(.95); }
 .feed-watch.on { color: var(--accent); }
 .feed-watch.on svg { fill: currentColor; }
 .feed-heading:first-child { margin-top: 4px; }
-.feed-row:disabled { cursor: default; }
+.feed-open:disabled { cursor: default; }
 .feed-text.muted { color: var(--muted); }
 .feed-new { display: block; margin-top: 3px; font-size: 12px; font-weight: bold; color: var(--accent); }
 .feed-item:hover .feed-date, .feed-item:focus-within .feed-date { visibility: hidden; }
@@ -696,7 +700,26 @@ button.status:hover { filter: brightness(.95); }
 .feed-row.unread { font-weight: bold; }
 .feed-row.unread .feed-meta b { font-weight: 700; }
 .feed-meta span { color: var(--muted); font-size: 12px; }
+/* The body of a row, as the thread draws it (S-11, S-12): paragraphs alone are cut at two lines, and blocks, attachments, a code block or a quote at about 12, so that one long post of a bot cannot take the screen. Nothing in it can be selected: the press goes to the row. */
 .feed-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; line-height: 1.45; overflow-wrap: anywhere; }
+.feed-text.feed-full { display: block; -webkit-line-clamp: unset; max-height: calc(1.45em * 12); }
+#slack-feed .feed-text, #slack-feed .feed-text * { user-select: none; -webkit-user-select: none; }
+.feed-text .st-text { margin: 0; line-height: inherit; }
+.feed-text .st-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* The unread replies of a thread (S-14), under its row. They are not bold when the row is. */
+.feed-thread-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 8px 2px 4px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: 12px; font-weight: bold; color: var(--accent); cursor: pointer; }
+.feed-thread-toggle:hover { background: var(--soft); }
+.feed-thread-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.feed-thread-toggle svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
+.feed-thread-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.feed-thread-replies { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-left: 12px; border-left: 2px solid var(--line); font-weight: normal; }
+.feed-reply { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; }
+.feed-reply-avatar { width: 20px; height: 20px; font-size: 9px; }
+.feed-reply-main { min-width: 0; }
+.feed-reply-meta { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.feed-reply-meta b { font-weight: 600; }
+.feed-reply-meta span { color: var(--muted); }
+.feed-reply-rest { font-size: 12px; color: var(--muted); }
 .feed-replies { display: block; margin-top: 3px; font-size: 12px; color: var(--accent); }
 .feed-date { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .feed-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 48px 0; color: #888; }

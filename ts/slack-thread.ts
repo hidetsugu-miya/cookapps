@@ -15,7 +15,7 @@ import { invoke } from "./ipc.js";
 import { closeMenu } from "./menu.js";
 import { attachmentNode, blocksNode } from "./slack-blocks.js";
 import { richNodes } from "./slack-rich.js";
-import { revealSlackList } from "./slack-list.js";
+import { revealSlackList, seeThread } from "./slack-list.js";
 import { decorateAvatar, loadIcons, slackMs } from "./slack-view.js";
 import { initSplit } from "./split.js";
 import { toast } from "./toast.js";
@@ -291,9 +291,12 @@ async function readThread(where: "keep" | "end" | "top") {
     const t = await invoke("slack_thread", { teamId: open.teamId, channel: open.channel, ts: open.ts });
     if (seq !== readSeq) return;
     thread = t;
-    // A watched thread is seen up to the newest reply read (Rust leaves a thread that is not watched alone).
+    // A thread is seen up to the newest reply read: `slack_watch_seen` for a watched one and `slack_thread_seen` for another (Rust leaves the other kind alone).
     const newest = t.messages[t.messages.length - 1];
-    if (t.messages.length > 1) invoke("slack_watch_seen", { teamId: open.teamId, channel: open.channel, ts: open.ts, latestTs: newest.ts }).catch(() => {});
+    if (t.messages.length > 1) {
+      invoke("slack_watch_seen", { teamId: open.teamId, channel: open.channel, ts: open.ts, latestTs: newest.ts }).catch(() => {});
+      seeThread(open.teamId, open.channel, open.ts, newest.ts);
+    }
   } catch (e) {
     if (seq !== readSeq) return;
     readError = String(e);
