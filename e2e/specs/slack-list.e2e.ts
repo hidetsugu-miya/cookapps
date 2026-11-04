@@ -66,8 +66,13 @@ describe("slack list", () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);
     expect(await callsOf("slack_timeline")).toEqual([null]);
-    await expect($("#slack-list h1")).toHaveText("Slack");
-    await expect($("#slack-unread")).toHaveText("未読 0 件");
+    // No heading and no count in one: the unread count is the Slack button's badge, which 0 hides.
+    await expect($("#slack-list h1")).not.toExist();
+    await expect($("#slack-list header")).not.toExist();
+    await expect($("#slack-unread")).not.toExist();
+    await expect($("#nav-slack .nav-count")).not.toBeDisplayed();
+    // The list starts 8px below the top, as the inbox's does.
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("slack-feed")!).paddingTop)).toBe("8px");
     expect(await rowTexts(".feed-meta b")).toEqual(["Alice Example", "Bob Example"]);
     expect(await rowTexts(".feed-meta span")).toEqual(["#dev", "#general"]);
     expect(await rowTexts(".feed-text")).toEqual(["Please review the deploy notes.", "Lunch at noon."]);
@@ -300,11 +305,19 @@ describe("slack list", () => {
     await waitForCount("#slack-feed .feed-row", 2);
   });
 
-  it("says in the heading how many channels no read has reached yet, until none is left", async () => {
+  it("says above the notice how many channels no read has reached yet, until none is left", async () => {
     await openList(timeline(sample(), { pendingChannels: 3, refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 2);
     await expect($("#slack-pending")).toBeDisplayed();
     await expect($("#slack-pending")).toHaveText("残り 3 チャンネルを読み込み中");
+    const place = await browser.execute(() => {
+      const pending = document.getElementById("slack-pending")!;
+      return {
+        before: !!(pending.compareDocumentPosition(document.getElementById("slack-notice")!) & Node.DOCUMENT_POSITION_FOLLOWING),
+        left: getComputedStyle(pending).paddingLeft,
+      };
+    });
+    expect(place).toEqual({ before: true, left: "32px" });
     await mock("slack_timeline", timeline(sample(), { pendingChannels: 0, refreshSecs: 1 }));
     await browser.waitUntil(async () => !(await $("#slack-pending").isDisplayed()));
   });
@@ -435,14 +448,14 @@ describe("slack list", () => {
   it("shows the first 10 unread rows with a button for the rest, whose count is the rest, and all of them (20 at most) once it is pressed", async () => {
     await openList(timeline(heap(20, 7)));
     await waitForCount("#slack-feed .feed-row", 15);
-    await expect($("#slack-unread")).toHaveText("未読 20 件");
+    await expect($("#nav-slack .nav-count")).toHaveText("20");
     // 10 unread, the button, the heading, and at most 5 read rows.
     expect(await layout()).toEqual([...unreadTexts(10), "button:未読をあと 10 件表示", "既読", "read:read 0", "read:read 1", "read:read 2", "read:read 3", "read:read 4"]);
     await $("#slack-feed .feed-more .text-btn").click();
     await waitForCount("#slack-feed .feed-row", 25);
     expect(await layout()).toEqual([...unreadTexts(20), "既読", "read:read 0", "read:read 1", "read:read 2", "read:read 3", "read:read 4"]);
     expect(await count("#slack-feed .feed-more")).toBe(0);
-    await expect($("#slack-unread")).toHaveText("未読 20 件");
+    await expect($("#nav-slack .nav-count")).toHaveText("20");
   });
 
   it("says in the button how many unread rows are left when fewer than 10 are", async () => {

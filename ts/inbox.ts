@@ -84,7 +84,43 @@ export const historyIds = new Map<string, string>();
 // Set when a load answers; the kept list of the last run, which is drawn first at startup, must not come after it.
 let inboxLoaded = false;
 
+// There is no reload button: a load that failed (the call, or an account in its answer) is repeated by the sync round at `nextReload`.
+// The wait doubles after each failure, from 60 seconds up to 5 minutes, and a load that works clears it.
+const RELOAD_FIRST_MS = 60000;
+const RELOAD_MAX_MS = 300000;
+let nextReload: number | null = null;
+let reloadDelay = RELOAD_FIRST_MS;
+
+function scheduleReload(failed: boolean) {
+  if (failed) {
+    nextReload = Date.now() + reloadDelay;
+    reloadDelay = Math.min(reloadDelay * 2, RELOAD_MAX_MS);
+  } else {
+    nextReload = null;
+    reloadDelay = RELOAD_FIRST_MS;
+  }
+}
+
+// The text the inbox itself put in `#error` (a failed load or the sync notice), so a later load or sync clears only that and not an error shown for something else.
+let inboxError: string | null = null;
+
+function showInboxError(e: unknown) {
+  showError(e);
+  inboxError = $("error").textContent;
+}
+
+function clearInboxError() {
+  if (inboxError !== null && !$("error").hidden && $("error").textContent === inboxError) $("error").hidden = true;
+  inboxError = null;
+}
+
 function drawThreads(inbox: Inbox) {
+  // The rows are all rebuilt: the button that has the focus is found again on the new row of the same thread.
+  const active = document.activeElement;
+  let focus: { key: string; selector: string } | null = null;
+  if (active?.classList.length) {
+    for (const [key, r] of rows) if (r.li.contains(active)) focus = { key, selector: `.${[...active.classList].join(".")}` };
+  }
   const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
   rows.clear();
   for (const t of shown) rows.set(rowKey(t), { t, li: row(t) });
@@ -98,6 +134,7 @@ function drawThreads(inbox: Inbox) {
   $("unread-threads").replaceChildren(...all.filter((r) => r.t.unread).map((r) => r.li));
   $("read-threads").replaceChildren(...all.filter((r) => !r.t.unread).map((r) => r.li));
   updateBadge();
+  if (focus) rows.get(focus.key)?.li.querySelector<HTMLElement>(focus.selector)?.focus();
 }
 
 // Draws the list the last run kept while the first load is still on its way; a missing or failed read leaves the screen to the load. Its rows work like the loaded ones.
@@ -112,13 +149,18 @@ export async function showKeptInbox() {
   if (currentScreen() === "mail") show("list");
 }
 
-export async function load() {
+// `background` is a retry of the sync round: it clears only the error of the last load, and shows its own failure only while the mail screen is shown.
+export async function load(background = false) {
   const seq = ++loadSeq;
   loading++;
-  $("error").hidden = true;
+  // Whether this load failed; stays null when a newer load took over.
+  let failed: boolean | null = null;
+  if (background) clearInboxError();
+  else $("error").hidden = true;
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
+    failed = Object.keys(inbox.failed).length > 0;
     inboxLoaded = true;
     renderAccounts(inbox);
     if (inbox.accounts.length === 0) return show("login");
@@ -126,9 +168,11 @@ export async function load() {
     for (const [account, id] of Object.entries(inbox.historyIds)) historyIds.set(account, id);
     drawThreads(inbox);
   } catch (e) {
-    showError(e);
+    if (seq === loadSeq) failed = true;
+    if (!background || currentScreen() === "mail") showInboxError(e);
   } finally {
     loading--;
+    if (failed !== null) scheduleReload(failed);
   }
   // A load that ends while the calendar is shown (e.g. after a re-login there) must not switch the screen; nor must it close an open thread.
   if (currentScreen() === "mail" && $("thread").hidden) show("list");
@@ -182,9 +226,10 @@ export function applySync(account: string, r: Sync) {
     const keep = new Set(r.threads.map(rowKey));
     applyChanges(r.threads, [...rows.keys()].filter((k) => k.startsWith(`${account}/`) && !keep.has(k)));
   } else if (r.kind === "needsLogin") {
-    // The detail view stays; the list shows the re-login row at the next load.
+    // The detail view stays; the list shows the re-login row at the next load, which is now (hidden list: the next sync round).
     historyIds.delete(account);
     if (!$("threads").hidden) load();
+    else nextReload = 0;
     return;
   } else {
     return;
@@ -198,8 +243,11 @@ let syncFails = 0;
 let syncing = false;
 
 // Brings the list up to date with Gmail through `sync`, without leaving the current view.
+// A load that is due (a failed one, or one asked for by a sync that needs a login) comes first: it may leave no history IDs to sync from.
 async function syncAll() {
-  if (syncing || loading || document.hidden || historyIds.size === 0) return;
+  if (loading || document.hidden) return;
+  if (nextReload !== null && Date.now() >= nextReload) return load(true);
+  if (syncing || historyIds.size === 0) return;
   syncing = true;
   const seq = loadSeq;
   let failure: unknown = null;
@@ -217,14 +265,19 @@ async function syncAll() {
   } finally {
     syncing = false;
   }
-  syncFails = failure ? syncFails + 1 : 0;
-  if (syncFails === 3) showError(`自動同期に失敗しています: ${failure}`);
+  if (failure) {
+    syncFails++;
+    if (syncFails === 3) showInboxError(`自動同期に失敗しています: ${failure}`);
+  } else {
+    // The sync works again: the notice of the failures goes (only that one, not an error shown for something else).
+    if (syncFails >= 3) clearInboxError();
+    syncFails = 0;
+  }
 }
 
 export function initInbox() {
   setInterval(syncAll, SYNC_MS);
   document.addEventListener("visibilitychange", syncAll);
-  $("reload").onclick = load;
   // Cmd+Z (Ctrl+Z off macOS) undoes the last removal; in a text field it stays that field's own undo.
   document.addEventListener("keydown", (e) => {
     if (e.metaKey !== isMac || e.ctrlKey === isMac || e.altKey || e.shiftKey || e.key !== "z" || composing(e) || !lastRemoved) return;

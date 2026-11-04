@@ -14,7 +14,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .nav-dot { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 0 2px var(--side); }
 .nav-item:hover .nav-dot { box-shadow: 0 0 0 2px var(--side-hover); }
 .nav-item[aria-current="page"] .nav-dot { box-shadow: 0 0 0 2px var(--accent); }
-/* The bottom group (update button, Claude avatar, settings) takes the free space above it, so settings stays last whatever is shown. */
+/* The bottom group (Claude avatar, settings) takes the free space above it, so settings stays last whatever is shown. */
 #sidebar-bottom { margin-top: auto; padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 /* The accounts of a function sit under its icon in a tray (the Google accounts under the calendar, the Slack workspaces under Slack); nav.ts shows the one that fits the screen. */
 .tray { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px; border-radius: 12px; background: var(--side-hover); }
@@ -98,10 +98,10 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .date { text-align: right; white-space: nowrap; padding-right: 8px; color: #666; font-size: 12px; }
 
 /* Detail view: the toolbar is tinted, the subject sits above the messages, and each message lines its body up with the sender's name (avatar 40px + gap 16px). */
-#mail-header.detail { padding: 14px 32px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
-#mail-header.detail .icon-btn { color: #444746; border-radius: 50%; }
+#mail-header { padding: 14px 32px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#mail-header .icon-btn { color: #444746; border-radius: 50%; }
 /* The right-hand group starts at the first button that is shown: the AI summary button, or the Slack button while the summary button is hidden. */
-#mail-header.detail #thread-summary:not([hidden]), #mail-header.detail #thread-summary[hidden] + #thread-slack { margin-left: auto; }
+#mail-header #thread-summary:not([hidden]), #mail-header #thread-summary[hidden] + #thread-slack { margin-left: auto; }
 #thread-head { margin: 16px 0 20px 56px; font-size: 22px; line-height: 1.35; }
 #thread-subject { display: inline; margin: 0; font-size: inherit; font-weight: normal; color: #1f1f1f; white-space: normal; overflow-wrap: anywhere; }
 #thread-head .label { display: inline-block; white-space: nowrap; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--code-line); color: #444746; font-size: 11px; vertical-align: middle; }
@@ -211,7 +211,8 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .cal-now-label { right: 6px; transform: translateY(-50%); padding: 1px 8px; border-radius: 10px; background: #ff9f43; color: #fff; font-size: 11px; }
 
 /* Todo: project column on the left, tasks on the right. */
-.toast { position: fixed; right: 24px; bottom: 24px; z-index: 20; padding: 10px 16px; border-radius: 10px; background: var(--side); color: #fff; font-size: 13px; }
+/* The toast stacks above the update popup while it shows (ts/update.ts sets --toast-bottom). */
+.toast { position: fixed; right: 24px; bottom: var(--toast-bottom, 24px); z-index: 20; padding: 10px 16px; border-radius: 10px; background: var(--side); color: #fff; font-size: 13px; }
 .toast button { margin-left: 12px; padding: 0; border: 0; background: transparent; color: var(--side-fg); font: inherit; cursor: pointer; }
 #todo { flex: 1; min-height: 0; display: flex; }
 #projects { width: 220px; flex: none; border-right: 1px solid var(--line); padding: 20px 12px; box-sizing: border-box; overflow-y: auto; }
@@ -540,6 +541,13 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 :is(.pop, .pane) code, .item-meta code { padding: 1px 5px; border-radius: 4px; background: var(--code); font-family: ui-monospace, monospace; font-size: 12px; }
 
 .pop p { margin: 0 0 12px; }
+/* The update popup (ts/update.ts): bottom right, the icon and the text above, the buttons at the right below. */
+#update-pop { right: 24px; bottom: 24px; display: flex; flex-direction: column; gap: 12px; }
+#update-pop .up-body { display: flex; gap: 12px; align-items: flex-start; }
+#update-pop .up-icon { flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--soft); color: var(--accent); display: flex; align-items: center; justify-content: center; }
+#update-pop .up-text { display: flex; flex-direction: column; min-width: 0; }
+#update-pop .up-text span { font-size: 13px; color: var(--muted); }
+#update-pop .up-actions { display: flex; justify-content: flex-end; gap: 8px; }
 button.status, button.item-meta { padding: 0 10px; border: 0; font-family: inherit; cursor: pointer; }
 button.item-meta { padding: 0; background: none; font-size: 12px; text-align: left; text-decoration: underline; }
 button.status:hover { filter: brightness(.95); }
@@ -649,9 +657,9 @@ button.status:hover { filter: brightness(.95); }
 
 /* The Slack list: a row per message, newest first. The dot on the avatar is the workspace's color. */
 #slack-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#slack-list header { align-items: baseline; gap: 8px; }
-#slack-list h1 { flex: none; }
-#slack-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 24px 16px; }
+#slack-pending { padding: 8px 32px 0; }
+#slack-notice:not(:empty) { padding-top: 8px; }
+#slack-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }
 .feed-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 14px; width: 100%; box-sizing: border-box; padding: 10px 16px; border: 0; border-radius: 12px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .feed-item { position: relative; }
 .feed-item:hover .feed-row { background: var(--hover); }

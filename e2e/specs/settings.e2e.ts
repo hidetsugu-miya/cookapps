@@ -1008,15 +1008,41 @@ describe("settings: update", () => {
     await expect(status()).toHaveText("再起動で v9.9.9 になります");
   });
 
-  it("checks again on 今すぐ確認, and redraws the card and the sidebar button", async () => {
+  it("checks again on 今すぐ確認, and redraws the card and the popup", async () => {
     await openUpdate();
     await expect(status()).toHaveText("最新");
-    await expect($("#update-btn")).not.toBeDisplayed();
+    await expect($("#update-pop")).not.toBeDisplayed();
+    await expect($("#update-items").$("button=更新して再起動")).not.toExist();
     const check = await mock("check_update", { version: "9.9.9", installed: false });
     await $("#update-recheck").click();
     expect(await waitForCalls(check)).toEqual([null]);
     await expect(status()).toHaveText("v9.9.9 があります");
-    await expect($("#update-btn")).toHaveAttribute("aria-label", "v9.9.9 に更新");
+    await expect($("#update-pop-title")).toHaveText("v9.9.9 があります");
+  });
+
+  it("has the same button as the popup in the card, which waits while it works, and still shows after あとで", async () => {
+    await openUpdate({ update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
+    await expect(status()).toHaveText("v9.9.9 があります");
+    await $("#update-later").click();
+    await expect($("#update-pop")).not.toBeDisplayed();
+    const button = $("#update-items").$("button=更新して再起動");
+    await expect(button).toHaveClass(expect.stringContaining("primary"));
+    const install = await mock("install_update", holds);
+    const restart = await mock("restart_app", null);
+    await button.click();
+    await waitForCalls(install);
+    await expect($("#update-items").$("button=更新して再起動")).toBeDisabled();
+    await release(install, null);
+    expect(await waitForCalls(restart)).toEqual([null]);
+    expect(await callsOf(install)).toEqual([null]);
+  });
+
+  it("names the button 再起動 in the card once the app is replaced", async () => {
+    await openUpdate({ update_mode: "auto", check_update: { version: "9.9.9", installed: false } });
+    await expect(status()).toHaveText("再起動で v9.9.9 になります");
+    const restart = await mock("restart_app", null);
+    await $("#update-items").$("button=再起動").click();
+    expect(await waitForCalls(restart)).toEqual([null]);
   });
 });
 
