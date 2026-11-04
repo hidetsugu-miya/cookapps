@@ -176,10 +176,13 @@ fn can_close(atoms: &[Atom], i: usize) -> bool {
 
 /// The atoms `lo..hi` as parts: a mark opens when it is at a word's start and the nearest mark of its kind that ends a word follows it on the line; a mark with no partner is text.
 fn styled(atoms: &[Atom], lo: usize, hi: usize, style: Style, out: &mut Vec<Part>) {
+    // A kind whose search found no end up to `hi` finds none from a later start either, so it is not searched again (the cost stays linear in the line).
+    let mut no_end = [false; MARKS.len()];
     let mut i = lo;
     while i < hi {
         if let Atom::Ch(mark) = atoms[i] {
-            if MARKS.contains(&mark) && can_open(atoms, i) {
+            let kind = MARKS.iter().position(|&m| m == mark);
+            if let Some(kind) = kind.filter(|&k| !no_end[k] && can_open(atoms, i)) {
                 let close = (i + 2..hi)
                     .find(|&j| matches!(atoms[j], Atom::Ch(c) if c == mark) && can_close(atoms, j));
                 if let Some(j) = close {
@@ -187,6 +190,15 @@ fn styled(atoms: &[Atom], lo: usize, hi: usize, style: Style, out: &mut Vec<Part
                     i = j + 1;
                     continue;
                 }
+                no_end[kind] = true;
+            }
+        }
+        if let (Atom::Ch(c), Some(last)) = (&atoms[i], out.last_mut()) {
+            // Raw text next to raw text of the same style grows one string.
+            if last.raw && last.style == style {
+                last.text.push(*c);
+                i += 1;
+                continue;
             }
         }
         out.push(match &atoms[i] {
@@ -270,8 +282,11 @@ fn lines_spans(lines: &[&str], name_of: NameOf) -> Vec<Span> {
     spans(parts)
 }
 
-/// The text of a line that starts with a quote mark (`&gt;`, and one space after it), else `None`.
+/// The text of a line that starts with a quote mark (`&gt;`, and one space after it), else `None`. `&gt;&gt;&gt;` (Slack's quote to the end of the message) is not read: it stays text.
 fn quoted(line: &str) -> Option<&str> {
+    if line.starts_with("&gt;&gt;&gt;") {
+        return None;
+    }
     let rest = line.strip_prefix("&gt;")?;
     Some(rest.strip_prefix(' ').unwrap_or(rest))
 }
@@ -293,10 +308,12 @@ fn text_blocks(text: &str, name_of: NameOf, out: &mut Rich) {
             out.push(RichBlock::Quote {
                 spans: lines_spans(&inner, name_of),
             });
-        } else if run.iter().any(|l| !l.trim().is_empty()) {
-            out.push(RichBlock::Paragraph {
-                spans: lines_spans(run, name_of),
-            });
+        } else {
+            // A paragraph with nothing to see (blank lines, or a token that is no text) is not drawn.
+            let spans = lines_spans(run, name_of);
+            if spans.iter().any(|s| !s.text.trim().is_empty()) {
+                out.push(RichBlock::Paragraph { spans });
+            }
         }
     }
 }
@@ -621,6 +638,35 @@ mod tests {
             vec![para(vec![sp("```\n", ""), sp("a", "b")])]
         );
         assert_eq!(read("``````"), vec![]);
+    }
+
+    #[test]
+    fn three_quote_marks_at_the_start_of_a_line_stay_text() {
+        assert_eq!(
+            read("&gt;&gt;&gt; a\nb"),
+            vec![para(vec![sp(">>> a\nb", "")])]
+        );
+        assert_eq!(
+            read("x\n&gt;&gt;&gt;\n&gt; q"),
+            vec![para(vec![sp("x\n>>>", "")]), quote(vec![sp("q", "")])]
+        );
+        // Two marks are a quote of a quote mark.
+        assert_eq!(read("&gt;&gt; a"), vec![quote(vec![sp("> a", "")])]);
+    }
+
+    #[test]
+    fn a_long_line_of_marks_with_no_partner_is_read_at_once() {
+        // Each kind of mark searches for an end once, not once per mark (a line of this size took seconds when it was quadratic).
+        let line = "*a ".repeat(20_000) + &"_b ".repeat(20_000) + &"~c ".repeat(20_000);
+        let started = std::time::Instant::now();
+        let got = read(&line);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert_eq!(got, vec![para(vec![sp(&line, "")])]);
+    }
+
+    #[test]
+    fn a_token_that_is_no_text_leaves_no_paragraph() {
+        assert_eq!(read("<!date^1^{date}>"), vec![]);
     }
 
     #[test]

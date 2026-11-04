@@ -249,6 +249,8 @@ describe("slack thread: blocks and attachments", () => {
     await expect($("#st-msgs .st-bh")).toHaveText("Job succeeded");
     expect(await textsOf("#st-msgs .st-sec-main > .st-text")).toEqual(["Project: api"]);
     expect(await textsOf("#st-msgs .st-fields .st-text")).toEqual(["When\nnow", "Branch\nmain"]);
+    // Each field is one box, whatever blocks it holds.
+    expect(await count("#st-msgs .st-fields > .st-field")).toBe(2);
     expect(await textsOf("#st-msgs .st-ctx")).toEqual(["built by the bot"]);
     expect(await count("#st-msgs hr.st-hr")).toBe(1);
     // Slack's alternative text is not drawn beside them.
@@ -527,6 +529,8 @@ describe("slack thread: styles of a text (S-12)", () => {
     await openDetail({}, slackThread([threadMessage(root, "CircleCI", "alt", { blocks, showText: false, attachments: [card] })]));
     expect(await textsOf("#st-msgs .st-sec-main > .st-text strong")).toEqual(["ok"]);
     expect(await textsOf("#st-msgs .st-fields blockquote")).toEqual(["quoted"]);
+    // A field of a paragraph and a quote is still one box.
+    expect(await count("#st-msgs .st-fields > .st-field")).toBe(1);
     expect(await textsOf("#st-msgs .st-ctx code")).toEqual(["bot"]);
     expect(await textsOf("#st-msgs .st-att > .st-text em")).toEqual(["text"]);
     expect(await textsOf("#st-msgs .st-att .st-field pre > code")).toEqual(["x = 1"]);

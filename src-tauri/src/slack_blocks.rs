@@ -185,16 +185,15 @@ fn text_of(v: &Value, name_of: NameOf) -> Option<String> {
 
 /// A text as `Rich`: a mrkdwn object is read for its styles (S-12), a `plain_text` object is not. A plain string is read when `string_is_mrkdwn`.
 fn rich_of(v: &Value, name_of: NameOf, string_is_mrkdwn: bool) -> Option<Rich> {
-    let text = text_of(v, name_of)?;
     let (raw, formatted) = match v {
         Value::String(s) => (s.as_str(), string_is_mrkdwn),
         _ => (v["text"].as_str()?, v["type"] != "plain_text"),
     };
-    Some(if formatted {
-        parse(raw, name_of)
-    } else {
-        plain(text)
-    })
+    if formatted {
+        // Read once; nothing to draw is no text.
+        return Some(parse(raw, name_of)).filter(|rich| !rich.is_empty());
+    }
+    text_of(v, name_of).map(plain)
 }
 
 /// `url` as it is when it is an http or https address, else `None`: a button never opens another scheme.

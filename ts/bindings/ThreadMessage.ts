@@ -6,7 +6,7 @@ import type { ThreadFile } from "./ThreadFile";
 
 export type ThreadMessage = { ts: string, user: string | null, name: string, iconUrl: string | null, text: string, 
 /**
- * `text` read for its styles (S-12), drawn in place of `text` (which stays for the other checks).
+ * What the screen draws of the message's text (S-12): the raw text read for its styles. `text` above stays a string that is not read for styles, and the screen does not draw it.
  */
 rich: Array<RichBlock>, files: Array<ThreadFile>, 
 /**
@@ -14,7 +14,7 @@ rich: Array<RichBlock>, files: Array<ThreadFile>,
  */
 blocks: Array<ThreadBlock>, 
 /**
- * Whether `text` is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
+ * Whether the text (`rich`) is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
  */
 showText: boolean, attachments: Array<ThreadAttachment>, 
 /**

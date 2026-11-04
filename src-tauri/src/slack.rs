@@ -1465,12 +1465,12 @@ pub struct ThreadMessage {
     name: String,
     icon_url: Option<String>,
     text: String,
-    /// `text` read for its styles (S-12), drawn in place of `text` (which stays for the other checks).
+    /// What the screen draws of the message's text (S-12): the raw text read for its styles. `text` above stays a string that is not read for styles, and the screen does not draw it.
     rich: Rich,
     files: Vec<ThreadFile>,
     /// Drawn under (or in place of) `text` (S-11); empty when `text` alone is drawn.
     blocks: Vec<ThreadBlock>,
-    /// Whether `text` is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
+    /// Whether the text (`rich`) is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
     show_text: bool,
     attachments: Vec<ThreadAttachment>,
     /// The https addresses of the images of `blocks` and `attachments`, once each; the screen asks for them only when the user presses "画像を表示".

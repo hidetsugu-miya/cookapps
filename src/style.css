@@ -718,6 +718,7 @@ a.st-file:hover { background: var(--hover); }
 .st-sec .st-text, .st-att .st-text { margin: 0; }
 .st-sec .st-quote, .st-att .st-quote, .st-sec .st-pre, .st-att .st-pre { margin: 0; }
 .st-ctx-t { margin: 0; }
+.st-ctx-item { min-width: 0; max-width: 100%; }
 .st-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 16px; margin-top: 6px; }
 .st-field { min-width: 0; }
 .st-field b { display: block; font-size: 12px; color: var(--muted); }

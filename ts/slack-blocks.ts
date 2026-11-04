@@ -60,7 +60,11 @@ function blockNode(b: ThreadBlock, ctx: ImageContext): Node | null {
       if (b.text) main.append(...richNodes(b.text));
       if (b.fields.length) {
         const fields = tag("div", "st-fields");
-        fields.append(...b.fields.flatMap((f) => richNodes(f)));
+        for (const f of b.fields) {
+          const field = tag("div", "st-field");
+          field.append(...richNodes(f));
+          fields.append(field);
+        }
         main.append(fields);
       }
       box.append(main);
