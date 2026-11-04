@@ -512,13 +512,19 @@ fn flush_text(
 }
 
 /// The timeline of the held messages: the user's and the assistant's text, and the tool calls between them folded into runs.
-/// A result, a message that is not drawn (reasoning, noise, an agent's start) does not break a run; text does.
-fn items_of(held: &[Held]) -> Vec<OrcaChatItem> {
+/// A result, a message that is not drawn (reasoning, noise, an agent's start) does not break a run; text does, and so does a message in `page_starts`:
+/// the first message before an older page came, so a run there keeps its id (and what is in view and what is open stay) when older calls arrive in front of it.
+fn items_of(held: &[Held], page_starts: &HashSet<String>) -> Vec<OrcaChatItem> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut run: Option<Run> = None;
     let (mut calls_total, mut results_total) = (0usize, 0usize);
     let mut done: HashSet<&str> = HashSet::new();
     for message in held {
+        if page_starts.contains(&message.id) {
+            if let Some(run) = run.take() {
+                entries.push(Entry::Run(run));
+            }
+        }
         let mut parts = 0usize;
         let mut text: Vec<&str> = Vec::new();
         for (index, block) in message.blocks.iter().enumerate() {
@@ -997,6 +1003,8 @@ impl Link {
 /// What the session holds between connections, and what it has sent.
 struct Chat {
     held: Vec<Held>,
+    /// The messages that were first when an older page came in front of them.
+    page_starts: HashSet<String>,
     has_more: bool,
     before_offset: Option<u32>,
     session_id: Option<String>,
@@ -1011,6 +1019,7 @@ impl Chat {
     fn new() -> Self {
         Self {
             held: Vec::new(),
+            page_starts: HashSet::new(),
             has_more: false,
             before_offset: None,
             session_id: None,
@@ -1041,7 +1050,7 @@ impl Chat {
 
     /// Sends what changed in the timeline since the last send.
     fn publish(&mut self, sink: &mut impl FnMut(OrcaChatEvent)) {
-        let items = items_of(&self.held);
+        let items = items_of(&self.held, &self.page_starts);
         if let Some(event) = items_event(&self.sent_items, &items, self.sent_more, self.has_more) {
             sink(event);
         }
@@ -1053,6 +1062,7 @@ impl Chat {
     fn start_session(&mut self, id: String, sink: &mut impl FnMut(OrcaChatEvent)) {
         self.session_id = Some(id);
         self.held.clear();
+        self.page_starts.clear();
         self.has_more = false;
         self.before_offset = None;
         self.loaded = false;
@@ -1078,6 +1088,7 @@ impl Chat {
 
     fn apply_replacement(&mut self, page: Page, sink: &mut impl FnMut(OrcaChatEvent)) {
         self.held = page.messages;
+        self.page_starts.clear();
         self.has_more = page.has_more;
         self.before_offset = page.before_offset;
         self.loaded(sink);
@@ -1089,6 +1100,9 @@ impl Chat {
     }
 
     fn apply_older(&mut self, page: Page, sink: &mut impl FnMut(OrcaChatEvent)) {
+        if let Some(first) = self.held.first() {
+            self.page_starts.insert(first.id.clone());
+        }
         prepend_older(&mut self.held, page.messages);
         self.has_more = page.has_more;
         self.before_offset = page.before_offset;
@@ -1509,7 +1523,7 @@ mod tests {
     }
 
     fn items(messages: &[Value]) -> Vec<OrcaChatItem> {
-        items_of(&held(messages))
+        items_of(&held(messages), &HashSet::new())
     }
 
     fn user(id: &str, text: &str) -> OrcaChatItem {
@@ -1594,7 +1608,7 @@ mod tests {
         assert!(held[3].blocks.is_empty());
         // The turn with a tool block is not noise, so Orca draws it as the user's.
         assert_eq!(
-            items_of(&held),
+            items_of(&held, &HashSet::new()),
             [
                 user("u1", "hello"),
                 user("n2", "<system-reminder>x"),
@@ -1922,6 +1936,41 @@ mod tests {
             other => panic!("{other:?}"),
         };
         assert_eq!(id(&before), id(&after));
+    }
+
+    #[test]
+    fn a_run_keeps_its_id_when_an_older_page_ends_in_calls() {
+        let page = |id: &str, name: &str| {
+            held_of(&json!({"id": id, "role": "assistant", "blocks": [
+                {"type": "tool-call", "name": name, "input": {}, "callId": id},
+            ]}))
+            .unwrap()
+        };
+        let ids = |items: &[OrcaChatItem]| -> Vec<String> {
+            items
+                .iter()
+                .map(|i| match i {
+                    OrcaChatItem::Tools { id, .. } => id.clone(),
+                    other => panic!("{other:?}"),
+                })
+                .collect()
+        };
+        let newer = vec![page("c", "Edit"), page("d", "Bash")];
+        let before = ids(&items_of(&newer, &HashSet::new()));
+        let mut held = newer;
+        let mut starts = HashSet::new();
+        starts.insert(held[0].id.clone());
+        prepend_older(&mut held, vec![page("a", "Read"), page("b", "Read")]);
+        // Older calls stand as a run of their own, and the run that was on screen has the same id.
+        assert_eq!(
+            ids(&items_of(&held, &starts)),
+            vec!["a#c0".to_owned(), before[0].clone()]
+        );
+        // Without the mark they would join it under an older id.
+        assert_eq!(
+            ids(&items_of(&held, &HashSet::new())),
+            vec!["a#c0".to_owned()]
+        );
     }
 
     fn running(timeline: &[OrcaChatItem]) -> Option<String> {
