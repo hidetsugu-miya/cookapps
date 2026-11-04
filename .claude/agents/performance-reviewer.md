@@ -1,6 +1,6 @@
 ---
 name: performance-reviewer
-description: "cookapps の push 前のパフォーマンスレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で、security-reviewer・code-reviewer と並列に起動する。"
+description: "cookapps の push 前のパフォーマンスレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -17,7 +17,7 @@ tools: Read, Grep, Glob, Bash
 - High: 利用者が遅さや重さを感じる、または量や時間とともに悪化するもの。API の回数制限や割り当てに届きうる呼び出し、同期の周期ごとに件数に比例して増える処理、UI を止めるブロッキング、上限の無いメモリの増加など。
 - Low: 上に当たらない細かな改善。まれな操作での余分なリクエスト、小さな clone や線形探索、この変更で悪くならない既存の動きなど。
 
-2 回目以降は、渡された止める指摘が直ったかと、直した差分が新しく生んだ止める指摘だけを見る。
+2 回目以降は、直した差分が新しく生んだ止める指摘だけを見る。渡された止める指摘と重ねて報告しない。直ったかは release-verifier が確かめる。
 
 ## 見る観点
 
