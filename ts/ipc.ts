@@ -16,6 +16,7 @@ import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaSkill } from "./bindings/OrcaSkill";
+import type { OrcaTerminalTargets } from "./bindings/OrcaTerminalTargets";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
@@ -33,6 +34,9 @@ import type { UpdateMode } from "./bindings/UpdateMode";
 import type { Week } from "./bindings/Week";
 import type { Workspace } from "./bindings/Workspace";
 import type { WorkspaceIcon } from "./bindings/WorkspaceIcon";
+
+// Where a terminal of the app opens (A-8): a worktree of this machine by its path, or an SSH host by the id Orca gives it. Rust checks it against Orca's list.
+export type TerminalTarget = { kind: "worktree"; path: string } | { kind: "ssh"; id: string };
 
 type Account = { account: string };
 // What Todoist says about an uploaded file (`file_name`, `file_url`, `file_type`, ...): it is handed back as the attachment of a comment, as it is.
@@ -186,6 +190,19 @@ export interface Commands {
   orca_chat_pause: { args: { paused: boolean }; result: null };
   // The skills of Claude Code on the machine the app runs on (the CLI cannot list another machine's, so the target does not matter), as the commands to type (`/name`, `/plugin:name`), sorted.
   orca_skills: { args: undefined; result: OrcaSkill[] };
+  // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. A terminal that is already closed is a success.
+  orca_close: { args: { handle: string; environment: string | null }; result: null };
+  // The lines on the screen of the plain terminal `handle`, for the mirror (no colors).
+  orca_terminal_read: { args: { handle: string; environment: string | null }; result: string[] };
+  // Types `text` into the plain terminal `handle` as it is (no Enter is added).
+  orca_terminal_input: { args: { handle: string; text: string; environment: string | null }; result: null };
+  // The destinations of a new terminal: this machine's worktrees and its SSH hosts, whatever the target is. `message` says why the worktrees could not be read.
+  orca_terminal_targets: { args: undefined; result: OrcaTerminalTargets };
+  // Opens a terminal of the app at `target` with the given size and sends its output (`TerminalEvent`) to `channel`; answers the id the other commands take.
+  terminal_open: { args: { target: TerminalTarget; cols: number; rows: number; channel: unknown }; result: string };
+  terminal_write: { args: { id: string; data: string }; result: null };
+  terminal_resize: { args: { id: string; cols: number; rows: number }; result: null };
+  terminal_close: { args: { id: string }; result: null };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

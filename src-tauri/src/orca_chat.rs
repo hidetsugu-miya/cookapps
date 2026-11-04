@@ -1113,6 +1113,18 @@ async fn unix_request(_: &str, _: &str, _: &str, _: Value) -> Result<Value, Link
     ))
 }
 
+/// A call of this machine's Orca over its unix socket (A-8 asks for the SSH hosts, which the CLI cannot list). The `result`, or a Japanese message; no token is in it.
+pub(crate) async fn local_call(method: &str, params: Value) -> Result<Value, String> {
+    match load_pairing(None)? {
+        Pairing::Unix { endpoint, token } => unix_request(&endpoint, &token, method, params)
+            .await
+            .map_err(|e| match e {
+                LinkError::Broken(message) | LinkError::Remote(message) => message,
+            }),
+        Pairing::WebSocket { .. } => Err("Orca の接続情報を読めません".into()),
+    }
+}
+
 enum Link {
     Ws(Box<WsLink>),
     Unix { endpoint: String, token: String },

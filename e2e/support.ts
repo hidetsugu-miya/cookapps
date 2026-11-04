@@ -12,8 +12,14 @@ import type { Info } from "../ts/bindings/Info";
 import type { OrcaChatEvent } from "../ts/bindings/OrcaChatEvent";
 import type { OrcaChatItem } from "../ts/bindings/OrcaChatItem";
 import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
+import type { OrcaProject } from "../ts/bindings/OrcaProject";
 import type { OrcaRow } from "../ts/bindings/OrcaRow";
 import type { OrcaSkill } from "../ts/bindings/OrcaSkill";
+import type { OrcaSshTarget } from "../ts/bindings/OrcaSshTarget";
+import type { OrcaStatus } from "../ts/bindings/OrcaStatus";
+import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
+import type { OrcaTerminalTargets } from "../ts/bindings/OrcaTerminalTargets";
+import type { OrcaTerminalWorktree } from "../ts/bindings/OrcaTerminalWorktree";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
@@ -22,6 +28,7 @@ import type { RichBlock } from "../ts/bindings/RichBlock";
 import type { SlackThread } from "../ts/bindings/SlackThread";
 import type { Span } from "../ts/bindings/Span";
 import type { Summary } from "../ts/bindings/Summary";
+import type { TerminalEvent } from "../ts/bindings/TerminalEvent";
 import type { TaskItem } from "../ts/bindings/TaskItem";
 import type { ThreadAttachment } from "../ts/bindings/ThreadAttachment";
 import type { ThreadDetail } from "../ts/bindings/ThreadDetail";
@@ -497,13 +504,35 @@ export const connection = (
   claude: Claude = method === "apiKey" ? claudeKeyReady : subscription,
 ): ClaudeConnection => ({ method, subscription, apiKey, claude });
 
-// The Orca screen (A-6). `minutes` is how long ago the state began (the time of a running or waiting agent) or the agent ended (a done one).
+// The Orca screen (A-6, A-8). `minutes` is how long ago the state began (the time of a running or waiting agent) or the agent ended (a done one). The row's icon follows its group unless `extra` says another status, and its project is `proj_{repo}`.
+const GROUP_STATUS: Record<OrcaRow["group"], OrcaStatus> = { waiting: "question", working: "working", done: "done" };
 export const orcaRow = (repo: string, branch: string, line: string, extra: Partial<OrcaRow> & { minutes?: number } = {}): OrcaRow => {
   const { minutes = 2, ...rest } = extra;
-  return { group: "working", repo, branch, line, atMs: Date.now() - minutes * 60_000 - 5_000, handle: `term_${repo}`, paneKey: `tab_${repo}:leaf_1`, path: `/work/${repo}`, ...rest };
+  const group = rest.group ?? "working";
+  return { group, repo, branch, line, atMs: Date.now() - minutes * 60_000 - 5_000, handle: `term_${repo}`, paneKey: `tab_${repo}:leaf_1`, path: `/work/${repo}`, activity: "", status: GROUP_STATUS[group], projectKey: `proj_${repo}`, ...rest };
 };
 
 export const orcaWorktree = (repo: string, branch: string): OrcaWorktree => ({ path: `/work/${repo}`, repo, branch });
+
+// A plain terminal of Orca (a shell) in the project of `repo`.
+export const orcaTerminal = (repo: string, title: string, extra: Partial<OrcaTerminal> = {}): OrcaTerminal => ({ handle: `term_${repo}_${title}`, title, branch: "main", projectKey: `proj_${repo}`, ...extra });
+export const orcaSsh = (id: string, label: string, connected = true): OrcaSshTarget => ({ id, label, connected });
+export const terminalWorktree = (repo: string, branch: string): OrcaTerminalWorktree => ({ path: `/work/${repo}`, repo, branch, projectKey: `proj_${repo}` });
+// What `orca_terminal_targets` answers.
+export const terminalTargets = (worktrees: OrcaTerminalWorktree[], ssh: OrcaSshTarget[] = [], message = ""): OrcaTerminalTargets => ({ worktrees, ssh, message });
+
+const STATUS_ORDER: OrcaStatus[] = ["question", "failed", "working", "monitoring", "interrupted", "done", "idle"];
+
+// The project list of what is on the screen: one project for each repository of the rows, the worktrees and the terminals, the highest status of its rows (a terminal is a green dot), and its sessions.
+function projectsOf(rows: OrcaRow[], worktrees: OrcaWorktree[], terminals: OrcaTerminal[]): OrcaProject[] {
+  const keys = [...new Set([...rows.map((r) => r.projectKey), ...worktrees.map((w) => `proj_${w.repo}`), ...terminals.map((t) => t.projectKey)])];
+  return keys.map((key) => {
+    const mine = rows.filter((r) => r.projectKey === key);
+    const mineTerminals = terminals.filter((t) => t.projectKey === key);
+    const statuses: OrcaStatus[] = [...mine.map((r) => r.status), ...mineTerminals.map((): OrcaStatus => "done"), "idle"];
+    return { key, name: key.replace(/^proj_/, ""), status: statuses.sort((a, b) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b))[0], sessions: mine.length + mineTerminals.length, atMs: 0 };
+  });
+}
 
 // What `orca_overview` answers: a read that worked, this machine's, unless `extra` says another.
 export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], extra: Partial<OrcaOverview> = {}): OrcaOverview => ({
@@ -513,6 +542,10 @@ export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], ex
   environments: [],
   rows,
   worktrees,
+  projects: projectsOf(rows, worktrees, extra.terminals ?? []),
+  hosts: [],
+  terminals: [],
+  ssh: [],
   known: true,
   ...extra,
 });
@@ -556,6 +589,33 @@ export const sendChat = (event: OrcaChatEvent, nth = -1) =>
     event,
     nth,
   );
+
+// A terminal of the app (A-8): the arguments of every `terminal_open` so far (the channel as `true`), and the delivery of an output or an end to the channel of the last one (or the `nth`).
+export const terminalOpens = () =>
+  browser.execute(() => {
+    const calls = (window as unknown as { __e2e_calls__: Record<string, { target: unknown; cols: number; rows: number; channel?: unknown }[]> }).__e2e_calls__.terminal_open ?? [];
+    return calls.map((c) => ({ ...c, channel: !!c.channel }));
+  });
+
+export const termData = (text: string): TerminalEvent => ({ kind: "data", data: Buffer.from(text).toString("base64") });
+export const termExit = (code: number | null = 0): TerminalEvent => ({ kind: "exit", code });
+
+export const sendTerminal = (event: TerminalEvent, nth = -1) =>
+  browser.execute(
+    (id, e, n) => {
+      if (!window.__e2e_once__(id)) return;
+      const calls = (window as unknown as { __e2e_calls__: Record<string, { channel: { onmessage: (event: unknown) => void } }[]> }).__e2e_calls__.terminal_open;
+      calls.at(n)!.channel.onmessage(e);
+    },
+    onceId(),
+    event,
+    nth,
+  );
+
+export async function waitForTerminalOpens(times = 1) {
+  await browser.waitUntil(async () => (await terminalOpens()).length >= times, { timeoutMsg: `terminal_open was not called ${times} time(s)` });
+  return terminalOpens();
+}
 
 // Waits until `orca_chat_open` was called `times` times; the calls are read with `chatOpens`.
 export async function waitForOpens(times = 1) {
