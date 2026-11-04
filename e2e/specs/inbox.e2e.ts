@@ -146,6 +146,123 @@ describe("inbox", () => {
     await expect($("#relogin")).toHaveText(expect.stringContaining("再ログインが必要です"));
   });
 
+  // The error line as it is on screen.
+  const errorLine = () =>
+    browser.execute(() => {
+      const e = document.getElementById("error")!;
+      return { text: e.textContent, hidden: e.hidden };
+    });
+  // Puts an error of some other screen in the error line.
+  const otherError = () =>
+    browser.execute(() => {
+      const e = document.getElementById("error")!;
+      e.textContent = "other error";
+      e.hidden = false;
+    });
+
+  describe("a retry of a load that failed, in the background", () => {
+    // Runs the due retry with `answer`, and returns once its load has ended.
+    async function retry(answer: unknown, afterMs: number) {
+      await mock("inbox", answer);
+      await clockAfter(afterMs);
+      await syncRound();
+      await waitForCalls("inbox");
+      await browser.pause(300);
+    }
+
+    it("keeps the thread that is open when it fails again", async () => {
+      await mock("thread", threadDetail("Already read", "Old news", false));
+      await rowOf("read-threads", "Already read").$(".subject").click();
+      await expect($("#thread")).toBeDisplayed();
+      await mock("sync", { kind: "needsLogin" });
+      await mock("inbox", rejects("boom"));
+      await syncRound();
+      await waitForCalls("sync");
+      await mock("sync", { kind: "unchanged" });
+      await syncRound();
+      await waitForCalls("inbox");
+      await browser.pause(300);
+      await expect($("#thread")).toBeDisplayed();
+      expect((await errorLine()).text).toContain("boom");
+      await retry(rejects("boom"), 70_000);
+      await expect($("#thread")).toBeDisplayed();
+      expect(await callsOf("inbox")).toHaveLength(1);
+      expect((await errorLine()).text).toContain("boom");
+    });
+
+    it("keeps the focus on the same button of the same row when the rows are drawn again", async () => {
+      const failing = { ...inbox(), failed: { [account]: "quota" } };
+      await mock("inbox", failing);
+      await loadByNeedsLogin();
+      await browser.pause(300);
+      await browser.execute(() => {
+        for (const li of document.querySelectorAll<HTMLElement>("#unread-threads li")) li.setAttribute("data-old", "");
+        const li = [...document.querySelectorAll<HTMLElement>("#unread-threads li")].find((e) => e.textContent?.includes("Second unread"))!;
+        li.querySelector<HTMLElement>(".read-box")!.focus();
+      });
+      await expect(rowOf("unread-threads", "Second unread").$(".read-box")).toBeFocused();
+      await retry(failing, 70_000);
+      await waitForCount("#unread-threads li:not([data-old])", 2);
+      await expect(rowOf("unread-threads", "Second unread").$(".read-box")).toBeFocused();
+    });
+
+    it("shows nothing and clears nothing of another screen's error while another screen is shown", async () => {
+      const failing = { ...inbox(), failed: { [account]: "quota" } };
+      await mock("inbox", failing);
+      await loadByNeedsLogin();
+      await browser.pause(300);
+      expect((await errorLine()).hidden).toBe(true);
+      await $("#nav-settings").click();
+      // It fails: the inbox's error is not shown on the other screen.
+      await retry(rejects("boom"), 70_000);
+      expect((await errorLine()).hidden).toBe(true);
+      await otherError();
+      await retry(rejects("boom"), 200_000);
+      expect(await errorLine()).toEqual({ text: "other error", hidden: false });
+      // It works: the other error stays.
+      await retry(inbox(), 500_000);
+      expect(await errorLine()).toEqual({ text: "other error", hidden: false });
+    });
+
+    it("clears the error of the last load when it works", async () => {
+      await mock("inbox", rejects("boom"));
+      await loadByNeedsLogin();
+      expect((await errorLine()).text).toContain("boom");
+      await retry(inbox(), 70_000);
+      expect((await errorLine()).hidden).toBe(true);
+    });
+  });
+
+  describe("the notice of a failing sync", () => {
+    async function failThreeRounds() {
+      const sync = await mock("sync", rejects("offline"));
+      for (let n = 1; n <= 3; n++) {
+        await syncRound();
+        await waitForCalls(sync, n);
+        await browser.pause(300);
+      }
+      await expect($("#error")).toHaveText(expect.stringContaining("自動同期に失敗しています"));
+    }
+
+    it("goes when the sync works again", async () => {
+      await failThreeRounds();
+      await mock("sync", { kind: "unchanged" });
+      await syncRound();
+      await waitForCalls("sync");
+      await expect($("#error")).not.toBeDisplayed();
+    });
+
+    it("leaves an error shown for something else when the sync works again", async () => {
+      await failThreeRounds();
+      await otherError();
+      await mock("sync", { kind: "unchanged" });
+      await syncRound();
+      await waitForCalls("sync");
+      await browser.pause(300);
+      expect(await errorLine()).toEqual({ text: "other error", hidden: false });
+    });
+  });
+
   describe("a load that failed", () => {
     // `inbox` calls since the last `mock("inbox")`, after a pause long enough for a call to have been made.
     const loads = async () => {

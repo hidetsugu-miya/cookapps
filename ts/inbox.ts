@@ -101,7 +101,26 @@ function scheduleReload(failed: boolean) {
   }
 }
 
+// The text the inbox itself put in `#error` (a failed load or the sync notice), so a later load or sync clears only that and not an error shown for something else.
+let inboxError: string | null = null;
+
+function showInboxError(e: unknown) {
+  showError(e);
+  inboxError = $("error").textContent;
+}
+
+function clearInboxError() {
+  if (inboxError !== null && !$("error").hidden && $("error").textContent === inboxError) $("error").hidden = true;
+  inboxError = null;
+}
+
 function drawThreads(inbox: Inbox) {
+  // The rows are all rebuilt: the button that has the focus is found again on the new row of the same thread.
+  const active = document.activeElement;
+  let focus: { key: string; selector: string } | null = null;
+  if (active?.classList.length) {
+    for (const [key, r] of rows) if (r.li.contains(active)) focus = { key, selector: `.${[...active.classList].join(".")}` };
+  }
   const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
   rows.clear();
   for (const t of shown) rows.set(rowKey(t), { t, li: row(t) });
@@ -115,6 +134,7 @@ function drawThreads(inbox: Inbox) {
   $("unread-threads").replaceChildren(...all.filter((r) => r.t.unread).map((r) => r.li));
   $("read-threads").replaceChildren(...all.filter((r) => !r.t.unread).map((r) => r.li));
   updateBadge();
+  if (focus) rows.get(focus.key)?.li.querySelector<HTMLElement>(focus.selector)?.focus();
 }
 
 // Draws the list the last run kept while the first load is still on its way; a missing or failed read leaves the screen to the load. Its rows work like the loaded ones.
@@ -129,12 +149,14 @@ export async function showKeptInbox() {
   if (currentScreen() === "mail") show("list");
 }
 
-export async function load() {
+// `background` is a retry of the sync round: it clears only the error of the last load, and shows its own failure only while the mail screen is shown.
+export async function load(background = false) {
   const seq = ++loadSeq;
   loading++;
   // Whether this load failed; stays null when a newer load took over.
   let failed: boolean | null = null;
-  $("error").hidden = true;
+  if (background) clearInboxError();
+  else $("error").hidden = true;
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
@@ -147,7 +169,7 @@ export async function load() {
     drawThreads(inbox);
   } catch (e) {
     if (seq === loadSeq) failed = true;
-    showError(e);
+    if (!background || currentScreen() === "mail") showInboxError(e);
   } finally {
     loading--;
     if (failed !== null) scheduleReload(failed);
@@ -224,7 +246,7 @@ let syncing = false;
 // A load that is due (a failed one, or one asked for by a sync that needs a login) comes first: it may leave no history IDs to sync from.
 async function syncAll() {
   if (loading || document.hidden) return;
-  if (nextReload !== null && Date.now() >= nextReload) return load();
+  if (nextReload !== null && Date.now() >= nextReload) return load(true);
   if (syncing || historyIds.size === 0) return;
   syncing = true;
   const seq = loadSeq;
@@ -245,10 +267,10 @@ async function syncAll() {
   }
   if (failure) {
     syncFails++;
-    if (syncFails === 3) showError(`自動同期に失敗しています: ${failure}`);
+    if (syncFails === 3) showInboxError(`自動同期に失敗しています: ${failure}`);
   } else {
     // The sync works again: the notice of the failures goes (only that one, not an error shown for something else).
-    if (syncFails >= 3) $("error").hidden = true;
+    if (syncFails >= 3) clearInboxError();
     syncFails = 0;
   }
 }
