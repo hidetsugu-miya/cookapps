@@ -269,6 +269,9 @@ function rowOf(m: TimelineMessage, key: string) {
 
 // Opening a message sets its channel's read position to it: the row and the older ones of the channel become read at once (an unread row leaves the list, a watched one or one with unread replies stays and is no longer bold), and Slack is told.
 // Nothing changes when the row is read already, or when the token cannot write the position (the next read would show it unread again). A failure is logged by Rust; the next read shows Slack's value.
+// The latest `slack_mark_read` on its way: a list made from the cache before Rust has the new position would bring the rows back unread.
+let marking: Promise<unknown> = Promise.resolve();
+
 function markRead(m: TimelineMessage) {
   // A watched row moves the position to the newest unread message Rust holds of its thread (its own message, or a reply also sent to the channel); another row to its own message.
   const to = m.watch ? m.watch.unreadTo : m.unread ? m.ts : null;
@@ -287,10 +290,11 @@ function markRead(m: TimelineMessage) {
   m.unread = false;
   unreadCount = Math.max(0, unreadCount - moved);
   drawBadge();
-  // A list made from the cache before Rust has the new position (a read on its way, or the one `slack_thread_seen` starts, which ends first) would bring the rows back unread: once Rust has it, the list is made again from its cache whenever `conversations.mark` was sent, without waiting for the next period.
-  invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: to }).then(
-    (sent) => {
-      if (sent) load(true);
+  // A read that is on its way may answer with the old position (the rows would be unread again): once Rust has the new one, the list is made again from its cache, without waiting for the next period.
+  const during = isLoading();
+  marking = invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: to }).then(
+    () => {
+      if (during || isLoading()) load(true);
     },
     () => {},
   );
@@ -338,7 +342,8 @@ function seeReplies(m: TimelineMessage) {
 export function seeThread(teamId: string, channel: string, ts: string, latestTs: string) {
   const during = isLoading();
   invoke("slack_thread_seen", { teamId, channel, ts, latestTs }).then(
-    (moved) => {
+    async (moved) => {
+      await marking;
       if (moved || during || isLoading()) load(true);
     },
     () => {},

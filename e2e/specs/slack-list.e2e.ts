@@ -1240,25 +1240,23 @@ describe("slack list", () => {
     expect(await waitForCalls("slack_timeline", 2)).toContainEqual({ cached: true });
   });
 
-  it("makes the list again from the cache once slack_mark_read is done, so a list made meanwhile by slack_thread_seen does not leave a row that is unread itself and has unread replies, and the badge, unread", async () => {
+  it("waits for slack_mark_read before making the list again after slack_thread_seen, so a row that is unread itself and has unread replies does not come back", async () => {
     await openList(timeline([withReplies({ unread: true })]));
     await waitForCount("#slack-feed .feed-row", 1);
     await expect($("#nav-slack .nav-count")).toHaveText("3");
     const mark = await mock("slack_mark_read", holds);
-    await mock("slack_thread_seen", true);
+    const seen = await mock("slack_thread_seen", true);
     await mock("slack_thread", slackThread([threadMessage(parentTs, "Alice Example", "Parent")]));
-    // Rust has not the new position yet: the list it makes from its cache is the old one.
-    const stale = await mock("slack_timeline", timeline([withReplies({ unread: true })]));
+    const fresh = await mock("slack_timeline", timeline([]));
     await $("#slack-feed .feed-open").click();
     await expect($("#slack-thread")).toBeDisplayed();
     expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: parentTs }]);
-    expect(await waitForCalls(stale)).toEqual([{ cached: true }]);
-    await expect($("#nav-slack .nav-count")).toHaveText("3");
-    // Rust has it now: the list is made again from the cache, with the position moved.
-    const fresh = await mock("slack_timeline", timeline([]));
-    await release(mark, true);
-    expect(await waitForCalls(fresh)).toEqual([{ cached: true }]);
+    await waitForCalls(seen);
+    // Rust has not the new position yet: nothing is made from its cache.
+    expect(await callsOf(fresh)).toEqual([]);
     await expect($("#nav-slack .nav-count")).not.toBeDisplayed();
+    await release(mark, true);
+    expect((await waitForCalls(fresh))[0]).toEqual({ cached: true });
     await $("#st-back").click();
     await expect($("#slack-list")).toBeDisplayed();
     expect(await count("#slack-feed .feed-row")).toBe(0);
