@@ -274,6 +274,7 @@ pub fn run() {
             orca_chat::orca_chat_open,
             orca_chat::orca_chat_close,
             orca_chat::orca_chat_older,
+            orca_chat::orca_chat_pause,
             update::app_info,
             update::update_mode,
             update::set_update_mode,

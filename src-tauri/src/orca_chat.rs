@@ -151,6 +151,8 @@ pub enum OrcaChatEvent {
 pub enum OrcaCommand {
     /// Read the page of older messages before the oldest one held.
     Older,
+    /// The window is hidden (`true`) or shown again (`false`): while hidden nothing is read again, and the connection and what is held stay.
+    Pause(bool),
     /// End the session.
     Close,
 }
@@ -1013,6 +1015,8 @@ struct Chat {
     sent_items: Vec<OrcaChatItem>,
     sent_more: bool,
     status: Option<(OrcaChatState, String)>,
+    /// Connections that failed in a row since a page or a snapshot was last read (it picks the wait before the next one).
+    attempt: usize,
 }
 
 impl Chat {
@@ -1027,6 +1031,7 @@ impl Chat {
             sent_items: Vec::new(),
             sent_more: false,
             status: None,
+            attempt: 0,
         }
     }
 
@@ -1072,6 +1077,7 @@ impl Chat {
 
     fn loaded(&mut self, sink: &mut impl FnMut(OrcaChatEvent)) {
         self.loaded = true;
+        self.attempt = 0;
         self.publish(sink);
         self.set_status(OrcaChatState::Live, "", sink);
     }
@@ -1106,6 +1112,7 @@ impl Chat {
         prepend_older(&mut self.held, page.messages);
         self.has_more = page.has_more;
         self.before_offset = page.before_offset;
+        self.attempt = 0;
         self.publish(sink);
     }
 
@@ -1136,6 +1143,12 @@ fn is_closing(command: Option<OrcaCommand>) -> bool {
     matches!(command, None | Some(OrcaCommand::Close))
 }
 
+/// The stream of one connection (WebSocket only): its streamed answers carry `request_id`, and `nativeChat.unsubscribe` names `id`.
+struct Subscription {
+    request_id: String,
+    id: String,
+}
+
 struct Target<'a> {
     worktree: &'a str,
     pane_key: &'a str,
@@ -1147,7 +1160,7 @@ async fn check_session(
     link: &mut Link,
     chat: &mut Chat,
     target: &Target<'_>,
-    subscription: &mut Option<String>,
+    subscription: &mut Option<Subscription>,
     sink: &mut impl FnMut(OrcaChatEvent),
 ) -> Result<(), String> {
     let tabs = link
@@ -1176,7 +1189,7 @@ async fn check_session(
                 if let (Link::Ws(ws), Some(old)) = (&mut *link, subscription.take()) {
                     // Best effort: the answer is not waited for, and a connection that ends drops it anyway.
                     let _ = ws
-                        .send_request("nativeChat.unsubscribe", json!({"subscriptionId": old}))
+                        .send_request("nativeChat.unsubscribe", json!({"subscriptionId": old.id}))
                         .await;
                 }
                 chat.start_session(id, sink);
@@ -1194,8 +1207,10 @@ async fn check_session(
                 .send_request("nativeChat.subscribe", params)
                 .await
                 .map_err(reason_of)?;
-            // The streamed answers carry the id of this request.
-            *subscription = Some(request_id);
+            *subscription = Some(Subscription {
+                request_id,
+                id: sub,
+            });
         }
     }
     Ok(())
@@ -1254,13 +1269,13 @@ async fn older(
 fn on_response(
     response: &Value,
     chat: &mut Chat,
-    subscription: &mut Option<String>,
+    subscription: &mut Option<Subscription>,
     sink: &mut impl FnMut(OrcaChatEvent),
 ) -> ResponseEffect {
-    let Some(sub) = subscription.as_deref() else {
+    let Some(sub) = subscription.as_ref() else {
         return ResponseEffect::None;
     };
-    if response["id"] != sub {
+    if response["id"] != sub.request_id {
         return ResponseEffect::None;
     }
     let Ok(result) = result_of(response) else {
@@ -1289,19 +1304,18 @@ enum ResponseEffect {
 }
 
 /// Serves one connection until it fails (`Err`, with the reason) or the screen closes the session (`Ok`).
+/// While `paused` neither the session is looked for again nor the transcript polled; a resume does both at once.
 async fn serve(
     link: &mut Link,
     chat: &mut Chat,
     target: &Target<'_>,
     commands: &mut UnboundedReceiver<OrcaCommand>,
     timing: Timing,
-    attempt: &mut usize,
+    paused: &mut bool,
     sink: &mut impl FnMut(OrcaChatEvent),
 ) -> Result<(), String> {
-    let mut subscription: Option<String> = None;
+    let mut subscription: Option<Subscription> = None;
     check_session(link, chat, target, &mut subscription, sink).await?;
-    // A connection that answered is a success: the next failure waits the shortest time again.
-    *attempt = 0;
     let streaming = matches!(link, Link::Ws(_));
     let mut next_tabs = Instant::now() + timing.tabs_every;
     let mut next_poll = Instant::now();
@@ -1313,16 +1327,23 @@ async fn serve(
         tokio::select! {
             command = commands.recv() => match command {
                 Some(OrcaCommand::Older) => older(link, chat, sink).await?,
+                Some(OrcaCommand::Pause(now)) => {
+                    if *paused && !now {
+                        next_tabs = Instant::now();
+                        next_poll = Instant::now();
+                    }
+                    *paused = now;
+                }
                 other => {
                     debug_assert!(is_closing(other));
                     return Ok(());
                 }
             },
-            () = sleep_until(next_tabs) => {
+            () = sleep_until(next_tabs), if !*paused => {
                 check_session(link, chat, target, &mut subscription, sink).await?;
                 next_tabs = Instant::now() + timing.tabs_every;
             }
-            () = sleep_until(next_poll), if !streaming && chat.session_id.is_some() => {
+            () = sleep_until(next_poll), if !streaming && !*paused && chat.session_id.is_some() => {
                 poll(link, chat, sink).await?;
                 next_poll = Instant::now() + timing.poll_every;
             }
@@ -1365,7 +1386,7 @@ async fn run_loop<F, Fut>(
     };
     let mut chat = Chat::new();
     chat.set_status(OrcaChatState::Connecting, "", &mut sink);
-    let mut attempt = 0usize;
+    let mut paused = false;
     loop {
         let result = match open().await {
             Ok(mut link) => {
@@ -1375,7 +1396,7 @@ async fn run_loop<F, Fut>(
                     &target,
                     &mut commands,
                     timing,
-                    &mut attempt,
+                    &mut paused,
                     &mut sink,
                 )
                 .await
@@ -1386,13 +1407,16 @@ async fn run_loop<F, Fut>(
             return;
         };
         chat.set_status(OrcaChatState::Reconnecting, &reason, &mut sink);
-        let until = Instant::now() + backoff(attempt);
-        attempt += 1;
+        let until = Instant::now() + backoff(chat.attempt);
+        chat.attempt += 1;
         loop {
             tokio::select! {
                 () = sleep_until(until) => break,
                 // A request for older messages while disconnected is dropped; the button can be pressed again.
-                command = commands.recv() => if is_closing(command) { return; },
+                command = commands.recv() => match command {
+                    Some(OrcaCommand::Pause(now)) => paused = now,
+                    other => if is_closing(other) { return; },
+                },
             }
         }
     }
@@ -1466,7 +1490,11 @@ pub async fn orca_chat_open(
 ) -> Result<(), String> {
     check_path(&path)?;
     check_pane_key(&pane_key)?;
-    state.stop();
+    // The old session is ended, the new one started and stored under one lock, so two opens cannot leave a task running.
+    let mut active = state.0.lock().unwrap();
+    if let Some(old) = active.take() {
+        old.task.abort();
+    }
     let (commands, receiver) = unbounded_channel();
     let closer = commands.clone();
     let task = tauri::async_runtime::spawn(run_session(
@@ -1480,7 +1508,7 @@ pub async fn orca_chat_open(
             }
         },
     ));
-    *state.0.lock().unwrap() = Some(Active { task, commands });
+    *active = Some(Active { task, commands });
     Ok(())
 }
 
@@ -1488,6 +1516,18 @@ pub async fn orca_chat_open(
 #[tauri::command]
 pub async fn orca_chat_close(state: tauri::State<'_, OrcaChat>) -> Result<(), String> {
     state.stop();
+    Ok(())
+}
+
+/// Pauses (`true`) or resumes the periodic reads of the session that runs, while the window is hidden: the connection and what is held stay.
+#[tauri::command]
+pub async fn orca_chat_pause(
+    state: tauri::State<'_, OrcaChat>,
+    paused: bool,
+) -> Result<(), String> {
+    if let Some(active) = state.0.lock().unwrap().as_ref() {
+        let _ = active.commands.send(OrcaCommand::Pause(paused));
+    }
     Ok(())
 }
 
@@ -2886,5 +2926,169 @@ mod tests {
         commands.send(OrcaCommand::Close).unwrap();
         task.await.unwrap();
         drop(server.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_paused_session_reads_nothing_and_reads_at_once_when_resumed() {
+        let (path, log) = unix_server("pause", |request| {
+            let result = if request["method"] == "session.tabs.list" {
+                tabs("tab:leaf", "s1")
+            } else {
+                page(&["m1"], false, 0)
+            };
+            json!({"id": request["id"], "ok": true, "result": result})
+        });
+        let (commands, receiver) = unbounded_channel();
+        let (sink, mut events) = sink();
+        let task = tokio::spawn(run_loop(
+            opener(move || Pairing::Unix {
+                endpoint: path.clone(),
+                token: "t".into(),
+            }),
+            "/w".into(),
+            "tab:leaf".into(),
+            receiver,
+            FAST,
+            sink,
+        ));
+        until(&mut events, |e| {
+            matches!(
+                e,
+                OrcaChatEvent::Status {
+                    state: OrcaChatState::Live,
+                    ..
+                }
+            )
+        })
+        .await;
+        commands.send(OrcaCommand::Pause(true)).unwrap();
+        // A read that was on its way ends; then several periods of both reads pass.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let held = log.lock().unwrap().len();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(log.lock().unwrap().len(), held);
+        commands.send(OrcaCommand::Pause(false)).unwrap();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let seen = log.lock().unwrap()[held..].to_vec();
+                let has = |method: &str| seen.iter().any(|r| r["method"] == method);
+                if has("session.tabs.list") && has("nativeChat.readSession") {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("both reads after the resume");
+        commands.send(OrcaCommand::Close).unwrap();
+        task.await.unwrap();
+    }
+
+    /// Runs `serve` once on a unix socket whose transcript reads answer `reads` times and then break, with the failure count at `attempt` before it starts.
+    async fn attempt_after_a_connection(name: &str, reads: usize, attempt: usize) -> usize {
+        let answered = Arc::new(Mutex::new(0usize));
+        let (path, _) = unix_server(name, move |request| {
+            if request["method"] == "session.tabs.list" {
+                return json!({"id": request["id"], "ok": true, "result": tabs("tab:leaf", "s1")});
+            }
+            let mut n = answered.lock().unwrap();
+            *n += 1;
+            if *n <= reads {
+                json!({"id": request["id"], "ok": true, "result": page(&["m1"], false, 0)})
+            } else {
+                // No `ok`: the answer cannot be read, which ends the connection.
+                json!({"id": request["id"]})
+            }
+        });
+        let mut link = Link::Unix {
+            endpoint: path,
+            token: "t".into(),
+        };
+        let mut chat = Chat::new();
+        chat.attempt = attempt;
+        let (_commands, mut receiver) = unbounded_channel();
+        let (mut sink, _events) = sink();
+        let target = Target {
+            worktree: "/w",
+            pane_key: "tab:leaf",
+        };
+        let ended = serve(
+            &mut link,
+            &mut chat,
+            &target,
+            &mut receiver,
+            FAST,
+            &mut false,
+            &mut sink,
+        )
+        .await;
+        assert!(ended.is_err());
+        chat.attempt
+    }
+
+    #[tokio::test]
+    async fn the_wait_before_reconnecting_starts_again_only_after_a_read() {
+        // The tabs answered and the next call failed: the wait goes on growing.
+        assert_eq!(attempt_after_a_connection("attempt-a", 0, 3).await, 3);
+        // A page was read before the failure: the wait starts again.
+        assert_eq!(attempt_after_a_connection("attempt-b", 1, 3).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_changed_session_unsubscribes_with_the_subscription_id_not_the_request_id() {
+        let (listener, url) = bind().await;
+        let desktop = Desktop::new([32; 32]);
+        let key = desktop.public_key_b64();
+        let server = tokio::spawn(async move {
+            let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
+            let list = server.request().await;
+            server
+                .send(json!({"id": list["id"], "ok": true, "result": tabs("tab:leaf", "s1")}))
+                .await;
+            let subscribe = server.request().await;
+            assert_eq!(subscribe["method"], "nativeChat.subscribe");
+            let sub = subscribe["params"]["subscriptionId"].clone();
+            assert_ne!(sub, subscribe["id"]);
+            // The session changes (a /clear): the old stream is ended with its subscription id, then the new one is started.
+            let list = server.request().await;
+            assert_eq!(list["method"], "session.tabs.list");
+            server
+                .send(json!({"id": list["id"], "ok": true, "result": tabs("tab:leaf", "s2")}))
+                .await;
+            let unsubscribe = server.request().await;
+            assert_eq!(unsubscribe["method"], "nativeChat.unsubscribe");
+            assert_eq!(unsubscribe["params"], json!({"subscriptionId": sub}));
+            let again = server.request().await;
+            assert_eq!(again["method"], "nativeChat.subscribe");
+            assert_eq!(again["params"]["sessionId"], "s2");
+            server
+        });
+        let (commands, receiver) = unbounded_channel();
+        let (sink, _events) = sink();
+        let task = tokio::spawn(run_loop(
+            move || {
+                let (url, key) = (url.clone(), key.clone());
+                async move {
+                    Link::open(Pairing::WebSocket {
+                        url,
+                        device_token: "device-token".into(),
+                        public_key_b64: key,
+                    })
+                    .await
+                }
+            },
+            "/w".into(),
+            "tab:leaf".into(),
+            receiver,
+            FAST,
+            sink,
+        ));
+        let server = timeout(Duration::from_secs(5), server)
+            .await
+            .expect("the server saw the unsubscribe")
+            .unwrap();
+        commands.send(OrcaCommand::Close).unwrap();
+        task.await.unwrap();
+        drop(server);
     }
 }

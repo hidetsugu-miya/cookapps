@@ -182,6 +182,8 @@ export interface Commands {
   orca_chat_close: { args: undefined; result: null };
   // Reads the page of older messages of the session that is read; they arrive as an `items` event.
   orca_chat_older: { args: undefined; result: null };
+  // Pauses (`true`, the window is hidden) or resumes the periodic reads of the session that is read; the connection and what is held stay.
+  orca_chat_pause: { args: { paused: boolean }; result: null };
   // The skills of Claude Code on the machine the app runs on (the CLI cannot list another machine's, so the target does not matter), as the commands to type (`/name`, `/plugin:name`), sorted.
   orca_skills: { args: undefined; result: OrcaSkill[] };
   app_info: { args: undefined; result: AppInfo };

@@ -157,6 +157,33 @@ describe("orca", () => {
     expect(await chatOpens()).toHaveLength(1);
   });
 
+  it("pauses the history read while the window is hidden, also for a session opened then, and resumes it when shown", async () => {
+    await openOrca();
+    const pause = await mock("orca_chat_pause", null);
+    // fixtures.js makes the page report a shown window; the spec turns it hidden and tells the page.
+    const setHidden = (hidden: boolean) =>
+      browser.execute(
+        (id, h) => {
+          if (!window.__e2e_once__(id)) return;
+          Object.defineProperty(document, "hidden", { get: () => h, configurable: true });
+          document.dispatchEvent(new Event("visibilitychange"));
+        },
+        onceId(),
+        hidden,
+      );
+    // No session is open: nothing to pause.
+    await setHidden(true);
+    await setHidden(false);
+    await select("example-app");
+    await setHidden(true);
+    expect(await waitForCalls(pause)).toEqual([{ paused: true }]);
+    // A session opened while hidden is paused once it is open.
+    await select("example-lib", 2);
+    expect(await waitForCalls(pause, 2)).toEqual([{ paused: true }, { paused: true }]);
+    await setHidden(false);
+    expect(await waitForCalls(pause, 3)).toEqual([{ paused: true }, { paused: true }, { paused: false }]);
+  });
+
   it("cannot select a row that has no pane", async () => {
     await openOrca();
     await expect(rowOf("example-web")).toBeDisabled();

@@ -64,7 +64,7 @@ pub struct OrcaRow {
     /// When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
     #[cfg_attr(test, ts(type = "number"))]
     pub at_ms: i64,
-    /// The terminal that takes a send; `None` when it was not found (the row cannot be selected).
+    /// The terminal that takes a send; `None` when it was not found (the row can be read but takes no post).
     pub handle: Option<String>,
     /// The agent's pane (`{tabId}:{leafId}`), which finds its session for the history (A-7); `None` when the agent has none.
     pub pane_key: Option<String>,

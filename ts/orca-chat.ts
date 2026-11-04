@@ -136,12 +136,23 @@ export function openChat(environment: string | null, path: string, paneKey: stri
       drawStatus();
     }
   };
-  invoke("orca_chat_open", { environment, path, paneKey, channel }).catch((e) => {
-    if (current !== channel) return;
-    state = "unavailable";
-    message = String(e);
-    drawStatus();
-  });
+  invoke("orca_chat_open", { environment, path, paneKey, channel })
+    // Rust starts a session that is not paused: a session opened in a hidden window is paused once it exists.
+    .then(() => {
+      if (current === channel && document.hidden) sendPause();
+    })
+    .catch((e) => {
+      if (current !== channel) return;
+      state = "unavailable";
+      message = String(e);
+      drawStatus();
+    });
+}
+
+// While the window is hidden Rust stops the periodic reads of the open session (the connection, the older pages, the open runs and the scroll stay), and reads once at once when it is shown again.
+function sendPause() {
+  if (current === null) return;
+  invoke("orca_chat_pause", { paused: document.hidden }).catch(() => {});
 }
 
 export function closeChat() {
@@ -164,6 +175,7 @@ export function setChatWorking(now: boolean) {
 }
 
 export function initOrcaChat() {
+  document.addEventListener("visibilitychange", sendPause);
   $("orca-older").onclick = () => {
     invoke("orca_chat_older").catch(() => {});
   };

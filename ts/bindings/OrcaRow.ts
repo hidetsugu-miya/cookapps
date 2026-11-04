@@ -14,7 +14,7 @@ line: string,
  */
 atMs: number, 
 /**
- * The terminal that takes a send; `None` when it was not found (the row cannot be selected).
+ * The terminal that takes a send; `None` when it was not found (the row can be read but takes no post).
  */
 handle: string | null, 
 /**
