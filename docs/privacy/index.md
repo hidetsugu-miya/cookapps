@@ -134,6 +134,7 @@ Slack のメッセージの要約の結果は、タスクの名前と説明と�
 API キーに切り替えると、本アプリは `claude auth logout` を実行して、この端末の Claude Code のサブスクリプションをログアウトします。
 設定の接続解除で、保存したキーを削除できます。Anthropic の Console のキーは残るので、不要なら Console で取り消してください。
 
+
 ## アップデートの確認
 
 本アプリは、起動したときと 5 分ごとに、GitHub Releases（github.com）の `latest.json` を取得して、新しい版があるかを確かめます。
