@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeReady, count, holds, inbox, mock, ownIcon, pngUri, rejects, release, slackLoad, slackTs, textsOf, timeline, timelineMessage, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, claudeReady, count, holds, inbox, mock, ownIcon, pngUri, rejects, release, slackLoad, slackThread, slackTs, textsOf, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, workspace } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 
@@ -10,7 +10,14 @@ const sample = () => [
 
 // `n` messages of two lines each, newest first (the list must be taller than the window to scroll).
 const many = (n: number, text = "line one of the message\nline two of the message") =>
-  Array.from({ length: n }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `${text} ${i}`));
+  Array.from({ length: n }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `${text} ${i}`, { unread: true }));
+
+// `unread` unread messages, each in a channel of its own, then `read` read ones (newest first overall): "unread 0" ... and "read 0" ...
+const heap = (unread: number, read: number) => [
+  ...Array.from({ length: unread }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `unread ${i}`, { unread: true, channel: `C${i}` })),
+  ...Array.from({ length: read }, (_, i) => timelineMessage(slackTs(100 + i, i), `Reader ${i}`, "dev", `read ${i}`, { channel: `R${i}` })),
+];
+const unreadTexts = (n: number, from = 0) => Array.from({ length: n }, (_, i) => `unread:unread ${from + i}`);
 
 // The app with one workspace whose messages are `messages`, and the Slack screen open.
 async function openList(value = timeline(sample()), fixtures: Record<string, unknown> = {}) {
@@ -20,6 +27,38 @@ async function openList(value = timeline(sample()), fixtures: Record<string, unk
 }
 
 const rowTexts = (selector: string) => textsOf(`#slack-feed .feed-row ${selector}`);
+// What the list holds from the top: "unread:text" and "read:text" per row, and "既読" for the heading.
+const layout = () =>
+  browser.execute(() =>
+    [...document.getElementById("slack-feed")!.children].map((c) => {
+      if (c.classList.contains("feed-heading")) return c.textContent!.trim();
+      if (c.classList.contains("feed-more")) return `button:${c.textContent}`;
+      const row = c.querySelector(".feed-row")!;
+      return `${row.classList.contains("unread") ? "unread" : "read"}:${row.querySelector(".feed-text")!.textContent}`;
+    }),
+  );
+const weightOf = (selector: string) => browser.execute((s) => getComputedStyle(document.querySelector(s)!).fontWeight, selector);
+
+// Newest first. Channel C0123ABCD: "first" and "second" are unread, "third" is read; channel C2: "other" is unread (older than "first", newer than "second").
+const unreadSample = () => [
+  timelineMessage(slackTs(1), "Alice Example", "dev", "first", { unread: true }),
+  timelineMessage(slackTs(2), "Bob Example", "random", "other", { unread: true, channel: "C2" }),
+  timelineMessage(slackTs(3), "Alice Example", "dev", "second", { unread: true }),
+  timelineMessage(slackTs(4), "Bob Example", "dev", "third"),
+];
+// The Slack screen with `messages` (`fixtures` change the answers), a row of which opens a thread that `slack_thread` answers; `slack_mark_read` is mocked.
+async function openUnread(messages: ReturnType<typeof unreadSample>, extra: Parameters<typeof timeline>[1] = {}) {
+  await openList(timeline(messages, extra));
+  await waitForCount("#slack-feed .feed-row", messages.length);
+  const mark = await mock("slack_mark_read", true);
+  await mock("slack_thread", slackThread([threadMessage(messages[0].ts, "Alice Example", "first")]));
+  return mark;
+}
+const openRow = async (text: string) => {
+  const rows = await $$("#slack-feed .feed-row");
+  for (const row of rows) if ((await row.$(".feed-text").getText()) === text) return row.click();
+  throw new Error(`no row with ${text}`);
+};
 const scrollTop = () => browser.execute(() => document.getElementById("slack-feed")!.scrollTop);
 
 describe("slack list", () => {
@@ -28,14 +67,14 @@ describe("slack list", () => {
     await waitForCount("#slack-feed .feed-row", 2);
     expect(await callsOf("slack_timeline")).toEqual([null]);
     await expect($("#slack-list h1")).toHaveText("Slack");
-    await expect($("#slack-list .header-sub")).toHaveText("新しい順に 20 件");
+    await expect($("#slack-unread")).toHaveText("未読 0 件");
     expect(await rowTexts(".feed-meta b")).toEqual(["Alice Example", "Bob Example"]);
     expect(await rowTexts(".feed-meta span")).toEqual(["#dev", "#general"]);
     expect(await rowTexts(".feed-text")).toEqual(["Please review the deploy notes.", "Lunch at noon."]);
     for (const date of await rowTexts(".feed-date")) expect(date).toMatch(/^(\d{1,2}:\d{2}|\d{1,2}月\d{1,2}日)$/);
   });
 
-  it("draws a row as a real button, with the text cut at two lines and no hover actions", async () => {
+  it("draws a row as a real button, with the text cut at two lines, and the button that hides its channel beside it, not in it", async () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);
     const row = await browser.execute(() => {
@@ -43,13 +82,18 @@ describe("slack list", () => {
       return { tag: r.tagName, clamp: getComputedStyle(r.querySelector(".feed-text")!).getPropertyValue("-webkit-line-clamp"), buttons: r.querySelectorAll("button").length };
     });
     expect(row).toEqual({ tag: "BUTTON", clamp: "2", buttons: 0 });
+    const hide = await browser.execute(() => {
+      const h = document.querySelector<HTMLElement>("#slack-feed .feed-hide")!;
+      return { tag: h.tagName, inRow: !!h.closest(".feed-row"), item: h.parentElement!.className, label: h.getAttribute("aria-label") };
+    });
+    expect(hide).toEqual({ tag: "BUTTON", inRow: false, item: "feed-item", label: "#dev を一覧に出さない" });
   });
 
   it("shows 返信 N 件 only for a message that has replies", async () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);
     expect(await textsOf("#slack-feed .feed-replies")).toEqual(["返信 2 件"]);
-    expect(await count("#slack-feed .feed-row:nth-child(2) .feed-replies")).toBe(0);
+    expect(await count("#slack-feed .feed-item:nth-child(2) .feed-replies")).toBe(0);
   });
 
   it("shows a message of files only as 添付ファイル, and attached images never in a row", async () => {
@@ -109,10 +153,11 @@ describe("slack list", () => {
   });
 
   it("shows a spinner on the first read, and the rows when it answers", async () => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
-    const read = await mock("slack_timeline", holds);
-    await $("#nav-slack").click();
+    // The first read is the one at startup, which is held.
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: holds, claude_status: claudeReady });
+    const read = "slack_timeline";
     await waitForCalls(read);
+    await $("#nav-slack").click();
     await expect($("#slack-feed .spin")).toBeDisplayed();
     expect(await count("#slack-feed .feed-row")).toBe(0);
     await release(read, timeline(sample()));
@@ -121,8 +166,7 @@ describe("slack list", () => {
   });
 
   it("says that the read failed when there is nothing to show, and reads again from 再読み込み", async () => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
-    await mock("slack_timeline", rejects("接続できません"));
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: rejects("接続できません"), claude_status: claudeReady });
     await $("#nav-slack").click();
     await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: 接続できません"));
     await mock("slack_timeline", timeline(sample()));
@@ -170,33 +214,51 @@ describe("slack list", () => {
 
   it("reads again every refreshSecs while the screen is shown and replaces the rows in place, keeping the scroll position", async () => {
     await openList(timeline(many(20), { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 10);
+    await $("#slack-feed .feed-more .text-btn").click();
     await waitForCount("#slack-feed .feed-row", 20);
     await browser.execute(() => {
       document.getElementById("slack-feed")!.scrollTop = 300;
     });
     expect(await scrollTop()).toBe(300);
-    await mock("slack_timeline", timeline([timelineMessage(slackTs(0), "New Person", "dev", "A new message"), ...many(19)], { refreshSecs: 1 }));
+    await mock("slack_timeline", timeline([timelineMessage(slackTs(0), "New Person", "dev", "A new message", { unread: true }), ...many(19)], { refreshSecs: 1 }));
     await waitForText("#slack-feed .feed-meta b", "New Person");
     expect(await count("#slack-feed .feed-row")).toBe(20);
     expect(await scrollTop()).toBe(300);
     await expect($("#slack-list")).toBeDisplayed();
   });
 
-  it("stops reading when another screen is shown, and reads at once when the screen is shown again", async () => {
+  it("goes on reading every refreshSecs while another screen is shown, without drawing the list there or switching the screen", async () => {
     await openList(timeline(sample(), { refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 2);
     await $("#nav-todo").click();
     await expect($("#todo")).toBeDisplayed();
     const before = (await callsOf("slack_timeline")).length;
-    await browser.pause(2500);
-    expect((await callsOf("slack_timeline")).length).toBe(before);
+    await waitForCalls("slack_timeline", before + 2);
+    await expect($("#todo")).toBeDisplayed();
+    await expect($("#slack-list")).not.toBeDisplayed();
+    expect(await count("#slack-feed .feed-row")).toBe(2);
+  });
+
+  it("reads at startup, before the Slack screen is shown, and draws the list from what was read when it is shown", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(sample()), claude_status: claudeReady });
+    await waitForCalls("slack_timeline");
+    await expect($("#slack-list")).not.toBeDisplayed();
     await $("#nav-slack").click();
-    await waitForCalls("slack_timeline", before + 1);
+    await waitForCount("#slack-feed .feed-row", 2);
+    // The startup read is the only one: showing the screen reads again only after refreshSecs.
+    expect(await callsOf("slack_timeline")).toEqual([null]);
+  });
+
+  it("does not read at startup without a workspace", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady });
+    await browser.pause(1500);
+    expect(await callsOf("slack_timeline")).toEqual([]);
+    await expect($("#nav-slack .nav-count")).not.toBeDisplayed();
   });
 
   it("draws only the answer of the latest read", async () => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
-    await mock("slack_timeline", rejects("接続できません"));
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: rejects("接続できません"), claude_status: claudeReady });
     await $("#nav-slack").click();
     await expect($("#slack-feed .pending.fail")).toBeDisplayed();
     // The first 再読み込み waits; the second one answers at once. The first answer to arrive is the older one, and it must not be drawn.
@@ -225,10 +287,10 @@ describe("slack list", () => {
   });
 
   it("does not start a read while one is on its way when the screen is shown again", async () => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
-    const read = await mock("slack_timeline", holds);
-    await $("#nav-slack").click();
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: holds, claude_status: claudeReady });
+    const read = "slack_timeline";
     await waitForCalls(read);
+    await $("#nav-slack").click();
     await $("#nav-mail").click();
     await $("#nav-slack").click();
     await expect($("#slack-list")).toBeDisplayed();
@@ -288,5 +350,301 @@ describe("slack list", () => {
     await waitForCalls("slack_icons");
     expect(await waitForCalls(fetch)).toContainEqual({ urls: [iconUrl] });
     await browser.waitUntil(async () => (await count("#slack-workspace-list img.av-img")) === 1);
+  });
+
+  it("splits the rows into unread above and read below a 既読 heading, each in the order it came, and draws the unread in bold", async () => {
+    await openList(timeline(unreadSample()));
+    await waitForCount("#slack-feed .feed-row", 4);
+    expect(await layout()).toEqual(["unread:first", "unread:other", "unread:second", "既読", "read:third"]);
+    expect(await count("#slack-feed .feed-heading svg")).toBe(1);
+    expect(await weightOf("#slack-feed .feed-row.unread")).toBe("700");
+    expect(await weightOf("#slack-feed .feed-row:not(.unread)")).toBe("400");
+  });
+
+  it("draws no 既読 heading when nothing is unread, or when nothing is read", async () => {
+    await openList(timeline(unreadSample().map((m) => ({ ...m, unread: false })), { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 4);
+    expect(await layout()).toEqual(["read:first", "read:other", "read:second", "read:third"]);
+    await mock("slack_timeline", timeline(unreadSample().map((m) => ({ ...m, unread: true })), { refreshSecs: 1 }));
+    await browser.waitUntil(async () => (await count("#slack-feed .feed-row.unread")) === 4);
+    expect(await layout()).toEqual(["unread:first", "unread:other", "unread:second", "unread:third"]);
+    expect(await count("#slack-feed .feed-heading")).toBe(0);
+  });
+
+  it("moves a row to the read side when it changes between reads, keeping the order and the heading", async () => {
+    await openList(timeline(unreadSample(), { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 4);
+    await mock("slack_timeline", timeline(unreadSample().map((m) => (m.channel === "C2" ? { ...m, unread: false } : m)), { refreshSecs: 1 }));
+    await browser.waitUntil(async () => (await layout()).includes("read:other"));
+    expect(await layout()).toEqual(["unread:first", "unread:second", "既読", "read:other", "read:third"]);
+  });
+
+  it("calls slack_mark_read with the opened message when a row is pressed, and shows that row and the older ones of its channel as read on the return", async () => {
+    const messages = unreadSample();
+    const mark = await openUnread(messages);
+    await openRow("second");
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[2].ts }]);
+    await expect($("#slack-thread")).toBeDisplayed();
+    await $("#st-back").click();
+    await expect($("#slack-list")).toBeDisplayed();
+    // The newer message of the channel and the other channel's stay unread.
+    expect(await layout()).toEqual(["unread:first", "unread:other", "既読", "read:second", "read:third"]);
+  });
+
+  it("sets the position to the newest message of the channel when that one is pressed, which makes the older ones of the channel read and no other channel's", async () => {
+    const messages = unreadSample();
+    const mark = await openUnread(messages);
+    await openRow("first");
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[0].ts }]);
+    await $("#st-back").click();
+    expect(await layout()).toEqual(["unread:other", "既読", "read:first", "read:second", "read:third"]);
+  });
+
+  it("does not call slack_mark_read for a row that is read already", async () => {
+    const mark = await openUnread(unreadSample());
+    await openRow("third");
+    await expect($("#slack-thread")).toBeDisplayed();
+    await browser.pause(300);
+    expect(await callsOf(mark)).toEqual([]);
+    await $("#st-back").click();
+    expect(await layout()).toEqual(["unread:first", "unread:other", "unread:second", "既読", "read:third"]);
+  });
+
+  it("neither calls slack_mark_read nor moves a row when the token lacks a write scope", async () => {
+    const mark = await openUnread(unreadSample(), { missing: [{ teamId: workspace.teamId, team: workspace.team, scopes: ["channels:write", "groups:write"] }] });
+    await openRow("second");
+    await expect($("#slack-thread")).toBeDisplayed();
+    await browser.pause(300);
+    expect(await callsOf(mark)).toEqual([]);
+    await $("#st-back").click();
+    expect(await layout()).toEqual(["unread:first", "unread:other", "unread:second", "既読", "read:third"]);
+  });
+
+  it("shows Slack's value at the next read when slack_mark_read fails", async () => {
+    const messages = unreadSample();
+    const mark = await openUnread(messages, { refreshSecs: 1 });
+    await mock("slack_mark_read", rejects("失敗しました"));
+    await openRow("first");
+    await waitForCalls(mark);
+    // The next read of the list (every second here) answers Slack's value, which still has the message unread.
+    await browser.waitUntil(async () => (await callsOf("slack_timeline")).length >= 2);
+    await $("#st-back").click();
+    await browser.waitUntil(async () => (await layout()).includes("unread:first"));
+  });
+
+  it("shows the first 10 unread rows with a button for the rest, whose count is the rest, and all of them (20 at most) once it is pressed", async () => {
+    await openList(timeline(heap(20, 7)));
+    await waitForCount("#slack-feed .feed-row", 15);
+    await expect($("#slack-unread")).toHaveText("未読 20 件");
+    // 10 unread, the button, the heading, and at most 5 read rows.
+    expect(await layout()).toEqual([...unreadTexts(10), "button:未読をあと 10 件表示", "既読", "read:read 0", "read:read 1", "read:read 2", "read:read 3", "read:read 4"]);
+    await $("#slack-feed .feed-more .text-btn").click();
+    await waitForCount("#slack-feed .feed-row", 25);
+    expect(await layout()).toEqual([...unreadTexts(20), "既読", "read:read 0", "read:read 1", "read:read 2", "read:read 3", "read:read 4"]);
+    expect(await count("#slack-feed .feed-more")).toBe(0);
+    await expect($("#slack-unread")).toHaveText("未読 20 件");
+  });
+
+  it("says in the button how many unread rows are left when fewer than 10 are", async () => {
+    await openList(timeline(heap(14, 2)));
+    await waitForCount("#slack-feed .feed-row", 12);
+    expect(await textsOf("#slack-feed .feed-more .text-btn")).toEqual(["未読をあと 4 件表示"]);
+    await $("#slack-feed .feed-more .text-btn").click();
+    await waitForCount("#slack-feed .feed-row", 16);
+    expect(await count("#slack-feed .feed-more")).toBe(0);
+  });
+
+  it("draws no button for 10 unread rows or fewer", async () => {
+    await openList(timeline(heap(10, 1)));
+    await waitForCount("#slack-feed .feed-row", 11);
+    expect(await count("#slack-feed .feed-more")).toBe(0);
+  });
+
+  it("keeps the rest of the unread rows shown through a background read", async () => {
+    await openList(timeline(heap(20, 3), { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 13);
+    await $("#slack-feed .feed-more .text-btn").click();
+    await waitForCount("#slack-feed .feed-row", 24);
+    await waitForCalls("slack_timeline", 3);
+    await browser.pause(300);
+    expect(await count("#slack-feed .feed-more")).toBe(0);
+    expect(await count("#slack-feed .feed-row")).toBe(24);
+  });
+
+  it("keeps the rest of the unread rows shown on the return from a thread", async () => {
+    await openList(timeline(heap(20, 3)));
+    await waitForCount("#slack-feed .feed-row", 13);
+    await mock("slack_mark_read", true);
+    await mock("slack_thread", slackThread([threadMessage(heap(1, 0)[0].ts, "Person 0", "unread 0")]));
+    await $("#slack-feed .feed-more .text-btn").click();
+    await waitForCount("#slack-feed .feed-row", 25);
+    await openRow("unread 4");
+    await expect($("#slack-thread")).toBeDisplayed();
+    await $("#st-back").click();
+    await expect($("#slack-list")).toBeDisplayed();
+    expect(await count("#slack-feed .feed-more")).toBe(0);
+    expect(await count("#slack-feed .feed-row.unread")).toBe(19);
+  });
+
+  it("goes back to 10 unread rows when Slack is opened again from another screen", async () => {
+    await openList(timeline(heap(20, 1)));
+    await waitForCount("#slack-feed .feed-row", 11);
+    await $("#slack-feed .feed-more .text-btn").click();
+    await waitForCount("#slack-feed .feed-row", 21);
+    await $("#nav-todo").click();
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 11);
+    expect(await textsOf("#slack-feed .feed-more .text-btn")).toEqual(["未読をあと 10 件表示"]);
+  });
+
+  it("keeps the read side at 5 rows after a row moved to it, newest first", async () => {
+    const mark = await openUnread(heap(2, 5));
+    await openRow("unread 1");
+    await waitForCalls(mark);
+    await $("#st-back").click();
+    expect(await layout()).toEqual(["unread:unread 0", "既読", "read:unread 1", "read:read 0", "read:read 1", "read:read 2", "read:read 3"]);
+    expect(await count("#slack-feed .feed-row:not(.unread)")).toBe(5);
+  });
+
+  // The Slack button's badge (S-8): the unread messages held, on any screen.
+  const badge = () => $("#nav-slack .nav-count");
+  const badgeLabel = () => browser.execute(() => document.getElementById("nav-slack")!.getAttribute("aria-label"));
+
+  it("shows the unread count on the Slack button from the read at startup, with the count in its label, on a screen other than Slack", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(3, 1)), claude_status: claudeReady });
+    await expect(badge()).toHaveText("3");
+    await expect(badge()).toBeDisplayed();
+    expect(await badgeLabel()).toBe("Slack（未読 3 件）");
+    await expect($("#slack-list")).not.toBeDisplayed();
+  });
+
+  it("shows no badge for 0 unread messages", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(sample()), claude_status: claudeReady });
+    await waitForCalls("slack_timeline");
+    await browser.pause(300);
+    await expect(badge()).not.toBeDisplayed();
+    expect(await badgeLabel()).toBe("Slack");
+  });
+
+  it("counts the messages held, not the ones listed, and shows 20+ above 20 with the real number in the label", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(20, 0), { unreadTotal: 20 }), claude_status: claudeReady });
+    await expect(badge()).toHaveText("20");
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(20, 0), { unreadTotal: 37 }), claude_status: claudeReady });
+    await expect(badge()).toHaveText("20+");
+    expect(await badgeLabel()).toBe("Slack（未読 37 件）");
+  });
+
+  it("follows the unread count on another screen without showing or switching the Slack screen, and keeps the number when a read fails", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(2, 0), { refreshSecs: 1 }), claude_status: claudeReady });
+    await expect(badge()).toHaveText("2");
+    await $("#nav-todo").click();
+    await expect($("#todo")).toBeDisplayed();
+    await mock("slack_timeline", timeline(heap(5, 0), { refreshSecs: 1 }));
+    await waitForText("#nav-slack .nav-count", "5");
+    await expect($("#todo")).toBeDisplayed();
+    await expect($("#slack-list")).not.toBeDisplayed();
+    await mock("slack_timeline", rejects("接続できません"));
+    await waitForCalls("slack_timeline");
+    await browser.pause(300);
+    await expect(badge()).toHaveText("5");
+    await mock("slack_timeline", timeline(sample(), { refreshSecs: 1 }));
+    await browser.waitUntil(async () => !(await badge().isDisplayed()));
+  });
+
+  it("lowers the badge at once by the rows an opened message makes read", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(3, 0)), claude_status: claudeReady });
+    await expect(badge()).toHaveText("3");
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 3);
+    await mock("slack_mark_read", true);
+    await mock("slack_thread", slackThread([threadMessage(heap(1, 0)[0].ts, "Person 0", "unread 0")]));
+    await openRow("unread 1");
+    await expect(badge()).toHaveText("2");
+    expect(await badgeLabel()).toBe("Slack（未読 2 件）");
+  });
+
+  it("does not add the Slack count to the Dock badge", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(3, 0)), claude_status: claudeReady });
+    await expect(badge()).toHaveText("3");
+    expect((await callsOf("set_badge")).every((c) => (c as { count: number }).count !== 3)).toBe(true);
+  });
+
+  // Keeping a channel off the list (S-9).
+  const devRows = () => count("#slack-feed .feed-row");
+  const withHidden = () => [
+    timelineMessage(slackTs(1), "Alice Example", "dev", "from dev", { unread: true }),
+    timelineMessage(slackTs(2), "Bob Example", "random", "from random", { unread: true, channel: "C2" }),
+    timelineMessage(slackTs(3), "Bob Example", "dev", "older from dev"),
+  ];
+
+  it("shows the button that hides a row's channel in the place of the date while the row has the focus, and nowhere else", async () => {
+    await openList(timeline(withHidden()));
+    await waitForCount("#slack-feed .feed-row", 3);
+    const state = () =>
+      browser.execute(() => {
+        const item = document.querySelector<HTMLElement>("#slack-feed .feed-item")!;
+        const other = document.querySelectorAll<HTMLElement>("#slack-feed .feed-item")[1]!;
+        const v = (e: Element, s: string) => getComputedStyle(e.querySelector(s)!).visibility;
+        return { hide: v(item, ".feed-hide"), date: v(item, ".feed-date"), otherHide: v(other, ".feed-hide"), otherDate: v(other, ".feed-date") };
+      });
+    expect(await state()).toEqual({ hide: "hidden", date: "visible", otherHide: "hidden", otherDate: "visible" });
+    await browser.execute(() => document.querySelector<HTMLElement>("#slack-feed .feed-row")!.focus());
+    expect(await state()).toEqual({ hide: "visible", date: "hidden", otherHide: "hidden", otherDate: "visible" });
+  });
+
+  it("takes the channel's rows out at once on pressing the button, calls slack_hide_channel, opens no thread and marks nothing read", async () => {
+    await openList(timeline(withHidden()));
+    await waitForCount("#slack-feed .feed-row", 3);
+    const hide = await mock("slack_hide_channel", holds);
+    const mark = await mock("slack_mark_read", true);
+    const thread = await mock("slack_thread", slackThread([threadMessage(withHidden()[0].ts, "Alice Example", "from dev")]));
+    await mock("slack_timeline", timeline([withHidden()[1]]));
+    await $('button[aria-label="#dev を一覧に出さない"]').click();
+    expect(await waitForCalls(hide)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD" }]);
+    // Before Rust has answered, both rows of #dev are gone and #random stays.
+    expect(await textsOf("#slack-feed .feed-text")).toEqual(["from random"]);
+    await release(hide, true);
+    await expect($(".toast")).toHaveText(expect.stringContaining("#dev を一覧に出さないようにしました"));
+    await expect($("#slack-thread")).not.toBeDisplayed();
+    expect(await callsOf(thread)).toEqual([]);
+    expect(await callsOf(mark)).toEqual([]);
+  });
+
+  it("lowers the badge at once by the unread rows of the hidden channel, and reads the list again", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(withHidden()), claude_status: claudeReady });
+    await expect(badge()).toHaveText("2");
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 3);
+    await mock("slack_hide_channel", true);
+    await mock("slack_timeline", timeline([withHidden()[1]]));
+    await $('button[aria-label="#dev を一覧に出さない"]').click();
+    await expect(badge()).toHaveText("1");
+    await waitForCalls("slack_timeline");
+    await expect($(".toast")).toHaveText(expect.stringContaining("元に戻す"));
+  });
+
+  it("puts the channel back with 元に戻す: slack_unhide_channel is called and the list is read again", async () => {
+    await openList(timeline(withHidden()));
+    await waitForCount("#slack-feed .feed-row", 3);
+    await mock("slack_hide_channel", true);
+    await mock("slack_timeline", timeline([withHidden()[1]]));
+    await $('button[aria-label="#dev を一覧に出さない"]').click();
+    await waitForCalls("slack_timeline");
+    await expect($(".toast button")).toHaveText("元に戻す");
+    const unhide = await mock("slack_unhide_channel", true);
+    await mock("slack_timeline", timeline(withHidden()));
+    await $(".toast button").click();
+    expect(await waitForCalls(unhide)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD" }]);
+    await waitForCount("#slack-feed .feed-row", 3);
+    expect(await devRows()).toBe(3);
+  });
+
+  it("brings the rows back and says so when slack_hide_channel fails", async () => {
+    await openList(timeline(withHidden()));
+    await waitForCount("#slack-feed .feed-row", 3);
+    await mock("slack_hide_channel", rejects("保存できません"));
+    await $('button[aria-label="#dev を一覧に出さない"]').click();
+    await expect($("#error")).toHaveText(expect.stringContaining("保存できません"));
+    await waitForCount("#slack-feed .feed-row", 3);
   });
 });

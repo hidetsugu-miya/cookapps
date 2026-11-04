@@ -1,17 +1,22 @@
-// The Slack screen's list (S-5): the newest 20 messages of the joined channels of every workspace, newest first. A row opens the thread (slack-thread.ts).
-// The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only; the list is read when the screen is shown (not while a read is on its way, nor before `refreshSecs` have passed since the last one) and again every `refreshSecs` while it stays.
+// The Slack screen's list (S-5, S-8): the unread messages (past the channel's read position in Slack; the first 10 of up to 20, the rest behind a button) above the newest 5 read ones, of the joined channels of every workspace, each newest first.
+// A row opens the thread (slack-thread.ts) and sets the channel's read position to it; the button on a row (S-9) keeps its channel off the list.
+// The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only.
+// The list is read at startup and again every `refreshSecs` while the window is visible, on whatever screen (the Slack button's badge follows it); showing the screen reads it only when no read is on its way and the one held is older than `refreshSecs`.
+// A read on another screen draws nothing of the list (it is drawn when the screen is shown) and never calls `show()`.
 import type { Timeline } from "./bindings/Timeline";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import type { Workspace } from "./bindings/Workspace";
 import { renderWorkspaceTray } from "./accounts.js";
 import { $, tag } from "./dom.js";
 import { formatDate } from "./format.js";
+import { EYE_OFF_SVG, EYE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { currentScreen, setScreen } from "./nav.js";
-import { setSlackWorkspaces } from "./slack-workspaces.js";
+import { setScreen } from "./nav.js";
+import { getSlackWorkspaces, setSlackWorkspaces, slackListVersion } from "./slack-workspaces.js";
 import { openSlackThread } from "./slack-thread.js";
 import { decorateAvatar, loadIcons, slackMs, workspaceColor } from "./slack-view.js";
-import { show } from "./view.js";
+import { toast } from "./toast.js";
+import { setNavCount, show, showError } from "./view.js";
 
 // The workspaces (`slack_load`), or null until read.
 let workspaces: Workspace[] | null = null;
@@ -24,9 +29,19 @@ let loadError: string | null = null;
 let loadSeq = 0;
 let loading = false;
 let lastTry = 0;
+// The version of `slackListVersion` the list was last made current with.
+let seenVersion = 0;
+// The unread messages among all the ones held (`unreadTotal` of the last answer, lowered at once by what the screen moves to read or hides): the Slack button's badge, which shows 20+ above this.
+let unreadCount = 0;
+const BADGE_CAP = 20;
 // What the list and the notice show now; they are drawn again only when this changes.
 let feedKey = "";
 let noticeKey = "";
+// How many unread rows show before the button, and the most read rows; the answer holds at most 20 and 5 (Rust), the read side also after rows moved to it.
+const UNREAD_FIRST = 10;
+const READ_SHOWN = 5;
+// Whether the button showed the rest of the unread rows. It stays through redraws and a return from a thread, and goes when the screen is opened again.
+let unreadOpen = false;
 // Where the list was scrolled to (it is hidden while a thread or another screen is shown, which forgets the position).
 let listScroll = 0;
 
@@ -71,9 +86,60 @@ function drawNotice() {
   );
 }
 
+// A row with the button that keeps its channel off the list. The two are siblings: a button is not put in a button.
+function itemOf(m: TimelineMessage, key: string) {
+  const item = tag("div", "feed-item");
+  const hide = tag("button", "icon-btn feed-hide");
+  hide.type = "button";
+  hide.setAttribute("aria-label", `#${m.channelName} を一覧に出さない`);
+  hide.innerHTML = EYE_OFF_SVG;
+  hide.onclick = () => hideChannel(m);
+  item.append(rowOf(m, key), hide);
+  return item;
+}
+
+function drawBadge() {
+  setNavCount("nav-slack", unreadCount, "Slack", "未読", undefined, BADGE_CAP);
+}
+
+// Takes the channel's rows out of the list held, with their share of the badge.
+function dropChannel(teamId: string, channel: string) {
+  if (!timeline) return;
+  const gone = (m: TimelineMessage) => m.teamId === teamId && m.channel === channel;
+  unreadCount = Math.max(0, unreadCount - timeline.messages.filter((m) => gone(m) && m.unread).length);
+  timeline.messages = timeline.messages.filter((m) => !gone(m));
+  drawBadge();
+  draw();
+}
+
+// Keeps the channel off the list: its rows go at once, Rust saves it, and the notice offers to undo it. The list is read again, for the rows that fill the place.
+async function hideChannel(m: TimelineMessage) {
+  const { teamId, channel, channelName } = m;
+  dropChannel(teamId, channel);
+  try {
+    await invoke("slack_hide_channel", { teamId, channel });
+  } catch (e) {
+    showError(e);
+    load();
+    return;
+  }
+  toast(`#${channelName} を一覧に出さないようにしました`, { label: "元に戻す", run: () => unhideChannel(teamId, channel) });
+  load();
+}
+
+async function unhideChannel(teamId: string, channel: string) {
+  try {
+    await invoke("slack_unhide_channel", { teamId, channel });
+  } catch (e) {
+    showError(e);
+  }
+  load();
+}
+
 function rowOf(m: TimelineMessage, key: string) {
   const row = tag("button", "feed-row");
   row.type = "button";
+  row.classList.toggle("unread", m.unread);
   row.dataset.key = key;
   const avatar = tag("span", "avatar feed-avatar");
   decorateAvatar(avatar, m.name, m.iconUrl);
@@ -89,9 +155,51 @@ function rowOf(m: TimelineMessage, key: string) {
   row.append(avatar, main, tag("span", "feed-date", formatDate(slackMs(m.ts))));
   row.onclick = () => {
     listScroll = feed().scrollTop;
+    markRead(m);
     openSlackThread(m);
   };
   return row;
+}
+
+// Opening a message sets its channel's read position to it: the row and the older ones of the channel (the list is newest first) become read at once, and Slack is told.
+// Nothing changes when the row is read already, or when the token cannot write the position (the next read would show it unread again). A failure is logged by Rust; the next read shows Slack's value.
+function markRead(m: TimelineMessage) {
+  if (!m.unread || !timeline) return;
+  const cannotWrite = timeline.missing.some((x) => x.teamId === m.teamId && x.scopes.some((s) => s === "channels:write" || s === "groups:write"));
+  if (cannotWrite) return;
+  let reached = false;
+  let moved = 0;
+  for (const x of timeline.messages) {
+    if (x.teamId !== m.teamId || x.channel !== m.channel) continue;
+    reached ||= x.ts === m.ts;
+    if (reached && x.unread) moved++;
+    if (reached) x.unread = false;
+  }
+  m.unread = false;
+  unreadCount = Math.max(0, unreadCount - moved);
+  drawBadge();
+  invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: m.ts }).catch(() => {});
+}
+
+// The button after the first unread rows, which shows all the others.
+function moreButton(n: number) {
+  const box = tag("div", "feed-more");
+  const button = tag("button", "text-btn", `未読をあと ${n} 件表示`);
+  button.type = "button";
+  button.onclick = () => {
+    unreadOpen = true;
+    drawFeed();
+  };
+  box.append(button);
+  return box;
+}
+
+// The "既読" heading between the two sections, as the inbox has it.
+function readHeading() {
+  const heading = tag("h2", "feed-heading");
+  heading.innerHTML = EYE_SVG;
+  heading.append("既読");
+  return heading;
 }
 
 // The state of the list when there are no rows: loading, no workspace, a failed read, or nothing to show.
@@ -126,16 +234,24 @@ function emptyNode() {
 // Draws the rows where they are: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
   const messages = timeline?.messages ?? [];
-  const key = JSON.stringify([messages, loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], new Date().toDateString()]);
+  const key = JSON.stringify([messages, unreadOpen, loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], new Date().toDateString()]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...(messages.length ? messages.map((m) => rowOf(m, `${m.teamId}/${m.channel}/${m.ts}`)) : [emptyNode()]));
+  const rows = (list: TimelineMessage[]) => list.map((m) => itemOf(m, `${m.teamId}/${m.channel}/${m.ts}`));
+  const unreadAll = messages.filter((m) => m.unread);
+  const shownUnread = unreadOpen ? unreadAll : unreadAll.slice(0, UNREAD_FIRST);
+  const shownRead = messages.filter((m) => !m.unread).slice(0, READ_SHOWN);
+  const more = unreadAll.length - shownUnread.length;
+  const unread = rows(shownUnread);
+  const read = rows(shownRead);
+  // The heading only when both sections have rows.
+  box.replaceChildren(...(messages.length ? [...unread, ...(more > 0 ? [moreButton(more)] : []), ...(unread.length && read.length ? [readHeading()] : []), ...read] : [emptyNode()]));
   box.scrollTop = top;
   if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
-  loadIcons(messages.map((m) => m.iconUrl));
+  loadIcons([...shownUnread, ...shownRead].map((m) => m.iconUrl));
 }
 
 // The muted "残り N チャンネルを読み込み中" in the heading while some channels were not reached by any read yet.
@@ -146,7 +262,17 @@ function drawPending() {
   label.textContent = left > 0 ? `残り ${left} チャンネルを読み込み中` : "";
 }
 
+// The muted "未読 N 件" in the heading: the unread rows of the answer (the button shows the ones still hidden).
+function drawUnreadCount() {
+  const label = $("slack-unread");
+  label.hidden = timeline === null;
+  label.textContent = timeline ? `未読 ${timeline.messages.filter((m) => m.unread).length} 件` : "";
+}
+
+// Draws the list's parts when the list is on screen; it is drawn from what is held when it is shown (`revealSlackList`).
 function draw() {
+  if ($("slack-list").hidden) return;
+  drawUnreadCount();
   drawPending();
   drawNotice();
   drawFeed();
@@ -170,11 +296,27 @@ async function load() {
   if (next) {
     timeline = next;
     loadError = null;
+    unreadCount = next.unreadTotal;
+    drawBadge();
   } else {
     loadError = error;
   }
   drawTray();
   draw();
+}
+
+// Takes the workspaces as the new list. The last one removed takes its rows, its failure and its badge with it; a workspace added or removed makes the list held stale at once.
+function adoptWorkspaces(list: Workspace[]) {
+  const before = workspaces?.map((w) => w.teamId).join();
+  workspaces = list;
+  setSlackWorkspaces(list);
+  if (!list.length) {
+    timeline = null;
+    loadError = null;
+    unreadCount = 0;
+    drawBadge();
+  }
+  if (before !== undefined && before !== list.map((w) => w.teamId).join()) lastTry = 0;
 }
 
 // The list is shown again where it was (back from a thread).
@@ -187,18 +329,10 @@ export function revealSlackList() {
 
 // The Slack screen is shown: the workspaces and the user's icons are read, then the messages. What was read before stays on screen meanwhile.
 export async function showSlackList() {
+  unreadOpen = false;
   revealSlackList();
   try {
-    const before = workspaces?.map((w) => w.teamId).join();
-    workspaces = (await invoke("slack_load")).workspaces;
-    setSlackWorkspaces(workspaces);
-    // The last workspace was removed: its rows and its failure go with it.
-    if (!workspaces.length) {
-      timeline = null;
-      loadError = null;
-    }
-    // A workspace added or removed since the last read makes the list held stale at once.
-    if (before !== undefined && before !== workspaces.map((w) => w.teamId).join()) lastTry = 0;
+    adoptWorkspaces((await invoke("slack_load")).workspaces);
   } catch (e) {
     // The workspaces known stay: the tray and the refresh go on with them.
     workspaces ??= [];
@@ -206,7 +340,7 @@ export async function showSlackList() {
   }
   drawTray();
   draw();
-  if (!workspaces.length) return;
+  if (!workspaces?.length) return;
   invoke("slack_icons").then(
     (list) => {
       ownIcons.clear();
@@ -217,17 +351,44 @@ export async function showSlackList() {
     () => {},
   );
   // Showing the screen again does not read again while a read is on its way, or while the list held is younger than the answer asked for.
+  staleIfChanged();
   if (loading || (timeline !== null && Date.now() - lastTry < timeline.refreshSecs * 1000)) return;
   await load();
 }
 
-// Reads again when the list has been shown for as long as the server asked for, while the Slack screen is up and the window is visible.
+// Reads again when the list held is as old as the server asked for, on any screen, while the window is visible. Workspaces that settings added or removed are taken first.
 function refresh() {
-  if (currentScreen() !== "slack" || document.hidden || loading || !workspaces?.length) return;
+  if (document.hidden || loading) return;
+  staleIfChanged();
+  const shared = getSlackWorkspaces();
+  if (shared && (workspaces === null || shared.map((w) => w.teamId).join() !== workspaces.map((w) => w.teamId).join())) {
+    adoptWorkspaces(shared);
+    drawTray();
+    draw();
+  }
+  if (!workspaces?.length) return;
   if (Date.now() - lastTry >= (timeline?.refreshSecs ?? 120) * 1000) load();
 }
 
+// Settings changed what the list shows: the list held is stale at once.
+function staleIfChanged() {
+  if (slackListVersion() === seenVersion) return;
+  seenVersion = slackListVersion();
+  lastTry = 0;
+}
+
+// The first read, for the badge: the workspaces, then the messages when there is a workspace.
+async function start() {
+  try {
+    adoptWorkspaces((await invoke("slack_load")).workspaces);
+  } catch {
+    return;
+  }
+  if (workspaces?.length && !loading) await load();
+}
+
 export function initSlackList() {
+  start();
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", refresh);
   feed().addEventListener("scroll", () => {

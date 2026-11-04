@@ -1,4 +1,4 @@
-import { account, boot, checked, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "update";
 
@@ -215,11 +215,11 @@ describe("settings: Slack", () => {
     await expect($("#slack-workspaces button.status")).not.toExist();
   });
 
-  it("lists users:read and files:read with the other scopes in the setup hint", async () => {
+  it("lists the optional scopes (users:read, files:read, channels:write, groups:write) with the other scopes in the setup hint", async () => {
     await openSettings([], claudeMissing, "slack");
     await $("#slack-help").click();
     const scopes = await $$('[role="dialog"][aria-label="Slack の接続方法"] .scopes code').map((code) => code.getText());
-    expect(scopes).toEqual(["chat:write", "channels:read", "groups:read", "channels:history", "groups:history", "im:history", "mpim:history", "users:read", "files:read"]);
+    expect(scopes).toEqual(["chat:write", "channels:read", "groups:read", "channels:history", "groups:history", "im:history", "mpim:history", "users:read", "files:read", "channels:write", "groups:write"]);
   });
 
   it("asks before disconnecting: キャンセル sends nothing, 解除 calls slack_remove_workspace", async () => {
@@ -1163,5 +1163,42 @@ describe("settings: tabs", () => {
     await waitForCalls("check_update");
     await waitForText("#update-items .status", "最新");
     await expect($("#settings-tab-update .tab-dot")).not.toBeDisplayed();
+  });
+});
+
+describe("settings: Slack channels kept off the list", () => {
+  const rows = () => textsOf("#slack-hidden .item");
+
+  it("lists them after the connection card with a dot in the workspace's color, #channel, the workspace name and a count, and the channel's ID when its name is not known", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), slack_hidden_list: [hiddenChannel("C0123ABCD", "general"), hiddenChannel("C9ZZ", "C9ZZ")], claude_status: claudeMissing });
+    await $("#nav-settings").click();
+    await openTab("slack");
+    await waitForCount("#slack-hidden .item", 2);
+    await expect($("#settings-panel-slack .card:nth-of-type(2) h2")).toHaveText("一覧に出さないチャンネル");
+    await expect($("#slack-hidden-count")).toHaveText("2 件");
+    expect(await rows()).toEqual(["#generalExample Team戻す", "C9ZZExample Team戻す"]);
+    const dots = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#slack-hidden .hidden-dot")].map((d) => d.style.background));
+    expect(dots.every((d) => d !== "")).toBe(true);
+    await expect($('button[aria-label="#general を一覧に戻す"]')).toExist();
+    await expect($('button[aria-label="C9ZZ を一覧に戻す"]')).toExist();
+  });
+
+  it("puts a channel back with 戻す: slack_unhide_channel is called with its IDs and the card is read again", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), slack_hidden_list: [hiddenChannel("C0123ABCD", "general"), hiddenChannel("C2", "random")], claude_status: claudeMissing });
+    await $("#nav-settings").click();
+    await openTab("slack");
+    await waitForCount("#slack-hidden .item", 2);
+    const unhide = await mock("slack_unhide_channel", true);
+    await mock("slack_hidden_list", [hiddenChannel("C2", "random")]);
+    await $('button[aria-label="#general を一覧に戻す"]').click();
+    expect(await waitForCalls(unhide)).toEqual([{ teamId: "T1", channel: "C0123ABCD" }]);
+    await waitForCount("#slack-hidden .item", 1);
+    await expect($("#slack-hidden-count")).toHaveText("1 件");
+  });
+
+  it("says there are none, with a count of 0", async () => {
+    await openSettings([], claudeMissing, "slack");
+    await expect($("#slack-hidden .card-empty")).toHaveText("一覧に出さないチャンネルはありません");
+    await expect($("#slack-hidden-count")).toHaveText("0 件");
   });
 });

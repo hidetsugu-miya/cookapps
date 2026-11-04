@@ -19,6 +19,7 @@ import type { ThreadDetail } from "../ts/bindings/ThreadDetail";
 import type { ThreadFile } from "../ts/bindings/ThreadFile";
 import type { ThreadItem } from "../ts/bindings/ThreadItem";
 import type { ThreadMessage } from "../ts/bindings/ThreadMessage";
+import type { HiddenChannel } from "../ts/bindings/HiddenChannel";
 import type { Timeline } from "../ts/bindings/Timeline";
 import type { TimelineMessage } from "../ts/bindings/TimelineMessage";
 import type { Todo } from "../ts/bindings/Todo";
@@ -368,7 +369,7 @@ export const proofreadEdit: PromptEdit = {
 // What `slack_channels` answers: the channels of the workspace `workspace`.
 export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general" }];
 
-// What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by. `missingOptional` is the same for users:read and files:read.
+// What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by. `missingOptional` is the same for users:read, files:read, channels:write and groups:write.
 export const checked = (missingScopes: string[] | null, missingOptional: string[] | null = []): Checked => ({ ...workspace, missingScopes, missingOptional });
 
 // A Slack timestamp `minutes` minutes ago ("1700000000.000100"); `n` tells apart messages of the same minute.
@@ -393,11 +394,23 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
   replyCount: 0,
   permalink: permalinkOf(ts),
   hasFiles: false,
+  unread: false,
   ...extra,
 });
 
-// What `slack_timeline` answers.
-export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({ messages, failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, ...extra });
+// What `slack_timeline` answers; `unreadTotal` is the number of unread messages given unless `extra` says another (it counts the messages held, not only the ones listed).
+export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({
+  messages,
+  failed: [],
+  missing: [],
+  refreshSecs: 120,
+  pendingChannels: 0,
+  unreadTotal: messages.filter((m) => m.unread).length,
+  ...extra,
+});
+
+// A channel kept off the Slack list (`slack_hidden_list`); `name` is the channel's ID when its name is not known.
+export const hiddenChannel = (channel: string, name: string, extra: Partial<HiddenChannel> = {}): HiddenChannel => ({ teamId: workspace.teamId, team: workspace.team, channel, name, ...extra });
 
 // A message of a thread (`slack_thread`).
 export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, files: [], ...extra });

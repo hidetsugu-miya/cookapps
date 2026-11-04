@@ -57,8 +57,8 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 #relogin { margin-bottom: 8px; }
 #relogin > div, #cal-notice > div, #todo-notice > div, #slack-notice > div { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; background: #fff4e5; margin-bottom: 4px; }
 #threads ul { list-style: none; margin: 0; padding: 0; }
-#read-heading { display: flex; align-items: center; gap: 6px; margin: 16px 16px 4px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: normal; color: #444; }
-#read-heading svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+#read-heading, .feed-heading { display: flex; align-items: center; gap: 6px; margin: 16px 16px 4px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: normal; color: #444; }
+#read-heading svg, .feed-heading svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 #read-heading:has(+ #read-threads:empty) { display: none; }
 #threads:not(:has(li))::after { content: "受信トレイにスレッドはありません"; display: block; padding: 48px 0; text-align: center; color: #888; }
 #threads li { display: grid; grid-template-columns: 20px 8px 32px 180px 1fr auto; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 12px; cursor: pointer; }
@@ -515,6 +515,7 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .item-name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-meta { color: #666; font-size: 12px; overflow-wrap: anywhere; }
 .item-meta.warn { color: var(--warn); }
+.hidden-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; }
 .card-empty { padding: 12px 20px 14px; border-top: 1px solid var(--line); color: #666; font-size: 13px; }
 .card-add { display: flex; gap: 8px; padding: 12px 12px 14px 20px; border-top: 1px solid var(--line); background: var(--bar); border-radius: 0 0 12px 12px; }
 .card-add input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: #fff; }
@@ -652,13 +653,20 @@ button.status:hover { filter: brightness(.95); }
 #slack-list h1 { flex: none; }
 #slack-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 24px 16px; }
 .feed-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 14px; width: 100%; box-sizing: border-box; padding: 10px 16px; border: 0; border-radius: 12px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
-.feed-row:hover { background: var(--hover); }
+.feed-item { position: relative; }
+.feed-item:hover .feed-row { background: var(--hover); }
 .feed-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .feed-avatar { position: relative; }
 .feed-ws { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; }
 .feed-main { display: block; min-width: 0; }
 .feed-meta { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.feed-hide { position: absolute; top: 8px; right: 12px; visibility: hidden; }
+.feed-item:hover .feed-hide, .feed-item:focus-within .feed-hide { visibility: visible; }
+.feed-item:hover .feed-date, .feed-item:focus-within .feed-date { visibility: hidden; }
+.feed-more { display: flex; justify-content: center; padding: 6px 0; }
 .feed-meta b { font-weight: 600; }
+.feed-row.unread { font-weight: bold; }
+.feed-row.unread .feed-meta b { font-weight: 700; }
 .feed-meta span { color: var(--muted); font-size: 12px; }
 .feed-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; line-height: 1.45; overflow-wrap: anywhere; }
 .feed-replies { display: block; margin-top: 3px; font-size: 12px; color: var(--accent); }

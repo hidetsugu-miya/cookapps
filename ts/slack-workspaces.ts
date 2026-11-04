@@ -7,6 +7,11 @@ import { updateAddMode } from "./todo-add.js";
 let slackWorkspaces: Workspace[] | null = null;
 let loadingSlack = false;
 
+// Bumped when settings changes what the Slack list shows (a channel put back), so that the list is read again at the next chance.
+let listVersion = 0;
+export const bumpSlackList = () => ++listVersion;
+export const slackListVersion = () => listVersion;
+
 export const getSlackWorkspaces = () => slackWorkspaces;
 export const setSlackWorkspaces = (list: Workspace[]) => (slackWorkspaces = list);
 
