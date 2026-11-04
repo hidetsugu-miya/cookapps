@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.31.1
+
+The inbox list lost its heading and its manual reload button, and the Slack list its heading and its unread count (the count stays on the Slack button). A failed inbox load is now tried again by itself, after 60 seconds and then twice as long each time up to 5 minutes, and a login that ends while the list is not on screen reloads it at the next sync round. The update button moved out of the side menu into a popup at the bottom right (#9), with the same action as a button in the update tab of settings; "あとで" closes it for that version until the app quits, and a toast stacks above it. The popup was not tried with a real update.
+
 ## v0.31.0
 
 S-10 the Slack list and thread show the standard emoji of `:tada:`-style codes (the crate `emojis`, then a table of Slack's names generated from iamcal/emoji-data, MIT, in `slack_emoji.rs`, with skin tones). A workspace's own emoji stay as `:name:`, and codes in URLs, links, mentions, code and right after an ASCII letter or digit are not converted. S-1 and S-2 are unchanged. A real Slack message was not tried.
