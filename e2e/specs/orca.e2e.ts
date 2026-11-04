@@ -362,11 +362,33 @@ describe("orca skill list", () => {
     await expect(popup()).not.toBeDisplayed();
   });
 
-  it("is asked for once, with the target, and not on every keystroke", async () => {
+  it("is asked for once, with no environment, and not on every keystroke", async () => {
     await openWithSkills();
     await $("#orca-input").setValue("/rev");
     await $("#orca-input").setValue("/revi");
-    expect(await callsOf("orca_skills")).toEqual([{ environment: null }]);
+    expect(await callsOf("orca_skills")).toEqual([null]);
+  });
+
+  it("opens with a saved environment as the target, and asks for the skills with no environment", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }), { orca_skills: skills() });
+    await waitForCalls("orca_skills");
+    await $("#orca-input").setValue("/rev");
+    await expect(popup()).toBeDisplayed();
+    expect(await commands()).toEqual(["/review", "/pr-review"]);
+    expect(await callsOf("orca_skills")).toEqual([null]);
+  });
+
+  it("opens while the target fails to read, and is not read again when the target changes", async () => {
+    await openOrca(orcaOverview([], [], { state: "failed", message: "Orca is busy", target: "Studio", environments: ["Studio", "Lab"] }), { orca_skills: skills() });
+    await waitForCalls("orca_skills");
+    await $("#orca-input").setValue("/rev");
+    await expect(popup()).toBeDisplayed();
+    await mock("orca_set_target", null);
+    await mock("orca_overview", orcaOverview([], [], { target: "Lab", environments: ["Studio", "Lab"] }));
+    await $("#orca-target").click();
+    await pickMenu("Lab");
+    await expect($("#orca-target")).toHaveText("Lab に接続中");
+    expect(await callsOf("orca_skills")).toEqual([null]);
   });
 
   it("moves with the arrow keys around the ends, and Tab puts the command in with one space", async () => {

@@ -36,7 +36,7 @@ let selected: string | null = null;
 let newPath: string | null = null;
 let agent = AGENTS[0].id;
 let busy = false;
-// The skills of Claude Code on the target in use; read again when the screen is first shown, when the target changes and by the update button.
+// The skills of Claude Code on the machine the app runs on, whatever the target; read when the screen is first shown and by the update button.
 let skills: OrcaSkill[] = [];
 let skillsStale = true;
 let skillsSeq = 0;
@@ -237,14 +237,14 @@ async function load(scope: Scope, force = false) {
   fetchSkills();
 }
 
-// Reads the skills when they are due and the screen is shown with a working command. A failure only means no list.
+// Reads the skills when they are due and the screen is shown with the command found (the target may be failing). A failure only means no list.
 async function fetchSkills() {
-  if (!skillsStale || !shown() || view?.state !== "ready") return;
+  if (!skillsStale || !shown() || view === null || view.state === "missing") return;
   skillsStale = false;
   const seq = ++skillsSeq;
   let list: OrcaSkill[] = [];
   try {
-    list = await invoke("orca_skills", { environment: view.target });
+    list = await invoke("orca_skills");
   } catch {
     // No list, no popup; posting does not depend on it.
   }
@@ -283,8 +283,6 @@ async function chooseTarget(environment: string | null) {
   // The sessions and worktrees belong to the old target.
   selected = null;
   newPath = null;
-  skills = [];
-  skillsStale = true;
   view = { ...view, target: environment, rows: [], worktrees: [] };
   badge = 0;
   switching = true;
