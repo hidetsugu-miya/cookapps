@@ -27,6 +27,7 @@ use crate::{
         ThreadBlock,
     },
     slack_emoji,
+    slack_mrkdwn::{self, Rich},
 };
 
 /// Every request goes here and nowhere else: nothing from outside is put into the URL.
@@ -1464,10 +1465,12 @@ pub struct ThreadMessage {
     name: String,
     icon_url: Option<String>,
     text: String,
+    /// What the screen draws of the message's text (S-12): the raw text read for its styles. `text` above stays a string that is not read for styles, and the screen does not draw it.
+    rich: Rich,
     files: Vec<ThreadFile>,
     /// Drawn under (or in place of) `text` (S-11); empty when `text` alone is drawn.
     blocks: Vec<ThreadBlock>,
-    /// Whether `text` is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
+    /// Whether the text (`rich`) is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
     show_text: bool,
     attachments: Vec<ThreadAttachment>,
     /// The https addresses of the images of `blocks` and `attachments`, once each; the screen asks for them only when the user presses "画像を表示".
@@ -2135,13 +2138,13 @@ fn permalink(workspace_url: &str, channel: &str, ts: &str, thread_ts: Option<&st
 }
 
 /// A piece of Slack's mrkdwn: text, or what is between `<` and `>`.
-enum Piece<'a> {
+pub(crate) enum Piece<'a> {
     Text(&'a str),
     Token(&'a str),
 }
 
 /// `text` cut into text and `<…>` tokens, in order. A `<` with no `>` after it is text.
-fn pieces(text: &str) -> Vec<Piece<'_>> {
+pub(crate) fn pieces(text: &str) -> Vec<Piece<'_>> {
     let (mut out, mut rest) = (Vec::new(), text);
     while let Some(start) = rest.find('<') {
         let Some(len) = rest[start + 1..].find('>') else {
@@ -2164,7 +2167,7 @@ pub(crate) fn unescape(s: &str) -> String {
 
 /// The text of one `<…>`: a mention (`<@U1>` as `@name`, `@不明` when no name is known), a channel (`<#C1|name>` as `#name`), a broadcast (`<!here>` as `@here`),
 /// a link (`<https://a|label>` as `label (https://a)`, `<https://a|https://a>` and `<https://a>` as `https://a`).
-fn token_text(token: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
+pub(crate) fn token_text(token: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
     let (target, label) = match token.split_once('|') {
         Some((target, label)) => (target, Some(label).filter(|l| !l.is_empty())),
         None => (token, None),
@@ -2254,7 +2257,7 @@ fn emoji_at(rest: &str, prev: Option<char>) -> Option<(&'static str, usize)> {
 
 /// The length of the web address that starts `rest` (up to the next white space), which is copied as it is. `None` for anything else.
 /// `prev` is the character before it, so that a scheme is only looked for at its start.
-fn url_len(rest: &str, prev: Option<char>) -> Option<usize> {
+pub(crate) fn url_len(rest: &str, prev: Option<char>) -> Option<usize> {
     let is_scheme = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-');
     if rest.starts_with(|c: char| c.is_ascii_alphabetic()) && !prev.is_some_and(is_scheme) {
         let word = rest.find(|c: char| !is_scheme(c)).unwrap_or(rest.len());
@@ -2423,6 +2426,7 @@ fn thread_slim(m: &Value) -> Value {
         "ts": m["ts"],
         "user": m["user"],
         "text": m["text"],
+        "mrkdwn": m["mrkdwn"],
         "files": m["files"],
         "blocks": m["blocks"],
         "attachments": m["attachments"],
@@ -2438,6 +2442,7 @@ fn thread_message(
     name_of: &dyn Fn(&str) -> Option<String>,
 ) -> ThreadMessage {
     let sender = bot_of(m).or(user);
+    let text = m["text"].as_str().unwrap_or_default();
     // A person's ordinary post carries a `rich_text` block that repeats `text`, so it stays `text`; a bot's post, or one with no text, draws its blocks.
     let draw_rich_text =
         bot_of(m).is_some() || m["text"].as_str().is_none_or(|t| t.trim().is_empty());
@@ -2457,7 +2462,13 @@ fn thread_message(
             .as_ref()
             .map_or_else(|| UNKNOWN_NAME.to_owned(), |u| u.name.clone()),
         icon_url: sender.and_then(|u| u.icon_url),
-        text: plain_text(m["text"].as_str().unwrap_or_default(), name_of),
+        text: plain_text(text, name_of),
+        // A message posted with `mrkdwn: false` shows its marks as they are.
+        rich: if m["mrkdwn"] == false {
+            slack_mrkdwn::plain(plain_text(text, name_of))
+        } else {
+            slack_mrkdwn::parse(text, name_of)
+        },
         files: m["files"]
             .as_array()
             .into_iter()
@@ -5026,6 +5037,37 @@ mod tests {
         assert_eq!(emojify("host:id:123"), "host:id:123");
         assert_eq!(emojify("ok:tada: 1:fire:"), "ok:tada: 1:fire:");
         assert_eq!(emojify(""), "");
+    }
+
+    #[test]
+    fn a_thread_message_keeps_its_text_and_reads_the_same_text_for_its_styles() {
+        let name_of = |id: &str| (id == "U1").then(|| "Alice".to_owned());
+        let message = |extra: Value| {
+            let mut m = json!({"ts": "1.0", "text": "*hi* <@U1> a_b_c"});
+            m.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            thread_message(&m, None, &name_of)
+        };
+        let read = message(json!({}));
+        assert_eq!(read.text, "*hi* @Alice a_b_c");
+        assert_eq!(read.rich.len(), 1);
+        let slack_mrkdwn::RichBlock::Paragraph { spans } = &read.rich[0] else {
+            panic!("a paragraph")
+        };
+        assert_eq!(spans.len(), 2);
+        assert!(spans[0].bold && spans[0].text == "hi");
+        assert_eq!(spans[1].text, " @Alice a_b_c");
+        // A message posted with `mrkdwn: false` shows its marks as they are.
+        let off = message(json!({"mrkdwn": false}));
+        let slack_mrkdwn::RichBlock::Paragraph { spans } = &off.rich[0] else {
+            panic!("a paragraph")
+        };
+        assert_eq!(spans.len(), 1);
+        assert!(!spans[0].bold);
+        assert_eq!(spans[0].text, "*hi* @Alice a_b_c");
+        // `thread_slim` keeps the flag, or the message above would always be read.
+        assert_eq!(thread_slim(&json!({"mrkdwn": false}))["mrkdwn"], false);
     }
 
     #[test]

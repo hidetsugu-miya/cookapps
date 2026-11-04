@@ -11,9 +11,9 @@ import { $, composing, isMac, tag } from "./dom.js";
 import { formatDetailDate, hostOf } from "./format.js";
 import { FILE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { linkify } from "./mail-text.js";
 import { closeMenu } from "./menu.js";
 import { attachmentNode, blocksNode } from "./slack-blocks.js";
+import { richNodes } from "./slack-rich.js";
 import { revealSlackList } from "./slack-list.js";
 import { decorateAvatar, loadIcons, slackMs } from "./slack-view.js";
 import { initSplit } from "./split.js";
@@ -189,11 +189,7 @@ function messageNode(m: ThreadMessage) {
   const images = { shown: imagesShown.has(m.ts), uris: blockImages };
   if (m.blocks.length) body.append(blocksNode(m.blocks, images));
   // Rust says whether the text is drawn too: with no blocks, and beside a block that could not be drawn (the text is otherwise Slack's alternative text).
-  if (m.showText && m.text.trim()) {
-    const text = tag("p", "st-text");
-    text.append(...linkify(m.text));
-    body.append(text);
-  }
+  if (m.showText) body.append(...richNodes(m.rich));
   body.append(...m.attachments.map((a) => attachmentNode(a, images)));
   if (m.imageUrls.length && !images.shown) body.append(imagesBar(m));
   if (m.files.length) {
