@@ -1,0 +1,9 @@
+# Updates requirements
+
+## U-1 Auto update
+
+Check GitHub Releases at start and every 5 minutes. When a newer version is out, a popup (`#update-pop`, `role="status"`, 320px wide, fixed 24px from the right and bottom edges, taking no focus) opens at the bottom right and a red dot is put on the settings button and on the update tab of settings (A-3). The popup has a round icon, a bold title and a short text, and, at the right below them, "あとで" and a main button. For a version not yet replaced the title is "v{version} があります", the text "入れ替えて再起動します" and the button "更新して再起動": it downloads the new app, checks its signature, replaces the app and restarts it. While that is on its way the button is disabled, and a failure is shown with `showError` and leaves the popup. "あとで" closes the popup for that version (kept in memory only, never saved), so the same version does not open it again and a newer one does. While the popup shows, the toast stacks above it (`--toast-bottom`, set from the popup's height). macOS on Apple Silicon only
+
+## U-2 Update settings and version
+
+The settings screen shows the running version (from `app.package_info()`), the update state and a "check now" button. The update mode is "manual" (U-1's behavior) or "auto" (the default), saved in `update-settings.json` in the app config directory. In auto mode a newer version is downloaded and replaced in the background without a restart (`install_update`), and the popup of U-1 then says "新しい版の準備ができました" and "再起動すると v{version} になります", with the main button "再起動", which restarts the app (`restart_app`); the app never restarts by itself. While a newer version is out, the card's row also has a `.text-btn.primary` with the same text and the same operation as the popup's main button (disabled while it works), also after "あとで". On other platforms the card shows the version and "not supported"
