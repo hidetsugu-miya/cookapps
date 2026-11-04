@@ -3,6 +3,7 @@ import {
   callsOf,
   chatAssistant,
   chatItems,
+  chatQuestion,
   chatOpens,
   chatStatus,
   chatTools,
@@ -561,6 +562,21 @@ describe("orca: the session history", () => {
       return { user: left(".orca-user"), assistant: left(".orca-assistant") };
     });
     expect(sides.user).toBeGreaterThan(sides.assistant + 50);
+  });
+
+  it("shows the agent's question unfolded, with its choices, and whether it waits or what was answered", async () => {
+    await openOrca();
+    await select("example-app");
+    await sendChat(chatItems([chatQuestion("q1", null, true)]));
+    await expect($("#orca-items .orca-question")).toBeDisplayed();
+    await expect($("#orca-items .orca-question-text")).toHaveText("Which one?");
+    expect(await textsOf("#orca-items .orca-question-label")).toEqual(["First", "Second"]);
+    expect(await textsOf("#orca-items .orca-question-desc")).toEqual(["the first way"]);
+    await expect($("#orca-items .orca-question-waiting")).toHaveText("回答待ち");
+    await expect($("#orca-items .orca-question-answer")).not.toExist();
+    await sendChat(chatItems([chatQuestion("q1", "First", false)]));
+    await expect($("#orca-items .orca-question-answer")).toHaveText("回答: First");
+    await expect($("#orca-items .orca-question-waiting")).not.toExist();
   });
 
   it("rules the cells of a table in the agent's answer", async () => {

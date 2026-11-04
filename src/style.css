@@ -721,6 +721,13 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-tools-btn[aria-expanded="true"] .orca-chev { transform: rotate(90deg); }
 .orca-tool-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--code); font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: #444; user-select: text; -webkit-user-select: text; }
 .orca-tool-call { white-space: pre-wrap; overflow-wrap: anywhere; }
+.orca-question { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--bar); line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.orca-question-text { font-weight: 600; }
+.orca-question-options { display: flex; flex-direction: column; gap: 4px; padding-left: 22px; list-style: disc; }
+.orca-question-label { font-weight: 600; }
+.orca-question-desc { margin-left: 8px; color: var(--muted); }
+.orca-question-answer { color: var(--accent); }
+.orca-question-waiting { color: var(--warn); }
 #orca-form { flex: none; padding: 12px 24px 20px; border-top: 1px solid var(--line); background: var(--bar); }
 #orca-error { margin-bottom: 8px; }
 .orca-dest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }

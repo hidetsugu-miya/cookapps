@@ -3,7 +3,7 @@
 //! A token, a key or an auth frame is in no log line, no error text and no `Debug` output (the types that hold one derive none).
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
     path::{Path, PathBuf},
     time::Duration,
@@ -62,6 +62,10 @@ const DETAIL_KEYS: [&str; 9] = [
     "prompt",
 ];
 
+/// The tool that asks the user, and how its result starts once the user has answered: `{ANSWERED}"{question}"="{answer}", "{question}"="{answer}". You can now…`
+const ASK_TOOL: &str = "AskUserQuestion";
+const ANSWERED: &str = "Your questions have been answered: ";
+
 /// How often the session looks again, and how often the unix socket (which cannot stream) is read.
 #[derive(Clone, Copy)]
 struct Timing {
@@ -83,6 +87,25 @@ const TIMING: Timing = Timing {
 pub struct OrcaToolCall {
     pub name: String,
     pub detail: String,
+}
+
+/// One choice of a question the agent asks.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct OrcaQuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+/// One question the agent asks, with the user's answer once it is known.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct OrcaQuestion {
+    pub text: String,
+    pub options: Vec<OrcaQuestionOption>,
+    pub answer: Option<String>,
 }
 
 /// One thing the timeline draws.
@@ -109,6 +132,12 @@ pub enum OrcaChatItem {
         summary: String,
         running_summary: Option<String>,
         calls: Vec<OrcaToolCall>,
+    },
+    /// Questions the agent asks the user, never folded. `waiting` is true until the call has a result.
+    Question {
+        id: String,
+        questions: Vec<OrcaQuestion>,
+        waiting: bool,
     },
 }
 
@@ -175,8 +204,15 @@ enum Block {
         detail: String,
         call_id: Option<String>,
     },
+    /// A call of `ASK_TOOL` whose input could be read.
+    Ask {
+        questions: Vec<OrcaQuestion>,
+        call_id: Option<String>,
+    },
+    /// `answered` is the output of a result only when it is the answer to questions; no other output is kept.
     Result {
         call_id: Option<String>,
+        answered: Option<String>,
     },
 }
 
@@ -294,6 +330,50 @@ fn detail_of(input: &Value) -> String {
         .unwrap_or_default()
 }
 
+/// The questions of a call of `ASK_TOOL`, whose input is an object or that object as a string. `None` when there are none to show: it is then an ordinary call.
+fn questions_of(input: &Value) -> Option<Vec<OrcaQuestion>> {
+    let parsed;
+    let input = match input.as_str() {
+        Some(text) => {
+            parsed = serde_json::from_str::<Value>(text).ok()?;
+            &parsed
+        }
+        None => input,
+    };
+    let questions: Vec<OrcaQuestion> = input["questions"]
+        .as_array()?
+        .iter()
+        .filter_map(|q| {
+            Some(OrcaQuestion {
+                text: text_of(q, "question")?.to_owned(),
+                options: q["options"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|o| {
+                        Some(OrcaQuestionOption {
+                            label: text_of(o, "label")?.to_owned(),
+                            description: text_of(o, "description").unwrap_or_default().to_owned(),
+                        })
+                    })
+                    .collect(),
+                answer: None,
+            })
+        })
+        .collect();
+    (!questions.is_empty()).then_some(questions)
+}
+
+/// The answer to `question` in the output of a call of `ASK_TOOL`. An answer ends at a quote followed by the next question or by the end of the list.
+fn answer_of(output: &str, question: &str) -> Option<String> {
+    let rest = output.split_once(&format!("\"{question}\"=\""))?.1;
+    let end = [rest.find("\", \""), rest.find("\". "), rest.rfind('"')]
+        .into_iter()
+        .flatten()
+        .min()?;
+    Some(rest[..end].to_owned())
+}
+
 /// A message of a page reduced for the timeline. One without an `id` cannot be merged and is dropped.
 /// A message the harness injected, or that starts an agent, is kept empty, so that an update of it by id still finds it.
 fn held_of(message: &Value) -> Option<Held> {
@@ -339,13 +419,28 @@ fn held_of(message: &Value) -> Option<Held> {
                 let text = text.trim();
                 (!text.is_empty()).then(|| Block::Text(text.to_owned()))
             }
-            "tool-call" => Some(Block::Call {
-                name: text_of(block, "name").unwrap_or("tool").to_owned(),
-                detail: detail_of(&block["input"]),
-                call_id: call_id(block),
-            }),
+            "tool-call" => {
+                let name = text_of(block, "name").unwrap_or("tool");
+                let questions = (name == ASK_TOOL)
+                    .then(|| questions_of(&block["input"]))
+                    .flatten();
+                Some(match questions {
+                    Some(questions) => Block::Ask {
+                        questions,
+                        call_id: call_id(block),
+                    },
+                    None => Block::Call {
+                        name: name.to_owned(),
+                        detail: detail_of(&block["input"]),
+                        call_id: call_id(block),
+                    },
+                })
+            }
             "tool-result" => Some(Block::Result {
                 call_id: call_id(block),
+                answered: text_of(block, "output")
+                    .filter(|output| output.starts_with(ANSWERED))
+                    .map(str::to_owned),
             }),
             _ => None,
         })
@@ -450,6 +545,11 @@ struct Run {
 enum Entry {
     Item(OrcaChatItem),
     Run(Run),
+    Ask {
+        id: String,
+        questions: Vec<OrcaQuestion>,
+        call_id: Option<String>,
+    },
 }
 
 /// The names of a run's calls with how many times each is called, in the order of first use: `Read 2、Edit 2、Bash 1`.
@@ -513,14 +613,15 @@ fn flush_text(
     }));
 }
 
-/// The timeline of the held messages: the user's and the assistant's text, and the tool calls between them folded into runs.
-/// A result, a message that is not drawn (reasoning, noise, an agent's start) does not break a run; text does, and so does a message in `page_starts`:
+/// The timeline of the held messages: the user's and the assistant's text, the agent's questions, and the tool calls between them folded into runs.
+/// A result, a message that is not drawn (reasoning, noise, an agent's start) does not break a run; text and a question do, and so does a message in `page_starts`:
 /// the first message before an older page came, so a run there keeps its id (and what is in view and what is open stay) when older calls arrive in front of it.
 fn items_of(held: &[Held], page_starts: &HashSet<String>) -> Vec<OrcaChatItem> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut run: Option<Run> = None;
     let (mut calls_total, mut results_total) = (0usize, 0usize);
     let mut done: HashSet<&str> = HashSet::new();
+    let mut answers: HashMap<&str, &str> = HashMap::new();
     for message in held {
         if page_starts.contains(&message.id) {
             if let Some(run) = run.take() {
@@ -550,10 +651,25 @@ fn items_of(held: &[Held], page_starts: &HashSet<String>) -> Vec<OrcaChatItem> {
                         call_id: call_id.clone(),
                     });
                 }
-                Block::Result { call_id } => {
+                Block::Ask { questions, call_id } => {
+                    flush_text(message, &mut parts, &mut text, &mut entries, &mut run);
+                    calls_total += 1;
+                    if let Some(run) = run.take() {
+                        entries.push(Entry::Run(run));
+                    }
+                    entries.push(Entry::Ask {
+                        id: format!("{}#q{index}", message.id),
+                        questions: questions.clone(),
+                        call_id: call_id.clone(),
+                    });
+                }
+                Block::Result { call_id, answered } => {
                     results_total += 1;
                     if let Some(id) = call_id {
                         done.insert(id);
+                        if let Some(output) = answered {
+                            answers.insert(id, output);
+                        }
                     }
                 }
             }
@@ -569,6 +685,27 @@ fn items_of(held: &[Held], page_starts: &HashSet<String>) -> Vec<OrcaChatItem> {
         .enumerate()
         .map(|(index, entry)| match entry {
             Entry::Item(item) => item,
+            Entry::Ask {
+                id,
+                questions,
+                call_id,
+            } => {
+                let output = call_id.as_deref().and_then(|c| answers.get(c));
+                OrcaChatItem::Question {
+                    id,
+                    waiting: match call_id.as_deref() {
+                        Some(c) => !done.contains(c),
+                        None => calls_total > results_total,
+                    },
+                    questions: questions
+                        .into_iter()
+                        .map(|q| OrcaQuestion {
+                            answer: output.and_then(|o| answer_of(o, &q.text)),
+                            ..q
+                        })
+                        .collect(),
+                }
+            }
             Entry::Run(run) => {
                 let pending = if run.calls.iter().all(|c| c.call_id.is_some()) {
                     run.calls
@@ -1713,6 +1850,142 @@ mod tests {
         }
     }
 
+    fn ask_input() -> Value {
+        json!({"questions": [
+            {"question": "Which?", "header": "H", "multiSelect": false, "options": [
+                {"label": "A", "description": "first"},
+                {"label": "B"},
+            ]},
+            {"question": "When?", "options": []},
+        ]})
+    }
+
+    fn answered(id: &str, call_id: &str, output: &str) -> Value {
+        json!({"id": id, "role": "tool", "blocks": [{"type": "tool-result", "callId": call_id, "output": output}]})
+    }
+
+    #[test]
+    fn a_question_is_an_item_of_its_own_that_ends_a_run() {
+        let held: Vec<Held> = [
+            call("m1", "Bash", json!({"command": "ls"}), "k1"),
+            call("m2", ASK_TOOL, ask_input(), "k2"),
+            call("m3", "Read", json!({"file_path": "/a"}), "k3"),
+        ]
+        .iter()
+        .filter_map(held_of)
+        .collect();
+        let items = items_of(&held, &HashSet::new());
+        assert_eq!(items.len(), 3);
+        assert!(matches!(&items[0], OrcaChatItem::Tools { calls, .. } if calls.len() == 1));
+        assert_eq!(
+            items[1],
+            OrcaChatItem::Question {
+                id: "m2#q0".into(),
+                questions: vec![
+                    OrcaQuestion {
+                        text: "Which?".into(),
+                        options: vec![
+                            OrcaQuestionOption {
+                                label: "A".into(),
+                                description: "first".into()
+                            },
+                            OrcaQuestionOption {
+                                label: "B".into(),
+                                description: String::new()
+                            },
+                        ],
+                        answer: None,
+                    },
+                    OrcaQuestion {
+                        text: "When?".into(),
+                        options: vec![],
+                        answer: None,
+                    },
+                ],
+                waiting: true,
+            }
+        );
+        assert!(matches!(&items[2], OrcaChatItem::Tools { calls, .. } if calls.len() == 1));
+    }
+
+    #[test]
+    fn a_question_takes_its_answers_from_the_result() {
+        let output = format!("{ANSWERED}\"Which?\"=\"A (x)\", \"When?\"=\"today\". You can now continue with the user's answers in mind.");
+        let held: Vec<Held> = [
+            call("m", ASK_TOOL, ask_input(), "k"),
+            answered("r", "k", &output),
+        ]
+        .iter()
+        .filter_map(held_of)
+        .collect();
+        let items = items_of(&held, &HashSet::new());
+        let OrcaChatItem::Question {
+            questions, waiting, ..
+        } = &items[0]
+        else {
+            panic!("{items:?}")
+        };
+        assert!(!waiting);
+        assert_eq!(questions[0].answer.as_deref(), Some("A (x)"));
+        assert_eq!(questions[1].answer.as_deref(), Some("today"));
+    }
+
+    #[test]
+    fn a_question_refused_or_answered_in_another_form_has_no_answer_and_does_not_wait() {
+        let held: Vec<Held> = [
+            call("m", ASK_TOOL, ask_input(), "k"),
+            answered("r", "k", "The user doesn't want to proceed"),
+        ]
+        .iter()
+        .filter_map(held_of)
+        .collect();
+        // Only the output that answers questions is kept.
+        assert_eq!(
+            held[1].blocks,
+            [Block::Result {
+                call_id: Some("k".into()),
+                answered: None
+            }]
+        );
+        let items = items_of(&held, &HashSet::new());
+        let OrcaChatItem::Question {
+            questions, waiting, ..
+        } = &items[0]
+        else {
+            panic!("{items:?}")
+        };
+        assert!(!waiting);
+        assert!(questions.iter().all(|q| q.answer.is_none()));
+    }
+
+    #[test]
+    fn the_questions_of_a_call_are_read_or_it_stays_an_ordinary_call() {
+        let string_input = call("m", ASK_TOOL, json!(ask_input().to_string()), "k");
+        assert!(matches!(
+            held_of(&string_input).unwrap().blocks[0],
+            Block::Ask { .. }
+        ));
+        for input in [
+            json!({}),
+            json!({"questions": []}),
+            json!("not json"),
+            json!({"questions": [{"options": []}]}),
+        ] {
+            let m = held_of(&call("m", ASK_TOOL, input.clone(), "k")).unwrap();
+            assert!(matches!(m.blocks[0], Block::Call { .. }), "{input}");
+        }
+    }
+
+    #[test]
+    fn an_answer_ends_at_the_quote_that_closes_it() {
+        assert_eq!(
+            answer_of("\"Q\"=\"say \"hi\" twice\". You can", "Q").as_deref(),
+            Some("say \"hi\" twice")
+        );
+        assert_eq!(answer_of("\"Q\"=\"a\"", "Q").as_deref(), Some("a"));
+        assert_eq!(answer_of("\"Other\"=\"a\"", "Q"), None);
+    }
+
     #[test]
     fn a_tool_call_keeps_its_name_its_detail_and_no_output() {
         let m = held_of(&call(
@@ -1735,7 +2008,8 @@ mod tests {
         assert_eq!(
             r.blocks,
             [Block::Result {
-                call_id: Some("k1".into())
+                call_id: Some("k1".into()),
+                answered: None,
             }]
         );
     }
@@ -2687,7 +2961,8 @@ mod tests {
                     .map(|i| match i {
                         OrcaChatItem::User { id, .. }
                         | OrcaChatItem::Assistant { id, .. }
-                        | OrcaChatItem::Tools { id, .. } => id.clone(),
+                        | OrcaChatItem::Tools { id, .. }
+                        | OrcaChatItem::Question { id, .. } => id.clone(),
                     })
                     .collect::<Vec<_>>(),
                 *has_more,

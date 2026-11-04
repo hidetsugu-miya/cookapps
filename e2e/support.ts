@@ -529,6 +529,12 @@ export const chatTools = (id: string, summary: string, calls: [string, string][]
   runningSummary,
   calls: calls.map(([name, detail]) => ({ name, detail })),
 });
+export const chatQuestion = (id: string, answer: string | null, waiting: boolean): OrcaChatItem => ({
+  kind: "question",
+  id,
+  questions: [{ text: "Which one?", options: [{ label: "First", description: "the first way" }, { label: "Second", description: "" }], answer }],
+  waiting,
+});
 export const chatItems = (items: OrcaChatItem[], start = 0, hasMore = false): OrcaChatEvent => ({ kind: "items", start, items, hasMore });
 export const chatStatus = (state: "connecting" | "live" | "reconnecting" | "unavailable", message = ""): OrcaChatEvent => ({ kind: "status", state, message });
 
