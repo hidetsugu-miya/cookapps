@@ -103,7 +103,7 @@ describe("slack list", () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);
     expect(await textsOf("#slack-feed .feed-replies")).toEqual(["返信 2 件"]);
-    expect(await count("#slack-feed .feed-item:nth-child(2) .feed-replies")).toBe(0);
+    expect(await count("#slack-feed .feed-item:nth-of-type(2) .feed-replies")).toBe(0);
   });
 
   it("shows a message of files only as 添付ファイル, and attached images never in a row", async () => {
@@ -727,6 +727,9 @@ describe("slack list", () => {
   it("fixes a header above the list, tinted as the thread's, with the title, the button that marks all read and the icon that opens the hidden channels", async () => {
     await openList(timeline(many(20)));
     await waitForCount("#slack-feed .feed-row", 10);
+    // The list is taller than the window only with all 20 rows.
+    await $("#slack-feed .feed-more .text-btn").click();
+    await waitForCount("#slack-feed .feed-row", 20);
     await expect($("#slack-header h1")).toHaveText("Slack");
     await expect($("#slack-mark-all")).toHaveText("すべて既読にする");
     await expect($("#slack-hidden-open")).toHaveAttribute("aria-label", "一覧に出さないチャンネル");
@@ -907,6 +910,8 @@ describe("slack list", () => {
     const rows = await browser.execute(() => [...document.querySelectorAll<HTMLButtonElement>("#slack-feed .feed-row")].map((r) => r.disabled));
     expect(rows).toEqual([true, false]);
     const unwatch = await mock("slack_unwatch", null);
+    // The list made again from Rust's cache no longer has the thread.
+    await mock("slack_timeline", timeline([], { watched: [waiting] }));
     await $$('button[aria-label="ウォッチを外す"]')[0].click();
     expect(await waitForCalls(unwatch)).toEqual([{ teamId: workspace.teamId, channel: "C3", ts: gone.ts }]);
     expect(await count("#slack-feed .feed-row")).toBe(1);
