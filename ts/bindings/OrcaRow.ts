@@ -6,18 +6,22 @@ import type { OrcaGroup } from "./OrcaGroup";
  */
 export type OrcaRow = { group: OrcaGroup, repo: string, branch: string, 
 /**
- * The one line under the name: the task, and for a running agent the tool in use.
+ * The one line of the row: the first line of the prompt, else the task, the conversation, or the last answer.
  */
 line: string, 
-/**
- * "Claude", "Codex", or the agent's own type.
- */
-agent: string, 
 /**
  * When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
  */
 atMs: number, 
 /**
- * The terminal that takes a send; `None` when it was not found (the row cannot be selected).
+ * The terminal that takes a send; `None` when it was not found (the row can be read but takes no post).
  */
-handle: string | null, };
+handle: string | null, 
+/**
+ * The agent's pane (`{tabId}:{leafId}`), which finds its session for the history (A-7); `None` when the agent has none.
+ */
+paneKey: string | null, 
+/**
+ * The worktree's path, which the history asks Orca for the worktree's tabs.
+ */
+path: string, };

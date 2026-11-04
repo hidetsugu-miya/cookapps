@@ -1,4 +1,5 @@
-// The Orca screen (A-6): the agents that run in Orca, in three groups (waiting for the user, running, done), and a composer that posts to the selected one or starts a new one. Nothing about a session is kept here.
+// The Orca screen (A-6, A-7): two panes. The list pane has the Claude agents that run in Orca, in three groups (waiting for the user, working, done); the work pane has the history of the selected one (orca-chat.ts) and a composer that posts to it,
+// or, with none selected, the start of a new session. Nothing about a session is kept here.
 // The list is read at startup for the sidebar button's count, every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time, and no more once the `orca` command was found missing (the update button reads again).
 // Only the first read, the screen being shown, the update button, a change of the target and a read after a failure ask for the environments; the clock reads the agents (the screen shown) or only their count (another screen).
 // A read in the background swaps the rows in place: the selection, the text in the composer and the scroll position stay, and `show()` is never called by it.
@@ -7,14 +8,13 @@ import type { OrcaRow } from "./bindings/OrcaRow";
 import type { OrcaSkill } from "./bindings/OrcaSkill";
 import { $, composing, tag } from "./dom.js";
 import { invoke } from "./ipc.js";
-import { openMenu } from "./menu.js";
+import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen } from "./nav.js";
+import { closeChat, initOrcaChat, openChat, setChatWorking } from "./orca-chat.js";
+import { initSplit } from "./split.js";
 import { setNavCount, show, showError } from "./view.js";
 
-const AGENTS = [
-  { id: "claude", label: "Claude" },
-  { id: "codex", label: "Codex" },
-];
+const STATE_LABELS = { waiting: "入力待ち", working: "作業中", done: "完了" } as const;
 const THIS_MACHINE = "このマシン";
 const SHOWN_MS = 10_000;
 const HIDDEN_MS = 60_000;
@@ -31,11 +31,12 @@ let switching = false;
 let loadSeq = 0;
 let loading = false;
 let lastTry = 0;
-// The handle of the selected row, the worktree (its path) and the agent a new launch uses, and a post on its way.
+// The pane key of the selected row (null: the new-session pane shows), the worktree (its path) a new launch uses, and a post on its way.
 let selected: string | null = null;
 let newPath: string | null = null;
-let agent = AGENTS[0].id;
 let busy = false;
+// The session whose history is open (target, path and pane key), null when none is.
+let chatKey: string | null = null;
 // The skills of Claude Code on the machine the app runs on, whatever the target; read when the screen is first shown, by the update button, and again after a failure.
 let skills: OrcaSkill[] = [];
 let skillsStale = true;
@@ -56,11 +57,7 @@ const feed = () => $("orca-feed");
 const shown = () => currentScreen() === "orca";
 
 const targetName = (v: OrcaOverview) => v.target ?? THIS_MACHINE;
-const selectedRow = () => (selected === null ? null : (view?.rows.find((r) => r.handle === selected) ?? null));
-const isClaudeDest = () => {
-  const row = selectedRow();
-  return (row ? row.agent.toLowerCase() : agent) === "claude";
-};
+const selectedRow = () => (selected === null ? null : (view?.rows.find((r) => r.paneKey === selected) ?? null));
 
 // How long ago `ms` was: running and waiting agents show the time since their state began ("2 分"), a done one how long ago it ended ("18 分前").
 function elapsed(ms: number, now: number, done: boolean) {
@@ -74,7 +71,7 @@ function elapsed(ms: number, now: number, done: boolean) {
 const countOf = (rows: OrcaRow[]) => rows.filter((r) => r.group !== "done").length;
 
 function drawBadge() {
-  setNavCount("nav-orca", badge, "Orca", "動作中");
+  setNavCount("nav-orca", badge, "Orca", "作業中");
 }
 
 function drawHeader() {
@@ -105,31 +102,31 @@ function drawNotice() {
   $("orca-notice").replaceChildren(row);
 }
 
-function heading(label: string, n: number) {
-  return tag("h2", "feed-heading", `${label} ${n}`);
+function heading(group: OrcaRow["group"], n: number) {
+  const h = tag("h2", `orca-group ${group}`);
+  h.append(tag("span", "orca-dot"), STATE_LABELS[group], tag("span", "orca-count", String(n)));
+  return h;
 }
 
+// Three lines: the prompt and the time, the state, and the worktree.
 function rowNode(r: OrcaRow, key: string, now: number) {
   const row = tag("button", `orca-row ${r.group}`);
   row.type = "button";
   row.dataset.key = key;
-  // A row with no terminal cannot take a post.
-  row.disabled = r.handle === null;
-  row.setAttribute("aria-pressed", String(r.handle !== null && r.handle === selected));
-  const name = tag("span");
-  name.append(tag("b", "", r.repo), tag("span", "orca-branch", r.branch));
-  const main = tag("span", "orca-main");
-  main.append(name, tag("span", "orca-line", r.line));
-  const side = tag("span", "orca-side");
-  if (r.agent) side.append(tag("span", "orca-agent", r.agent));
-  side.append(elapsed(r.atMs, now, r.group === "done"));
-  row.append(tag("span", "orca-dot"), main, side);
+  // A row with no pane has no session to read.
+  row.disabled = r.paneKey === null;
+  row.setAttribute("aria-pressed", String(r.paneKey !== null && r.paneKey === selected));
+  const top = tag("span", "orca-top");
+  top.append(tag("span", "orca-prompt", r.line), tag("span", "orca-time", elapsed(r.atMs, now, r.group === "done")));
+  row.append(top, tag("span", "orca-state", STATE_LABELS[r.group]), tag("span", "orca-where", worktreeLabel(r)));
   row.onclick = () => {
-    selected = r.handle;
+    selected = r.paneKey;
     // A worktree chosen for a launch is chosen again for the next one.
     newPath = null;
     drawFeed();
+    drawWork();
     drawComposer();
+    syncChat();
     input().focus();
   };
   return row;
@@ -155,10 +152,10 @@ function drawFeed() {
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
   const rows = view?.rows ?? [];
   const nodes: HTMLElement[] = [];
-  for (const [group, label] of [["waiting", "入力待ち"], ["working", "動作中"], ["done", "完了"]] as const) {
+  for (const group of ["waiting", "working", "done"] as const) {
     const list = rows.filter((r) => r.group === group);
     if (!list.length) continue;
-    nodes.push(heading(label, list.length), ...list.map((r) => rowNode(r, r.handle ?? `${group}/${r.repo}/${r.branch}/${r.line}`, now)));
+    nodes.push(heading(group, list.length), ...list.map((r) => rowNode(r, r.paneKey ?? `${group}/${r.repo}/${r.branch}/${r.line}`, now)));
   }
   box.replaceChildren(...(nodes.length ? nodes : [emptyNode()]));
   box.scrollTop = top;
@@ -167,26 +164,40 @@ function drawFeed() {
 
 const worktreeLabel = (w: { repo: string; branch: string }) => `${w.repo} ・ ${w.branch}`;
 
-// The composer's chips and button follow the selection: a selected session is named and posted to; with none, a worktree and an agent are chosen and a new agent is started.
+// The work pane's header and the plus button follow the selection: a selected session is named, with none the new-session pane shows.
+function drawWork() {
+  const row = selectedRow();
+  $("orca-work-title").textContent = row ? worktreeLabel(row) : "新しいセッション";
+  $("orca-new").setAttribute("aria-pressed", String(!row));
+  $("orca-dest").hidden = !!row;
+  setChatWorking(row?.group === "working");
+}
+
+// Reads the history of the selected session while the screen is shown, and closes it when there is none, the target or the session changed, or the screen was left.
+function syncChat() {
+  const row = shown() ? selectedRow() : null;
+  const want = row?.paneKey ? JSON.stringify([view?.target ?? null, row.path, row.paneKey]) : null;
+  if (want === chatKey) return;
+  chatKey = want;
+  if (row?.paneKey && want) openChat(view?.target ?? null, row.path, row.paneKey);
+  else closeChat();
+}
+
+// The composer's chip and button follow the selection: a selected session is posted to; with none, a worktree is chosen and a new agent is started.
 function drawComposer() {
   const row = selectedRow();
   const worktrees = view?.worktrees ?? [];
   const worktree = worktrees.find((w) => w.path === newPath) ?? null;
-  $("orca-dest-label").hidden = !row;
-  $("orca-dest-label").textContent = row ? `${worktreeLabel(row)} のセッション` : "";
   const pick = $<HTMLButtonElement>("orca-dest-pick");
-  pick.hidden = !!row;
   pick.disabled = worktrees.length === 0;
   pick.textContent = worktree ? worktreeLabel(worktree) : worktrees.length ? "worktree を選ぶ" : "worktree がありません";
-  $("orca-agent").hidden = !!row;
-  $("orca-agent").textContent = AGENTS.find((a) => a.id === agent)!.label;
-  $("orca-new").hidden = !row;
   // The text is the one being posted while a post is on its way.
   input().disabled = busy;
-  input().placeholder = row ? "追加の指示を書く" : "起動するエージェントへの指示を書く";
+  input().placeholder = row ? "追加の指示を書く（/ でスキル）" : "起動するエージェントへの指示を書く（/ でスキル）";
   const send = $<HTMLButtonElement>("orca-send");
   send.textContent = row ? "送る" : "起動する";
-  send.disabled = busy || view?.state === "missing" || !input().value.trim() || (!row && !worktree);
+  // A session with no terminal can be read but takes no post.
+  send.disabled = busy || view?.state === "missing" || !input().value.trim() || (row ? row.handle === null : !worktree);
   updateCompletion();
 }
 
@@ -198,7 +209,7 @@ function adopt(read: OrcaOverview) {
   view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees } : next;
   badge = countOf(view.rows);
   switching = false;
-  if (selected !== null && !view.rows.some((r) => r.handle === selected)) selected = null;
+  if (selected !== null && !view.rows.some((r) => r.paneKey === selected)) selected = null;
   if (newPath !== null && !view.worktrees.some((w) => w.path === newPath)) newPath = null;
 }
 
@@ -208,7 +219,9 @@ function draw() {
   drawHeader();
   drawNotice();
   drawFeed();
+  drawWork();
   drawComposer();
+  syncChat();
 }
 
 // What a read after a failure, the first one and one with the command missing ask for: everything. A working list is read for its agents (the screen shown) or their count.
@@ -264,6 +277,8 @@ async function fetchSkills() {
 }
 
 function refresh() {
+  // The history is read only while the screen is shown.
+  if (!shown()) syncChat();
   if (document.hidden || loading) return;
   // A missing command is not looked for again by the clock.
   if (view?.state === "missing") return;
@@ -312,10 +327,42 @@ function pickWorktree(path: string) {
   input().focus();
 }
 
-function pickAgent(id: string) {
-  agent = id;
-  drawComposer();
-  input().focus();
+// The dialog under the "起動先" chip: the worktrees, narrowed by a filter on `{repo} ・ {branch}`. A pick closes it.
+function openDestPicker(anchor: Element) {
+  const worktrees = view?.worktrees ?? [];
+  const pop = tag("div", "menu orca-dest-pop");
+  pop.setAttribute("role", "dialog");
+  pop.setAttribute("aria-label", "起動先の worktree");
+  const filter = tag("input");
+  filter.setAttribute("aria-label", "worktree を絞り込む");
+  filter.placeholder = "worktree を絞り込む";
+  filter.autocomplete = "off";
+  const rows = tag("div", "orca-dest-list");
+  const drawRows = () => {
+    const q = filter.value.trim().toLowerCase();
+    const hits = worktrees.filter((w) => worktreeLabel(w).toLowerCase().includes(q));
+    rows.replaceChildren(
+      ...(hits.length
+        ? hits.map((w) => {
+            const b = tag("button");
+            b.type = "button";
+            b.dataset.path = w.path;
+            b.setAttribute("aria-current", String(w.path === newPath));
+            b.append(tag("b", "", w.repo), tag("span", "", w.branch));
+            b.onclick = () => {
+              closeMenu();
+              pickWorktree(w.path);
+            };
+            return b;
+          })
+        : [tag("p", "empty", "該当する worktree がありません")]),
+    );
+  };
+  filter.oninput = drawRows;
+  drawRows();
+  pop.append(filter, rows);
+  showMenu(anchor, pop);
+  filter.focus();
 }
 
 function showPostError(message: string | null) {
@@ -329,13 +376,13 @@ async function post() {
   const row = selectedRow();
   const target = view?.target ?? null;
   if (busy || !text.trim() || view === null) return;
-  if (!row && !newPath) return;
+  if (row ? row.handle === null : !newPath) return;
   busy = true;
   showPostError(null);
   drawComposer();
   try {
     if (row) await invoke("orca_send", { handle: row.handle!, text, environment: target });
-    else await invoke("orca_launch", { agent, path: newPath!, text, environment: target });
+    else await invoke("orca_launch", { path: newPath!, text, environment: target });
     input().value = "";
     load(clockScope(), true);
   } catch (e) {
@@ -386,7 +433,7 @@ function markActive() {
 // Opens, narrows or closes the list for the text and the caret as they are. The highlight stays on the same skill while it is still listed; `reset` (typing) puts it on the first.
 function updateCompletion(reset = false) {
   // Only the text being typed in opens it: a read in the background must not.
-  const query = !dismissed && document.activeElement === input() && isClaudeDest() ? slashQuery() : null;
+  const query = !dismissed && document.activeElement === input() ? slashQuery() : null;
   const matches = query === null ? [] : matchesOf(query);
   if (!matches.length) {
     if (completion) closeCompletion();
@@ -447,6 +494,8 @@ function onKey(e: KeyboardEvent) {
 }
 
 export function initOrca() {
+  initOrcaChat();
+  initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.3, property: "--list-w" });
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", refresh);
   $("orca-refresh").onclick = () => {
@@ -455,18 +504,13 @@ export function initOrca() {
     load("full", true);
   };
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
-  $("orca-dest-pick").onclick = (e) => {
-    const items = (view?.worktrees ?? []).map((w) => ({ label: worktreeLabel(w), color: "var(--chip-line)", current: w.path === newPath, pick: () => pickWorktree(w.path) }));
-    openMenu(e.currentTarget as Element, items);
-  };
-  $("orca-agent").onclick = (e) => {
-    const items = AGENTS.map((a) => ({ label: a.label, color: "var(--accent)", current: a.id === agent, pick: () => pickAgent(a.id) }));
-    openMenu(e.currentTarget as Element, items);
-  };
+  $("orca-dest-pick").onclick = (e) => openDestPicker(e.currentTarget as Element);
   $("orca-new").onclick = () => {
     selected = null;
     drawFeed();
+    drawWork();
     drawComposer();
+    syncChat();
     input().focus();
   };
   $("orca-form").onsubmit = (e) => {

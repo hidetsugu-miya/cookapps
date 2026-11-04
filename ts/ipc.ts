@@ -175,8 +175,15 @@ export interface Commands {
   orca_set_target: { args: { environment: string | null }; result: null };
   // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.
   orca_send: { args: { handle: string; text: string; environment: string | null }; result: null };
-  // Starts `agent` ("claude" or "codex") in the worktree at `path` with `text` as its first prompt.
-  orca_launch: { args: { agent: string; path: string; text: string; environment: string | null }; result: null };
+  // Starts Claude in the worktree at `path` with `text` as its first prompt.
+  orca_launch: { args: { path: string; text: string; environment: string | null }; result: null };
+  // Reads the history of the session in the pane `paneKey` of the worktree `path` (A-7) and sends it to `channel` (an `OrcaChatEvent` at a time) until it is closed or another is opened; only one session is read.
+  orca_chat_open: { args: { environment: string | null; path: string; paneKey: string; channel: unknown }; result: null };
+  orca_chat_close: { args: undefined; result: null };
+  // Reads the page of older messages of the session that is read; they arrive as an `items` event.
+  orca_chat_older: { args: undefined; result: null };
+  // Pauses (`true`, the window is hidden) or resumes the periodic reads of the session that is read; the connection and what is held stay.
+  orca_chat_pause: { args: { paused: boolean }; result: null };
   // The skills of Claude Code on the machine the app runs on (the CLI cannot list another machine's, so the target does not matter), as the commands to type (`/name`, `/plugin:name`), sorted.
   orca_skills: { args: undefined; result: OrcaSkill[] };
   app_info: { args: undefined; result: AppInfo };

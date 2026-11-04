@@ -304,32 +304,42 @@
       <div id="slack-notice"></div>
       <div id="slack-feed"></div>
     </section>
-    <section id="orca" hidden>
-      <header id="orca-header">
-        <h1>Orca</h1>
-        <span id="orca-status" class="status off">確認中</span>
-        <button id="orca-target" class="status off" aria-haspopup="menu" hidden>確認中</button>
-        <button id="orca-refresh" class="icon-btn" aria-label="更新">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
-        </button>
-      </header>
-      <div id="orca-notice"></div>
-      <div id="orca-feed"></div>
-      <form id="orca-form">
-        <p id="orca-error" class="pending fail" role="alert" hidden></p>
-        <div class="orca-dest">
-          <span>宛先</span>
-          <span id="orca-dest-label" class="review-chip on" hidden></span>
-          <button id="orca-dest-pick" type="button" class="review-chip" aria-haspopup="menu"></button>
-          <button id="orca-agent" type="button" class="review-chip" aria-haspopup="menu" aria-label="起動するエージェント"></button>
-          <button id="orca-new" type="button" class="text-btn">新しく起動する</button>
+    <section id="orca" class="split-main" hidden>
+      <aside id="orca-list" aria-label="セッション">
+        <header id="orca-header">
+          <span id="orca-status" class="status off">確認中</span>
+          <button id="orca-target" class="status off" aria-haspopup="menu" hidden>確認中</button>
+          <button id="orca-new" class="icon-btn" aria-label="新しく起動する" aria-pressed="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button id="orca-refresh" class="icon-btn" aria-label="更新">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+          </button>
+        </header>
+        <div id="orca-notice"></div>
+        <div id="orca-feed"></div>
+      </aside>
+      <div id="orca-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="一覧の幅" aria-valuemin="20" aria-valuemax="50" aria-valuenow="30" tabindex="0"><span></span></div>
+      <div id="orca-work">
+        <header id="orca-work-head"><h1 id="orca-work-title">新しいセッション</h1></header>
+        <div id="orca-chat-status"></div>
+        <div id="orca-chat">
+          <button id="orca-older" type="button" class="text-btn" hidden>以前の履歴を読む</button>
+          <div id="orca-items"></div>
         </div>
-        <div class="composer">
-          <div id="orca-complete" role="listbox" aria-label="スキル" hidden></div>
-          <textarea id="orca-input" class="chat-input" rows="2" aria-label="Orca への投稿" aria-controls="orca-complete" autocomplete="off" spellcheck="false"></textarea>
-          <button id="orca-send" type="submit" class="text-btn primary" disabled>起動する</button>
-        </div>
-      </form>
+        <form id="orca-form">
+          <p id="orca-error" class="pending fail" role="alert" hidden></p>
+          <div id="orca-dest" class="orca-dest">
+            <span>起動先</span>
+            <button id="orca-dest-pick" type="button" class="review-chip" aria-haspopup="dialog"></button>
+          </div>
+          <div class="composer">
+            <div id="orca-complete" role="listbox" aria-label="スキル" hidden></div>
+            <textarea id="orca-input" class="chat-input" rows="2" aria-label="Orca への投稿" aria-controls="orca-complete" autocomplete="off" spellcheck="false"></textarea>
+            <button id="orca-send" type="submit" class="text-btn primary" disabled>起動する</button>
+          </div>
+        </form>
+      </div>
     </section>
     <section id="slack-thread" class="split-main" hidden>
       <div id="st-detail">

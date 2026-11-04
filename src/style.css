@@ -663,33 +663,71 @@ button.status:hover { filter: brightness(.95); }
 .proofread-row .text-btn:disabled { opacity: .4; cursor: default; }
 .proofread-row .text-btn:disabled:hover { background: #fff; }
 
-/* The Orca screen (A-6): a row per agent, grouped by what it waits for, and the composer pinned under the list. */
-#orca { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#orca-header { padding: 14px 24px 10px 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
-#orca-header h1 { flex: none; margin-right: 8px; }
-#orca-header .icon-btn { margin-left: auto; color: #444746; border-radius: 50%; }
+/* The Orca screen (A-6, A-7): the list of agents on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the history of the selected agent and the composer pinned under it. */
+#orca { flex: 1; min-height: 0; display: flex; }
+#orca-list { flex: none; width: clamp(20%, var(--list-w, 30%), 50%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
+#orca-split { flex: none; }
+#orca-header { gap: 8px; padding: 10px 8px 10px 16px; border-bottom: 1px solid var(--line); }
+#orca-header .icon-btn { color: #444746; }
+#orca-header .icon-btn[aria-pressed="true"] { background: var(--soft); }
+#orca-new { margin-left: auto; }
 button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
-#orca-notice:not(:empty) { padding: 8px 32px 0; }
-#orca-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }
-.orca-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; column-gap: 12px; width: 100%; min-height: 60px; box-sizing: border-box; padding: 10px 16px; border: 0; border-radius: 12px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+#orca-notice:not(:empty) { padding: 8px 12px 0; }
+#orca-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
+.orca-group { flex: none; display: flex; align-items: center; gap: 8px; margin: 8px 8px 4px; font-size: 12px; font-weight: 600; color: #444; }
+.orca-group .orca-count { margin-left: auto; font-weight: normal; color: var(--muted); }
+.orca-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.orca-group.waiting .orca-dot { background: var(--warn); }
+.orca-group.done .orca-dot { background: var(--muted); }
+.orca-row { display: flex; flex-direction: column; gap: 3px; width: 100%; min-height: 72px; box-sizing: border-box; margin-bottom: 2px; padding: 8px 10px; border: 0; border-radius: 12px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .orca-row:hover:not(:disabled) { background: var(--hover); }
 .orca-row[aria-pressed="true"] { background: var(--soft); }
-.orca-row:disabled { cursor: default; }
+.orca-row:disabled { cursor: default; opacity: .6; }
 .orca-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.orca-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
-.orca-row.waiting .orca-dot { background: var(--warn); }
-.orca-row.done .orca-dot { background: var(--muted); }
-.orca-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.orca-branch { margin-left: 8px; font-size: 12px; color: var(--muted); }
-.orca-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #444; }
-.orca-side { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); white-space: nowrap; }
-.orca-agent { padding: 2px 8px; border: 1px solid var(--chip-line); border-radius: 10px; }
-#orca-form { flex: none; padding: 12px 24px 20px 32px; border-top: 1px solid var(--line); background: var(--bar); }
+.orca-top { display: flex; gap: 8px; width: 100%; }
+.orca-prompt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-time { flex: none; font-size: 12px; color: var(--muted); }
+.orca-state { font-size: 12px; color: #444; }
+.orca-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
+#orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#orca-work-head { padding: 10px 24px; min-height: 52px; box-sizing: border-box; border-bottom: 1px solid var(--line); }
+#orca-chat-status:not(:empty) { padding: 8px 24px 0; }
+#orca-chat { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 8px; }
+#orca-older { display: block; margin: 0 auto 12px; height: 28px; padding: 0 12px; font: inherit; font-size: 12px; }
+#orca-items { display: flex; flex-direction: column; gap: 12px; }
+.orca-user { align-self: flex-end; max-width: 80%; padding: 8px 12px; border-radius: 12px; background: var(--soft); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.orca-assistant { line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.orca-assistant > :first-child { margin-top: 0; }
+.orca-assistant > :last-child { margin-bottom: 0; }
+.orca-assistant p, .orca-assistant ul, .orca-assistant ol, .orca-assistant pre, .orca-assistant blockquote { margin: 0 0 8px; }
+.orca-assistant h1, .orca-assistant h2, .orca-assistant h3 { margin: 12px 0 6px; font-size: 15px; white-space: normal; }
+.orca-assistant ul { list-style: disc; }
+.orca-assistant ul, .orca-assistant ol { padding-left: 22px; }
+.orca-assistant a { color: var(--accent); }
+.orca-assistant code { padding: 1px 4px; border-radius: 4px; background: var(--code); font-family: ui-monospace, monospace; font-size: 12px; }
+.orca-assistant pre { padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 12px; background: var(--code); overflow-x: auto; }
+.orca-assistant pre code { padding: 0; background: none; }
+.orca-assistant blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
+.orca-tools { align-self: flex-start; max-width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.orca-tools-btn { align-self: flex-start; min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--bar); font: inherit; font-size: 13px; color: #444; cursor: pointer; }
+.orca-tools-btn:hover { background: var(--hover); }
+.orca-tools-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.orca-chev { display: inline-flex; transition: transform .1s; }
+.orca-chev svg { width: 16px; height: 16px; }
+.orca-tools-btn[aria-expanded="true"] .orca-chev { transform: rotate(90deg); }
+.orca-tool-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--code); font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: #444; user-select: text; -webkit-user-select: text; }
+.orca-tool-call { white-space: pre-wrap; overflow-wrap: anywhere; }
+#orca-form { flex: none; padding: 12px 24px 20px; border-top: 1px solid var(--line); background: var(--bar); }
 #orca-error { margin-bottom: 8px; }
 .orca-dest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
 .orca-dest .review-chip { height: 28px; padding: 0 12px; border-radius: 14px; font-size: 12px; }
-.orca-dest .review-chip.on { border-color: var(--accent); background: var(--soft); color: var(--ins); }
-.orca-dest .text-btn { height: 28px; padding: 0 12px; border-radius: 14px; font: inherit; }
+.orca-dest-pop { width: 320px; max-height: calc(100vh - 32px); padding: 8px; gap: 8px; }
+.orca-dest-pop input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--chip-line); border-radius: 8px; font: inherit; }
+.orca-dest-pop input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.orca-dest-list { display: flex; flex-direction: column; overflow-y: auto; }
+.orca-dest-pop button { flex: none; height: auto; flex-direction: column; align-items: flex-start; gap: 0; padding: 6px 10px; }
+.orca-dest-pop button span { font-size: 12px; color: var(--muted); }
+.orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: 12px; }
 #orca-form .composer { position: relative; flex-direction: row; align-items: flex-end; gap: 12px; padding: 10px 12px; }
 #orca-input { flex: 1; min-width: 0; }
 #orca-send { flex: none; height: 44px; padding: 0 20px; border-radius: 22px; font: inherit; }

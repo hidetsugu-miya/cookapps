@@ -8,6 +8,8 @@ pub mod gmail;
 pub mod image_senders;
 pub mod images;
 pub mod orca;
+pub mod orca_chat;
+pub mod orca_e2ee;
 pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
@@ -179,6 +181,7 @@ pub fn run() {
         .manage(slack::SlackState::default())
         .manage(std::sync::Mutex::new(None::<tauri_plugin_updater::Update>))
         .manage(update::Installed::default())
+        .manage(orca_chat::OrcaChat::default())
         .manage(Mutex::new(Badge::default()))
         .setup(|app| {
             // No Dock icon, and no focus taken from the developer's apps while the E2E run drives the window.
@@ -268,6 +271,10 @@ pub fn run() {
             orca::orca_send,
             orca::orca_launch,
             orca::orca_skills,
+            orca_chat::orca_chat_open,
+            orca_chat::orca_chat_close,
+            orca_chat::orca_chat_older,
+            orca_chat::orca_chat_pause,
             update::app_info,
             update::update_mode,
             update::set_update_mode,

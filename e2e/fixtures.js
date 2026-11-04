@@ -12,7 +12,7 @@
 // An unmocked command is also recorded in window.__e2e_unmocked__: the app swallows some rejections, and wdio.conf.ts prints the list when a test fails.
 // The window is never shown (visible: false in tauri.e2e.conf.json), and WKWebView then reports document.hidden and runs no animation frames,
 // which would stop the app's sync, Todo refresh and its requestAnimationFrame work. Make the page behave as in a shown window.
-Object.defineProperty(document, "hidden", { get: () => false });
+Object.defineProperty(document, "hidden", { get: () => false, configurable: true });
 Object.defineProperty(document, "visibilityState", { get: () => "visible" });
 window.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 16);
 
@@ -50,6 +50,10 @@ const answers = {
   // No orca command: the Orca screen reads once and stops.
   orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], known: true },
   orca_skills: [],
+  orca_chat_open: null,
+  orca_chat_close: null,
+  orca_chat_older: null,
+  orca_chat_pause: null,
   fetch_images: {},
   claude_status: { state: "missing" },
   claude_model_settings: Object.fromEntries(

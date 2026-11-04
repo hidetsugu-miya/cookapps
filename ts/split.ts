@@ -1,21 +1,33 @@
-// The divider between a screen's left part and its Claude pane (the Slack compose screen and the Slack thread): it sets the pane's width to between a third and a half of `main`.
-// Each divider keeps its own ratio in memory, as a ratio so a resized window keeps it. The CSS (`.split-main`, `.split-chat`) holds the range too.
-const MIN_RATIO = 1 / 3;
-const MAX_RATIO = 1 / 2;
+// The divider between a screen's parts: the Claude pane of the Slack compose screen and the Slack thread (on the right, a third to a half of `main`),
+// and the list of the Orca screen (on the left, a fifth to a half). It sets that pane's width as a ratio of `main`, so a resized window keeps it.
+// Each divider keeps its own ratio in memory. The CSS (`.split-chat`, `#orca-list`) holds the range too.
 const KEY_STEP = 0.02;
 
-// `main` is the element that holds the left part, the divider and the pane, `split` the divider.
-export function initSplit(main: HTMLElement, split: HTMLElement) {
-  let ratio = MIN_RATIO;
+export interface SplitOptions {
+  // The side of `main` the pane is on. Dragging towards the other side widens it.
+  side?: "left" | "right";
+  min?: number;
+  max?: number;
+  // The ratio at the start; the minimum when left out.
+  initial?: number;
+  // The CSS property that carries the pane's width as a percentage.
+  property?: string;
+}
+
+// `main` is the element that holds the pane, the divider and the rest, `split` the divider.
+export function initSplit(main: HTMLElement, split: HTMLElement, { side = "right", min = 1 / 3, max = 1 / 2, initial = min, property = "--chat-w" }: SplitOptions = {}) {
+  let ratio = initial;
+  // How far the pane is from the edge of `main` it sits on, as a ratio of the box.
+  const ratioAt = (box: DOMRect, x: number) => (side === "right" ? box.right - x : x - box.left) / box.width;
 
   function setRatio(next: number) {
-    ratio = Math.min(MAX_RATIO, Math.max(MIN_RATIO, next));
-    main.style.setProperty("--chat-w", `${ratio * 100}%`);
+    ratio = Math.min(max, Math.max(min, next));
+    main.style.setProperty(property, `${ratio * 100}%`);
     split.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
   }
 
   setRatio(ratio);
-  // The divider is dragged with pointer events on the document, so the drag goes on when the pointer leaves it. Dragging left widens the Claude pane.
+  // The divider is dragged with pointer events on the document, so the drag goes on when the pointer leaves it.
   split.onpointerdown = (down) => {
     if (down.button !== 0) return;
     down.preventDefault();
@@ -32,7 +44,7 @@ export function initSplit(main: HTMLElement, split: HTMLElement) {
     };
     const move = (e: PointerEvent) => {
       if (e.pointerId !== pointer) return;
-      pending = (box.right - e.clientX) / box.width;
+      pending = ratioAt(box, e.clientX);
       if (!frame) frame = requestAnimationFrame(flush);
     };
     const end = (e: PointerEvent) => {
@@ -51,6 +63,8 @@ export function initSplit(main: HTMLElement, split: HTMLElement) {
   split.onkeydown = (e) => {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
-    setRatio(ratio + (e.key === "ArrowLeft" ? KEY_STEP : -KEY_STEP));
+    // The arrow that points away from the pane's edge widens it.
+    const widen = e.key === (side === "right" ? "ArrowLeft" : "ArrowRight");
+    setRatio(ratio + (widen ? KEY_STEP : -KEY_STEP));
   };
 }

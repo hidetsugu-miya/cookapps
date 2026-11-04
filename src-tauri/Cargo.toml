@@ -17,14 +17,18 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+crypto_secretbox = "0.1"
 dirs = "7"
 emojis = "0.9"
 encoding_rs = "0.8"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 getrandom = "0.4"
+hkdf = "0.13"
 keyring = "4"
 keyring-core = { version = "1", optional = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query", "multipart"] }
 rmcp = { version = "3.8", features = ["server", "transport-io", "macros"] }
+salsa20 = "0.10"
 schemars = "1"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
@@ -35,7 +39,9 @@ tauri-plugin-updater = "2"
 tauri-plugin-wdio = { version = "1.5.1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1.5.1", optional = true }
 tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "sync", "time"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 url = "2"
+x25519-dalek = "3"
 
 # External images on macOS are fetched through NSURLSession (see `images/macos.rs`).
 [target.'cfg(target_os = "macos")'.dependencies]
