@@ -177,6 +177,8 @@ function rowOf(m: TimelineMessage, key: string) {
   main.append(meta, tag("span", status === "ok" ? "feed-text" : "feed-text muted", text));
   if (status === "ok" && m.replyCount > 0) main.append(tag("span", "feed-replies", `返信 ${m.replyCount} 件`));
   if (m.watch && m.watch.newReplies > 0) main.append(tag("span", "feed-new", `新しい返信 ${m.watch.newReplies} 件`));
+  // New replies that could not be counted (a thread longer than the page Rust reads): no number.
+  else if (m.watch?.uncounted) main.append(tag("span", "feed-new", "新しい返信あり"));
   row.append(avatar, main, tag("span", "feed-date", formatDate(slackMs(m.ts))));
   // A thread that cannot be read has nothing to open; its bookmark lets it go.
   row.disabled = status === "unreadable";
@@ -192,19 +194,25 @@ function rowOf(m: TimelineMessage, key: string) {
 // Opening a message sets its channel's read position to it: the row and the older ones of the channel become read at once (an unread row leaves the list, a watched one stays and is no longer bold), and Slack is told.
 // Nothing changes when the row is read already, or when the token cannot write the position (the next read would show it unread again). A failure is logged by Rust; the next read shows Slack's value.
 function markRead(m: TimelineMessage) {
-  if (!m.unread || !timeline) return;
+  // A watched row moves the position to the newest unread message Rust holds of its thread (its own message, or a reply also sent to the channel); another row to its own message.
+  const to = m.watch ? m.watch.unreadTo : m.unread ? m.ts : null;
+  if (!to || !timeline) return;
   const cannotWrite = timeline.missing.some((x) => x.teamId === m.teamId && lacksWrite(x));
   if (cannotWrite) return;
-  const moves = (x: TimelineMessage) => x.unread && x.teamId === m.teamId && x.channel === m.channel && notAfter(x.ts, m.ts);
+  const moves = (x: TimelineMessage) => x.unread && x.teamId === m.teamId && x.channel === m.channel && notAfter(x.ts, to);
   const moved = [...timeline.messages, ...timeline.watched].filter(moves).length;
-  for (const x of timeline.watched) if (moves(x)) x.unread = false;
+  for (const x of timeline.watched) {
+    if (x.teamId !== m.teamId || x.channel !== m.channel) continue;
+    if (x.watch?.unreadTo && notAfter(x.watch.unreadTo, to)) x.watch.unreadTo = null;
+    if (moves(x)) x.unread = false;
+  }
   timeline.messages = timeline.messages.filter((x) => !moves(x));
   m.unread = false;
   unreadCount = Math.max(0, unreadCount - moved);
   drawBadge();
   // A read that is on its way may answer with the old position (the rows would be unread again): once Rust has the new one, the list is made again from its cache, without waiting for the next period.
   const during = isLoading();
-  invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: m.ts }).then(
+  invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: to }).then(
     () => {
       if (during || isLoading()) load(true);
     },
@@ -224,7 +232,10 @@ function notAfter(a: string, b: string) {
 
 // Opening a watched row clears its "新しい返信" at once; Rust moves the position the replies are counted from. A failure is ignored: the next read shows the count again.
 function seeWatched(m: TimelineMessage) {
-  if (m.watch) m.watch.newReplies = 0;
+  if (m.watch) {
+    m.watch.newReplies = 0;
+    m.watch.uncounted = false;
+  }
   invoke("slack_watch_seen", { teamId: m.teamId, channel: m.channel, ts: m.ts }).catch(() => {});
 }
 
@@ -249,7 +260,7 @@ async function watchThread(m: TimelineMessage) {
   const ts = m.threadTs ?? m.ts;
   const same = (x: TimelineMessage) => x.teamId === m.teamId && x.channel === m.channel && (x.threadTs ?? x.ts) === ts;
   timeline.messages = timeline.messages.filter((x) => !same(x));
-  timeline.watched = [{ ...m, ts, threadTs: null, watch: { newReplies: 0, status: "ok" } }, ...timeline.watched];
+  timeline.watched = [{ ...m, ts, threadTs: null, watch: { newReplies: 0, uncounted: false, status: "ok", unreadTo: m.unread ? m.ts : null } }, ...timeline.watched];
   draw();
   await guarded(() => invoke("slack_watch", { teamId: m.teamId, channel: m.channel, ts }));
   load(true);
@@ -344,7 +355,9 @@ function emptyNode() {
   }
   if (timeline === null && loadError === null) return loadingRow();
   // A read that failed with nothing to show: the error of the call, or of every workspace that could not be read.
-  const failure = loadError ?? (timeline?.failed.length ? timeline.failed.map((f) => `${f.team}: ${f.error}`).join("、") : null);
+  // Only when every connected workspace failed; a failure of some is in the notice above the list, and the rest has no message.
+  const everyFailed = timeline !== null && timeline.failed.length > 0 && timeline.failed.length >= workspaces.length;
+  const failure = loadError ?? (timeline && everyFailed ? timeline.failed.map((f) => `${f.team}: ${f.error}`).join("、") : null);
   if (failure !== null) {
     const row = tag("div", "pending fail");
     const retry = tag("button", "text-btn", "再読み込み");
@@ -541,7 +554,11 @@ export function initSlackList() {
   feed().addEventListener("scroll", () => {
     if (!$("slack-list").hidden) listScroll = feed().scrollTop;
   });
-  $("slack-mark-all").onclick = markAllRead;
+  // A double click is two clicks (the second has `detail` 2): it must not arm the button and confirm it at once.
+  $("slack-mark-all").onclick = (e) => {
+    if ((e as MouseEvent).detail > 1) return;
+    markAllRead();
+  };
   $("slack-mark-all").onblur = disarmMarkAll;
   $("slack-hidden-open").onclick = openSettings;
 }

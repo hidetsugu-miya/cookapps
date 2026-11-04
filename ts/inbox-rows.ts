@@ -108,7 +108,7 @@ async function markRows(list: { t: ThreadItem; li: HTMLLIElement }[], read: bool
   );
   updateBadge();
   if (failed.length) showError(`${failed.length} 件を更新できませんでした: ${failed[0]}`);
-  if (relogin) load();
+  if (relogin) load(true);
   return done;
 }
 

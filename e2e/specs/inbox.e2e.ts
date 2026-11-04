@@ -224,6 +224,19 @@ describe("inbox", () => {
       await expect($(".toast")).toHaveText(expect.stringContaining("元に戻しました"));
     });
 
+    it("reads the list again for a login that is needed without clearing the error of another failure", async () => {
+      const setRead = await mock("set_read", holds);
+      await $("#mail-mark-all").click();
+      await waitForCalls(setRead, 2);
+      await release(setRead, rejects("Gmail が断りました"));
+      await release(setRead, null);
+      await expect($("#error")).toHaveText(expect.stringContaining("Gmail が断りました"));
+      // The list was read again (the startup read and this one), and it did not hide the error.
+      await waitForCalls("inbox", 2);
+      await browser.pause(300);
+      await expect($("#error")).toHaveText(expect.stringContaining("Gmail が断りました"));
+    });
+
     it("keeps a row as it is when a sync arrives while its request is on its way", async () => {
       const setRead = await mock("set_read", holds);
       await $("#mail-mark-all").click();

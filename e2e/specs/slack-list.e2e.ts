@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeReady, count, holds, inbox, mock, ownIcon, pngUri, rejects, release, slackLoad, slackThread, slackTs, textsOf, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, watchedMessage, workspace } from "../support";
+import { boot, callsOf, claudeReady, count, holds, inbox, mock, onceId, ownIcon, pngUri, rejects, release, slackLoad, slackThread, slackTs, textsOf, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, watchedMessage, workspace } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 
@@ -902,8 +902,8 @@ describe("slack list", () => {
   });
 
   it("keeps a thread that cannot be read as a row that says so, cannot be opened, and can be let go; a thread not read yet says it is being read", async () => {
-    const gone = watchedMessage(slackTs(10), "不明", "ops", "", 0, { channel: "C3", user: null, watch: { newReplies: 0, status: "unreadable" } });
-    const waiting = watchedMessage(slackTs(20), "不明", "ops", "", 0, { channel: "C3", user: null, watch: { newReplies: 0, status: "pending" } });
+    const gone = watchedMessage(slackTs(10), "不明", "ops", "", 0, { channel: "C3", user: null, watch: { newReplies: 0, uncounted: false, status: "unreadable", unreadTo: null } });
+    const waiting = watchedMessage(slackTs(20), "不明", "ops", "", 0, { channel: "C3", user: null, watch: { newReplies: 0, uncounted: false, status: "pending", unreadTo: null } });
     await openList(timeline([], { watched: [gone, waiting] }));
     await waitForCount("#slack-feed .feed-row", 2);
     expect(await textsOf("#slack-feed .feed-text")).toEqual(["このスレッドは読めません（削除されたか、チャンネルを抜けた可能性があります）", "読み込んでいます…"]);
@@ -927,9 +927,59 @@ describe("slack list", () => {
     });
     const before = await active();
     expect(before).toMatch(/\/watch$/);
-    await mock("slack_timeline", timeline(many(20), { watched: [{ ...watched[0], watch: { newReplies: 3, status: "ok" } }], refreshSecs: 1 }));
+    await mock("slack_timeline", timeline(many(20), { watched: [{ ...watched[0], watch: { newReplies: 3, uncounted: false, status: "ok", unreadTo: null } }], refreshSecs: 1 }));
     await waitForText("#slack-feed .feed-new", "新しい返信 3 件");
     expect(await active()).toBe(before);
     await expect($("#slack-list")).toBeDisplayed();
+  });
+
+  it("does not let a double click arm and confirm すべて既読にする at once: the second click of a double click is ignored", async () => {
+    await openList(timeline(unreadSample()));
+    await waitForCount("#slack-feed .feed-row", 3);
+    const all = await mock("slack_mark_all_read", { marked: 2, failed: 0 });
+    // A double click is two clicks with `detail` 1 and 2.
+    await browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      const button = document.getElementById("slack-mark-all")!;
+      for (const detail of [1, 2]) button.dispatchEvent(new MouseEvent("click", { detail, bubbles: true }));
+    }, onceId());
+    await expect($("#slack-mark-all")).toHaveText("もう一度押すとすべて既読");
+    await browser.pause(300);
+    expect(await callsOf(all)).toEqual([]);
+    expect(await count("#slack-feed .feed-row")).toBe(3);
+    // A later single click confirms.
+    await $("#slack-mark-all").click();
+    expect(await waitForCalls(all)).toEqual([null]);
+  });
+
+  it("says 新しい返信あり, with no number, for new replies that could not be counted", async () => {
+    const long = watchedMessage(slackTs(10), "Carol Example", "ops", "A long thread", 0, { channel: "C3" });
+    long.watch = { newReplies: 0, uncounted: true, status: "ok", unreadTo: null };
+    await openList(timeline([], { watched: [long, ...watchedSample()] }));
+    await waitForCount("#slack-feed .feed-row", 3);
+    expect(await textsOf("#slack-feed .feed-new")).toEqual(["新しい返信あり", "新しい返信 2 件"]);
+  });
+
+  it("moves the read position to the newest unread message of the thread when a watched row is opened, also when the thread's own message is read", async () => {
+    const reply = slackTs(2, 7);
+    const row = watchedMessage(slackTs(10), "Carol Example", "ops", "Watched read", 0, { channel: "C3" });
+    row.watch = { newReplies: 0, uncounted: false, status: "ok", unreadTo: reply };
+    const mark = await openUnread(unreadSample(), { watched: [row] });
+    await mock("slack_thread", slackThread([threadMessage(row.ts, "Carol Example", "Watched read")]));
+    await openRow("Watched read");
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C3", ts: reply }]);
+    await expect($("#slack-thread")).toBeDisplayed();
+  });
+
+  it("lists nothing but the notice when only some workspaces failed, and offers 再読み込み only when every workspace failed", async () => {
+    const other = { ...workspace, teamId: "T2", team: "Other Team" };
+    const failure = { teamId: "T2", team: "Other Team", error: "接続できません" };
+    await boot({ inbox: inbox(), slack_load: { workspaces: [workspace, other], recent: [] }, slack_timeline: timeline([], { failed: [failure], refreshSecs: 1 }), claude_status: claudeReady });
+    await $("#nav-slack").click();
+    await expect($("#slack-feed .feed-empty")).toHaveText("メッセージはありません");
+    expect(await count("#slack-feed .pending.fail")).toBe(0);
+    expect(await textsOf("#slack-notice > div")).toEqual(["Other Team を読み込めませんでした: 接続できません設定を開く"]);
+    await mock("slack_timeline", timeline([], { failed: [failure, { ...failure, teamId: "T1", team: "Example Team" }], refreshSecs: 1 }));
+    await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした"));
   });
 });

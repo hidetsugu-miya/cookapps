@@ -105,6 +105,19 @@ describe("slack thread", () => {
     expect(await textsOf("#st-msgs .st-avatar .av-text")).toEqual(["BE"]);
   });
 
+  it("tells Rust the newest reply it read, to move a watched thread's seen position, and only when the thread has replies", async () => {
+    await openDetail();
+    expect(await waitForCalls("slack_watch_seen")).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, latestTs: reply1 }]);
+    // A thread with no reply sends nothing.
+    await $("#st-back").click();
+    await mock("slack_watch_seen", true);
+    await mock("slack_thread", slackThread([threadMessage(root, "Alice Example", rootText)]));
+    await $("#slack-feed .feed-row").click();
+    await waitForCount("#st-msgs .st-msg", 1);
+    await browser.pause(300);
+    expect(await callsOf("slack_watch_seen")).toEqual([]);
+  });
+
   it("goes back to the list where it was scrolled to and reads nothing again", async () => {
     // Unread rows, each in a channel of its own: the list shows 10 of them until the button shows the rest, and opening one takes only that row out.
     const messages = Array.from({ length: 20 }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `A message of the list, number ${i}`, { unread: true, channel: `C${i}` }));

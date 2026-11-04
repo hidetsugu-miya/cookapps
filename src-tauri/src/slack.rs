@@ -69,6 +69,8 @@ const BAD_URL: &str = "Slack のメッセージかチャンネルのリンクを
 const BAD_TARGET: &str = "貼り付け先が不正です";
 const BAD_MESSAGE_URL: &str = "Slack のメッセージのリンクを入力してください";
 const NO_MESSAGE: &str = "リンク先のメッセージが見つかりません";
+const WATCH_LIMITED: &str =
+    "Slack の呼び出し制限のため、しばらくウォッチできません。少し待ってからやり直してください";
 const UNWATCHABLE: &str = "このスレッドは読めないため、ウォッチできません";
 const NO_WORKSPACE: &str = "このリンクのワークスペースは接続されていません。設定で追加してください";
 
@@ -1444,7 +1446,11 @@ pub enum WatchStatus {
 #[serde(rename_all = "camelCase")]
 pub struct WatchMark {
     new_replies: u32,
+    /// The thread has new replies that could not be counted (it is longer than the first page `conversations.replies` gave and its newest reply is after the last one seen): the row says so without a number.
+    uncounted: bool,
     status: WatchStatus,
+    /// The newest unread message the cache holds of the thread (its own message, or a reply also sent to the channel): opening the row sets the channel's read position to it.
+    unread_to: Option<String>,
 }
 
 /// A workspace the timeline could not read at all.
@@ -1593,6 +1599,8 @@ enum WatchRead {
         parent: Box<Raw>,
         replies: Vec<String>,
         latest_reply: Option<String>,
+        /// The thread goes on past the page that was read.
+        truncated: bool,
     },
     /// Slack says the thread cannot be read.
     Unreadable,
@@ -1629,6 +1637,8 @@ struct TimelineCache {
     watch: Mutex<HashMap<WatchKey, WatchEntry>>,
     /// The same as `info_limited_until`, for `conversations.replies`.
     replies_limited_until: Mutex<HashMap<String, Instant>>,
+    /// The same, for `conversations.mark` ("すべて既読にする").
+    mark_limited_until: Mutex<HashMap<String, Instant>>,
 }
 
 impl TimelineCache {
@@ -1660,6 +1670,7 @@ impl TimelineCache {
             .unwrap()
             .retain(|(t, _, _), _| t != team_id);
         self.replies_limited_until.lock().unwrap().remove(team_id);
+        self.mark_limited_until.lock().unwrap().remove(team_id);
     }
 
     fn watch_entry(&self, key: &WatchKey) -> Option<WatchEntry> {
@@ -1699,6 +1710,15 @@ impl TimelineCache {
 
     fn replies_limited(&self, team_id: &str) -> bool {
         stopped(&self.replies_limited_until, team_id)
+    }
+
+    /// The workspace's `conversations.mark` calls stop for `wait`.
+    fn limit_mark(&self, team_id: &str, wait: Duration) {
+        stop_until(&self.mark_limited_until, team_id, wait);
+    }
+
+    fn mark_limited(&self, team_id: &str) -> bool {
+        stopped(&self.mark_limited_until, team_id)
     }
 
     fn own_user(&self, team_id: &str) -> Option<String> {
@@ -2111,7 +2131,35 @@ fn watch_read_of(
         parent: Box::new(parent),
         replies,
         latest_reply,
+        truncated: truncated(reply),
     }
+}
+
+/// The newest unread message of the watched thread `w` among `held` (the messages the cache holds) and its own message `parent` (as the last check read it), if any.
+fn thread_unread_to(
+    w: &Watched,
+    parent: Option<&Raw>,
+    held: &[Raw],
+    unread: impl Fn(&Raw) -> bool,
+) -> Option<String> {
+    held.iter()
+        .filter(|m| {
+            m.team_id == w.team_id && m.channel == w.channel && thread_of_message(m) == w.ts
+        })
+        .chain(parent)
+        .filter(|m| unread(m))
+        .map(|m| m.ts.as_str())
+        .max_by_key(|t| ts_key(t))
+        .map(str::to_owned)
+}
+
+/// The reply a watched thread is seen up to when it is opened: the later of what the last check found and what the thread detail read (`None`: neither is known).
+fn seen_target(checked: Option<&str>, read: Option<&str>) -> Option<String> {
+    [checked, read]
+        .into_iter()
+        .flatten()
+        .max_by_key(|t| ts_key(t))
+        .map(str::to_owned)
 }
 
 /// How many of the replies `replies` are after `seen`.
@@ -2130,10 +2178,12 @@ struct WatchRow {
 }
 
 /// The row of the watched thread `w` from its last check (`entry`; `None`: never checked). A thread that was not read, or cannot be, is a row with no message.
+/// `held` is the messages the cache holds, which `unread_to` of the mark is taken from.
 fn watch_row(
     w: &Watched,
     entry: Option<&WatchEntry>,
     channel_name: &str,
+    held: &[Raw],
     unread: impl Fn(&Raw) -> bool,
 ) -> WatchRow {
     let placeholder = || Raw {
@@ -2154,14 +2204,25 @@ fn watch_row(
             parent,
             replies,
             latest_reply,
+            truncated,
         }) => {
             let mut raw = Raw::clone(parent);
             raw.channel_name = channel_name.to_owned();
+            let uncounted = *truncated
+                && latest_reply
+                    .as_deref()
+                    .is_some_and(|t| ts_key(t) > ts_key(&w.seen_ts));
             WatchRow {
                 unread: unread(&raw),
                 mark: WatchMark {
-                    new_replies: new_replies(replies, &w.seen_ts),
+                    new_replies: if uncounted {
+                        0
+                    } else {
+                        new_replies(replies, &w.seen_ts)
+                    },
+                    uncounted,
                     status: WatchStatus::Ok,
+                    unread_to: thread_unread_to(w, Some(&raw), held, &unread),
                 },
                 activity: latest_reply.as_deref().map_or(own, |t| own.max(ts_key(t))),
                 raw,
@@ -2172,23 +2233,26 @@ fn watch_row(
             unread: false,
             mark: WatchMark {
                 new_replies: 0,
+                uncounted: false,
                 status: if read.is_some() {
                     WatchStatus::Unreadable
                 } else {
                     WatchStatus::Pending
                 },
+                unread_to: thread_unread_to(w, None, held, &unread).filter(|_| read.is_none()),
             },
             activity: own,
         },
     }
 }
 
-/// The rows of the watch section, the newest activity first.
+/// The rows of the watch section, the newest activity first. `held` is the messages the cache holds (the channels kept off the list left out).
 fn watch_rows(
     cache: &TimelineCache,
     channels: &ChannelCache,
     workspaces: &[Workspace],
     watched: &[Watched],
+    held: &[Raw],
 ) -> Vec<WatchRow> {
     let mut rows: Vec<WatchRow> = watched
         .iter()
@@ -2196,7 +2260,7 @@ fn watch_rows(
         .map(|w| {
             let name = kept_channel_name(channels, &w.team_id, &w.channel)
                 .unwrap_or_else(|| w.channel.clone());
-            watch_row(w, cache.watch_entry(&w.key()).as_ref(), &name, |m| {
+            watch_row(w, cache.watch_entry(&w.key()).as_ref(), &name, held, |m| {
                 unread_by_cache(cache, m)
             })
         })
@@ -3459,7 +3523,9 @@ fn cached_timeline(
     hidden: &[Hidden],
     watched: &[Watched],
 ) -> Timeline {
-    let picked = pick_timeline(cache, held_messages(cache, workspaces, hidden), watched);
+    let held = held_messages(cache, workspaces, hidden);
+    let rows = watch_rows(cache, channels, workspaces, watched, &held);
+    let picked = pick_timeline(cache, held, watched);
     let (mut pending, mut largest) = (0, 0);
     for w in workspaces {
         let kept = channels
@@ -3474,7 +3540,6 @@ fn cached_timeline(
         }
     }
     let (failed, missing) = cache.notice_of(workspaces);
-    let rows = watch_rows(cache, channels, workspaces, watched);
     Timeline {
         messages: timeline_messages(cache, workspaces, &picked.top),
         watched: watched_messages(cache, workspaces, &rows),
@@ -3601,22 +3666,43 @@ pub async fn slack_timeline(
                 .map(|channel| (team.to_owned(), read.token.clone(), channel)),
         );
     }
-    refresh_read_marks(&http, &state.timeline, channels).await;
-    refresh_watched(
-        &http,
-        &state.timeline,
-        &state.channels,
-        &token_of_team,
-        &load_watched(&dir).await,
-    )
-    .await;
+    // The user's own ID first (asked once per workspace, then remembered): the checks of the watched threads leave the user's own replies out, and run beside the read positions.
+    let readable: Vec<(String, String)> = reads
+        .iter()
+        .filter(|r| !r.token.is_empty())
+        .map(|r| (r.workspace.team_id.clone(), r.token.clone()))
+        .collect();
+    let owners = readable.into_iter().map(|(team, token)| {
+        let (http, cache) = (http.clone(), Arc::clone(&state.timeline));
+        async move {
+            own_user_id(&http, &cache, &team, &token).await;
+        }
+    });
+    run_limited(owners, USER_CONCURRENCY).await;
+    let to_check = load_watched(&dir).await;
+    tokio::join!(
+        refresh_read_marks(&http, &state.timeline, channels),
+        refresh_watched(
+            &http,
+            &state.timeline,
+            &state.channels,
+            &token_of_team,
+            &to_check,
+        )
+    );
 
     // The files again: a channel hidden, or a thread watched or let go, while the calls above were on their way is not listed or counted.
     let hidden = load_hidden(&dir).await;
     let watched = load_watched(&dir).await;
     let all = visible_messages(all, &hidden);
+    let rows = watch_rows(
+        &state.timeline,
+        &state.channels,
+        &workspaces,
+        &watched,
+        &all,
+    );
     let picked = pick_timeline(&state.timeline, all, &watched);
-    let rows = watch_rows(&state.timeline, &state.channels, &workspaces, &watched);
 
     // Names: the senders and the people the texts mention, once each, in the order the list shows them.
     let mut seen = HashSet::new();
@@ -3795,17 +3881,28 @@ pub async fn slack_watch(
                 .iter()
                 .find(|w| w.team_id == team_id)
                 .ok_or_else(|| log_failure(command, &team_id, NO_WORKSPACE))?;
+            // While Slack's rate limit stops the checks of this workspace, nothing is sent: the same stop as the list's.
+            if state.timeline.replies_limited(&team_id) {
+                return Err(log_failure(command, &team_id, WATCH_LIMITED));
+            }
             let token = token_of(&team_id)
                 .await
                 .map_err(|e| log_failure(command, &team_id, e))?;
-            let reply = call(
+            let (reply, _) = call_scoped_retrying(
                 auth.http(),
                 &token,
                 "conversations.replies",
                 Payload::Form(&watch_params(&channel, &ts)),
+                0,
             )
             .await
-            .map_err(|e| log_failure(command, &team_id, read_error(e, &workspace.team)))?;
+            .map_err(|e| {
+                if let Some(wait) = e.rate_limited {
+                    state.timeline.limit_replies(&team_id, wait);
+                    return log_failure(command, &team_id, WATCH_LIMITED);
+                }
+                log_failure(command, &team_id, read_error(e, &workspace.team))
+            })?;
             let named = Channel {
                 name: kept_channel_name(&state.channels, &team_id, &channel)
                     .unwrap_or_else(|| channel.clone()),
@@ -3872,7 +3969,8 @@ pub async fn slack_unwatch(
     .map_err(|e| log_failure(command, &team_id, e))
 }
 
-/// The watched thread was opened: its "new replies" are seen up to the newest reply the last check found (`seen_ts` only moves forward). Asks Slack nothing. Whether it moved.
+/// The watched thread was opened: its "new replies" are seen up to the newest reply the last check found, or the later of that and `latest_ts` (the newest reply the thread detail read);
+/// `seen_ts` only moves forward, and nothing changes for a thread that is not watched. Asks Slack nothing. Whether it moved.
 #[tauri::command]
 pub async fn slack_watch_seen(
     app: AppHandle,
@@ -3880,21 +3978,25 @@ pub async fn slack_watch_seen(
     team_id: String,
     channel: String,
     ts: String,
+    latest_ts: Option<String>,
 ) -> Result<bool, String> {
     let command = "slack_watch_seen";
-    if token_key(&team_id).is_err() || !valid_channel(&channel) || !valid_ts(&ts) {
+    if token_key(&team_id).is_err()
+        || !valid_channel(&channel)
+        || !valid_ts(&ts)
+        || latest_ts.as_deref().is_some_and(|t| !valid_ts(t))
+    {
         return Err(log_failure(command, &team_id, BAD_TARGET));
     }
     let key = (team_id.clone(), channel, ts);
-    let Some(WatchEntry {
-        read:
-            Some(WatchRead::Thread {
-                latest_reply: Some(latest),
-                ..
-            }),
-        ..
-    }) = state.timeline.watch_entry(&key)
-    else {
+    let checked = match state.timeline.watch_entry(&key) {
+        Some(WatchEntry {
+            read: Some(WatchRead::Thread { latest_reply, .. }),
+            ..
+        }) => latest_reply,
+        _ => None,
+    };
+    let Some(latest) = seen_target(checked.as_deref(), latest_ts.as_deref()) else {
         return Ok(false);
     };
     let dir = config_dir(&app)?;
@@ -3978,6 +4080,11 @@ pub async fn slack_mark_all_read(
     let mut tokens: HashMap<String, Option<String>> = HashMap::new();
     let (mut failed, mut calls) = (0u32, Vec::new());
     for (team, channel, ts) in targets {
+        // A workspace Slack rate-limited stays untouched until its `Retry-After` has passed: its channels count as failed.
+        if cache.mark_limited(&team) {
+            failed += 1;
+            continue;
+        }
         if !tokens.contains_key(&team) {
             let token = token_of(&team)
                 .await
@@ -4004,6 +4111,9 @@ pub async fn slack_mark_all_read(
             }
             Some(Err(e)) => {
                 failed += 1;
+                if let Some(wait) = e.rate_limited {
+                    cache.limit_mark(&team, wait);
+                }
                 if logged.insert(team.clone()) {
                     log_failure(command, &team, e);
                 }
@@ -6101,6 +6211,7 @@ mod tests {
             parent,
             replies,
             latest_reply,
+            truncated,
         } = read
         else {
             panic!("unreadable");
@@ -6111,6 +6222,7 @@ mod tests {
         // The user's own reply is not new to them.
         assert_eq!(replies, ["12.000001", "15.000001"]);
         assert_eq!(latest_reply.as_deref(), Some("15.000001"));
+        assert!(!truncated);
         // Without the user's ID known every reply counts.
         let WatchRead::Thread { replies, .. } =
             watch_read_of(&replies_answer(), "T1", &channel("C1"), "10.000001", None)
@@ -6187,6 +6299,7 @@ mod tests {
                 parent: Box::new(parent),
                 replies: replies.iter().map(|r| (*r).to_owned()).collect(),
                 latest_reply: latest.map(str::to_owned),
+                truncated: false,
             }),
         }
     }
@@ -6197,25 +6310,27 @@ mod tests {
         let mut parent = raw("C1", "10.000001");
         parent.reply_count = 3;
         let entry = thread_entry(parent, &["12.000001", "15.000001"], Some("15.000001"));
-        let row = watch_row(&w, Some(&entry), "general", |m| m.ts == "10.000001");
+        let row = watch_row(&w, Some(&entry), "general", &[], |m| m.ts == "10.000001");
         assert_eq!(row.raw.channel_name, "general");
         assert!(row.unread);
         assert_eq!(
             row.mark,
             WatchMark {
                 new_replies: 1,
-                status: WatchStatus::Ok
+                uncounted: false,
+                status: WatchStatus::Ok,
+                unread_to: Some("10.000001".into())
             }
         );
         assert_eq!(row.activity, ts_key("15.000001"));
-        let row = watch_row(&w, Some(&entry), "general", |_| false);
+        let row = watch_row(&w, Some(&entry), "general", &[], |_| false);
         assert!(!row.unread);
     }
 
     #[test]
     fn a_watched_row_for_a_thread_not_read_or_not_readable_has_no_message_and_stays() {
         let w = watched("T1", "C1", "10.000001", "10.000001");
-        let pending = watch_row(&w, None, "general", |_| true);
+        let pending = watch_row(&w, None, "general", &[], |_| true);
         assert_eq!(pending.mark.status, WatchStatus::Pending);
         assert_eq!(pending.raw.ts, "10.000001");
         assert!(pending.raw.text.is_empty());
@@ -6225,7 +6340,7 @@ mod tests {
             read: None,
         };
         assert_eq!(
-            watch_row(&w, Some(&failed), "general", |_| true)
+            watch_row(&w, Some(&failed), "general", &[], |_| true)
                 .mark
                 .status,
             WatchStatus::Pending
@@ -6234,12 +6349,14 @@ mod tests {
             checked: Instant::now(),
             read: Some(WatchRead::Unreadable),
         };
-        let row = watch_row(&w, Some(&gone), "general", |_| true);
+        let row = watch_row(&w, Some(&gone), "general", &[], |_| true);
         assert_eq!(
             row.mark,
             WatchMark {
                 new_replies: 0,
-                status: WatchStatus::Unreadable
+                uncounted: false,
+                status: WatchStatus::Unreadable,
+                unread_to: None
             }
         );
         // No message, so nothing is unread.
@@ -6260,6 +6377,7 @@ mod tests {
                 parent: Box::new(raw("C1", "10.000001")),
                 replies: vec![],
                 latest_reply: None,
+                truncated: false,
             }),
         );
         cache.record_watch(
@@ -6268,6 +6386,7 @@ mod tests {
                 parent: Box::new(raw("C1", "11.000001")),
                 replies: vec!["30.000001".into()],
                 latest_reply: Some("30.000001".into()),
+                truncated: false,
             }),
         );
         let list = [
@@ -6276,7 +6395,7 @@ mod tests {
             watched("T1", "C1", "12.000001", "12.000001"),
             watched("T2", "C1", "13.000001", "13.000001"),
         ];
-        let rows = watch_rows(&cache, &channels, &workspaces, &list);
+        let rows = watch_rows(&cache, &channels, &workspaces, &list, &[]);
         let order: Vec<_> = rows.iter().map(|r| r.raw.ts.as_str()).collect();
         // 11 has a reply at 30; 12 was never read (pending); 10 is quiet. T2 is not connected.
         assert_eq!(order, ["11.000001", "12.000001", "10.000001"]);
@@ -6302,6 +6421,7 @@ mod tests {
             parent: Box::new(raw("C1", "10.000001")),
             replies: vec![],
             latest_reply: None,
+            truncated: false,
         };
         cache.record_watch(k.clone(), Some(read.clone()));
         cache.record_watch(k.clone(), None);
@@ -6421,5 +6541,151 @@ mod tests {
         let out = cached_timeline(&cache, &channels, &workspaces, &[hidden("T1", "C1")], &list);
         assert!(out.messages.is_empty());
         assert_eq!(out.watched.len(), 1);
+    }
+
+    fn long_thread_entry(truncated: bool, latest: &str) -> WatchEntry {
+        let mut entry = thread_entry(raw("C1", "10.000001"), &["12.000001"], Some(latest));
+        if let Some(WatchRead::Thread { truncated: t, .. }) = &mut entry.read {
+            *t = truncated;
+        }
+        entry
+    }
+
+    #[test]
+    fn a_check_says_the_thread_goes_on_past_the_first_page() {
+        let mut answer = replies_answer();
+        answer["has_more"] = json!(true);
+        let WatchRead::Thread { truncated, .. } =
+            watch_read_of(&answer, "T1", &channel("C1"), "10.000001", None)
+        else {
+            panic!("unreadable");
+        };
+        assert!(truncated);
+        let mut answer = replies_answer();
+        answer["response_metadata"] = json!({"next_cursor": "abc"});
+        let WatchRead::Thread { truncated, .. } =
+            watch_read_of(&answer, "T1", &channel("C1"), "10.000001", None)
+        else {
+            panic!("unreadable");
+        };
+        assert!(truncated);
+    }
+
+    #[test]
+    fn new_replies_that_cannot_be_counted_are_marked_when_the_thread_is_longer_than_the_page_and_its_newest_reply_is_after_the_seen_one(
+    ) {
+        let w = watched("T1", "C1", "10.000001", "11.000001");
+        // The page holds one reply after the seen one, but the thread goes on and its newest reply is later: no number.
+        let row = watch_row(
+            &w,
+            Some(&long_thread_entry(true, "50.000001")),
+            "g",
+            &[],
+            |_| false,
+        );
+        assert_eq!((row.mark.new_replies, row.mark.uncounted), (0, true));
+        // The newest reply is not after the seen one: nothing is new.
+        let seen = watched("T1", "C1", "10.000001", "50.000001");
+        let row = watch_row(
+            &seen,
+            Some(&long_thread_entry(true, "50.000001")),
+            "g",
+            &[],
+            |_| false,
+        );
+        assert_eq!((row.mark.new_replies, row.mark.uncounted), (0, false));
+        // A thread that fits the page is counted.
+        let row = watch_row(
+            &w,
+            Some(&long_thread_entry(false, "50.000001")),
+            "g",
+            &[],
+            |_| false,
+        );
+        assert_eq!((row.mark.new_replies, row.mark.uncounted), (1, false));
+    }
+
+    #[test]
+    fn opening_a_watched_row_reads_up_to_the_newest_unread_message_the_cache_holds_of_the_thread() {
+        let w = watched("T1", "C1", "10.000001", "10.000001");
+        let mut broadcast = raw("C1", "14.000001");
+        broadcast.thread_ts = Some("10.000001".into());
+        let mut other_thread = raw("C1", "20.000001");
+        other_thread.thread_ts = Some("11.000001".into());
+        let held = vec![
+            other_thread,
+            broadcast,
+            raw("C1", "12.000001"),
+            raw("C2", "30.000001"),
+        ];
+        let parent = raw("C1", "10.000001");
+        // Every message is unread: the newest of this thread's, not of the channel.
+        assert_eq!(
+            thread_unread_to(&w, Some(&parent), &held, |_| true).as_deref(),
+            Some("14.000001")
+        );
+        // Only the thread's own message is unread.
+        assert_eq!(
+            thread_unread_to(&w, Some(&parent), &held, |m| m.ts == "10.000001").as_deref(),
+            Some("10.000001")
+        );
+        assert_eq!(thread_unread_to(&w, Some(&parent), &held, |_| false), None);
+        assert_eq!(thread_unread_to(&w, None, &[], |_| true), None);
+        // The row carries it: an unread reply sent to the channel counts though the thread's own message is read.
+        let entry = thread_entry(parent, &[], None);
+        let row = watch_row(&w, Some(&entry), "g", &held, |m| m.ts == "14.000001");
+        assert!(!row.unread);
+        assert_eq!(row.mark.unread_to.as_deref(), Some("14.000001"));
+        // A thread that cannot be read has nothing to move.
+        let gone = WatchEntry {
+            checked: Instant::now(),
+            read: Some(WatchRead::Unreadable),
+        };
+        assert_eq!(
+            watch_row(&w, Some(&gone), "g", &held, |_| true)
+                .mark
+                .unread_to,
+            None
+        );
+    }
+
+    #[test]
+    fn a_thread_is_seen_up_to_the_later_of_the_last_check_and_what_the_detail_read() {
+        assert_eq!(
+            seen_target(Some("12.000001"), Some("9.000001")).as_deref(),
+            Some("12.000001")
+        );
+        assert_eq!(
+            seen_target(Some("9.000001"), Some("12.000001")).as_deref(),
+            Some("12.000001")
+        );
+        assert_eq!(
+            seen_target(None, Some("12.000001")).as_deref(),
+            Some("12.000001")
+        );
+        assert_eq!(
+            seen_target(Some("12.000001"), None).as_deref(),
+            Some("12.000001")
+        );
+        assert_eq!(seen_target(None, None), None);
+        // It is only a target: `with_seen` moves the saved position forward and never back.
+        let list = vec![watched("T1", "C1", "10.000001", "20.000001")];
+        let (_, moved) = with_seen(list, &key("T1", "C1", "10.000001"), "12.000001");
+        assert!(!moved);
+    }
+
+    #[test]
+    fn conversations_mark_stops_per_workspace_until_the_wait_has_passed() {
+        let cache = TimelineCache::default();
+        assert!(!cache.mark_limited("T1"));
+        cache.limit_mark("T1", Duration::from_secs(60));
+        assert!(cache.mark_limited("T1"));
+        assert!(!cache.mark_limited("T2"));
+        // Not the other stops.
+        assert!(!cache.replies_limited("T1"));
+        assert!(!cache.info_limited("T1"));
+        assert!(!cache.rate_limited("T1"));
+        cache.forget("T1");
+        assert!(!cache.mark_limited("T1"));
     }
 }

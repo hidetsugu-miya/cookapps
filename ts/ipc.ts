@@ -125,8 +125,8 @@ export interface Commands {
   slack_watch: { args: { teamId: string; channel: string; ts: string; seenTs?: string | null }; result: boolean };
   // Lets the thread go; answers the reply it had been seen up to (null: it was not watched).
   slack_unwatch: { args: { teamId: string; channel: string; ts: string }; result: string | null };
-  // The watched thread was opened: its new replies count as seen (asks Slack nothing).
-  slack_watch_seen: { args: { teamId: string; channel: string; ts: string }; result: boolean };
+  // The watched thread was opened: its new replies count as seen, up to the newest reply the last check found or `latestTs` (the newest reply the thread detail read), whichever is later (asks Slack nothing).
+  slack_watch_seen: { args: { teamId: string; channel: string; ts: string; latestTs?: string | null }; result: boolean };
   // The whole thread starting at `ts`, oldest first. For a reply pass its `threadTs`, not its own `ts`.
   slack_thread: { args: { teamId: string; channel: string; ts: string }; result: SlackThread };
   // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched).

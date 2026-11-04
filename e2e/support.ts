@@ -403,8 +403,11 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
 });
 
 // A row of the watch section (`Timeline.watched`): the thread's own message, with `newReplies` new replies (and `status`, "ok" unless `extra` says another).
-export const watchedMessage = (ts: string, name: string, channelName: string, text: string, newReplies = 0, extra: Partial<TimelineMessage> = {}): TimelineMessage =>
-  timelineMessage(ts, name, channelName, text, { watch: { newReplies, status: "ok" }, ...extra });
+// `unreadTo` (the message opening the row moves the read position to) is the message itself when it is unread, unless `extra.watch` says another.
+export const watchedMessage = (ts: string, name: string, channelName: string, text: string, newReplies = 0, extra: Partial<TimelineMessage> = {}): TimelineMessage => {
+  const message = timelineMessage(ts, name, channelName, text, extra);
+  return { ...message, watch: extra.watch ?? { newReplies, uncounted: false, status: "ok", unreadTo: message.unread ? message.ts : null } };
+};
 
 // What `slack_timeline` answers; `unreadTotal` is the number of unread messages given unless `extra` says another (it counts the messages held, not only the ones listed),
 // `markableChannels` the channels of the unread messages given. `watched` is empty unless `extra` gives it.
