@@ -40,6 +40,9 @@ let busy = false;
 let skills: OrcaSkill[] = [];
 let skillsStale = true;
 let skillsSeq = 0;
+// A read that failed is tried again by the list reads that follow, at most once in this long (the update button reads at once), so a target on another machine does not run a failing command every 10 seconds.
+const SKILLS_RETRY_MS = 60_000;
+let skillsFailedAt = 0;
 // The open skill list: its matches and the one highlighted. `dismissed` keeps Escape's closing until the text changes.
 let completion: { matches: OrcaSkill[]; active: number } | null = null;
 let dismissed = false;
@@ -237,18 +240,25 @@ async function load(scope: Scope, force = false) {
   fetchSkills();
 }
 
-// Reads the skills when they are due and the screen is shown with the command found (the target may be failing). A failure only means no list.
+// Reads the skills when they are due and the screen is shown with the command found (the target may be failing). A failure only means no list for now: it is read again later (`SKILLS_RETRY_MS`).
 async function fetchSkills() {
   if (!skillsStale || !shown() || view === null || view.state === "missing") return;
+  if (Date.now() - skillsFailedAt < SKILLS_RETRY_MS) return;
   skillsStale = false;
   const seq = ++skillsSeq;
   let list: OrcaSkill[] = [];
+  let failed = false;
   try {
     list = await invoke("orca_skills");
   } catch {
     // No list, no popup; posting does not depend on it.
+    failed = true;
   }
   if (seq !== skillsSeq) return;
+  if (failed) {
+    skillsStale = true;
+    skillsFailedAt = Date.now();
+  }
   skills = list;
   updateCompletion();
 }
@@ -441,6 +451,7 @@ export function initOrca() {
   document.addEventListener("visibilitychange", refresh);
   $("orca-refresh").onclick = () => {
     skillsStale = true;
+    skillsFailedAt = 0;
     load("full", true);
   };
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);

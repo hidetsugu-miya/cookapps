@@ -1,4 +1,4 @@
-import { boot, callsOf, holds, inbox, mock, onceId, orcaOverview, orcaRow, orcaSkill, orcaWorktree, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, holds, inbox, isoDate, mock, onceId, orcaOverview, orcaRow, orcaSkill, orcaWorktree, rejects, release, setClock, textsOf, waitForCalls, waitForCount } from "../support";
 
 // A running, a waiting, a second running and a done agent; the second running one has no terminal handle.
 const sample = () => [
@@ -527,6 +527,22 @@ describe("orca skill list", () => {
     await expect(popup()).not.toBeDisplayed();
     await $("#orca-send").click();
     expect(await waitForCalls(launch)).toEqual([{ agent: "claude", path: "/work/example-app", text: "/review", environment: null }]);
+  });
+
+  it("reads the skills again by itself after a failed read, once a minute at most", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_skills: rejects("skills failed") });
+    await waitForCalls("orca_skills");
+    const again = await mock("orca_skills", skills());
+    // The list reads of the next seconds (the clock reads every 10 seconds on this screen) do not read the skills again.
+    const overview = await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await waitForCalls(overview);
+    expect(await callsOf(again)).toEqual([]);
+    // A minute later the next list read does, with no press of the update button.
+    const later = new Date(Date.now() + 61_000);
+    await setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
+    await waitForCalls(again);
+    await $("#orca-input").setValue("/rev");
+    await browser.waitUntil(async () => (await commands()).join() === "/review,/pr-review", { timeoutMsg: "the list never opened" });
   });
 
   it("reads the skills again after the update button", async () => {
