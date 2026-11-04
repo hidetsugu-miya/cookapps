@@ -7,6 +7,7 @@ import type { ThreadButton } from "./bindings/ThreadButton";
 import type { ThreadImage } from "./bindings/ThreadImage";
 import { tag } from "./dom.js";
 import { linkify } from "./mail-text.js";
+import { richNodes } from "./slack-rich.js";
 
 // `shown`: the images of this message were asked for. `uris`: the fetched images (data: URIs) by address.
 export interface ImageContext {
@@ -56,10 +57,10 @@ function blockNode(b: ThreadBlock, ctx: ImageContext): Node | null {
     case "section": {
       const box = tag("div", "st-sec");
       const main = tag("div", "st-sec-main");
-      if (b.text) main.append(paragraph(b.text));
+      if (b.text) main.append(...richNodes(b.text));
       if (b.fields.length) {
         const fields = tag("div", "st-fields");
-        fields.append(...b.fields.map((f) => paragraph(f)));
+        fields.append(...b.fields.flatMap((f) => richNodes(f)));
         main.append(fields);
       }
       box.append(main);
@@ -71,9 +72,9 @@ function blockNode(b: ThreadBlock, ctx: ImageContext): Node | null {
       const row = tag("div", "st-ctx");
       for (const e of b.elements) {
         if (e.type === "text") {
-          const span = tag("span");
-          span.append(...linkify(e.text));
-          row.append(span);
+          const item = tag("div", "st-ctx-item");
+          item.append(...richNodes(e.text, "st-ctx-t"));
+          row.append(item);
         } else {
           const image = imageNode(e, ctx, "st-ctx-img");
           if (image) row.append(image);
@@ -111,7 +112,7 @@ export function attachmentNode(a: ThreadAttachment, ctx: ImageContext) {
   const box = tag("div", "st-att");
   // Rust passes a hex color only.
   if (a.color) box.style.setProperty("--att", a.color);
-  if (a.pretext) box.append(paragraph(a.pretext));
+  if (a.pretext) box.append(...richNodes(a.pretext));
   if (a.authorName) box.append(paragraph(a.authorName, "st-att-author"));
   if (a.title) {
     if (a.titleLink) {
@@ -121,13 +122,13 @@ export function attachmentNode(a: ThreadAttachment, ctx: ImageContext) {
       box.append(link);
     } else box.append(paragraph(a.title, "st-att-title"));
   }
-  if (a.text) box.append(paragraph(a.text));
+  if (a.text) box.append(...richNodes(a.text));
   if (a.fields.length) {
     const fields = tag("div", "st-fields");
     for (const f of a.fields) {
       const field = tag("div", "st-field");
       if (f.title) field.append(linked("b", "", f.title));
-      if (f.value) field.append(paragraph(f.value));
+      field.append(...richNodes(f.value));
       fields.append(field);
     }
     box.append(fields);

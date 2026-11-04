@@ -1,6 +1,6 @@
 //! A Slack message's `blocks` (Block Kit) and `attachments` as the structure the thread screen draws (S-11).
 //!
-//! Pure functions from Slack's JSON: nothing here calls Slack. The text is plain text (`plain_text`), never markup.
+//! Pure functions from Slack's JSON: nothing here calls Slack. The text is plain text (`plain_text`), never markup; a mrkdwn text is a `Rich` (S-12).
 //! A button's address is http or https, an image's address is https, and anything else is left out here, so the screen does not decide.
 
 use std::collections::HashSet;
@@ -12,6 +12,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::slack::{emojify, mention_ids, plain_text, unescape, UNKNOWN_NAME};
+use crate::slack_mrkdwn::{parse, plain, Rich};
 
 /// Looks a user up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -52,7 +53,7 @@ pub enum ThreadAccessory {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ThreadContext {
-    Text { text: String },
+    Text { text: Rich },
     Image(ThreadImage),
 }
 
@@ -66,8 +67,8 @@ pub enum ThreadBlock {
         text: String,
     },
     Section {
-        text: Option<String>,
-        fields: Vec<String>,
+        text: Option<Rich>,
+        fields: Vec<Rich>,
         accessory: Option<ThreadAccessory>,
     },
     Context {
@@ -90,7 +91,7 @@ pub enum ThreadBlock {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadField {
     title: String,
-    value: String,
+    value: Rich,
 }
 
 /// An attachment, as drawn. `color` is `#rrggbb` (or `#rgb`); `fallback` is set only when nothing else of the attachment can be drawn.
@@ -100,11 +101,11 @@ pub struct ThreadField {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadAttachment {
     color: Option<String>,
-    pretext: Option<String>,
+    pretext: Option<Rich>,
     author_name: Option<String>,
     title: Option<String>,
     title_link: Option<String>,
-    text: Option<String>,
+    text: Option<Rich>,
     fields: Vec<ThreadField>,
     footer: Option<String>,
     actions: Vec<ThreadButton>,
@@ -182,6 +183,20 @@ fn text_of(v: &Value, name_of: NameOf) -> Option<String> {
     })
 }
 
+/// A text as `Rich`: a mrkdwn object is read for its styles (S-12), a `plain_text` object is not. A plain string is read when `string_is_mrkdwn`.
+fn rich_of(v: &Value, name_of: NameOf, string_is_mrkdwn: bool) -> Option<Rich> {
+    let text = text_of(v, name_of)?;
+    let (raw, formatted) = match v {
+        Value::String(s) => (s.as_str(), string_is_mrkdwn),
+        _ => (v["text"].as_str()?, v["type"] != "plain_text"),
+    };
+    Some(if formatted {
+        parse(raw, name_of)
+    } else {
+        plain(text)
+    })
+}
+
 /// `url` as it is when it is an http or https address, else `None`: a button never opens another scheme.
 /// The app's own origin on Windows and Android (`tauri.localhost`) is left out too: the navigation hook lets it through to the window itself.
 fn http_url(url: Option<&str>) -> Option<String> {
@@ -225,7 +240,9 @@ fn accessory(a: &Value, name_of: NameOf) -> Option<ThreadAccessory> {
 fn context_element(e: &Value, name_of: NameOf) -> Option<ThreadContext> {
     match e["type"].as_str()? {
         "image" => image(e).map(ThreadContext::Image),
-        "mrkdwn" | "plain_text" => text_of(e, name_of).map(|text| ThreadContext::Text { text }),
+        "mrkdwn" | "plain_text" => {
+            rich_of(e, name_of, false).map(|text| ThreadContext::Text { text })
+        }
         _ => None,
     }
 }
@@ -233,7 +250,7 @@ fn context_element(e: &Value, name_of: NameOf) -> Option<ThreadContext> {
 /// A text as a section with nothing else in it.
 fn paragraph(text: String) -> ThreadBlock {
     ThreadBlock::Section {
-        text: Some(text),
+        text: Some(plain(text)),
         fields: Vec::new(),
         accessory: None,
     }
@@ -246,10 +263,10 @@ fn block(b: &Value, name_of: NameOf) -> Option<ThreadBlock> {
             text: text_of(&b["text"], name_of)?,
         }),
         "section" => {
-            let text = text_of(&b["text"], name_of);
-            let fields: Vec<String> = items(&b["fields"])
+            let text = rich_of(&b["text"], name_of, false);
+            let fields: Vec<Rich> = items(&b["fields"])
                 .iter()
-                .filter_map(|f| text_of(f, name_of))
+                .filter_map(|f| rich_of(f, name_of, false))
                 .collect();
             let accessory = accessory(&b["accessory"], name_of);
             (text.is_some() || !fields.is_empty() || accessory.is_some()).then_some(
@@ -392,22 +409,28 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
         return None;
     }
     let text = |key: &str| text_of(&a[key], name_of);
+    // Only the texts `mrkdwn_in` names are read for styles (`text`, `pretext` and `fields`, for the values of the fields); the others are plain text.
+    let styled = |key: &str| items(&a["mrkdwn_in"]).iter().any(|k| k == key);
+    let rich = |key: &str| rich_of(&a[key], name_of, styled(key));
     let title = text("title");
     let mut out = ThreadAttachment {
         color: color(a["color"].as_str()),
-        pretext: text("pretext"),
+        pretext: rich("pretext"),
         author_name: text("author_name"),
         title_link: title
             .as_ref()
             .and_then(|_| http_url(a["title_link"].as_str())),
         title,
-        text: text("text"),
+        text: rich("text"),
         fields: a["fields"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|f| {
-                let (title, value) = (text_of(&f["title"], name_of), text_of(&f["value"], name_of));
+                let (title, value) = (
+                    text_of(&f["title"], name_of),
+                    rich_of(&f["value"], name_of, styled("fields")),
+                );
                 (title.is_some() || value.is_some()).then(|| ThreadField {
                     title: title.unwrap_or_default(),
                     value: value.unwrap_or_default(),
@@ -571,15 +594,35 @@ pub(crate) fn mentioned_users(message: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::slack_mrkdwn::{RichBlock, Span};
     use serde_json::json;
 
     fn blocks(v: Value) -> Vec<ThreadBlock> {
         message_blocks(&v, false, &|_| None).0
     }
 
+    /// A text with no style.
+    fn p(text: &str) -> Rich {
+        plain(text.to_owned())
+    }
+
+    /// A paragraph of spans: `(text, bold)`.
+    fn styled(spans: &[(&str, bool)]) -> Rich {
+        vec![RichBlock::Paragraph {
+            spans: spans
+                .iter()
+                .map(|(text, bold)| Span {
+                    text: (*text).to_owned(),
+                    bold: *bold,
+                    ..Span::default()
+                })
+                .collect(),
+        }]
+    }
+
     fn section(text: &str) -> ThreadBlock {
         ThreadBlock::Section {
-            text: Some(text.to_owned()),
+            text: Some(p(text)),
             fields: vec![],
             accessory: None,
         }
@@ -745,14 +788,79 @@ mod tests {
         assert_eq!(
             list,
             vec![ThreadBlock::Section {
-                text: Some("*Project* api (https://a.example/p) <1> 🔥".into()),
-                fields: vec!["*When*\nnow".into(), "<b>raw</b> :fire:".into()],
+                text: Some(styled(&[
+                    ("Project", true),
+                    (" api (https://a.example/p) <1> 🔥", false)
+                ])),
+                // A `plain_text` field is not read for styles.
+                fields: vec![
+                    styled(&[("When", true), ("\nnow", false)]),
+                    p("<b>raw</b> :fire:")
+                ],
                 accessory: Some(ThreadAccessory::Button(ThreadButton {
                     text: "View Job".into(),
                     url: Some("https://a.example/job".into())
                 })),
             }]
         );
+    }
+
+    #[test]
+    fn a_mrkdwn_text_is_read_for_its_styles_and_a_plain_text_is_not() {
+        let list = blocks(json!([
+            {"type": "section", "text": {"type": "mrkdwn", "text": "a\n&gt; *q*\n```\n*c*\n```"}},
+            {"type": "section", "text": {"type": "plain_text", "text": "*not bold*"}},
+            {"type": "header", "text": {"type": "plain_text", "text": "*not bold*"}},
+        ]));
+        let ThreadBlock::Section { text, .. } = &list[0] else {
+            panic!("a section")
+        };
+        let kinds: Vec<&str> = text
+            .iter()
+            .flatten()
+            .map(|b| match b {
+                RichBlock::Paragraph { .. } => "paragraph",
+                RichBlock::Quote { .. } => "quote",
+                RichBlock::Code { .. } => "code",
+            })
+            .collect();
+        assert_eq!(kinds, ["paragraph", "quote", "code"]);
+        assert_eq!(list[1], section("*not bold*"));
+        assert_eq!(
+            list[2],
+            ThreadBlock::Header {
+                text: "*not bold*".into()
+            }
+        );
+        // A `rich_text` block and a `markdown` block are not mrkdwn: their marks stay.
+        assert_eq!(
+            blocks(json!([{"type": "markdown", "text": "*x*"}])),
+            vec![section("*x*")]
+        );
+    }
+
+    #[test]
+    fn an_attachment_is_read_for_styles_only_where_mrkdwn_in_says() {
+        let list = attachments(json!([{
+            "pretext": "*pre*",
+            "text": "*text*",
+            "title": "*title*",
+            "footer": "*footer*",
+            "fields": [{"title": "*t*", "value": "*v*"}],
+            "mrkdwn_in": ["text", "fields"]
+        }]));
+        let a = &list[0];
+        assert_eq!(a.pretext, Some(p("*pre*")));
+        assert_eq!(a.text, Some(styled(&[("text", true)])));
+        assert_eq!(a.title.as_deref(), Some("*title*"));
+        assert_eq!(a.footer.as_deref(), Some("*footer*"));
+        assert_eq!(a.fields[0].title, "*t*");
+        assert_eq!(a.fields[0].value, styled(&[("v", true)]));
+        // Without `mrkdwn_in` nothing is read.
+        let off =
+            attachments(json!([{"text": "*text*", "fields": [{"title": "t", "value": "*v*"}]}]));
+        assert_eq!(off[0].text, Some(p("*text*")));
+        assert_eq!(off[0].fields[0].value, p("*v*"));
     }
 
     #[test]
@@ -854,7 +962,7 @@ mod tests {
                         alt: "logo".into()
                     }),
                     ThreadContext::Text {
-                        text: "built by *bot*".into()
+                        text: styled(&[("built by ", false), ("bot", true)])
                     },
                     ThreadContext::Image(ThreadImage {
                         url: None,
@@ -921,7 +1029,7 @@ mod tests {
         assert_eq!(
             list,
             vec![ThreadBlock::Section {
-                text: Some("x".into()),
+                text: Some(p("x")),
                 fields: vec![],
                 accessory: Some(ThreadAccessory::Image(ThreadImage {
                     url: Some("https://a.example/t.png".into()),
@@ -1023,19 +1131,19 @@ mod tests {
             list,
             vec![ThreadAttachment {
                 color: Some("#36a64f".into()),
-                pretext: Some("Before link (https://a.example)".into()),
+                pretext: Some(p("Before link (https://a.example)")),
                 author_name: Some("CI 🤖".into()),
                 title: Some("Job #1".into()),
                 title_link: Some("https://a.example/job/1".into()),
-                text: Some("Passed & done".into()),
+                text: Some(p("Passed & done")),
                 fields: vec![
                     ThreadField {
                         title: "Project".into(),
-                        value: "api".into()
+                        value: p("api")
                     },
                     ThreadField {
                         title: "Only title".into(),
-                        value: "".into()
+                        value: vec![]
                     },
                 ],
                 footer: Some("via CI".into()),

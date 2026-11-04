@@ -12,7 +12,9 @@ import type { Info } from "../ts/bindings/Info";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
+import type { RichBlock } from "../ts/bindings/RichBlock";
 import type { SlackThread } from "../ts/bindings/SlackThread";
+import type { Span } from "../ts/bindings/Span";
 import type { Summary } from "../ts/bindings/Summary";
 import type { TaskItem } from "../ts/bindings/TaskItem";
 import type { ThreadAttachment } from "../ts/bindings/ThreadAttachment";
@@ -413,8 +415,14 @@ export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> =
 // A channel kept off the Slack list (`slack_hidden_list`); `name` is the channel's ID when its name is not known.
 export const hiddenChannel = (channel: string, name: string, extra: Partial<HiddenChannel> = {}): HiddenChannel => ({ teamId: workspace.teamId, team: workspace.team, channel, name, ...extra });
 
-// A message of a thread (`slack_thread`).
-export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, files: [], blocks: [], showText: true, attachments: [], imageUrls: [], ...extra });
+// A Slack text read for its styles (S-12): `plain` is a text with no style, `span` a run (`style` holds b, i, s and c for bold, italic, strike and code), `para` and `quote` hold spans.
+export const span = (text: string, style = ""): Span => ({ text, bold: style.includes("b"), italic: style.includes("i"), strike: style.includes("s"), code: style.includes("c") });
+export const para = (...spans: Span[]): RichBlock => ({ type: "paragraph", spans });
+export const quote = (...spans: Span[]): RichBlock => ({ type: "quote", spans });
+export const plain = (text: string): RichBlock[] => [para(span(text))];
+
+// A message of a thread (`slack_thread`); its `rich` is its text with no style unless `extra` sets it.
+export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, rich: plain(text), files: [], blocks: [], showText: true, attachments: [], imageUrls: [], ...extra });
 
 // An attachment of a thread's message (S-11) with nothing in it; `extra` sets the parts.
 export const attachment = (extra: Partial<ThreadAttachment> = {}): ThreadAttachment => ({
