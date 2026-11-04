@@ -94,11 +94,13 @@ function rowOf(m: TimelineMessage, key: string) {
 
 // The state of the list when there are no rows: loading, no workspace, a failed read, or nothing to show.
 function emptyNode() {
-  if (workspaces === null || (timeline === null && loadError === null)) {
+  const loadingRow = () => {
     const row = tag("div", "pending");
     row.append(tag("span", "spin"), tag("span", "sp", "読み込んでいます…"));
     return row;
-  }
+  };
+  if (workspaces === null) return loadingRow();
+  // With no workspace no timeline is ever read, so this must come before the wait for the timeline.
   if (workspaces.length === 0 && loadError === null) {
     const box = tag("div", "feed-empty", "Slack のワークスペースが接続されていません");
     const open = tag("button", "text-btn", "設定を開く");
@@ -106,6 +108,7 @@ function emptyNode() {
     box.append(open);
     return box;
   }
+  if (timeline === null && loadError === null) return loadingRow();
   if (timeline === null) {
     const row = tag("div", "pending fail");
     const retry = tag("button", "text-btn", "再読み込み");

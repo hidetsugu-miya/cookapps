@@ -175,7 +175,8 @@ describe("slack thread: attached files", () => {
   });
 
   it("shows a file that is not an image as a chip with its name that opens the file in Slack", async () => {
-    await openDetail({}, withFiles());
+    // Only the pdf: the fixture's default `slack_file_images` answers nothing, so an image would fall back to a chip too.
+    await openDetail({}, slackThread([threadMessage(root, "Alice Example", rootText, { files: [slackFile("F2", "notes.pdf", { mimetype: "application/pdf" })] })]));
     const chip = $("#st-msgs a.st-file");
     await expect(chip).toHaveText("notes.pdf");
     await expect(chip).toHaveAttribute("href", slackFile("F2", "notes.pdf").permalink as string);
