@@ -71,10 +71,10 @@ const navCounts: Record<string, number> = { "nav-mail": 0, "nav-todo": 0 };
 let upcoming: number[] = [];
 let sentToDock = "0:";
 
-// The count on a sidebar button (99+ from 100; none for 0). The label carries it too: the tooltip shows the label, e.g. "受信トレイ（未読 3 件）".
+// The count on a sidebar button (99+ from 100, or `cap`+ above `cap`; none for 0). The label carries it too: the tooltip shows the label, e.g. "受信トレイ（未読 3 件）".
 // The Dock badge shows the sum of the two buttons' counts, and Rust adds the `upcoming` moments as the clock passes them (they are the Todo button's; the mail button leaves them as they are).
 // The call is skipped when neither the sum nor the moments changed.
-export function setNavCount(id: string, count: number, name: string, kind: string, ahead?: number[]) {
+export function setNavCount(id: string, count: number, name: string, kind: string, ahead?: number[], cap = 99) {
   navCounts[id] = count;
   if (ahead) upcoming = ahead.sort((a, b) => a - b);
   const sum = navCounts["nav-mail"] + navCounts["nav-todo"];
@@ -86,6 +86,6 @@ export function setNavCount(id: string, count: number, name: string, kind: strin
   const b = $(id);
   const badge = b.querySelector<HTMLElement>(".nav-count")!;
   badge.hidden = count === 0;
-  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.textContent = count > cap ? `${cap}+` : String(count);
   b.setAttribute("aria-label", count === 0 ? name : `${name}（${kind} ${count} 件）`);
 }

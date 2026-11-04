@@ -21,6 +21,7 @@
     </button>
     <button id="nav-slack" class="nav-item" aria-label="Slack">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/></svg>
+      <span class="nav-count" aria-hidden="true" hidden></span>
     </button>
     <div id="slack-workspace-list" class="tray" aria-label="連携中のワークスペース" hidden></div>
     <div id="sidebar-bottom">
@@ -175,7 +176,8 @@
         </div>
         <div id="todoist-items"></div>
       </section>
-      <section id="settings-panel-slack" class="card" role="tabpanel" aria-labelledby="settings-tab-slack" hidden>
+      <div id="settings-panel-slack" role="tabpanel" aria-labelledby="settings-tab-slack" hidden>
+      <section class="card">
         <div class="card-head">
           <h2>
             <span class="logo slack"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/></svg></span>Slack
@@ -190,6 +192,14 @@
           <button class="text-btn">追加</button>
         </form>
       </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>一覧に出さないチャンネル</h2>
+          <span id="slack-hidden-count" class="header-sub"></span>
+        </div>
+        <div id="slack-hidden"></div>
+      </section>
+      </div>
       <div id="settings-panel-claude" role="tabpanel" aria-labelledby="settings-tab-claude" hidden>
       <section class="card">
         <div class="card-head">
@@ -284,7 +294,7 @@
     <section id="slack-list" hidden>
       <header>
         <h1>Slack</h1>
-        <span class="header-sub">新しい順に 20 件</span>
+        <span id="slack-unread" class="header-sub" hidden></span>
         <span id="slack-pending" class="header-sub" hidden></span>
       </header>
       <div id="slack-notice"></div>

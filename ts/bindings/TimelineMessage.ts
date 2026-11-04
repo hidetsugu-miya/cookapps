@@ -4,4 +4,8 @@
  * A message of the timeline as the screen draws it. The text is plain text (`plain_text`), never markup.
  * `thread_ts` is set only for a reply that was also sent to the channel; open its thread with `thread_ts ?? ts`.
  */
-export type TimelineMessage = { teamId: string, team: string, workspaceUrl: string | null, channel: string, channelName: string, ts: string, threadTs: string | null, user: string | null, name: string, iconUrl: string | null, text: string, replyCount: number, permalink: string, hasFiles: boolean, };
+export type TimelineMessage = { teamId: string, team: string, workspaceUrl: string | null, channel: string, channelName: string, ts: string, threadTs: string | null, user: string | null, name: string, iconUrl: string | null, text: string, replyCount: number, permalink: string, hasFiles: boolean, 
+/**
+ * Whether the message is past the channel's `last_read` (`is_unread`).
+ */
+unread: boolean, };

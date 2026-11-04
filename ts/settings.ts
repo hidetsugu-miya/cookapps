@@ -1,5 +1,6 @@
 // The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Claude and the updater, each with its card.
 // The heading and the tabs stay at the top while a card scrolls. A token is never shown; Rust keeps it in the keychain.
+import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Workspace } from "./bindings/Workspace";
 import { calendarFirstDay, setCalendarFirstDay } from "./calendar.js";
@@ -10,7 +11,8 @@ import { LINK_SVG } from "./icons.js";
 import { closeHint, code, confirmUnlink, hintPopup, toggleHint } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { appsLink, OPTIONAL_KINDS, openPermissionPane, scopesBlock, SLACK_SCOPES } from "./permission-pane.js";
-import { setSlackWorkspaces } from "./slack-workspaces.js";
+import { bumpSlackList, setSlackWorkspaces } from "./slack-workspaces.js";
+import { workspaceColor } from "./slack-view.js";
 import { updateAddMode } from "./todo-add.js";
 import { showTokenForm } from "./todo.js";
 import { loadPromptState } from "./todo-prompt.js";
@@ -112,6 +114,8 @@ function workspaceRow(w: Workspace, result: Check | null) {
         const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
         wsChecks.delete(w.teamId);
         renderWorkspaces(left);
+        // The channels kept off the list go with their workspace.
+        loadHiddenCard();
       } catch (e) {
         showError(e);
       }
@@ -121,7 +125,7 @@ function workspaceRow(w: Workspace, result: Check | null) {
       ? `${result.missing.join("、")} の権限がありません。スコープを足して、トークンを貼り直してください`
       : result?.state === "error"
         ? result.message
-        : [`${w.user} ・ ${hostOf(w.url)}`, ...(result?.optional.length ? [` ・ ${result.optional.map((s) => `${s}（${OPTIONAL_KINDS[s] ?? s}）`).join("、")}はありません。足すと Slack の画面に出ます`] : [])].join("");
+        : [`${w.user} ・ ${hostOf(w.url)}`, ...(result?.optional.length ? [` ・ ${result.optional.map((s) => `${s}（${OPTIONAL_KINDS[s] ?? s}）`).join("、")}はありません。足すと Slack の画面で使えます`] : [])].join("");
   return itemRow({
     avatar,
     name: w.team,
@@ -159,6 +163,49 @@ function drawWorkspaces(list: Workspace[], seq: number) {
         })
       : [tag("div", "card-empty", "ワークスペースはまだありません")]),
   );
+}
+
+// The "一覧に出さないチャンネル" card: the channels kept off the Slack list, each with a button that puts it back. Only the latest read may draw.
+let hiddenSeq = 0;
+
+function hiddenRow(h: HiddenChannel) {
+  const label = h.name === h.channel ? h.channel : `#${h.name}`;
+  const dot = tag("i", "hidden-dot");
+  dot.style.background = workspaceColor(h.team);
+  const who = tag("div", "who");
+  who.append(tag("div", "item-name", label), tag("div", "item-meta", h.team));
+  const back = tag("button", "text-btn", "戻す");
+  back.type = "button";
+  back.setAttribute("aria-label", `${label} を一覧に戻す`);
+  back.onclick = async () => {
+    $("error").hidden = true;
+    try {
+      await invoke("slack_unhide_channel", { teamId: h.teamId, channel: h.channel });
+      bumpSlackList();
+    } catch (e) {
+      showError(e);
+    }
+    loadHiddenCard();
+  };
+  const row = tag("div", "item");
+  row.append(dot, who, back);
+  return row;
+}
+
+function renderHiddenCard(list: HiddenChannel[]) {
+  $("slack-hidden-count").textContent = `${list.length} 件`;
+  $("slack-hidden").replaceChildren(...(list.length ? list.map(hiddenRow) : [tag("div", "card-empty", "一覧に出さないチャンネルはありません")]));
+}
+
+async function loadHiddenCard() {
+  const seq = ++hiddenSeq;
+  let list: HiddenChannel[];
+  try {
+    list = await invoke("slack_hidden_list");
+  } catch (e) {
+    return showError(e);
+  }
+  if (seq === hiddenSeq) renderHiddenCard(list);
 }
 
 // The day the week starts on as the calendar card shows it; null until read.
@@ -266,6 +313,7 @@ export async function loadSettings() {
   loadModelSettings();
   loadCalendarCard();
   loadTodoistCard();
+  loadHiddenCard();
   let loaded: SlackLoad;
   try {
     loaded = await invoke("slack_load");
@@ -310,7 +358,7 @@ export function initSettings() {
         [
           [appsLink(), " で、ワークスペースごとにアプリを作る"],
           ["「User Token Scopes」に次を足す", ...scopesBlock(SLACK_SCOPES)],
-          [code("users:read"), " と ", code("files:read"), " は、Slack の画面に送信者の名前とアイコン、添付画像を出すために使います。なくても、ほかのことはできます"],
+          [code("users:read"), " と ", code("files:read"), " は、Slack の画面に送信者の名前とアイコン、添付画像を出すために使います。なくても、ほかのことはできます。", code("channels:write"), " と ", code("groups:write"), " は、Slack の画面でメッセージを開いたとき、Slack 側のそのチャンネルも既読にするために使います。Slack の仕様で、この 2 つにはチャンネルの管理権限も含まれますが、cookapps は既読位置を送る呼び出し（conversations.mark）にしか使いません。足さなくても、既読を Slack と同期すること以外はできます"],
           ["ワークスペースにインストールし、", code("xoxp-"), " で始まるトークンを下の欄に貼る"],
         ],
         "トークンは OS の資格情報の保管場所に入れ、画面には出しません",

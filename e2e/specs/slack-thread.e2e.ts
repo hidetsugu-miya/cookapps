@@ -105,10 +105,13 @@ describe("slack thread", () => {
   });
 
   it("goes back to the list where it was scrolled to and reads nothing again", async () => {
-    const messages = Array.from({ length: 20 }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `A message of the list, number ${i}`));
+    // Unread rows, each in a channel of its own: the list shows 10 of them until the button shows the rest, and opening one moves only that row to the read side.
+    const messages = Array.from({ length: 20 }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `A message of the list, number ${i}`, { unread: true, channel: `C${i}` }));
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(messages), claude_status: claudeReady });
     await mock("slack_thread", slackThread([threadMessage(messages[8].ts, "Person 8", "A message of the list, number 8")]));
     await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 10);
+    await $("#slack-feed .feed-more .text-btn").click();
     await waitForCount("#slack-feed .feed-row", 20);
     await browser.execute(() => {
       document.getElementById("slack-feed")!.scrollTop = 300;
@@ -322,13 +325,13 @@ describe("slack thread: reply", () => {
     await input().setValue("Draft of the first thread");
     await $("#st-back").click();
     await mock("slack_thread", slackThread([threadMessage(other, "Carol Example", "Another thread")]));
-    await $("#slack-feed .feed-row:nth-child(2)").click();
+    await $("#slack-feed .feed-item:nth-child(2) .feed-row").click();
     await waitForCount("#st-msgs .st-msg", 1);
     await expect(input()).toHaveValue("");
     await input().setValue("Draft of the second");
     await $("#st-back").click();
     await mock("slack_thread", base());
-    await $("#slack-feed .feed-row:nth-child(1)").click();
+    await $("#slack-feed .feed-item:nth-child(1) .feed-row").click();
     await waitForCount("#st-msgs .st-msg", 2);
     await expect(input()).toHaveValue("Draft of the first thread");
   });
@@ -512,7 +515,7 @@ describe("slack thread: proofreading with Claude", () => {
     await waitForCalls(edit);
     await $("#st-back").click();
     await mock("slack_thread", slackThread([threadMessage(other, "Carol Example", "Another thread")]));
-    await $("#slack-feed .feed-row:nth-child(2)").click();
+    await $("#slack-feed .feed-item:nth-child(2) .feed-row").click();
     await waitForCount("#st-msgs .st-msg", 1);
     await release(edit, replyEdit("My reply", "My better reply"));
     await browser.pause(300);

@@ -30,6 +30,9 @@ const TOKEN_SERVICE: &str = "jp.mysis.cookapps.slack";
 const LEGACY_USER: &str = "slack";
 const WORKSPACES_FILE: &str = "slack-workspaces.json";
 const WORKSPACES_KEY: &str = "workspaces";
+/// The channels kept off the Slack list: team and channel IDs only.
+const HIDDEN_FILE: &str = "slack-hidden.json";
+const HIDDEN_KEY: &str = "hidden";
 const RECENT_FILE: &str = "slack-recent.json";
 const RECENT_KEY: &str = "recent";
 /// v0.11.0's registered destinations, which are not carried over.
@@ -361,18 +364,20 @@ fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
     missing_scopes(scopes, &HISTORY_SCOPES)
 }
 
-/// The scopes only the timeline and the thread use: names and icons (`users:read`) and attached images (`files:read`).
+/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message sets (`channels:write`, `groups:write`).
 /// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`.
-const OPTIONAL_SCOPES: [&str; 2] = ["users:read", "files:read"];
+const OPTIONAL_SCOPES: [&str; 4] = ["users:read", "files:read", "channels:write", "groups:write"];
 
 /// Every scope the timeline wants, which the list answer says a workspace's token lacks.
-const TIMELINE_SCOPES: [&str; 6] = [
+const TIMELINE_SCOPES: [&str; 8] = [
     "channels:read",
     "groups:read",
     "channels:history",
     "groups:history",
     "users:read",
     "files:read",
+    "channels:write",
+    "groups:write",
 ];
 
 /// The message for a failed `conversations.replies`: a missing scope says which workspace's token to replace, and which scope it lacks.
@@ -903,7 +908,7 @@ pub async fn slack_load(
 }
 
 /// A workspace as `auth.test` describes it now. `missing_scopes` is `None` when Slack sent no scopes to judge by.
-/// `missing_optional` is the same for `OPTIONAL_SCOPES` (`users:read`, `files:read`), which the token can do without.
+/// `missing_optional` is the same for `OPTIONAL_SCOPES` (`users:read`, `files:read`, `channels:write`, `groups:write`), which the token can do without.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -987,6 +992,15 @@ pub async fn slack_remove_workspace(
         // The recent list is a convenience: a broken file is not worth failing the removal for.
         if let Ok(recent) = load_list::<Recent>(&dir, RECENT_FILE, RECENT_KEY) {
             save_list(&dir, RECENT_FILE, RECENT_KEY, &without_team(recent, &gone))?;
+        }
+        // The channels kept off the list go with their workspace, for the same reason.
+        if let Ok(hidden) = load_list::<Hidden>(&dir, HIDDEN_FILE, HIDDEN_KEY) {
+            save_list(
+                &dir,
+                HIDDEN_FILE,
+                HIDDEN_KEY,
+                &without_hidden_team(hidden, &gone),
+            )?;
         }
         Ok(list)
     })
@@ -1326,8 +1340,11 @@ pub async fn slack_post(
 
 // The Slack timeline (S-5), the thread (S-6) and its reply (S-6, S-7). Nothing about messages is saved to disk.
 
-/// The most messages the timeline lists.
-const TIMELINE_MAX: usize = 20;
+/// The most unread messages, and the most read ones, the timeline lists (each the newest of the messages the cache holds).
+const UNREAD_MAX: usize = 20;
+const READ_MAX: usize = 5;
+/// The most channels of one workspace whose `conversations.info` one read asks for: the channels whose read position is not known first, then the ones asked longest ago.
+const INFO_BUDGET: usize = 40;
 /// Messages `conversations.history` is asked for per channel.
 const HISTORY_LIMIT: &str = "20";
 /// Channels of one workspace whose history is read at the same time.
@@ -1375,10 +1392,12 @@ pub struct TimelineMessage {
     reply_count: u32,
     permalink: String,
     has_files: bool,
+    /// Whether the message is past the channel's `last_read` (`is_unread`).
+    unread: bool,
 }
 
 /// A workspace the timeline could not read at all.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
@@ -1389,7 +1408,7 @@ pub struct TimelineFailure {
 }
 
 /// The scopes of `TIMELINE_SCOPES` a workspace's token lacks.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
@@ -1399,7 +1418,7 @@ pub struct TimelineMissing {
     scopes: Vec<&'static str>,
 }
 
-/// The newest messages of every joined channel of every workspace, newest first, and when to read again.
+/// The newest messages of every joined channel of every workspace, newest first, and when to read again. The screen splits them by `unread`.
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -1411,6 +1430,8 @@ pub struct Timeline {
     refresh_secs: u32,
     /// Channels no read has reached yet, over all workspaces.
     pending_channels: u32,
+    /// The unread messages among all the messages held (not only the ones listed), channels kept off the list left out; the sidebar's badge.
+    unread_total: u32,
 }
 
 /// An attached file of a thread's message. `thumb_url` is set only for an image Slack serves a 360px preview of;
@@ -1503,6 +1524,14 @@ struct TimelineCache {
     history: Mutex<TeamsHistory>,
     /// team -> until when Slack's rate limit stops its timeline reads.
     limited_until: Mutex<HashMap<String, Instant>>,
+    /// The same for `conversations.info`, whose limit is the method's own: a 429 there does not stop the history reads.
+    info_limited_until: Mutex<HashMap<String, Instant>>,
+    /// What the last full read found out about the workspaces that could not be read and the scopes tokens lack, which a read from the cache repeats.
+    notice: Mutex<(Vec<TimelineFailure>, Vec<TimelineMissing>)>,
+    /// (team, channel) -> Slack's `last_read` of the channel, which the unread marks are judged by, and when it was set (by Slack's answer, or by opening a message).
+    read_marks: Mutex<HashMap<(String, String), (String, Instant)>>,
+    /// (team, channel) -> when `conversations.info` was last called for the channel, whether or not it gave a `last_read`.
+    info_asked: Mutex<HashMap<(String, String), Instant>>,
     /// team -> the scopes the token had when it last answered, so that a round that reads nothing still knows them.
     scopes: Mutex<HashMap<String, String>>,
     /// team -> the ID of the user the token is (`auth.test`), so that the icons do not ask again.
@@ -1517,6 +1546,20 @@ impl TimelineCache {
             .unwrap()
             .retain(|(t, _), _| t != team_id);
         self.limited_until.lock().unwrap().remove(team_id);
+        self.info_limited_until.lock().unwrap().remove(team_id);
+        {
+            let mut notice = self.notice.lock().unwrap();
+            notice.0.retain(|f| f.team_id != team_id);
+            notice.1.retain(|m| m.team_id != team_id);
+        }
+        self.read_marks
+            .lock()
+            .unwrap()
+            .retain(|(t, _), _| t != team_id);
+        self.info_asked
+            .lock()
+            .unwrap()
+            .retain(|(t, _), _| t != team_id);
         self.scopes.lock().unwrap().remove(team_id);
         self.own.lock().unwrap().remove(team_id);
     }
@@ -1588,18 +1631,94 @@ impl TimelineCache {
 
     /// The workspace's timeline reads stop for `wait` (or the rest of an earlier stop, if that is longer).
     fn limit(&self, team_id: &str, wait: Duration) {
-        let until = Instant::now() + wait;
-        let mut limited = self.limited_until.lock().unwrap();
-        let slot = limited.entry(team_id.to_owned()).or_insert(until);
-        *slot = (*slot).max(until);
+        stop_until(&self.limited_until, team_id, wait);
     }
 
     fn rate_limited(&self, team_id: &str) -> bool {
-        self.limited_until
+        stopped(&self.limited_until, team_id)
+    }
+
+    fn put_notice(&self, failed: &[TimelineFailure], missing: &[TimelineMissing]) {
+        *self.notice.lock().unwrap() = (failed.to_vec(), missing.to_vec());
+    }
+
+    /// What the last full read said, for the workspaces that are still connected.
+    fn notice_of(&self, workspaces: &[Workspace]) -> (Vec<TimelineFailure>, Vec<TimelineMissing>) {
+        let (failed, missing) = &*self.notice.lock().unwrap();
+        let connected = |team: &str| workspaces.iter().any(|w| w.team_id == team);
+        (
+            failed
+                .iter()
+                .filter(|f| connected(&f.team_id))
+                .cloned()
+                .collect(),
+            missing
+                .iter()
+                .filter(|m| connected(&m.team_id))
+                .cloned()
+                .collect(),
+        )
+    }
+
+    /// The workspace's `conversations.info` calls stop for `wait`.
+    fn limit_info(&self, team_id: &str, wait: Duration) {
+        stop_until(&self.info_limited_until, team_id, wait);
+    }
+
+    fn info_limited(&self, team_id: &str) -> bool {
+        stopped(&self.info_limited_until, team_id)
+    }
+
+    /// The channel's `last_read` as Slack last said it (or as opening a message moved it).
+    fn last_read(&self, team_id: &str, channel: &str) -> Option<String> {
+        self.read_marks
             .lock()
             .unwrap()
-            .get(team_id)
-            .is_some_and(|until| *until > Instant::now())
+            .get(&(team_id.to_owned(), channel.to_owned()))
+            .map(|(ts, _)| ts.clone())
+    }
+
+    /// When `conversations.info` was last called for each channel of the workspace.
+    fn info_asked_at(&self, team_id: &str) -> HashMap<String, Instant> {
+        self.info_asked
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((t, _), _)| t == team_id)
+            .map(|((_, channel), at)| (channel.clone(), *at))
+            .collect()
+    }
+
+    fn note_info_asked(&self, team_id: &str, channel: &str) {
+        self.info_asked
+            .lock()
+            .unwrap()
+            .insert((team_id.to_owned(), channel.to_owned()), Instant::now());
+    }
+
+    /// Keeps what Slack said, which also moves back when the user marked the channel unread there.
+    /// The answer of a call that began at `started` is dropped when the kept value was set after that,
+    /// by opening a message or by a call that began later, so that a slow old answer cannot move the position back.
+    fn put_last_read_started(&self, team_id: &str, channel: &str, ts: &str, started: Instant) {
+        let mut kept = self.read_marks.lock().unwrap();
+        let key = (team_id.to_owned(), channel.to_owned());
+        if kept.get(&key).is_some_and(|(_, set)| *set > started) {
+            return;
+        }
+        kept.insert(key, (ts.to_owned(), Instant::now()));
+    }
+
+    /// Moves the channel's `last_read` to `ts` when that is later than the one kept; it never moves back. Whether it moved.
+    fn advance_last_read(&self, team_id: &str, channel: &str, ts: &str) -> bool {
+        let mut kept = self.read_marks.lock().unwrap();
+        match kept.get_mut(&(team_id.to_owned(), channel.to_owned())) {
+            Some((current, set)) if moves_forward(Some(current), ts) => {
+                *current = ts.to_owned();
+                *set = Instant::now();
+                true
+            }
+            _ => false,
+        }
     }
 
     fn scopes(&self, team_id: &str) -> Option<String> {
@@ -1612,6 +1731,133 @@ impl TimelineCache {
             .unwrap()
             .insert(team_id.to_owned(), scopes.to_owned());
     }
+}
+
+/// A channel kept off the list.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Hidden {
+    team_id: String,
+    channel: String,
+}
+
+/// A hidden channel as the settings card lists it: `name` is the channel's name, or its ID when the name is not known.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct HiddenChannel {
+    team_id: String,
+    team: String,
+    channel: String,
+    name: String,
+}
+
+/// The entries with IDs that are valid, each once, in the order they came: what a file that was edited by hand may not guarantee.
+fn clean_hidden(list: Vec<Hidden>) -> Vec<Hidden> {
+    let mut seen = HashSet::new();
+    list.into_iter()
+        .filter(|h| token_key(&h.team_id).is_ok() && valid_channel(&h.channel))
+        .filter(|h| seen.insert((h.team_id.clone(), h.channel.clone())))
+        .collect()
+}
+
+/// `list` with the channel added, at the end, unless it is there already.
+fn with_hidden(mut list: Vec<Hidden>, add: Hidden) -> Vec<Hidden> {
+    if !list.contains(&add) {
+        list.push(add);
+    }
+    list
+}
+
+/// `list` without the channel.
+fn without_hidden(list: Vec<Hidden>, team_id: &str, channel: &str) -> Vec<Hidden> {
+    list.into_iter()
+        .filter(|h| !(h.team_id == team_id && h.channel == channel))
+        .collect()
+}
+
+/// `list` without the channels of a workspace that was removed.
+fn without_hidden_team(list: Vec<Hidden>, team_id: &str) -> Vec<Hidden> {
+    list.into_iter().filter(|h| h.team_id != team_id).collect()
+}
+
+/// The IDs of the workspace's channels kept off the list.
+fn hidden_of(list: &[Hidden], team_id: &str) -> HashSet<String> {
+    list.iter()
+        .filter(|h| h.team_id == team_id)
+        .map(|h| h.channel.clone())
+        .collect()
+}
+
+/// `list` without the channels kept off the list: they are not asked about, not counted as unread-pending and not listed.
+fn visible_channels(list: Vec<Channel>, hidden: &HashSet<String>) -> Vec<Channel> {
+    list.into_iter()
+        .filter(|c| !hidden.contains(&c.id))
+        .collect()
+}
+
+/// `all` without the messages of the channels kept off the list, also those a read kept before the channel was hidden.
+fn visible_messages(all: Vec<Raw>, hidden: &[Hidden]) -> Vec<Raw> {
+    all.into_iter()
+        .filter(|m| {
+            !hidden
+                .iter()
+                .any(|h| h.team_id == m.team_id && h.channel == m.channel)
+        })
+        .collect()
+}
+
+/// How many of `messages` are unread.
+fn count_unread(messages: &[Raw], unread: impl Fn(&Raw) -> bool) -> u32 {
+    u32::try_from(messages.iter().filter(|m| unread(m)).count()).unwrap_or(u32::MAX)
+}
+
+/// The hidden channels of the workspaces that are connected, with the name `name_of(team, channel)` gives, or the ID when it gives none.
+fn hidden_channels(
+    hidden: &[Hidden],
+    workspaces: &[Workspace],
+    name_of: impl Fn(&str, &str) -> Option<String>,
+) -> Vec<HiddenChannel> {
+    hidden
+        .iter()
+        .filter_map(|h| {
+            let workspace = workspaces.iter().find(|w| w.team_id == h.team_id)?;
+            Some(HiddenChannel {
+                team_id: h.team_id.clone(),
+                team: workspace.team.clone(),
+                channel: h.channel.clone(),
+                name: name_of(&h.team_id, &h.channel).unwrap_or_else(|| h.channel.clone()),
+            })
+        })
+        .collect()
+}
+
+/// The name of the channel in the list kept for the workspace (also an old one), or `None`.
+fn kept_channel_name(cache: &ChannelCache, team_id: &str, channel: &str) -> Option<String> {
+    cache
+        .lock()
+        .unwrap()
+        .get(team_id)?
+        .1
+        .iter()
+        .find(|c| c.id == channel)
+        .map(|c| c.name.clone())
+}
+
+/// Stops `team_id` in `map` for `wait` (or the rest of an earlier stop, if that is longer).
+fn stop_until(map: &Mutex<HashMap<String, Instant>>, team_id: &str, wait: Duration) {
+    let until = Instant::now() + wait;
+    let mut limited = map.lock().unwrap();
+    let slot = limited.entry(team_id.to_owned()).or_insert(until);
+    *slot = (*slot).max(until);
+}
+
+fn stopped(map: &Mutex<HashMap<String, Instant>>, team_id: &str) -> bool {
+    map.lock()
+        .unwrap()
+        .get(team_id)
+        .is_some_and(|until| *until > Instant::now())
 }
 
 /// How long to stop after a 429: what Slack asked for (`Retry-After`), else `RATE_LIMIT_DEFAULT`, at most `RATE_LIMIT_MAX`.
@@ -1734,6 +1980,26 @@ fn ts_key(ts: &str) -> (u64, u64) {
     (sec.parse().unwrap_or(0), micro.parse().unwrap_or(0))
 }
 
+/// Whether the message `ts` is past the channel's `last_read` (both as numbers, not as text), unless `sender` is the user (`own`) themselves.
+/// A channel whose `last_read` is not known has no unread message: a message is never marked unread by a guess.
+fn is_unread(ts: &str, last_read: Option<&str>, sender: Option<&str>, own: Option<&str>) -> bool {
+    let from_self = sender.is_some() && sender == own;
+    !from_self && moves_forward(last_read, ts)
+}
+
+/// Whether `ts` is later than `current`, so that setting the read position to `ts` moves it forward. With no position known it does not: nothing is sent blind.
+fn moves_forward(current: Option<&str>, ts: &str) -> bool {
+    current.is_some_and(|c| ts_key(ts) > ts_key(c))
+}
+
+/// The channel's `last_read` in a `conversations.info` answer, when it is a usable timestamp.
+fn last_read_of(reply: &Value) -> Option<String> {
+    reply["channel"]["last_read"]
+        .as_str()
+        .filter(|t| valid_ts(t))
+        .map(str::to_owned)
+}
+
 /// The listed message of a channel, or `None` when it does not belong in the timeline or has no usable `ts`.
 fn raw_of(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
     if !is_listed(m) {
@@ -1763,13 +2029,61 @@ fn raw_of(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
     })
 }
 
-/// The newest `TIMELINE_MAX` of `all`, newest first by `ts` as a number, without a message listed twice (the same team, channel and `ts`).
-fn merge_timeline(mut all: Vec<Raw>) -> Vec<Raw> {
+/// `all` newest first by `ts` as a number, without a message listed twice (the same team, channel and `ts`).
+fn newest_first(mut all: Vec<Raw>) -> Vec<Raw> {
     all.sort_by_key(|m| std::cmp::Reverse(ts_key(&m.ts)));
     let mut seen = HashSet::new();
     all.retain(|m| seen.insert((m.team_id.clone(), m.channel.clone(), m.ts.clone())));
-    all.truncate(TIMELINE_MAX);
     all
+}
+
+/// The messages the list shows, from `sorted` (newest first): the newest `UNREAD_MAX` unread ones and the newest `READ_MAX` read ones, together still newest first,
+/// each with whether it is unread. Older messages are not looked at for either.
+fn select_timeline(sorted: Vec<Raw>, unread: impl Fn(&Raw) -> bool) -> Vec<(Raw, bool)> {
+    let (mut unread_left, mut read_left) = (UNREAD_MAX, READ_MAX);
+    let mut chosen = Vec::new();
+    for m in sorted {
+        if unread_left == 0 && read_left == 0 {
+            break;
+        }
+        let is_unread = unread(&m);
+        let left = if is_unread {
+            &mut unread_left
+        } else {
+            &mut read_left
+        };
+        if *left > 0 {
+            *left -= 1;
+            chosen.push((m, is_unread));
+        }
+    }
+    chosen
+}
+
+/// A channel `choose_info_channels` may pick: the newest message held, the read position kept (`None`: not known), and when `conversations.info` was last called for it (`None`: never).
+struct InfoCandidate {
+    channel: String,
+    newest: String,
+    last_read: Option<String>,
+    asked: Option<Instant>,
+}
+
+/// The channels (given in the order the newest message of each comes) whose `conversations.info` one read asks for, at most `budget`:
+/// first those whose read position is not known or may be behind the newest message held, then the rest with what is left of the budget;
+/// within each, the ones never asked, then the ones asked longest ago, so that a channel that gives no position cannot keep the front.
+fn choose_info_channels(candidates: &[InfoCandidate], budget: usize) -> Vec<String> {
+    let mut chosen: Vec<&InfoCandidate> = candidates.iter().collect();
+    // `None` (never asked) sorts before every `Some`, and the sort keeps the given order among equals.
+    chosen.sort_by_key(|c| {
+        let may_be_unread =
+            c.last_read.is_none() || moves_forward(c.last_read.as_deref(), &c.newest);
+        (!may_be_unread, c.asked)
+    });
+    chosen
+        .into_iter()
+        .take(budget)
+        .map(|c| c.channel.clone())
+        .collect()
 }
 
 /// How long to wait before the next read: `REFRESH_BUSY_SECS` while channels are unread (`pending`) or the biggest workspace has more channels than one read covers (`largest`), else `REFRESH_MIN_SECS`.
@@ -1911,6 +2225,7 @@ fn timeline_message(
     workspace: &Workspace,
     user: Option<SlackUser>,
     name_of: &dyn Fn(&str) -> Option<String>,
+    unread: bool,
 ) -> TimelineMessage {
     let sender = raw.bot.clone().or(user);
     TimelineMessage {
@@ -1935,6 +2250,7 @@ fn timeline_message(
             raw.thread_ts.as_deref(),
         ),
         has_files: raw.has_files,
+        unread,
     }
 }
 
@@ -2074,6 +2390,140 @@ async fn lookup_users(
     run_limited(jobs, USER_CONCURRENCY).await;
 }
 
+/// Who the token of the workspace is (`auth.test`): asked once per workspace, then remembered.
+async fn own_user_id(
+    http: &reqwest::Client,
+    cache: &TimelineCache,
+    team_id: &str,
+    token: &str,
+) -> Option<String> {
+    if let Some(user) = cache.own_user(team_id) {
+        return Some(user);
+    }
+    // Not retried: the list does not wait for it, and the next read asks again.
+    let (reply, _) = call_scoped_retrying(http, token, "auth.test", Payload::Empty, 0)
+        .await
+        .ok()?;
+    let user = reply["user_id"].as_str().filter(|u| valid_channel(u))?;
+    cache.put_own_user(team_id, user);
+    Some(user.to_owned())
+}
+
+/// One `conversations.info` call; the answer is `None` when the workspace's calls were stopped by a rate limit already.
+type InfoAnswer = (
+    String,
+    String,
+    Instant,
+    Option<Result<(Value, Option<String>), SlackError>>,
+);
+
+/// A workspace's `conversations.info` calls to make: its name, whether a rate limit stopped them, and the `(token, channel)` of each.
+type InfoGroup = (String, Arc<AtomicBool>, Vec<(String, String)>);
+
+async fn ask_info(
+    http: reqwest::Client,
+    token: String,
+    team: String,
+    channel: String,
+    stop: Arc<AtomicBool>,
+) -> InfoAnswer {
+    let started = Instant::now();
+    if stop.load(Ordering::Relaxed) {
+        return (team, channel, started, None);
+    }
+    let form = [("channel", channel.clone())];
+    let got =
+        call_scoped_retrying(&http, &token, "conversations.info", Payload::Form(&form), 0).await;
+    if got.as_ref().is_err_and(|e| e.rate_limited.is_some()) {
+        stop.store(true, Ordering::Relaxed);
+    }
+    (team, channel, started, Some(got))
+}
+
+/// Keeps the `last_read` of every `(team, token, channel)` of `wanted` (the channels `choose_info_channels` picked among those the cache holds messages of),
+/// `HISTORY_CONCURRENCY` calls at a time for each workspace, and who each workspace's user is.
+/// A rate limit (429) is not retried: it ends that workspace's calls for this round and stops them until Slack's `Retry-After` has passed, and the history reads go on.
+/// A call that fails leaves the channel's earlier value in place; an answer of a call that began before the value was set is dropped (`put_last_read_started`).
+async fn refresh_read_marks(
+    http: &reqwest::Client,
+    cache: &Arc<TimelineCache>,
+    wanted: Vec<(String, String, String)>,
+) {
+    // team -> (the calls stopped?, [(token, channel)]), in the order the workspaces first come.
+    let mut groups: Vec<InfoGroup> = Vec::new();
+    for (team, token, channel) in wanted {
+        match groups.iter_mut().find(|g| g.0 == team) {
+            Some(group) => group.2.push((token, channel)),
+            None => {
+                let stop = Arc::new(AtomicBool::new(cache.info_limited(&team)));
+                groups.push((team, stop, vec![(token, channel)]));
+            }
+        }
+    }
+    let who: Vec<(String, String)> = groups
+        .iter()
+        .map(|(team, _, items)| (team.clone(), items[0].0.clone()))
+        .collect();
+    let owners = who.into_iter().map(|(team, token)| {
+        let (http, cache) = (http.clone(), Arc::clone(cache));
+        async move {
+            own_user_id(&http, &cache, &team, &token).await;
+        }
+    });
+    let workspaces = groups.len().max(1);
+    let runs = groups.into_iter().map(|(team, stop, items)| {
+        let http = http.clone();
+        async move {
+            let jobs = items.into_iter().map(|(token, channel)| {
+                ask_info(
+                    http.clone(),
+                    token,
+                    team.clone(),
+                    channel,
+                    Arc::clone(&stop),
+                )
+            });
+            run_limited(jobs, HISTORY_CONCURRENCY).await
+        }
+    });
+    let (_, answers) = tokio::join!(
+        run_limited(owners, USER_CONCURRENCY),
+        run_limited(runs, workspaces)
+    );
+    let mut logged = HashSet::new();
+    for (team, channel, started, got) in answers.into_iter().flatten() {
+        let Some(got) = got else { continue };
+        cache.note_info_asked(&team, &channel);
+        match got {
+            Ok((reply, _)) => {
+                if let Some(ts) = last_read_of(&reply) {
+                    cache.put_last_read_started(&team, &channel, &ts, started);
+                }
+            }
+            Err(e) => match e.rate_limited {
+                Some(wait) => {
+                    cache.limit_info(&team, wait);
+                    if logged.insert(team.clone()) {
+                        log_failure(
+                            "slack_timeline",
+                            &team,
+                            format!(
+                                "Slack の呼び出し制限のため既読位置を {} 秒読みません",
+                                wait.as_secs()
+                            ),
+                        );
+                    }
+                }
+                None => {
+                    if logged.insert(team.clone()) {
+                        log_failure("slack_timeline", &team, e);
+                    }
+                }
+            },
+        }
+    }
+}
+
 /// What reading one workspace gave: its token (empty when it could not be read), the scopes the token has, how many channels it is in and how many of them
 /// no read has reached yet, the messages it remembers (also when this read failed), and why it failed, if it did.
 struct WorkspaceRead {
@@ -2093,6 +2543,7 @@ async fn fill_workspace(
     http: &reqwest::Client,
     channels: &ChannelCache,
     cache: &TimelineCache,
+    hidden: &HashSet<String>,
     read: &mut WorkspaceRead,
 ) -> Result<(), String> {
     let team_id = read.workspace.team_id.clone();
@@ -2104,6 +2555,8 @@ async fn fill_workspace(
         Some(list) => list,
         None => fetch_and_keep_channels(http, channels, &team_id, &read.token).await?,
     };
+    // The channels kept off the list are not read, not counted, and drop out of the history kept.
+    let list = visible_channels(list, hidden);
     read.channels = list.len();
     let history = cache.team_history(&team_id);
     let chosen = if cache.rate_limited(&team_id) {
@@ -2189,6 +2642,7 @@ async fn read_workspace(
     http: reqwest::Client,
     channels: Arc<ChannelCache>,
     cache: Arc<TimelineCache>,
+    hidden: HashSet<String>,
     workspace: Workspace,
 ) -> WorkspaceRead {
     let mut read = WorkspaceRead {
@@ -2200,7 +2654,7 @@ async fn read_workspace(
         messages: Vec::new(),
         error: None,
     };
-    read.error = fill_workspace(&http, &channels, &cache, &mut read)
+    read.error = fill_workspace(&http, &channels, &cache, &hidden, &mut read)
         .await
         .err();
     // A workspace that failed still lists the messages its earlier reads kept.
@@ -2215,26 +2669,118 @@ async fn read_workspace(
     read
 }
 
-/// The newest `TIMELINE_MAX` messages of the joined public and private channels (no direct messages) of every workspace, newest first.
+/// Every message the cache holds for the workspaces, without the channels kept off the list, newest first.
+fn held_messages(cache: &TimelineCache, workspaces: &[Workspace], hidden: &[Hidden]) -> Vec<Raw> {
+    let all = workspaces
+        .iter()
+        .flat_map(|w| cache.team_messages(&w.team_id))
+        .collect();
+    newest_first(visible_messages(all, hidden))
+}
+
+/// The messages the list shows (`select_timeline`) and the number of unread ones among all of `all` (newest first), by the read positions and the user IDs the cache holds.
+fn pick_timeline(cache: &TimelineCache, all: Vec<Raw>) -> (Vec<(Raw, bool)>, u32) {
+    let unread_of = |m: &Raw| {
+        is_unread(
+            &m.ts,
+            cache.last_read(&m.team_id, &m.channel).as_deref(),
+            m.user.as_deref(),
+            cache.own_user(&m.team_id).as_deref(),
+        )
+    };
+    let total = count_unread(&all, unread_of);
+    (select_timeline(all, unread_of), total)
+}
+
+/// The rows as the screen draws them, with the names the cache holds.
+fn timeline_messages(
+    cache: &TimelineCache,
+    workspaces: &[Workspace],
+    top: &[(Raw, bool)],
+) -> Vec<TimelineMessage> {
+    top.iter()
+        .filter_map(|(raw, unread)| {
+            let workspace = workspaces.iter().find(|w| w.team_id == raw.team_id)?;
+            let user = raw
+                .user
+                .as_deref()
+                .and_then(|u| cache.user(&raw.team_id, u));
+            let name_of = |id: &str| cache.user(&raw.team_id, id).map(|u| u.name);
+            Some(timeline_message(raw, workspace, user, &name_of, *unread))
+        })
+        .collect()
+}
+
+/// The list from what the cache holds, with no call to Slack: the same selection and counts as a full read over the messages, the read positions and the names kept,
+/// the notice of the last full read, and `pendingChannels` and `refreshSecs` from the channel lists kept (the channels kept off the list left out).
+/// What is not held (a channel put back whose history was dropped) comes with the next full read.
+fn cached_timeline(
+    cache: &TimelineCache,
+    channels: &ChannelCache,
+    workspaces: &[Workspace],
+    hidden: &[Hidden],
+) -> Timeline {
+    let (top, unread_total) = pick_timeline(cache, held_messages(cache, workspaces, hidden));
+    let (mut pending, mut largest) = (0, 0);
+    for w in workspaces {
+        let kept = channels
+            .lock()
+            .unwrap()
+            .get(&w.team_id)
+            .map(|(_, list)| list.clone());
+        if let Some(list) = kept {
+            let list = visible_channels(list, &hidden_of(hidden, &w.team_id));
+            pending += pending_channels(&list, &cache.team_history(&w.team_id));
+            largest = largest.max(list.len());
+        }
+    }
+    let (failed, missing) = cache.notice_of(workspaces);
+    Timeline {
+        messages: timeline_messages(cache, workspaces, &top),
+        failed,
+        missing,
+        refresh_secs: refresh_secs(pending, largest),
+        pending_channels: u32::try_from(pending).unwrap_or(u32::MAX),
+        unread_total,
+    }
+}
+
+/// The newest `UNREAD_MAX` unread and the newest `READ_MAX` read messages (`select_timeline`) of the joined public and private channels (no direct messages) of every workspace, together newest first.
 /// A workspace that cannot be read at all is in `failed`; the scopes a token lacks are in `missing`. Messages are kept in memory only.
+/// With `cached` true nothing is asked of Slack and no token is read: the list is made again from what the cache holds (`cached_timeline`), as after a channel was hidden or put back.
 #[tauri::command]
 pub async fn slack_timeline(
     app: AppHandle,
     auth: State<'_, Auth>,
     state: State<'_, SlackState>,
+    cached: Option<bool>,
 ) -> Result<Timeline, String> {
     let command = "slack_timeline";
     let dir = config_dir(&app)?;
+    if cached == Some(true) {
+        let workspaces = load_workspaces(&dir)
+            .await
+            .map_err(|e| log_failure(command, "-", e))?;
+        let hidden = load_hidden(&dir).await;
+        return Ok(cached_timeline(
+            &state.timeline,
+            &state.channels,
+            &workspaces,
+            &hidden,
+        ));
+    }
     migrate(&dir, auth.http(), &state).await;
     let workspaces = load_workspaces(&dir)
         .await
         .map_err(|e| log_failure(command, "-", e))?;
     let http = auth.http().clone();
+    let hidden = load_hidden(&dir).await;
     let jobs = workspaces.iter().cloned().map(|w| {
         read_workspace(
             http.clone(),
             Arc::clone(&state.channels),
             Arc::clone(&state.timeline),
+            hidden_of(&hidden, &w.team_id),
             w,
         )
     });
@@ -2277,17 +2823,52 @@ pub async fn slack_timeline(
             });
         }
     }
-    let top = merge_timeline(all);
+    let all = newest_first(visible_messages(all, &hidden));
 
-    // Names: the senders and the people the texts mention, once each, in the order the list shows them.
+    // Where the read position of each channel holding messages is: at most `INFO_BUDGET` calls per workspace that could be read, the rest use the value kept.
     let token_of_team: HashMap<&str, &str> = reads
         .iter()
         .map(|r| (r.workspace.team_id.as_str(), r.token.as_str()))
         .collect();
+    let mut channels: Vec<(String, String, String)> = Vec::new();
+    for read in reads
+        .iter()
+        .filter(|r| r.error.is_none() && !r.token.is_empty())
+    {
+        let team = read.workspace.team_id.as_str();
+        let mut seen = HashSet::new();
+        let marks = state.timeline.info_asked_at(team);
+        // `all` is newest first, so the first message of a channel is its newest.
+        let held: Vec<InfoCandidate> = all
+            .iter()
+            .filter(|m| m.team_id == team)
+            .filter(|m| seen.insert(m.channel.clone()))
+            .map(|m| InfoCandidate {
+                channel: m.channel.clone(),
+                newest: m.ts.clone(),
+                last_read: state.timeline.last_read(team, &m.channel),
+                asked: marks.get(&m.channel).copied(),
+            })
+            .collect();
+        let asked = choose_info_channels(&held, INFO_BUDGET);
+        channels.extend(
+            asked
+                .into_iter()
+                .map(|channel| (team.to_owned(), read.token.clone(), channel)),
+        );
+    }
+    refresh_read_marks(&http, &state.timeline, channels).await;
+
+    // The file again: a channel hidden while the calls above were on their way is not listed or counted.
+    let hidden = load_hidden(&dir).await;
+    let all = visible_messages(all, &hidden);
+    let (top, unread_total) = pick_timeline(&state.timeline, all);
+
+    // Names: the senders and the people the texts mention, once each, in the order the list shows them.
     let mut seen = HashSet::new();
     let wanted = top
         .iter()
-        .flat_map(|m| {
+        .flat_map(|(m, _)| {
             let sender = m.bot.is_none().then_some(m.user.clone()).flatten();
             sender
                 .into_iter()
@@ -2310,25 +2891,138 @@ pub async fn slack_timeline(
     .collect();
     lookup_users(&http, &state.timeline, wanted).await;
 
-    let messages = top
-        .iter()
-        .filter_map(|raw| {
-            let workspace = workspaces.iter().find(|w| w.team_id == raw.team_id)?;
-            let user = raw
-                .user
-                .as_deref()
-                .and_then(|u| state.timeline.user(&raw.team_id, u));
-            let name_of = |id: &str| state.timeline.user(&raw.team_id, id).map(|u| u.name);
-            Some(timeline_message(raw, workspace, user, &name_of))
-        })
-        .collect();
+    let messages = timeline_messages(&state.timeline, &workspaces, &top);
+    state.timeline.put_notice(&failed, &missing);
     Ok(Timeline {
         messages,
         failed,
         missing,
         refresh_secs: refresh_secs(pending, largest),
         pending_channels: u32::try_from(pending).unwrap_or(u32::MAX),
+        unread_total,
     })
+}
+
+/// The channels kept off the list; a file that cannot be read is an empty list, as far as the list goes.
+async fn load_hidden(dir: &Path) -> Vec<Hidden> {
+    let dir = dir.to_owned();
+    match blocking(move || load_list::<Hidden>(&dir, HIDDEN_FILE, HIDDEN_KEY)).await {
+        Ok(list) => clean_hidden(list),
+        Err(e) => {
+            log_failure("slack_hidden", "-", e);
+            Vec::new()
+        }
+    }
+}
+
+/// The channels kept off the Slack list, with the workspace's name and the channel's name (its ID when the name is not known), in the order they were hidden.
+#[tauri::command]
+pub async fn slack_hidden_list(
+    app: AppHandle,
+    state: State<'_, SlackState>,
+) -> Result<Vec<HiddenChannel>, String> {
+    let dir = config_dir(&app)?;
+    let workspaces = load_workspaces(&dir)
+        .await
+        .map_err(|e| log_failure("slack_hidden_list", "-", e))?;
+    let hidden = load_hidden(&dir).await;
+    Ok(hidden_channels(&hidden, &workspaces, |team, channel| {
+        kept_channel_name(&state.channels, team, channel)
+    }))
+}
+
+/// Keeps the channel off the Slack list from the next read on: it is not read, not counted and not listed. Slack itself is not told.
+#[tauri::command]
+pub async fn slack_hide_channel(
+    app: AppHandle,
+    state: State<'_, SlackState>,
+    team_id: String,
+    channel: String,
+) -> Result<bool, String> {
+    let command = "slack_hide_channel";
+    if token_key(&team_id).is_err() || !valid_channel(&channel) {
+        return Err(log_failure(command, &team_id, BAD_TARGET));
+    }
+    let dir = config_dir(&app)?;
+    let _files = state.files.lock().await;
+    let team = team_id.clone();
+    blocking(move || {
+        // A file that cannot be read is an error, not an empty list to be written over.
+        let list = clean_hidden(load_list(&dir, HIDDEN_FILE, HIDDEN_KEY)?);
+        let list = with_hidden(
+            list,
+            Hidden {
+                team_id: team,
+                channel,
+            },
+        );
+        save_list(&dir, HIDDEN_FILE, HIDDEN_KEY, &list)
+    })
+    .await
+    .map_err(|e| log_failure(command, &team_id, e))?;
+    Ok(true)
+}
+
+/// Puts the channel back on the Slack list: it is read again from the next read on.
+#[tauri::command]
+pub async fn slack_unhide_channel(
+    app: AppHandle,
+    state: State<'_, SlackState>,
+    team_id: String,
+    channel: String,
+) -> Result<bool, String> {
+    let command = "slack_unhide_channel";
+    if token_key(&team_id).is_err() || !valid_channel(&channel) {
+        return Err(log_failure(command, &team_id, BAD_TARGET));
+    }
+    let dir = config_dir(&app)?;
+    let _files = state.files.lock().await;
+    let team = team_id.clone();
+    blocking(move || {
+        let list = clean_hidden(load_list(&dir, HIDDEN_FILE, HIDDEN_KEY)?);
+        save_list(
+            &dir,
+            HIDDEN_FILE,
+            HIDDEN_KEY,
+            &without_hidden(list, &team, &channel),
+        )
+    })
+    .await
+    .map_err(|e| log_failure(command, &team_id, e))?;
+    Ok(true)
+}
+
+/// Sets the read position of `channel` to the message `ts` (`conversations.mark`) when that is later than the one the list holds, and moves the one it holds.
+/// Nothing is sent for a position that is not later, or for a channel whose position is not known. Returns whether it was sent.
+#[tauri::command]
+pub async fn slack_mark_read(
+    auth: State<'_, Auth>,
+    state: State<'_, SlackState>,
+    team_id: String,
+    channel: String,
+    ts: String,
+) -> Result<bool, String> {
+    let command = "slack_mark_read";
+    if token_key(&team_id).is_err() || !valid_channel(&channel) || !valid_ts(&ts) {
+        return Err(log_failure(command, &team_id, BAD_TARGET));
+    }
+    if !moves_forward(state.timeline.last_read(&team_id, &channel).as_deref(), &ts) {
+        return Ok(false);
+    }
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    let form = [("channel", channel.clone()), ("ts", ts.clone())];
+    call(
+        auth.http(),
+        &token,
+        "conversations.mark",
+        Payload::Form(&form),
+    )
+    .await
+    .map_err(|e| log_failure(command, &team_id, e))?;
+    state.timeline.advance_last_read(&team_id, &channel, &ts);
+    Ok(true)
 }
 
 /// The whole thread that starts with the message `ts` of `channel` (pages of 200, up to 20 pages, as the summary reads it), oldest first, with names, icons and the attached files.
@@ -2465,16 +3159,8 @@ pub async fn slack_icons(
         async move {
             let who = async {
                 let token = token_of(&team_id).await.ok()?;
-                // Who the token is does not change: ask `auth.test` once per workspace.
-                if let Some(user) = cache.own_user(&team_id) {
-                    return Some((team_id.clone(), token, user));
-                }
-                let (reply, _) = call_scoped(&http, &token, "auth.test", Payload::Empty)
-                    .await
-                    .ok()?;
-                let user = reply["user_id"].as_str().filter(|u| valid_channel(u))?;
-                cache.put_own_user(&team_id, user);
-                Some((team_id.clone(), token, user.to_owned()))
+                let user = own_user_id(&http, &cache, &team_id, &token).await?;
+                Some((team_id.clone(), token, user))
             }
             .await;
             (team_id, who)
@@ -3421,6 +4107,558 @@ mod tests {
         assert!(!cache.rate_limited("T1"));
         cache.limit("T3", Duration::ZERO);
         assert!(!cache.rate_limited("T3"));
+    }
+
+    #[test]
+    fn a_message_is_unread_when_its_ts_is_past_last_read_as_a_number() {
+        let read = Some("1700000000.000100");
+        assert!(is_unread("1700000000.000101", read, Some("U2"), Some("U1")));
+        assert!(is_unread("1700000001.000000", read, None, None));
+        // The same position, and an earlier one, are read.
+        assert!(!is_unread(
+            "1700000000.000100",
+            read,
+            Some("U2"),
+            Some("U1")
+        ));
+        assert!(!is_unread(
+            "1699999999.999999",
+            read,
+            Some("U2"),
+            Some("U1")
+        ));
+        // Compared as numbers, not as text: "999999999..." is the earlier one though it sorts after "1700000000...".
+        assert!(!is_unread("999999999.999999", read, None, None));
+        assert!(is_unread(
+            "1700000000.000010",
+            Some("999999999.999999"),
+            None,
+            None
+        ));
+        assert!(!is_unread(
+            "1700000000.000010",
+            Some("1700000000.000100"),
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn a_message_of_the_user_themselves_or_in_a_channel_with_no_position_is_not_unread() {
+        let read = Some("1700000000.000100");
+        assert!(!is_unread(
+            "1700000009.000000",
+            read,
+            Some("U1"),
+            Some("U1")
+        ));
+        // Who the user is may not be known yet; a sender is not then taken for them.
+        assert!(is_unread("1700000009.000000", read, Some("U1"), None));
+        // A message of a bot has no user.
+        assert!(is_unread("1700000009.000000", read, None, Some("U1")));
+        assert!(!is_unread(
+            "1700000009.000000",
+            None,
+            Some("U2"),
+            Some("U1")
+        ));
+    }
+
+    #[test]
+    fn the_read_position_moves_only_forward_and_never_from_an_unknown_one() {
+        assert!(moves_forward(
+            Some("1700000000.000100"),
+            "1700000000.000101"
+        ));
+        assert!(!moves_forward(
+            Some("1700000000.000100"),
+            "1700000000.000100"
+        ));
+        assert!(!moves_forward(
+            Some("1700000000.000100"),
+            "1699999999.000000"
+        ));
+        assert!(!moves_forward(None, "1700000000.000101"));
+        assert!(moves_forward(Some("999999999.999999"), "1700000000.000000"));
+    }
+
+    /// `n` messages of one channel, newest first: the ts of the i-th is `1700000000 + (n - i)` seconds, so a larger number is newer.
+    fn messages_newest_first(n: usize) -> Vec<Raw> {
+        (0..n)
+            .map(|i| raw("C1", &format!("{}.000000", 1_700_000_000 + (n - i))))
+            .collect()
+    }
+
+    fn secs(m: &Raw) -> usize {
+        m.ts.split('.').next().unwrap().parse::<usize>().unwrap() - 1_700_000_000
+    }
+
+    #[test]
+    fn at_most_twenty_unread_and_five_read_are_listed_each_the_newest_and_together_newest_first() {
+        let all = messages_newest_first(60);
+        // The newest 30 are unread, the rest are read.
+        let chosen = select_timeline(all, |m| secs(m) > 30);
+        let unread: Vec<usize> = chosen
+            .iter()
+            .filter(|(_, u)| *u)
+            .map(|(m, _)| secs(m))
+            .collect();
+        let read: Vec<usize> = chosen
+            .iter()
+            .filter(|(_, u)| !*u)
+            .map(|(m, _)| secs(m))
+            .collect();
+        assert_eq!(unread, (41..=60).rev().collect::<Vec<_>>());
+        assert_eq!(read, (26..=30).rev().collect::<Vec<_>>());
+        // Together they are still newest first.
+        let order: Vec<usize> = chosen.iter().map(|(m, _)| secs(m)).collect();
+        assert!(order.windows(2).all(|w| w[0] > w[1]));
+        assert_eq!(order.len(), UNREAD_MAX + READ_MAX);
+    }
+
+    #[test]
+    fn fewer_messages_than_the_limits_are_all_listed_and_an_old_unread_one_is_found_past_read_ones()
+    {
+        let all = messages_newest_first(10);
+        let chosen = select_timeline(all, |m| secs(m).is_multiple_of(2));
+        assert_eq!(chosen.len(), 10);
+        // Read ones past the fifth are left out, while an older unread one still comes in.
+        let all = messages_newest_first(40);
+        let chosen = select_timeline(all, |m| secs(m) == 1);
+        let ts: Vec<usize> = chosen.iter().map(|(m, _)| secs(m)).collect();
+        assert_eq!(ts, [40, 39, 38, 37, 36, 1]);
+        assert!(select_timeline(Vec::new(), |_| true).is_empty());
+    }
+
+    /// `(channel, newest ts, last_read, seconds since it was asked)`.
+    fn candidates(list: &[(&str, &str, Option<&str>, Option<u64>)]) -> Vec<InfoCandidate> {
+        let now = Instant::now();
+        list.iter()
+            .map(|(channel, newest, last_read, asked)| InfoCandidate {
+                channel: (*channel).into(),
+                newest: (*newest).into(),
+                last_read: last_read.map(str::to_owned),
+                asked: asked.map(|s| now - Duration::from_secs(s)),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_info_calls_go_first_to_channels_that_may_be_unread_then_to_the_rest_each_oldest_asked_first(
+    ) {
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // C1: no position known, never asked. C2: position behind the newest message, asked recently. C3: position known and level with the newest, never asked.
+        // C4: no position known, asked long ago. C5: behind, never asked. C6: level, asked long ago.
+        let list = candidates(&[
+            ("C1", "5.1", None, None),
+            ("C2", "5.1", Some("4.1"), Some(10)),
+            ("C3", "5.1", Some("5.1"), None),
+            ("C4", "5.1", None, Some(500)),
+            ("C5", "5.1", Some("4.1"), None),
+            ("C6", "5.1", Some("9.1"), Some(900)),
+        ]);
+        assert_eq!(
+            choose_info_channels(&list, 10),
+            ids(&["C1", "C5", "C4", "C2", "C3", "C6"])
+        );
+        // The budget cuts from the end of that order: the channels that may be unread come before the rest, which gets what is left.
+        assert_eq!(
+            choose_info_channels(&list, 4),
+            ids(&["C1", "C5", "C4", "C2"])
+        );
+        assert_eq!(
+            choose_info_channels(&list, 5),
+            ids(&["C1", "C5", "C4", "C2", "C3"])
+        );
+        assert!(choose_info_channels(&list, 0).is_empty());
+    }
+
+    #[test]
+    fn a_channel_that_gives_no_position_does_not_keep_the_front_once_it_was_asked() {
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // C1 and C2 never gave a position; C1 was asked a moment ago, C2 long ago, C3 never. With a budget of 1 the one asked longest ago, or never, goes.
+        let list = candidates(&[
+            ("C1", "5.1", None, Some(1)),
+            ("C2", "5.1", None, Some(300)),
+            ("C3", "5.1", None, None),
+        ]);
+        assert_eq!(choose_info_channels(&list, 1), ids(&["C3"]));
+        assert_eq!(choose_info_channels(&list, 2), ids(&["C3", "C2"]));
+        // A position that is the same number written differently is level, not behind.
+        let level = candidates(&[
+            ("C1", "5.000100", Some("5.000100"), None),
+            ("C2", "5.000100", None, Some(5)),
+        ]);
+        assert_eq!(choose_info_channels(&level, 1), ids(&["C2"]));
+    }
+
+    #[test]
+    fn when_info_was_last_asked_is_kept_per_channel_apart_from_the_position_and_goes_with_the_workspace(
+    ) {
+        let cache = TimelineCache::default();
+        assert!(cache.info_asked_at("T1").is_empty());
+        cache.note_info_asked("T1", "C1");
+        cache.note_info_asked("T2", "C9");
+        assert_eq!(cache.info_asked_at("T1").len(), 1);
+        // Asked, and no position came: the channel is still asked about, and has no position.
+        assert_eq!(cache.last_read("T1", "C1"), None);
+        cache.forget("T1");
+        assert!(cache.info_asked_at("T1").is_empty());
+        assert_eq!(cache.info_asked_at("T2").len(), 1);
+    }
+
+    #[test]
+    fn an_answer_of_a_call_that_began_before_the_position_was_set_does_not_move_it_back() {
+        let cache = TimelineCache::default();
+        let before = Instant::now();
+        std::thread::sleep(Duration::from_millis(5));
+        cache.put_last_read("T1", "C1", "1700000000.000100");
+        assert!(cache.advance_last_read("T1", "C1", "1700000009.000000"));
+        // The call began before the message was opened: its answer (the old position) is dropped.
+        cache.put_last_read_started("T1", "C1", "1700000000.000100", before);
+        assert_eq!(
+            cache.last_read("T1", "C1").as_deref(),
+            Some("1700000009.000000")
+        );
+        // A call that began after it is taken, also when it says an earlier position (the user marked the channel unread in Slack).
+        std::thread::sleep(Duration::from_millis(5));
+        cache.put_last_read_started("T1", "C1", "1700000002.000000", Instant::now());
+        assert_eq!(
+            cache.last_read("T1", "C1").as_deref(),
+            Some("1700000002.000000")
+        );
+        // With nothing kept yet, an answer is taken whenever the call began.
+        cache.put_last_read_started("T1", "C2", "1700000001.000000", before);
+        assert_eq!(
+            cache.last_read("T1", "C2").as_deref(),
+            Some("1700000001.000000")
+        );
+    }
+
+    impl TimelineCache {
+        /// Keeps `ts` as the channel's position as Slack's answer of now.
+        fn put_last_read(&self, team_id: &str, channel: &str, ts: &str) {
+            self.put_last_read_started(team_id, channel, ts, Instant::now());
+        }
+    }
+
+    fn hidden(team: &str, channel: &str) -> Hidden {
+        Hidden {
+            team_id: team.into(),
+            channel: channel.into(),
+        }
+    }
+
+    #[test]
+    fn the_hidden_list_keeps_valid_ids_once_adds_at_the_end_and_removes_one_channel_or_a_workspace()
+    {
+        let list = clean_hidden(vec![
+            hidden("T1", "C1"),
+            hidden("T1", "c bad"),
+            hidden("", "C2"),
+            hidden("T1", "C1"),
+            hidden("T2", "C1"),
+        ]);
+        assert_eq!(list, [hidden("T1", "C1"), hidden("T2", "C1")]);
+        let list = with_hidden(list, hidden("T1", "C9"));
+        assert_eq!(list.last(), Some(&hidden("T1", "C9")));
+        // A channel that is hidden already is not listed twice.
+        assert_eq!(with_hidden(list.clone(), hidden("T1", "C1")), list);
+        let list = without_hidden(list, "T1", "C1");
+        assert_eq!(list, [hidden("T2", "C1"), hidden("T1", "C9")]);
+        assert_eq!(
+            without_hidden(list.clone(), "T3", "C1"),
+            list,
+            "another workspace's channel of the same ID stays"
+        );
+        assert_eq!(without_hidden_team(list, "T1"), [hidden("T2", "C1")]);
+        assert_eq!(
+            hidden_of(&[hidden("T1", "C1"), hidden("T2", "C2")], "T1"),
+            HashSet::from(["C1".to_owned()])
+        );
+    }
+
+    #[test]
+    fn a_hidden_channel_is_not_chosen_for_the_history_the_info_calls_or_the_pending_count() {
+        let hidden_ids = HashSet::from(["C2".to_owned()]);
+        let list = visible_channels(
+            vec![channel("C1"), channel("C2"), channel("C3")],
+            &hidden_ids,
+        );
+        assert_eq!(ids(&list), ["C1", "C3"]);
+        // Nothing asks about it: it is not among the channels chosen, even with a budget to spare...
+        assert_eq!(
+            ids(&choose_channels(&list, &History::new(), 10)),
+            ["C1", "C3"]
+        );
+        // ...it is not counted as a channel no read has reached...
+        assert_eq!(pending_channels(&list, &History::new()), 2);
+        // ...and the messages a read kept before it was hidden drop out of the history.
+        let now = Instant::now();
+        let history = next_history(
+            &list,
+            History::from([("C2".to_owned(), (now, vec![raw("C2", "2.1")]))]),
+            HashMap::new(),
+            now,
+        );
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn the_messages_of_a_hidden_channel_are_not_listed_nor_counted_as_unread() {
+        let mut other_team = raw("C1", "5.5");
+        other_team.team_id = "T2".into();
+        let all = vec![raw("C1", "3.3"), raw("C2", "4.4"), other_team.clone()];
+        let shown = visible_messages(all, &[hidden("T1", "C1")]);
+        assert_eq!(
+            shown.iter().map(|m| m.ts.as_str()).collect::<Vec<_>>(),
+            ["4.4", "5.5"]
+        );
+        assert_eq!(count_unread(&shown, |_| true), 2);
+        assert_eq!(count_unread(&shown, |m| m.team_id == "T2"), 1);
+        assert_eq!(count_unread(&[], |_| true), 0);
+        // The count is the held messages, not the 20 the list shows.
+        let many: Vec<Raw> = (0..30).map(|i| raw("C3", &format!("{i}.1"))).collect();
+        assert_eq!(count_unread(&many, |_| true), 30);
+    }
+
+    /// A cache that holds `n` messages of the channel C1 of T1 (the i-th, 1-based, at `1700000000 + i` seconds) and `m` of C2, read at `now`.
+    fn cache_with(n: usize, m: usize) -> TimelineCache {
+        let cache = TimelineCache::default();
+        let one = |channel: &str, count: usize| -> Vec<Raw> {
+            (1..=count)
+                .map(|i| raw(channel, &format!("{}.000000", 1_700_000_000 + i)))
+                .collect()
+        };
+        let now = Instant::now();
+        let history = History::from([
+            ("C1".to_owned(), (now, one("C1", n))),
+            ("C2".to_owned(), (now, one("C2", m))),
+        ]);
+        cache.replace_history("T1", history);
+        cache
+    }
+
+    #[test]
+    fn a_list_made_from_the_cache_picks_by_the_read_positions_kept_and_counts_all_the_unread_held()
+    {
+        let cache = cache_with(30, 4);
+        let workspaces = vec![workspace("T1", "https://one.slack.com/")];
+        // C1: the newest 25 of its 30 are unread; C2 has no position known, so none of its 4 is unread.
+        cache.put_last_read("T1", "C1", "1700000005.000000");
+        let all = held_messages(&cache, &workspaces, &[]);
+        assert_eq!(all.len(), 34);
+        let (top, total) = pick_timeline(&cache, all);
+        assert_eq!(total, 25);
+        let unread: Vec<_> = top.iter().filter(|(_, u)| *u).collect();
+        let read: Vec<_> = top.iter().filter(|(_, u)| !*u).collect();
+        // 20 of the 25 are listed, and 5 read ones: the newest of C1's read ones and C2's.
+        assert_eq!((unread.len(), read.len()), (UNREAD_MAX, READ_MAX));
+        assert!(unread.iter().all(|(m, _)| m.channel == "C1"));
+    }
+
+    #[test]
+    fn a_list_made_from_the_cache_leaves_out_a_hidden_channel_and_its_unread_and_keeps_the_notice()
+    {
+        let cache = cache_with(3, 3);
+        let workspaces = vec![
+            workspace("T1", "https://one.slack.com/"),
+            workspace("T2", "https://two.slack.com/"),
+        ];
+        cache.put_last_read("T1", "C1", "1700000000.000000");
+        cache.put_last_read("T1", "C2", "1700000000.000000");
+        let failure = |team: &str| TimelineFailure {
+            team_id: team.into(),
+            team: format!("team {team}"),
+            error: "接続できません".into(),
+        };
+        cache.put_notice(&[failure("T1"), failure("T3")], &[]);
+        let channels: ChannelCache = Mutex::new(HashMap::from([(
+            "T1".to_owned(),
+            (
+                Instant::now(),
+                vec![channel("C1"), channel("C2"), channel("C3")],
+            ),
+        )]));
+        let none = cached_timeline(&cache, &channels, &workspaces, &[]);
+        assert_eq!(none.unread_total, 6);
+        assert_eq!(none.messages.len(), 6);
+        // C3 was never read, so it is pending; a notice of a workspace that is gone is not repeated.
+        assert_eq!(none.pending_channels, 1);
+        assert_eq!(none.failed, [failure("T1")]);
+        let hidden = [hidden("T1", "C2"), hidden("T1", "C3")];
+        let shown = cached_timeline(&cache, &channels, &workspaces, &hidden);
+        assert_eq!(shown.unread_total, 3);
+        assert!(shown.messages.iter().all(|m| m.channel == "C1"));
+        // The hidden C3 is not pending any more.
+        assert_eq!(shown.pending_channels, 0);
+        assert_eq!(shown.refresh_secs, REFRESH_MIN_SECS);
+        assert!(shown.messages.iter().all(|m| m.unread));
+    }
+
+    #[test]
+    fn a_list_made_from_the_cache_with_nothing_held_or_no_channel_list_is_empty_and_not_pending() {
+        let cache = TimelineCache::default();
+        let channels: ChannelCache = Mutex::new(HashMap::new());
+        let workspaces = vec![workspace("T1", "https://one.slack.com/")];
+        let list = cached_timeline(&cache, &channels, &workspaces, &[]);
+        assert!(list.messages.is_empty());
+        assert_eq!((list.unread_total, list.pending_channels), (0, 0));
+        assert_eq!(list.refresh_secs, REFRESH_MIN_SECS);
+        // Messages of a workspace that is not connected any more are not listed.
+        let cache = cache_with(2, 0);
+        assert!(cached_timeline(&cache, &channels, &[], &[])
+            .messages
+            .is_empty());
+    }
+
+    #[test]
+    fn a_hidden_channel_is_listed_with_its_name_or_its_id_and_only_for_a_connected_workspace() {
+        let workspaces = vec![workspace("T1", "https://one.slack.com/")];
+        let list = hidden_channels(
+            &[hidden("T1", "C1"), hidden("T1", "C2"), hidden("T2", "C3")],
+            &workspaces,
+            |_, channel| (channel == "C1").then(|| "general".to_owned()),
+        );
+        assert_eq!(
+            list,
+            [
+                HiddenChannel {
+                    team_id: "T1".into(),
+                    team: "team T1".into(),
+                    channel: "C1".into(),
+                    name: "general".into()
+                },
+                HiddenChannel {
+                    team_id: "T1".into(),
+                    team: "team T1".into(),
+                    channel: "C2".into(),
+                    name: "C2".into()
+                },
+            ]
+        );
+        let cache: ChannelCache = Mutex::new(HashMap::from([(
+            "T1".to_owned(),
+            (Instant::now(), vec![channel("C1")]),
+        )]));
+        assert_eq!(
+            kept_channel_name(&cache, "T1", "C1").as_deref(),
+            Some("name C1")
+        );
+        assert_eq!(kept_channel_name(&cache, "T1", "C9"), None);
+        assert_eq!(kept_channel_name(&cache, "T2", "C1"), None);
+    }
+
+    #[test]
+    fn the_hidden_file_is_written_and_read_back_and_a_broken_one_is_an_error_to_treat_as_empty() {
+        let dir = temp_dir("hidden");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(load_list::<Hidden>(&dir, HIDDEN_FILE, HIDDEN_KEY)
+            .unwrap()
+            .is_empty());
+        let list = vec![hidden("T1", "C1"), hidden("T2", "C2")];
+        save_list(&dir, HIDDEN_FILE, HIDDEN_KEY, &list).unwrap();
+        assert_eq!(
+            load_list::<Hidden>(&dir, HIDDEN_FILE, HIDDEN_KEY).unwrap(),
+            list
+        );
+        let text = std::fs::read_to_string(dir.join(HIDDEN_FILE)).unwrap();
+        // Only the two IDs are stored.
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["hidden"][0], json!({"teamId": "T1", "channel": "C1"}));
+        assert!(!dir.join(format!("{HIDDEN_FILE}.tmp")).exists());
+        std::fs::write(dir.join(HIDDEN_FILE), "{not json").unwrap();
+        assert!(load_list::<Hidden>(&dir, HIDDEN_FILE, HIDDEN_KEY).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn last_read_is_taken_from_the_info_answer_only_when_it_is_a_timestamp() {
+        let reply = |v: Value| json!({"channel": {"id": "C1", "last_read": v}});
+        assert_eq!(
+            last_read_of(&reply(json!("1700000000.000100"))).as_deref(),
+            Some("1700000000.000100")
+        );
+        assert_eq!(last_read_of(&reply(json!("soon"))), None);
+        assert_eq!(last_read_of(&reply(json!(null))), None);
+        assert_eq!(last_read_of(&json!({"channel": {"id": "C1"}})), None);
+        assert_eq!(last_read_of(&json!({})), None);
+    }
+
+    #[test]
+    fn last_read_is_kept_per_channel_moves_forward_only_and_goes_with_the_workspace() {
+        let cache = TimelineCache::default();
+        assert_eq!(cache.last_read("T1", "C1"), None);
+        // An unknown position is not advanced to a guess.
+        assert!(!cache.advance_last_read("T1", "C1", "1700000000.000100"));
+        assert_eq!(cache.last_read("T1", "C1"), None);
+        cache.put_last_read("T1", "C1", "1700000000.000100");
+        cache.put_last_read("T1", "C2", "1600000000.000000");
+        cache.put_last_read("T2", "C1", "1500000000.000000");
+        assert!(cache.advance_last_read("T1", "C1", "1700000005.000000"));
+        assert_eq!(
+            cache.last_read("T1", "C1").as_deref(),
+            Some("1700000005.000000")
+        );
+        // It never moves back, and the same position is no move.
+        assert!(!cache.advance_last_read("T1", "C1", "1700000001.000000"));
+        assert!(!cache.advance_last_read("T1", "C1", "1700000005.000000"));
+        assert_eq!(
+            cache.last_read("T1", "C1").as_deref(),
+            Some("1700000005.000000")
+        );
+        // What Slack says wins, also when the user marked the channel unread there.
+        cache.put_last_read("T1", "C1", "1700000002.000000");
+        assert_eq!(
+            cache.last_read("T1", "C1").as_deref(),
+            Some("1700000002.000000")
+        );
+        // The other channel and the other workspace are untouched.
+        assert_eq!(
+            cache.last_read("T1", "C2").as_deref(),
+            Some("1600000000.000000")
+        );
+        cache.forget("T1");
+        assert_eq!(cache.last_read("T1", "C1"), None);
+        assert_eq!(cache.last_read("T1", "C2"), None);
+        assert_eq!(
+            cache.last_read("T2", "C1").as_deref(),
+            Some("1500000000.000000")
+        );
+    }
+
+    #[test]
+    fn a_rate_limited_info_call_stops_only_that_workspace_and_not_its_history_reads() {
+        let cache = TimelineCache::default();
+        assert!(!cache.info_limited("T1"));
+        cache.limit_info("T1", Duration::from_secs(60));
+        assert!(cache.info_limited("T1"));
+        assert!(!cache.rate_limited("T1"));
+        assert!(!cache.info_limited("T2"));
+        cache.limit("T2", Duration::from_secs(60));
+        assert!(!cache.info_limited("T2"));
+        cache.forget("T1");
+        assert!(!cache.info_limited("T1"));
+    }
+
+    #[test]
+    fn the_write_scopes_are_optional_and_listed_when_a_token_lacks_them() {
+        let scopes =
+            "channels:read,groups:read,channels:history,groups:history,users:read,files:read";
+        assert_eq!(
+            missing_scopes(scopes, &OPTIONAL_SCOPES),
+            ["channels:write", "groups:write"]
+        );
+        assert_eq!(
+            missing_scopes(scopes, &TIMELINE_SCOPES),
+            ["channels:write", "groups:write"]
+        );
+        let all = format!("{scopes},channels:write,groups:write");
+        assert!(missing_scopes(&all, &OPTIONAL_SCOPES).is_empty());
+        assert!(missing_scopes(&all, &TIMELINE_SCOPES).is_empty());
+        // The history scopes stay what a token must have; the write scopes are not among them.
+        assert!(!HISTORY_SCOPES.contains(&"channels:write"));
+        assert!(!HISTORY_SCOPES.contains(&"groups:write"));
     }
 
     #[test]

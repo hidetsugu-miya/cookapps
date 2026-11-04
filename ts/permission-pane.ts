@@ -17,10 +17,12 @@ const HISTORY_KINDS: Record<string, string> = {
   "mpim:history": "グループ DM",
 };
 const HISTORY_SCOPES = Object.keys(HISTORY_KINDS);
-// The scopes the token can do without: the Slack list shows names, icons and attached images only with them.
+// The scopes the token can do without: the Slack list shows names, icons and attached images only with them, and opening a message sets the channel's read position in Slack only with the write ones.
 export const OPTIONAL_KINDS: Record<string, string> = {
   "users:read": "送信者の名前とアイコン",
   "files:read": "添付画像",
+  "channels:write": "公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
+  "groups:write": "非公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
 };
 export const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", ...HISTORY_SCOPES, ...Object.keys(OPTIONAL_KINDS)];
 

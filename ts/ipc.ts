@@ -15,6 +15,7 @@ import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
+import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
 import type { Summary } from "./bindings/Summary";
@@ -106,9 +107,17 @@ export interface Commands {
     args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string };
     result: boolean;
   };
-  // The newest 20 messages of the joined channels (no direct messages) of every workspace, newest first; `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
-  // `missing` the scopes a token lacks (users:read, files:read among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet. Messages are kept in memory only.
-  slack_timeline: { args: undefined; result: Timeline };
+  // The newest 20 unread and the newest 5 read messages of the joined channels (no direct messages) of every workspace, together newest first (S-8); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
+  // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
+  // `unreadTotal` the unread messages among all those held (the Slack button's badge). Messages are kept in memory only.
+  // With `cached` true nothing is asked of Slack: the list is made again from what Rust holds (after a channel was hidden or put back).
+  slack_timeline: { args: { cached: boolean } | undefined; result: Timeline };
+  // The channels kept off the Slack list, in the order they were hidden, with the channel's name (its ID when the name is not known). Slack itself is not told (its mute cannot be read).
+  slack_hidden_list: { args: undefined; result: HiddenChannel[] };
+  slack_hide_channel: { args: { teamId: string; channel: string }; result: boolean };
+  slack_unhide_channel: { args: { teamId: string; channel: string }; result: boolean };
+  // Sets the channel's read position to the message `ts` in Slack (`conversations.mark`), only when it is later than the one held; true when it was sent.
+  slack_mark_read: { args: { teamId: string; channel: string; ts: string }; result: boolean };
   // The whole thread starting at `ts`, oldest first. For a reply pass its `threadTs`, not its own `ts`.
   slack_thread: { args: { teamId: string; channel: string; ts: string }; result: SlackThread };
   // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched).
@@ -158,7 +167,8 @@ export interface Commands {
 // The commands that take JSON arguments; `todoist_upload` takes raw bytes (`invokeRaw`).
 type JsonCommand = Exclude<keyof Commands, "todoist_upload">;
 
-export type ArgsOf<C extends JsonCommand> = Commands[C]["args"] extends undefined ? [] : [Commands[C]["args"]];
+// A command whose arguments may be left out (`T | undefined`) takes them as an optional parameter.
+export type ArgsOf<C extends JsonCommand> = Commands[C]["args"] extends undefined ? [] : undefined extends Commands[C]["args"] ? [Commands[C]["args"]?] : [Commands[C]["args"]];
 
 // Read once, as the app always did: the E2E build replaces `core` with a wrapper before this module runs (e2e/fixtures.js).
 const { invoke: tauriInvoke } = window.__TAURI__.core;

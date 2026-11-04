@@ -7,7 +7,7 @@
 // Every command the app calls at startup has a harmless base answer, so no test can reach Gmail, the keychain or Slack.
 // To change what the app sees at startup, put {command: value} in sessionStorage["e2e-fixtures"] and reload (`boot` in e2e/support.ts does it).
 // A mock value of the form {__e2e_reject__: text} makes the command fail with that text, as a Rust `Err(String)` reaches the app.
-// A mock value {__e2e_hold__: true} makes the command wait until `release` in e2e/support.ts answers it, so a spec decides when the answer arrives.
+// A mock or fixture value {__e2e_hold__: true} makes the command wait until `release` in e2e/support.ts answers it, so a spec decides when the answer arrives.
 // Calls held at the same time are answered by `release` in the order they were made.
 // An unmocked command is also recorded in window.__e2e_unmocked__: the app swallows some rejections, and wdio.conf.ts prints the list when a test fails.
 // The window is never shown (visible: false in tauri.e2e.conf.json), and WKWebView then reports document.hidden and runs no animation frames,
@@ -35,7 +35,11 @@ const answers = {
   todoist_connected: false,
   todoist_comments: [],
   slack_load: { workspaces: [], recent: [] },
-  slack_timeline: { messages: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0 },
+  slack_timeline: { messages: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, unreadTotal: 0 },
+  slack_mark_read: true,
+  slack_hidden_list: [],
+  slack_hide_channel: true,
+  slack_unhide_channel: true,
   slack_icons: [],
   slack_file_images: {},
   fetch_images: {},
@@ -66,27 +70,22 @@ const invoke = async (cmd, args, options) => {
   // A raw body (a file's bytes, with its name in the headers) is recorded as {bytes, headers}, the bytes as numbers: the record is read through the driver, which cannot carry bytes.
   const raw = args instanceof Uint8Array || args instanceof ArrayBuffer;
   window.__e2e_calls__[cmd].push(raw ? { bytes: Array.from(new Uint8Array(args)), headers: options?.headers ?? {} } : (args ?? null));
-  if (cmd in window.__e2e_mocks__) {
-    const value = structuredClone(window.__e2e_mocks__[cmd]);
-    if (value?.__e2e_reject__ !== undefined) throw value.__e2e_reject__;
-    if (value?.__e2e_hold__) {
-      window.__e2e_release__ ??= {};
-      window.__e2e_release__[cmd] ??= [];
-      return new Promise((resolve, reject) => {
-        // `release` with a {__e2e_reject__: text} value makes the held call fail.
-        window.__e2e_release__[cmd].push((answer) => (answer?.__e2e_reject__ !== undefined ? reject(answer.__e2e_reject__) : resolve(answer)));
-      });
-    }
-    return value;
-  }
-  if (!(cmd in answers)) {
+  if (!(cmd in window.__e2e_mocks__) && !(cmd in answers)) {
     window.__e2e_unmocked__ ??= [];
     window.__e2e_unmocked__.push(cmd);
     throw new Error(`e2e: unmocked command "${cmd}" (args ${JSON.stringify(args)})`);
   }
-  const answer = structuredClone(answers[cmd]);
-  // A fixture can make a command fail from the start too (a mock does the same, once the page is loaded).
-  if (answer?.__e2e_reject__ !== undefined) throw answer.__e2e_reject__;
-  return answer;
+  const value = structuredClone(cmd in window.__e2e_mocks__ ? window.__e2e_mocks__[cmd] : answers[cmd]);
+  // A fixture can make a command fail or wait from the start too (a mock does the same, once the page is loaded).
+  if (value?.__e2e_reject__ !== undefined) throw value.__e2e_reject__;
+  if (value?.__e2e_hold__) {
+    window.__e2e_release__ ??= {};
+    window.__e2e_release__[cmd] ??= [];
+    return new Promise((resolve, reject) => {
+      // `release` with a {__e2e_reject__: text} value makes the held call fail.
+      window.__e2e_release__[cmd].push((answer) => (answer?.__e2e_reject__ !== undefined ? reject(answer.__e2e_reject__) : resolve(answer)));
+    });
+  }
+  return value;
 };
 window.__TAURI__.core = { ...core, invoke };
