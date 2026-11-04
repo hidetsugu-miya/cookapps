@@ -22,7 +22,7 @@ User-facing text is in `README.md` and `docs/`.
 
 | ID | Feature | What it does |
 |----|---------|--------------|
-| M-1 | List | Show the threads in the inbox, split into unread and read, each sorted newest first. The list has no heading and no reload button (the toolbar `#mail-header` is shown only in a thread). A load that failed (the call, or an account in its answer) is repeated by the sync round, which runs every 10 seconds and when the window is shown again, once 60 seconds have passed since the last load, until a load succeeds with no failed account; it never switches the screen |
+| M-1 | List | Show the threads in the inbox, split into unread and read, each sorted newest first. The list has no heading and no reload button (the toolbar `#mail-header` is shown only in a thread). A load that failed (the call, or an account in its answer) is repeated by the sync round, which runs every 10 seconds and when the window is shown again, once the wait has passed since that load (60 seconds, doubled after each failed repeat up to 5 minutes), until a load succeeds with no failed account, which clears the wait; when a sync answers that an account needs a login while the list is not shown (a thread is open), the list is loaded again at the next sync round; a load never switches the screen |
 | M-2 | Read | Open a thread and show its body |
 | M-3 | Delete | Move a thread to the trash |
 | M-4 | Archive | Remove the `INBOX` label from a thread |

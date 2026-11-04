@@ -128,6 +128,24 @@ describe("inbox", () => {
     await expect($("#mail-header")).not.toBeDisplayed();
   });
 
+  it("loads again at the next sync round when a sync needs a login while a thread is open, and keeps the thread", async () => {
+    await mock("thread", threadDetail("Already read", "Old news", false));
+    await rowOf("read-threads", "Already read").$(".subject").click();
+    await expect($("#thread")).toBeDisplayed();
+    const sync = await mock("sync", { kind: "needsLogin" });
+    await mock("inbox", { ...inbox(), needsLogin: [account] });
+    await syncRound();
+    await waitForCalls(sync);
+    // The list is not shown: the load waits for the next round.
+    await browser.pause(300);
+    expect(await callsOf("inbox")).toEqual([]);
+    await syncRound();
+    expect(await waitForCalls("inbox")).toHaveLength(1);
+    await expect($("#thread")).toBeDisplayed();
+    await $("#back").click();
+    await expect($("#relogin")).toHaveText(expect.stringContaining("再ログインが必要です"));
+  });
+
   describe("a load that failed", () => {
     // `inbox` calls since the last `mock("inbox")`, after a pause long enough for a call to have been made.
     const loads = async () => {
@@ -135,11 +153,11 @@ describe("inbox", () => {
       return callsOf("inbox");
     };
 
-    it("is repeated by the sync round only after 60 seconds since the last load, and then no more", async () => {
+    it("is repeated by the sync round after 60 seconds, then after 120 seconds, and no more once it worked", async () => {
       await mock("inbox", rejects("boom"));
       await loadByNeedsLogin();
       await expect($("#error")).toHaveText(expect.stringContaining("boom"));
-      await mock("inbox", inbox());
+      await mock("inbox", rejects("boom"));
       await syncRound();
       expect(await loads()).toEqual([]);
       await clockAfter(30_000);
@@ -148,9 +166,18 @@ describe("inbox", () => {
       await clockAfter(70_000);
       await syncRound();
       expect(await waitForCalls("inbox")).toHaveLength(1);
+      await expect($("#error")).toHaveText(expect.stringContaining("boom"));
+      // It failed again: the wait doubled to 120 seconds from that load, so 70 seconds later is too early.
+      await clockAfter(140_000);
+      await syncRound();
+      expect(await loads()).toHaveLength(1);
+      await mock("inbox", inbox());
+      await clockAfter(200_000);
+      await syncRound();
+      expect(await waitForCalls("inbox")).toHaveLength(1);
       await expect($("#error")).not.toBeDisplayed();
       // It worked: nothing is repeated any more.
-      await clockAfter(140_000);
+      await clockAfter(500_000);
       await syncRound();
       expect(await loads()).toHaveLength(1);
     });
@@ -163,14 +190,14 @@ describe("inbox", () => {
       await clockAfter(70_000);
       await syncRound();
       expect(await waitForCalls("inbox")).toHaveLength(1);
-      // Still failing, and the last load was just now: the next try waits for 60 seconds again.
+      // Still failing, and the last load was just now: the next try waits for 120 seconds.
       await syncRound();
       expect(await loads()).toHaveLength(1);
       await mock("inbox", inbox());
-      await clockAfter(140_000);
+      await clockAfter(200_000);
       await syncRound();
       expect(await waitForCalls("inbox")).toHaveLength(1);
-      await clockAfter(210_000);
+      await clockAfter(500_000);
       await syncRound();
       expect(await loads()).toHaveLength(1);
     });

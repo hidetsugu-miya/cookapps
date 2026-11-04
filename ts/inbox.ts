@@ -84,10 +84,22 @@ export const historyIds = new Map<string, string>();
 // Set when a load answers; the kept list of the last run, which is drawn first at startup, must not come after it.
 let inboxLoaded = false;
 
-// There is no reload button: a load that failed (the call, or an account in its answer) is repeated by the sync round once this long has passed since the last load.
-const RELOAD_RETRY_MS = 60000;
-let needsReload = false;
-let lastLoad = 0;
+// There is no reload button: a load that failed (the call, or an account in its answer) is repeated by the sync round at `nextReload`.
+// The wait doubles after each failure, from 60 seconds up to 5 minutes, and a load that works clears it.
+const RELOAD_FIRST_MS = 60000;
+const RELOAD_MAX_MS = 300000;
+let nextReload: number | null = null;
+let reloadDelay = RELOAD_FIRST_MS;
+
+function scheduleReload(failed: boolean) {
+  if (failed) {
+    nextReload = Date.now() + reloadDelay;
+    reloadDelay = Math.min(reloadDelay * 2, RELOAD_MAX_MS);
+  } else {
+    nextReload = null;
+    reloadDelay = RELOAD_FIRST_MS;
+  }
+}
 
 function drawThreads(inbox: Inbox) {
   const shown = inbox.threads.filter((t) => !pending.has(rowKey(t)));
@@ -120,12 +132,13 @@ export async function showKeptInbox() {
 export async function load() {
   const seq = ++loadSeq;
   loading++;
-  lastLoad = Date.now();
+  // Whether this load failed; stays null when a newer load took over.
+  let failed: boolean | null = null;
   $("error").hidden = true;
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
-    needsReload = Object.keys(inbox.failed).length > 0;
+    failed = Object.keys(inbox.failed).length > 0;
     inboxLoaded = true;
     renderAccounts(inbox);
     if (inbox.accounts.length === 0) return show("login");
@@ -133,10 +146,11 @@ export async function load() {
     for (const [account, id] of Object.entries(inbox.historyIds)) historyIds.set(account, id);
     drawThreads(inbox);
   } catch (e) {
-    if (seq === loadSeq) needsReload = true;
+    if (seq === loadSeq) failed = true;
     showError(e);
   } finally {
     loading--;
+    if (failed !== null) scheduleReload(failed);
   }
   // A load that ends while the calendar is shown (e.g. after a re-login there) must not switch the screen; nor must it close an open thread.
   if (currentScreen() === "mail" && $("thread").hidden) show("list");
@@ -190,9 +204,10 @@ export function applySync(account: string, r: Sync) {
     const keep = new Set(r.threads.map(rowKey));
     applyChanges(r.threads, [...rows.keys()].filter((k) => k.startsWith(`${account}/`) && !keep.has(k)));
   } else if (r.kind === "needsLogin") {
-    // The detail view stays; the list shows the re-login row at the next load.
+    // The detail view stays; the list shows the re-login row at the next load, which is now (hidden list: the next sync round).
     historyIds.delete(account);
     if (!$("threads").hidden) load();
+    else nextReload = 0;
     return;
   } else {
     return;
@@ -206,10 +221,10 @@ let syncFails = 0;
 let syncing = false;
 
 // Brings the list up to date with Gmail through `sync`, without leaving the current view.
-// A failed load is repeated first (a failed load leaves no history IDs to sync from).
+// A load that is due (a failed one, or one asked for by a sync that needs a login) comes first: it may leave no history IDs to sync from.
 async function syncAll() {
   if (loading || document.hidden) return;
-  if (needsReload && Date.now() - lastLoad >= RELOAD_RETRY_MS) return load();
+  if (nextReload !== null && Date.now() >= nextReload) return load();
   if (syncing || historyIds.size === 0) return;
   syncing = true;
   const seq = loadSeq;
