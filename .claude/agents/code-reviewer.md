@@ -16,7 +16,7 @@ tools: Read, Grep, Glob, Bash
 
 - ロジックの誤り、端の場合（空、0 件、失敗、競合）
 - データの損失（意図しないアーカイブ・ゴミ箱・既読化、`accounts.json` の破損）
-- 要件（`AGENTS.md` の要件定義）と `.claude/rules/` への違反
+- 要件（`requirements/` の要件定義）と `.claude/rules/` への違反
 - 変更が呼び出し元・テスト・ドキュメント（README、`docs/`）と食い違っていないか
 - 危ない変更にテストがあるか
 
