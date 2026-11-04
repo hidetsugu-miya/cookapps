@@ -796,7 +796,7 @@ describe("slack thread: asking Claude", () => {
     const edit = await mock("claude_chat_thread", replyEdit("確認おねがいします", "ご確認をお願いします"));
     await input().setValue("確認おねがいします");
     await ask("丁寧にして");
-    expect(await waitForCalls(edit)).toEqual([{ text: "確認おねがいします", thread, history: [], instruction: "丁寧にして" }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: "確認おねがいします", thread, truncated: false, history: [], instruction: "丁寧にして" }]);
     await waitForCount(`${log} .chat-ai`, 1);
     await expect($(`${log} .chat-user`)).toHaveText("丁寧にして");
     await expect($(`${log} .diff-ins`)).toHaveText("+ ご確認をお願いします");
@@ -814,7 +814,7 @@ describe("slack thread: asking Claude", () => {
     await expect(send()).toBeDisabled();
     await expect($("#reply-send")).toBeEnabled();
     await ask("返信案を書いて");
-    expect(await waitForCalls(edit)).toEqual([{ text: "", thread, history: [], instruction: "返信案を書いて" }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: "", thread, truncated: false, history: [], instruction: "返信案を書いて" }]);
     await waitForCount(`${log} .chat-ai`, 1);
     await expect(apply()).toBeEnabled();
     await apply().click();
@@ -832,7 +832,27 @@ describe("slack thread: asking Claude", () => {
     await $("#slack-feed .feed-row").click();
     await expect($("#st-msgs .pending.fail")).toBeDisplayed();
     await ask("どう返す？");
-    expect(await waitForCalls(edit)).toEqual([{ text: "", thread: [], history: [], instruction: "どう返す？" }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: "", thread: [], truncated: false, history: [], instruction: "どう返す？" }]);
+  });
+
+  it("sends truncated as true when the read of the thread stopped before its end", async () => {
+    await openDetail({}, { ...base(), truncated: true });
+    const edit = await mock("claude_chat_thread", replyEdit("", "案"));
+    await ask("要約して");
+    expect(await waitForCalls(edit)).toEqual([{ text: "", thread, truncated: true, history: [], instruction: "要約して" }]);
+  });
+
+  it("keeps the line breaks of Claude's answer in its own pane only", async () => {
+    await openDetail();
+    const answer = { reply: "要点です\n- 1 つ目\n- 2 つ目", body: null, diff: [] };
+    await mock("claude_chat_thread", answer);
+    await ask("要約して");
+    await waitForCount(`${log} .chat-ai`, 1);
+    const style = (selector: string) => browser.execute((s) => getComputedStyle(document.querySelector(s)!).whiteSpace, selector);
+    expect(await style(`${log} .chat-ai`)).toBe("pre-wrap");
+    // The send button is an .icon-btn, kept round and in the accent color.
+    await expect($("#reply-send")).toHaveElementClass("icon-btn");
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("reply-send")!).borderRadius)).toBe("50%");
   });
 
   it("sends the text of a message as the thread gives it, and the conversation on the second request", async () => {
@@ -924,7 +944,7 @@ describe("slack thread: asking Claude", () => {
       },
       onceId(),
     );
-    expect(await waitForCalls(edit)).toEqual([{ text: "", thread, history: [], instruction: "1 行目" }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: "", thread, truncated: false, history: [], instruction: "1 行目" }]);
   });
 
   it("forgets the conversation with two presses of クリア", async () => {

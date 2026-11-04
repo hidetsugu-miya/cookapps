@@ -79,9 +79,9 @@ const chat = createChat({
     grow();
     refreshSlackThread();
   },
-  // The thread goes as the screen shows it (the sender's name, the time and the text); while it is not read, none goes.
+  // The thread goes as the screen shows it (the sender's name, the time and the text), and whether its read stopped short; while it is not read, none goes.
   ask: (text, history, instruction) =>
-    invoke("claude_chat_thread", { text, thread: (thread?.messages ?? []).map(({ name, ts, text }) => ({ name, ts, text })), history, instruction }),
+    invoke("claude_chat_thread", { text, thread: (thread?.messages ?? []).map(({ name, ts, text }) => ({ name, ts, text })), truncated: thread?.truncated ?? false, history, instruction }),
   changed: refreshSlackThread,
   locked: () => posting,
   copy: (text) => void copyText(text, "コピーしました"),

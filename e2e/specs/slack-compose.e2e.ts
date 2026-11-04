@@ -316,6 +316,9 @@ describe("slack compose screen: proofreading with Claude", () => {
     await $("#slack-proofread").click();
     await waitForCount("#slack-log .chat-ai", 1);
     expect(await textsOf("#slack-log .diff-foot .text-btn")).toEqual(["却下", "適用"]);
+    // The answer text and the send button keep their look: the line breaks of an answer are not kept here, and the send button is a text button.
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#slack-log .chat-ai")!).whiteSpace)).toBe("normal");
+    expect(await browser.execute(() => document.getElementById("slack-send")!.className)).toBe("text-btn primary chat-send");
   });
 
   it("sends 校正してください with the text, and applying the proposal changes the edit field without posting", async () => {
