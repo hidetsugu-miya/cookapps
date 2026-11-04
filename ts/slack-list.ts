@@ -189,6 +189,8 @@ function bodyOf(m: Drawn) {
   if (m.blocks.length) box.append(blocksNode(m.blocks, NO_IMAGES));
   if (m.showText) box.append(...richNodes(m.rich));
   box.append(...m.attachments.map((a) => attachmentNode(a, NO_IMAGES)));
+  // Blocks that are only images (never fetched here) draw nothing: the plain text stands for them, else the files do.
+  if (!box.textContent?.trim()) box.replaceChildren(m.text.trim() || "（添付ファイル）");
   return box;
 }
 

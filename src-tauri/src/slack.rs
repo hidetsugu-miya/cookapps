@@ -1386,6 +1386,9 @@ const WATCH_BUDGET: usize = 20;
 const THREAD_BUDGET: usize = 20;
 /// The unread replies of a thread kept to draw: the newest ones.
 const UNREPLIED_MAX: usize = 20;
+/// How long a thread with no new reply and no unread reply waits before `choose_thread_checks` picks it again.
+const THREAD_RECHECK: Duration = Duration::from_secs(3600);
+
 /// The threads `THREAD_SEEN_FILE` keeps: the ones with the newest position.
 const THREAD_SEEN_MAX: usize = 500;
 /// The most channels of one workspace whose `conversations.info` one read asks for: the channels whose read position is not known first, then the ones asked longest ago.
@@ -2489,9 +2492,11 @@ fn thread_read_of(
                 m["ts"] != thread_ts
                     && m["subtype"] != "thread_broadcast"
                     && m["user"].as_str() != Some(own)
+                    && m["ts"]
+                        .as_str()
+                        .is_some_and(|t| ts_key(t) > ts_key(position))
             })
             .filter_map(|m| raw_of(team_id, channel, m))
-            .filter(|m| ts_key(&m.ts) > ts_key(position))
             .collect()
     });
     unread.sort_by_key(|m| ts_key(&m.ts));
@@ -2672,8 +2677,12 @@ fn never_checked_threads(candidates: &[ThreadCandidate]) -> usize {
     candidates.iter().filter(|c| c.checked.is_none()).count()
 }
 
-/// The threads (at most `budget`) one read checks, each with what `conversations.history` said: the ones never checked, then the ones whose reply count changed since the last check, then the ones with unread replies, then the rest; within each, the ones checked longest ago.
-fn choose_thread_checks(candidates: &[ThreadCandidate], budget: usize) -> Vec<(WatchKey, u32)> {
+/// The threads (at most `budget`) one read checks, each with what `conversations.history` said: the ones never checked, then the ones whose reply count changed since the last check, then the ones with unread replies, then the rest, which only once `THREAD_RECHECK` has passed since their last check (at `now`); within each, the ones checked longest ago.
+fn choose_thread_checks(
+    candidates: &[ThreadCandidate],
+    budget: usize,
+    now: Instant,
+) -> Vec<(WatchKey, u32)> {
     let rank = |c: &ThreadCandidate| {
         if c.checked.is_none() {
             0
@@ -2685,7 +2694,14 @@ fn choose_thread_checks(candidates: &[ThreadCandidate], budget: usize) -> Vec<(W
             3
         }
     };
-    let mut chosen: Vec<&ThreadCandidate> = candidates.iter().collect();
+    let mut chosen: Vec<&ThreadCandidate> = candidates
+        .iter()
+        .filter(|c| {
+            rank(c) < 3
+                || c.checked
+                    .is_some_and(|t| now.saturating_duration_since(t) >= THREAD_RECHECK)
+        })
+        .collect();
     // `None` (never checked) sorts before every `Some`, and the sort keeps the given order among equals.
     chosen.sort_by_key(|c| (rank(c), c.checked));
     chosen
@@ -2815,7 +2831,7 @@ fn user_fresh(age: Duration, found: bool) -> bool {
 }
 
 /// Whether a message of `conversations.history` belongs in the timeline: a message with no subtype or one of the subtypes a person or a bot posts with,
-/// that has text or a file. Joins, leaves and every other subtype are left out.
+/// that has text, a file, blocks or attachments. Joins, leaves and every other subtype are left out.
 fn is_listed(m: &Value) -> bool {
     if m["type"] != "message" {
         return false;
@@ -2827,8 +2843,8 @@ fn is_listed(m: &Value) -> bool {
         return false;
     }
     let text = m["text"].as_str().is_some_and(|t| !t.trim().is_empty());
-    let files = m["files"].as_array().is_some_and(|f| !f.is_empty());
-    text || files
+    let has = |key: &str| m[key].as_array().is_some_and(|a| !a.is_empty());
+    text || has("files") || has("blocks") || has("attachments")
 }
 
 /// `https://…` as it is, and nothing else: an icon or an image address from Slack is used only over https.
@@ -3787,15 +3803,16 @@ async fn refresh_threads(
         })
         .cloned()
         .collect();
-    let calls: Vec<Call<(WatchKey, u32)>> = choose_thread_checks(&usable, THREAD_BUDGET)
-        .into_iter()
-        .map(|(key, count)| Call {
-            team: key.0.clone(),
-            token: tokens[key.0.as_str()].to_owned(),
-            form: watch_params(&key.1, &key.2),
-            key: (key, count),
-        })
-        .collect();
+    let calls: Vec<Call<(WatchKey, u32)>> =
+        choose_thread_checks(&usable, THREAD_BUDGET, Instant::now())
+            .into_iter()
+            .map(|(key, count)| Call {
+                team: key.0.clone(),
+                token: tokens[key.0.as_str()].to_owned(),
+                form: watch_params(&key.1, &key.2),
+                key: (key, count),
+            })
+            .collect();
     let mut logged = HashSet::new();
     for (team, (key, count), got) in call_each(http, "conversations.replies", calls).await {
         match got {
@@ -7642,6 +7659,23 @@ mod tests {
     }
 
     #[test]
+    fn a_post_with_only_blocks_or_attachments_is_listed_and_one_with_nothing_is_not() {
+        let base =
+            json!({"type": "message", "subtype": "bot_message", "ts": "1.000001", "text": ""});
+        assert!(!is_listed(&base));
+        let mut blocks = base.clone();
+        blocks["blocks"] = json!([{"type": "section"}]);
+        assert!(is_listed(&blocks));
+        let mut attachments = base.clone();
+        attachments["attachments"] = json!([{"title": "a"}]);
+        assert!(is_listed(&attachments));
+        let mut empty = base;
+        empty["blocks"] = json!([]);
+        empty["attachments"] = json!([]);
+        assert!(!is_listed(&empty));
+    }
+
+    #[test]
     fn only_the_newest_replies_are_kept_to_draw_and_all_of_them_counted() {
         let many: Vec<Value> = (0..30)
             .map(|i| reply(&format!("{}.000001", 20 + i), "U2"))
@@ -7713,8 +7747,9 @@ mod tests {
 
     #[test]
     fn the_checks_go_to_the_threads_never_checked_then_the_changed_then_the_unread_then_the_rest() {
-        let now = Instant::now();
-        let early = now.checked_sub(Duration::from_secs(60)).unwrap();
+        // `early` is two hours before `now`: a thread with nothing new is checked again only after `THREAD_RECHECK`.
+        let early = Instant::now();
+        let now = early + Duration::from_secs(7200);
         let list = [
             candidate("1.1", 1, Some(1), Some(early), false),
             candidate("2.1", 1, Some(1), Some(now), true),
@@ -7726,19 +7761,32 @@ mod tests {
             candidate("8.1", 1, None, None, false),
         ];
         let order = |budget| -> Vec<String> {
-            choose_thread_checks(&list, budget)
+            choose_thread_checks(&list, budget, now)
                 .into_iter()
                 .map(|(k, _)| k.2)
                 .collect()
         };
-        assert_eq!(
-            order(20),
-            ["6.1", "8.1", "5.1", "4.1", "3.1", "2.1", "1.1", "7.1"]
-        );
+        // 7.1 was checked just now and nothing is new, so it waits.
+        assert_eq!(order(20), ["6.1", "8.1", "5.1", "4.1", "3.1", "2.1", "1.1"]);
         assert_eq!(order(3), ["6.1", "8.1", "5.1"]);
         assert!(order(0).is_empty());
         // What history said goes with the call.
-        assert_eq!(choose_thread_checks(&list[3..4], 1)[0].1, 2);
+        assert_eq!(choose_thread_checks(&list[3..4], 1, now)[0].1, 2);
+    }
+
+    #[test]
+    fn a_thread_with_nothing_new_is_checked_again_only_after_the_recheck_time() {
+        let checked = Instant::now();
+        let list = [candidate("1.1", 1, Some(1), Some(checked), false)];
+        let at = |after: Duration| choose_thread_checks(&list, 20, checked + after).len();
+        assert_eq!(at(THREAD_RECHECK - Duration::from_secs(1)), 0);
+        assert_eq!(at(THREAD_RECHECK), 1);
+        // A thread that changed or has unread replies is not held back.
+        let busy = [
+            candidate("2.1", 2, Some(1), Some(checked), false),
+            candidate("3.1", 1, Some(1), Some(checked), true),
+        ];
+        assert_eq!(choose_thread_checks(&busy, 20, checked).len(), 2);
     }
 
     fn channels_of_t1(ids: &[&str]) -> ChannelCache {

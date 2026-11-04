@@ -160,6 +160,30 @@ describe("slack list", () => {
     expect(await count("#slack-feed img:not(.av-img)")).toBe(0);
   });
 
+  it("shows the plain text, else 添付ファイル, for a post whose blocks and attachments draw nothing here (images only)", async () => {
+    const image = { url: "https://example.com/a.png", alt: "" };
+    await openList(
+      timeline([
+        timelineMessage(slackTs(3), "Bot One", "dev", "Chart ready", { unread: true, channel: "C1", showText: false, blocks: [{ type: "image", image, title: null }] }),
+        timelineMessage(slackTs(2), "Bot Two", "dev", "", { unread: true, channel: "C2", showText: false, rich: [], attachments: [attachment({ image })] }),
+      ]),
+    );
+    await waitForCount("#slack-feed .feed-row", 2);
+    expect(await rowTexts(".feed-text")).toEqual(["Chart ready", "（添付ファイル）"]);
+  });
+
+  it("lets the workspace dot of a row take the pointer, so that its tooltip shows", async () => {
+    await openList();
+    await waitForCount("#slack-feed .feed-row", 2);
+    const [title, hit] = await browser.execute(() => {
+      const dot = document.querySelector<HTMLElement>("#slack-feed .feed-ws")!;
+      const r = dot.getBoundingClientRect();
+      return [dot.title, document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === dot];
+    });
+    expect(title).toBe("Example Team");
+    expect(hit).toBe(true);
+  });
+
   it("marks a row's avatar with the workspace's color, the same as the workspace's avatar in the sidebar", async () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);
