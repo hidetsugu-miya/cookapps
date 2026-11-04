@@ -1,5 +1,6 @@
 // The Orca screen (A-6): the agents that run in Orca, in three groups (waiting for the user, running, done), and a composer that posts to the selected one or starts a new one. Nothing about a session is kept here.
 // The list is read at startup for the sidebar button's count, every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time, and no more once the `orca` command was found missing (the update button reads again).
+// Only the first read, the screen being shown, the update button, a change of the target and a read after a failure ask for the environments; the clock reads the agents (the screen shown) or only their count (another screen).
 // A read in the background swaps the rows in place: the selection, the text in the composer and the scroll position stay, and `show()` is never called by it.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
@@ -20,6 +21,12 @@ const HIDDEN_MS = 60_000;
 
 // The last read, or null before the first. A failed read keeps the rows and worktrees of the one before it while the target is the same.
 let view: OrcaOverview | null = null;
+// How much a read asks for (see `orca_overview`).
+type Scope = "full" | "screen" | "badge";
+// The agents that wait or run, for the sidebar button: the rows held, or what a read for the count alone found.
+let badge = 0;
+// The target was just changed and the first read of the new one has not come back: nothing is said about it yet.
+let switching = false;
 // Reads: the latest request is the one used; one is on its way; when the last one started.
 let loadSeq = 0;
 let loading = false;
@@ -61,16 +68,17 @@ function elapsed(ms: number, now: number, done: boolean) {
   return done ? `${text}前` : text;
 }
 
+const countOf = (rows: OrcaRow[]) => rows.filter((r) => r.group !== "done").length;
+
 function drawBadge() {
-  const count = view?.rows.filter((r) => r.group !== "done").length ?? 0;
-  setNavCount("nav-orca", count, "Orca", "動作中");
+  setNavCount("nav-orca", badge, "Orca", "動作中");
 }
 
 function drawHeader() {
   const v = view;
-  const [cls, label] = !v ? ["off", "確認中"] : v.state === "missing" ? ["off", "未インストール"] : v.state === "failed" ? ["warn", `${targetName(v)} に接続できません`] : ["ok", `${targetName(v)} に接続中`];
-  // The label is a menu of the targets once an environment is saved, plain text before.
-  const menu = !!v && v.environments.length > 0;
+  const [cls, label] = !v || switching ? ["off", "確認中"] : v.state === "missing" ? ["off", "未インストール"] : v.state === "failed" ? ["warn", `${targetName(v)} に接続できません`] : ["ok", `${targetName(v)} に接続中`];
+  // The label is a menu of the targets once an environment is saved (or a saved one is the target, listed or not), plain text before.
+  const menu = !!v && (v.environments.length > 0 || v.target !== null);
   const key = JSON.stringify([cls, label, menu]);
   if (key === headerKey) return;
   headerKey = key;
@@ -83,7 +91,7 @@ function drawHeader() {
 }
 
 function drawNotice() {
-  const v = view;
+  const v = switching ? null : view;
   const text = v?.state === "missing" ? "orca コマンドが見つかりません。Orca を入れると、動いているエージェントを見て、指示を送れます" : v?.state === "failed" ? `読み込めませんでした: ${v.message}` : null;
   const key = JSON.stringify([v?.state, text]);
   if (key === noticeKey) return;
@@ -115,6 +123,8 @@ function rowNode(r: OrcaRow, key: string, now: number) {
   row.append(tag("span", "orca-dot"), main, side);
   row.onclick = () => {
     selected = r.handle;
+    // A worktree chosen for a launch is chosen again for the next one.
+    newPath = null;
     drawFeed();
     drawComposer();
     input().focus();
@@ -123,7 +133,7 @@ function rowNode(r: OrcaRow, key: string, now: number) {
 }
 
 function emptyNode() {
-  if (view === null) {
+  if (view === null || switching) {
     const loadingRow = tag("div", "pending");
     loadingRow.append(tag("span", "spin"), tag("span", "sp", "読み込んでいます…"));
     return loadingRow;
@@ -134,7 +144,7 @@ function emptyNode() {
 // Draws the rows where they are: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
   const now = Date.now();
-  const key = JSON.stringify([view?.state ?? null, view?.rows ?? null, selected, Math.floor(now / 60_000)]);
+  const key = JSON.stringify([view?.state ?? null, view?.rows ?? null, selected, switching, Math.floor(now / 60_000)]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -168,6 +178,8 @@ function drawComposer() {
   $("orca-agent").hidden = !!row;
   $("orca-agent").textContent = AGENTS.find((a) => a.id === agent)!.label;
   $("orca-new").hidden = !row;
+  // The text is the one being posted while a post is on its way.
+  input().disabled = busy;
   input().placeholder = row ? "追加の指示を書く" : "起動するエージェントへの指示を書く";
   const send = $<HTMLButtonElement>("orca-send");
   send.textContent = row ? "送る" : "起動する";
@@ -175,10 +187,14 @@ function drawComposer() {
   updateCompletion();
 }
 
-// Takes a read as the one shown. A failed read keeps the rows and worktrees held while the target is the same; a missing command empties them.
-function adopt(next: OrcaOverview) {
+// Takes a read as the one shown. A read that did not learn the target and the environments (a poll, or a failed `environment list`) leaves the ones held;
+// a failed read keeps the rows and worktrees held while the target is the same; a missing command empties them.
+function adopt(read: OrcaOverview) {
+  const next = !read.known && view !== null ? { ...read, target: view.target, environments: view.environments } : read;
   const keep = next.state === "failed" && view !== null && view.state !== "missing" && view.target === next.target;
   view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees } : next;
+  badge = countOf(view.rows);
+  switching = false;
   if (selected !== null && !view.rows.some((r) => r.handle === selected)) selected = null;
   if (newPath !== null && !view.worktrees.some((w) => w.path === newPath)) newPath = null;
 }
@@ -192,21 +208,30 @@ function draw() {
   drawComposer();
 }
 
+// What a read after a failure, the first one and one with the command missing ask for: everything. A working list is read for its agents (the screen shown) or their count.
+const clockScope = (): Scope => (view?.state !== "ready" ? "full" : shown() ? "screen" : "badge");
+
 // Reads the list. Only the latest request is used; `force` starts one although another is on its way (after a post or a change of the target).
-async function load(force = false) {
+async function load(scope: Scope, force = false) {
   if (loading && !force) return;
   const seq = ++loadSeq;
   loading = true;
   lastTry = Date.now();
   let next: OrcaOverview;
   try {
-    next = await invoke("orca_overview");
+    next = await invoke("orca_overview", { scope, target: view?.target ?? null });
   } catch (e) {
-    next = { state: "failed", message: String(e), target: view?.target ?? null, environments: view?.environments ?? [], rows: [], worktrees: [] };
+    next = { state: "failed", message: String(e), target: null, environments: [], rows: [], worktrees: [], known: false };
   }
   if (seq !== loadSeq) return;
   loading = false;
   lastTry = Date.now();
+  // A read for the count alone has no terminals: it only moves the count, and a failure of it is left to the next read.
+  if (scope === "badge" && next.state !== "missing") {
+    if (next.state === "ready") badge = countOf(next.rows);
+    drawBadge();
+    return;
+  }
   adopt(next);
   draw();
   fetchSkills();
@@ -232,7 +257,7 @@ function refresh() {
   if (document.hidden || loading) return;
   // A missing command is not looked for again by the clock.
   if (view?.state === "missing") return;
-  if (Date.now() - lastTry >= (shown() ? SHOWN_MS : HIDDEN_MS)) load();
+  if (Date.now() - lastTry >= (shown() ? SHOWN_MS : HIDDEN_MS)) load(clockScope());
 }
 
 // The Orca screen is shown: what was read stays on screen while a new read is on its way.
@@ -241,7 +266,8 @@ export function showOrca() {
   headerKey = noticeKey = feedKey = "";
   draw();
   fetchSkills();
-  if (!loading) load();
+  // The environments are read when the screen is shown, whatever read is on its way.
+  load("full", true);
 }
 
 async function chooseTarget(environment: string | null) {
@@ -260,8 +286,10 @@ async function chooseTarget(environment: string | null) {
   skills = [];
   skillsStale = true;
   view = { ...view, target: environment, rows: [], worktrees: [] };
+  badge = 0;
+  switching = true;
   draw();
-  load(true);
+  load("full", true);
 }
 
 function openTargetMenu(anchor: Element) {
@@ -301,12 +329,14 @@ async function post() {
     if (row) await invoke("orca_send", { handle: row.handle!, text, environment: target });
     else await invoke("orca_launch", { agent, path: newPath!, text, environment: target });
     input().value = "";
-    load(true);
+    load(clockScope(), true);
   } catch (e) {
     showPostError(String(e));
   } finally {
     busy = false;
     drawComposer();
+    // A disabled text lost the focus.
+    input().focus();
   }
 }
 
@@ -347,7 +377,8 @@ function markActive() {
 
 // Opens, narrows or closes the list for the text and the caret as they are. The highlight stays on the same skill while it is still listed; `reset` (typing) puts it on the first.
 function updateCompletion(reset = false) {
-  const query = !dismissed && isClaudeDest() ? slashQuery() : null;
+  // Only the text being typed in opens it: a read in the background must not.
+  const query = !dismissed && document.activeElement === input() && isClaudeDest() ? slashQuery() : null;
   const matches = query === null ? [] : matchesOf(query);
   if (!matches.length) {
     if (completion) closeCompletion();
@@ -412,7 +443,7 @@ export function initOrca() {
   document.addEventListener("visibilitychange", refresh);
   $("orca-refresh").onclick = () => {
     skillsStale = true;
-    load(true);
+    load("full", true);
   };
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
   $("orca-dest-pick").onclick = (e) => {
@@ -442,5 +473,5 @@ export function initOrca() {
   // The caret moving out of the first word closes the list, and moving back in opens it.
   for (const type of ["keyup", "click", "focus"]) input().addEventListener(type, () => updateCompletion());
   input().addEventListener("blur", () => closeCompletion());
-  load();
+  load("full");
 }

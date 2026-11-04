@@ -1,4 +1,4 @@
-import { boot, callsOf, inbox, mock, onceId, orcaOverview, orcaRow, orcaSkill, orcaWorktree, rejects, textsOf, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, holds, inbox, mock, onceId, orcaOverview, orcaRow, orcaSkill, orcaWorktree, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
 
 // A running, a waiting, a second running and a done agent; the second running one has no terminal handle.
 const sample = () => [
@@ -230,6 +230,89 @@ describe("orca", () => {
     await waitForCount("#orca-feed .orca-row", 1);
     await expect($("#orca-send")).toHaveText("起動する");
   });
+
+  it("reads everything when the screen is shown or updated, and the clock only the agents of the target held", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }));
+    const scopes = async () => (await callsOf("orca_overview")).map((c) => (c as { scope: string }).scope);
+    // The first read and showing the screen.
+    expect(await scopes()).toEqual(["full", "full"]);
+    // The clock, within 10 seconds on this screen.
+    const overview = await mock("orca_overview", orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }));
+    expect(await waitForCalls(overview)).toEqual([{ scope: "screen", target: "Studio" }]);
+    await $("#orca-refresh").click();
+    expect(await waitForCalls(overview, 2)).toEqual([
+      { scope: "screen", target: "Studio" },
+      { scope: "full", target: "Studio" },
+    ]);
+  });
+
+  it("disables the text while it is posted, and gives it back with the focus", async () => {
+    await openOrca();
+    const send = await mock("orca_send", holds);
+    await rowOf("example-app").click();
+    await $("#orca-input").setValue("Slow one");
+    await $("#orca-send").click();
+    await waitForCalls(send);
+    await expect($("#orca-input")).toBeDisabled();
+    await expect($("#orca-send")).toBeDisabled();
+    await release(send, null);
+    await expect($("#orca-input")).toBeEnabled();
+    await expect($("#orca-input")).toHaveValue("");
+    expect(await browser.execute(() => document.activeElement?.id)).toBe("orca-input");
+  });
+
+  it("asks for the worktree again after a row was selected", async () => {
+    await openOrca();
+    await $("#orca-dest-pick").click();
+    await pickMenu("example-app ・ feat/a");
+    await expect($("#orca-dest-pick")).toHaveText("example-app ・ feat/a");
+    await rowOf("example-app").click();
+    await $("#orca-new").click();
+    await expect($("#orca-dest-pick")).toHaveText("worktree を選ぶ");
+    await $("#orca-input").setValue("Go");
+    await expect($("#orca-send")).toBeDisabled();
+  });
+
+  it("says nothing about a new target until its first read comes back, and keeps the menu", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio", "Lab"] }));
+    await mock("orca_set_target", null);
+    const overview = await mock("orca_overview", holds);
+    await $("#orca-target").click();
+    await pickMenu("このマシン");
+    await waitForCalls(overview);
+    await expect($("#orca-target")).toHaveText("確認中");
+    await expect($("#orca-feed")).toHaveText(expect.stringContaining("読み込んでいます"));
+    expect((await textsOf("#orca-feed"))[0]).not.toContain("動いているエージェントはありません");
+    await $("#orca-target").click();
+    expect(await textsOf(".menu button")).toEqual(["このマシン", "Studio", "Lab"]);
+    await release(overview, orcaOverview([orcaRow("lab-app", "main", "Lab task")], [], { environments: ["Studio", "Lab"] }));
+    await expect($("#orca-target")).toHaveText("このマシン に接続中");
+    await waitForCount("#orca-feed .orca-row", 1);
+  });
+
+  it("keeps the target, the environments and the rows when the environments cannot be read", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio", "Lab"] }));
+    await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is busy", known: false }));
+    await $("#orca-refresh").click();
+    await expect($("#orca-target")).toHaveText("Studio に接続できません");
+    await expect($("#orca-notice")).toHaveText("読み込めませんでした: Orca is busy");
+    expect(await rowTexts("b")).toHaveLength(4);
+    await $("#orca-target").click();
+    expect(await textsOf(".menu button")).toEqual(["このマシン", "Studio", "Lab"]);
+  });
+
+  it("does not pick another target for a saved one that is gone, and lets the owner choose again", async () => {
+    await openOrca(orcaOverview([], [], { state: "failed", message: "保存した接続先が見つかりません", target: "Gone", environments: ["Studio"] }));
+    await expect($("#orca-target")).toHaveText("Gone に接続できません");
+    await expect($("#orca-notice")).toHaveText("読み込めませんでした: 保存した接続先が見つかりません");
+    const save = await mock("orca_set_target", null);
+    await mock("orca_overview", orcaOverview([orcaRow("lab-app", "main", "Task")], [], { target: "Studio", environments: ["Studio"] }));
+    await $("#orca-target").click();
+    expect(await textsOf(".menu button")).toEqual(["このマシン", "Studio"]);
+    await pickMenu("Studio");
+    expect(await waitForCalls(save)).toEqual([{ environment: "Studio" }]);
+    await expect($("#orca-target")).toHaveText("Studio に接続中");
+  });
 });
 
 describe("orca skill list", () => {
@@ -395,6 +478,21 @@ describe("orca skill list", () => {
     await waitForCount("#orca-feed .orca-row", 5);
     await expect(popup()).toBeDisplayed();
     expect(await activeCommand()).toBe("/pr-review");
+  });
+
+  it("does not open while the text has no focus, when a read in the background comes", async () => {
+    await openWithSkills();
+    await $("#orca-input").setValue("/re");
+    await expect(popup()).toBeDisplayed();
+    await browser.execute(() => document.getElementById("orca-input")!.blur());
+    await expect(popup()).not.toBeDisplayed();
+    const overview = await mock("orca_overview", orcaOverview([...sample(), orcaRow("example-new", "main", "Fresh")], worktrees()));
+    await waitForCalls(overview);
+    await waitForCount("#orca-feed .orca-row", 5);
+    await expect(popup()).not.toBeDisplayed();
+    // Back in the text, it opens again.
+    await $("#orca-input").click();
+    await expect(popup()).toBeDisplayed();
   });
 
   it("gives no list, and still posts, when the skills cannot be read", async () => {

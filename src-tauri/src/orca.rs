@@ -117,6 +117,8 @@ pub struct OrcaOverview {
     /// Newest first.
     pub rows: Vec<OrcaRow>,
     pub worktrees: Vec<OrcaWorktree>,
+    /// Whether this read says what the target and the environments are. A poll of the screen or of the badge does not read them, and a failed `environment list` cannot: the screen then keeps the ones it had.
+    pub known: bool,
 }
 
 impl OrcaOverview {
@@ -128,8 +130,19 @@ impl OrcaOverview {
             environments: Vec::new(),
             rows: Vec::new(),
             worktrees: Vec::new(),
+            known: true,
         }
     }
+}
+
+/// How much `orca_overview` reads. `Full` asks for the environments, resolves the target and reads the agents and their terminals (the screen shown, the update button, a change of the target, and after a failure);
+/// `Screen` reads the agents and terminals of the target the screen holds; `Badge` reads the worktrees' agents only, for the count, with no terminal.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum OrcaScope {
+    Full,
+    Screen,
+    Badge,
 }
 
 // ---- the CLI's JSON ----
@@ -341,15 +354,25 @@ enum Target {
     Environment { name: String },
 }
 
-/// The target a settings file holds; a file that does not say one (or none) gives `None`.
-fn parse_target(text: &str) -> Option<Target> {
-    serde_json::from_str(text).ok()
+/// What the settings file holds: no file yet, a file that cannot be used, or a target.
+#[derive(Clone, Debug, PartialEq)]
+enum Saved {
+    Nothing,
+    Unusable,
+    Target(Target),
 }
 
-fn load_target(dir: &Path) -> Option<Target> {
-    std::fs::read_to_string(dir.join(SETTINGS_FILE))
-        .ok()
-        .and_then(|text| parse_target(&text))
+/// The target a settings file holds; a file that does not say one is `Unusable`.
+fn parse_target(text: &str) -> Saved {
+    serde_json::from_str(text).map_or(Saved::Unusable, Saved::Target)
+}
+
+fn load_target(dir: &Path) -> Saved {
+    match std::fs::read_to_string(dir.join(SETTINGS_FILE)) {
+        Ok(text) => parse_target(&text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Saved::Nothing,
+        Err(_) => Saved::Unusable,
+    }
 }
 
 fn save_target(dir: &Path, environment: Option<&str>) -> Result<(), String> {
@@ -364,12 +387,28 @@ fn save_target(dir: &Path, environment: Option<&str>) -> Result<(), String> {
         .map_err(|e| format!("{} を書けません: {e}", path.display()))
 }
 
-/// The environment to talk to (`None`: this machine). A saved target that is still listed stays; with nothing saved, or a saved environment that is gone, the first saved environment is used, else this machine.
-fn resolve_target(saved: Option<Target>, environments: &[String]) -> Option<String> {
+/// The environment to talk to (`None`: this machine). Only when no file was saved yet the first saved environment is used, else this machine.
+/// A saved environment that is no longer listed, or a file that cannot be used while an environment is saved, is an error: the target never changes by itself, and the owner chooses again.
+fn resolve_target(saved: &Saved, environments: &[String]) -> Result<Option<String>, String> {
+    let lost = || Err("保存した接続先が見つかりません".to_owned());
     match saved {
-        Some(Target::Local) => None,
-        Some(Target::Environment { name }) if environments.contains(&name) => Some(name),
-        _ => environments.first().cloned(),
+        Saved::Nothing => Ok(environments.first().cloned()),
+        // With no environment saved there is nothing else to choose.
+        Saved::Unusable if environments.is_empty() => Ok(None),
+        Saved::Unusable => lost(),
+        Saved::Target(Target::Local) => Ok(None),
+        Saved::Target(Target::Environment { name }) if environments.contains(name) => {
+            Ok(Some(name.clone()))
+        }
+        Saved::Target(Target::Environment { .. }) => lost(),
+    }
+}
+
+/// The name of the environment a settings file holds, for the label of a failed read.
+fn saved_name(saved: &Saved) -> Option<String> {
+    match saved {
+        Saved::Target(Target::Environment { name }) => Some(name.clone()),
+        _ => None,
     }
 }
 
@@ -412,6 +451,33 @@ fn check_path(path: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err("worktree の場所が正しくありません".into())
+    }
+}
+
+/// The handle must belong to a row of the list read just now (a top-level agent of a live terminal), or the terminal is gone.
+fn check_session(rows: &[OrcaRow], handle: &str) -> Result<(), String> {
+    if rows.iter().any(|r| r.handle.as_deref() == Some(handle)) {
+        Ok(())
+    } else {
+        Err("宛先のセッションは終了したか、見つかりません。一覧を読み直してください".into())
+    }
+}
+
+/// The path must be a worktree of the list read just now.
+fn check_worktree(worktrees: &[OrcaWorktree], path: &str) -> Result<(), String> {
+    if worktrees.iter().any(|w| w.path == path) {
+        Ok(())
+    } else {
+        Err("起動先の worktree が見つかりません。一覧を読み直してください".into())
+    }
+}
+
+/// A send the terminal did not take (`result.send.accepted` false) is a failure although the CLI answered `ok`.
+fn check_accepted(result: &Value) -> Result<(), String> {
+    if result["send"]["accepted"] == false {
+        Err("Orca が指示を受け付けませんでした".into())
+    } else {
+        Ok(())
     }
 }
 
@@ -525,8 +591,33 @@ fn read_environments() -> Result<Vec<String>, RunError> {
         .map(|result| environments_of(&result))
 }
 
-fn overview(dir: &Path) -> OrcaOverview {
-    let saved = load_target(dir);
+/// `orca worktree ps` and, when `terminals` is true, `orca terminal list` of the target, run side by side: the answer waits for the slower one, not for both.
+/// Without terminals the second answer is an empty document.
+fn read_lists(
+    environment: Option<&str>,
+    terminals: bool,
+) -> (Result<Value, RunError>, Result<Value, RunError>) {
+    std::thread::scope(|scope| {
+        let list = scope.spawn(|| {
+            if terminals {
+                call(&terminals_args(environment), READ_TIMEOUT)
+            } else {
+                Ok(Value::Null)
+            }
+        });
+        let ps = call(&ps_args(environment), READ_TIMEOUT);
+        (ps, list.join().unwrap())
+    })
+}
+
+fn message_of(e: RunError) -> String {
+    match e {
+        RunError::Missing => not_installed(),
+        RunError::Failed(message) => message,
+    }
+}
+
+fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview {
     let failed =
         |message: String, target: Option<String>, environments: Vec<String>| OrcaOverview {
             message,
@@ -534,38 +625,44 @@ fn overview(dir: &Path) -> OrcaOverview {
             environments,
             ..OrcaOverview::empty(OrcaState::Failed)
         };
-    let environments = match read_environments() {
-        Ok(environments) => environments,
-        Err(RunError::Missing) => return OrcaOverview::empty(OrcaState::Missing),
-        Err(RunError::Failed(message)) => {
-            let target = match saved {
-                Some(Target::Environment { name }) => Some(name),
-                _ => None,
-            };
-            return failed(message, target, Vec::new());
+    // Only a full read asks for the environments and resolves the target; the others use the one the screen holds.
+    let (target, environments, known) = if scope == OrcaScope::Full {
+        let saved = load_target(dir);
+        let environments = match read_environments() {
+            Ok(environments) => environments,
+            Err(RunError::Missing) => return OrcaOverview::empty(OrcaState::Missing),
+            // The target and the environments are not learned: the screen keeps the ones it had.
+            Err(RunError::Failed(message)) => {
+                return OrcaOverview {
+                    known: false,
+                    ..failed(message, None, Vec::new())
+                }
+            }
+        };
+        match resolve_target(&saved, &environments) {
+            Ok(target) => (target, environments, true),
+            Err(message) => return failed(message, saved_name(&saved), environments),
         }
+    } else {
+        (held, Vec::new(), false)
     };
-    let target = resolve_target(saved, &environments);
-    // Two processes, run side by side: the answer waits for the slower one, not for both.
-    let (ps, terminals) = std::thread::scope(|scope| {
-        let terminals = scope.spawn(|| call(&terminals_args(target.as_deref()), READ_TIMEOUT));
-        let ps = call(&ps_args(target.as_deref()), READ_TIMEOUT);
-        (ps, terminals.join().unwrap())
-    });
+    let (ps, terminals) = read_lists(target.as_deref(), scope != OrcaScope::Badge);
     match (ps, terminals) {
         (Ok(ps), Ok(terminals)) => OrcaOverview {
             target,
             environments,
             rows: rows_of(&ps, &terminals),
             worktrees: worktrees_of(&ps),
+            known,
             ..OrcaOverview::empty(OrcaState::Ready)
         },
         (Err(RunError::Missing), _) | (_, Err(RunError::Missing)) => {
             OrcaOverview::empty(OrcaState::Missing)
         }
-        (Err(RunError::Failed(message)), _) | (_, Err(RunError::Failed(message))) => {
-            failed(message, target, environments)
-        }
+        (Err(RunError::Failed(message)), _) | (_, Err(RunError::Failed(message))) => OrcaOverview {
+            known,
+            ..failed(message, target, environments)
+        },
     }
 }
 
@@ -587,17 +684,21 @@ fn not_installed() -> String {
 
 /// Runs a write of the CLI once. It is never run again: after a lost reply a second run would post twice (the CLI forbids a fresh retry of a launch).
 fn write(args: &[String]) -> Result<(), String> {
-    match call(args, WRITE_TIMEOUT) {
-        Ok(_) => Ok(()),
-        Err(RunError::Missing) => Err(not_installed()),
-        Err(RunError::Failed(message)) => Err(message),
-    }
+    call(args, WRITE_TIMEOUT)
+        .map_err(message_of)
+        .and_then(|result| check_accepted(&result))
 }
 
 fn send(handle: &str, text: &str, environment: Option<&str>) -> Result<(), String> {
     check_handle(handle)?;
     check_text(text)?;
     check_listed(environment)?;
+    // The terminal may have closed since the list on the screen was read.
+    let (ps, terminals) = read_lists(environment, true);
+    check_session(
+        &rows_of(&ps.map_err(message_of)?, &terminals.map_err(message_of)?),
+        handle,
+    )?;
     write(&send_args(handle, text, environment))
 }
 
@@ -606,6 +707,8 @@ fn launch(agent: &str, path: &str, text: &str, environment: Option<&str>) -> Res
     check_path(path)?;
     check_text(text)?;
     check_listed(environment)?;
+    let (ps, _) = read_lists(environment, false);
+    check_worktree(&worktrees_of(&ps.map_err(message_of)?), path)?;
     write(&launch_args(agent, path, text, environment))
 }
 
@@ -629,11 +732,15 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
         .map_err(|e| e.to_string())
 }
 
-/// The agents of the Orca in use and the worktrees to start one in.
+/// The agents of the Orca in use and the worktrees to start one in. `target` is the one the screen holds, used by every scope but `Full`.
 #[tauri::command]
-pub async fn orca_overview(app: tauri::AppHandle) -> Result<OrcaOverview, String> {
+pub async fn orca_overview(
+    app: tauri::AppHandle,
+    scope: OrcaScope,
+    target: Option<String>,
+) -> Result<OrcaOverview, String> {
     let dir = config_dir(&app)?;
-    blocking(move || overview(&dir)).await
+    blocking(move || overview(&dir, scope, target)).await
 }
 
 /// Saves the Orca to talk to: a saved environment's name, or `None` for this machine.
@@ -1118,6 +1225,44 @@ mod tests {
     }
 
     #[test]
+    fn a_send_needs_a_session_of_the_list_read_just_now() {
+        let rows = rows_of(&ps(&[agent("tabA:leaf1", "working")]), &terminals());
+        assert!(check_session(&rows, "term_1").is_ok());
+        // A terminal that is listed but has no agent of a live pty, or one that is gone, is refused.
+        for bad in ["term_2", "term_gone", ""] {
+            assert!(
+                check_session(&rows, bad).unwrap_err().contains("終了"),
+                "{bad}"
+            );
+        }
+        assert!(check_session(&[], "term_1").is_err());
+        let mut dead = agent("tabA:leaf1", "working");
+        dead["hasLivePty"] = json!(false);
+        assert!(check_session(&rows_of(&ps(&[dead]), &terminals()), "term_1").is_err());
+    }
+
+    #[test]
+    fn a_launch_needs_a_worktree_of_the_list_read_just_now() {
+        let listed = worktrees_of(&ps(&[]));
+        assert!(check_worktree(&listed, "/work/example").is_ok());
+        for bad in ["/work/other", "/work/example/", "work/example", ""] {
+            assert!(check_worktree(&listed, bad).is_err(), "{bad}");
+        }
+        assert!(check_worktree(&[], "/work/example").is_err());
+    }
+
+    #[test]
+    fn a_send_the_terminal_did_not_take_is_a_failure() {
+        assert!(check_accepted(&json!({"send": {"accepted": false}})).is_err());
+        assert!(check_accepted(&json!({"send": {"accepted": true}})).is_ok());
+        // A launch has no `send`, and an answer without the field is not a refusal.
+        assert!(check_accepted(&json!({"outcome": {"kind": "terminal"}})).is_ok());
+        assert!(check_accepted(&Value::Null).is_ok());
+        let out = r#"{"ok": true, "result": {"send": {"accepted": false}}}"#;
+        assert!(check_accepted(&parse_output(out).unwrap()).is_err());
+    }
+
+    #[test]
     fn the_skills_arguments() {
         assert_eq!(skills_args(None), ["skills", "installed", "--json"]);
         assert_eq!(
@@ -1179,26 +1324,51 @@ mod tests {
     #[test]
     fn a_saved_target_stays_while_it_is_listed() {
         let saved = vec!["Studio".to_owned(), "Lab".to_owned()];
-        let env = |name: &str| Some(Target::Environment { name: name.into() });
-        assert_eq!(resolve_target(env("Lab"), &saved).as_deref(), Some("Lab"));
-        assert_eq!(resolve_target(Some(Target::Local), &saved), None);
-        // Nothing saved, or a saved environment that is gone: the first one, else this machine.
-        assert_eq!(resolve_target(None, &saved).as_deref(), Some("Studio"));
+        let env = |name: &str| Saved::Target(Target::Environment { name: name.into() });
+        assert_eq!(resolve_target(&env("Lab"), &saved), Ok(Some("Lab".into())));
         assert_eq!(
-            resolve_target(env("Gone"), &saved).as_deref(),
-            Some("Studio")
+            resolve_target(&Saved::Target(Target::Local), &saved),
+            Ok(None)
         );
-        assert_eq!(resolve_target(None, &[]), None);
-        assert_eq!(resolve_target(env("Gone"), &[]), None);
-        assert_eq!(resolve_target(Some(Target::Local), &[]), None);
+        assert_eq!(resolve_target(&Saved::Target(Target::Local), &[]), Ok(None));
+    }
+
+    #[test]
+    fn only_a_missing_file_chooses_the_target_by_itself() {
+        let saved = vec!["Studio".to_owned(), "Lab".to_owned()];
+        assert_eq!(
+            resolve_target(&Saved::Nothing, &saved),
+            Ok(Some("Studio".into()))
+        );
+        assert_eq!(resolve_target(&Saved::Nothing, &[]), Ok(None));
+    }
+
+    #[test]
+    fn a_target_that_is_gone_or_a_file_that_is_broken_does_not_switch_by_itself() {
+        let saved = vec!["Studio".to_owned()];
+        let lost = Err("保存した接続先が見つかりません".to_owned());
+        let gone = Saved::Target(Target::Environment {
+            name: "Gone".into(),
+        });
+        assert_eq!(resolve_target(&gone, &saved), lost);
+        assert_eq!(resolve_target(&gone, &[]), lost);
+        assert_eq!(resolve_target(&Saved::Unusable, &saved), lost);
+        // With no environment saved there is nothing else to choose.
+        assert_eq!(resolve_target(&Saved::Unusable, &[]), Ok(None));
+        assert_eq!(saved_name(&gone).as_deref(), Some("Gone"));
+        assert_eq!(saved_name(&Saved::Unusable), None);
+        assert_eq!(saved_name(&Saved::Target(Target::Local)), None);
     }
 
     #[test]
     fn the_target_setting_reads_what_it_says_and_nothing_else() {
-        assert_eq!(parse_target(r#"{"kind":"local"}"#), Some(Target::Local));
+        assert_eq!(
+            parse_target(r#"{"kind":"local"}"#),
+            Saved::Target(Target::Local)
+        );
         assert_eq!(
             parse_target(r#"{"kind":"environment","name":"Studio"}"#),
-            Some(Target::Environment {
+            Saved::Target(Target::Environment {
                 name: "Studio".into()
             })
         );
@@ -1209,7 +1379,7 @@ mod tests {
             r#"{"kind":"remote"}"#,
             r#"{"kind":"environment"}"#,
         ] {
-            assert_eq!(parse_target(text), None, "{text}");
+            assert_eq!(parse_target(text), Saved::Unusable, "{text}");
         }
     }
 
@@ -1217,16 +1387,19 @@ mod tests {
     fn the_target_load_gives_what_save_wrote() {
         let dir = std::env::temp_dir().join(format!("cookapps-orca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(load_target(&dir), None);
+        assert_eq!(load_target(&dir), Saved::Nothing);
         save_target(&dir, Some("Studio")).unwrap();
         assert_eq!(
             load_target(&dir),
-            Some(Target::Environment {
+            Saved::Target(Target::Environment {
                 name: "Studio".into()
             })
         );
         save_target(&dir, None).unwrap();
-        assert_eq!(load_target(&dir), Some(Target::Local));
+        assert_eq!(load_target(&dir), Saved::Target(Target::Local));
+        // A file that exists but cannot be used is not "nothing saved".
+        std::fs::write(dir.join(SETTINGS_FILE), "{").unwrap();
+        assert_eq!(load_target(&dir), Saved::Unusable);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

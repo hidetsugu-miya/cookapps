@@ -511,6 +511,7 @@ export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], ex
   environments: [],
   rows,
   worktrees,
+  known: true,
   ...extra,
 });
 

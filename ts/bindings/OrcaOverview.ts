@@ -10,4 +10,8 @@ export type OrcaOverview = { state: OrcaState, message: string, target: string |
 /**
  * Newest first.
  */
-rows: Array<OrcaRow>, worktrees: Array<OrcaWorktree>, };
+rows: Array<OrcaRow>, worktrees: Array<OrcaWorktree>, 
+/**
+ * Whether this read says what the target and the environments are. A poll of the screen or of the badge does not read them, and a failed `environment list` cannot: the screen then keeps the ones it had.
+ */
+known: boolean, };

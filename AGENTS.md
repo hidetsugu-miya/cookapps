@@ -1,7 +1,7 @@
 # cookapps
 
 cookapps is a personal desktop client for Gmail.
-It also shows Google Calendar, Todoist and Slack, and it has a local MCP server.
+It also shows Google Calendar, Todoist, Slack and Orca, and it has a local MCP server.
 It is built with Tauri v2 and Rust.
 
 This file is the developer guide.
@@ -12,7 +12,7 @@ User-facing text is in `README.md` and `docs/`.
 - The only user is the owner.
 - Only Gmail accounts are supported.
 - Other mail providers (generic IMAP, Outlook and so on) are out of scope.
-- Calendar, Todoist and Slack are integrations around the mail client.
+- Calendar, Todoist, Slack and Orca are integrations around the mail client.
 - The app updates itself on macOS (Apple Silicon) only.
 - Notion is a planned integration.
 
