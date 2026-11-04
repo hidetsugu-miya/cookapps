@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.37.0
+
+S-15 a check beside a row of the Slack list reads the row without opening its thread (#22). A channel has one read position, so the older rows of the channel are read too and the newer ones stay unread.
+
 ## v0.36.0
 
 The rows of the Slack list draw the blocks, attachments and styles of a message, so a bot's post reads as it does in the thread (#16); images are not fetched there. S-14 a thread with unread replies is listed in the unread section, with "未読の返信 N 件" opening and closing its replies under the row, and its replies count in the badge. Up to 20 threads are checked in one read with `conversations.replies`. Slack has no public API to write a thread's read position, so what was read here is kept in `slack-thread-seen.json` (IDs and timestamps only) and does not clear the thread in Slack. A real Slack workspace was not tried.
