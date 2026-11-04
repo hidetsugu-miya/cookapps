@@ -418,6 +418,8 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .md pre { padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 6px; background: var(--code); overflow-x: auto; }
 #todo-detail .md pre code { padding: 0; background: none; }
 #todo-detail .md blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
+#todo-detail .md table { margin: 0 0 8px; border-collapse: collapse; }
+#todo-detail .md th, #todo-detail .md td { padding: 4px 8px; border: 1px solid var(--chip-line); }
 #todo-detail .desc-wrap:hover .desc { background: var(--hover); }
 #todo-detail .desc:focus-visible { outline: 2px solid var(--accent); }
 #todo-detail .desc.empty { color: #999; }
@@ -708,6 +710,8 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-assistant pre { padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 12px; background: var(--code); overflow-x: auto; }
 .orca-assistant pre code { padding: 0; background: none; }
 .orca-assistant blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
+.orca-assistant table { margin: 0 0 8px; border-collapse: collapse; }
+.orca-assistant th, .orca-assistant td { padding: 4px 8px; border: 1px solid var(--chip-line); }
 .orca-tools { align-self: flex-start; max-width: 100%; display: flex; flex-direction: column; gap: 6px; }
 .orca-tools-btn { align-self: flex-start; min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--bar); font: inherit; font-size: 13px; color: #444; cursor: pointer; }
 .orca-tools-btn:hover { background: var(--hover); }

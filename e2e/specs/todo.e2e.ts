@@ -1095,6 +1095,16 @@ describe("todo detail description copy", () => {
     await expect($(desc)).toBeDisplayed();
   }
 
+  it("rules the cells of a table in the description", async () => {
+    const data = todoData();
+    data.tasks[0].description = "| a | b |\n|---|---|\n| 1 | 2 |";
+    await openReport(data);
+    for (const cell of ["th", "td"]) {
+      const border = await browser.execute((s) => getComputedStyle(document.querySelector(s)!).borderTopWidth, `#todo-detail .desc ${cell}`);
+      expect(border).toBe("1px");
+    }
+  });
+
   it("copies the Markdown source with the icon beside the description, and does not open the editor", async () => {
     await openReport();
     await stubClipboard();

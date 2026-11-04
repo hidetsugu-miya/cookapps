@@ -563,6 +563,17 @@ describe("orca: the session history", () => {
     expect(sides.user).toBeGreaterThan(sides.assistant + 50);
   });
 
+  it("rules the cells of a table in the agent's answer", async () => {
+    await openOrca();
+    await select("example-app");
+    await sendChat(chatItems([chatAssistant("a1", "| a | b |\n|---|---|\n| 1 | 2 |")]));
+    await expect($("#orca-items .orca-assistant td")).toExist();
+    for (const cell of ["th", "td"]) {
+      const border = await browser.execute((s) => getComputedStyle(document.querySelector(s)!).borderTopWidth, `#orca-items .orca-assistant ${cell}`);
+      expect(border).toBe("1px");
+    }
+  });
+
   it("does not load a remote image of the agent's answer", async () => {
     await openOrca();
     await select("example-app");
