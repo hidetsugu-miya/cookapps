@@ -1,5 +1,6 @@
+import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
 import {
-  boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
+  attachment, boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
   threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings,
 } from "../support";
 
@@ -213,6 +214,254 @@ describe("slack thread: attached files", () => {
     await waitForCount("#st-msgs .st-msg", 2);
     await browser.pause(200);
     expect(await callsOf(images)).toEqual([]);
+  });
+});
+
+describe("slack thread: blocks and attachments", () => {
+  const imageUrl = "https://images.example.com/chart.png";
+  const missingUrl = "https://images.example.com/gone.png";
+  const alt = (text: string) => ({ url: null, alt: text });
+  const blocks: ThreadBlock[] = [
+    { type: "header", text: "Job succeeded" },
+    { type: "section", text: "Project: api", fields: ["When\nnow", "Branch\nmain"], accessory: { type: "button", text: "View Job", url: "https://app.example.com/jobs/1" } },
+    { type: "context", elements: [{ type: "text", text: "built by the bot" }] },
+    { type: "divider" },
+    { type: "actions", buttons: [{ text: "Rerun", url: null }, { text: "Docs", url: "https://docs.example.com/" }] },
+  ];
+  // A thread of one message from a bot: `text` is only the alternative text.
+  // (Rust sends showText false for a message whose blocks are drawn in place of the text.)
+  const bot = (extra: Parameters<typeof threadMessage>[3] = {}) => slackThread([threadMessage(root, "CircleCI", "CircleCI job succeeded!", { showText: !extra.blocks?.length, ...extra })]);
+  const imageMessage = () =>
+    bot({
+      blocks: [
+        { type: "image", image: { url: imageUrl, alt: "A chart" }, title: null },
+        { type: "image", image: { url: missingUrl, alt: "Gone image" }, title: null },
+      ],
+      imageUrls: [imageUrl, missingUrl],
+    });
+  // The messages of the list for two threads, to leave one and open the other.
+  const other = slackTs(20, 3);
+  const twoThreads = () => [listMessage(), timelineMessage(other, "Carol Example", "general", "Another thread")];
+  const shown = () => count("#st-msgs img.st-img");
+
+  it("draws the blocks in place of the text: the header, the section with its fields and button, the context and the divider", async () => {
+    await openDetail({}, bot({ blocks }));
+    await expect($("#st-msgs .st-bh")).toHaveText("Job succeeded");
+    expect(await textsOf("#st-msgs .st-sec-main > .st-text")).toEqual(["Project: api"]);
+    expect(await textsOf("#st-msgs .st-fields .st-text")).toEqual(["When\nnow", "Branch\nmain"]);
+    expect(await textsOf("#st-msgs .st-ctx")).toEqual(["built by the bot"]);
+    expect(await count("#st-msgs hr.st-hr")).toBe(1);
+    // Slack's alternative text is not drawn beside them.
+    expect((await textsOf("#st-msgs .st-msg"))[0]).not.toContain("CircleCI job succeeded!");
+    expect(await count("#st-msgs .st-msg > div > .st-text")).toBe(0);
+  });
+
+  it("draws the text of a message that has no blocks to draw, with its attachments under it", async () => {
+    await openDetail({}, bot({ attachments: [attachment({ title: "Build log", text: "All green" })] }));
+    expect(await textsOf("#st-msgs .st-msg > div > .st-text")).toEqual(["CircleCI job succeeded!"]);
+    expect(await textsOf("#st-msgs .st-att .st-att-title")).toEqual(["Build log"]);
+    // The text comes before the attachment.
+    expect(await browser.execute(() => document.querySelector("#st-msgs .st-msg > div > .st-text")!.compareDocumentPosition(document.querySelector("#st-msgs .st-att")!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
+  });
+
+  it("draws an attachment: the color bar, pretext, author, linked title, text, fields, buttons and footer", async () => {
+    const full = attachment({
+      color: "#36a64f",
+      pretext: "Before the card",
+      authorName: "CI bot",
+      title: "Job #1",
+      titleLink: "https://app.example.com/jobs/1",
+      text: "Passed",
+      fields: [{ title: "Project", value: "api" }, { title: "Branch", value: "main" }],
+      actions: [{ text: "Open", url: "https://app.example.com/open" }],
+      footer: "via CI",
+    });
+    await openDetail({}, bot({ attachments: [full] }));
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#st-msgs .st-att")!).borderLeftColor)).toBe("rgb(54, 166, 79)");
+    expect(await textsOf("#st-msgs .st-att > .st-text")).toEqual(["Before the card", "Passed"]);
+    await expect($("#st-msgs .st-att .st-att-author")).toHaveText("CI bot");
+    await expect($("#st-msgs a.st-att-title")).toHaveText("Job #1");
+    await expect($("#st-msgs a.st-att-title")).toHaveAttribute("href", "https://app.example.com/jobs/1");
+    expect(await textsOf("#st-msgs .st-att .st-field")).toEqual(["Projectapi", "Branchmain"]);
+    await expect($("#st-msgs .st-att a.text-btn")).toHaveAttribute("href", "https://app.example.com/open");
+    await expect($("#st-msgs .st-att .st-att-foot")).toHaveText("via CI");
+  });
+
+  it("draws an attachment's title as plain text when it has no link, and its fallback when nothing else is there", async () => {
+    await openDetail({}, bot({ attachments: [attachment({ title: "No link" }), attachment({ fallback: "Only a fallback" })] }));
+    expect(await count("#st-msgs a.st-att-title")).toBe(0);
+    expect(await textsOf("#st-msgs .st-att")).toEqual(["No link", "Only a fallback"]);
+  });
+
+  it("gives a button with an address as a link, and one without as its name that cannot be pressed", async () => {
+    await openDetail({}, bot({ blocks }));
+    const links = await browser.execute(() => [...document.querySelectorAll<HTMLAnchorElement>("#st-msgs a.text-btn")].map((a) => [a.textContent, a.getAttribute("href")]));
+    expect(links).toEqual([["View Job", "https://app.example.com/jobs/1"], ["Docs", "https://docs.example.com/"]]);
+    await expect($("#st-msgs button.text-btn")).toHaveText("Rerun");
+    await expect($("#st-msgs button.text-btn")).toBeDisabled();
+  });
+
+  it("draws every text as text: no markup, and only URLs are links", async () => {
+    const markup = "<b>bold</b><img src=x onerror=alert(1)> see https://example.com/plan";
+    await openDetail({}, bot({ blocks: [{ type: "section", text: markup, fields: [markup], accessory: null }], attachments: [attachment({ title: markup, text: markup })] }));
+    expect(await count("#st-msgs .st-blocks b, #st-msgs .st-blocks img, #st-msgs .st-att b, #st-msgs .st-att img")).toBe(0);
+    expect((await textsOf("#st-msgs .st-sec-main > .st-text"))[0]).toBe(markup);
+    expect((await textsOf("#st-msgs .st-att > .st-text"))[0]).toBe(markup);
+    // The section's text, its field, the attachment's title and its text.
+    expect(await count("#st-msgs .st-blocks a, #st-msgs .st-att a")).toBe(4);
+    await expect($("#st-msgs .st-sec-main > .st-text a")).toHaveAttribute("href", "https://example.com/plan");
+  });
+
+  it("fetches no image by default and offers 画像を表示 only on a message that has images", async () => {
+    const messages = [threadMessage(root, "CircleCI", "with images", { blocks: imageMessage().messages[0].blocks, showText: false, imageUrls: [imageUrl, missingUrl] }), threadMessage(reply1, "Bob Example", "no images")];
+    await openDetail({}, slackThread(messages));
+    await browser.pause(200);
+    expect(await callsOf("fetch_images")).toEqual([]);
+    expect(await shown()).toBe(0);
+    expect(await textsOf("#st-msgs .st-images .text-btn")).toEqual(["画像を表示"]);
+    expect(await count("#st-msgs .st-images")).toBe(1);
+  });
+
+  it("fetches the images with fetch_images when 画像を表示 is pressed, draws them, and uses the description of one that cannot be fetched", async () => {
+    await openDetail({}, imageMessage());
+    const fetch = await mock("fetch_images", { [imageUrl]: pngUri });
+    await $("#st-msgs .st-images .text-btn").click();
+    expect(await waitForCalls(fetch)).toEqual([{ urls: [imageUrl, missingUrl] }]);
+    await browser.waitUntil(async () => (await shown()) === 1);
+    expect(await browser.execute(() => document.querySelector<HTMLImageElement>("#st-msgs img.st-img")!.src)).toBe(pngUri);
+    expect(await textsOf("#st-msgs .st-alt")).toEqual(["Gone image"]);
+    expect(await count("#st-msgs .st-images")).toBe(0);
+  });
+
+  it("draws the description of an image with no address even before 画像を表示, and offers no button for it", async () => {
+    await openDetail({}, bot({ blocks: [{ type: "image", image: alt("Needs the Slack token"), title: null }] }));
+    expect(await textsOf("#st-msgs .st-alt")).toEqual(["Needs the Slack token"]);
+    expect(await count("#st-msgs .st-images")).toBe(0);
+  });
+
+  it("draws the text under the blocks when Rust says to, for a block that could not be drawn", async () => {
+    await openDetail({}, bot({ blocks: [{ type: "header", text: "Job succeeded" }], showText: true }));
+    await expect($("#st-msgs .st-bh")).toHaveText("Job succeeded");
+    expect(await textsOf("#st-msgs .st-msg > div > .st-text")).toEqual(["CircleCI job succeeded!"]);
+    // The text comes after the blocks.
+    expect(await browser.execute(() => document.querySelector("#st-msgs .st-blocks")!.compareDocumentPosition(document.querySelector("#st-msgs .st-msg > div > .st-text")!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
+  });
+
+  it("turns the URLs of the header, the title, the author, the footer and a field's title into links, and a titled link holds no link inside", async () => {
+    const url = "https://example.com/a";
+    await openDetail(
+      {},
+      bot({
+        blocks: [{ type: "header", text: `Header ${url}` }],
+        attachments: [
+          attachment({ authorName: `Author ${url}`, title: `Title ${url}`, fields: [{ title: `Field ${url}`, value: "v" }], footer: `Footer ${url}` }),
+          attachment({ title: `Linked ${url}`, titleLink: "https://example.com/t" }),
+        ],
+      }),
+    );
+    for (const selector of [".st-bh", ".st-att-author", ".st-att-title", ".st-field b", ".st-att-foot"]) {
+      await expect($(`#st-msgs ${selector} a`)).toHaveAttribute("href", url);
+    }
+    expect(await count("#st-msgs a.st-att-title a")).toBe(0);
+  });
+
+  it("gives a link button and a title link a tooltip with their address", async () => {
+    await openDetail({}, bot({ blocks, attachments: [attachment({ title: "Job", titleLink: "https://example.com/job" })] }));
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLAnchorElement>("#st-msgs a.text-btn, #st-msgs a.st-att-title")].map((a) => a.title === a.href))).toEqual([true, true, true]);
+  });
+
+  it("makes again only the row of the message whose images were asked for", async () => {
+    const messages = [threadMessage(root, "CircleCI", "with images", { blocks: imageMessage().messages[0].blocks, showText: false, imageUrls: [imageUrl, missingUrl] }), threadMessage(reply1, "Bob Example", "no images")];
+    await openDetail({}, slackThread(messages));
+    await browser.execute(() => {
+      document.querySelectorAll<HTMLElement>("#st-msgs .st-msg")[1].dataset.mark = "kept";
+    });
+    await mock("fetch_images", { [imageUrl]: pngUri });
+    await $("#st-msgs .st-images .text-btn").click();
+    await browser.waitUntil(async () => (await shown()) === 1);
+    expect(await browser.execute(() => document.querySelectorAll<HTMLElement>("#st-msgs .st-msg")[1].dataset.mark)).toBe("kept");
+  });
+
+  it("keeps the images shown when the thread is read again after a reply", async () => {
+    const read = await openDetail({}, imageMessage());
+    await mock("fetch_images", { [imageUrl]: pngUri });
+    await $("#st-msgs .st-images .text-btn").click();
+    await browser.waitUntil(async () => (await shown()) === 1);
+    await mock("slack_reply", true);
+    await input().setValue("Thanks");
+    await pressReply();
+    await waitForCalls(read, 2);
+    await expect($("#st-note")).toHaveText("スレッドに返信しました");
+    expect(await shown()).toBe(1);
+    expect(await count("#st-msgs .st-images")).toBe(0);
+  });
+
+  it("keeps the images shown when the same thread is opened again, and forgets them when another thread was opened", async () => {
+    await openDetail({}, imageMessage(), twoThreads());
+    await mock("fetch_images", { [imageUrl]: pngUri });
+    await $("#st-msgs .st-images .text-btn").click();
+    await browser.waitUntil(async () => (await shown()) === 1);
+    await $("#st-back").click();
+    await $("#slack-feed .feed-item:nth-child(1) .feed-row").click();
+    await waitForCount("#st-msgs .st-msg", 1);
+    expect(await shown()).toBe(1);
+    await $("#st-back").click();
+    await mock("slack_thread", slackThread([threadMessage(other, "Carol Example", "Another thread")]));
+    await $("#slack-feed .feed-item:nth-child(2) .feed-row").click();
+    await waitForCount("#st-msgs .st-msg", 1);
+    await $("#st-back").click();
+    await mock("slack_thread", imageMessage());
+    await $("#slack-feed .feed-item:nth-child(1) .feed-row").click();
+    await waitForCount("#st-msgs .st-msg", 1);
+    expect(await shown()).toBe(0);
+    expect(await textsOf("#st-msgs .st-images .text-btn")).toEqual(["画像を表示"]);
+  });
+
+  it("keeps the button and says so when the fetch fails", async () => {
+    await openDetail({}, imageMessage());
+    const fetch = await mock("fetch_images", rejects("取得できません"));
+    await $("#st-msgs .st-images .text-btn").click();
+    await waitForCalls(fetch);
+    await expect($(".toast")).toHaveText(expect.stringContaining("画像を取得できませんでした: 取得できません"));
+    await expect($("#st-msgs .st-images .text-btn")).toBeEnabled();
+    expect(await shown()).toBe(0);
+  });
+
+  it("draws an attachment's own image and thumbnail after 画像を表示, and an image-only attachment is not dropped", async () => {
+    const thumbUrl = "https://images.example.com/thumb.png";
+    const card = attachment({ image: { url: imageUrl, alt: "A chart" }, thumb: { url: thumbUrl, alt: "A chart" } });
+    await openDetail({}, bot({ attachments: [card], imageUrls: [imageUrl, thumbUrl] }));
+    // Nothing is drawn or fetched before the press, but the attachment and the button are there.
+    expect(await count("#st-msgs .st-att")).toBe(1);
+    expect(await shown()).toBe(0);
+    expect(await callsOf("fetch_images")).toEqual([]);
+    const fetch = await mock("fetch_images", { [imageUrl]: pngUri, [thumbUrl]: pngUri });
+    await $("#st-msgs .st-images .text-btn").click();
+    expect(await waitForCalls(fetch)).toEqual([{ urls: [imageUrl, thumbUrl] }]);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-att img")) === 2);
+    expect(await count("#st-msgs .st-att .st-img")).toBe(1);
+    expect(await count("#st-msgs .st-att .st-acc-img")).toBe(1);
+  });
+
+  it("draws the description of an attachment's image that cannot be fetched", async () => {
+    await openDetail({}, bot({ attachments: [attachment({ image: { url: missingUrl, alt: "Gone image" } })], imageUrls: [missingUrl] }));
+    await mock("fetch_images", {});
+    await $("#st-msgs .st-images .text-btn").click();
+    await browser.waitUntil(async () => (await count("#st-msgs .st-att .st-alt")) === 1);
+    expect(await textsOf("#st-msgs .st-att .st-alt")).toEqual(["Gone image"]);
+    expect(await count("#st-msgs .st-images")).toBe(0);
+  });
+
+  it("draws the images of the blocks inside an attachment and of a section's accessory and a context too", async () => {
+    const inner: ThreadBlock[] = [
+      { type: "section", text: "Report", fields: [], accessory: { type: "image", url: imageUrl, alt: "Thumb" } },
+      { type: "context", elements: [{ type: "image", url: imageUrl, alt: "Logo" }] },
+    ];
+    await openDetail({}, bot({ attachments: [attachment({ blocks: inner })], imageUrls: [imageUrl] }));
+    const fetch = await mock("fetch_images", { [imageUrl]: pngUri });
+    await $("#st-msgs .st-images .text-btn").click();
+    expect(await waitForCalls(fetch)).toEqual([{ urls: [imageUrl] }]);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-att img")) === 2);
   });
 });
 

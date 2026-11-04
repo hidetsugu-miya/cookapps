@@ -1,4 +1,4 @@
-// The Slack thread (S-6, S-7): the messages of a thread with their senders' icons and attached images, a field to reply in, a card to make a Todo from the message,
+// The Slack thread (S-6, S-7, S-11): the messages of a thread with their senders' icons, attached images, blocks and attachments (slack-blocks.ts), a field to reply in, a card to make a Todo from the message,
 // and a conversation with Claude (claude-chat.ts) that proofreads the reply. Nothing leaves the app until "返信する"; Claude is asked only when the user presses "校正する" or sends a request.
 // The thread is read when it is opened and after a reply, not on a timer. The reply and the conversation are kept per thread in memory until the app quits.
 import type { SlackThread } from "./bindings/SlackThread";
@@ -13,6 +13,7 @@ import { FILE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { linkify } from "./mail-text.js";
 import { closeMenu } from "./menu.js";
+import { attachmentNode, blocksNode } from "./slack-blocks.js";
 import { revealSlackList } from "./slack-list.js";
 import { decorateAvatar, loadIcons, slackMs } from "./slack-view.js";
 import { initSplit } from "./split.js";
@@ -55,6 +56,12 @@ let todoConnected = false;
 const thumbs = new Map<string, string>();
 // The thumbnail URLs asked for and not answered yet, so that a second read of the thread does not ask again.
 const inFlight = new Set<string>();
+// The images of blocks and attachments (S-11): the timestamps of the messages whose "画像を表示" was pressed, and the fetched images (data: URIs) by address.
+// Both are kept while the same thread is open again and read again, and forgotten when another thread is opened.
+const imagesShown = new Set<string>();
+const blockImages = new Map<string, string>();
+// `fetch_images` takes at most 50 URLs.
+const FETCH_BATCH = 50;
 
 const input = () => $<HTMLTextAreaElement>("st-input");
 const draft = () => (current ? drafts.get(current.key) : undefined);
@@ -134,22 +141,67 @@ function fileNode(f: ThreadFile) {
   return box;
 }
 
+// "画像を表示" of a message: Rust fetches its images (no token, public https hosts only) when this is pressed, and the message is drawn again with them.
+// A call that fails keeps the button; images Rust could not fetch are drawn as their descriptions.
+async function showImages(m: ThreadMessage, button: HTMLButtonElement) {
+  const key = current?.key;
+  button.disabled = true;
+  try {
+    const urls = m.imageUrls.filter((u) => !blockImages.has(u));
+    for (let i = 0; i < urls.length; i += FETCH_BATCH) {
+      const got = await invoke("fetch_images", { urls: urls.slice(i, i + FETCH_BATCH) });
+      if (current?.key !== key) return;
+      for (const [url, uri] of Object.entries(got)) blockImages.set(url, uri);
+    }
+  } catch (e) {
+    if (current?.key === key) {
+      button.disabled = false;
+      toast(`画像を取得できませんでした: ${e}`);
+    }
+    return;
+  }
+  imagesShown.add(m.ts);
+  // Only the row of this message is made again, so the others and the scroll position stay as they are (the whole thread is drawn again when the row is not there).
+  const row = [...$("st-msgs").children].find((el) => (el as HTMLElement).dataset.ts === m.ts);
+  const latest = thread?.messages.find((x) => x.ts === m.ts);
+  if (!row || !thread || !latest) return drawMessages("keep");
+  row.replaceWith(messageNode(latest));
+  loadIcons([latest.iconUrl]);
+  loadThumbs(thread, current!.key);
+}
+
+function imagesBar(m: ThreadMessage) {
+  const bar = tag("div", "st-images");
+  const button = tag("button", "text-btn", "画像を表示");
+  button.onclick = () => showImages(m, button);
+  bar.append(button);
+  return bar;
+}
+
 function messageNode(m: ThreadMessage) {
   const row = tag("div", "st-msg");
   const avatar = tag("div", "avatar st-avatar");
   decorateAvatar(avatar, m.name, m.iconUrl);
   const meta = tag("div", "st-meta");
   meta.append(tag("b", "", m.name), tag("time", "", formatDetailDate(slackMs(m.ts))));
-  const text = tag("p", "st-text");
-  text.append(...linkify(m.text));
   const body = tag("div");
   body.append(meta);
-  if (m.text.trim()) body.append(text);
+  const images = { shown: imagesShown.has(m.ts), uris: blockImages };
+  if (m.blocks.length) body.append(blocksNode(m.blocks, images));
+  // Rust says whether the text is drawn too: with no blocks, and beside a block that could not be drawn (the text is otherwise Slack's alternative text).
+  if (m.showText && m.text.trim()) {
+    const text = tag("p", "st-text");
+    text.append(...linkify(m.text));
+    body.append(text);
+  }
+  body.append(...m.attachments.map((a) => attachmentNode(a, images)));
+  if (m.imageUrls.length && !images.shown) body.append(imagesBar(m));
   if (m.files.length) {
     const files = tag("div", "st-files");
     files.append(...m.files.map(fileNode));
     body.append(files);
   }
+  row.dataset.ts = m.ts;
   row.append(avatar, body);
   return row;
 }
@@ -256,6 +308,8 @@ export function openSlackThread(m: TimelineMessage) {
     thread = null;
     thumbs.clear();
     inFlight.clear();
+    imagesShown.clear();
+    blockImages.clear();
     closeCard();
   }
   note(null);

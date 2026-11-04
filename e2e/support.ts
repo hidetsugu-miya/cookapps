@@ -15,6 +15,7 @@ import type { SlackLoad } from "../ts/bindings/SlackLoad";
 import type { SlackThread } from "../ts/bindings/SlackThread";
 import type { Summary } from "../ts/bindings/Summary";
 import type { TaskItem } from "../ts/bindings/TaskItem";
+import type { ThreadAttachment } from "../ts/bindings/ThreadAttachment";
 import type { ThreadDetail } from "../ts/bindings/ThreadDetail";
 import type { ThreadFile } from "../ts/bindings/ThreadFile";
 import type { ThreadItem } from "../ts/bindings/ThreadItem";
@@ -413,7 +414,12 @@ export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> =
 export const hiddenChannel = (channel: string, name: string, extra: Partial<HiddenChannel> = {}): HiddenChannel => ({ teamId: workspace.teamId, team: workspace.team, channel, name, ...extra });
 
 // A message of a thread (`slack_thread`).
-export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, files: [], ...extra });
+export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, files: [], blocks: [], showText: true, attachments: [], imageUrls: [], ...extra });
+
+// An attachment of a thread's message (S-11) with nothing in it; `extra` sets the parts.
+export const attachment = (extra: Partial<ThreadAttachment> = {}): ThreadAttachment => ({
+  color: null, pretext: null, authorName: null, title: null, titleLink: null, text: null, fields: [], footer: null, actions: [], blocks: [], image: null, thumb: null, fallback: null, ...extra,
+});
 
 // An attached file; an image has a thumbnail URL on files.slack.com.
 export const slackFile = (id: string, name: string, extra: Partial<ThreadFile> = {}): ThreadFile => ({ id, name, mimetype: "image/png", thumbUrl: null, permalink: `https://example-team.slack.com/files/U1/${id}/${name}`, ...extra });
