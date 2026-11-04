@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: "cookapps の push 前のコードレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で、security-reviewer・performance-reviewer と並列に起動する。"
+description: "cookapps の push 前のコードレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -16,7 +16,7 @@ tools: Read, Grep, Glob, Bash
 
 - ロジックの誤り、端の場合（空、0 件、失敗、競合）
 - データの損失（意図しないアーカイブ・ゴミ箱・既読化、`accounts.json` の破損）
-- 要件（`AGENTS.local.md` の要件定義）と `.claude/rules/` への違反
+- 要件（`AGENTS.md` の要件定義）と `.claude/rules/` への違反
 - 変更が呼び出し元・テスト・ドキュメント（README、`docs/`）と食い違っていないか
 - 危ない変更にテストがあるか
 
@@ -27,7 +27,7 @@ tools: Read, Grep, Glob, Bash
 - High: 普通の使い方で害が出るもの。データの損失や破損、機能が動かない、要件で決めた動きが満たされない、公開してはいけないものの公開。
 - Low: 上に当たらないもの。まれな入力でしか起きず害の小さいバグ、この変更で悪くならない既存の動き、ドキュメントの食い違い、読みやすさ、命名、小さな改善。
 
-2 回目以降は、渡された止める指摘が直ったかと、直した差分が新しく生んだ止める指摘だけを見る。
+2 回目以降は、直した差分が新しく生んだ止める指摘だけを見る。渡された止める指摘と重ねて報告しない。直ったかは release-verifier が確かめる。
 
 ## 返す形式
 
