@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: "cookapps の push 前のセキュリティレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で、performance-reviewer・code-reviewer と並列に起動する。"
+description: "cookapps の push 前のセキュリティレビュー。push する範囲（例 origin/main..HEAD）を受け取り、差分とそれが触れるコードを読んで、重大度付きの指摘を返す。編集しない。.claude/rules/review.md の手順の中で起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -27,7 +27,7 @@ tools: Read, Grep, Glob, Bash
 - High: 条件付きで上と同じことが起きる、外部の入力の検証漏れ
 - Medium / Low: 多層防御の不足、悪用の経路が無いもの
 
-2 回目以降は、渡された止める指摘が直ったかと、直した差分が新しく生んだ止める指摘だけを見る。
+2 回目以降は、直した差分が新しく生んだ止める指摘だけを見る。渡された止める指摘と重ねて報告しない。直ったかは release-verifier が確かめる。
 
 ## 返す形式
 
