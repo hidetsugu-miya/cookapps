@@ -100,6 +100,12 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 /* Detail view: the toolbar is tinted, the subject sits above the messages, and each message lines its body up with the sender's name (avatar 40px + gap 16px). */
 #mail-header { padding: 14px 32px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #mail-header .icon-btn { color: #444746; border-radius: 50%; }
+/* The inbox's header and the Slack list's carry the same tint as the thread's bar; they stay above the list while it scrolls (only #main and #slack-feed scroll). */
+#inbox-header { padding: 16px 32px 10px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#slack-header { padding: 14px 24px 10px 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#slack-header .icon-btn { color: #444746; border-radius: 50%; }
+#inbox-header .text-btn:disabled, #slack-header .text-btn:disabled { opacity: .4; cursor: default; }
+#inbox-header .text-btn:disabled:hover, #slack-header .text-btn:disabled:hover { background: #fff; }
 /* The right-hand group starts at the first button that is shown: the AI summary button, or the Slack button while the summary button is hidden. */
 #mail-header #thread-summary:not([hidden]), #mail-header #thread-summary[hidden] + #thread-slack { margin-left: auto; }
 #thread-head { margin: 16px 0 20px 56px; font-size: 22px; line-height: 1.35; }
@@ -668,9 +674,20 @@ button.status:hover { filter: brightness(.95); }
 .feed-ws { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; }
 .feed-main { display: block; min-width: 0; }
 .feed-meta { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
-.feed-hide { position: absolute; top: 8px; right: 12px; visibility: hidden; }
-.feed-item.feed-keep .feed-hide { visibility: visible; }
-.feed-item:hover .feed-hide, .feed-item:focus-within .feed-hide { visibility: visible; }
+.feed-hide, .feed-watch { position: absolute; top: 8px; visibility: hidden; }
+.feed-hide { right: 52px; }
+.feed-watch { right: 12px; }
+.feed-item.feed-keep .feed-hide, .feed-item.feed-keep .feed-watch { visibility: visible; }
+.feed-item:hover .feed-hide, .feed-item:focus-within .feed-hide, .feed-item:hover .feed-watch, .feed-item:focus-within .feed-watch { visibility: visible; }
+/* A watched row keeps its bookmark shown, and the date moves left of it. */
+.feed-item.watched .feed-watch { visibility: visible; }
+.feed-item.watched .feed-row { padding-right: 56px; }
+.feed-watch.on { color: var(--accent); }
+.feed-watch.on svg { fill: currentColor; }
+.feed-heading:first-child { margin-top: 4px; }
+.feed-row:disabled { cursor: default; }
+.feed-text.muted { color: var(--muted); }
+.feed-new { display: block; margin-top: 3px; font-size: 12px; font-weight: bold; color: var(--accent); }
 .feed-item:hover .feed-date, .feed-item:focus-within .feed-date { visibility: hidden; }
 .feed-more { display: flex; justify-content: center; padding: 6px 0; }
 .feed-meta b { font-weight: 600; }

@@ -398,17 +398,25 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
   permalink: permalinkOf(ts),
   hasFiles: false,
   unread: false,
+  watch: null,
   ...extra,
 });
 
-// What `slack_timeline` answers; `unreadTotal` is the number of unread messages given unless `extra` says another (it counts the messages held, not only the ones listed).
+// A row of the watch section (`Timeline.watched`): the thread's own message, with `newReplies` new replies (and `status`, "ok" unless `extra` says another).
+export const watchedMessage = (ts: string, name: string, channelName: string, text: string, newReplies = 0, extra: Partial<TimelineMessage> = {}): TimelineMessage =>
+  timelineMessage(ts, name, channelName, text, { watch: { newReplies, status: "ok" }, ...extra });
+
+// What `slack_timeline` answers; `unreadTotal` is the number of unread messages given unless `extra` says another (it counts the messages held, not only the ones listed),
+// `markableChannels` the channels of the unread messages given. `watched` is empty unless `extra` gives it.
 export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({
   messages,
+  watched: [],
   failed: [],
   missing: [],
   refreshSecs: 120,
   pendingChannels: 0,
   unreadTotal: messages.filter((m) => m.unread).length,
+  markableChannels: new Set(messages.filter((m) => m.unread).map((m) => `${m.teamId}/${m.channel}`)).size,
   ...extra,
 });
 

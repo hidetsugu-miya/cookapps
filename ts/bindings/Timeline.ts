@@ -4,9 +4,17 @@ import type { TimelineMessage } from "./TimelineMessage";
 import type { TimelineMissing } from "./TimelineMissing";
 
 /**
- * The newest messages of every joined channel of every workspace, newest first, and when to read again. The screen splits them by `unread`.
+ * The unread messages of every joined channel of every workspace, newest first, the watched threads, and when to read again.
  */
-export type Timeline = { messages: Array<TimelineMessage>, failed: Array<TimelineFailure>, missing: Array<TimelineMissing>, refreshSecs: number, 
+export type Timeline = { 
+/**
+ * The unread messages (the newest `UNREAD_MAX`), newest first, without the threads that are watched.
+ */
+messages: Array<TimelineMessage>, 
+/**
+ * The watched threads (S-13), the newest activity first; each is `Some` in `watch`.
+ */
+watched: Array<TimelineMessage>, failed: Array<TimelineFailure>, missing: Array<TimelineMissing>, refreshSecs: number, 
 /**
  * Channels no read has reached yet, over all workspaces.
  */
@@ -14,4 +22,8 @@ pendingChannels: number,
 /**
  * The unread messages among all the messages held (not only the ones listed), channels kept off the list left out; the sidebar's badge.
  */
-unreadTotal: number, };
+unreadTotal: number, 
+/**
+ * The channels "すべて既読にする" would move (`mark_targets`): 0 when there is nothing to do.
+ */
+markableChannels: number, };

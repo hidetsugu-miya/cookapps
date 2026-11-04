@@ -4,7 +4,7 @@ import type { Sync } from "./bindings/Sync";
 import type { ThreadItem } from "./bindings/ThreadItem";
 import { renderAccounts } from "./accounts.js";
 import { $, composing, isMac } from "./dom.js";
-import { place, pending, row, rowKey, rows, updateBadge } from "./inbox-rows.js";
+import { markAllRead, place, pending, row, rowKey, rows, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { currentScreen } from "./nav.js";
 import { opened } from "./thread.js";
@@ -276,6 +276,7 @@ async function syncAll() {
 }
 
 export function initInbox() {
+  $("mail-mark-all").onclick = markAllRead;
   setInterval(syncAll, SYNC_MS);
   document.addEventListener("visibilitychange", syncAll);
   // Cmd+Z (Ctrl+Z off macOS) undoes the last removal; in a text field it stays that field's own undo.

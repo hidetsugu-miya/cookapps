@@ -1,4 +1,4 @@
-import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, threadDetail, waitForCalls, waitForCount } from "../support";
+import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, thread, threadDetail, waitForCalls, waitForCount } from "../support";
 
 // Fires the event the app's sync round listens for (the window is shown again), which runs one round at once.
 const syncRound = () =>
@@ -116,16 +116,127 @@ describe("inbox", () => {
     expect(await callsOf(make)).toHaveLength(1);
   });
 
-  it("shows no heading, no reload button and no toolbar on the list, and the toolbar only on a thread", async () => {
+  it("shows a header with the title and the unread operation only on the list, no reload button, and the thread's toolbar only on a thread", async () => {
     await expect($("#title")).not.toExist();
     await expect($("#reload")).not.toExist();
+    await expect($("#inbox-header")).toBeDisplayed();
+    await expect($("#inbox-header h1")).toHaveText("受信トレイ");
+    await expect($("#mail-mark-all")).toHaveText("すべて既読にする");
     await expect($("#mail-header")).not.toBeDisplayed();
     await mock("thread", threadDetail("Already read", "Old news", false));
     await rowOf("read-threads", "Already read").$(".subject").click();
     await expect($("#mail-header")).toBeDisplayed();
+    await expect($("#inbox-header")).not.toBeDisplayed();
     await expect($("#thread-label")).toHaveText("受信トレイ");
     await $("#back").click();
     await expect($("#mail-header")).not.toBeDisplayed();
+    await expect($("#inbox-header")).toBeDisplayed();
+  });
+
+  it("fixes the header above the list in the thread toolbar's color: it stays where it is while the list scrolls", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => thread(`m${i}`, `Thread ${i}`, true));
+    await boot({ inbox: inbox(many) });
+    await waitForCount("#unread-threads li", 30);
+    const colors = await browser.execute(() => [getComputedStyle(document.getElementById("inbox-header")!).backgroundColor, getComputedStyle(document.getElementById("mail-header")!).backgroundColor]);
+    expect(colors[0]).toBe(colors[1]);
+    const top = () => browser.execute(() => document.getElementById("inbox-header")!.getBoundingClientRect().top);
+    const before = await top();
+    await browser.execute(() => {
+      document.getElementById("main")!.scrollTop = 400;
+    });
+    expect(await browser.execute(() => document.getElementById("main")!.scrollTop)).toBeGreaterThan(0);
+    expect(await top()).toBe(before);
+    expect(await browser.execute(() => document.getElementById("main")!.contains(document.getElementById("inbox-header")))).toBe(false);
+  });
+
+  describe("marking all read", () => {
+    const unreadThreads = (n: number) => Array.from({ length: n }, (_, i) => thread(`m${i}`, `Thread ${i}`, true));
+
+    it("cannot be pressed with no unread thread, and can with one", async () => {
+      await boot({ inbox: inbox([thread("t3", "Already read", false)]) });
+      await waitForCount("#read-threads li", 1);
+      await expect($("#mail-mark-all")).toBeDisabled();
+      await boot({ inbox: inbox() });
+      await waitForCount("#unread-threads li", 2);
+      await expect($("#mail-mark-all")).toBeEnabled();
+    });
+
+    it("makes every unread thread read with set_read, one request each, changes the rows at once, and offers 元に戻す", async () => {
+      const setRead = await mock("set_read", holds);
+      await $("#mail-mark-all").click();
+      // Before Gmail has answered, both rows are read and in the read section, and the button has nothing left to do.
+      await waitForCount("#unread-threads li", 0);
+      await waitForCount("#read-threads li", 3);
+      await expect($("#mail-mark-all")).toBeDisabled();
+      expect(await waitForCalls(setRead, 2)).toEqual([
+        { account, id: "t1", read: true },
+        { account, id: "t2", read: true },
+      ]);
+      await release(setRead, true);
+      await release(setRead, true);
+      await expect($(".toast")).toHaveText(expect.stringContaining("2 件を既読にしました"));
+      await expect($(".toast button")).toHaveText("元に戻す");
+      expect(await browser.execute(() => document.querySelectorAll("#read-threads li:not(.unread)").length)).toBe(3);
+    });
+
+    it("sends at most 4 requests at once", async () => {
+      await boot({ inbox: inbox(unreadThreads(6)) });
+      await waitForCount("#unread-threads li", 6);
+      const setRead = await mock("set_read", holds);
+      await $("#mail-mark-all").click();
+      await waitForCalls(setRead, 4);
+      await browser.pause(300);
+      expect(await callsOf(setRead)).toHaveLength(4);
+      await release(setRead, true);
+      await waitForCalls(setRead, 5);
+      await browser.pause(300);
+      expect(await callsOf(setRead)).toHaveLength(5);
+      await release(setRead, true);
+      await waitForCalls(setRead, 6);
+      for (let i = 0; i < 4; i++) await release(setRead, true);
+      await expect($(".toast")).toHaveText(expect.stringContaining("6 件を既読にしました"));
+    });
+
+    it("puts a thread whose request failed back as unread, says so, and offers 元に戻す for the others", async () => {
+      const setRead = await mock("set_read", holds);
+      await $("#mail-mark-all").click();
+      await waitForCalls(setRead, 2);
+      await release(setRead, true);
+      await release(setRead, rejects("Gmail が断りました"));
+      await expect($("#error")).toHaveText(expect.stringContaining("1 件を更新できませんでした: Gmail が断りました"));
+      await waitForCount("#unread-threads li", 1);
+      await expect(rowOf("unread-threads", "Second unread")).toExist();
+      await expect($(".toast")).toHaveText(expect.stringContaining("1 件を既読にしました"));
+      await expect($("#mail-mark-all")).toBeEnabled();
+    });
+
+    it("makes the threads it changed unread again with 元に戻す, with set_read, and says so", async () => {
+      const setRead = await mock("set_read", true);
+      await $("#mail-mark-all").click();
+      await waitForCalls(setRead, 2);
+      await expect($(".toast button")).toHaveText("元に戻す");
+      await $(".toast button").click();
+      await waitForCount("#unread-threads li", 2);
+      expect((await callsOf(setRead)).slice(2)).toEqual([
+        { account, id: "t1", read: false },
+        { account, id: "t2", read: false },
+      ]);
+      await expect($(".toast")).toHaveText(expect.stringContaining("元に戻しました"));
+    });
+
+    it("keeps a row as it is when a sync arrives while its request is on its way", async () => {
+      const setRead = await mock("set_read", holds);
+      await $("#mail-mark-all").click();
+      await waitForCalls(setRead, 2);
+      // Gmail still says the thread is unread: the row keeps the state the user chose.
+      await mock("sync", { kind: "changed", threads: [thread("t1", "First unread", true)], removed: [], historyId: "101" });
+      await syncRound();
+      await waitForCalls("sync");
+      await browser.pause(300);
+      await waitForCount("#unread-threads li", 0);
+      await release(setRead, true);
+      await release(setRead, true);
+    });
   });
 
   it("loads again at the next sync round when a sync needs a login while a thread is open, and keeps the thread", async () => {

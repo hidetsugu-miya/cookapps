@@ -8,6 +8,8 @@ export const PERSON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle c
 export const TODO_SVG = $("thread-todo").innerHTML.trim();
 export const EYE_SVG = $("read-heading").querySelector("svg")!.outerHTML;
 export const EYE_OFF_SVG = svgOf('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/>');
+export const BOOKMARK_SVG = svgOf('<path d="M6 4h12v17l-6-4-6 4z"/>');
+export const DOT_SVG = svgOf('<circle cx="12" cy="12" r="5"/>');
 export const MAIL_SVG = svgOf('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>');
 export const RETURN_SVG = svgOf('<path d="M9 14 4 9l5-5M4 9h9a7 7 0 0 1 7 7v4"/>');
 export const SUB_SVG = svgOf('<path d="M6 4v10a3 3 0 0 0 3 3h9"/><path d="M15 14l3 3-3 3"/>');

@@ -106,7 +106,7 @@ describe("slack thread", () => {
   });
 
   it("goes back to the list where it was scrolled to and reads nothing again", async () => {
-    // Unread rows, each in a channel of its own: the list shows 10 of them until the button shows the rest, and opening one moves only that row to the read side.
+    // Unread rows, each in a channel of its own: the list shows 10 of them until the button shows the rest, and opening one takes only that row out.
     const messages = Array.from({ length: 20 }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `A message of the list, number ${i}`, { unread: true, channel: `C${i}` }));
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(messages), claude_status: claudeReady });
     await mock("slack_thread", slackThread([threadMessage(messages[8].ts, "Person 8", "A message of the list, number 8")]));
