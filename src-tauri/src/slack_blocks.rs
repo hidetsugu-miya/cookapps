@@ -109,6 +109,9 @@ pub struct ThreadAttachment {
     footer: Option<String>,
     actions: Vec<ThreadButton>,
     blocks: Vec<ThreadBlock>,
+    /// The attachment's own `image_url` and `thumb_url`, with the `fallback` as their description.
+    image: Option<ThreadImage>,
+    thumb: Option<ThreadImage>,
     fallback: Option<String>,
 }
 
@@ -387,9 +390,26 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
             .filter_map(|b| button(b, name_of))
             .collect(),
         blocks: all_blocks(&a["blocks"], name_of),
+        image: None,
+        thumb: None,
         fallback: None,
     };
+    // The images use the fallback as their description; a thumbnail with no address of its own adds nothing to an image that is there.
+    let alt = text("fallback").unwrap_or_default();
+    let picture = |key: &str| {
+        a[key].as_str().and_then(|raw| {
+            let url = image_url(Some(raw));
+            (url.is_some() || !alt.is_empty()).then(|| ThreadImage {
+                url,
+                alt: alt.clone(),
+            })
+        })
+    };
+    out.image = picture("image_url");
+    out.thumb = picture("thumb_url").filter(|t| t.url.is_some() || out.image.is_none());
     let drawn = out.pretext.is_some()
+        || out.image.is_some()
+        || out.thumb.is_some()
         || out.author_name.is_some()
         || out.title.is_some()
         || out.text.is_some()
@@ -418,10 +438,20 @@ pub(crate) fn image_urls(blocks: &[ThreadBlock], attachments: &[ThreadAttachment
     let mut seen = HashSet::new();
     blocks
         .iter()
-        .chain(attachments.iter().flat_map(|a| &a.blocks))
         .flat_map(block_images)
+        .chain(attachments.iter().flat_map(attachment_images))
         .filter(|url| seen.insert(*url))
         .map(str::to_owned)
+        .collect()
+}
+
+/// The addresses of an attachment's own images, then those of its blocks.
+fn attachment_images(a: &ThreadAttachment) -> Vec<&str> {
+    [&a.image, &a.thumb]
+        .into_iter()
+        .flatten()
+        .filter_map(|i| i.url.as_deref())
+        .chain(a.blocks.iter().flat_map(block_images))
         .collect()
 }
 
@@ -803,6 +833,8 @@ mod tests {
             footer: None,
             actions: vec![],
             blocks: vec![],
+            image: None,
+            thumb: None,
             fallback: None,
         }
     }
@@ -855,6 +887,8 @@ mod tests {
                     },
                 ],
                 blocks: vec![],
+                image: None,
+                thumb: None,
                 fallback: None,
             }]
         );
@@ -931,11 +965,56 @@ mod tests {
             json!({"fields": [{"title": "a", "value": "b"}]}),
             json!({"blocks": [{"type": "divider"}]}),
             json!({"actions": [{"type": "button", "text": "B"}]}),
+            json!({"image_url": "https://a.example/i.png"}),
+            json!({"thumb_url": "https://a.example/t.png"}),
         ] {
             let mut a = other.clone();
             a["fallback"] = json!("fb");
             assert_eq!(attachments(json!([a]))[0].fallback, None, "{other}");
         }
+    }
+
+    #[test]
+    fn an_attachments_own_images_are_drawn_with_the_fallback_as_their_description() {
+        let image = |url: &str, alt: &str| ThreadImage {
+            url: Some(url.to_owned()),
+            alt: alt.to_owned(),
+        };
+        // An attachment of nothing but an image is not dropped, and its fallback is the description, not a text.
+        let only =
+            attachments(json!([{"image_url": "https://a.example/i.png", "fallback": "A chart"}]));
+        assert_eq!(
+            only,
+            vec![ThreadAttachment {
+                image: Some(image("https://a.example/i.png", "A chart")),
+                ..bare()
+            }]
+        );
+        // Both are kept when both are given, and with no fallback the description is empty.
+        let both = attachments(
+            json!([{"image_url": "https://a.example/i.png", "thumb_url": "https://a.example/t.png"}]),
+        );
+        assert_eq!(both[0].image, Some(image("https://a.example/i.png", "")));
+        assert_eq!(both[0].thumb, Some(image("https://a.example/t.png", "")));
+        // The same address rules as a block's image: https, and not the host that needs the token.
+        let bad = attachments(
+            json!([{"title": "t", "image_url": "http://a.example/i.png", "thumb_url": "https://files.slack.com/x.png"}]),
+        );
+        assert_eq!(bad[0].image, None);
+        assert_eq!(bad[0].thumb, None);
+        // An address that cannot be used still leaves the description, once.
+        let alt_only = attachments(
+            json!([{"image_url": "http://a.example/i.png", "thumb_url": "http://a.example/t.png", "fallback": "A chart"}]),
+        );
+        assert_eq!(
+            alt_only[0].image,
+            Some(ThreadImage {
+                url: None,
+                alt: "A chart".into()
+            })
+        );
+        assert_eq!(alt_only[0].thumb, None);
+        assert_eq!(alt_only[0].fallback, None);
     }
 
     #[test]
@@ -965,14 +1044,17 @@ mod tests {
             {"type": "context", "elements": [{"type": "image", "image_url": "https://a.example/1.png", "alt_text": "c"}]},
             {"type": "image", "image_url": "http://a.example/3.png", "alt_text": "no"},
         ]));
-        let a = attachments(
-            json!([{"blocks": [{"type": "image", "image_url": "https://a.example/4.png", "alt_text": "d"}]}]),
-        );
+        let a = attachments(json!([
+            {"image_url": "https://a.example/5.png", "thumb_url": "https://a.example/6.png", "blocks": [{"type": "image", "image_url": "https://a.example/4.png", "alt_text": "d"}]},
+            {"thumb_url": "https://a.example/5.png"}
+        ]));
         assert_eq!(
             image_urls(&b, &a),
             vec![
                 "https://a.example/1.png",
                 "https://a.example/2.png",
+                "https://a.example/5.png",
+                "https://a.example/6.png",
                 "https://a.example/4.png"
             ]
         );

@@ -2,8 +2,13 @@
 import type { ThreadBlock } from "./ThreadBlock";
 import type { ThreadButton } from "./ThreadButton";
 import type { ThreadField } from "./ThreadField";
+import type { ThreadImage } from "./ThreadImage";
 
 /**
  * An attachment, as drawn. `color` is `#rrggbb` (or `#rgb`); `fallback` is set only when nothing else of the attachment can be drawn.
  */
-export type ThreadAttachment = { color: string | null, pretext: string | null, authorName: string | null, title: string | null, titleLink: string | null, text: string | null, fields: Array<ThreadField>, footer: string | null, actions: Array<ThreadButton>, blocks: Array<ThreadBlock>, fallback: string | null, };
+export type ThreadAttachment = { color: string | null, pretext: string | null, authorName: string | null, title: string | null, titleLink: string | null, text: string | null, fields: Array<ThreadField>, footer: string | null, actions: Array<ThreadButton>, blocks: Array<ThreadBlock>, 
+/**
+ * The attachment's own `image_url` and `thumb_url`, with the `fallback` as their description.
+ */
+image: ThreadImage | null, thumb: ThreadImage | null, fallback: string | null, };

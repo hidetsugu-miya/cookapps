@@ -382,6 +382,31 @@ describe("slack thread: blocks and attachments", () => {
     expect(await shown()).toBe(0);
   });
 
+  it("draws an attachment's own image and thumbnail after 画像を表示, and an image-only attachment is not dropped", async () => {
+    const thumbUrl = "https://images.example.com/thumb.png";
+    const card = attachment({ image: { url: imageUrl, alt: "A chart" }, thumb: { url: thumbUrl, alt: "A chart" } });
+    await openDetail({}, bot({ attachments: [card], imageUrls: [imageUrl, thumbUrl] }));
+    // Nothing is drawn or fetched before the press, but the attachment and the button are there.
+    expect(await count("#st-msgs .st-att")).toBe(1);
+    expect(await shown()).toBe(0);
+    expect(await callsOf("fetch_images")).toEqual([]);
+    const fetch = await mock("fetch_images", { [imageUrl]: pngUri, [thumbUrl]: pngUri });
+    await $("#st-msgs .st-images .text-btn").click();
+    expect(await waitForCalls(fetch)).toEqual([{ urls: [imageUrl, thumbUrl] }]);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-att img")) === 2);
+    expect(await count("#st-msgs .st-att .st-img")).toBe(1);
+    expect(await count("#st-msgs .st-att .st-acc-img")).toBe(1);
+  });
+
+  it("draws the description of an attachment's image that cannot be fetched", async () => {
+    await openDetail({}, bot({ attachments: [attachment({ image: { url: missingUrl, alt: "Gone image" } })], imageUrls: [missingUrl] }));
+    await mock("fetch_images", {});
+    await $("#st-msgs .st-images .text-btn").click();
+    await browser.waitUntil(async () => (await count("#st-msgs .st-att .st-alt")) === 1);
+    expect(await textsOf("#st-msgs .st-att .st-alt")).toEqual(["Gone image"]);
+    expect(await count("#st-msgs .st-images")).toBe(0);
+  });
+
   it("draws the images of the blocks inside an attachment and of a section's accessory and a context too", async () => {
     const inner: ThreadBlock[] = [
       { type: "section", text: "Report", fields: [], accessory: { type: "image", url: imageUrl, alt: "Thumb" } },

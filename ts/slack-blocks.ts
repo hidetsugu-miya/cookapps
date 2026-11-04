@@ -127,6 +127,7 @@ export function attachmentNode(a: ThreadAttachment, ctx: ImageContext) {
     }
     box.append(fields);
   }
+  for (const node of [a.thumb && imageNode(a.thumb, ctx, "st-acc-img"), a.image && imageNode(a.image, ctx, "st-img")]) if (node) box.append(node);
   if (a.blocks.length) box.append(blocksNode(a.blocks, ctx));
   if (a.actions.length) {
     const row = tag("div", "st-acts");

@@ -418,7 +418,7 @@ export const threadMessage = (ts: string, name: string, text: string, extra: Par
 
 // An attachment of a thread's message (S-11) with nothing in it; `extra` sets the parts.
 export const attachment = (extra: Partial<ThreadAttachment> = {}): ThreadAttachment => ({
-  color: null, pretext: null, authorName: null, title: null, titleLink: null, text: null, fields: [], footer: null, actions: [], blocks: [], fallback: null, ...extra,
+  color: null, pretext: null, authorName: null, title: null, titleLink: null, text: null, fields: [], footer: null, actions: [], blocks: [], image: null, thumb: null, fallback: null, ...extra,
 });
 
 // An attached file; an image has a thumbnail URL on files.slack.com.
