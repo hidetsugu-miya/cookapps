@@ -21,6 +21,7 @@ use crate::{
     claude::Thread,
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
     images::{fetch_slack_files, run_limited, SlackFileCache},
+    slack_emoji,
 };
 
 /// Every request goes here and nowhere else: nothing from outside is put into the URL.
@@ -2209,7 +2210,7 @@ fn skin_tone_at(text: &str) -> Option<(emojis::SkinTone, usize)> {
         .then_some((tone, ":skin-tone-".len() + 2))
 }
 
-/// The emoji of the `:name:` that starts `rest`, with the skin tone code after it, and the length of what it covers. `None` when it is no emoji of ours.
+/// The emoji of the `:name:` that starts `rest`, with the skin tone code after it, and the length of what it covers. `None` when it is no emoji of ours (a custom emoji).
 /// `prev` is the character before it: digits on both sides are a time (`10:30:45`), not a code.
 fn emoji_at(rest: &str, prev: Option<char>) -> Option<(&'static str, usize)> {
     let body = rest.strip_prefix(':')?;
@@ -2223,14 +2224,19 @@ fn emoji_at(rest: &str, prev: Option<char>) -> Option<(&'static str, usize)> {
     if prev.is_some_and(|p| p.is_ascii_digit()) && name.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let emoji = emojis::get_by_shortcode(name)?;
+    // The crate first, then the table of Slack's other names; the tone is found through the crate for both.
+    let base = emojis::get_by_shortcode(name)
+        .map(emojis::Emoji::as_str)
+        .or_else(|| slack_emoji::get(name))?;
     let len = n + 2;
     match skin_tone_at(&rest[len..]) {
         Some((tone, tone_len)) => Some((
-            emoji.with_skin_tone(tone).unwrap_or(emoji).as_str(),
+            emojis::get(base)
+                .and_then(|e| e.with_skin_tone(tone))
+                .map_or(base, emojis::Emoji::as_str),
             len + tone_len,
         )),
-        None => Some((emoji.as_str(), len)),
+        None => Some((base, len)),
     }
 }
 
@@ -4836,6 +4842,45 @@ mod tests {
         ] {
             assert_eq!(emojify(&format!(":{name}:")), emoji, "{name}");
         }
+    }
+
+    #[test]
+    fn the_standard_names_of_slack_that_the_crate_lacks_come_from_the_table() {
+        for (name, emoji) in [
+            ("thinking_face", "🤔"),
+            ("hugging_face", "🤗"),
+            ("face_with_rolling_eyes", "🙄"),
+            ("robot_face", "🤖"),
+            ("man-bowing", "🙇‍♂️"),
+            ("woman-bowing", "🙇‍♀️"),
+            ("man-shrugging", "🤷‍♂️"),
+            ("woman-shrugging", "🤷‍♀️"),
+            ("man-gesturing-ok", "🙆‍♂️"),
+            ("flag-jp", "🇯🇵"),
+        ] {
+            // The crate does not know them, so only the table can answer.
+            assert!(emojis::get_by_shortcode(name).is_none(), "{name}");
+            assert_eq!(emojify(&format!(":{name}:")), emoji, "{name}");
+        }
+        // The skin tone goes the same way.
+        assert_eq!(emojify(":man-bowing::skin-tone-3:"), "🙇🏼‍♂️");
+        assert_eq!(emojify(":woman-shrugging::skin-tone-6:"), "🤷🏿‍♀️");
+        // A flag has no skin tone: the base emoji, and the code does not stay.
+        assert_eq!(emojify(":flag-jp::skin-tone-3:"), "🇯🇵");
+        // A custom emoji is not in the table.
+        assert_eq!(emojify(":my-team-logo:"), ":my-team-logo:");
+    }
+
+    #[test]
+    fn the_table_holds_only_sorted_names_the_crate_lacks() {
+        assert!(slack_emoji::EMOJI.windows(2).all(|w| w[0].0 < w[1].0));
+        for (name, emoji) in slack_emoji::EMOJI {
+            assert!(emojis::get_by_shortcode(name).is_none(), "{name}");
+            assert!(!emoji.is_empty(), "{name}");
+        }
+        assert_eq!(slack_emoji::get("thinking_face"), Some("🤔"));
+        assert_eq!(slack_emoji::get("tada"), None);
+        assert_eq!(slack_emoji::get(""), None);
     }
 
     #[test]
