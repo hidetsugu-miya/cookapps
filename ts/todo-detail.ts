@@ -183,14 +183,15 @@ function openLabelPicker(anchor: Element, id: string) {
   input.setAttribute("aria-label", "ラベルを検索または作成");
   const list = tag("div", "label-list");
   const toggle = (name: string) => {
-    const now = todoState.taskById.get(id)?.labels ?? [];
+    const now = todoState.taskById.get(id)?.labels;
     closeMenu();
-    saveTask(id, { labels: now.includes(name) ? now.filter((n) => n !== name) : [...now, name] });
+    // A refresh may have taken the task out of the list: its labels are unknown, and the whole list would be overwritten.
+    if (now) saveTask(id, { labels: now.includes(name) ? now.filter((n) => n !== name) : [...now, name] });
   };
   const create = (name: string) => {
-    const now = todoState.taskById.get(id)?.labels ?? [];
+    const now = todoState.taskById.get(id)?.labels;
     closeMenu();
-    createLabel(id, name, [...now, name]);
+    if (now) createLabel(id, name, [...now, name]);
   };
   // What the typed text matches exactly (ignoring case), and what it is.
   const exact = () => todoState.todo!.labels.find((l) => l.name.toLowerCase() === input.value.trim().toLowerCase());
