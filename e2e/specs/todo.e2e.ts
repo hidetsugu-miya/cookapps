@@ -226,14 +226,25 @@ describe("todo", () => {
     await expect($(".review .review-due")).toHaveText("2026-11-14 15:00");
     await pickWith("明日午前12時5分", 15);
     await expect($(".review .review-due")).toHaveText("2026-11-15 00:05");
+    await pickWith("明日 午後 3時", 16);
+    await expect($(".review .review-due")).toHaveText("2026-11-16 15:00");
   });
 
-  it("does not read an hour of 24 or more typed in the due popover as a time", async () => {
+  it("does not read a time from other forms typed in the due popover", async () => {
     await openSummaryCard();
-    await $(".review .review-due").click();
-    await $(".due-pop .chip-input").setValue("25時");
-    await dayButton(12).click();
+    const pickWith = async (text: string, day: number) => {
+      await $(".review .review-due").click();
+      await $(".due-pop .chip-input").setValue(text);
+      await dayButton(day).click();
+    };
+    await pickWith("25時", 12);
     await expect($(".review .review-due")).toHaveText("2026-11-12");
+    await pickWith("夜8時", 13);
+    await expect($(".review .review-due")).toHaveText("2026-11-13");
+    await pickWith("15:00:00", 14);
+    await expect($(".review .review-due")).toHaveText("2026-11-14");
+    await pickWith("PM3:00", 15);
+    await expect($(".review .review-due")).toHaveText("2026-11-15");
   });
 
   it("says 期限なし on the due chip when the card is for a project and the date is empty", async () => {

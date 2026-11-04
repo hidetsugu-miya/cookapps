@@ -46,9 +46,10 @@ function monthPicker(shown: Date, current: string | null, pick: (iso: string) =>
   return box;
 }
 
-// The time at the end of what is typed in the due popover, as `HH:MM`, or null: "15:00", "9:30", "15時", "15時30分", each with 午前 or 午後 in front ("午後3時"),
-// alone or after a date or other words ("2026-11-06 15:00", "明日15時"). An hour of 24 or more, or minutes of 60 or more, is not a time.
-const TYPED_TIME = /(?:^|\D)(午前|午後)?(\d{1,2})(?::(\d{2})|時(?:(\d{1,2})分)?)$/;
+// The time of what is typed in the due popover, as `HH:MM`, or null: "15:00", "9:30", "15時", "15時30分", each with 午前 or 午後 in front ("午後 3時"),
+// alone or after a date, 今日, 明日 or 明後日 ("2026-11-06 15:00", "明日15時"). The whole text must be of this form: other words change what a number means ("夜8時"), so they are not read.
+// An hour of 24 or more, or minutes of 60 or more, is not a time.
+const TYPED_TIME = /^(?:(?:\d{4}-\d{2}-\d{2}|今日|明日|明後日)\s*)?(?:(午前|午後)\s*)?(\d{1,2})(?::(\d{2})|時(?:(\d{1,2})分)?)$/;
 function typedTime(text: string): string | null {
   const m = TYPED_TIME.exec(text.trim());
   if (!m) return null;
@@ -76,7 +77,7 @@ export interface DueEdit {
 // The due popover opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
 // A one-off due date is written "2026-11-02 12:00", which Todoist reads back as is; a repeat keeps Todoist's text, which a date cannot hold.
 // The text in the field is confirmed by Enter or by a click elsewhere that closes the popover (what was typed is not lost); Escape cancels it.
-// A picked day keeps the time typed at the end of the field ("15:00", "15時", "明日 午後3時", "2026-11-06 15:00"; `typedTime`), else the time the due date had.
+// A picked day keeps the time typed in the field ("15:00", "15時", "明日 午後3時", "2026-11-06 15:00"; `typedTime`), else the time the due date had.
 // The task's detail and the Slack summary card both open it; what is done with the new text is theirs.
 export function openDueEditor(anchor: Element, e: DueEdit) {
   const pop = tag("div", "menu due-pop");
