@@ -21,7 +21,8 @@ export async function loadSlackWorkspaces() {
   try {
     slackWorkspaces = (await invoke("slack_load")).workspaces;
   } catch {
-    slackWorkspaces = [];
+    // The list that was read stays.
+    slackWorkspaces ??= [];
   }
   loadingSlack = false;
   updateAddMode();

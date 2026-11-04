@@ -661,6 +661,7 @@ button.status:hover { filter: brightness(.95); }
 .feed-main { display: block; min-width: 0; }
 .feed-meta { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
 .feed-hide { position: absolute; top: 8px; right: 12px; visibility: hidden; }
+.feed-item.feed-keep .feed-hide { visibility: visible; }
 .feed-item:hover .feed-hide, .feed-item:focus-within .feed-hide { visibility: visible; }
 .feed-item:hover .feed-date, .feed-item:focus-within .feed-date { visibility: hidden; }
 .feed-more { display: flex; justify-content: center; padding: 6px 0; }

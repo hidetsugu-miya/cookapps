@@ -98,6 +98,8 @@ function itemOf(m: TimelineMessage, key: string) {
   const hide = tag("button", "icon-btn feed-hide");
   hide.type = "button";
   hide.setAttribute("aria-label", `#${m.channelName} を一覧に出さない`);
+  // The key of the row with a suffix: a redraw gives the focus back to the button too.
+  hide.dataset.key = `${key}/hide`;
   hide.innerHTML = EYE_OFF_SVG;
   hide.onclick = () => hideChannel(m);
   item.append(rowOf(m, key), hide);
@@ -189,7 +191,14 @@ function markRead(m: TimelineMessage) {
   m.unread = false;
   unreadCount = Math.max(0, unreadCount - moved);
   drawBadge();
-  invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: m.ts }).catch(() => {});
+  // A read that is on its way may answer with the old position (the rows would be unread again): once Rust has the new one, the list is made again from its cache, without waiting for the next period.
+  const during = isLoading();
+  invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: m.ts }).then(
+    () => {
+      if (during || isLoading()) load(true);
+    },
+    () => {},
+  );
 }
 
 // The button after the first unread rows, which shows all the others.
@@ -261,7 +270,16 @@ function drawFeed() {
   // The heading only when both sections have rows.
   box.replaceChildren(...(messages.length ? [...unread, ...(more > 0 ? [moreButton(more)] : []), ...(unread.length && read.length ? [readHeading()] : []), ...read] : [emptyNode()]));
   box.scrollTop = top;
-  if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  const target = focused ? box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`) : null;
+  if (target) {
+    // The hide button is `visibility: hidden` until the pointer or the focus is in its row, and a hidden element takes no focus: show it until it loses the focus.
+    const item = target.classList.contains("feed-hide") ? target.closest(".feed-item") : null;
+    if (item) {
+      item.classList.add("feed-keep");
+      target.addEventListener("blur", () => item.classList.remove("feed-keep"), { once: true });
+    }
+    target.focus({ preventScroll: true });
+  }
   loadIcons([...shownUnread, ...shownRead].map((m) => m.iconUrl));
 }
 

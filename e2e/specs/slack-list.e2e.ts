@@ -680,6 +680,26 @@ describe("slack list", () => {
     expect(await count("#slack-feed .feed-row")).toBe(1);
   });
 
+  it("gives the focus back to a row's hide button when a background read redraws the list", async () => {
+    const messages = withHidden();
+    await openList(timeline(messages, { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 3);
+    const active = () => browser.execute(() => ({ label: document.activeElement?.getAttribute("aria-label"), key: (document.activeElement as HTMLElement | null)?.dataset.key }));
+    // The button is hidden until the pointer or the focus is in its row, and the E2E window matches neither: show it by hand to focus it.
+    await browser.execute(() => {
+      const hide = document.querySelector<HTMLElement>("#slack-feed .feed-hide")!;
+      hide.style.visibility = "visible";
+      hide.focus();
+    });
+    const before = await active();
+    expect(before.label).toBe("#dev を一覧に出さない");
+    expect(before.key).toMatch(/\/hide$/);
+    // A new message at the top changes the list, so that it is drawn again.
+    await mock("slack_timeline", timeline([timelineMessage(slackTs(0), "New Person", "dev", "A new message", { channel: "C3" }), ...messages], { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 4);
+    expect(await active()).toEqual(before);
+  });
+
   it("brings the rows back and says so when slack_hide_channel fails", async () => {
     await openList(timeline(withHidden()));
     await waitForCount("#slack-feed .feed-row", 3);

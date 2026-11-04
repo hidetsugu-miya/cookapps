@@ -21,8 +21,8 @@ const HISTORY_SCOPES = Object.keys(HISTORY_KINDS);
 export const OPTIONAL_KINDS: Record<string, string> = {
   "users:read": "送信者の名前とアイコン",
   "files:read": "添付画像",
-  "channels:write": "公開チャンネルの既読位置",
-  "groups:write": "非公開チャンネルの既読位置",
+  "channels:write": "公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
+  "groups:write": "非公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
 };
 export const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", ...HISTORY_SCOPES, ...Object.keys(OPTIONAL_KINDS)];
 
