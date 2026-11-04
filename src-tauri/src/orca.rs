@@ -26,8 +26,6 @@ const WORKTREE_LIMIT: &str = "200";
 const TEXT_LIMIT: usize = 100_000;
 /// Characters of the line a row shows; the screen cuts it with an ellipsis, this only keeps a long message from crossing the IPC.
 const LINE_LIMIT: usize = 200;
-/// The agents a launch may start, as `orca agent launch --agent` takes them.
-const AGENTS: [&str; 2] = ["claude", "codex"];
 const SETTINGS_FILE: &str = "orca-settings.json";
 const SETTINGS_TMP_FILE: &str = "orca-settings.json.tmp";
 
@@ -61,15 +59,17 @@ pub struct OrcaRow {
     pub group: OrcaGroup,
     pub repo: String,
     pub branch: String,
-    /// The one line under the name: the task, and for a running agent the tool in use.
+    /// The one line of the row: the first line of the prompt, else the task, the conversation, or the last answer.
     pub line: String,
-    /// "Claude", "Codex", or the agent's own type.
-    pub agent: String,
     /// When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
     #[cfg_attr(test, ts(type = "number"))]
     pub at_ms: i64,
     /// The terminal that takes a send; `None` when it was not found (the row cannot be selected).
     pub handle: Option<String>,
+    /// The agent's pane (`{tabId}:{leafId}`), which finds its session for the history (A-7); `None` when the agent has none.
+    pub pane_key: Option<String>,
+    /// The worktree's path, which the history asks Orca for the worktree's tabs.
+    pub path: String,
 }
 
 /// A worktree a launch can start an agent in.
@@ -147,12 +147,12 @@ pub enum OrcaScope {
 
 // ---- the CLI's JSON ----
 
-fn text_of<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn text_of<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value[key].as_str().filter(|s| !s.trim().is_empty())
 }
 
 /// The first line of `text` that is not blank, cut to `LINE_LIMIT` characters.
-fn first_line(text: &str) -> Option<String> {
+pub(crate) fn first_line(text: &str) -> Option<String> {
     text.lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
@@ -165,14 +165,6 @@ fn ms_of(value: &Value, key: &str) -> i64 {
     value[key].as_f64().map_or(0, |ms| ms as i64)
 }
 
-fn agent_label(agent_type: &str) -> String {
-    match agent_type {
-        "claude" => "Claude".into(),
-        "codex" => "Codex".into(),
-        other => other.into(),
-    }
-}
-
 /// The group an agent state belongs to: `waiting` and `blocked` need the user, `done` is finished, anything else (also a state not known yet) runs.
 fn group_of(state: &str) -> OrcaGroup {
     match state {
@@ -182,30 +174,17 @@ fn group_of(state: &str) -> OrcaGroup {
     }
 }
 
-/// The text of a row's line: the task's title, else the conversation's name, else the first line of the prompt; a done agent prefers the first line of its last message,
-/// a running one gets the tool in use after it.
-fn line_of(agent: &Value, group: OrcaGroup) -> String {
-    let task = text_of(agent, "taskTitle")
-        .or_else(|| text_of(agent, "conversationName"))
+/// The text of a row's line: the first line of the prompt, else the task's title, the conversation's name, or the first line of the last answer.
+fn line_of(agent: &Value) -> String {
+    text_of(agent, "prompt")
         .and_then(first_line)
-        .or_else(|| text_of(agent, "prompt").and_then(first_line));
-    let text = if group == OrcaGroup::Done {
-        text_of(agent, "lastAssistantMessage")
-            .and_then(first_line)
-            .or(task)
-    } else {
-        task
-    };
-    let tool = text_of(agent, "toolName").filter(|_| group == OrcaGroup::Working);
-    match (text, tool) {
-        (Some(text), Some(tool)) => format!("{text} ・ {tool} を実行中"),
-        (Some(text), None) => text,
-        (None, Some(tool)) => format!("{tool} を実行中"),
-        (None, None) => String::new(),
-    }
+        .or_else(|| text_of(agent, "taskTitle").and_then(first_line))
+        .or_else(|| text_of(agent, "conversationName").and_then(first_line))
+        .or_else(|| text_of(agent, "lastAssistantMessage").and_then(first_line))
+        .unwrap_or_default()
 }
 
-/// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level agents of a live terminal, newest first.
+/// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level Claude agents of a live terminal, newest first.
 /// A field that is absent or of another type is left out, not an error.
 pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
     // The pane of an agent is "{tabId}:{leafId}" of its terminal.
@@ -223,12 +202,16 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
     let mut rows: Vec<(i64, OrcaRow)> = Vec::new();
     for worktree in ps["worktrees"].as_array().into_iter().flatten() {
         for agent in worktree["agents"].as_array().into_iter().flatten() {
-            if !agent["parentPaneKey"].is_null() || agent["hasLivePty"] != true {
+            if !agent["parentPaneKey"].is_null()
+                || agent["hasLivePty"] != true
+                || agent["agentType"] != "claude"
+            {
                 continue;
             }
             let group = group_of(agent["state"].as_str().unwrap_or_default());
             let updated = ms_of(agent, "updatedAt");
-            let handle = text_of(agent, "paneKey").and_then(|pane| {
+            let pane_key = text_of(agent, "paneKey");
+            let handle = pane_key.and_then(|pane| {
                 handles
                     .iter()
                     .find(|(key, _)| key == pane)
@@ -242,14 +225,15 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                     branch: text_of(worktree, "displayName")
                         .unwrap_or_default()
                         .to_owned(),
-                    line: line_of(agent, group),
-                    agent: agent_label(agent["agentType"].as_str().unwrap_or_default()),
+                    line: line_of(agent),
                     at_ms: if group == OrcaGroup::Done {
                         updated
                     } else {
                         ms_of(agent, "stateStartedAt")
                     },
                     handle,
+                    pane_key: pane_key.map(str::to_owned),
+                    path: text_of(worktree, "path").unwrap_or_default().to_owned(),
                 },
             ));
         }
@@ -424,14 +408,6 @@ fn check_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_agent(agent: &str) -> Result<(), String> {
-    if AGENTS.contains(&agent) {
-        Ok(())
-    } else {
-        Err(format!("起動できないエージェントです: {agent}"))
-    }
-}
-
 /// A terminal handle is `term_` and an ID, so nothing in it can be read as an option.
 fn check_handle(handle: &str) -> Result<(), String> {
     let id = handle.strip_prefix("term_").unwrap_or_default();
@@ -446,7 +422,7 @@ fn check_handle(handle: &str) -> Result<(), String> {
     }
 }
 
-fn check_path(path: &str) -> Result<(), String> {
+pub(crate) fn check_path(path: &str) -> Result<(), String> {
     if Path::new(path).is_absolute() {
         Ok(())
     } else {
@@ -526,8 +502,9 @@ fn skills_args() -> Vec<String> {
     args_of(&["skills", "installed", "--json"])
 }
 
-fn launch_args(agent: &str, path: &str, text: &str, environment: Option<&str>) -> Vec<String> {
-    let mut args = args_of(&["agent", "launch", "--agent", agent]);
+/// Always Claude: the history of A-7 reads only Claude's sessions.
+fn launch_args(path: &str, text: &str, environment: Option<&str>) -> Vec<String> {
+    let mut args = args_of(&["agent", "launch", "--agent", "claude"]);
     args.extend([
         "--worktree".into(),
         format!("path:{path}"),
@@ -703,14 +680,13 @@ fn send(handle: &str, text: &str, environment: Option<&str>) -> Result<(), Strin
     write(&send_args(handle, text, environment))
 }
 
-fn launch(agent: &str, path: &str, text: &str, environment: Option<&str>) -> Result<(), String> {
-    check_agent(agent)?;
+fn launch(path: &str, text: &str, environment: Option<&str>) -> Result<(), String> {
     check_path(path)?;
     check_text(text)?;
     check_listed(environment)?;
     let (ps, _) = read_lists(environment, false);
     check_worktree(&worktrees_of(&ps.map_err(message_of)?), path)?;
-    write(&launch_args(agent, path, text, environment))
+    write(&launch_args(path, text, environment))
 }
 
 fn skills() -> Result<Vec<OrcaSkill>, String> {
@@ -769,15 +745,14 @@ pub async fn orca_send(
     blocking(move || send(&handle, &text, environment.as_deref())).await?
 }
 
-/// Starts `agent` in the worktree at `path`, with `text` as its first prompt.
+/// Starts Claude in the worktree at `path`, with `text` as its first prompt.
 #[tauri::command]
 pub async fn orca_launch(
-    agent: String,
     path: String,
     text: String,
     environment: Option<String>,
 ) -> Result<(), String> {
-    blocking(move || launch(&agent, &path, &text, environment.as_deref())).await?
+    blocking(move || launch(&path, &text, environment.as_deref())).await?
 }
 
 #[cfg(test)]
@@ -818,9 +793,10 @@ mod tests {
                 repo: "example".into(),
                 branch: "feat/a".into(),
                 line: "Write the docs".into(),
-                agent: "Claude".into(),
                 at_ms: 2_000,
                 handle: Some("term_1".into()),
+                pane_key: Some("tabA:leaf1".into()),
+                path: "/work/example".into(),
             }]
         );
     }
@@ -874,57 +850,41 @@ mod tests {
     }
 
     #[test]
-    fn the_line_takes_the_task_then_the_conversation_then_the_prompt() {
+    fn the_line_takes_the_prompt_then_the_task_the_conversation_and_the_last_answer() {
         let mut a = agent("tabA:leaf1", "working");
         a["taskTitle"] = json!("Task\nsecond");
         a["conversationName"] = json!("Conversation");
-        assert_eq!(line_of(&a, OrcaGroup::Working), "Task");
-        a["taskTitle"] = json!("  ");
-        assert_eq!(line_of(&a, OrcaGroup::Working), "Conversation");
-        a["conversationName"] = Value::Null;
-        assert_eq!(line_of(&a, OrcaGroup::Working), "Write the docs");
+        a["lastAssistantMessage"] = json!("\nAnswer\nmore");
+        assert_eq!(line_of(&a), "Write the docs");
         a["prompt"] = json!("\n\n  \nfirst real line\nnext");
-        assert_eq!(line_of(&a, OrcaGroup::Working), "first real line");
-        a.as_object_mut().unwrap().remove("prompt");
-        assert_eq!(line_of(&a, OrcaGroup::Working), "");
+        assert_eq!(line_of(&a), "first real line");
+        a["prompt"] = json!("  ");
+        assert_eq!(line_of(&a), "Task");
+        a["taskTitle"] = json!(" ");
+        assert_eq!(line_of(&a), "Conversation");
+        a["conversationName"] = Value::Null;
+        assert_eq!(line_of(&a), "Answer");
+        a.as_object_mut().unwrap().remove("lastAssistantMessage");
+        assert_eq!(line_of(&a), "");
     }
 
     #[test]
-    fn a_done_row_prefers_the_first_line_of_the_last_message() {
-        let mut a = agent("tabA:leaf1", "done");
-        a["taskTitle"] = json!("Task");
-        a["lastAssistantMessage"] = json!("\nDone: opened the pull request.\nDetails");
-        assert_eq!(
-            line_of(&a, OrcaGroup::Done),
-            "Done: opened the pull request."
-        );
-        a["lastAssistantMessage"] = json!("   ");
-        assert_eq!(line_of(&a, OrcaGroup::Done), "Task");
-        // A running row does not show the last message.
-        a["lastAssistantMessage"] = json!("Old answer");
-        assert_eq!(line_of(&a, OrcaGroup::Working), "Task");
-    }
-
-    #[test]
-    fn a_running_row_names_the_tool_in_use() {
+    fn the_line_is_the_same_whatever_the_state_and_names_no_tool() {
         let mut a = agent("tabA:leaf1", "working");
-        a["taskTitle"] = json!("Task");
         a["toolName"] = json!("Bash");
-        assert_eq!(line_of(&a, OrcaGroup::Working), "Task ・ Bash を実行中");
-        a["taskTitle"] = Value::Null;
-        a.as_object_mut().unwrap().remove("prompt");
-        assert_eq!(line_of(&a, OrcaGroup::Working), "Bash を実行中");
-        // Only a running agent uses a tool; a waiting or done one does not.
-        a["taskTitle"] = json!("Task");
-        assert_eq!(line_of(&a, OrcaGroup::Waiting), "Task");
-        assert_eq!(line_of(&a, OrcaGroup::Done), "Task");
+        a["lastAssistantMessage"] = json!("Old answer");
+        for state in ["working", "waiting", "blocked", "done"] {
+            a["state"] = json!(state);
+            let rows = rows_of(&ps(&[a.clone()]), &terminals());
+            assert_eq!(rows[0].line, "Write the docs", "{state}");
+        }
     }
 
     #[test]
     fn a_long_line_is_cut() {
         let mut a = agent("tabA:leaf1", "working");
-        a["taskTitle"] = json!("あ".repeat(LINE_LIMIT + 50));
-        assert_eq!(line_of(&a, OrcaGroup::Working).chars().count(), LINE_LIMIT);
+        a["prompt"] = json!("あ".repeat(LINE_LIMIT + 50));
+        assert_eq!(line_of(&a).chars().count(), LINE_LIMIT);
     }
 
     #[test]
@@ -948,7 +908,7 @@ mod tests {
         let rows = rows_of(
             &ps(&[
                 agent("tabZ:leafZ", "working"),
-                json!({"parentPaneKey": null, "hasLivePty": true, "state": "working"}),
+                json!({"parentPaneKey": null, "hasLivePty": true, "state": "working", "agentType": "claude"}),
             ]),
             &terminals(),
         );
@@ -975,7 +935,7 @@ mod tests {
         }
         let bare = json!({"worktrees": [{"agents": [{
             "parentPaneKey": null, "hasLivePty": true,
-            "updatedAt": "soon", "stateStartedAt": null, "agentType": 4,
+            "updatedAt": "soon", "stateStartedAt": null, "agentType": "claude",
         }]}]});
         let rows = rows_of(&bare, &terminals());
         assert_eq!(
@@ -985,20 +945,31 @@ mod tests {
                 repo: String::new(),
                 branch: String::new(),
                 line: String::new(),
-                agent: String::new(),
                 at_ms: 0,
                 handle: None,
+                pane_key: None,
+                path: String::new(),
             }]
         );
     }
 
     #[test]
-    fn an_agent_type_that_is_not_known_is_shown_as_it_is() {
-        let mut a = agent("tabA:leaf1", "working");
-        a["agentType"] = json!("codex");
-        assert_eq!(rows_of(&ps(&[a.clone()]), &terminals())[0].agent, "Codex");
-        a["agentType"] = json!("gemini");
-        assert_eq!(rows_of(&ps(&[a]), &terminals())[0].agent, "gemini");
+    fn only_claude_agents_are_rows() {
+        let mut codex = agent("tabA:leaf1", "working");
+        codex["agentType"] = json!("codex");
+        let mut unknown = agent("tabB:leaf2", "working");
+        unknown.as_object_mut().unwrap().remove("agentType");
+        let mut typed = agent("tabB:leaf2", "working");
+        typed["agentType"] = json!(4);
+        assert!(rows_of(&ps(&[codex, unknown, typed]), &terminals()).is_empty());
+    }
+
+    #[test]
+    fn a_row_carries_the_pane_and_the_worktree_path_even_without_a_terminal() {
+        let rows = rows_of(&ps(&[agent("tabZ:leafZ", "working")]), &terminals());
+        assert_eq!(rows[0].handle, None);
+        assert_eq!(rows[0].pane_key.as_deref(), Some("tabZ:leafZ"));
+        assert_eq!(rows[0].path, "/work/example");
     }
 
     #[test]
@@ -1170,15 +1141,6 @@ mod tests {
     }
 
     #[test]
-    fn only_listed_agents_launch() {
-        assert!(check_agent("claude").is_ok());
-        assert!(check_agent("codex").is_ok());
-        for bad in ["", "Claude", "gemini", "claude --x", "--agent"] {
-            assert!(check_agent(bad).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
     fn a_handle_is_term_and_an_id() {
         assert!(check_handle("term_1b7c4be1-bb60-4450-9d19-26885731499f").is_ok());
         assert!(check_handle("term_a_B-9").is_ok());
@@ -1296,12 +1258,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            launch_args("codex", "/work/a", "--surface chat", None),
+            launch_args("/work/a", "--surface chat", None),
             [
                 "agent",
                 "launch",
                 "--agent",
-                "codex",
+                "claude",
                 "--worktree",
                 "path:/work/a",
                 "--surface",
@@ -1311,9 +1273,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            launch_args("claude", "/work/a", "go", Some("Studio"))
-                .last()
-                .unwrap(),
+            launch_args("/work/a", "go", Some("Studio")).last().unwrap(),
             "--environment=Studio"
         );
     }
