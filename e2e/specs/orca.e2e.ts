@@ -1,4 +1,4 @@
-import { boot, callsOf, holds, inbox, mock, onceId, orcaOverview, orcaRow, orcaSkill, orcaWorktree, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, holds, inbox, isoDate, mock, onceId, orcaOverview, orcaRow, orcaSkill, orcaWorktree, rejects, release, setClock, textsOf, waitForCalls, waitForCount } from "../support";
 
 // A running, a waiting, a second running and a done agent; the second running one has no terminal handle.
 const sample = () => [
@@ -362,11 +362,33 @@ describe("orca skill list", () => {
     await expect(popup()).not.toBeDisplayed();
   });
 
-  it("is asked for once, with the target, and not on every keystroke", async () => {
+  it("is asked for once, with no environment, and not on every keystroke", async () => {
     await openWithSkills();
     await $("#orca-input").setValue("/rev");
     await $("#orca-input").setValue("/revi");
-    expect(await callsOf("orca_skills")).toEqual([{ environment: null }]);
+    expect(await callsOf("orca_skills")).toEqual([null]);
+  });
+
+  it("opens with a saved environment as the target, and asks for the skills with no environment", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }), { orca_skills: skills() });
+    await waitForCalls("orca_skills");
+    await $("#orca-input").setValue("/rev");
+    await expect(popup()).toBeDisplayed();
+    expect(await commands()).toEqual(["/review", "/pr-review"]);
+    expect(await callsOf("orca_skills")).toEqual([null]);
+  });
+
+  it("opens while the target fails to read, and is not read again when the target changes", async () => {
+    await openOrca(orcaOverview([], [], { state: "failed", message: "Orca is busy", target: "Studio", environments: ["Studio", "Lab"] }), { orca_skills: skills() });
+    await waitForCalls("orca_skills");
+    await $("#orca-input").setValue("/rev");
+    await expect(popup()).toBeDisplayed();
+    await mock("orca_set_target", null);
+    await mock("orca_overview", orcaOverview([], [], { target: "Lab", environments: ["Studio", "Lab"] }));
+    await $("#orca-target").click();
+    await pickMenu("Lab");
+    await expect($("#orca-target")).toHaveText("Lab に接続中");
+    expect(await callsOf("orca_skills")).toEqual([null]);
   });
 
   it("moves with the arrow keys around the ends, and Tab puts the command in with one space", async () => {
@@ -505,6 +527,22 @@ describe("orca skill list", () => {
     await expect(popup()).not.toBeDisplayed();
     await $("#orca-send").click();
     expect(await waitForCalls(launch)).toEqual([{ agent: "claude", path: "/work/example-app", text: "/review", environment: null }]);
+  });
+
+  it("reads the skills again by itself after a failed read, once a minute at most", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_skills: rejects("skills failed") });
+    await waitForCalls("orca_skills");
+    const again = await mock("orca_skills", skills());
+    // The list reads of the next seconds (the clock reads every 10 seconds on this screen) do not read the skills again.
+    const overview = await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await waitForCalls(overview);
+    expect(await callsOf(again)).toEqual([]);
+    // A minute later the next list read does, with no press of the update button.
+    const later = new Date(Date.now() + 61_000);
+    await setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
+    await waitForCalls(again);
+    await $("#orca-input").setValue("/rev");
+    await browser.waitUntil(async () => (await commands()).join() === "/review,/pr-review", { timeoutMsg: "the list never opened" });
   });
 
   it("reads the skills again after the update button", async () => {

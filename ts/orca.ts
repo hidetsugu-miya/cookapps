@@ -36,10 +36,13 @@ let selected: string | null = null;
 let newPath: string | null = null;
 let agent = AGENTS[0].id;
 let busy = false;
-// The skills of Claude Code on the target in use; read again when the screen is first shown, when the target changes and by the update button.
+// The skills of Claude Code on the machine the app runs on, whatever the target; read when the screen is first shown, by the update button, and again after a failure.
 let skills: OrcaSkill[] = [];
 let skillsStale = true;
 let skillsSeq = 0;
+// A read that failed is tried again by the list reads that follow, at most once in this long (the update button reads at once), so a target on another machine does not run a failing command every 10 seconds.
+const SKILLS_RETRY_MS = 60_000;
+let skillsFailedAt = 0;
 // The open skill list: its matches and the one highlighted. `dismissed` keeps Escape's closing until the text changes.
 let completion: { matches: OrcaSkill[]; active: number } | null = null;
 let dismissed = false;
@@ -237,18 +240,25 @@ async function load(scope: Scope, force = false) {
   fetchSkills();
 }
 
-// Reads the skills when they are due and the screen is shown with a working command. A failure only means no list.
+// Reads the skills when they are due and the screen is shown with the command found (the target may be failing). A failure only means no list for now: it is read again later (`SKILLS_RETRY_MS`).
 async function fetchSkills() {
-  if (!skillsStale || !shown() || view?.state !== "ready") return;
+  if (!skillsStale || !shown() || view === null || view.state === "missing") return;
+  if (Date.now() - skillsFailedAt < SKILLS_RETRY_MS) return;
   skillsStale = false;
   const seq = ++skillsSeq;
   let list: OrcaSkill[] = [];
+  let failed = false;
   try {
-    list = await invoke("orca_skills", { environment: view.target });
+    list = await invoke("orca_skills");
   } catch {
     // No list, no popup; posting does not depend on it.
+    failed = true;
   }
   if (seq !== skillsSeq) return;
+  if (failed) {
+    skillsStale = true;
+    skillsFailedAt = Date.now();
+  }
   skills = list;
   updateCompletion();
 }
@@ -283,8 +293,6 @@ async function chooseTarget(environment: string | null) {
   // The sessions and worktrees belong to the old target.
   selected = null;
   newPath = null;
-  skills = [];
-  skillsStale = true;
   view = { ...view, target: environment, rows: [], worktrees: [] };
   badge = 0;
   switching = true;
@@ -443,6 +451,7 @@ export function initOrca() {
   document.addEventListener("visibilitychange", refresh);
   $("orca-refresh").onclick = () => {
     skillsStale = true;
+    skillsFailedAt = 0;
     load("full", true);
   };
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);

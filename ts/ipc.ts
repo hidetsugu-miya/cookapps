@@ -177,8 +177,8 @@ export interface Commands {
   orca_send: { args: { handle: string; text: string; environment: string | null }; result: null };
   // Starts `agent` ("claude" or "codex") in the worktree at `path` with `text` as its first prompt.
   orca_launch: { args: { agent: string; path: string; text: string; environment: string | null }; result: null };
-  // The skills of Claude Code on that Orca, as the commands to type (`/name`, `/plugin:name`), sorted.
-  orca_skills: { args: { environment: string | null }; result: OrcaSkill[] };
+  // The skills of Claude Code on the machine the app runs on (the CLI cannot list another machine's, so the target does not matter), as the commands to type (`/name`, `/plugin:name`), sorted.
+  orca_skills: { args: undefined; result: OrcaSkill[] };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

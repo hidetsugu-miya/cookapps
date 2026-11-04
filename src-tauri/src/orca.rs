@@ -521,8 +521,9 @@ fn send_args(handle: &str, text: &str, environment: Option<&str>) -> Vec<String>
     with_environment(args, environment)
 }
 
-fn skills_args(environment: Option<&str>) -> Vec<String> {
-    with_environment(args_of(&["skills", "installed", "--json"]), environment)
+/// Never with `--environment`: the CLI refuses it (`invalid_environment`), since it lists the skills of the machine it runs on.
+fn skills_args() -> Vec<String> {
+    args_of(&["skills", "installed", "--json"])
 }
 
 fn launch_args(agent: &str, path: &str, text: &str, environment: Option<&str>) -> Vec<String> {
@@ -712,9 +713,8 @@ fn launch(agent: &str, path: &str, text: &str, environment: Option<&str>) -> Res
     write(&launch_args(agent, path, text, environment))
 }
 
-fn skills(environment: Option<&str>) -> Result<Vec<OrcaSkill>, String> {
-    check_listed(environment)?;
-    match call(&skills_args(environment), READ_TIMEOUT) {
+fn skills() -> Result<Vec<OrcaSkill>, String> {
+    match call(&skills_args(), READ_TIMEOUT) {
         Ok(result) => Ok(skills_of(&result)),
         Err(RunError::Missing) => Err(not_installed()),
         Err(RunError::Failed(message)) => Err(message),
@@ -753,10 +753,10 @@ pub async fn orca_set_target(
     blocking(move || set_target(&dir, environment.as_deref())).await?
 }
 
-/// The skills of Claude Code on the Orca in use, for the composer's `/` completion.
+/// The skills of Claude Code on the machine the app runs on (whatever the target), for the composer's `/` completion.
 #[tauri::command]
-pub async fn orca_skills(environment: Option<String>) -> Result<Vec<OrcaSkill>, String> {
-    blocking(move || skills(environment.as_deref())).await?
+pub async fn orca_skills() -> Result<Vec<OrcaSkill>, String> {
+    blocking(skills).await?
 }
 
 /// Sends `text` and Enter to the terminal `handle`.
@@ -1264,11 +1264,8 @@ mod tests {
 
     #[test]
     fn the_skills_arguments() {
-        assert_eq!(skills_args(None), ["skills", "installed", "--json"]);
-        assert_eq!(
-            skills_args(Some("Studio")),
-            ["skills", "installed", "--json", "--environment=Studio"]
-        );
+        // Never an environment: the CLI refuses it for this command.
+        assert_eq!(skills_args(), ["skills", "installed", "--json"]);
     }
 
     #[test]
