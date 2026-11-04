@@ -377,7 +377,7 @@ fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
     missing_scopes(scopes, &HISTORY_SCOPES)
 }
 
-/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message sets (`channels:write`, `groups:write`).
+/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message or "すべて既読にする" sets (`channels:write`, `groups:write`).
 /// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`.
 const OPTIONAL_SCOPES: [&str; 4] = ["users:read", "files:read", "channels:write", "groups:write"];
 
@@ -2269,6 +2269,13 @@ fn watch_rows(
     rows
 }
 
+/// How many rows of the watch section have not been checked yet (their thread is not read): the list is read sooner while there are any.
+fn unchecked_watch_rows(rows: &[WatchRow]) -> usize {
+    rows.iter()
+        .filter(|r| r.mark.status == WatchStatus::Pending)
+        .count()
+}
+
 /// The channels "すべて既読にする" moves, as `(team, channel, ts)`: for each channel of a workspace `writable` allows that holds an unread message, the newest unread one,
 /// in the order the channels first come in `all`.
 fn mark_targets(
@@ -2562,9 +2569,10 @@ fn choose_info_channels(candidates: &[InfoCandidate], budget: usize) -> Vec<Stri
         .collect()
 }
 
-/// How long to wait before the next read: `REFRESH_BUSY_SECS` while channels are unread (`pending`) or the biggest workspace has more channels than one read covers (`largest`), else `REFRESH_MIN_SECS`.
-fn refresh_secs(pending: usize, largest: usize) -> u32 {
-    if pending > 0 || largest > HISTORY_BUDGET {
+/// How long to wait before the next read: `REFRESH_BUSY_SECS` while channels are unread (`pending`), the biggest workspace has more channels than one read covers (`largest`)
+/// or watched threads are not checked yet (`unchecked`), else `REFRESH_MIN_SECS`.
+fn refresh_secs(pending: usize, largest: usize, unchecked: usize) -> u32 {
+    if pending > 0 || largest > HISTORY_BUDGET || unchecked > 0 {
         REFRESH_BUSY_SECS
     } else {
         REFRESH_MIN_SECS
@@ -3545,7 +3553,7 @@ fn cached_timeline(
         watched: watched_messages(cache, workspaces, &rows),
         failed,
         missing,
-        refresh_secs: refresh_secs(pending, largest),
+        refresh_secs: refresh_secs(pending, largest, unchecked_watch_rows(&rows)),
         pending_channels: u32::try_from(pending).unwrap_or(u32::MAX),
         unread_total: picked.unread_total,
         markable_channels: picked.markable_channels,
@@ -3639,6 +3647,12 @@ pub async fn slack_timeline(
         .iter()
         .map(|r| (r.workspace.team_id.as_str(), r.token.as_str()))
         .collect();
+    // The workspaces that could be read this round are the ones whose watched threads are checked.
+    let watch_tokens: HashMap<&str, &str> = reads
+        .iter()
+        .filter(|r| r.error.is_none())
+        .map(|r| (r.workspace.team_id.as_str(), r.token.as_str()))
+        .collect();
     let mut channels: Vec<(String, String, String)> = Vec::new();
     for read in reads
         .iter()
@@ -3669,7 +3683,7 @@ pub async fn slack_timeline(
     // The user's own ID first (asked once per workspace, then remembered): the checks of the watched threads leave the user's own replies out, and run beside the read positions.
     let readable: Vec<(String, String)> = reads
         .iter()
-        .filter(|r| !r.token.is_empty())
+        .filter(|r| r.error.is_none() && !r.token.is_empty())
         .map(|r| (r.workspace.team_id.clone(), r.token.clone()))
         .collect();
     let owners = readable.into_iter().map(|(team, token)| {
@@ -3686,7 +3700,7 @@ pub async fn slack_timeline(
             &http,
             &state.timeline,
             &state.channels,
-            &token_of_team,
+            &watch_tokens,
             &to_check,
         )
     );
@@ -3741,7 +3755,7 @@ pub async fn slack_timeline(
         watched,
         failed,
         missing,
-        refresh_secs: refresh_secs(pending, largest),
+        refresh_secs: refresh_secs(pending, largest, unchecked_watch_rows(&rows)),
         pending_channels: u32::try_from(pending).unwrap_or(u32::MAX),
         unread_total: picked.unread_total,
         markable_channels: picked.markable_channels,
@@ -3921,6 +3935,13 @@ pub async fn slack_watch(
         }
     };
     let _files = state.files.lock().await;
+    // The workspace may have been removed while the thread was read (removing it holds this lock): nothing is saved for a workspace that is gone.
+    let workspaces = load_workspaces(&dir)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    if !workspaces.iter().any(|w| w.team_id == team_id) {
+        return Err(log_failure(command, &team_id, NO_WORKSPACE));
+    }
     let team = team_id.clone();
     blocking(move || {
         // A file that cannot be read is an error, not an empty list to be written over.
@@ -3989,11 +4010,15 @@ pub async fn slack_watch_seen(
         return Err(log_failure(command, &team_id, BAD_TARGET));
     }
     let key = (team_id.clone(), channel, ts);
-    let checked = match state.timeline.watch_entry(&key) {
-        Some(WatchEntry {
+    // A thread the cache has no check of is not watched (`slack_watch` records one; a thread put back by "元に戻す" has none until the next read checks it): nothing to move, and the lock and the file are left alone.
+    let Some(entry) = state.timeline.watch_entry(&key) else {
+        return Ok(false);
+    };
+    let checked = match entry {
+        WatchEntry {
             read: Some(WatchRead::Thread { latest_reply, .. }),
             ..
-        }) => latest_reply,
+        } => latest_reply,
         _ => None,
     };
     let Some(latest) = seen_target(checked.as_deref(), latest_ts.as_deref()) else {
@@ -5764,10 +5789,33 @@ mod tests {
 
     #[test]
     fn the_list_is_read_every_minute_while_channels_are_unread_or_more_than_one_read_covers() {
-        assert_eq!(refresh_secs(0, 0), 120);
-        assert_eq!(refresh_secs(0, HISTORY_BUDGET), 120);
-        assert_eq!(refresh_secs(0, HISTORY_BUDGET + 1), 60);
-        assert_eq!(refresh_secs(1, 3), 60);
+        assert_eq!(refresh_secs(0, 0, 0), 120);
+        assert_eq!(refresh_secs(0, HISTORY_BUDGET, 0), 120);
+        assert_eq!(refresh_secs(0, HISTORY_BUDGET + 1, 0), 60);
+        assert_eq!(refresh_secs(1, 3, 0), 60);
+    }
+
+    #[test]
+    fn the_list_is_read_every_minute_while_a_watched_thread_is_not_checked_yet_and_as_usual_after()
+    {
+        let w = watched("T1", "C1", "10.000001", "10.000001");
+        let entry = thread_entry(raw("C1", "10.000001"), &[], None);
+        let gone = WatchEntry {
+            checked: Instant::now(),
+            read: Some(WatchRead::Unreadable),
+        };
+        let rows = |entry: Option<&WatchEntry>| vec![watch_row(&w, entry, "g", &[], |_| false)];
+        let unchecked = |rows: &[WatchRow]| unchecked_watch_rows(rows);
+        // Never checked, or checks that failed so far: pending, so the list is read sooner.
+        assert_eq!(unchecked(&rows(None)), 1);
+        assert_eq!(
+            refresh_secs(0, 0, unchecked(&rows(None))),
+            REFRESH_BUSY_SECS
+        );
+        // Read, or known to be unreadable: the usual wait.
+        assert_eq!(unchecked(&rows(Some(&entry))), 0);
+        assert_eq!(unchecked(&rows(Some(&gone))), 0);
+        assert_eq!(refresh_secs(0, 0, 0), REFRESH_MIN_SECS);
     }
 
     #[test]

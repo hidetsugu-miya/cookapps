@@ -236,7 +236,14 @@ function seeWatched(m: TimelineMessage) {
     m.watch.newReplies = 0;
     m.watch.uncounted = false;
   }
-  invoke("slack_watch_seen", { teamId: m.teamId, channel: m.channel, ts: m.ts }).catch(() => {});
+  // A read that is on its way may answer with the old count: once Rust has the new position, the list is made again from its cache (as `markRead` does).
+  const during = isLoading();
+  invoke("slack_watch_seen", { teamId: m.teamId, channel: m.channel, ts: m.ts }).then(
+    () => {
+      if (during || isLoading()) load(true);
+    },
+    () => {},
+  );
 }
 
 // Runs a change of the watch list. Every request before it is passed over and none is answered until it is done (as for the channels kept off the list), so that an answer that began before cannot bring a row back.

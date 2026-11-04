@@ -6,7 +6,6 @@ export const svgOf = (paths: string) => `<svg viewBox="0 0 24 24" aria-hidden="t
 export const CHECK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>';
 export const PERSON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="5"/><path d="M2 24c0-6 4.5-9 10-9s10 3 10 9z"/></svg>';
 export const TODO_SVG = $("thread-todo").innerHTML.trim();
-export const EYE_SVG = $("read-heading").querySelector("svg")!.outerHTML;
 export const EYE_OFF_SVG = svgOf('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/>');
 export const BOOKMARK_SVG = svgOf('<path d="M6 4h12v17l-6-4-6 4z"/>');
 export const DOT_SVG = svgOf('<circle cx="12" cy="12" r="5"/>');
