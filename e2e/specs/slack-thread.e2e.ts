@@ -256,6 +256,172 @@ describe("slack thread: attached files", () => {
   });
 });
 
+describe("slack thread: where it opens", () => {
+  // A thread longer than the pane; `last` is added to its last message.
+  const long = (last: Parameters<typeof threadMessage>[3] = {}) =>
+    Array.from({ length: 12 }, (_, i) => threadMessage(slackTs(100 - i, i), `Person ${i}`, "a line\nanother line\nand a third line", i === 11 ? last : {}));
+  // An image of 300 x 240 (the placeholder of a thumbnail is 140 high), which only has its size once it is decoded.
+  const tall = `data:image/svg+xml,${encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='300' height='240'/>")}`;
+  const imageUrl = "https://images.example.com/chart.png";
+  const box = () =>
+    browser.execute(() => {
+      const b = document.getElementById("st-msgs")!;
+      return { top: b.scrollTop, height: b.scrollHeight, view: b.clientHeight };
+    });
+  const atBottom = async () => {
+    const { top, height, view } = await box();
+    return height > view && top + view >= height - 2;
+  };
+  const scrollTo = (top: number) =>
+    browser.execute((t) => {
+      document.getElementById("st-msgs")!.scrollTop = t;
+    }, top);
+  // Waits until the image in the box is decoded, so that its height is in the layout.
+  const imageLoaded = () =>
+    browser.waitUntil(() => browser.execute(() => [...document.querySelectorAll<HTMLImageElement>("#st-msgs img.st-img")].some((i) => i.complete && i.naturalHeight > 0)));
+  const thumbThread = () => slackThread(long({ files: [slackFile("F1", "design.png", { thumbUrl: thumbUrlOf("F1") })] }));
+  // The app with the thread of a thumbnail held, opened; the thumbnail's call is waiting.
+  async function openHeld() {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([listMessage()]), claude_status: claudeReady });
+    await mock("slack_thread", thumbThread());
+    const images = await mock("slack_file_images", holds);
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 1);
+    await $("#slack-feed .feed-open").click();
+    await waitForCalls(images);
+    await waitForCount("#st-msgs .st-msg", 12);
+    await browser.waitUntil(atBottom);
+    return images;
+  }
+
+  it("opens a thread longer than the pane at its newest message, and another thread after it too", async () => {
+    const other = slackTs(20, 3);
+    await openDetail({}, slackThread(long()), [listMessage(), timelineMessage(other, "Carol Example", "general", "Another thread")]);
+    await browser.waitUntil(atBottom);
+    await scrollTo(0);
+    await $("#st-back").click();
+    await mock("slack_thread", slackThread(long()));
+    await $("#slack-feed .feed-item:nth-of-type(2) .feed-open").click();
+    await waitForCount("#st-msgs .st-msg", 12);
+    await browser.waitUntil(atBottom);
+  });
+
+  it("opens a thread that fits the pane at its top", async () => {
+    await openDetail();
+    const { top, height, view } = await box();
+    expect(height).toBeLessThanOrEqual(view);
+    expect(top).toBe(0);
+  });
+
+  it("stays at the newest message when a thumbnail changes the height after the thread was opened", async () => {
+    const images = await openHeld();
+    const before = (await box()).height;
+    await release(images, { [thumbUrlOf("F1")]: tall });
+    await browser.waitUntil(async () => (await count("#st-msgs .st-thumb img.st-img")) === 1);
+    await imageLoaded();
+    expect((await box()).height).toBeGreaterThan(before);
+    await browser.waitUntil(atBottom);
+  });
+
+  it("stays at the newest message when an image of a block is drawn after 画像を表示", async () => {
+    const blockThread = slackThread(long({ blocks: [{ type: "image", image: { url: imageUrl, alt: "A chart" }, title: null }], showText: false, imageUrls: [imageUrl] }));
+    await openDetail({}, blockThread);
+    await browser.waitUntil(atBottom);
+    await mock("fetch_images", { [imageUrl]: tall });
+    await $("#st-msgs .st-images .text-btn").click();
+    await browser.waitUntil(async () => (await count("#st-msgs img.st-img")) === 1);
+    await imageLoaded();
+    await browser.waitUntil(atBottom);
+  });
+
+  it("does not take the user back to the end when an image changes the height after they scrolled up", async () => {
+    const images = await openHeld();
+    await scrollTo(50);
+    // The scroll event of the move is dispatched before the next frame.
+    await browser.pause(200);
+    await release(images, { [thumbUrlOf("F1")]: tall });
+    await browser.waitUntil(async () => (await count("#st-msgs .st-thumb img.st-img")) === 1);
+    await imageLoaded();
+    await browser.pause(200);
+    expect((await box()).top).toBe(50);
+  });
+
+  it("follows the end again once the user scrolls back down to it", async () => {
+    const images = await openHeld();
+    await scrollTo(50);
+    await browser.pause(200);
+    await scrollTo(1e6);
+    await browser.pause(200);
+    await release(images, { [thumbUrlOf("F1")]: tall });
+    await browser.waitUntil(async () => (await count("#st-msgs .st-thumb img.st-img")) === 1);
+    await imageLoaded();
+    await browser.waitUntil(atBottom);
+  });
+
+  // The long thread opened, scrolled up to 50 and left; `slack_thread` answers `value` on the next opening of the same row.
+  async function leaveScrolled(value: unknown) {
+    await openDetail({}, slackThread(long()));
+    await browser.waitUntil(atBottom);
+    await scrollTo(50);
+    // The scroll event of the move is dispatched before the next frame.
+    await browser.pause(200);
+    await $("#st-back").click();
+    const read = await mock("slack_thread", value);
+    await $("#slack-feed .feed-open").click();
+    await waitForCalls(read);
+    return read;
+  }
+
+  it("keeps the scroll position when the same thread is opened again, while it is read and after", async () => {
+    const read = await leaveScrolled(holds);
+    expect((await box()).top).toBe(50);
+    await release(read, slackThread(long()));
+    await browser.pause(200);
+    expect((await box()).top).toBe(50);
+  });
+
+  it("keeps the scroll position when the thread is read again from 再読み込み", async () => {
+    await leaveScrolled(rejects("読めません"));
+    await $("#st-msgs .pending.fail").waitForExist();
+    expect((await box()).top).toBe(50);
+    const read = await mock("slack_thread", slackThread(long()));
+    // The error is above the messages and out of view at 50: press it without scrolling to it.
+    await browser.execute(() => document.querySelector<HTMLElement>("#st-msgs .pending.fail .text-btn")!.click());
+    await waitForCalls(read);
+    await browser.waitUntil(async () => (await count("#st-msgs .pending.fail")) === 0);
+    expect((await box()).top).toBe(50);
+  });
+
+  it("opens at the newest message when 再読み込み reads a thread whose first read failed", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([listMessage()]), claude_status: claudeReady });
+    await mock("slack_thread", rejects("読めません"));
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 1);
+    await $("#slack-feed .feed-open").click();
+    await $("#st-msgs .pending.fail").waitForExist();
+    await mock("slack_thread", slackThread(long()));
+    await $("#st-msgs .pending.fail .text-btn").click();
+    await waitForCount("#st-msgs .st-msg", 12);
+    await browser.waitUntil(atBottom);
+  });
+
+  it("opens at the newest message when the thread was left before its read ended", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([listMessage()]), claude_status: claudeReady });
+    const read = await mock("slack_thread", holds);
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 1);
+    await $("#slack-feed .feed-open").click();
+    await waitForCalls(read);
+    await $("#st-back").click();
+    await release(read, slackThread(long()));
+    await waitForCount("#st-msgs .st-msg", 12);
+    await mock("slack_thread", slackThread(long()));
+    await $("#slack-feed .feed-open").click();
+    await expect($("#slack-thread")).toBeDisplayed();
+    await browser.waitUntil(atBottom);
+  });
+});
+
 describe("slack thread: blocks and attachments", () => {
   const imageUrl = "https://images.example.com/chart.png";
   const missingUrl = "https://images.example.com/gone.png";
