@@ -106,8 +106,8 @@ export interface Commands {
     args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string };
     result: boolean;
   };
-  // The newest 20 messages of the joined channels (no direct messages) of every workspace, newest first; `failed` are workspaces that could not be read at all,
-  // `missing` the scopes a token lacks (users:read, files:read among them), `refreshSecs` the wait until the next read. Messages are kept in memory only.
+  // The newest 20 messages of the joined channels (no direct messages) of every workspace, newest first; `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
+  // `missing` the scopes a token lacks (users:read, files:read among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet. Messages are kept in memory only.
   slack_timeline: { args: undefined; result: Timeline };
   // The whole thread starting at `ts`, oldest first. For a reply pass its `threadTs`, not its own `ts`.
   slack_thread: { args: { teamId: string; channel: string; ts: string }; result: SlackThread };

@@ -1,5 +1,5 @@
 // The Slack screen's list (S-5): the newest 20 messages of the joined channels of every workspace, newest first. A row opens the thread (slack-thread.ts).
-// The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only; the list is read when the screen is shown and again every `refreshSecs` while it stays.
+// The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only; the list is read when the screen is shown (not while a read is on its way, nor before `refreshSecs` have passed since the last one) and again every `refreshSecs` while it stays.
 import type { Timeline } from "./bindings/Timeline";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import type { Workspace } from "./bindings/Workspace";
@@ -55,6 +55,8 @@ function drawNotice() {
   const lines: string[] = [];
   for (const f of timeline?.failed ?? []) lines.push(`${f.team} を読み込めませんでした: ${f.error}`);
   for (const m of timeline?.missing ?? []) lines.push(`${m.team}: ${m.scopes.join("、")} の権限がありません`);
+  // A read that failed while rows are held: the rows stay, and the failure shows here.
+  if (timeline && loadError !== null) lines.unshift(`読み込めませんでした: ${loadError}`);
   const key = JSON.stringify(lines);
   if (key === noticeKey) return;
   noticeKey = key;
@@ -109,11 +111,13 @@ function emptyNode() {
     return box;
   }
   if (timeline === null && loadError === null) return loadingRow();
-  if (timeline === null) {
+  // A read that failed with nothing to show: the error of the call, or of every workspace that could not be read.
+  const failure = timeline === null ? loadError : timeline.failed.length ? timeline.failed.map((f) => `${f.team}: ${f.error}`).join("、") : null;
+  if (failure !== null) {
     const row = tag("div", "pending fail");
     const retry = tag("button", "text-btn", "再読み込み");
     retry.onclick = () => load();
-    row.append(tag("span", "sp", `読み込めませんでした: ${loadError}`), retry);
+    row.append(tag("span", "sp", `読み込めませんでした: ${failure}`), retry);
     return row;
   }
   return tag("div", "feed-empty", "メッセージはありません");
@@ -122,7 +126,7 @@ function emptyNode() {
 // Draws the rows where they are: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
   const messages = timeline?.messages ?? [];
-  const key = JSON.stringify([messages, loadError, workspaces?.length ?? null, timeline === null, new Date().toDateString()]);
+  const key = JSON.stringify([messages, loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], new Date().toDateString()]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -134,7 +138,16 @@ function drawFeed() {
   loadIcons(messages.map((m) => m.iconUrl));
 }
 
+// The muted "残り N チャンネルを読み込み中" in the heading while some channels were not reached by any read yet.
+function drawPending() {
+  const left = timeline?.pendingChannels ?? 0;
+  const label = $("slack-pending");
+  label.hidden = left === 0;
+  label.textContent = left > 0 ? `残り ${left} チャンネルを読み込み中` : "";
+}
+
 function draw() {
+  drawPending();
   drawNotice();
   drawFeed();
 }
@@ -176,8 +189,11 @@ export function revealSlackList() {
 export async function showSlackList() {
   revealSlackList();
   try {
+    const before = workspaces?.map((w) => w.teamId).join();
     workspaces = (await invoke("slack_load")).workspaces;
     setSlackWorkspaces(workspaces);
+    // A workspace added or removed since the last read makes the list held stale at once.
+    if (before !== undefined && before !== workspaces.map((w) => w.teamId).join()) lastTry = 0;
   } catch (e) {
     workspaces = [];
     loadError = String(e);
@@ -194,6 +210,8 @@ export async function showSlackList() {
     },
     () => {},
   );
+  // Showing the screen again does not read again while a read is on its way, or while the list held is younger than the answer asked for.
+  if (loading || (timeline !== null && Date.now() - lastTry < timeline.refreshSecs * 1000)) return;
   await load();
 }
 

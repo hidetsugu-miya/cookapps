@@ -25,6 +25,8 @@ let claudePopup = false;
 let popupWorkspace: string | null = null;
 // The workspaces of the Slack tray, as the Slack screen last drew them.
 let tray: WorkspaceEntry[] = [];
+// What the tray's avatars were drawn from.
+let trayKey = "";
 
 // A workspace of the Slack tray: its own icon (the https URL on Slack's image host, fetched by slack-view.ts, or null for the initial on the workspace's color), and what the last read of its messages found.
 export interface WorkspaceEntry {
@@ -114,8 +116,12 @@ function togglePopup(account: string) {
 const trayButtons = () => [...$("slack-workspace-list").children] as HTMLElement[];
 
 // The Slack tray: one avatar per workspace, with its own icon when it has one. Drawn by the Slack screen; an open popup follows the new state.
+// The avatars are rebuilt only when a workspace, its name or its icon address changed, so that a fetched icon stays on its avatar.
 export function renderWorkspaceTray(items: WorkspaceEntry[]) {
   tray = items;
+  const key = JSON.stringify(items.map((w) => [w.teamId, w.team, w.iconUrl]));
+  if (key === trayKey) return refreshPopup();
+  trayKey = key;
   $("slack-workspace-list").replaceChildren(
     ...items.map((w) => {
       const button = document.createElement("button");

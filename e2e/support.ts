@@ -397,7 +397,7 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
 });
 
 // What `slack_timeline` answers.
-export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({ messages, failed: [], missing: [], refreshSecs: 120, ...extra });
+export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({ messages, failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, ...extra });
 
 // A message of a thread (`slack_thread`).
 export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, files: [], ...extra });

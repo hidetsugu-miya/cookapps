@@ -35,7 +35,7 @@ const answers = {
   todoist_connected: false,
   todoist_comments: [],
   slack_load: { workspaces: [], recent: [] },
-  slack_timeline: { messages: [], failed: [], missing: [], refreshSecs: 120 },
+  slack_timeline: { messages: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0 },
   slack_icons: [],
   slack_file_images: {},
   fetch_images: {},

@@ -162,20 +162,90 @@ describe("slack list", () => {
   });
 
   it("draws only the answer of the latest read", async () => {
-    await openList(timeline(sample()));
-    await waitForCount("#slack-feed .feed-row", 2);
-    // The next read waits; the one after it answers at once. The first answer to arrive is the older one, and it must not be drawn.
-    const read = await mock("slack_timeline", holds);
-    await $("#nav-mail").click();
+    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
+    await mock("slack_timeline", rejects("接続できません"));
     await $("#nav-slack").click();
+    await expect($("#slack-feed .pending.fail")).toBeDisplayed();
+    // The first 再読み込み waits; the second one answers at once. The first answer to arrive is the older one, and it must not be drawn.
+    const read = await mock("slack_timeline", holds);
+    await $("#slack-feed .pending.fail .text-btn").click();
     await waitForCalls(read);
     await mock("slack_timeline", timeline([timelineMessage(slackTs(1), "Newer Person", "dev", "The newer answer")]));
-    await $("#nav-mail").click();
-    await $("#nav-slack").click();
+    await $("#slack-feed .pending.fail .text-btn").click();
     await waitForText("#slack-feed .feed-meta b", "Newer Person");
     await release(read, timeline([timelineMessage(slackTs(2), "Older Person", "dev", "The older answer")]));
     await browser.pause(300);
     expect(await rowTexts(".feed-meta b")).toEqual(["Newer Person"]);
+  });
+
+  it("does not read again when the screen is shown again before refreshSecs have passed, and draws the list it holds", async () => {
+    await openList(timeline(sample()));
+    await waitForCount("#slack-feed .feed-row", 2);
+    for (const leave of ["#nav-mail", "#nav-todo"]) {
+      await $(leave).click();
+      await $("#nav-slack").click();
+      await expect($("#slack-list")).toBeDisplayed();
+      await waitForCount("#slack-feed .feed-row", 2);
+    }
+    await browser.pause(300);
+    expect(await callsOf("slack_timeline")).toEqual([null]);
+  });
+
+  it("does not start a read while one is on its way when the screen is shown again", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
+    const read = await mock("slack_timeline", holds);
+    await $("#nav-slack").click();
+    await waitForCalls(read);
+    await $("#nav-mail").click();
+    await $("#nav-slack").click();
+    await expect($("#slack-list")).toBeDisplayed();
+    await browser.pause(300);
+    expect(await callsOf("slack_timeline")).toEqual([null]);
+    await release(read, timeline(sample()));
+    await waitForCount("#slack-feed .feed-row", 2);
+  });
+
+  it("says in the heading how many channels no read has reached yet, until none is left", async () => {
+    await openList(timeline(sample(), { pendingChannels: 3, refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 2);
+    await expect($("#slack-pending")).toBeDisplayed();
+    await expect($("#slack-pending")).toHaveText("残り 3 チャンネルを読み込み中");
+    await mock("slack_timeline", timeline(sample(), { pendingChannels: 0, refreshSecs: 1 }));
+    await browser.waitUntil(async () => !(await $("#slack-pending").isDisplayed()));
+  });
+
+  it("keeps the user's own icon on the tray's avatar and in its popup after a read that changes nothing and after leaving the screen", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady, slack_timeline: timeline(sample(), { refreshSecs: 1 }), slack_icons: ownIcon(iconUrl) });
+    await mock("fetch_images", { [iconUrl]: pngUri });
+    await $("#nav-slack").click();
+    await browser.waitUntil(async () => (await count("#slack-workspace-list img.av-img")) === 1);
+    await waitForCalls("slack_timeline", 2);
+    await browser.pause(300);
+    expect(await count("#slack-workspace-list img.av-img")).toBe(1);
+    await $("#slack-workspace-list button").click();
+    expect(await count("#account-popup .avatar img.av-img")).toBe(1);
+    await $("#nav-todo").click();
+    await $("#nav-slack").click();
+    await expect($("#slack-list")).toBeDisplayed();
+    expect(await count("#slack-workspace-list img.av-img")).toBe(1);
+  });
+
+  it("shows the failure with 再読み込み when a read answers with a failed workspace and no message, and reads again from it", async () => {
+    await openList(timeline([], { failed: [{ teamId: "T1", team: "Example Team", error: "接続できません" }] }));
+    await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: Example Team: 接続できません"));
+    expect(await count("#slack-feed .feed-empty")).toBe(0);
+    await mock("slack_timeline", timeline(sample()));
+    await $("#slack-feed .pending.fail .text-btn").click();
+    await waitForCount("#slack-feed .feed-row", 2);
+  });
+
+  it("keeps the rows that were read when a later read fails, and says so in the notice", async () => {
+    await openList(timeline(sample(), { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 2);
+    await mock("slack_timeline", rejects("接続できません"));
+    await waitForText("#slack-notice > div", "読み込めませんでした: 接続できません");
+    expect(await rowTexts(".feed-meta b")).toEqual(["Alice Example", "Bob Example"]);
+    expect(await count("#slack-feed .pending.fail")).toBe(0);
   });
 
   it("draws the user's own icon of each workspace in the sidebar's tray", async () => {

@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -603,6 +606,8 @@ struct SlackError {
     code: Option<String>,
     /// For `missing_scope`, the scope Slack says the token lacks; empty otherwise.
     needed: String,
+    /// Set for a rate-limited (429) answer that was not retried: how long Slack asked to wait (`rate_limit_wait`).
+    rate_limited: Option<Duration>,
 }
 
 impl From<String> for SlackError {
@@ -612,6 +617,7 @@ impl From<String> for SlackError {
             token_dead: false,
             code: None,
             needed: String::new(),
+            rate_limited: None,
         }
     }
 }
@@ -654,6 +660,17 @@ async fn call_scoped(
     method: &str,
     payload: Payload<'_>,
 ) -> Result<(Value, Option<String>), SlackError> {
+    call_scoped_retrying(http, token, method, payload, MAX_RETRIES).await
+}
+
+/// `call_scoped` with the number of rate-limit retries given. With none, a 429 is an error that carries how long Slack asked to wait.
+async fn call_scoped_retrying(
+    http: &reqwest::Client,
+    token: &str,
+    method: &str,
+    payload: Payload<'_>,
+    retries: usize,
+) -> Result<(Value, Option<String>), SlackError> {
     let mut attempt = 0;
     loop {
         let req = http.post(format!("{API_URL}/{method}")).bearer_auth(token);
@@ -667,18 +684,21 @@ async fn call_scoped(
             .await
             .map_err(|e| format!("Slack に接続できません: {e}"))?;
         let status = res.status();
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
-            let retry_after = res
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(parse_retry_after);
+        let limited = status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+        let retry_after = res
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(parse_retry_after);
+        if limited && attempt < retries {
             tokio::time::sleep(retry_wait(attempt, retry_after)).await;
             attempt += 1;
             continue;
         }
         if !status.is_success() {
-            return Err(format!("Slack が {status} を返しました").into());
+            let mut error = SlackError::from(format!("Slack が {status} を返しました"));
+            error.rate_limited = limited.then(|| rate_limit_wait(retry_after));
+            return Err(error);
         }
         let scopes = res
             .headers()
@@ -694,6 +714,7 @@ async fn call_scoped(
             token_dead: token_is_dead(reply["error"].as_str().unwrap_or_default()),
             code: reply["error"].as_str().map(str::to_owned),
             needed: reply["needed"].as_str().unwrap_or_default().to_owned(),
+            rate_limited: None,
         })?;
         return Ok((reply, scopes));
     }
@@ -1308,15 +1329,21 @@ const TIMELINE_MAX: usize = 20;
 const HISTORY_LIMIT: &str = "20";
 /// Channels of one workspace whose history is read at the same time.
 const HISTORY_CONCURRENCY: usize = 4;
+/// The most channels of one workspace whose `conversations.history` one read asks for (Tier 3 allows about 50 a minute).
+/// The channels never read come first, then the ones read longest ago; the others show what their last read kept.
+const HISTORY_BUDGET: usize = 40;
 /// `users.info` calls at the same time, and the most one list or thread makes: the users past it are asked about by the next read.
 const USER_CONCURRENCY: usize = 4;
 const USER_LOOKUPS: usize = 40;
 /// How long a user is remembered; one Slack could not describe is asked about again sooner.
 const USER_TTL: Duration = Duration::from_secs(60 * 60);
 const USER_MISS_TTL: Duration = Duration::from_secs(5 * 60);
-/// The shortest wait between two reads of the timeline, and how many calls a minute one round may use (Tier 3 allows about 50).
+/// The wait between two reads of the timeline: `REFRESH_MIN_SECS`, or `REFRESH_BUSY_SECS` while channels are still unread or a workspace has more than `HISTORY_BUDGET`.
 const REFRESH_MIN_SECS: u32 = 120;
-const CALLS_PER_MINUTE: usize = 40;
+const REFRESH_BUSY_SECS: u32 = 60;
+/// How long a workspace's timeline reads stop after Slack rate-limits one: the `Retry-After` it gave, else `RATE_LIMIT_DEFAULT`, never more than `RATE_LIMIT_MAX`.
+const RATE_LIMIT_DEFAULT: Duration = Duration::from_secs(60);
+const RATE_LIMIT_MAX: Duration = Duration::from_secs(10 * 60);
 /// Shown for a user, channel or mention Slack could not name.
 const UNKNOWN_NAME: &str = "不明";
 /// Where a link goes when the workspace's own address is not known.
@@ -1379,6 +1406,8 @@ pub struct Timeline {
     failed: Vec<TimelineFailure>,
     missing: Vec<TimelineMissing>,
     refresh_secs: u32,
+    /// Channels no read has reached yet, over all workspaces.
+    pending_channels: u32,
 }
 
 /// An attached file of a thread's message. `thumb_url` is set only for an image Slack serves a 360px preview of;
@@ -1458,12 +1487,21 @@ struct Raw {
 /// (team, user) -> when it was asked, and what Slack said (`None`: it could not say).
 type UserCache = HashMap<(String, String), (Instant, Option<SlackUser>)>;
 
+/// A workspace's channels -> when each was read and the messages that read listed.
+type History = HashMap<String, (Instant, Vec<Raw>)>;
+/// (team, channel) -> the same, for every workspace.
+type TeamsHistory = HashMap<(String, String), (Instant, Vec<Raw>)>;
+
 /// What the timeline and the thread keep between reads, in memory only.
 #[derive(Default)]
 struct TimelineCache {
     users: Mutex<UserCache>,
-    /// (team, channel) -> the listed messages of its last read, which stand in for a channel that cannot be read now.
-    history: Mutex<HashMap<(String, String), Vec<Raw>>>,
+    /// (team, channel) -> when its last read was and the messages that read listed, which stand in for a channel that is not read now.
+    history: Mutex<TeamsHistory>,
+    /// team -> until when Slack's rate limit stops its timeline reads.
+    limited_until: Mutex<HashMap<String, Instant>>,
+    /// team -> the scopes the token had when it last answered, so that a round that reads nothing still knows them.
+    scopes: Mutex<HashMap<String, String>>,
 }
 
 impl TimelineCache {
@@ -1473,6 +1511,8 @@ impl TimelineCache {
             .lock()
             .unwrap()
             .retain(|(t, _), _| t != team_id);
+        self.limited_until.lock().unwrap().remove(team_id);
+        self.scopes.lock().unwrap().remove(team_id);
     }
 
     fn user(&self, team_id: &str, user: &str) -> Option<SlackUser> {
@@ -1497,23 +1537,102 @@ impl TimelineCache {
         );
     }
 
-    fn channel_history(&self, team_id: &str, channel: &str) -> Option<Vec<Raw>> {
+    /// The workspace's remembered channels.
+    fn team_history(&self, team_id: &str) -> History {
         self.history
             .lock()
             .unwrap()
-            .get(&(team_id.to_owned(), channel.to_owned()))
-            .cloned()
+            .iter()
+            .filter(|((t, _), _)| t == team_id)
+            .map(|((_, channel), kept)| (channel.clone(), kept.clone()))
+            .collect()
     }
 
-    /// The workspace's remembered messages become `kept`, by channel.
-    fn replace_history(&self, team_id: &str, kept: HashMap<String, Vec<Raw>>) {
+    /// Every remembered message of the workspace.
+    fn team_messages(&self, team_id: &str) -> Vec<Raw> {
+        self.history
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((t, _), _)| t == team_id)
+            .flat_map(|(_, (_, messages))| messages.iter().cloned())
+            .collect()
+    }
+
+    /// The workspace's remembered channels become `kept`.
+    fn replace_history(&self, team_id: &str, kept: History) {
         let mut history = self.history.lock().unwrap();
         history.retain(|(t, _), _| t != team_id);
         history.extend(
             kept.into_iter()
-                .map(|(channel, list)| ((team_id.to_owned(), channel), list)),
+                .map(|(channel, read)| ((team_id.to_owned(), channel), read)),
         );
     }
+
+    /// The workspace's timeline reads stop for `wait` (or the rest of an earlier stop, if that is longer).
+    fn limit(&self, team_id: &str, wait: Duration) {
+        let until = Instant::now() + wait;
+        let mut limited = self.limited_until.lock().unwrap();
+        let slot = limited.entry(team_id.to_owned()).or_insert(until);
+        *slot = (*slot).max(until);
+    }
+
+    fn rate_limited(&self, team_id: &str) -> bool {
+        self.limited_until
+            .lock()
+            .unwrap()
+            .get(team_id)
+            .is_some_and(|until| *until > Instant::now())
+    }
+
+    fn scopes(&self, team_id: &str) -> Option<String> {
+        self.scopes.lock().unwrap().get(team_id).cloned()
+    }
+
+    fn put_scopes(&self, team_id: &str, scopes: &str) {
+        self.scopes
+            .lock()
+            .unwrap()
+            .insert(team_id.to_owned(), scopes.to_owned());
+    }
+}
+
+/// How long to stop after a 429: what Slack asked for (`Retry-After`), else `RATE_LIMIT_DEFAULT`, at most `RATE_LIMIT_MAX`.
+fn rate_limit_wait(retry_after: Option<Duration>) -> Duration {
+    retry_after
+        .unwrap_or(RATE_LIMIT_DEFAULT)
+        .min(RATE_LIMIT_MAX)
+}
+
+/// The channels one read asks Slack about, at most `budget`: those never read first (in the list's order), then the ones read longest ago.
+fn choose_channels(list: &[Channel], history: &History, budget: usize) -> Vec<Channel> {
+    let mut chosen: Vec<&Channel> = list.iter().collect();
+    // `None` (never read) sorts before every `Some`, and the sort keeps the list's order among equals.
+    chosen.sort_by_key(|c| history.get(&c.id).map(|(at, _)| *at));
+    chosen.into_iter().take(budget).cloned().collect()
+}
+
+/// The history after a round: only the channels still in `list` stay; those in `read` take their new messages (read at `now`), the others keep what they had.
+/// A channel that was never read and could not be read now is not in it.
+fn next_history(
+    list: &[Channel],
+    mut history: History,
+    read: HashMap<String, Vec<Raw>>,
+    now: Instant,
+) -> History {
+    let joined: HashSet<&str> = list.iter().map(|c| c.id.as_str()).collect();
+    history.retain(|id, _| joined.contains(id.as_str()));
+    history.extend(
+        read.into_iter()
+            .filter(|(id, _)| joined.contains(id.as_str()))
+            .map(|(id, messages)| (id, (now, messages))),
+    );
+    history
+}
+
+/// How many channels of `list` no read has reached yet.
+fn pending_channels(list: &[Channel], history: &History) -> usize {
+    list.iter().filter(|c| !history.contains_key(&c.id)).count()
 }
 
 /// Whether a remembered user is still good: an hour for one Slack described, five minutes for one it could not.
@@ -1621,12 +1740,13 @@ fn merge_timeline(mut all: Vec<Raw>) -> Vec<Raw> {
     all
 }
 
-/// How long to wait before the next read: at least `REFRESH_MIN_SECS`, and long enough that one call per channel stays within `CALLS_PER_MINUTE`.
-fn refresh_secs(channels: usize) -> u32 {
-    let by_rate = channels.saturating_mul(60).div_ceil(CALLS_PER_MINUTE);
-    u32::try_from(by_rate)
-        .unwrap_or(u32::MAX)
-        .max(REFRESH_MIN_SECS)
+/// How long to wait before the next read: `REFRESH_BUSY_SECS` while channels are unread (`pending`) or the biggest workspace has more channels than one read covers (`largest`), else `REFRESH_MIN_SECS`.
+fn refresh_secs(pending: usize, largest: usize) -> u32 {
+    if pending > 0 || largest > HISTORY_BUDGET {
+        REFRESH_BUSY_SECS
+    } else {
+        REFRESH_MIN_SECS
+    }
 }
 
 /// The base of a workspace's links: `https://{host}/` of its address, or Slack's home when that is not an https Slack address.
@@ -1877,22 +1997,27 @@ async fn lookup_users(
     run_limited(jobs, USER_CONCURRENCY).await;
 }
 
-/// What reading one workspace gave: its token (empty when it could not be read), the scopes the token has, how many channels it is in, and the messages or why none.
+/// What reading one workspace gave: its token (empty when it could not be read), the scopes the token has, how many channels it is in and how many of them
+/// no read has reached yet, the messages it remembers (also when this read failed), and why it failed, if it did.
 struct WorkspaceRead {
     workspace: Workspace,
     token: String,
     scopes: Option<String>,
     channels: usize,
-    outcome: Result<Vec<Raw>, String>,
+    pending: usize,
+    messages: Vec<Raw>,
+    error: Option<String>,
 }
 
-/// Reads the joined channels of the workspace, `HISTORY_CONCURRENCY` at a time. A channel that cannot be read keeps the messages of its last read; the workspace fails only when no channel could be read.
+/// Reads the history of at most `HISTORY_BUDGET` joined channels of the workspace (`choose_channels`), `HISTORY_CONCURRENCY` at a time; the others keep the messages of their last read.
+/// A rate limit is not retried: it ends this workspace's read for the round and stops its reads until Slack's `Retry-After` has passed.
+/// The workspace fails only when a call failed and no channel could be read.
 async fn fill_workspace(
     http: &reqwest::Client,
     channels: &ChannelCache,
     cache: &TimelineCache,
     read: &mut WorkspaceRead,
-) -> Result<Vec<Raw>, String> {
+) -> Result<(), String> {
     let team_id = read.workspace.team_id.clone();
     read.token = token_of(&team_id).await?;
     if is_bot_token(&read.token) {
@@ -1903,27 +2028,43 @@ async fn fill_workspace(
         None => fetch_and_keep_channels(http, channels, &team_id, &read.token).await?,
     };
     read.channels = list.len();
-    let jobs = list.iter().cloned().map(|channel| {
-        let (http, token, team) = (
-            http.clone(),
-            read.token.clone(),
-            read.workspace.team.clone(),
-        );
+    let history = cache.team_history(&team_id);
+    let chosen = if cache.rate_limited(&team_id) {
+        Vec::new()
+    } else {
+        choose_channels(&list, &history, HISTORY_BUDGET)
+    };
+    // Set by the first rate-limited call, so that the channels still to start do not call.
+    let stop = Arc::new(AtomicBool::new(false));
+    let jobs = chosen.into_iter().map(|channel| {
+        let (http, token, stop) = (http.clone(), read.token.clone(), Arc::clone(&stop));
         async move {
+            if stop.load(Ordering::Relaxed) {
+                return (channel, None);
+            }
             let form = [
                 ("channel", channel.id.clone()),
                 ("limit", HISTORY_LIMIT.to_owned()),
             ];
-            let got = call_scoped(&http, &token, "conversations.history", Payload::Form(&form))
-                .await
-                .map_err(|e| read_error(e, &team));
-            (channel, got)
+            let got = call_scoped_retrying(
+                &http,
+                &token,
+                "conversations.history",
+                Payload::Form(&form),
+                0,
+            )
+            .await;
+            if got.as_ref().is_err_and(|e| e.rate_limited.is_some()) {
+                stop.store(true, Ordering::Relaxed);
+            }
+            (channel, Some(got))
         }
     });
-    let (mut all, mut kept, mut read_ok, mut first_error) = (Vec::new(), HashMap::new(), 0, None);
+    let (mut fresh, mut read_ok, mut first_error, mut wait) = (HashMap::new(), 0, None, None);
     for (channel, got) in run_limited(jobs, HISTORY_CONCURRENCY).await {
         match got {
-            Ok((reply, scopes)) => {
+            None => {}
+            Some(Ok((reply, scopes))) => {
                 read_ok += 1;
                 read.scopes = read.scopes.take().or(scopes);
                 let found: Vec<Raw> = reply["messages"]
@@ -1932,26 +2073,38 @@ async fn fill_workspace(
                     .flatten()
                     .filter_map(|m| raw_of(&team_id, &channel, m))
                     .collect();
-                all.extend(found.iter().cloned());
-                kept.insert(channel.id, found);
+                fresh.insert(channel.id, found);
             }
-            Err(e) => {
-                first_error.get_or_insert(e);
-                if let Some(old) = cache.channel_history(&team_id, &channel.id) {
-                    all.extend(old.iter().cloned());
-                    kept.insert(channel.id, old);
+            Some(Err(e)) => match e.rate_limited {
+                Some(w) => wait = wait.max(Some(w)),
+                None => {
+                    first_error.get_or_insert(read_error(e, &read.workspace.team));
                 }
-            }
+            },
         }
     }
-    cache.replace_history(&team_id, kept);
+    if let Some(w) = wait {
+        cache.limit(&team_id, w);
+        log_failure(
+            "slack_timeline",
+            &team_id,
+            format!("Slack の呼び出し制限のため {} 秒読みません", w.as_secs()),
+        );
+    }
+    match &read.scopes {
+        Some(scopes) => cache.put_scopes(&team_id, scopes),
+        None => read.scopes = cache.scopes(&team_id),
+    }
+    let next = next_history(&list, history, fresh, Instant::now());
+    read.pending = pending_channels(&list, &next);
+    cache.replace_history(&team_id, next);
     match first_error {
         Some(e) if read_ok == 0 => Err(e),
         Some(e) => {
             log_failure("slack_timeline", &team_id, e);
-            Ok(all)
+            Ok(())
         }
-        None => Ok(all),
+        None => Ok(()),
     }
 }
 
@@ -1966,10 +2119,16 @@ async fn read_workspace(
         token: String::new(),
         scopes: None,
         channels: 0,
-        outcome: Ok(Vec::new()),
+        pending: 0,
+        messages: Vec::new(),
+        error: None,
     };
-    read.outcome = fill_workspace(&http, &channels, &cache, &mut read).await;
-    if read.outcome.is_err() && read.scopes.is_none() && !read.token.is_empty() {
+    read.error = fill_workspace(&http, &channels, &cache, &mut read)
+        .await
+        .err();
+    // A workspace that failed still lists the messages its earlier reads kept.
+    read.messages = cache.team_messages(&read.workspace.team_id);
+    if read.error.is_some() && read.scopes.is_none() && !read.token.is_empty() {
         // The failure may be a missing scope: `auth.test` says which the token has.
         read.scopes = call_scoped(&http, &read.token, "auth.test", Payload::Empty)
             .await
@@ -2009,10 +2168,12 @@ pub async fn slack_timeline(
             .position(|w| w.team_id == r.workspace.team_id)
     });
 
-    let (mut all, mut failed, mut missing, mut channels) = (Vec::new(), Vec::new(), Vec::new(), 0);
+    let (mut all, mut failed, mut missing) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut largest, mut pending) = (0, 0);
     let mut no_names = HashSet::new();
     for read in &reads {
-        channels += read.channels;
+        largest = largest.max(read.channels);
+        pending += read.pending;
         let lacks = read
             .scopes
             .as_deref()
@@ -2028,16 +2189,15 @@ pub async fn slack_timeline(
                 scopes: lacks,
             });
         }
-        match &read.outcome {
-            Ok(found) => all.extend(found.iter().cloned()),
-            Err(error) => {
-                log_failure(command, &read.workspace.team_id, error.as_str());
-                failed.push(TimelineFailure {
-                    team_id: read.workspace.team_id.clone(),
-                    team: read.workspace.team.clone(),
-                    error: error.clone(),
-                });
-            }
+        // A workspace that failed still lists the messages its earlier reads kept.
+        all.extend(read.messages.iter().cloned());
+        if let Some(error) = &read.error {
+            log_failure(command, &read.workspace.team_id, error.as_str());
+            failed.push(TimelineFailure {
+                team_id: read.workspace.team_id.clone(),
+                team: read.workspace.team.clone(),
+                error: error.clone(),
+            });
         }
     }
     let top = merge_timeline(all);
@@ -2084,7 +2244,8 @@ pub async fn slack_timeline(
         messages,
         failed,
         missing,
-        refresh_secs: refresh_secs(channels),
+        refresh_secs: refresh_secs(pending, largest),
+        pending_channels: u32::try_from(pending).unwrap_or(u32::MAX),
     })
 }
 
@@ -2757,6 +2918,7 @@ mod tests {
             token_dead: false,
             code: code.map(str::to_owned),
             needed: String::new(),
+            rate_limited: None,
         }
     }
 
@@ -3030,5 +3192,161 @@ mod tests {
         // A page that is not a list adds nothing.
         add_page(&mut read, &mut seen, &json!(null), slim);
         assert_eq!(read.len(), 1);
+    }
+
+    fn channel(id: &str) -> Channel {
+        Channel {
+            id: id.into(),
+            name: format!("name {id}"),
+        }
+    }
+
+    fn raw(channel: &str, ts: &str) -> Raw {
+        Raw {
+            team_id: "T1".into(),
+            channel: channel.into(),
+            channel_name: format!("name {channel}"),
+            ts: ts.into(),
+            thread_ts: None,
+            user: None,
+            bot: None,
+            text: "t".into(),
+            reply_count: 0,
+            has_files: false,
+        }
+    }
+
+    fn ids(list: &[Channel]) -> Vec<&str> {
+        list.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_read_asks_for_the_unread_channels_first_and_then_the_ones_read_longest_ago() {
+        let now = Instant::now();
+        let ago = |s| now - Duration::from_secs(s);
+        let list: Vec<Channel> = ["C1", "C2", "C3", "C4", "C5"].map(channel).to_vec();
+        let history: History = [("C1", ago(10)), ("C3", ago(300)), ("C4", ago(60))]
+            .into_iter()
+            .map(|(id, at)| (id.to_owned(), (at, Vec::new())))
+            .collect();
+        // C2 and C5 were never read (in the list's order), then C3 (300 s ago), C4 and C1.
+        assert_eq!(
+            ids(&choose_channels(&list, &history, 5)),
+            ["C2", "C5", "C3", "C4", "C1"]
+        );
+        assert_eq!(
+            ids(&choose_channels(&list, &history, 3)),
+            ["C2", "C5", "C3"]
+        );
+        assert!(choose_channels(&list, &history, 0).is_empty());
+        // Past the budget, every channel is reached in turn.
+        let many: Vec<Channel> = (0..100).map(|n| channel(&format!("C{n}"))).collect();
+        let mut history = History::new();
+        let mut round = |at: Instant| {
+            let chosen = choose_channels(&many, &history, HISTORY_BUDGET);
+            assert_eq!(chosen.len(), HISTORY_BUDGET);
+            let read = chosen.into_iter().map(|c| (c.id, Vec::new())).collect();
+            history = next_history(&many, std::mem::take(&mut history), read, at);
+            pending_channels(&many, &history)
+        };
+        assert_eq!(round(ago(30)), 60);
+        assert_eq!(round(ago(20)), 20);
+        assert_eq!(round(ago(10)), 0);
+    }
+
+    #[test]
+    fn the_history_keeps_the_channels_not_read_now_and_drops_the_ones_left() {
+        let now = Instant::now();
+        let before = now - Duration::from_secs(60);
+        let list: Vec<Channel> = ["C1", "C2", "C3"].map(channel).to_vec();
+        let history: History = [
+            ("C1".to_owned(), (before, vec![raw("C1", "1.1")])),
+            ("C9".to_owned(), (before, vec![raw("C9", "1.2")])),
+        ]
+        .into_iter()
+        .collect();
+        let read = HashMap::from([("C2".to_owned(), vec![raw("C2", "2.1")])]);
+        let next = next_history(&list, history, read, now);
+        // C1 keeps its messages and its time, C2 is new, C9 left the workspace, and C3 was never read.
+        assert_eq!(next.get("C1"), Some(&(before, vec![raw("C1", "1.1")])));
+        assert_eq!(next.get("C2"), Some(&(now, vec![raw("C2", "2.1")])));
+        assert!(!next.contains_key("C9"));
+        assert_eq!(pending_channels(&list, &next), 1);
+        // A channel read with no message is read all the same.
+        let none = next_history(
+            &list,
+            History::new(),
+            HashMap::from([("C3".to_owned(), Vec::new())]),
+            now,
+        );
+        assert_eq!(pending_channels(&list, &none), 2);
+    }
+
+    #[test]
+    fn a_workspace_keeps_its_messages_when_a_later_read_fails() {
+        let cache = TimelineCache::default();
+        let now = Instant::now();
+        let list = vec![channel("C1"), channel("C2")];
+        let read = HashMap::from([
+            ("C1".to_owned(), vec![raw("C1", "1.1")]),
+            ("C2".to_owned(), vec![raw("C2", "2.1")]),
+        ]);
+        cache.replace_history("T1", next_history(&list, History::new(), read, now));
+        // A round in which nothing could be read changes nothing.
+        let next = next_history(&list, cache.team_history("T1"), HashMap::new(), now);
+        cache.replace_history("T1", next);
+        let mut ts: Vec<String> = cache
+            .team_messages("T1")
+            .into_iter()
+            .map(|m| m.ts)
+            .collect();
+        ts.sort();
+        assert_eq!(ts, ["1.1", "2.1"]);
+        assert!(cache.team_messages("T2").is_empty());
+        cache.forget("T1");
+        assert!(cache.team_messages("T1").is_empty());
+    }
+
+    #[test]
+    fn a_rate_limit_waits_for_retry_after_else_a_minute_and_never_past_ten() {
+        let s = Duration::from_secs;
+        assert_eq!(rate_limit_wait(Some(s(30))), s(30));
+        assert_eq!(rate_limit_wait(None), RATE_LIMIT_DEFAULT);
+        assert_eq!(rate_limit_wait(Some(s(86_400))), RATE_LIMIT_MAX);
+    }
+
+    #[test]
+    fn a_rate_limited_workspace_is_not_read_until_the_wait_has_passed_and_the_others_are() {
+        let cache = TimelineCache::default();
+        assert!(!cache.rate_limited("T1"));
+        cache.limit("T1", Duration::from_secs(60));
+        assert!(cache.rate_limited("T1"));
+        assert!(!cache.rate_limited("T2"));
+        // A shorter limit does not shorten the wait.
+        cache.limit("T1", Duration::ZERO);
+        assert!(cache.rate_limited("T1"));
+        cache.forget("T1");
+        assert!(!cache.rate_limited("T1"));
+        cache.limit("T3", Duration::ZERO);
+        assert!(!cache.rate_limited("T3"));
+    }
+
+    #[test]
+    fn the_scopes_of_the_last_answer_are_remembered_per_workspace() {
+        let cache = TimelineCache::default();
+        assert_eq!(cache.scopes("T1"), None);
+        cache.put_scopes("T1", "channels:history");
+        assert_eq!(cache.scopes("T1").as_deref(), Some("channels:history"));
+        assert_eq!(cache.scopes("T2"), None);
+        cache.forget("T1");
+        assert_eq!(cache.scopes("T1"), None);
+    }
+
+    #[test]
+    fn the_list_is_read_every_minute_while_channels_are_unread_or_more_than_one_read_covers() {
+        assert_eq!(refresh_secs(0, 0), 120);
+        assert_eq!(refresh_secs(0, HISTORY_BUDGET), 120);
+        assert_eq!(refresh_secs(0, HISTORY_BUDGET + 1), 60);
+        assert_eq!(refresh_secs(1, 3), 60);
     }
 }

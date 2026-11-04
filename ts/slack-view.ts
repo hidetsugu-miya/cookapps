@@ -18,16 +18,20 @@ const BATCH = 50;
 // The fetches run one after the other, so a URL asked for twice is fetched once.
 let chain: Promise<void> = Promise.resolve();
 
-// Puts the icon of `url` on every avatar waiting for it, once it is here.
+// Puts the fetched icon `uri` on the avatar `node` in place of its initial.
+function putIcon(node: HTMLElement, uri: string) {
+  const img = tag("img", "av-img");
+  img.src = uri;
+  img.alt = "";
+  node.querySelector(".av-text")?.replaceWith(img);
+  delete node.dataset.icon;
+}
+
+// Puts the icon of `url` on every avatar in the page waiting for it, once it is here.
 export function paintIcons() {
   for (const node of document.querySelectorAll<HTMLElement>("[data-icon]")) {
     const uri = icons.get(node.dataset.icon!);
-    if (!uri) continue;
-    const img = tag("img", "av-img");
-    img.src = uri;
-    img.alt = "";
-    node.querySelector(".av-text")?.replaceWith(img);
-    delete node.dataset.icon;
+    if (uri) putIcon(node, uri);
   }
 }
 
@@ -54,7 +58,9 @@ export function decorateAvatar(node: HTMLElement, name: string, iconUrl: string 
   node.style.background = avatarColor(name);
   node.replaceChildren(tag("span", "av-text", initials(name)));
   if (!iconUrl) return node;
-  node.dataset.icon = iconUrl;
-  paintIcons();
+  // An icon already fetched goes on the node itself, which may not be in the page yet (`paintIcons` looks only in the page); the others wait for `loadIcons`.
+  const uri = icons.get(iconUrl);
+  if (uri) putIcon(node, uri);
+  else node.dataset.icon = iconUrl;
   return node;
 }
