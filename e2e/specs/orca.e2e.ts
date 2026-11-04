@@ -231,7 +231,10 @@ describe("orca", () => {
 
   it("narrows the worktrees in the dialog with a filter, in two-line rows", async () => {
     await openOrca();
-    await $("#orca-dest-pick").click();
+    // The driver's click focuses the button after the page's handler ran, which no real press does, so this press is the page's own.
+    await browser.execute((id) => {
+      if (window.__e2e_once__(id)) document.getElementById("orca-dest-pick")!.click();
+    }, onceId());
     const pop = $(".orca-dest-pop");
     await expect(pop).toHaveAttribute("role", "dialog");
     const filter = $('.orca-dest-pop input[aria-label="worktree を絞り込む"]');
@@ -678,9 +681,10 @@ describe("orca: the session history", () => {
     await expect($("#orca-older")).toBeDisplayed();
     await expect($("#orca-older")).toHaveText("以前の履歴を読む");
     await scrollBox().set(400);
-    const before = await scrollBox().offsetOf("m20");
     await $("#orca-older").click();
     expect(await waitForCalls(older)).toEqual([null]);
+    // Measured after the press: the button is at the top of the list, so the driver scrolls up to it.
+    const before = await scrollBox().offsetOf("m20");
     // The older page arrives as a redraw from the start with no more to read.
     await sendChat(chatItems(many(0, 50), 0, false));
     await expect($("#orca-older")).not.toBeDisplayed();
