@@ -46,8 +46,22 @@ function monthPicker(shown: Date, current: string | null, pick: (iso: string) =>
   return box;
 }
 
-// The time at the end of what is typed in the due popover: "15:00" alone, or after a date or other words.
-const TYPED_TIME = /(?:^|\s)(\d{1,2}:\d{2})$/;
+// The time at the end of what is typed in the due popover, as `HH:MM`, or null: "15:00", "9:30", "15時", "15時30分", each with 午前 or 午後 in front ("午後3時"),
+// alone or after a date or other words ("2026-11-06 15:00", "明日15時"). An hour of 24 or more, or minutes of 60 or more, is not a time.
+const TYPED_TIME = /(?:^|\D)(午前|午後)?(\d{1,2})(?::(\d{2})|時(?:(\d{1,2})分)?)$/;
+function typedTime(text: string): string | null {
+  const m = TYPED_TIME.exec(text.trim());
+  if (!m) return null;
+  const hour = Number(m[2]);
+  const minute = Number(m[3] ?? m[4] ?? 0);
+  if (minute >= 60) return null;
+  let h = hour;
+  if (m[1]) {
+    if (hour > 12) return null;
+    h = (hour % 12) + (m[1] === "午後" ? 12 : 0);
+  } else if (hour >= 24) return null;
+  return `${String(h).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
 
 // What the due popover edits. `text` is what its field starts with; `date` (`YYYY-MM-DD`) and `time` (`HH:MM`) are the day it marks and the time a picked day keeps,
 // null for none; a `recurring` due date gets the text field only, since a picked day would replace its repeat. `commit` gets the new text, only when it differs.
@@ -62,7 +76,7 @@ export interface DueEdit {
 // The due popover opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
 // A one-off due date is written "2026-11-02 12:00", which Todoist reads back as is; a repeat keeps Todoist's text, which a date cannot hold.
 // The text in the field is confirmed by Enter or by a click elsewhere that closes the popover (what was typed is not lost); Escape cancels it.
-// A picked day keeps the time typed at the end of the field ("15:00" or "2026-11-06 15:00"), else the time the due date had.
+// A picked day keeps the time typed at the end of the field ("15:00", "15時", "明日 午後3時", "2026-11-06 15:00"; `typedTime`), else the time the due date had.
 // The task's detail and the Slack summary card both open it; what is done with the new text is theirs.
 export function openDueEditor(anchor: Element, e: DueEdit) {
   const pop = tag("div", "menu due-pop");
@@ -84,8 +98,7 @@ export function openDueEditor(anchor: Element, e: DueEdit) {
   if (!e.recurring)
     pop.append(
       monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), e.date, (iso) => {
-        const typed = TYPED_TIME.exec(input.value.trim());
-        const time = typed ? typed[1].padStart(5, "0") : e.time;
+        const time = typedTime(input.value) ?? e.time;
         closeMenu();
         const value = time ? `${iso} ${time}` : iso;
         if (value !== e.text) e.commit(value);
