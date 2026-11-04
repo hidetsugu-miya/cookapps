@@ -314,42 +314,42 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
           </button>
         </header>
-        <div id="st-msgs"></div>
-        <div id="st-note" role="status" hidden></div>
-        <div id="st-card"></div>
+        <div id="st-body">
+          <div id="st-msgs"></div>
+          <div id="st-note" role="status" hidden></div>
+          <div id="st-card"></div>
+        </div>
         <div id="st-reply">
           <p id="st-error" class="pending fail" role="alert" hidden></p>
           <div class="composer">
             <textarea id="st-input" class="chat-input" rows="3" aria-label="スレッドに返信" placeholder="スレッドに返信" autocomplete="off"></textarea>
             <div class="composer-foot">
-              <span id="st-keys" class="composer-hint"></span>
               <button id="st-send" class="text-btn primary" disabled>返信する</button>
             </div>
           </div>
         </div>
       </div>
       <div id="reply-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
-      <aside id="reply-chat" class="chat-pane split-chat" aria-label="Claude と校正">
+      <aside id="reply-chat" class="chat-pane split-chat" aria-label="Claude">
         <div class="chat-head">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
-          Claude と校正
           <button id="reply-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
         </div>
         <div id="reply-log" class="chat-log"></div>
-        <p id="reply-chat-note" class="chat-note" hidden></p>
-        <form id="reply-form" class="chat-form">
-          <div class="proofread-row">
-            <button id="reply-proofread" type="button" class="text-btn" disabled>校正する</button>
-          </div>
-          <div class="composer">
-            <textarea id="reply-input" class="chat-input" rows="1" aria-label="Claude への依頼" placeholder="どう直したいかを書く" autocomplete="off"></textarea>
-            <div class="composer-foot">
-              <span id="reply-keys" class="composer-hint"></span>
-              <button id="reply-send" class="text-btn primary chat-send">送信</button>
+        <div class="chat-foot">
+          <p id="reply-chat-note" class="chat-note" hidden></p>
+          <form id="reply-form" class="chat-form">
+            <div class="composer">
+              <textarea id="reply-input" class="chat-input" rows="1" aria-label="Claude への依頼" placeholder="Claude に頼みたいことを書く" autocomplete="off"></textarea>
+              <div class="composer-foot">
+                <button id="reply-send" class="icon-btn chat-send chat-send-icon" aria-label="送信">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+                </button>
+              </div>
             </div>
-          </div>
-          <div id="reply-model" class="chat-model"></div>
-        </form>
+            <div id="reply-model" class="chat-model"></div>
+          </form>
+        </div>
       </aside>
     </section>
     <section id="slack-compose" hidden>

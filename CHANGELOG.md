@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.34.0
+
+The Claude pane of the Slack thread is no longer for proofreading only (#11): it helps with summaries, answers and reply drafts too, and works with an empty reply. It now also sends the thread's messages, with the text and links of their blocks and attachments, up to 10,000 characters, only when send is pressed; the privacy policy says so. A proposal has a copy button, send is an arrow icon, the key hints are gone on both sides, and the lines above the reply field and the request field stay level (S-6, S-7). The compose and prompt screens are unchanged, except that a proposal from an empty text no longer shows a blank removed line. A real thread was not tried.
+
 ## v0.33.0
 
 S-12 the Slack thread draws Slack's own styles (#12): bold, italic, strike, inline code, code blocks and `>` quotes, in a message's text and in the mrkdwn texts of its blocks and attachments. A tag stays text, URLs stay links except inside a code, and a line starting with `>>>` stays text. The list and what is sent to Claude are unchanged. The contents of an attached `.md` file are not shown. A real Slack message was not tried.

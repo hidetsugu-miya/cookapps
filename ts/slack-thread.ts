@@ -1,5 +1,6 @@
 // The Slack thread (S-6, S-7, S-11): the messages of a thread with their senders' icons, attached images, blocks and attachments (slack-blocks.ts), a field to reply in, a card to make a Todo from the message,
-// and a conversation with Claude (claude-chat.ts) that proofreads the reply. Nothing leaves the app until "返信する"; Claude is asked only when the user presses "校正する" or sends a request.
+// and a conversation with Claude (claude-chat.ts) to ask about the thread and the reply: proofread it, summarise the thread, write a reply. Nothing leaves the app until "返信する"; Claude is asked only when the user sends a request,
+// and then it gets the reply field's text, the conversation, the request and the messages of the thread as shown.
 // The thread is read when it is opened and after a reply, not on a timer. The reply and the conversation are kept per thread in memory until the app quits.
 import type { SlackThread } from "./bindings/SlackThread";
 import type { ThreadFile } from "./bindings/ThreadFile";
@@ -21,7 +22,7 @@ import { toast } from "./toast.js";
 import { projectOf } from "./todo-data.js";
 import { reviewCard } from "./todo-add.js";
 import { ensureTodoData } from "./todo.js";
-import { show } from "./view.js";
+import { copyText, show } from "./view.js";
 
 // The thread shown now. `ts` is the thread's own timestamp (a reply opens its thread's).
 interface Open {
@@ -69,18 +70,22 @@ const hasText = () => !!draft()?.text.trim();
 
 const chat = createChat({
   prefix: "reply",
-  loginNote: "設定の Claude タブで接続すると、校正できます",
-  // Nothing to proofread while the field is blank.
-  text: () => (hasText() ? draft()!.text : null),
+  loginNote: "設定の Claude タブで接続すると、Claude に相談できます",
+  // The reply field's text, which may be blank: Claude can write a reply from the thread. There is none to ask about while no thread is open.
+  text: () => draft()?.text ?? null,
   apply: (text) => {
     draft()!.text = text;
     input().value = text;
     grow();
     refreshSlackThread();
   },
-  ask: (text, history, instruction) => invoke("claude_proofread_reply", { text, history, instruction }),
+  // The thread goes as the screen shows it (the sender's name, the time and the text), and whether its read stopped short; while it is not read, none goes.
+  ask: (text, history, instruction) =>
+    invoke("claude_chat_thread", { text, thread: (thread?.messages ?? []).map(({ name, ts, text }) => ({ name, ts, text })), truncated: thread?.truncated ?? false, history, instruction }),
   changed: refreshSlackThread,
   locked: () => posting,
+  copy: (text) => void copyText(text, "コピーしました"),
+  keyHint: false,
 });
 
 // The field is three lines high and grows with its text up to six (the CSS holds the limit). A hidden field measures 0, which is left alone.
@@ -94,7 +99,7 @@ function grow() {
 export function refreshSlackThread() {
   input().disabled = posting;
   $<HTMLButtonElement>("st-send").disabled = posting || !hasText();
-  $<HTMLButtonElement>("reply-proofread").disabled = !chat.refresh();
+  chat.refresh();
   $("st-todo").hidden = !(getClaude()?.state === "ready" && todoConnected);
   $<HTMLButtonElement>("st-todo").disabled = summarizing;
 }
@@ -424,7 +429,6 @@ export function initSlackThread() {
   };
   $("st-todo").onclick = makeTodo;
   $("st-send").onclick = reply;
-  $("st-keys").textContent = isMac ? "↩ で改行、⌘↩ で返信" : "Enter で改行、Ctrl+Enter で返信";
   input().oninput = () => {
     const d = draft();
     if (!d) return;
@@ -439,7 +443,6 @@ export function initSlackThread() {
     e.preventDefault();
     reply();
   };
-  $("reply-proofread").onclick = () => chat.send("校正してください");
   chat.init();
   initSplit($("slack-thread"), $("reply-split"));
   refreshSlackThread();
