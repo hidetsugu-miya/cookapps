@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.38.0
+
+A-6 a new Orca screen lists the agents running in Orca as waiting for input, running and done, and posts to them through the `orca` CLI: a further instruction to a selected session, or a new agent in a chosen worktree (#25). No conversation is kept. For a Claude destination, `/` at the start of the text opens a list of the installed skills. The target is this machine or a saved Orca server, kept in `orca-settings.json`. A saved Orca server was not tried.
+
 ## v0.37.0
 
 S-15 a check beside a row of the Slack list reads the row without opening its thread (#22). A channel has one read position, so the older rows of the channel are read too and the newer ones stay unread.
