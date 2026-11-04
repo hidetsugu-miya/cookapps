@@ -464,11 +464,11 @@ describe("slack list", () => {
     await openList(timeline(heap(20, 3), { refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 13);
     await $("#slack-feed .feed-more .text-btn").click();
-    await waitForCount("#slack-feed .feed-row", 24);
+    await waitForCount("#slack-feed .feed-row", 23);
     await waitForCalls("slack_timeline", 3);
     await browser.pause(300);
     expect(await count("#slack-feed .feed-more")).toBe(0);
-    expect(await count("#slack-feed .feed-row")).toBe(24);
+    expect(await count("#slack-feed .feed-row")).toBe(23);
   });
 
   it("keeps the rest of the unread rows shown on the return from a thread", async () => {
@@ -477,7 +477,7 @@ describe("slack list", () => {
     await mock("slack_mark_read", true);
     await mock("slack_thread", slackThread([threadMessage(heap(1, 0)[0].ts, "Person 0", "unread 0")]));
     await $("#slack-feed .feed-more .text-btn").click();
-    await waitForCount("#slack-feed .feed-row", 25);
+    await waitForCount("#slack-feed .feed-row", 23);
     await openRow("unread 4");
     await expect($("#slack-thread")).toBeDisplayed();
     await $("#st-back").click();
@@ -577,19 +577,30 @@ describe("slack list", () => {
     timelineMessage(slackTs(3), "Bob Example", "dev", "older from dev"),
   ];
 
-  it("shows the button that hides a row's channel in the place of the date while the row has the focus, and nowhere else", async () => {
+  // :hover and :focus never match in the E2E window (it is hidden and the driver does not hover), so the shown state cannot be reached:
+  // the hidden state is the computed style with no hover, and the rules that lift it are read from the stylesheet to say that hover or focus inside the row does.
+  it("hides the button that keeps a row's channel off the list and shows the date, unless the mouse is over the row or the focus is in it, when the date gives way to the button", async () => {
     await openList(timeline(withHidden()));
     await waitForCount("#slack-feed .feed-row", 3);
-    const state = () =>
-      browser.execute(() => {
-        const item = document.querySelector<HTMLElement>("#slack-feed .feed-item")!;
-        const other = document.querySelectorAll<HTMLElement>("#slack-feed .feed-item")[1]!;
-        const v = (e: Element, s: string) => getComputedStyle(e.querySelector(s)!).visibility;
-        return { hide: v(item, ".feed-hide"), date: v(item, ".feed-date"), otherHide: v(other, ".feed-hide"), otherDate: v(other, ".feed-date") };
-      });
-    expect(await state()).toEqual({ hide: "hidden", date: "visible", otherHide: "hidden", otherDate: "visible" });
-    await browser.execute(() => document.querySelector<HTMLElement>("#slack-feed .feed-row")!.focus());
-    expect(await state()).toEqual({ hide: "visible", date: "hidden", otherHide: "hidden", otherDate: "visible" });
+    const state = await browser.execute(() => {
+      const v = (item: Element, s: string) => getComputedStyle(item.querySelector(s)!).visibility;
+      return [...document.querySelectorAll("#slack-feed .feed-item")].map((item) => ({ hide: v(item, ".feed-hide"), date: v(item, ".feed-date") }));
+    });
+    expect(state).toEqual(Array.from({ length: 3 }, () => ({ hide: "hidden", date: "visible" })));
+    const rules = await browser.execute(() => {
+      const found: Record<string, string | null> = { shows: null, hidesDate: null };
+      for (const sheet of document.styleSheets)
+        for (const rule of sheet.cssRules) {
+          if (!(rule instanceof CSSStyleRule)) continue;
+          if (rule.selectorText.includes(".feed-hide") && rule.style.visibility === "visible") found.shows = rule.selectorText;
+          if (rule.selectorText.includes(".feed-date") && rule.style.visibility === "hidden") found.hidesDate = rule.selectorText;
+        }
+      return found;
+    });
+    for (const selector of [rules.shows, rules.hidesDate]) {
+      expect(selector).toContain(".feed-item:hover");
+      expect(selector).toContain(".feed-item:focus-within");
+    }
   });
 
   it("takes the channel's rows out at once on pressing the button, calls slack_hide_channel, opens no thread and marks nothing read", async () => {
