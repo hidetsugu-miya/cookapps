@@ -252,6 +252,12 @@ describe("orca skill list", () => {
       onceId(),
       key,
     );
+  // The exact text of the field (`toHaveValue` trims what it reads) and whether the caret is at its end.
+  const typed = () =>
+    browser.execute(() => {
+      const field = document.getElementById("orca-input") as HTMLTextAreaElement;
+      return { value: field.value, caretAtEnd: field.selectionStart === field.value.length && field.selectionEnd === field.value.length };
+    });
   const openWithSkills = async (list = skills(), rows = sample()) => {
     await openOrca(orcaOverview(rows, worktrees()), { orca_skills: list });
     await waitForCalls("orca_skills");
@@ -293,7 +299,7 @@ describe("orca skill list", () => {
     await press("ArrowDown");
     expect(await activeCommand()).toBe("/pr-review");
     await press("Tab");
-    await expect($("#orca-input")).toHaveValue("/pr-review ");
+    expect(await typed()).toEqual({ value: "/pr-review ", caretAtEnd: true });
     await expect(popup()).not.toBeDisplayed();
   });
 
@@ -304,7 +310,7 @@ describe("orca skill list", () => {
     await pickMenu("example-app ・ feat/a");
     await $("#orca-input").setValue("/rev");
     await press("Enter");
-    await expect($("#orca-input")).toHaveValue("/review ");
+    expect(await typed()).toEqual({ value: "/review ", caretAtEnd: true });
     await expect(popup()).not.toBeDisplayed();
     expect(await callsOf(launch)).toEqual([]);
     // The text goes on after the command.
@@ -316,10 +322,11 @@ describe("orca skill list", () => {
   it("takes a click on a row", async () => {
     await openWithSkills();
     await $("#orca-input").setValue("/s");
-    for (const option of await $$("#orca-complete .orca-skill")) {
-      if ((await option.$("code").getText()) === "/simplify") await option.click();
-    }
-    await expect($("#orca-input")).toHaveValue("/simplify ");
+    // The row is found by its place and clicked once: the list goes at the click, and a row looked up after it is gone.
+    const index = (await commands()).indexOf("/simplify");
+    expect(index).toBeGreaterThanOrEqual(0);
+    await (await $$("#orca-complete .orca-skill"))[index].click();
+    expect(await typed()).toEqual({ value: "/simplify ", caretAtEnd: true });
     await expect(popup()).not.toBeDisplayed();
   });
 
