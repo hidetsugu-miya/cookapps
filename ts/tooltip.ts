@@ -27,8 +27,8 @@ function showTip(target: Element) {
   }, TIP_DELAY_MS);
 }
 
-// Delegated, so rows and avatars built later get tooltips too.
-const TIP_TARGET = "button[aria-label], input[aria-label], a.icon-btn[aria-label]";
+// Delegated, so rows and avatars built later get tooltips too. The button stretched over a row of the Slack list has its label for the keyboard: the row itself shows what it says.
+const TIP_TARGET = "button[aria-label]:not(.feed-open), input[aria-label], a.icon-btn[aria-label]";
 const targetOf = (e: Event) => (e.target as Element).closest?.(TIP_TARGET);
 
 export function initTooltip() {

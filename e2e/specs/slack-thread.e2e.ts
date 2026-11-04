@@ -24,7 +24,7 @@ async function openDetail(fixtures: Record<string, unknown> = {}, value = base()
   const read = await mock("slack_thread", value);
   await $("#nav-slack").click();
   await waitForCount("#slack-feed .feed-row", messages.length);
-  await $("#slack-feed .feed-row").click();
+  await $("#slack-feed .feed-open").click();
   await expect($("#slack-thread")).toBeDisplayed();
   await waitForCount("#st-msgs .st-msg", value.messages.length);
   return read;
@@ -99,7 +99,7 @@ describe("slack thread", () => {
     const fetch = await mock("fetch_images", { [iconUrl]: pngUri });
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     expect((await waitForCalls(fetch)).at(-1)).toEqual({ urls: [iconUrl] });
     await browser.waitUntil(async () => (await count("#st-msgs .st-avatar img.av-img")) === 1);
     expect(await textsOf("#st-msgs .st-avatar .av-text")).toEqual(["BE"]);
@@ -112,10 +112,36 @@ describe("slack thread", () => {
     await $("#st-back").click();
     await mock("slack_watch_seen", true);
     await mock("slack_thread", slackThread([threadMessage(root, "Alice Example", rootText)]));
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 1);
     await browser.pause(300);
     expect(await callsOf("slack_watch_seen")).toEqual([]);
+  });
+
+  it("tells Rust the newest reply it read, to move the seen position of a thread that is not watched, and makes the list again from its cache only when that moved something", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady, slack_timeline: timeline([listMessage()]) });
+    await mock("slack_thread", slackThread([threadMessage(root, "Alice Example", rootText), threadMessage(reply1, "Bob Example", "Looks fine to me.")]));
+    const seen = await mock("slack_thread_seen", false);
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 1);
+    const read = await mock("slack_timeline", timeline([listMessage()]));
+    await $("#slack-feed .feed-open").click();
+    expect(await waitForCalls(seen)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, latestTs: reply1 }]);
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([]);
+    await $("#st-back").click();
+    await mock("slack_thread_seen", true);
+    await $("#slack-feed .feed-open").click();
+    expect(await waitForCalls(read)).toEqual([{ cached: true }]);
+    await expect($("#slack-thread")).toBeDisplayed();
+    // A thread with no reply sends nothing.
+    await $("#st-back").click();
+    await mock("slack_thread_seen", true);
+    await mock("slack_thread", slackThread([threadMessage(root, "Alice Example", rootText)]));
+    await $("#slack-feed .feed-open").click();
+    await waitForCount("#st-msgs .st-msg", 1);
+    await browser.pause(300);
+    expect(await callsOf("slack_thread_seen")).toEqual([]);
   });
 
   it("goes back to the list where it was scrolled to and reads nothing again", async () => {
@@ -131,7 +157,7 @@ describe("slack thread", () => {
       document.getElementById("slack-feed")!.scrollTop = 300;
     });
     // A click of the page itself: the browser would scroll a clicked row into view first.
-    await browser.execute((id) => window.__e2e_once__(id) && document.querySelectorAll<HTMLElement>("#slack-feed .feed-row")[8].click(), onceId());
+    await browser.execute((id) => window.__e2e_once__(id) && document.querySelectorAll<HTMLElement>("#slack-feed .feed-open")[8].click(), onceId());
     await expect($("#slack-thread")).toBeDisplayed();
     const reads = (await callsOf("slack_timeline")).length;
     await $("#st-back").click();
@@ -152,7 +178,7 @@ describe("slack thread", () => {
     await mock("slack_thread", rejects("読めません"));
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await expect($("#st-msgs .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: 読めません"));
     await mock("slack_thread", base());
     await $("#st-msgs .pending.fail .text-btn").click();
@@ -164,7 +190,7 @@ describe("slack thread", () => {
     const read = await mock("slack_thread", holds);
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await waitForCalls(read);
     await expect($("#st-msgs .spin")).toBeDisplayed();
     await release(read, base());
@@ -186,7 +212,7 @@ describe("slack thread: attached files", () => {
     const images = await mock("slack_file_images", holds);
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     expect(await waitForCalls(images)).toEqual([{ teamId: workspace.teamId, urls: [thumbUrlOf("F1")] }]);
     await expect($("#st-msgs .st-thumb.loading")).toBeDisplayed();
     expect(await count("#st-msgs .st-img")).toBe(0);
@@ -211,7 +237,7 @@ describe("slack thread: attached files", () => {
     await mock("slack_file_images", {});
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await waitForCount("#st-msgs a.st-file", 2);
     expect(await textsOf("#st-msgs a.st-file")).toEqual(["design.png", "notes.pdf"]);
     expect(await count("#st-msgs .st-thumb")).toBe(0);
@@ -223,7 +249,7 @@ describe("slack thread: attached files", () => {
     const images = await mock("slack_file_images", {});
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 2);
     await browser.pause(200);
     expect(await callsOf(images)).toEqual([]);
@@ -417,16 +443,16 @@ describe("slack thread: blocks and attachments", () => {
     await $("#st-msgs .st-images .text-btn").click();
     await browser.waitUntil(async () => (await shown()) === 1);
     await $("#st-back").click();
-    await $("#slack-feed .feed-item:nth-of-type(1) .feed-row").click();
+    await $("#slack-feed .feed-item:nth-of-type(1) .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 1);
     expect(await shown()).toBe(1);
     await $("#st-back").click();
     await mock("slack_thread", slackThread([threadMessage(other, "Carol Example", "Another thread")]));
-    await $("#slack-feed .feed-item:nth-of-type(2) .feed-row").click();
+    await $("#slack-feed .feed-item:nth-of-type(2) .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 1);
     await $("#st-back").click();
     await mock("slack_thread", imageMessage());
-    await $("#slack-feed .feed-item:nth-of-type(1) .feed-row").click();
+    await $("#slack-feed .feed-item:nth-of-type(1) .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 1);
     expect(await shown()).toBe(0);
     expect(await textsOf("#st-msgs .st-images .text-btn")).toEqual(["画像を表示"]);
@@ -648,7 +674,7 @@ describe("slack thread: reply", () => {
     await send().click();
     await waitForCalls(post);
     await $("#st-back").click();
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 2);
     await release(post, true);
     await expect(input()).toHaveValue("");
@@ -662,13 +688,13 @@ describe("slack thread: reply", () => {
     await input().setValue("Draft of the first thread");
     await $("#st-back").click();
     await mock("slack_thread", slackThread([threadMessage(other, "Carol Example", "Another thread")]));
-    await $("#slack-feed .feed-item:nth-of-type(2) .feed-row").click();
+    await $("#slack-feed .feed-item:nth-of-type(2) .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 1);
     await expect(input()).toHaveValue("");
     await input().setValue("Draft of the second");
     await $("#st-back").click();
     await mock("slack_thread", base());
-    await $("#slack-feed .feed-item:nth-of-type(1) .feed-row").click();
+    await $("#slack-feed .feed-item:nth-of-type(1) .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 2);
     await expect(input()).toHaveValue("Draft of the first thread");
   });
@@ -710,7 +736,7 @@ describe("slack thread: Todo", () => {
     await $("#st-todo").click();
     await waitForCalls(summary);
     await $("#st-back").click();
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 2);
     await release(summary, slackSummary);
     await expect(cardOf()).toBeDisplayed();
@@ -723,7 +749,7 @@ describe("slack thread: Todo", () => {
     await expect(cardOf()).toBeDisplayed();
     await $("#st-card .review-name").setValue("Edited name");
     await $("#st-back").click();
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 2);
     await expect($("#st-card .review-name")).toHaveValue("Edited name");
   });
@@ -842,7 +868,7 @@ describe("slack thread: asking Claude", () => {
     const edit = await mock("claude_chat_thread", replyEdit("", "案"));
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await expect($("#st-msgs .pending.fail")).toBeDisplayed();
     await ask("どう返す？");
     expect(await waitForCalls(edit)).toEqual([{ text: "", thread: [], truncated: false, history: [], instruction: "どう返す？" }]);
@@ -982,7 +1008,7 @@ describe("slack thread: asking Claude", () => {
     await waitForCalls(edit);
     await $("#st-back").click();
     await mock("slack_thread", slackThread([threadMessage(other, "Carol Example", "Another thread")]));
-    await $("#slack-feed .feed-item:nth-of-type(2) .feed-row").click();
+    await $("#slack-feed .feed-item:nth-of-type(2) .feed-open").click();
     await waitForCount("#st-msgs .st-msg", 1);
     await release(edit, replyEdit("My reply", "My better reply"));
     await browser.pause(300);

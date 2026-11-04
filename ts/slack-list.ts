@@ -1,18 +1,21 @@
-// The Slack screen's list (S-5, S-8, S-13): under a fixed header, the unread messages (past the channel's read position in Slack; the first 10 of up to 20, the rest behind a button) of the joined channels of every workspace, newest first,
-// above the watched threads. A message that is read leaves the list unless its thread is watched.
-// A row opens the thread (slack-thread.ts) and sets the channel's read position to it; the buttons on a row keep its channel off the list (S-9) and watch or let go of its thread (S-13).
+// The Slack screen's list (S-5, S-8, S-13, S-14): under a fixed header, the unread messages (past the channel's read position in Slack; the first 10 of up to 20, the rest behind a button) of the joined channels of every workspace, with the threads with unread replies, newest first,
+// above the watched threads. A message that is read leaves the list unless its thread is watched or has unread replies. A row draws what the thread draws of the message (slack-blocks.ts, slack-rich.ts), with no image.
+// A row opens the thread (slack-thread.ts) and sets the channel's read position to it; the buttons on a row keep its channel off the list (S-9) and watch or let go of its thread (S-13), and its toggle folds its unread replies (S-14).
 // The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only.
 // The list is read at startup and again every `refreshSecs` while the window is visible, on whatever screen (the Slack button's badge follows it); showing the screen reads it only when no read is on its way and the one held is older than `refreshSecs`.
 // A read on another screen draws nothing of the list (it is drawn when the screen is shown) and never calls `show()`.
 import type { Timeline } from "./bindings/Timeline";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
+import type { TimelineReply } from "./bindings/TimelineReply";
 import type { Workspace } from "./bindings/Workspace";
 import { renderWorkspaceTray } from "./accounts.js";
 import { $, tag } from "./dom.js";
 import { formatDate } from "./format.js";
-import { BOOKMARK_SVG, DOT_SVG, EYE_OFF_SVG } from "./icons.js";
+import { BOOKMARK_SVG, CHEVRON_SVG, DOT_SVG, EYE_OFF_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
+import { attachmentNode, blocksNode } from "./slack-blocks.js";
+import { richNodes } from "./slack-rich.js";
 import { getSlackWorkspaces, setSlackWorkspaces, slackListVersion } from "./slack-workspaces.js";
 import { openSlackThread } from "./slack-thread.js";
 import { decorateAvatar, loadIcons, slackMs, workspaceColor } from "./slack-view.js";
@@ -48,6 +51,8 @@ let noticeKey = "";
 const UNREAD_FIRST = 10;
 // Whether the button showed the rest of the unread rows. It stays through redraws and a return from a thread, and goes when the screen is opened again.
 let unreadOpen = false;
+// The threads whose unread replies were folded with their toggle (they start open). Kept through redraws and a return from a thread, and forgotten when the thread has no more unread replies.
+const closedThreads = new Set<string>();
 // Where the list was scrolled to (it is hidden while a thread or another screen is shown, which forgets the position).
 let listScroll = 0;
 
@@ -118,11 +123,23 @@ function drawBadge() {
   setNavCount("nav-slack", unreadCount, "Slack", "未読", undefined, BADGE_CAP);
 }
 
+// What a row's unread replies add to the badge: a thread that could not be counted counts 1.
+const replyShare = (m: TimelineMessage) => (m.unreadReplies ? (m.unreadReplies.uncounted ? 1 : m.unreadReplies.count) : 0);
+const threadKeyOf = (m: TimelineMessage) => `${m.teamId}/${m.channel}/${m.ts}`;
+
+// Takes rows that went from the list out of what is held for the badge and for "すべて既読にする".
+function dropReplies(rows: TimelineMessage[]) {
+  if (!timeline) return;
+  unreadCount = Math.max(0, unreadCount - rows.reduce((n, m) => n + replyShare(m), 0));
+  timeline.unreadThreads = Math.max(0, timeline.unreadThreads - rows.filter((m) => m.unreadReplies).length);
+}
+
 // Takes the channel's rows out of the list held, with their share of the badge.
 function dropChannel(teamId: string, channel: string) {
   if (!timeline) return;
   const gone = (m: TimelineMessage) => m.teamId === teamId && m.channel === channel;
   unreadCount = Math.max(0, unreadCount - timeline.messages.filter((m) => gone(m) && m.unread).length);
+  dropReplies(timeline.messages.filter(gone));
   timeline.messages = timeline.messages.filter((m) => !gone(m));
   drawBadge();
   draw();
@@ -157,11 +174,64 @@ async function unhideChannel(teamId: string, channel: string) {
   load(true);
 }
 
+// What a row and a reply under it draw. The images of blocks and attachments are never fetched in the list, and a row has no thumbnail of a file.
+const NO_IMAGES = { shown: false, uris: new Map<string, string>() };
+type Drawn = Pick<TimelineMessage, "text" | "rich" | "blocks" | "showText" | "attachments" | "hasFiles">;
+
+// The body of a message as the thread draws it. Paragraphs alone are cut at two lines; blocks, attachments, a code block or a quote at about 12 lines (the CSS holds both).
+function bodyOf(m: Drawn) {
+  const short = !m.blocks.length && !m.attachments.length && m.rich.every((b) => b.type === "paragraph");
+  const box = tag("div", short ? "feed-text" : "feed-text feed-full");
+  if (short && !m.text.trim()) {
+    box.textContent = m.hasFiles ? "（添付ファイル）" : "";
+    return box;
+  }
+  if (m.blocks.length) box.append(blocksNode(m.blocks, NO_IMAGES));
+  if (m.showText) box.append(...richNodes(m.rich));
+  box.append(...m.attachments.map((a) => attachmentNode(a, NO_IMAGES)));
+  return box;
+}
+
+function replyOf(r: TimelineReply) {
+  const row = tag("div", "feed-reply");
+  const avatar = tag("div", "avatar feed-reply-avatar");
+  decorateAvatar(avatar, r.name, r.iconUrl);
+  const meta = tag("div", "feed-reply-meta");
+  meta.append(tag("b", "", r.name), tag("span", "", formatDate(slackMs(r.ts))));
+  const main = tag("div", "feed-reply-main");
+  main.append(meta, bodyOf(r));
+  row.append(avatar, main);
+  return row;
+}
+
+// The toggle of a row's unread replies, and the replies under it while it is open (they start open). Pressing it only folds them. The replies are part of the row: pressing one opens the thread.
+function repliesNodes(m: TimelineMessage, key: string) {
+  const unread = m.unreadReplies;
+  if (!unread) return [];
+  const thread = threadKeyOf(m);
+  const open = !closedThreads.has(thread);
+  const toggle = tag("button", "feed-thread-toggle");
+  toggle.type = "button";
+  toggle.dataset.key = `${key}/toggle`;
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.innerHTML = CHEVRON_SVG;
+  toggle.append(unread.uncounted ? "未読の返信あり" : `未読の返信 ${unread.count} 件`);
+  toggle.onclick = () => {
+    if (open) closedThreads.add(thread);
+    else closedThreads.delete(thread);
+    drawFeed();
+  };
+  if (!open) return [toggle];
+  const box = tag("div", "feed-thread-replies");
+  box.append(...unread.replies.map(replyOf));
+  if (unread.uncounted || unread.replies.length < unread.count) box.append(tag("div", "feed-reply-rest", "ほかの返信はスレッドで見られます"));
+  return [toggle, box];
+}
+
+// A row holds links and a toggle, so it is no button itself: one real button is stretched over it, and what is drawn above lets the press through to it (the CSS holds this), except links and the toggle.
 function rowOf(m: TimelineMessage, key: string) {
-  const row = tag("button", "feed-row");
-  row.type = "button";
+  const row = tag("div", "feed-row");
   row.classList.toggle("unread", m.unread);
-  row.dataset.key = key;
   const avatar = tag("span", "avatar feed-avatar");
   decorateAvatar(avatar, m.name, m.iconUrl);
   const dot = tag("i", "feed-ws");
@@ -170,28 +240,34 @@ function rowOf(m: TimelineMessage, key: string) {
   avatar.append(dot);
   const meta = tag("span", "feed-meta");
   meta.append(tag("b", "", m.name), tag("span", "", `#${m.channelName}`));
-  const main = tag("span", "feed-main");
+  const main = tag("div", "feed-main");
   // A thread that was not read yet, or cannot be, has no message to show.
   const status = m.watch?.status ?? "ok";
-  const text = status === "unreadable" ? "このスレッドは読めません（削除されたか、チャンネルを抜けた可能性があります）" : status === "pending" ? "読み込んでいます…" : m.text.trim() || (m.hasFiles ? "（添付ファイル）" : "");
-  main.append(meta, tag("span", status === "ok" ? "feed-text" : "feed-text muted", text));
+  const note = status === "unreadable" ? "このスレッドは読めません（削除されたか、チャンネルを抜けた可能性があります）" : status === "pending" ? "読み込んでいます…" : null;
+  main.append(meta, note === null ? bodyOf(m) : tag("div", "feed-text muted", note));
   if (status === "ok" && m.replyCount > 0) main.append(tag("span", "feed-replies", `返信 ${m.replyCount} 件`));
   if (m.watch && m.watch.newReplies > 0) main.append(tag("span", "feed-new", `新しい返信 ${m.watch.newReplies} 件`));
   // New replies that could not be counted (a thread longer than the page Rust reads): no number.
   else if (m.watch?.uncounted) main.append(tag("span", "feed-new", "新しい返信あり"));
-  row.append(avatar, main, tag("span", "feed-date", formatDate(slackMs(m.ts))));
+  main.append(...repliesNodes(m, key));
+  const press = tag("button", "feed-open");
+  press.type = "button";
+  press.dataset.key = key;
+  press.setAttribute("aria-label", `${m.name} #${m.channelName} ${note ?? m.text.trim().slice(0, 80)}`);
   // A thread that cannot be read has nothing to open; its bookmark lets it go.
-  row.disabled = status === "unreadable";
-  row.onclick = () => {
+  press.disabled = status === "unreadable";
+  press.onclick = () => {
     listScroll = feed().scrollTop;
     markRead(m);
     if (m.watch) seeWatched(m);
+    seeReplies(m);
     openSlackThread(m);
   };
+  row.append(press, avatar, main, tag("span", "feed-date", formatDate(slackMs(m.ts))));
   return row;
 }
 
-// Opening a message sets its channel's read position to it: the row and the older ones of the channel become read at once (an unread row leaves the list, a watched one stays and is no longer bold), and Slack is told.
+// Opening a message sets its channel's read position to it: the row and the older ones of the channel become read at once (an unread row leaves the list, a watched one or one with unread replies stays and is no longer bold), and Slack is told.
 // Nothing changes when the row is read already, or when the token cannot write the position (the next read would show it unread again). A failure is logged by Rust; the next read shows Slack's value.
 function markRead(m: TimelineMessage) {
   // A watched row moves the position to the newest unread message Rust holds of its thread (its own message, or a reply also sent to the channel); another row to its own message.
@@ -206,7 +282,8 @@ function markRead(m: TimelineMessage) {
     if (x.watch?.unreadTo && notAfter(x.watch.unreadTo, to)) x.watch.unreadTo = null;
     if (moves(x)) x.unread = false;
   }
-  timeline.messages = timeline.messages.filter((x) => !moves(x));
+  timeline.messages = timeline.messages.filter((x) => !moves(x) || x.unreadReplies);
+  for (const x of timeline.messages) if (moves(x)) x.unread = false;
   m.unread = false;
   unreadCount = Math.max(0, unreadCount - moved);
   drawBadge();
@@ -246,6 +323,29 @@ function seeWatched(m: TimelineMessage) {
   );
 }
 
+// Opening a row with unread replies: its replies count as read here, so the row goes at once (one that is still unread itself, when the token cannot write the position, stays without them) and the badge drops by them.
+function seeReplies(m: TimelineMessage) {
+  if (!m.unreadReplies || !timeline) return;
+  const latestTs = m.unreadReplies.latestTs;
+  const same = (x: TimelineMessage) => threadKeyOf(x) === threadKeyOf(m);
+  dropReplies(timeline.messages.filter((x) => same(x) && x.unreadReplies));
+  for (const x of timeline.messages) if (same(x)) x.unreadReplies = null;
+  timeline.messages = timeline.messages.filter((x) => !same(x) || x.unread);
+  drawBadge();
+  seeThread(m.teamId, m.channel, m.ts, latestTs);
+}
+
+// A thread was read up to the reply `latestTs`: Rust keeps it, since Slack cannot be told (S-14), and asks Slack nothing. The list is made again from its cache when that changed something or when a read on its way may answer with the old position. A failure is ignored: the next read shows the replies again.
+export function seeThread(teamId: string, channel: string, ts: string, latestTs: string) {
+  const during = isLoading();
+  invoke("slack_thread_seen", { teamId, channel, ts, latestTs }).then(
+    (moved) => {
+      if (moved || during || isLoading()) load(true);
+    },
+    () => {},
+  );
+}
+
 // Runs a change of the watch list. Every request before it is passed over and none is answered until it is done (as for the channels kept off the list), so that an answer that began before cannot bring a row back.
 async function guarded<T>(run: () => Promise<T>): Promise<{ value: T } | null> {
   changing++;
@@ -266,8 +366,11 @@ async function watchThread(m: TimelineMessage) {
   if (!timeline) return;
   const ts = m.threadTs ?? m.ts;
   const same = (x: TimelineMessage) => x.teamId === m.teamId && x.channel === m.channel && (x.threadTs ?? x.ts) === ts;
+  // A watched thread has no unread replies (S-14): "新しい返信" counts for it from here on.
+  dropReplies(timeline.messages.filter(same));
   timeline.messages = timeline.messages.filter((x) => !same(x));
-  timeline.watched = [{ ...m, ts, threadTs: null, watch: { newReplies: 0, uncounted: false, status: "ok", unreadTo: m.unread ? m.ts : null } }, ...timeline.watched];
+  timeline.watched = [{ ...m, ts, threadTs: null, watch: { newReplies: 0, uncounted: false, status: "ok", unreadTo: m.unread ? m.ts : null }, unreadReplies: null }, ...timeline.watched];
+  drawBadge();
   draw();
   await guarded(() => invoke("slack_watch", { teamId: m.teamId, channel: m.channel, ts }));
   load(true);
@@ -297,11 +400,11 @@ function disarmMarkAll() {
   button.textContent = "すべて既読にする";
 }
 
-// Moves the read position of every channel with an unread message to its newest unread message. The unread rows of the workspaces that can write it go at once (the watched ones stay, no longer bold);
+// Moves the read position of every channel with an unread message to its newest unread message, and every thread with unread replies to its newest reply. The unread rows of the workspaces that can write the position go at once (the watched ones stay, no longer bold), and every row's unread replies, which need no scope;
 // Rust sends it, and the list is made again from its cache, where the channels that could not be moved are unread still.
 async function markAllRead() {
   const button = $("slack-mark-all");
-  if (!timeline || timeline.markableChannels === 0) return;
+  if (!timeline || timeline.markableChannels + timeline.unreadThreads === 0) return;
   if (!button.classList.contains("confirm")) {
     button.classList.add("confirm", "danger");
     button.textContent = "もう一度押すとすべて既読";
@@ -312,10 +415,14 @@ async function markAllRead() {
   const writes = (teamId: string) => !timeline!.missing.some((x) => x.teamId === teamId && lacksWrite(x));
   const rows = timeline.messages.filter((m) => writes(m.teamId));
   for (const m of timeline.watched) if (writes(m.teamId)) m.unread = false;
-  timeline.messages = timeline.messages.filter((m) => !writes(m.teamId));
   const everyWorkspaceWrites = timeline.missing.every((x) => !lacksWrite(x));
   unreadCount = everyWorkspaceWrites ? 0 : Math.max(0, unreadCount - rows.filter((m) => m.unread).length);
+  dropReplies(timeline.messages);
+  for (const m of timeline.messages) m.unreadReplies = null;
+  // What stays is unread still, in a workspace that cannot write the position; a row that was there only for its replies goes.
+  timeline.messages = timeline.messages.filter((m) => m.unread && !writes(m.teamId));
   timeline.markableChannels = 0;
+  timeline.unreadThreads = 0;
   drawBadge();
   draw();
   const done = await guarded(() => invoke("slack_mark_all_read"));
@@ -379,13 +486,14 @@ function emptyNode() {
 function drawFeed() {
   const messages = timeline?.messages ?? [];
   const watched = timeline?.watched ?? [];
-  const key = JSON.stringify([messages, watched, unreadOpen, loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], new Date().toDateString()]);
+  forgetClosedThreads();
+  const key = JSON.stringify([messages, watched, [...closedThreads], unreadOpen, loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], new Date().toDateString()]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  const rows = (list: TimelineMessage[], prefix = "") => list.map((m) => itemOf(m, `${prefix}${m.teamId}/${m.channel}/${m.ts}`));
+  const rows = (list: TimelineMessage[], prefix = "") => list.map((m) => itemOf(m, `${prefix}${threadKeyOf(m)}`));
   const shownUnread = unreadOpen ? messages : messages.slice(0, UNREAD_FIRST);
   const more = messages.length - shownUnread.length;
   // The key of a watched row has a prefix: the same message may be in both sections for a moment.
@@ -408,13 +516,19 @@ function drawFeed() {
     }
     target.focus({ preventScroll: true });
   }
-  loadIcons([...shownUnread, ...watched].map((m) => m.iconUrl));
+  loadIcons([...shownUnread, ...watched].flatMap((m) => [m.iconUrl, ...(m.unreadReplies?.replies ?? []).map((r) => r.iconUrl)]));
 }
 
-// The header's "すべて既読にする" can be pressed while a channel has an unread message it may move.
+// A thread with no more unread replies starts open the next time it has some.
+function forgetClosedThreads() {
+  const shown = new Set((timeline?.messages ?? []).filter((m) => m.unreadReplies).map(threadKeyOf));
+  for (const thread of closedThreads) if (!shown.has(thread)) closedThreads.delete(thread);
+}
+
+// The header's "すべて既読にする" can be pressed while a channel has an unread message it may move, or a thread has unread replies.
 function drawHeader() {
   const button = $<HTMLButtonElement>("slack-mark-all");
-  button.disabled = !timeline || timeline.markableChannels === 0;
+  button.disabled = !timeline || timeline.markableChannels + timeline.unreadThreads === 0;
   if (button.disabled) disarmMarkAll();
 }
 
@@ -464,6 +578,7 @@ async function load(cached = false) {
     timeline = next;
     loadError = null;
     unreadCount = next.unreadTotal;
+    forgetClosedThreads();
     drawBadge();
   } else {
     loadError = error;

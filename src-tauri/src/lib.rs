@@ -240,6 +240,7 @@ pub fn run() {
             slack::slack_watch,
             slack::slack_unwatch,
             slack::slack_watch_seen,
+            slack::slack_thread_seen,
             slack::slack_hidden_list,
             slack::slack_hide_channel,
             slack::slack_unhide_channel,

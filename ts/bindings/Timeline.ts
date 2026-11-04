@@ -20,10 +20,14 @@ watched: Array<TimelineMessage>, failed: Array<TimelineFailure>, missing: Array<
  */
 pendingChannels: number, 
 /**
- * The unread messages among all the messages held (not only the ones listed), channels kept off the list left out; the sidebar's badge.
+ * The unread messages among all the messages held (not only the ones listed), channels kept off the list left out, and the unread replies (S-14; a thread that cannot be counted counts 1); the sidebar's badge.
  */
 unreadTotal: number, 
 /**
  * The channels "すべて既読にする" would move (`mark_targets`): 0 when there is nothing to do.
  */
-markableChannels: number, };
+markableChannels: number, 
+/**
+ * The threads with unread replies "すべて既読にする" would clear (S-14).
+ */
+unreadThreads: number, };

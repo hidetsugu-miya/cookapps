@@ -261,7 +261,7 @@ describe("sidebar: the account trays", () => {
     expect(await trays()).toEqual([false, true]);
     expect(await browser.execute(() => document.querySelectorAll("#slack-workspace-list button").length)).toBe(1);
     await mock("slack_thread", { teamId: workspace.teamId, channel: "C0123ABCD", ts: messages()[0].ts, messages: [], truncated: false });
-    await $("#slack-feed .feed-row").click();
+    await $("#slack-feed .feed-open").click();
     await expect($("#slack-thread")).toBeDisplayed();
     expect(await trays()).toEqual([false, true]);
   });
