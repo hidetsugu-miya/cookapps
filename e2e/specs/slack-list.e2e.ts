@@ -1383,4 +1383,175 @@ describe("slack list", () => {
     await mock("slack_timeline", timeline([], { failed: [failure, { ...failure, teamId: "T1", team: "Example Team" }], refreshSecs: 1 }));
     await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした"));
   });
+
+  // Reading one row without opening its thread (S-15).
+  // The text of the rows that have the check beside them.
+  const checked = () => browser.execute(() => [...document.querySelectorAll("#slack-feed .feed-item")].filter((i) => i.querySelector(".feed-read")).map((i) => i.querySelector(".feed-text")!.textContent!.trim()));
+  const readButton = async (text: string) => {
+    for (const item of await $$("#slack-feed .feed-item")) if ((await item.$(".feed-text").getText()) === text) return item.$(".feed-read");
+    throw new Error(`no row with ${text}`);
+  };
+  const lackingWrite = [{ teamId: workspace.teamId, team: workspace.team, scopes: ["channels:write"] }];
+
+  it("draws a check beside a row, left of the hide and watch buttons, shown on hover or focus only, and not under the row", async () => {
+    await openList(timeline(unreadSample()));
+    await waitForCount("#slack-feed .feed-row", 3);
+    const state = await browser.execute(() => {
+      const item = document.querySelector<HTMLElement>("#slack-feed .feed-item")!;
+      const [read, hide, watch] = [".feed-read", ".feed-hide", ".feed-watch"].map((s) => item.querySelector<HTMLElement>(s)!);
+      return { tag: read.tagName, inRow: !!read.closest(".feed-row"), parent: read.parentElement!.className, label: read.getAttribute("aria-label"), icon: read.classList.contains("icon-btn"), svg: !!read.querySelector("svg"), visibility: getComputedStyle(read).visibility, order: [read, hide, watch].map((b) => b.getBoundingClientRect().left) };
+    });
+    expect(state).toMatchObject({ tag: "BUTTON", inRow: false, parent: "feed-item", label: "既読にする", icon: true, svg: true, visibility: "hidden" });
+    expect(state.order[0]).toBeLessThan(state.order[1]);
+    expect(state.order[1]).toBeLessThan(state.order[2]);
+    const shows = await browser.execute(() => {
+      const found: string[] = [];
+      for (const sheet of document.styleSheets)
+        for (const rule of sheet.cssRules) if (rule instanceof CSSStyleRule && rule.selectorText.includes(".feed-read") && rule.style.visibility === "visible") found.push(rule.selectorText);
+      return found.join(" | ");
+    });
+    expect(shows).toContain(".feed-item:hover");
+    expect(shows).toContain(".feed-item:focus-within");
+    // A hidden element is skipped by the hit test: show the buttons as the pointer in the row does, then press where the check is drawn.
+    await browser.execute(() => document.querySelector("#slack-feed .feed-item")!.classList.add("feed-keep"));
+    // The middle of an icon button is its drawing: the press belongs to the button that holds it.
+    const buttonAt = (selector: string) =>
+      browser.execute((s) => {
+        const r = document.querySelector(s)!.getBoundingClientRect();
+        return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)!.closest("button")?.className;
+      }, selector);
+    expect(await buttonAt("#slack-feed .feed-item .feed-read")).toBe("icon-btn feed-read");
+    expect(await buttonAt("#slack-feed .feed-item .feed-hide")).toBe("icon-btn feed-hide");
+  });
+
+  it("reads the row and the older ones of its channel at once without opening the thread, calls slack_mark_read, lowers the badge, and makes the list again from Rust's cache", async () => {
+    const messages = unreadSample();
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(messages), claude_status: claudeReady });
+    await expect(badge()).toHaveText("3");
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 3);
+    const mark = await mock("slack_mark_read", holds);
+    const thread = await mock("slack_thread", slackThread([threadMessage(messages[0].ts, "Alice Example", "first")]));
+    const fresh = await mock("slack_timeline", timeline([messages[0], messages[1]]));
+    await (await readButton("second")).click();
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[2].ts }]);
+    // Before Slack has answered: "second" has gone, the newer row of its channel and the other channel's stay, and nothing is asked of the cache yet.
+    expect(await layout()).toEqual(["未読", "unread:first", "unread:other"]);
+    await expect(badge()).toHaveText("2");
+    expect(await callsOf(fresh)).toEqual([]);
+    await release(mark, true);
+    expect(await waitForCalls(fresh)).toEqual([{ cached: true }]);
+    await browser.pause(300);
+    expect(await callsOf(fresh)).toEqual([{ cached: true }]);
+    await expect($("#slack-list")).toBeDisplayed();
+    await expect($("#slack-thread")).not.toBeDisplayed();
+    expect(await callsOf(thread)).toEqual([]);
+    expect(await layout()).toEqual(["未読", "unread:first", "unread:other"]);
+  });
+
+  it("reads the newest row of a channel with its check: the older rows of the channel go, the other channel's stays", async () => {
+    const messages = unreadSample();
+    const mark = await openUnread(messages);
+    await mock("slack_timeline", timeline([messages[1]]));
+    await (await readButton("first")).click();
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[0].ts }]);
+    expect(await layout()).toEqual(["未読", "unread:other"]);
+  });
+
+  it("calls slack_thread_seen and not slack_mark_read for a row with unread replies that is read itself, takes it out at once, and opens no thread", async () => {
+    const message = withReplies();
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([message, ...unreadSample()]), claude_status: claudeReady });
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 4);
+    const seen = await mock("slack_thread_seen", holds);
+    const mark = await mock("slack_mark_read", true);
+    const thread = await mock("slack_thread", slackThread([threadMessage(message.ts, "Alice Example", "Parent")]));
+    const fresh = await mock("slack_timeline", timeline(unreadSample()));
+    await (await readButton("Parent")).click();
+    expect(await waitForCalls(seen)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: message.ts, latestTs: replyTwo }]);
+    expect(await layout()).toEqual(["未読", "unread:first", "unread:other", "unread:second"]);
+    await expect($("#nav-slack .nav-count")).toHaveText("3");
+    await release(seen, true);
+    expect(await waitForCalls(fresh)).toContainEqual({ cached: true });
+    await expect($("#slack-thread")).not.toBeDisplayed();
+    expect(await callsOf(mark)).toEqual([]);
+    expect(await callsOf(thread)).toEqual([]);
+  });
+
+  it("sets the position and calls slack_watch_seen for an unread watched row, un-bolds it and keeps it in the watch section, and opens no thread", async () => {
+    const watched = watchedSample();
+    const mark = await openUnread(unreadSample(), { watched });
+    const seen = await mock("slack_watch_seen", true);
+    const thread = await mock("slack_thread", slackThread([threadMessage(watched[1].ts, "Dave Example", "Watched unread")]));
+    await mock("slack_timeline", timeline(unreadSample(), { watched: [watched[0], { ...watched[1], unread: false, watch: { ...watched[1].watch!, unreadTo: null } }] }));
+    await (await readButton("Watched unread")).click();
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C3", ts: watched[1].ts }]);
+    expect(await waitForCalls(seen)).toEqual([{ teamId: workspace.teamId, channel: "C3", ts: watched[1].ts }]);
+    expect(await layout()).toEqual(["未読", "unread:first", "unread:other", "unread:second", "ウォッチ", "read:Watched read", "read:Watched unread"]);
+    await expect($("#slack-thread")).not.toBeDisplayed();
+    expect(await callsOf(thread)).toEqual([]);
+    expect(await checked()).toEqual(["first", "other", "second", "Watched read"]);
+  });
+
+  it("clears 新しい返信 and calls slack_watch_seen for a read watched row, sets no position, and opens no thread", async () => {
+    const watched = watchedSample();
+    const mark = await openUnread(unreadSample(), { watched });
+    const seen = await mock("slack_watch_seen", true);
+    const thread = await mock("slack_thread", slackThread([threadMessage(watched[0].ts, "Carol Example", "Watched read")]));
+    const fresh = await mock("slack_timeline", timeline(unreadSample(), { watched: [{ ...watched[0], watch: { ...watched[0].watch!, newReplies: 0 } }, watched[1]] }));
+    expect(await count("#slack-feed .feed-new")).toBe(1);
+    await (await readButton("Watched read")).click();
+    expect(await waitForCalls(seen)).toEqual([{ teamId: workspace.teamId, channel: "C3", ts: watched[0].ts }]);
+    expect(await count("#slack-feed .feed-new")).toBe(0);
+    expect(await waitForCalls(fresh)).toContainEqual({ cached: true });
+    expect(await count("#slack-feed .feed-new")).toBe(0);
+    await expect($("#slack-thread")).not.toBeDisplayed();
+    expect(await callsOf(mark)).toEqual([]);
+    expect(await callsOf(thread)).toEqual([]);
+  });
+
+  it("draws no check on a read watched row, a thread that cannot be read or is not read yet; and one on an unread row, and on a row whose new replies could not be counted", async () => {
+    const read = watchedMessage(slackTs(10), "Carol Example", "ops", "Watched quiet", 0, { channel: "C3" });
+    const gone = watchedMessage(slackTs(11), "不明", "ops", "", 0, { channel: "C3", user: null, watch: { newReplies: 0, uncounted: false, status: "unreadable", unreadTo: null } });
+    const waiting = watchedMessage(slackTs(12), "不明", "ops", "", 0, { channel: "C3", user: null, watch: { newReplies: 0, uncounted: false, status: "pending", unreadTo: null } });
+    const uncounted = watchedMessage(slackTs(13), "Dave Example", "ops", "Watched uncounted", 0, { channel: "C3", watch: { newReplies: 0, uncounted: true, status: "ok", unreadTo: null } });
+    await openList(timeline([unreadSample()[0]], { watched: [read, gone, waiting, uncounted] }));
+    await waitForCount("#slack-feed .feed-row", 5);
+    expect(await checked()).toEqual(["first", "Watched uncounted"]);
+  });
+
+  it("draws the check for unread replies and new replies when the token cannot write the position, and not for an unread message", async () => {
+    const watched = watchedSample();
+    await openList(timeline([unreadSample()[0], withReplies()], { watched, missing: lackingWrite }));
+    await waitForCount("#slack-feed .feed-row", 4);
+    expect(await checked()).toEqual(["Parent", "Watched read"]);
+  });
+
+  it("calls only slack_thread_seen for a row with unread replies when the token cannot write the position, and leaves its own unread message unread", async () => {
+    const message = withReplies({ unread: true });
+    await openList(timeline([message], { missing: lackingWrite }));
+    await waitForCount("#slack-feed .feed-row", 1);
+    const seen = await mock("slack_thread_seen", true);
+    const mark = await mock("slack_mark_read", true);
+    await mock("slack_timeline", timeline([{ ...message, unreadReplies: null }], { missing: lackingWrite }));
+    await $("#slack-feed .feed-read").click();
+    await waitForCalls(seen);
+    await waitForCalls("slack_timeline");
+    expect(await callsOf(mark)).toEqual([]);
+    expect(await layout()).toEqual(["未読", "unread:Parent"]);
+    expect(await checked()).toEqual([]);
+  });
+
+  it("says that the position could not be sent when slack_mark_read fails, and brings the rows back with the list made again from Rust's cache", async () => {
+    const messages = unreadSample();
+    const mark = await openUnread(messages);
+    await mock("slack_mark_read", rejects("失敗しました"));
+    const fresh = await mock("slack_timeline", timeline(messages));
+    await (await readButton("first")).click();
+    await waitForCalls(mark);
+    await expect($("#error")).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
+    expect(await waitForCalls(fresh)).toEqual([{ cached: true }]);
+    await browser.waitUntil(async () => (await layout()).join() === ["未読", "unread:first", "unread:other", "unread:second"].join());
+    await expect($("#slack-thread")).not.toBeDisplayed();
+  });
 });

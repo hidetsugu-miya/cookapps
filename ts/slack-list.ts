@@ -1,6 +1,6 @@
-// The Slack screen's list (S-5, S-8, S-13, S-14): under a fixed header, the unread messages (past the channel's read position in Slack; the first 10 of up to 20, the rest behind a button) of the joined channels of every workspace, with the threads with unread replies, newest first,
+// The Slack screen's list (S-5, S-8, S-13, S-14, S-15): under a fixed header, the unread messages (past the channel's read position in Slack; the first 10 of up to 20, the rest behind a button) of the joined channels of every workspace, with the threads with unread replies, newest first,
 // above the watched threads. A message that is read leaves the list unless its thread is watched or has unread replies. A row draws what the thread draws of the message (slack-blocks.ts, slack-rich.ts), with no image.
-// A row opens the thread (slack-thread.ts) and sets the channel's read position to it; the buttons on a row keep its channel off the list (S-9) and watch or let go of its thread (S-13), and its toggle folds its unread replies (S-14).
+// A row opens the thread (slack-thread.ts) and sets the channel's read position to it; the buttons on a row read it without opening the thread (S-15), keep its channel off the list (S-9) and watch or let go of its thread (S-13), and its toggle folds its unread replies (S-14).
 // The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only.
 // The list is read at startup and again every `refreshSecs` while the window is visible, on whatever screen (the Slack button's badge follows it); showing the screen reads it only when no read is on its way and the one held is older than `refreshSecs`.
 // A read on another screen draws nothing of the list (it is drawn when the screen is shown) and never calls `show()`.
@@ -11,7 +11,7 @@ import type { Workspace } from "./bindings/Workspace";
 import { renderWorkspaceTray } from "./accounts.js";
 import { $, tag } from "./dom.js";
 import { formatDate } from "./format.js";
-import { BOOKMARK_SVG, CHEVRON_SVG, DOT_SVG, EYE_OFF_SVG } from "./icons.js";
+import { BOOKMARK_SVG, CHECK_SVG, CHEVRON_SVG, DOT_SVG, EYE_OFF_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { attachmentNode, blocksNode } from "./slack-blocks.js";
@@ -97,11 +97,17 @@ function drawNotice() {
   );
 }
 
-// A row with the buttons beside it: the one that keeps its channel off the list, and the bookmark that watches its thread or lets it go. They are siblings of the row: a button is not put in a button.
+// A row with the buttons beside it: the check that reads it (only when that changes something), the one that keeps its channel off the list, and the bookmark that watches its thread or lets it go. They are siblings of the row: a button is not put in a button.
 // A row of the watch section has `m.watch`; its bookmark is always shown.
 function itemOf(m: TimelineMessage, key: string) {
   const watched = m.watch !== null;
   const item = tag("div", watched ? "feed-item watched" : "feed-item");
+  const read = tag("button", "icon-btn feed-read");
+  read.type = "button";
+  read.setAttribute("aria-label", "既読にする");
+  read.dataset.key = `${key}/read`;
+  read.innerHTML = CHECK_SVG;
+  read.onclick = () => readOne(m);
   const hide = tag("button", "icon-btn feed-hide");
   hide.type = "button";
   hide.setAttribute("aria-label", `#${m.channelName} を一覧に出さない`);
@@ -115,7 +121,7 @@ function itemOf(m: TimelineMessage, key: string) {
   bookmark.dataset.key = `${key}/watch`;
   bookmark.innerHTML = BOOKMARK_SVG;
   bookmark.onclick = () => (watched ? unwatchThread(m) : watchThread(m));
-  item.append(rowOf(m, key), hide, bookmark);
+  item.append(rowOf(m, key), ...(readable(m) ? [read] : []), hide, bookmark);
   return item;
 }
 
@@ -260,9 +266,7 @@ function rowOf(m: TimelineMessage, key: string) {
   press.disabled = status === "unreadable";
   press.onclick = () => {
     listScroll = feed().scrollTop;
-    markRead(m);
-    if (m.watch) seeWatched(m);
-    seeReplies(m);
+    readRow(m);
     openSlackThread(m);
   };
   row.append(press, avatar, main, tag("span", "feed-date", formatDate(slackMs(m.ts))));
@@ -274,12 +278,50 @@ function rowOf(m: TimelineMessage, key: string) {
 // The latest `slack_mark_read` on its way: a list made from the cache before Rust has the new position would bring the rows back unread.
 let marking: Promise<unknown> = Promise.resolve();
 
-function markRead(m: TimelineMessage) {
+// What reading a row does, which opening it and the check beside it (S-15) both do: the position, the new replies of a watched thread and the unread replies. The result holds the request of the position (none when nothing is sent) and ends when all three requests have.
+function readRow(m: TimelineMessage) {
+  const mark = markRead(m);
+  const watch = m.watch ? seeWatched(m) : undefined;
+  const replies = seeReplies(m);
+  return { mark, done: Promise.allSettled([mark, watch, replies]) };
+}
+
+// Whether pressing the check beside a row changes something: its position can be set (the token may write it) and it has an unread message, or it has unread replies, or it is a watched thread that was read and has new replies.
+function readable(m: TimelineMessage) {
+  if (m.unreadReplies) return true;
+  if (!m.watch) return m.unread && canWrite(m.teamId);
+  if (m.watch.newReplies > 0 || m.watch.uncounted) return true;
+  return m.watch.status === "ok" && !!m.watch.unreadTo && canWrite(m.teamId);
+}
+
+// The check beside a row: it reads the row without opening the thread. The position of the channel is one, so the older rows of the channel are read too (as S-8 says for a press on the row).
+// Rust's cache makes the list again once every request is done, whatever they answered, so that the badge and the counts are Rust's (nothing is asked of Slack). A request that fails is told, and the row comes back with the list.
+async function readOne(m: TimelineMessage) {
+  // No answer is used while the requests are on their way (as for S-9): one that began before could bring the row back.
+  changing++;
+  loadSeq++;
+  let failed = false;
+  try {
+    const { mark, done } = readRow(m);
+    draw();
+    try {
+      await mark;
+    } catch {
+      failed = true;
+    }
+    await done;
+  } finally {
+    changing--;
+  }
+  if (failed) showError("既読を Slack に送れませんでした");
+  load(true);
+}
+
+function markRead(m: TimelineMessage): Promise<unknown> | undefined {
   // A watched row moves the position to the newest unread message Rust holds of its thread (its own message, or a reply also sent to the channel); another row to its own message.
   const to = m.watch ? m.watch.unreadTo : m.unread ? m.ts : null;
-  if (!to || !timeline) return;
-  const cannotWrite = timeline.missing.some((x) => x.teamId === m.teamId && lacksWrite(x));
-  if (cannotWrite) return;
+  if (!to || !timeline) return undefined;
+  if (!canWrite(m.teamId)) return undefined;
   const moves = (x: TimelineMessage) => x.unread && x.teamId === m.teamId && x.channel === m.channel && notAfter(x.ts, to);
   const moved = [...timeline.messages, ...timeline.watched].filter(moves).length;
   for (const x of timeline.watched) {
@@ -294,16 +336,19 @@ function markRead(m: TimelineMessage) {
   drawBadge();
   // A read that is on its way may answer with the old position (the rows would be unread again): once Rust has the new one, the list is made again from its cache, without waiting for the next period.
   const during = isLoading();
-  marking = invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: to }).then(
+  const sent = invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: to });
+  marking = sent.then(
     () => {
       if (during || isLoading()) load(true);
     },
     () => {},
   );
+  return sent;
 }
 
 // Whether the token of a workspace cannot set the read position (`channels:write` or `groups:write` missing).
 const lacksWrite = (x: { scopes: string[] }) => x.scopes.some((s) => s === "channels:write" || s === "groups:write");
+const canWrite = (teamId: string) => !timeline?.missing.some((x) => x.teamId === teamId && lacksWrite(x));
 
 // Whether the Slack timestamp `a` is not after `b`, compared as numbers (seconds, then microseconds), not as text.
 function notAfter(a: string, b: string) {
@@ -320,36 +365,40 @@ function seeWatched(m: TimelineMessage) {
   }
   // A read that is on its way may answer with the old count: once Rust has the new position, the list is made again from its cache (as `markRead` does).
   const during = isLoading();
-  invoke("slack_watch_seen", { teamId: m.teamId, channel: m.channel, ts: m.ts }).then(
+  const sent = invoke("slack_watch_seen", { teamId: m.teamId, channel: m.channel, ts: m.ts });
+  sent.then(
     () => {
       if (during || isLoading()) load(true);
     },
     () => {},
   );
+  return sent;
 }
 
 // Opening a row with unread replies: its replies count as read here, so the row goes at once (one that is still unread itself, when the token cannot write the position, stays without them) and the badge drops by them.
 function seeReplies(m: TimelineMessage) {
-  if (!m.unreadReplies || !timeline) return;
+  if (!m.unreadReplies || !timeline) return undefined;
   const latestTs = m.unreadReplies.latestTs;
   const same = (x: TimelineMessage) => threadKeyOf(x) === threadKeyOf(m);
   dropReplies(timeline.messages.filter((x) => same(x) && x.unreadReplies));
   for (const x of timeline.messages) if (same(x)) x.unreadReplies = null;
   timeline.messages = timeline.messages.filter((x) => !same(x) || x.unread);
   drawBadge();
-  seeThread(m.teamId, m.channel, m.ts, latestTs);
+  return seeThread(m.teamId, m.channel, m.ts, latestTs);
 }
 
 // A thread was read up to the reply `latestTs`: Rust keeps it, since Slack cannot be told (S-14), and asks Slack nothing. The list is made again from its cache when that changed something or when a read on its way may answer with the old position. A failure is ignored: the next read shows the replies again.
 export function seeThread(teamId: string, channel: string, ts: string, latestTs: string) {
   const during = isLoading();
-  invoke("slack_thread_seen", { teamId, channel, ts, latestTs }).then(
+  const sent = invoke("slack_thread_seen", { teamId, channel, ts, latestTs });
+  sent.then(
     async (moved) => {
       await marking;
       if (moved || during || isLoading()) load(true);
     },
     () => {},
   );
+  return sent;
 }
 
 // Runs a change of the watch list. Every request before it is passed over and none is answered until it is done (as for the channels kept off the list), so that an answer that began before cannot bring a row back.
@@ -493,7 +542,7 @@ function drawFeed() {
   const messages = timeline?.messages ?? [];
   const watched = timeline?.watched ?? [];
   forgetClosedThreads();
-  const key = JSON.stringify([messages, watched, [...closedThreads], unreadOpen, loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], new Date().toDateString()]);
+  const key = JSON.stringify([messages, watched, [...closedThreads], unreadOpen, loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], timeline?.missing.map((x) => [x.teamId, x.scopes]) ?? [], new Date().toDateString()]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -515,7 +564,7 @@ function drawFeed() {
   const target = focused ? box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`) : null;
   if (target) {
     // The buttons beside a row are `visibility: hidden` until the pointer or the focus is in its row, and a hidden element takes no focus: show them until the button loses the focus.
-    const item = target.classList.contains("feed-hide") || target.classList.contains("feed-watch") ? target.closest(".feed-item") : null;
+    const item = ["feed-read", "feed-hide", "feed-watch"].some((c) => target.classList.contains(c)) ? target.closest(".feed-item") : null;
     if (item) {
       item.classList.add("feed-keep");
       target.addEventListener("blur", () => item.classList.remove("feed-keep"), { once: true });
