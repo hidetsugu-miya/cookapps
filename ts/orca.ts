@@ -36,7 +36,7 @@ let selected: string | null = null;
 let newPath: string | null = null;
 let agent = AGENTS[0].id;
 let busy = false;
-// The skills of Claude Code on the machine the app runs on, whatever the target; read when the screen is first shown and by the update button.
+// The skills of Claude Code on the machine the app runs on, whatever the target; read when the screen is first shown, by the update button, and again after a failure.
 let skills: OrcaSkill[] = [];
 let skillsStale = true;
 let skillsSeq = 0;
