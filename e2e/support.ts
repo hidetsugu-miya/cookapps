@@ -9,6 +9,8 @@ import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
+import type { OrcaChatEvent } from "../ts/bindings/OrcaChatEvent";
+import type { OrcaChatItem } from "../ts/bindings/OrcaChatItem";
 import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
 import type { OrcaRow } from "../ts/bindings/OrcaRow";
 import type { OrcaSkill } from "../ts/bindings/OrcaSkill";
@@ -498,7 +500,7 @@ export const connection = (
 // The Orca screen (A-6). `minutes` is how long ago the state began (the time of a running or waiting agent) or the agent ended (a done one).
 export const orcaRow = (repo: string, branch: string, line: string, extra: Partial<OrcaRow> & { minutes?: number } = {}): OrcaRow => {
   const { minutes = 2, ...rest } = extra;
-  return { group: "working", repo, branch, line, agent: "Claude", atMs: Date.now() - minutes * 60_000 - 5_000, handle: `term_${repo}`, ...rest };
+  return { group: "working", repo, branch, line, atMs: Date.now() - minutes * 60_000 - 5_000, handle: `term_${repo}`, paneKey: `tab_${repo}:leaf_1`, path: `/work/${repo}`, ...rest };
 };
 
 export const orcaWorktree = (repo: string, branch: string): OrcaWorktree => ({ path: `/work/${repo}`, repo, branch });
@@ -516,3 +518,41 @@ export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], ex
 });
 
 export const orcaSkill = (command: string, description = ""): OrcaSkill => ({ command, description });
+
+// The session history (A-7): the items the screen draws, and the delivery of an event to the channel the screen gave `orca_chat_open` (the last one, or the `nth` counting from 0).
+export const chatUser = (id: string, text: string): OrcaChatItem => ({ kind: "user", id, text });
+export const chatAssistant = (id: string, text: string): OrcaChatItem => ({ kind: "assistant", id, text });
+export const chatTools = (id: string, summary: string, calls: [string, string][], runningSummary: string | null = null): OrcaChatItem => ({
+  kind: "tools",
+  id,
+  summary,
+  runningSummary,
+  calls: calls.map(([name, detail]) => ({ name, detail })),
+});
+export const chatItems = (items: OrcaChatItem[], start = 0, hasMore = false): OrcaChatEvent => ({ kind: "items", start, items, hasMore });
+export const chatStatus = (state: "connecting" | "live" | "reconnecting" | "unavailable", message = ""): OrcaChatEvent => ({ kind: "status", state, message });
+
+// The arguments of every `orca_chat_open` so far, with the channel (an object that cannot cross the driver) as `true`.
+export const chatOpens = () =>
+  browser.execute(() => {
+    const calls = (window as unknown as { __e2e_calls__: Record<string, { environment: string | null; path: string; paneKey: string; channel?: unknown }[]> }).__e2e_calls__.orca_chat_open ?? [];
+    return calls.map((c) => ({ ...c, channel: !!c.channel }));
+  });
+
+export const sendChat = (event: OrcaChatEvent, nth = -1) =>
+  browser.execute(
+    (id, e, n) => {
+      if (!window.__e2e_once__(id)) return;
+      const calls = (window as unknown as { __e2e_calls__: Record<string, { channel: { onmessage: (event: unknown) => void } }[]> }).__e2e_calls__.orca_chat_open;
+      calls.at(n)!.channel.onmessage(e);
+    },
+    onceId(),
+    event,
+    nth,
+  );
+
+// Waits until `orca_chat_open` was called `times` times; the calls are read with `chatOpens`.
+export async function waitForOpens(times = 1) {
+  await browser.waitUntil(async () => (await chatOpens()).length >= times, { timeoutMsg: `orca_chat_open was not called ${times} time(s)` });
+  return chatOpens();
+}
