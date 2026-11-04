@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.35.1
+
+The due popover no longer loses what was typed (#15): a click elsewhere, or pressing "追加" on the Slack card, confirms the text as Enter does, and Escape still cancels it. A picked day uses the time typed in the field (`15:00`, `15時`, `15時30分`, with 午前 or 午後, alone or after a date, 今日, 明日 or 明後日). A click elsewhere does not clear a repeating task's due date.
+
 ## v0.35.0
 
 S-13 the Slack list has the sections "未読" and "ウォッチ", and the read section is gone (#13): a message that is not watched leaves the list once it is read. A bookmark button keeps a thread until it is let go, with "新しい返信 N 件" on new replies; `slack-watched.json` holds IDs and timestamps only, and up to 20 threads are checked in one read. The Slack list and the inbox list have a fixed header with "すべて既読にする": pressed twice in Slack, where the read position cannot go back, and once in the inbox, for the unread threads in the list, with "元に戻す". A real Slack workspace was not tried.
