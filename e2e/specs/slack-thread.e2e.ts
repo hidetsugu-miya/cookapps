@@ -512,7 +512,8 @@ describe("slack thread: styles of a text (S-12)", () => {
   it("draws an HTML tag in a styled text as text", async () => {
     const markup = "<b>x</b><img src=x onerror=alert(1)>";
     await openDetail({}, withRich({ rich: [para(span(markup, "b"), span(markup, "c")), quote(span(markup)), { type: "code", text: markup }] }));
-    expect(await count("#st-msgs .st-msg b, #st-msgs .st-msg img")).toBe(0);
+    // The sender's name is a <b> of its own, so only the text's elements are looked at.
+    expect(await count("#st-msgs .st-text b, #st-msgs .st-text img, #st-msgs blockquote b, #st-msgs blockquote img, #st-msgs pre b, #st-msgs pre img")).toBe(0);
     expect(await textsOf("#st-msgs strong, #st-msgs .st-text code, #st-msgs blockquote, #st-msgs pre")).toEqual([markup, markup, markup, markup]);
   });
 
