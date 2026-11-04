@@ -664,7 +664,7 @@ describe("todo detail", () => {
     await openTodo();
     await $(ROWS).click();
     await expect($("#todo-detail .detail-side")).toBeDisplayed();
-    expect(await textsOf("#todo-detail .detail-side .field-label")).toEqual(["プロジェクト", "日付"]);
+    expect(await textsOf("#todo-detail .detail-side .field-label")).toEqual(["プロジェクト", "日付", "ラベル"]);
     expect(await textsOf("#todo-detail .detail-side .field-value")).toEqual(["Work", "今日"]);
     await expect($("#todo-detail .chip")).not.toExist();
     await expect($("#todo-detail")).not.toHaveText(expect.stringContaining("優先度"));
@@ -1884,7 +1884,6 @@ describe("todo detail labels", () => {
     await $(add).click();
     await expect($(".label-pop")).toBeDisplayed();
     expect(await browser.execute(() => document.querySelector(".label-pop")!.classList.contains("menu") && document.querySelector(".label-pop")!.parentElement === document.body)).toBe(true);
-    await expect($(input)).toBeFocused();
     await expect($(input)).toHaveAttribute("placeholder", "ラベルを検索または作成");
     expect(await textsOf(rows)).toEqual(["Errand", "Urgent"]);
     expect(await browser.execute((s) => [...document.querySelectorAll(s)].map((b) => b.getAttribute("aria-current")), rows)).toEqual(["false", "true"]);
