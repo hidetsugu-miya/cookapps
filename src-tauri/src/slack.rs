@@ -1465,8 +1465,10 @@ pub struct ThreadMessage {
     icon_url: Option<String>,
     text: String,
     files: Vec<ThreadFile>,
-    /// Drawn in place of `text` when not empty (S-11): the message has a block other than `rich_text`.
+    /// Drawn under (or in place of) `text` (S-11); empty when `text` alone is drawn.
     blocks: Vec<ThreadBlock>,
+    /// Whether `text` is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
+    show_text: bool,
     attachments: Vec<ThreadAttachment>,
     /// The https addresses of the images of `blocks` and `attachments`, once each; the screen asks for them only when the user presses "画像を表示".
     image_urls: Vec<String>,
@@ -2154,7 +2156,7 @@ fn pieces(text: &str) -> Vec<Piece<'_>> {
 }
 
 /// Slack escapes `&`, `<` and `>` in text; `&amp;` is undone last.
-fn unescape(s: &str) -> String {
+pub(crate) fn unescape(s: &str) -> String {
     s.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&amp;", "&")
@@ -2436,11 +2438,15 @@ fn thread_message(
     name_of: &dyn Fn(&str) -> Option<String>,
 ) -> ThreadMessage {
     let sender = bot_of(m).or(user);
-    let blocks = message_blocks(&m["blocks"], name_of);
+    // A person's ordinary post carries a `rich_text` block that repeats `text`, so it stays `text`; a bot's post, or one with no text, draws its blocks.
+    let draw_rich_text =
+        bot_of(m).is_some() || m["text"].as_str().is_none_or(|t| t.trim().is_empty());
+    let (blocks, show_text) = message_blocks(&m["blocks"], draw_rich_text, name_of);
     let attachments = message_attachments(&m["attachments"], name_of);
     ThreadMessage {
         image_urls: image_urls(&blocks, &attachments),
         blocks,
+        show_text,
         attachments,
         ts: m["ts"].as_str().unwrap_or_default().to_owned(),
         user: m["user"]

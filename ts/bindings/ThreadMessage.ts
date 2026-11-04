@@ -5,9 +5,13 @@ import type { ThreadFile } from "./ThreadFile";
 
 export type ThreadMessage = { ts: string, user: string | null, name: string, iconUrl: string | null, text: string, files: Array<ThreadFile>, 
 /**
- * Drawn in place of `text` when not empty (S-11): the message has a block other than `rich_text`.
+ * Drawn under (or in place of) `text` (S-11); empty when `text` alone is drawn.
  */
-blocks: Array<ThreadBlock>, attachments: Array<ThreadAttachment>, 
+blocks: Array<ThreadBlock>, 
+/**
+ * Whether `text` is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
+ */
+showText: boolean, attachments: Array<ThreadAttachment>, 
 /**
  * The https addresses of the images of `blocks` and `attachments`, once each; the screen asks for them only when the user presses "画像を表示".
  */

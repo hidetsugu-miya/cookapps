@@ -14,11 +14,14 @@ export interface ImageContext {
   uris: ReadonlyMap<string, string>;
 }
 
-function paragraph(text: string, className = "st-text") {
-  const p = tag("p", className);
-  p.append(...linkify(text));
-  return p;
+// An element with `text` in it as text, and its URLs as links.
+function linked<K extends "p" | "h3" | "b">(name: K, className: string, text: string) {
+  const el = tag(name, className);
+  el.append(...linkify(text));
+  return el;
 }
+
+const paragraph = (text: string, className = "st-text") => linked("p", className, text);
 
 // A button with an address is a link (Rust's navigation hook opens it in the default browser); one without cannot be pressed, and only its name shows.
 function buttonNode(b: ThreadButton) {
@@ -29,6 +32,7 @@ function buttonNode(b: ThreadButton) {
   }
   const link = tag("a", "text-btn", b.text);
   link.href = b.url;
+  link.title = link.href;
   return link;
 }
 
@@ -48,7 +52,7 @@ function imageNode(img: ThreadImage, ctx: ImageContext, className: string) {
 function blockNode(b: ThreadBlock, ctx: ImageContext): Node | null {
   switch (b.type) {
     case "header":
-      return tag("h3", "st-bh", b.text);
+      return linked("h3", "st-bh", b.text);
     case "section": {
       const box = tag("div", "st-sec");
       const main = tag("div", "st-sec-main");
@@ -108,20 +112,21 @@ export function attachmentNode(a: ThreadAttachment, ctx: ImageContext) {
   // Rust passes a hex color only.
   if (a.color) box.style.setProperty("--att", a.color);
   if (a.pretext) box.append(paragraph(a.pretext));
-  if (a.authorName) box.append(tag("p", "st-att-author", a.authorName));
+  if (a.authorName) box.append(paragraph(a.authorName, "st-att-author"));
   if (a.title) {
     if (a.titleLink) {
       const link = tag("a", "st-att-title", a.title);
       link.href = a.titleLink;
+      link.title = link.href;
       box.append(link);
-    } else box.append(tag("p", "st-att-title", a.title));
+    } else box.append(paragraph(a.title, "st-att-title"));
   }
   if (a.text) box.append(paragraph(a.text));
   if (a.fields.length) {
     const fields = tag("div", "st-fields");
     for (const f of a.fields) {
       const field = tag("div", "st-field");
-      if (f.title) field.append(tag("b", "", f.title));
+      if (f.title) field.append(linked("b", "", f.title));
       if (f.value) field.append(paragraph(f.value));
       fields.append(field);
     }
@@ -134,7 +139,7 @@ export function attachmentNode(a: ThreadAttachment, ctx: ImageContext) {
     row.append(...a.actions.map(buttonNode));
     box.append(row);
   }
-  if (a.footer) box.append(tag("p", "st-att-foot", a.footer));
+  if (a.footer) box.append(paragraph(a.footer, "st-att-foot"));
   if (a.fallback) box.append(paragraph(a.fallback));
   return box;
 }

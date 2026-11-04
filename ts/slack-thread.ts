@@ -161,7 +161,13 @@ async function showImages(m: ThreadMessage, button: HTMLButtonElement) {
     return;
   }
   imagesShown.add(m.ts);
-  drawMessages("keep");
+  // Only the row of this message is made again, so the others and the scroll position stay as they are (the whole thread is drawn again when the row is not there).
+  const row = [...$("st-msgs").children].find((el) => (el as HTMLElement).dataset.ts === m.ts);
+  const latest = thread?.messages.find((x) => x.ts === m.ts);
+  if (!row || !thread || !latest) return drawMessages("keep");
+  row.replaceWith(messageNode(latest));
+  loadIcons([latest.iconUrl]);
+  loadThumbs(thread, current!.key);
 }
 
 function imagesBar(m: ThreadMessage) {
@@ -178,14 +184,16 @@ function messageNode(m: ThreadMessage) {
   decorateAvatar(avatar, m.name, m.iconUrl);
   const meta = tag("div", "st-meta");
   meta.append(tag("b", "", m.name), tag("time", "", formatDetailDate(slackMs(m.ts))));
-  const text = tag("p", "st-text");
-  text.append(...linkify(m.text));
   const body = tag("div");
   body.append(meta);
   const images = { shown: imagesShown.has(m.ts), uris: blockImages };
-  // Rust sends blocks only when they take the place of the text (the text is then Slack's alternative text).
   if (m.blocks.length) body.append(blocksNode(m.blocks, images));
-  else if (m.text.trim()) body.append(text);
+  // Rust says whether the text is drawn too: with no blocks, and beside a block that could not be drawn (the text is otherwise Slack's alternative text).
+  if (m.showText && m.text.trim()) {
+    const text = tag("p", "st-text");
+    text.append(...linkify(m.text));
+    body.append(text);
+  }
   body.append(...m.attachments.map((a) => attachmentNode(a, images)));
   if (m.imageUrls.length && !images.shown) body.append(imagesBar(m));
   if (m.files.length) {
@@ -193,6 +201,7 @@ function messageNode(m: ThreadMessage) {
     files.append(...m.files.map(fileNode));
     body.append(files);
   }
+  row.dataset.ts = m.ts;
   row.append(avatar, body);
   return row;
 }

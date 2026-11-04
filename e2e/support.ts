@@ -414,7 +414,7 @@ export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> =
 export const hiddenChannel = (channel: string, name: string, extra: Partial<HiddenChannel> = {}): HiddenChannel => ({ teamId: workspace.teamId, team: workspace.team, channel, name, ...extra });
 
 // A message of a thread (`slack_thread`).
-export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, files: [], blocks: [], attachments: [], imageUrls: [], ...extra });
+export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, files: [], blocks: [], showText: true, attachments: [], imageUrls: [], ...extra });
 
 // An attachment of a thread's message (S-11) with nothing in it; `extra` sets the parts.
 export const attachment = (extra: Partial<ThreadAttachment> = {}): ThreadAttachment => ({

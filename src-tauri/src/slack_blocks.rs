@@ -11,7 +11,7 @@ use serde_json::Value;
 use ts_rs::TS;
 use url::Url;
 
-use crate::slack::{emojify, mention_ids, plain_text, UNKNOWN_NAME};
+use crate::slack::{emojify, mention_ids, plain_text, unescape, UNKNOWN_NAME};
 
 /// Looks a user up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -115,19 +115,37 @@ pub struct ThreadAttachment {
     fallback: Option<String>,
 }
 
-/// The blocks to draw in place of the message's `text`: empty unless a block other than `rich_text` can be drawn.
-/// Slack's `text` is the alternative text of a message with such blocks, and a person's ordinary post carries a `rich_text` block that repeats it.
-pub(crate) fn message_blocks(blocks: &Value, name_of: NameOf) -> Vec<ThreadBlock> {
-    let drawn: Vec<(bool, ThreadBlock)> = blocks
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|b| Some((b["type"] == "rich_text", block(b, name_of)?)))
+/// The blocks to draw for the message, and whether its `text` is drawn too.
+/// Slack's `text` is the alternative text of a message with blocks, so it is left out when a block other than `rich_text` can be drawn; but a person's ordinary post carries a `rich_text` block that repeats it,
+/// so `rich_text` is flattened only when there is such a block or `draw_rich_text` (the post is a bot's, or has no text). Nothing is flattened otherwise.
+/// The text is drawn too when there are no blocks to draw, and when the message has a block that could not be (the text may stand for it).
+pub(crate) fn message_blocks(
+    blocks: &Value,
+    draw_rich_text: bool,
+    name_of: NameOf,
+) -> (Vec<ThreadBlock>, bool) {
+    let list = items(blocks);
+    // The blocks other than `rich_text` first: they are cheap, and say whether `rich_text` is flattened at all.
+    let mut drawn: Vec<(bool, Option<ThreadBlock>)> = list
+        .iter()
+        .map(|b| {
+            let rich = b["type"] == "rich_text";
+            (rich, if rich { None } else { block(b, name_of) })
+        })
         .collect();
-    if drawn.iter().all(|(rich, _)| *rich) {
-        return Vec::new();
+    let has_other = drawn.iter().any(|(rich, b)| !rich && b.is_some());
+    if !has_other && !draw_rich_text {
+        return (Vec::new(), true);
     }
-    drawn.into_iter().map(|(_, b)| b).collect()
+    for (b, (rich, slot)) in list.iter().zip(&mut drawn) {
+        if *rich {
+            *slot = block(b, name_of);
+        }
+    }
+    let missing = drawn.iter().any(|(rich, b)| !rich && b.is_none());
+    let out: Vec<ThreadBlock> = drawn.into_iter().filter_map(|(_, b)| b).collect();
+    let show_text = out.is_empty() || (has_other && missing);
+    (out, show_text)
 }
 
 /// Every block that can be drawn, `rich_text` included (an attachment has no `text` to fall back to).
@@ -150,7 +168,7 @@ fn not_blank(text: String) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
-/// The text of a Block Kit text object (`mrkdwn` or `plain_text`) or of a plain string, as plain text. A `plain_text` object is not mrkdwn: its `<` is a `<`, and its emoji codes are converted only when it says `emoji`.
+/// The text of a Block Kit text object (`mrkdwn` or `plain_text`) or of a plain string, as plain text. A `plain_text` object is not mrkdwn: its `<` is a `<` (only `&amp; &lt; &gt;` are undone), and its emoji codes are converted only when it says `emoji`.
 fn text_of(v: &Value, name_of: NameOf) -> Option<String> {
     let (raw, plain) = match v {
         Value::String(s) => (s.as_str(), false),
@@ -159,15 +177,18 @@ fn text_of(v: &Value, name_of: NameOf) -> Option<String> {
     };
     not_blank(match (plain, v["emoji"] == true) {
         (false, _) => plain_text(raw, name_of),
-        (true, true) => emojify(raw),
-        (true, false) => raw.to_owned(),
+        (true, true) => emojify(&unescape(raw)),
+        (true, false) => unescape(raw),
     })
 }
 
 /// `url` as it is when it is an http or https address, else `None`: a button never opens another scheme.
+/// The app's own origin on Windows and Android (`tauri.localhost`) is left out too: the navigation hook lets it through to the window itself.
 fn http_url(url: Option<&str>) -> Option<String> {
     let url = url?;
-    matches!(Url::parse(url).ok()?.scheme(), "http" | "https").then(|| url.to_owned())
+    let parsed = Url::parse(url).ok()?;
+    (matches!(parsed.scheme(), "http" | "https") && parsed.host_str() != Some("tauri.localhost"))
+        .then(|| url.to_owned())
 }
 
 /// `url` as it is when it is an https address that needs no Slack token, else `None`.
@@ -206,6 +227,15 @@ fn context_element(e: &Value, name_of: NameOf) -> Option<ThreadContext> {
         "image" => image(e).map(ThreadContext::Image),
         "mrkdwn" | "plain_text" => text_of(e, name_of).map(|text| ThreadContext::Text { text }),
         _ => None,
+    }
+}
+
+/// A text as a section with nothing else in it.
+fn paragraph(text: String) -> ThreadBlock {
+    ThreadBlock::Section {
+        text: Some(text),
+        fields: Vec::new(),
+        accessory: None,
     }
 }
 
@@ -249,11 +279,13 @@ fn block(b: &Value, name_of: NameOf) -> Option<ThreadBlock> {
                 .collect();
             (!buttons.is_empty()).then_some(ThreadBlock::Actions { buttons })
         }
-        "rich_text" => rich_text(b, name_of).map(|text| ThreadBlock::Section {
-            text: Some(text),
-            fields: Vec::new(),
-            accessory: None,
-        }),
+        "rich_text" => rich_text(b, name_of).map(paragraph),
+        // Standard Markdown, which is not mrkdwn: drawn as it is.
+        "markdown" => b["text"]
+            .as_str()
+            .map(str::to_owned)
+            .and_then(not_blank)
+            .map(paragraph),
         _ => None,
     }
 }
@@ -476,26 +508,61 @@ fn block_images(b: &ThreadBlock) -> Vec<&str> {
     }
 }
 
-/// Every mention found in `v`: `<@U1>` in any string, and the `user` elements of `rich_text`.
+/// The keys whose content is drawn, so the only places a mention is looked for (a URL or an ID elsewhere is not read).
+const DRAWN_KEYS: [&str; 9] = [
+    "text",
+    "fields",
+    "elements",
+    "blocks",
+    "pretext",
+    "title",
+    "footer",
+    "author_name",
+    "value",
+];
+
+/// Every mention in the drawn parts of `v`: `<@U1>` in a text, and the `user` elements of `rich_text`.
 fn collect_mentions(v: &Value, out: &mut Vec<String>) {
     match v {
         Value::String(s) => out.extend(mention_ids(s)),
         Value::Array(a) => a.iter().for_each(|x| collect_mentions(x, out)),
-        Value::Object(o) => {
+        Value::Object(_) => {
             if v["type"] == "user" {
                 out.extend(v["user_id"].as_str().map(str::to_owned));
             }
-            o.values().for_each(|x| collect_mentions(x, out));
+            DRAWN_KEYS
+                .iter()
+                .for_each(|k| collect_mentions(&v[*k], out));
         }
         _ => {}
     }
 }
 
 /// The users that the blocks and the attachments of `message` mention, each once.
+/// An attachment's `fallback` is drawn only when nothing else of it is, so it is read only then.
 pub(crate) fn mentioned_users(message: &Value) -> Vec<String> {
     let mut found = Vec::new();
     collect_mentions(&message["blocks"], &mut found);
-    collect_mentions(&message["attachments"], &mut found);
+    for a in items(&message["attachments"]) {
+        collect_mentions(a, &mut found);
+        let other = [
+            "pretext",
+            "author_name",
+            "title",
+            "text",
+            "fields",
+            "footer",
+            "actions",
+            "blocks",
+            "image_url",
+            "thumb_url",
+        ]
+        .iter()
+        .any(|k| !a[*k].is_null());
+        if !other {
+            collect_mentions(&a["fallback"], &mut found);
+        }
+    }
     let mut seen = HashSet::new();
     found.retain(|id| seen.insert(id.clone()));
     found
@@ -507,7 +574,7 @@ mod tests {
     use serde_json::json;
 
     fn blocks(v: Value) -> Vec<ThreadBlock> {
-        message_blocks(&v, &|_| None)
+        message_blocks(&v, false, &|_| None).0
     }
 
     fn section(text: &str) -> ThreadBlock {
@@ -532,6 +599,100 @@ mod tests {
         assert_eq!(blocks(json!([])), vec![]);
         assert_eq!(blocks(Value::Null), vec![]);
         assert_eq!(blocks(json!("x")), vec![]);
+    }
+
+    fn drawn(v: Value, draw_rich_text: bool) -> (Vec<ThreadBlock>, bool) {
+        message_blocks(&v, draw_rich_text, &|_| None)
+    }
+
+    #[test]
+    fn a_bots_or_a_textless_rich_text_only_message_draws_its_blocks() {
+        assert_eq!(
+            drawn(json!([rich_section("hi")]), true),
+            (vec![section("hi")], false)
+        );
+        // A rich text with nothing in it leaves the text.
+        assert_eq!(drawn(json!([rich_section(" ")]), true), (vec![], true));
+        // A person's ordinary post stays text, and its rich text is not even flattened.
+        assert_eq!(drawn(json!([rich_section("hi")]), false), (vec![], true));
+    }
+
+    #[test]
+    fn the_text_is_drawn_too_only_when_there_is_nothing_to_draw_or_a_block_could_not_be() {
+        let header = json!({"type": "header", "text": {"type": "plain_text", "text": "H"}});
+        let head = ThreadBlock::Header { text: "H".into() };
+        assert_eq!(drawn(json!([]), false), (vec![], true));
+        assert_eq!(
+            drawn(json!([header.clone()]), false),
+            (vec![head.clone()], false)
+        );
+        assert_eq!(
+            drawn(json!([header.clone(), {"type": "divider"}]), false),
+            (vec![head.clone(), ThreadBlock::Divider], false)
+        );
+        // A block that could not be drawn (an unknown type, an empty section) sits among drawn ones: both are shown.
+        assert_eq!(
+            drawn(json!([header.clone(), {"type": "input"}]), false),
+            (vec![head.clone()], true)
+        );
+        assert_eq!(
+            drawn(json!([header, {"type": "section"}]), false),
+            (vec![head], true)
+        );
+        // Nothing drawable at all: the text.
+        assert_eq!(drawn(json!([{"type": "input"}]), false), (vec![], true));
+    }
+
+    #[test]
+    fn a_markdown_block_is_a_section_of_its_text() {
+        assert_eq!(
+            blocks(json!([{"type": "markdown", "text": "**bold** & <b>raw</b>"}])),
+            vec![section("**bold** & <b>raw</b>")]
+        );
+        assert_eq!(
+            blocks(json!([{"type": "markdown", "text": "  "}, {"type": "divider"}])),
+            vec![ThreadBlock::Divider]
+        );
+    }
+
+    #[test]
+    fn a_plain_text_object_gets_its_escapes_back_but_stays_plain() {
+        let list = blocks(json!([
+            {"type": "header", "text": {"type": "plain_text", "text": "a &amp; b &lt;c&gt; &amp;lt;"}},
+            {"type": "header", "text": {"type": "plain_text", "text": "&lt;:fire:&gt;", "emoji": true}},
+        ]));
+        assert_eq!(
+            list,
+            vec![
+                ThreadBlock::Header {
+                    text: "a & b <c> &lt;".into()
+                },
+                ThreadBlock::Header {
+                    text: "<🔥>".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_link_to_the_apps_own_origin_is_not_a_link() {
+        let one = |url: &str| {
+            attachments(json!([{"title": "t", "title_link": url, "actions": [{"type": "button", "text": "B", "url": url}]}]))
+                .remove(0)
+        };
+        for own in [
+            "https://tauri.localhost/index.html",
+            "http://tauri.localhost/",
+            "https://TAURI.localhost/x",
+        ] {
+            let a = one(own);
+            assert_eq!(a.title_link, None, "{own}");
+            assert_eq!(a.actions[0].url, None, "{own}");
+        }
+        // Another host that only looks like it is a link.
+        let other = one("https://tauri.localhost.example.com/");
+        assert!(other.title_link.is_some());
+        assert!(other.actions[0].url.is_some());
     }
 
     #[test]
@@ -622,8 +783,10 @@ mod tests {
         let names = |id: &str| (id == "U1").then(|| "Alice".to_owned());
         let list = message_blocks(
             &json!([{"type": "section", "text": {"type": "mrkdwn", "text": "hi <@U1> and <@U2>"}}]),
+            false,
             &names,
-        );
+        )
+        .0;
         assert_eq!(list, vec![section("hi @Alice and @不明")]);
     }
 
@@ -802,7 +965,7 @@ mod tests {
             {"type": "rich_text_quote", "elements": [{"type": "text", "text": "quoted <b>"}]},
             {"type": "rich_text_preformatted", "elements": [{"type": "text", "text": "let x = 1;\n"}]}
         ]));
-        let list = message_blocks(&json!([r, {"type": "divider"}]), &names);
+        let list = message_blocks(&json!([r, {"type": "divider"}]), false, &names).0;
         assert_eq!(
             list[0],
             section("hello @Alice and @不明 #不明@here🎉:my_custom:https://a.example Nov 4\n• one\n• two\n  1. first\n  2. second\n> quoted <b>\nlet x = 1;")
@@ -1075,6 +1238,17 @@ mod tests {
         let mut found = mentioned_users(&m);
         found.sort();
         assert_eq!(found, vec!["U1", "U2", "U3", "U4", "U5"]);
+        // Only the drawn parts are read: not an ID or a URL, and a fallback only when it is what is drawn.
+        let m = json!({
+            "blocks": [{"type": "actions", "block_id": "<@U6>", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": "https://a.example/<@U7>"}]}],
+            "attachments": [
+                {"text": "x", "fallback": "<@U8>", "callback_id": "<@U9>"},
+                {"fallback": "<@U10>"}
+            ]
+        });
+        let mut found = mentioned_users(&m);
+        found.sort();
+        assert_eq!(found, vec!["U10"]);
         assert_eq!(mentioned_users(&json!({"text": "x"})), Vec::<String>::new());
     }
 }

@@ -728,6 +728,8 @@ a.st-file:hover { background: var(--hover); }
 .st-att-author, .st-att-foot { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .st-att-title { margin: 0; font-weight: 600; overflow-wrap: anywhere; text-decoration: none; }
 a.st-att-title:hover { text-decoration: underline; }
+/* The attachment is a flex column: without this a link or an image of its own would stretch across it. */
+a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-start; }
 .st-images { margin-top: 8px; }
 .st-note { margin: 0 24px 8px; padding: 8px 12px; border-radius: 12px; background: var(--soft); color: var(--ins); font-size: 13px; }
 #st-note.pending { margin: 0 24px 8px; }
