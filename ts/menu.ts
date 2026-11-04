@@ -5,18 +5,22 @@ import { composing, tag } from "./dom.js";
 let menuEl: HTMLElement | null = null;
 // The anchor of the open menu carries aria-expanded="true" while it is open.
 let menuAnchor: Element | null = null;
+// What the open menu does when a click elsewhere closes it (the due popover confirms its text); no other way of closing runs it.
+let menuOnOutside: (() => void) | null = null;
 
 export function closeMenu() {
   menuEl?.remove();
   menuEl = null;
+  menuOnOutside = null;
   menuAnchor?.removeAttribute("aria-expanded");
   menuAnchor = null;
 }
 
-// Shows `node` as the open menu, under `anchor` and inside the window.
-export function showMenu(anchor: Element, node: HTMLElement) {
+// Shows `node` as the open menu, under `anchor` and inside the window. `onOutside` runs after a click elsewhere closed it.
+export function showMenu(anchor: Element, node: HTMLElement, onOutside?: () => void) {
   closeMenu();
   menuEl = node;
+  menuOnOutside = onOutside ?? null;
   menuAnchor = anchor;
   anchor.setAttribute("aria-expanded", "true");
   document.body.append(node);
@@ -63,7 +67,10 @@ export function openMenu(anchor: Element, items: MenuItem[]) {
 
 export function initMenu() {
   document.addEventListener("pointerdown", (e) => {
-    if (menuEl && !(e.target as Element).closest(".menu")) closeMenu();
+    if (!menuEl || (e.target as Element).closest(".menu")) return;
+    const onOutside = menuOnOutside;
+    closeMenu();
+    onOutside?.();
   });
   // An Escape that cancels IME conversion is the field's, not the menu's.
   document.addEventListener("keydown", (e) => e.key === "Escape" && !composing(e) && closeMenu());

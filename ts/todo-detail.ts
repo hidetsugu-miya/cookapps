@@ -46,6 +46,24 @@ function monthPicker(shown: Date, current: string | null, pick: (iso: string) =>
   return box;
 }
 
+// The time of what is typed in the due popover, as `HH:MM`, or null: "15:00", "9:30", "15時", "15時30分", each with 午前 or 午後 in front ("午後 3時"),
+// alone or after a date, 今日, 明日 or 明後日 ("2026-11-06 15:00", "明日15時"). The whole text must be of this form: other words change what a number means ("夜8時"), so they are not read.
+// An hour of 24 or more, or minutes of 60 or more, is not a time.
+const TYPED_TIME = /^(?:(?:\d{4}-\d{2}-\d{2}|今日|明日|明後日)\s*)?(?:(午前|午後)\s*)?(\d{1,2})(?::(\d{2})|時(?:(\d{1,2})分)?)$/;
+function typedTime(text: string): string | null {
+  const m = TYPED_TIME.exec(text.trim());
+  if (!m) return null;
+  const hour = Number(m[2]);
+  const minute = Number(m[3] ?? m[4] ?? 0);
+  if (minute >= 60) return null;
+  let h = hour;
+  if (m[1]) {
+    if (hour > 12) return null;
+    h = (hour % 12) + (m[1] === "午後" ? 12 : 0);
+  } else if (hour >= 24) return null;
+  return `${String(h).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
 // What the due popover edits. `text` is what its field starts with; `date` (`YYYY-MM-DD`) and `time` (`HH:MM`) are the day it marks and the time a picked day keeps,
 // null for none; a `recurring` due date gets the text field only, since a picked day would replace its repeat. `commit` gets the new text, only when it differs.
 export interface DueEdit {
@@ -53,11 +71,14 @@ export interface DueEdit {
   date: string | null;
   time: string | null;
   recurring: boolean;
-  commit: (dueString: string) => void;
+  // `outside`: a click elsewhere confirmed it, and that click has not ended yet.
+  commit: (dueString: string, outside?: boolean) => void;
 }
 
 // The due popover opens a text field taking Todoist's natural language ("明日 15時", "毎週月曜"; empty clears the due date) over a month to pick a day from.
 // A one-off due date is written "2026-11-02 12:00", which Todoist reads back as is; a repeat keeps Todoist's text, which a date cannot hold.
+// The text in the field is confirmed by Enter or by a click elsewhere that closes the popover (what was typed is not lost); Escape cancels it.
+// A picked day keeps the time typed in the field ("15:00", "15時", "明日 午後3時", "2026-11-06 15:00"; `typedTime`), else the time the due date had.
 // The task's detail and the Slack summary card both open it; what is done with the new text is theirs.
 export function openDueEditor(anchor: Element, e: DueEdit) {
   const pop = tag("div", "menu due-pop");
@@ -65,23 +86,31 @@ export function openDueEditor(anchor: Element, e: DueEdit) {
   input.value = e.text;
   input.placeholder = "例: 明日 15時";
   input.setAttribute("aria-label", "期限（空欄で期限なし）");
+  const confirmText = () => {
+    if (input.value.trim() !== e.text) e.commit(input.value);
+  };
   input.onkeydown = (ev) => {
     if (composing(ev)) return;
     if (ev.key !== "Enter") return;
     closeMenu();
-    if (input.value.trim() !== e.text) e.commit(input.value);
+    confirmText();
   };
   const month = e.date ? addDays(e.date, 0) : new Date();
   pop.append(input);
   if (!e.recurring)
     pop.append(
       monthPicker(new Date(month.getFullYear(), month.getMonth(), 1), e.date, (iso) => {
+        const time = typedTime(input.value) ?? e.time;
         closeMenu();
-        if (iso === e.date) return;
-        e.commit(e.time ? `${iso} ${e.time}` : iso);
+        const value = time ? `${iso} ${time}` : iso;
+        if (value !== e.text) e.commit(value);
       }),
     );
-  showMenu(anchor, pop);
+  // A click elsewhere is not a decision to lose a repeat, which clearing the date takes two presses for; Enter on the empty field still is.
+  showMenu(anchor, pop, () => {
+    if (e.recurring && !input.value.trim()) return;
+    if (input.value.trim() !== e.text) e.commit(input.value, true);
+  });
   input.focus();
   input.select();
 }
@@ -93,7 +122,8 @@ export function openDuePop(anchor: Element, t: TaskItem) {
     date: due?.date ?? null,
     time: due?.time ?? null,
     recurring: !!due?.recurring,
-    commit: (dueString) => saveTask(t.id, { dueString }),
+    // A click elsewhere is still on its way: a redraw now would drop it, so the reload draws the new date.
+    commit: (dueString, outside) => saveTask(t.id, { dueString }, !outside),
   });
 }
 
