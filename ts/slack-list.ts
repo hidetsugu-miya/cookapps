@@ -287,11 +287,10 @@ function markRead(m: TimelineMessage) {
   m.unread = false;
   unreadCount = Math.max(0, unreadCount - moved);
   drawBadge();
-  // A read that is on its way may answer with the old position (the rows would be unread again): once Rust has the new one, the list is made again from its cache, without waiting for the next period.
-  const during = isLoading();
+  // A list made from the cache before Rust has the new position (a read on its way, or the one `slack_thread_seen` starts, which ends first) would bring the rows back unread: once Rust has it, the list is made again from its cache whenever `conversations.mark` was sent, without waiting for the next period.
   invoke("slack_mark_read", { teamId: m.teamId, channel: m.channel, ts: to }).then(
-    () => {
-      if (during || isLoading()) load(true);
+    (sent) => {
+      if (sent) load(true);
     },
     () => {},
   );
