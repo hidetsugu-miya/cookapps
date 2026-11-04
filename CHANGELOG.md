@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.35.0
+
+S-13 the Slack list has the sections "未読" and "ウォッチ", and the read section is gone (#13): a message that is not watched leaves the list once it is read. A bookmark button keeps a thread until it is let go, with "新しい返信 N 件" on new replies; `slack-watched.json` holds IDs and timestamps only, and up to 20 threads are checked in one read. The Slack list and the inbox list have a fixed header with "すべて既読にする": pressed twice in Slack, where the read position cannot go back, and once in the inbox, for the unread threads in the list, with "元に戻す". A real Slack workspace was not tried.
+
 ## v0.34.0
 
 The Claude pane of the Slack thread is no longer for proofreading only (#11): it helps with summaries, answers and reply drafts too, and works with an empty reply. It now also sends the thread's messages, with the text and links of their blocks and attachments, up to 10,000 characters, only when send is pressed; the privacy policy says so. A proposal has a copy button, send is an arrow icon, the key hints are gone on both sides, and the lines above the reply field and the request field stay level (S-6, S-7). The compose and prompt screens are unchanged, except that a proposal from an empty text no longer shows a blank removed line. A real thread was not tried.
