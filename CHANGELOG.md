@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.39.1
+
+A session whose Orca tab was closed while Claude kept running can be posted to again (#39). A question the agent asks is shown in the history unfolded, with its choices and the answer (#40). A Markdown table in the history, a Todo description or a Todo comment has ruled cells (#36).
+
 ## v0.39.0
 
 A-7 the Orca screen is now two panes (#31). A row of the list opens the history of its session on the right, with the box to post to it. The list's width can be dragged, each row shows the latest prompt, the state, the branch and the time, and "running" is now 作業中. Tool calls fold into one line that opens on a press. `+` switches the right pane to a new session, and its target is chosen from a menu with a filter. Only Claude sessions are listed, and the choice of agent is gone (A-6). A saved Orca server is read over an end-to-end encrypted WebSocket using Orca's pairing, with new updates as they come; this machine's Orca is read every 3 seconds. Written against Orca 1.4.248. Reading from a saved server was tested against known vectors and a local stand-in, not yet against a real server.
