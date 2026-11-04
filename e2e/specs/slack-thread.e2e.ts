@@ -529,8 +529,8 @@ describe("slack thread: styles of a text (S-12)", () => {
     await openDetail({}, slackThread([threadMessage(root, "CircleCI", "alt", { blocks, showText: false, attachments: [card] })]));
     expect(await textsOf("#st-msgs .st-sec-main > .st-text strong")).toEqual(["ok"]);
     expect(await textsOf("#st-msgs .st-fields blockquote")).toEqual(["quoted"]);
-    // A field of a paragraph and a quote is still one box.
-    expect(await count("#st-msgs .st-fields > .st-field")).toBe(1);
+    // A field of a paragraph and a quote is still one box (the attachment's fields are its own).
+    expect(await count("#st-msgs .st-fields:not(.st-att .st-fields) > .st-field")).toBe(1);
     expect(await textsOf("#st-msgs .st-ctx code")).toEqual(["bot"]);
     expect(await textsOf("#st-msgs .st-att > .st-text em")).toEqual(["text"]);
     expect(await textsOf("#st-msgs .st-att .st-field pre > code")).toEqual(["x = 1"]);
