@@ -1,3 +1,4 @@
+import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import {
   boot,
   callsOf,
@@ -41,6 +42,11 @@ const sample = () => [
   orcaRow("example-lib", "feature/x", "Opened the pull request.", { group: "done", minutes: 18, activity: "Edit: ts/orca.ts" }),
 ];
 const worktrees = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-api", "main")];
+// What `orca_launch` answers for a session started in example-api, and its row once the list holds it (a pane that is not one of the sample's).
+const reply: OrcaStarted = { paneKey: "tab_new:leaf_1", handle: "term_new" };
+const startedRow = () => orcaRow("example-api", "main", "Write the docs", { paneKey: "tab_new:leaf_1", handle: "term_new" });
+// What `orca_launch` answers when Orca's reply gave neither a pane key nor a handle.
+const noPane: OrcaStarted = { paneKey: null, handle: null };
 
 // The app with `value` as what Orca answers, and the Orca screen open.
 async function openOrca(value = orcaOverview(sample(), worktrees()), fixtures: Record<string, unknown> = {}) {
@@ -526,7 +532,7 @@ describe("orca", () => {
 
   it("starts Claude in the chosen worktree, with no agent in the arguments", async () => {
     await openOrca();
-    const launch = await mock("orca_launch", null);
+    const launch = await mock("orca_launch", noPane);
     // Needs a worktree before it can start.
     await $("#orca-input").setValue("Write the docs");
     await expect($("#orca-send")).toBeDisabled();
@@ -547,6 +553,108 @@ describe("orca", () => {
     await waitForCalls(launch);
     await expect($("#orca-error")).toHaveText("Worktree not found");
     await expect($("#orca-input")).toHaveValue("Try this");
+  });
+
+  it("follows the session it started: selects its tab, opens its history, and sends the next text to it", async () => {
+    await openOrca();
+    const launch = await mock("orca_launch", reply);
+    // The read after the launch holds the new session.
+    await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
+    await pickDest("/work/example-api");
+    await $("#orca-input").setValue("Write the docs");
+    await $("#orca-send").click();
+    expect(await waitForCalls(launch)).toEqual([{ path: "/work/example-api", text: "Write the docs", environment: null }]);
+    expect(await waitForOpens()).toEqual([{ environment: null, path: "/work/example-api", paneKey: "tab_new:leaf_1", channel: true }]);
+    await expect($('#orca-tabs [aria-selected="true"] .orca-tab-title')).toHaveText("Write the docs");
+    await expect($("#orca-started")).not.toBeDisplayed();
+    // A next text is an instruction to the same session.
+    const send = await mock("orca_send", null);
+    await $("#orca-input").setValue("And the tests");
+    await expect($("#orca-send")).toHaveText("送る");
+    await $("#orca-send").click();
+    expect(await waitForCalls(send)).toEqual([{ handle: "term_new", text: "And the tests", environment: null }]);
+    expect(await callsOf(launch)).toHaveLength(1);
+  });
+
+  it("waits for the row of the session it started, and starts no second one meanwhile", async () => {
+    await openOrca();
+    const launch = await mock("orca_launch", reply);
+    // The read after the launch does not hold the session yet.
+    await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await pickDest("/work/example-api");
+    await $("#orca-input").setValue("Write the docs");
+    await $("#orca-send").click();
+    await waitForCalls(launch);
+    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($("#orca-work-title")).toHaveText("新しいセッション");
+    // The next text cannot start another session.
+    await $("#orca-input").setValue("Another one");
+    await expect($("#orca-send")).toBeDisabled();
+    expect(await chatOpens()).toEqual([]);
+    // The row appears in a later read: it is selected and its history opens.
+    await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
+    await $("#orca-refresh").click();
+    expect(await waitForOpens()).toEqual([{ environment: null, path: "/work/example-api", paneKey: "tab_new:leaf_1", channel: true }]);
+    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($("#orca-send")).toHaveText("送る");
+    await expect($("#orca-send")).toBeEnabled();
+    expect(await callsOf(launch)).toHaveLength(1);
+  });
+
+  it("finds the row of the session it started by the handle when the launch gave no pane key", async () => {
+    await openOrca();
+    const launch = await mock("orca_launch", { paneKey: null, handle: "term_new" } satisfies OrcaStarted);
+    await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await pickDest("/work/example-api");
+    await $("#orca-input").setValue("Write the docs");
+    await $("#orca-send").click();
+    await waitForCalls(launch);
+    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    // The row has the handle and the pane key of the list.
+    await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
+    await $("#orca-refresh").click();
+    expect(await waitForOpens()).toEqual([{ environment: null, path: "/work/example-api", paneKey: "tab_new:leaf_1", channel: true }]);
+    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($("#orca-send")).toHaveText("送る");
+  });
+
+  it("drops the wait when the user selects another session", async () => {
+    await openOrca();
+    const launch = await mock("orca_launch", reply);
+    await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await pickDest("/work/example-api");
+    await $("#orca-input").setValue("Write the docs");
+    await $("#orca-send").click();
+    await waitForCalls(launch);
+    await expect($("#orca-started")).toBeDisplayed();
+    // Choosing a project drops the wait, and a row that appears later does not take the selection.
+    await $('#orca-feed .orca-project[data-key="proj_example-app"]').click();
+    await expect($("#orca-started")).not.toBeDisplayed();
+    await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
+    await $("#orca-refresh").click();
+    await waitForCalls("orca_overview");
+    await expect($('#orca-feed .orca-project[data-key="proj_example-app"]')).toHaveAttribute("aria-pressed", "true");
+    expect(await chatOpens()).toHaveLength(1);
+    expect((await chatOpens())[0].paneKey).toBe("tab_example-app:leaf_1");
+  });
+
+  it("says the history is in Orca when the launch gave no pane key, and starts another on the next press", async () => {
+    await openOrca();
+    const launch = await mock("orca_launch", noPane);
+    await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await pickDest("/work/example-api");
+    await $("#orca-input").setValue("Write the docs");
+    await $("#orca-send").click();
+    await waitForCalls(launch);
+    await expect($("#orca-input")).toHaveValue("");
+    await expect($("#orca-started")).toHaveText("セッションを始めました。履歴は Orca の画面で見られます。");
+    expect(await chatOpens()).toEqual([]);
+    // Nothing is waited for: the pane starts the next session when the user asks.
+    await $("#orca-input").setValue("Next");
+    await expect($("#orca-send")).toHaveText("起動する");
+    await expect($("#orca-send")).toBeEnabled();
+    await $("#orca-send").click();
+    await waitForCalls(launch, 2);
   });
 
   it("narrows the worktrees in the dialog with a filter, in two-line rows", async () => {
@@ -1316,7 +1424,7 @@ describe("orca skill list", () => {
 
   it("does not post on Enter while the list is open, and Enter puts the command in", async () => {
     await openWithSkills();
-    const launch = await mock("orca_launch", null);
+    const launch = await mock("orca_launch", noPane);
     await pickDest("/work/example-app");
     await $("#orca-input").setValue("/rev");
     await press("Enter");
@@ -1422,7 +1530,7 @@ describe("orca skill list", () => {
   it("gives no list, and still posts, when the skills cannot be read", async () => {
     await openOrca(orcaOverview(sample(), worktrees()), { orca_skills: rejects("skills failed") });
     await waitForCalls("orca_skills");
-    const launch = await mock("orca_launch", null);
+    const launch = await mock("orca_launch", noPane);
     await pickDest("/work/example-app");
     await $("#orca-input").setValue("/review");
     await expect(popup()).not.toBeDisplayed();
@@ -1909,7 +2017,7 @@ describe("orca: attached images", () => {
   it("puts the image in the chosen worktree and the saved target when it starts a session", async () => {
     await openOrca(orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }));
     const attach = await mock("orca_attach_image", dropped("example-api"));
-    const launch = await mock("orca_launch", null);
+    const launch = await mock("orca_launch", noPane);
     await pickDest("/work/example-api");
     await $("#orca-input").setValue("Write the docs");
     await paste(image());
