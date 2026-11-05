@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.41.2
+
+The message field of the Orca screen no longer shows a placeholder (#53). Typing `/` still opens the skill list.
+
 ## v0.41.1
 
 The history of an Orca session reads as a conversation (#52). It has a tinted ground and the agent's messages are white cards; the heading of a run of tools is small plain text that says only how many times tools ran, or that they are running.
