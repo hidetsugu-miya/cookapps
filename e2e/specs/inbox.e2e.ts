@@ -1,4 +1,5 @@
-import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, thread, threadDetail, waitForCalls, waitForCount } from "../support";
+import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, waitForCalls, waitForCount } from "../support";
+import type { ThreadItem } from "../../ts/bindings/ThreadItem";
 
 // Fires the event the app's sync round listens for (the window is shown again), which runs one round at once.
 const syncRound = () =>
@@ -242,7 +243,7 @@ describe("inbox", () => {
       await $("#mail-mark-all").click();
       await waitForCalls(setRead, 2);
       // Gmail still says the thread is unread: the row keeps the state the user chose.
-      await mock("sync", { kind: "changed", threads: [thread("t1", "First unread", true)], removed: [], historyId: "101" });
+      await mock("sync", { kind: "changed", threads: [thread("t1", "First unread", true)], removed: [], arrived: [], historyId: "101" });
       await syncRound();
       await waitForCalls("sync");
       await browser.pause(300);
@@ -354,6 +355,135 @@ describe("inbox", () => {
       expect((await errorLine()).text).toContain("boom");
       await retry(inbox(), 70_000);
       expect((await errorLine()).hidden).toBe(true);
+    });
+  });
+
+  describe("the popups for new mail (M-9)", () => {
+    const arrivedThread = thread("t9", "Lunch plan", true);
+    // One sync round that finds `arrived` among its changed threads; the next rounds find nothing.
+    async function arrive(...arrived: ThreadItem[]) {
+      const sync = await mock("sync", { kind: "changed", threads: arrived, removed: [], arrived: arrived.map((t) => t.id), historyId: "101" });
+      await syncRound();
+      await waitForCalls(sync);
+      await mock("sync", { kind: "unchanged" });
+    }
+    const cards = () => textsOf(".arrival");
+
+    it("shows no popup for the threads loaded at startup, or for a change that brought no new mail", async () => {
+      await browser.pause(300);
+      expect(await cards()).toEqual([]);
+      const sync = await mock("sync", { kind: "changed", threads: [arrivedThread], removed: [], arrived: [], historyId: "101" });
+      await syncRound();
+      await waitForCalls(sync);
+      await waitForCount("#unread-threads li", 3);
+      expect(await cards()).toEqual([]);
+    });
+
+    it("shows the sender and the subject at the bottom right with the three actions, and adds the row to the list", async () => {
+      await arrive(arrivedThread);
+      await waitForCount(".arrival", 1);
+      const card = $(".arrival");
+      await expect(card).toHaveText(expect.stringContaining("Alice"));
+      await expect(card).toHaveText(expect.stringContaining("Lunch plan"));
+      await expect(card.$('button[aria-label="ゴミ箱へ移動"]')).toBeDisplayed();
+      await expect(card.$('button[aria-label="アーカイブ"]')).toBeDisplayed();
+      await expect(card.$("button=詳細を開く")).toBeDisplayed();
+      await expect($("#nav-mail .nav-count")).toHaveText("3");
+      const rect = await browser.execute(() => {
+        const r = document.querySelector(".arrival")!.getBoundingClientRect();
+        return { right: innerWidth - r.right, bottom: innerHeight - r.bottom };
+      });
+      expect(rect.right).toBe(24);
+      expect(rect.bottom).toBeGreaterThanOrEqual(24);
+      // The same thread found again does not add a second card.
+      await arrive(arrivedThread);
+      expect(await cards()).toHaveLength(1);
+    });
+
+    it("trashes the thread with the same command as the list, takes its row out at once and closes the popup", async () => {
+      await arrive(arrivedThread);
+      await waitForCount("#unread-threads li", 3);
+      const trash = await mock("trash", true);
+      await $('.arrival button[aria-label="ゴミ箱へ移動"]').click();
+      await waitForCount(".arrival", 0);
+      await waitForCount("#unread-threads li", 2);
+      expect(await waitForCalls(trash)).toEqual([{ account, id: "t9" }]);
+    });
+
+    it("archives the thread with the same command as the list, takes its row out at once and closes the popup", async () => {
+      await arrive(arrivedThread);
+      await waitForCount("#unread-threads li", 3);
+      const archive = await mock("archive", true);
+      await $('.arrival button[aria-label="アーカイブ"]').click();
+      await waitForCount(".arrival", 0);
+      await waitForCount("#unread-threads li", 2);
+      expect(await waitForCalls(archive)).toEqual([{ account, id: "t9" }]);
+    });
+
+    it("opens the thread from another screen with 詳細を開く, but a sync alone leaves that screen as it is", async () => {
+      await $("#nav-slack").click();
+      await expect($("#slack-list")).toBeDisplayed();
+      const detail = await mock("thread", threadDetail("Lunch plan", "Shall we eat at noon?", true));
+      await mock("set_read", true);
+      await arrive(arrivedThread);
+      await waitForCount(".arrival", 1);
+      expect(await callsOf(detail)).toEqual([]);
+      await expect($("#slack-list")).toBeDisplayed();
+      await expect($("#thread")).not.toBeDisplayed();
+      await $(".arrival").$("button=詳細を開く").click();
+      await expect($("#thread")).toBeDisplayed();
+      await expect($("#thread-subject")).toHaveText("Lunch plan");
+      expect(await callsOf(detail)).toEqual([{ account, id: "t9" }]);
+      await waitForCount(".arrival", 0);
+      await expect($("#nav-mail")).toHaveAttribute("aria-current", "page");
+    });
+
+    it("closes with the close button, and gives no popup for the thread that is open on screen", async () => {
+      await arrive(arrivedThread);
+      await $('.arrival button[aria-label="閉じる"]').click();
+      await waitForCount(".arrival", 0);
+      expect(await callsOf("trash")).toEqual([]);
+      await mock("thread", threadDetail("First unread", "Hello", true));
+      await mock("set_read", true);
+      await rowOf("unread-threads", "First unread").$(".subject").click();
+      await expect($("#thread")).toBeDisplayed();
+      await arrive(thread("t1", "First unread", true));
+      await browser.pause(300);
+      expect(await cards()).toEqual([]);
+    });
+
+    it("closes the popup of a thread that is opened from the list, so its buttons cannot act on the open thread", async () => {
+      await arrive(arrivedThread);
+      await waitForCount(".arrival", 1);
+      await mock("thread", threadDetail("Lunch plan", "Shall we eat at noon?", true));
+      await mock("set_read", true);
+      await rowOf("unread-threads", "Lunch plan").$(".subject").click();
+      await expect($("#thread-subject")).toHaveText("Lunch plan");
+      await waitForCount(".arrival", 0);
+    });
+
+    it("does not let the timer of a closed popup close the next popup of the same thread", async () => {
+      await arrive(arrivedThread);
+      await $('.arrival button[aria-label="閉じる"]').click();
+      await waitForCount(".arrival", 0);
+      // The first card would have gone at 10 seconds; the second one arrives 6 seconds after the first.
+      await browser.pause(6000);
+      await arrive(arrivedThread);
+      await waitForCount(".arrival", 1);
+      await browser.pause(5000);
+      expect(await cards()).toHaveLength(1);
+      await browser.waitUntil(async () => (await cards()).length === 0, { timeout: 15_000, timeoutMsg: "the popup did not go by itself" });
+    });
+
+    it("keeps the newest 3 popups, and a popup goes by itself after 10 seconds", async () => {
+      const four = ["t5", "t6", "t7", "t8"].map((id) => thread(id, `Mail ${id}`, true));
+      await arrive(...four);
+      await waitForCount(".arrival", 3);
+      const texts = await cards();
+      expect(texts.some((t) => t.includes("Mail t5"))).toBe(false);
+      expect(texts.some((t) => t.includes("Mail t8"))).toBe(true);
+      await browser.waitUntil(async () => (await cards()).length === 0, { timeout: 15_000, timeoutMsg: "the popups did not go by themselves" });
+      await waitForCount("#unread-threads li", 6);
     });
   });
 

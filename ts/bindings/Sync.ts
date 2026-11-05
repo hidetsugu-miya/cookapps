@@ -4,4 +4,8 @@ import type { ThreadItem } from "./ThreadItem";
 /**
  * What one `sync` found, to apply to the list of that account.
  */
-export type Sync = { "kind": "unchanged" } | { "kind": "changed", threads: Array<ThreadItem>, removed: Array<string>, historyId: string, } | { "kind": "reloaded", threads: Array<ThreadItem>, historyId: string, } | { "kind": "needsLogin" };
+export type Sync = { "kind": "unchanged" } | { "kind": "changed", threads: Array<ThreadItem>, removed: Array<string>, 
+/**
+ * The IDs among `threads` that are new mail to tell the user about (M-9).
+ */
+arrived: Array<string>, historyId: string, } | { "kind": "reloaded", threads: Array<ThreadItem>, historyId: string, } | { "kind": "needsLogin" };

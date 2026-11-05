@@ -224,6 +224,19 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 /* The toast stacks above the update popup while it shows (ts/update.ts sets --toast-bottom). */
 .toast { position: fixed; right: 24px; bottom: var(--toast-bottom, 24px); z-index: 20; padding: 10px 16px; border-radius: 10px; background: var(--side); color: #fff; font-size: 13px; }
 .toast button { margin-left: 12px; padding: 0; border: 0; background: transparent; color: var(--side-fg); font: inherit; cursor: pointer; }
+/* The new-mail popups (ts/arrivals.ts) stack at the bottom right above the toast, which in turn is above the update popup. */
+.arrivals { position: fixed; right: 24px; bottom: calc(var(--toast-bottom, 24px) + 56px); z-index: 12; width: 320px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.arrival { pointer-events: auto; padding: 12px 12px 8px 16px; display: flex; flex-direction: column; gap: 8px; }
+/* The card is a .pop for its frame; these put back what .pop would change (it is fixed, 13px, and shrinks the text buttons). */
+.arrival.pop { position: static; z-index: auto; width: auto; font-size: inherit; line-height: normal; }
+.arrival.pop .text-btn { height: 32px; padding: 0 16px; font-size: revert; }
+.arrival-head { display: flex; align-items: flex-start; gap: 12px; }
+.arrival-head .avatar { flex: none; }
+.arrival-head .icon-btn { flex: none; width: 28px; height: 28px; margin-left: auto; }
+.arrival-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.arrival-text b, .arrival-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arrival-subject { font-size: 13px; color: var(--muted); }
+.arrival-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 #todo { flex: 1; min-height: 0; display: flex; }
 #projects { width: 220px; flex: none; border-right: 1px solid var(--line); padding: 20px 12px; box-sizing: border-box; overflow-y: auto; }
 #projects h3 { font-size: 12px; color: #888; font-weight: normal; margin: 16px 8px 4px; }
@@ -811,7 +824,7 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-pick-send:disabled { opacity: .4; cursor: default; }
 .orca-pick-send:disabled:hover { background: var(--accent); filter: none; }
 #orca-form { flex: none; padding: 12px 24px 20px; border-top: 1px solid var(--line); background: var(--bar); }
-#orca-error { margin-bottom: 8px; }
+#orca-error, #orca-started { margin-bottom: 8px; }
 .orca-dest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
 .orca-dest .review-chip { height: 28px; padding: 0 12px; border-radius: 14px; font-size: 12px; }
 .orca-dest-pop { width: 320px; max-height: calc(100vh - 32px); padding: 8px; gap: 8px; }

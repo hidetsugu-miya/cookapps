@@ -1,0 +1,96 @@
+// The popups for new mail (M-9): at the bottom right of the window, one card per new thread that auto sync found, with the actions trash, archive and open.
+import type { ThreadItem } from "./bindings/ThreadItem";
+import { $, el, span, tag } from "./dom.js";
+import { avatarColor, initials, senderName } from "./format.js";
+import { CHECK_SVG, CLOSE_SVG } from "./icons.js";
+import { removeRow } from "./inbox.js";
+import { rowKey, rows } from "./inbox-rows.js";
+import { setScreen } from "./nav.js";
+import { openThread, opened } from "./thread.js";
+
+// A card goes by itself after this long; the pointer or the focus on it holds it, and it counts again when they leave.
+const SHOW_MS = 10000;
+// The newest cards; an older one makes room (its thread stays in the list, unread).
+const MAX_CARDS = 3;
+
+let stack: HTMLElement;
+// The cards on screen by "account/id".
+const cards = new Map<string, HTMLElement>();
+
+export function initArrivals() {
+  stack = el("arrivals");
+  stack.id = "arrivals";
+  document.body.append(stack);
+}
+
+// Closes the card of a thread; openThread calls it too, so no button of a card acts on a thread the detail view holds.
+export function dismiss(key: string) {
+  cards.get(key)?.remove();
+  cards.delete(key);
+}
+
+// A button of a card that runs `run` for the thread's row and closes the card.
+function action(button: HTMLButtonElement, label: string, key: string, run: () => void) {
+  button.type = "button";
+  if (label) button.setAttribute("aria-label", label);
+  button.onclick = () => {
+    dismiss(key);
+    run();
+  };
+  return button;
+}
+
+// Shows the card of a new thread. A thread already announced, or the one open on screen, gets none.
+export function announceArrival(t: ThreadItem) {
+  const key = rowKey(t);
+  const current = opened.current;
+  if (cards.has(key) || (current && !$("thread").hidden && rowKey(current) === key)) return;
+  const name = senderName(t.from);
+  const card = el("arrival pop");
+  card.setAttribute("role", "status");
+  const avatar = span("avatar", initials(name));
+  avatar.style.background = avatarColor(name);
+  const text = el("arrival-text");
+  text.append(tag("b", "", name), span("arrival-subject", t.subject || "(件名なし)"));
+  const close = action(tag("button", "icon-btn"), "閉じる", key, () => {});
+  close.innerHTML = CLOSE_SVG;
+  const head = el("arrival-head");
+  head.append(avatar, text, close);
+
+  const row = () => rows.get(key);
+  const trash = action(tag("button", "icon-btn"), "ゴミ箱へ移動", key, () => {
+    const r = row();
+    if (r) removeRow("trash", r.t.account, r.t.id, r.li);
+  });
+  trash.innerHTML = $("trash").innerHTML;
+  const archive = action(tag("button", "icon-btn"), "アーカイブ", key, () => {
+    const r = row();
+    if (r) removeRow("archive", r.t.account, r.t.id, r.li);
+  });
+  archive.innerHTML = CHECK_SVG;
+  const open = action(tag("button", "text-btn", "詳細を開く"), "", key, () => {
+    setScreen("mail");
+    openThread(row()?.t ?? t, row()?.li ?? null);
+  });
+  const actions = el("arrival-actions");
+  actions.append(trash, archive, open);
+  card.append(head, actions);
+
+  let timer = 0;
+  const arm = () => {
+    clearTimeout(timer);
+    // A card closed before its time must not close a newer card of the same thread.
+    timer = window.setTimeout(() => cards.get(key) === card && dismiss(key), SHOW_MS);
+  };
+  const hold = () => clearTimeout(timer);
+  for (const type of ["mouseenter", "focusin"]) card.addEventListener(type, hold);
+  for (const type of ["mouseleave", "focusout"]) card.addEventListener(type, arm);
+  arm();
+
+  cards.set(key, card);
+  stack.append(card);
+  for (const [oldest] of cards) {
+    if (cards.size <= MAX_CARDS) break;
+    dismiss(oldest);
+  }
+}
