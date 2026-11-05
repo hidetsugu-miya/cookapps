@@ -70,6 +70,9 @@ const closing = new Set<string>();
 // The worktree (its path) a new launch uses, and a post on its way.
 let newPath: string | null = null;
 let busy = false;
+// The launch of the new-session pane that was answered: its pane key (null when Orca's reply gave none), the target and when to stop waiting for its row. With a pane key, the row is selected as soon as a read holds it, and no other launch is made till then.
+let started: { paneKey: string | null; target: string | null; until: number } | null = null;
+const START_WAIT_MS = 30_000;
 // The session whose history is open (target, path and pane key), null when none is.
 let chatKey: string | null = null;
 // The skills of Claude Code on the machine the app runs on, whatever the target; read when the screen is first shown, by the update button, and again after a failure.
@@ -451,8 +454,21 @@ function drawComposer() {
   const send = $<HTMLButtonElement>("orca-send");
   send.textContent = row ? "送る" : "起動する";
   // A session with no terminal can be read but takes no post.
-  send.disabled = busy || isReading() || view?.state === "missing" || !(input().value.trim() || hasAttachments()) || (row ? row.handle === null : !worktree);
+  send.disabled = busy || isReading() || view?.state === "missing" || !(input().value.trim() || hasAttachments()) || (row ? row.handle === null : !worktree || started?.paneKey != null);
+  drawStarted();
   updateCompletion();
+}
+
+// The note of a launch that was answered: it waits for the row of the session, or (Orca gave no pane key) says that the history is on Orca's screen.
+function drawStarted() {
+  const box = $("orca-started");
+  box.hidden = started === null || selectedRow() !== null;
+  if (box.hidden) return;
+  const waiting = started!.paneKey !== null;
+  const key = String(waiting);
+  if (box.dataset.state === key) return;
+  box.dataset.state = key;
+  box.replaceChildren(...(waiting ? [tag("span", "spin"), tag("span", "sp", "セッションを始めました。一覧に現れるのを待っています…")] : [tag("span", "sp", "セッションを始めました。履歴は Orca の画面で見られます。")]));
 }
 
 // Takes a read as the one shown. A read that did not learn the target and the environments (a poll, or a failed `environment list`) leaves the ones held (and the SSH hosts);
@@ -475,7 +491,16 @@ function adopt(read: OrcaOverview) {
     pruneMirrors((id) => held.has(id));
   }
   if (view.state === "ready") forgetGone();
+  claimStarted();
   ensureSelection();
+}
+
+// A launch whose row the read holds now is selected (its project and its tab, so its history opens); one for another target, or one that waited too long, is dropped.
+function claimStarted() {
+  if (started?.paneKey == null || view === null || view.state !== "ready") return;
+  const row = started.target === view.target ? view.rows.find((r) => r.paneKey === started!.paneKey) : undefined;
+  if (row) pickRow(row);
+  if (row || started.target !== view.target || Date.now() > started.until) started = null;
 }
 
 // The order and the last selection of tabs that are no longer anywhere are dropped, so they do not pile up.
@@ -610,6 +635,7 @@ async function chooseTarget(environment: string | null) {
   projectKey = null;
   selectedTab = null;
   newPath = null;
+  started = null;
   pruneMirrors(() => false);
   view = { ...view, target: environment, rows: [], worktrees: [], projects: [], hosts: [], terminals: [] };
   forgetNotices();
@@ -678,6 +704,7 @@ function showPostError(message: string | null) {
 
 // Selects the project and, in it, the tab last selected there, else the first.
 function selectProject(key: string) {
+  started = null;
   projectKey = key;
   selectedTab = null;
   newPath = null;
@@ -687,6 +714,7 @@ function selectProject(key: string) {
 }
 
 function selectTab(id: string) {
+  started = null;
   selectedTab = id;
   if (projectKey !== null) lastTab.set(projectKey, id);
   newPath = null;
@@ -697,17 +725,25 @@ function selectTab(id: string) {
 // A row of the working view selects its project and its tab.
 function selectRow(r: OrcaRow) {
   if (r.paneKey === null) return;
-  projectKey = r.projectKey;
-  selectedTab = claudeTabId(r.paneKey);
-  lastTab.set(r.projectKey, selectedTab);
-  // A worktree chosen for a launch is chosen again for the next one.
-  newPath = null;
+  started = null;
+  pickRow(r);
   draw();
   input().focus();
 }
 
+// Makes the row's project and tab the selection (the row has a pane key).
+function pickRow(r: OrcaRow) {
+  projectKey = r.projectKey;
+  selectedTab = claudeTabId(r.paneKey!);
+  lastTab.set(r.projectKey, selectedTab);
+  // A worktree chosen for a launch is chosen again for the next one.
+  newPath = null;
+}
+
 // The new-session pane: no project, no tab.
 function newSession() {
+  // The note of a launch with no pane key goes; one that waits for its row stays, so that no second launch is made meanwhile.
+  if (started?.paneKey === null) started = null;
   projectKey = null;
   selectedTab = null;
   draw();
@@ -757,19 +793,24 @@ async function post() {
   const row = selectedRow();
   const target = view?.target ?? null;
   if (busy || isReading() || !(text.trim() || hasAttachments()) || view === null) return;
-  if (row ? row.handle === null : projectKey !== null || !newPath) return;
+  if (row ? row.handle === null : projectKey !== null || !newPath || started?.paneKey != null) return;
   const path = row ? row.path : newPath!;
   if (hasAttachments() && !path) {
     showPostError("画像を置く worktree が分かりません");
     return;
   }
   busy = true;
+  started = null;
   showPostError(null);
   drawComposer();
   try {
     const body = hasAttachments() ? await invoke("orca_compose_text", { text, paths: await uploadAttachments(path, target) }) : text;
     if (row) await invoke("orca_send", { handle: row.handle!, text: body, environment: target });
-    else await invoke("orca_launch", { path: newPath!, text: body, environment: target });
+    else {
+      const launched = await invoke("orca_launch", { path: newPath!, text: body, environment: target });
+      // A session picked while the launch was on its way is not left for the new one.
+      if (projectKey === null) started = { paneKey: launched.paneKey, target, until: Date.now() + START_WAIT_MS };
+    }
     input().value = "";
     clearAttachments();
     load(clockScope(), true);
