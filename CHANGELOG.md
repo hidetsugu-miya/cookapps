@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.40.0
+
+A-8 the Orca screen has terminals and a project list (#42). The left pane lists the projects and the SSH hosts, newest first, each with the state icon Orca uses and its number of sessions, and a bell switches to the working sessions, which show the tool an agent is running. The right pane switches the sessions of a project with tabs, which can be closed. `+` starts Claude or opens a terminal in a worktree of this machine or on an SSH host: a real PTY, so full-screen programs work, and the shells end with the app. A plain terminal of Orca is only mirrored, with no colors, because Orca does not stream its bytes over its socket. The label of the target moved to the bottom of the left pane. Written against Orca 1.4.248.
+
 ## v0.39.2
 
 A Slack thread opened from the list opens at its newest message, and stays there while its images load (#32). Opening the same thread again keeps its position.
