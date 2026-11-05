@@ -45,7 +45,7 @@ type Scope = "full" | "screen" | "badge";
 let waitingCount = 0;
 // The notices: the panes of the stopped agents (done, failed or interrupted) that changed while the app ran and have not been shown on this screen yet.
 const notified = new Set<string>();
-// The panes that were stopped in the last read, and whether a read of the target was taken as the base (its rows are never noticed).
+// The panes that were stopped when last seen (a pane that left the list stays here, so one that comes back stopped is not noticed again), and whether a read of the target was taken as the base (its rows are never noticed).
 let wasStopped = new Set<string>();
 let baselined = false;
 // The target was just changed and the first read of the new one has not come back: nothing is said about it yet.
@@ -125,26 +125,26 @@ const isStopped = (r: OrcaRow) => r.group === "done" || r.status === "failed" ||
 const viewedPane = () => (shown() && !document.hidden && selectedTab?.startsWith("claude:") ? selectedTab.slice("claude:".length) : null);
 
 // Takes the rows of a read as the one the count follows (the rows of one read, whatever its scope). The first read of a target is only the base: a notice is made for a row that went from not stopped to stopped,
-// or that first appeared in a later read already stopped. A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
+// or that first appeared in a later read already stopped (a pane seen stopped before is never new, even after it left the list and came back). A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
 function track(rows: OrcaRow[]) {
   waitingCount = rows.filter((r) => r.group === "waiting").length;
-  const stopped = new Set<string>();
   const live = new Set<string>();
   for (const r of rows) {
     if (r.paneKey === null) continue;
     live.add(r.paneKey);
-    if (!isStopped(r)) notified.delete(r.paneKey);
-    else {
-      stopped.add(r.paneKey);
+    if (!isStopped(r)) {
+      notified.delete(r.paneKey);
+      wasStopped.delete(r.paneKey);
+    } else {
       if (baselined && !wasStopped.has(r.paneKey)) notified.add(r.paneKey);
+      wasStopped.add(r.paneKey);
     }
   }
   for (const key of notified) if (!live.has(key)) notified.delete(key);
-  wasStopped = stopped;
   baselined = true;
 }
 
-// Forgets the notices and the base: the command is gone, or the target changed.
+// Forgets the notices, the stopped panes seen and the base: the command is gone, or the target changed.
 function forgetNotices() {
   waitingCount = 0;
   notified.clear();
@@ -486,6 +486,8 @@ function drawComposer() {
 function adopt(read: OrcaOverview) {
   const next = !read.known && view !== null ? { ...read, target: view.target, environments: view.environments } : read;
   const keep = next.state === "failed" && view !== null && view.state !== "missing" && view.target === next.target;
+  // A target that changed without `chooseTarget` (the saved one is gone, or the file was changed): the notices and the base of the old one are not the new one's.
+  if (view !== null && next.target !== view.target) forgetNotices();
   view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees, projects: view!.projects, hosts: view!.hosts, terminals: view!.terminals } : next;
   if (read.known) ssh = read.ssh;
   if (view.state === "ready") track(view.rows);

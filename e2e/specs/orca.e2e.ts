@@ -21,6 +21,7 @@ import {
   orcaWorktree,
   rejects,
   release,
+  rowOf as threadRowOf,
   sendChat,
   sendTerminal,
   setClock,
@@ -30,6 +31,7 @@ import {
   terminalTargets,
   terminalWorktree,
   textsOf,
+  threadDetail,
   waitForCalls,
   waitForCount,
   waitForOpens,
@@ -264,6 +266,52 @@ describe("orca", () => {
     await $("#orca-target").click();
     await pickMenu("Lab");
     await expect($("#orca-target")).toHaveText("Lab に接続中");
+    await expectCount(0);
+  });
+
+  it("gives no new notice to a stopped agent that left the list for a read and comes back stopped", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await reread([finished("example-app"), working("example-api")]);
+    await expectCount(1);
+    // It leaves the list: its notice goes, and the app remembers that it was stopped.
+    await reread([working("example-api")]);
+    await expectCount(0);
+    await reread([finished("example-app"), working("example-api")]);
+    await expectCount(0);
+    // A pane the app never saw stopped still has a notice when it first appears stopped.
+    await reread([finished("example-app"), working("example-api"), finished("example-lib")]);
+    await expectCount(1);
+  });
+
+  it("drops the notices when a read names another target than the one held, and takes that read as the base", async () => {
+    const environments = ["Studio", "Lab"];
+    await openWorking(orcaOverview([working("example-app")], worktrees(), { target: "Studio", environments }));
+    await reread([finished("example-app")], { target: "Studio", environments });
+    await expectCount(1);
+    // The target changed without the menu (for example the saved one was changed): the rows of the other target are only the base.
+    await reread([finished("lab-app")], { target: "Lab", environments });
+    await expect($("#orca-target")).toHaveText("Lab に接続中");
+    await expectCount(0);
+    await reread([finished("lab-app"), finished("lab-lib")], { target: "Lab", environments });
+    await expectCount(1);
+  });
+
+  it("keeps the notice of a session that finished while another screen is shown, until the Orca screen shows it", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await select("example-app");
+    await $("#nav-mail").click();
+    await expect($("#orca")).not.toBeDisplayed();
+    await waitForCount("#unread-threads li", 2);
+    await mock("thread", threadDetail("請求書の件", "本文", false));
+    await threadRowOf("read-threads", "Already read").$(".subject").click();
+    await expect($("#thread-subject")).toHaveText("請求書の件");
+    // The pane of the thread reads the list when it opens, and that read finds the selected session done.
+    const overview = await mock("orca_overview", orcaOverview([finished("example-app"), working("example-api")], worktrees()));
+    await $("#thread-orca").click();
+    await waitForCalls(overview);
+    await expectCount(1);
+    await $("#nav-orca").click();
+    await expect($("#orca")).toBeDisplayed();
     await expectCount(0);
   });
 
