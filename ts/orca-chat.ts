@@ -369,6 +369,9 @@ export function closeChat(view: ChatView) {
   if (current === null || owner !== view) return;
   current = null;
   items = [];
+  picked.clear();
+  sending.clear();
+  failures.clear();
   wipe(view);
   owner = null;
   invoke("orca_chat_close").catch(() => {});

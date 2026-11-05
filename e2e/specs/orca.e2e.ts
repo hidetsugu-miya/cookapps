@@ -999,6 +999,27 @@ describe("orca: the session history", () => {
     expect(await count("#orca-items .orca-pick .pending.fail")).toBe(0);
   });
 
+  it("draws nothing of an answer that fails after another session was selected, and leaves that session's picks", async () => {
+    await openWorking();
+    await select("example-app");
+    const answerCall = await mock("orca_answer", holds);
+    await sendChat(chatItems([asking()]));
+    await waitForCount("#orca-items .orca-pick-option", 5);
+    await pickOption(0);
+    await pickOption(3);
+    await sendAnswer().click();
+    await waitForCalls(answerCall);
+    await select("example-api", 2);
+    await sendChat(chatItems([asking()]));
+    await waitForCount("#orca-items .orca-pick-option", 5);
+    await pickOption(1);
+    await release(answerCall, rejects("質問が画面に出ていません。ターミナルで答えてください"));
+    await browser.pause(200);
+    expect(await count("#orca-items .orca-pick .pending.fail")).toBe(0);
+    expect(await pressedOptions()).toEqual(pressedAll(F, T, F, F, F));
+    await expect(sendAnswer()).toHaveText("回答を送る");
+  });
+
   it("sends to the saved environment the screen shows, and says so when the session has no terminal", async () => {
     await openWorking(orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }));
     await select("example-app");
