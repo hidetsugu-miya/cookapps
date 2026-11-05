@@ -1,0 +1,815 @@
+//! A-11: answers a question of Claude (AskUserQuestion) in the history of an Orca session. The picks are typed into the session's terminal one key at a time, as a user would:
+//! before each key the screen is read until it shows what the key is for, so a key never lands in the composer of a session that does not ask.
+//! The keys are digits and Tab, built here; nothing the screen holds becomes a key. It was written against Claude Code 2.1.318 and Orca 1.4.249, and an update of either can change the screens (then nothing is sent).
+
+use std::time::{Duration, Instant};
+
+use serde::Deserialize;
+
+use crate::orca::{blocking, check_target, press_key, read_screen};
+
+/// Questions one call may answer, and choices one question may have (a choice is typed as one digit).
+const MAX_QUESTIONS: usize = 10;
+const MAX_OPTIONS: usize = 9;
+/// How long a key waits for its screen, and how often the screen is read meanwhile.
+const STEP_WAIT: Duration = Duration::from_secs(5);
+const POLL: Duration = Duration::from_millis(100);
+const NOT_SHOWN: &str = "質問が画面に出ていません。ターミナルで答えてください";
+const CHANGED: &str = "回答の途中で画面が変わりました。ターミナルで続けてください";
+/// The heading of the review, and what ends it (no line follows): every blank and the cursor are taken out, as `squash` does.
+const REVIEW: &str = "Reviewyouranswers";
+const REVIEW_END: &str = "Readytosubmityouranswers?1.Submitanswers2.Cancel";
+
+/// One question with the choices picked, as the history shows it. `picks` are 0-based indexes into `options`.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct AnswerQuestion {
+    pub text: String,
+    pub multi: bool,
+    pub options: Vec<String>,
+    pub picks: Vec<usize>,
+}
+
+/// A screen of Claude Code a key waits for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Screen<'a> {
+    /// The question is asked and nothing of it is picked yet.
+    QuestionShown(&'a AnswerQuestion),
+    /// The choice (0-based) of a multiple-choice question is checked.
+    OptionChecked(&'a AnswerQuestion, usize),
+    /// The review of all the answers, asking to submit.
+    Confirm(&'a [AnswerQuestion]),
+}
+
+/// A key and the screen it waits for.
+#[derive(Clone, Debug, PartialEq)]
+struct AnswerStep<'a> {
+    wait: Screen<'a>,
+    key: String,
+}
+
+fn check_questions(questions: &[AnswerQuestion]) -> Result<(), String> {
+    if questions.is_empty() {
+        return Err("答える質問がありません".into());
+    }
+    if questions.len() > MAX_QUESTIONS {
+        return Err(format!("一度に答えられる質問は {MAX_QUESTIONS} 個までです"));
+    }
+    for q in questions {
+        if q.text.trim().is_empty() {
+            return Err("質問の文がありません".into());
+        }
+        if q.options.is_empty() || q.options.len() > MAX_OPTIONS {
+            return Err(format!("選択肢は 1 個から {MAX_OPTIONS} 個までです"));
+        }
+        if q.options.iter().any(|o| o.trim().is_empty()) {
+            return Err("選択肢の文がありません".into());
+        }
+        if q.picks.is_empty() {
+            return Err("選択肢を選んでください".into());
+        }
+        if q.picks.iter().any(|&p| p >= q.options.len()) {
+            return Err("選んだ選択肢がありません".into());
+        }
+        let mut picks = q.picks.clone();
+        picks.sort_unstable();
+        picks.dedup();
+        if picks.len() != q.picks.len() {
+            return Err("同じ選択肢を重ねて選べません".into());
+        }
+        if !q.multi && q.picks.len() != 1 {
+            return Err("選べるのは 1 つだけの質問です".into());
+        }
+    }
+    Ok(())
+}
+
+/// The keys that answer `questions` (already checked) and the screen each waits for. A single choice is a digit; a multiple choice is a digit for each pick in the order of the choices, then Tab.
+/// The review is reached after the last question unless the only question is a single choice (it is sent by its digit), and its Submit is the digit 1.
+fn answer_steps(questions: &[AnswerQuestion]) -> Vec<AnswerStep<'_>> {
+    let mut steps = Vec::new();
+    for q in questions {
+        let mut picks = q.picks.clone();
+        picks.sort_unstable();
+        let mut wait = Screen::QuestionShown(q);
+        for &pick in &picks {
+            steps.push(AnswerStep {
+                wait,
+                key: (pick + 1).to_string(),
+            });
+            wait = Screen::OptionChecked(q, pick);
+        }
+        if q.multi {
+            steps.push(AnswerStep {
+                wait,
+                key: "\t".into(),
+            });
+        }
+    }
+    if questions.len() > 1 || questions.iter().any(|q| q.multi) {
+        steps.push(AnswerStep {
+            wait: Screen::Confirm(questions),
+            key: "1".into(),
+        });
+    }
+    steps
+}
+
+/// The text with every blank and the cursor `❯` removed: the screen wraps and pads lines, and the cursor stands on whichever line is selected, so only the characters are compared.
+fn squash(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_whitespace() && *c != '❯')
+        .collect()
+}
+
+/// The choices of `q` that are picked, in the order of the choices, as the review lists them.
+fn picked_labels(q: &AnswerQuestion) -> String {
+    let mut picks = q.picks.clone();
+    picks.sort_unstable();
+    picks
+        .iter()
+        .map(|&p| q.options[p].as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The last line that is not blank, squashed.
+fn last_line(lines: &[String]) -> Option<String> {
+    lines
+        .iter()
+        .rev()
+        .map(|l| squash(l))
+        .find(|l| !l.is_empty())
+}
+
+/// Whether the screen ends in the form of the question `q`, with the boxes of a multiple choice checked as `checked(index)` says.
+/// The text of Claude is always above the interface, so only a form at the end of the screen is real: the last line must be the footer of the form (a permission prompt, a working screen and a waiting input have another), the question's last occurrence must be followed at once by the first choice, the other choices in order (a line of description may lie between), "Type something", and "Chat about this" with the footer after it.
+fn form_shows(lines: &[String], q: &AnswerQuestion, checked: impl Fn(usize) -> bool) -> bool {
+    let Some(footer) = last_line(lines) else {
+        return false;
+    };
+    if !(footer.starts_with("Entertoselect") && footer.ends_with("Esctocancel")) {
+        return false;
+    }
+    let screen = squash(&lines.concat());
+    let text = squash(&q.text);
+    let Some(at) = screen.rfind(&text) else {
+        return false;
+    };
+    let mut tail = &screen[at + text.len()..];
+    for (i, label) in q.options.iter().enumerate() {
+        let choice = squash(&if q.multi {
+            let mark = if checked(i) { "✔" } else { "" };
+            format!("{}.[{mark}]{label}", i + 1)
+        } else {
+            format!("{}.{label}", i + 1)
+        });
+        let rest = if i == 0 {
+            tail.strip_prefix(choice.as_str())
+        } else {
+            tail.find(&choice).map(|at| &tail[at + choice.len()..])
+        };
+        let Some(rest) = rest else {
+            return false;
+        };
+        tail = rest;
+    }
+    let free = squash(&format!(
+        "{}.{}Type something",
+        q.options.len() + 1,
+        if q.multi { "[ ]" } else { "" }
+    ));
+    let Some(at) = tail.find(&free) else {
+        return false;
+    };
+    let tail = &tail[at + free.len()..];
+    let chat = squash(&format!("{}.Chat about this", q.options.len() + 2));
+    let Some(at) = tail.find(&chat) else {
+        return false;
+    };
+    // Between the two: the full stop of the single choice or the "Submit" (the last question) or "Next" (any other) of the multiple one, and the rule.
+    let gap = &tail[..at];
+    let gap = if q.multi {
+        gap.strip_prefix("Submit")
+            .or_else(|| gap.strip_prefix("Next"))
+    } else {
+        gap.strip_prefix('.')
+    }
+    .unwrap_or(gap);
+    gap.chars().all(|c| c == '─') && tail[at + chat.len()..] == footer
+}
+
+/// Whether the screen is the one `want` names. The comparison has no blanks, so a wrapped line still matches.
+fn screen_shows(lines: &[String], want: Screen) -> bool {
+    match want {
+        Screen::QuestionShown(q) => form_shows(lines, q, |_| false),
+        Screen::OptionChecked(q, option) => {
+            // The boxes checked are the picks up to this one, in the order of the choices.
+            let mut picks = q.picks.clone();
+            picks.sort_unstable();
+            form_shows(lines, q, |i| i <= option && picks.contains(&i))
+        }
+        Screen::Confirm(questions) => {
+            let screen = squash(&lines.concat());
+            let Some(at) = screen.rfind(REVIEW) else {
+                return false;
+            };
+            let answers: String = questions
+                .iter()
+                .map(|q| squash(&format!("●{}→{}", q.text, picked_labels(q))))
+                .collect();
+            screen[at + REVIEW.len()..] == format!("{answers}{REVIEW_END}")
+        }
+    }
+}
+
+/// The message of a failure after some keys were typed: they are in the terminal.
+fn midway(message: String, started: bool) -> String {
+    if started {
+        format!("{message}（回答は途中までターミナルに入っています。ターミナルで続けてください）")
+    } else {
+        message
+    }
+}
+
+/// Types the steps one key at a time. Before each key the screen is read every `poll` for at most `wait`, until it is the step's; a screen that never gets there stops the answer.
+fn run_steps(
+    steps: &[AnswerStep],
+    mut read: impl FnMut() -> Result<Vec<String>, String>,
+    mut press: impl FnMut(&str) -> Result<(), String>,
+    wait: Duration,
+    poll: Duration,
+) -> Result<(), String> {
+    for (i, step) in steps.iter().enumerate() {
+        let started = i > 0;
+        let deadline = Instant::now() + wait;
+        loop {
+            let lines = read().map_err(|e| midway(e, started))?;
+            if screen_shows(&lines, step.wait) {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err(if started { CHANGED } else { NOT_SHOWN }.into());
+            }
+            std::thread::sleep(poll);
+        }
+        press(&step.key).map_err(|e| midway(e, started))?;
+    }
+    Ok(())
+}
+
+fn answer(
+    handle: &str,
+    questions: &[AnswerQuestion],
+    environment: Option<&str>,
+) -> Result<(), String> {
+    check_questions(questions)?;
+    check_target(handle, environment)?;
+    run_steps(
+        &answer_steps(questions),
+        || read_screen(handle, environment),
+        |key| press_key(handle, key, environment),
+        STEP_WAIT,
+        POLL,
+    )
+}
+
+/// Answers the questions of the session `handle` (A-11). Each key is typed only when the screen shows what it is for; a send is never tried again.
+#[tauri::command]
+pub async fn orca_answer(
+    handle: String,
+    questions: Vec<AnswerQuestion>,
+    environment: Option<String>,
+) -> Result<(), String> {
+    blocking(move || answer(&handle, &questions, environment.as_deref())).await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn question(text: &str, multi: bool, options: &[&str], picks: &[usize]) -> AnswerQuestion {
+        AnswerQuestion {
+            text: text.into(),
+            multi,
+            options: options.iter().map(|o| (*o).into()).collect(),
+            picks: picks.to_vec(),
+        }
+    }
+
+    fn alpha(pick: usize) -> AnswerQuestion {
+        question(
+            "Pick alpha?",
+            false,
+            &["Apple", "Avocado", "Apricot"],
+            &[pick],
+        )
+    }
+
+    fn beta(picks: &[usize]) -> AnswerQuestion {
+        question("Pick beta?", true, &["Banana", "Berry", "Bean"], picks)
+    }
+
+    fn lines(text: &str) -> Vec<String> {
+        text.lines().map(str::to_owned).collect()
+    }
+
+    /// The screens of Claude Code 2.1.318, as measured.
+    const ECHO: &str = "> ask me Pick alpha?\n\nThinking...";
+    const ALPHA: &str = "←  ☐ A  ☐ B  ✔ Submit  →\n\nPick alpha?\n\n❯ 1. Apple\n     Fruit\n  2. Avocado\n     Fruit\n  3. Apricot\n     Fruit\n  4. Type something.\n────────────────────\n  5. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel";
+    /// The multiple choice with a mark in each box ("✔" or " ").
+    /// The word under "Type something" is `Submit` on the last question and `Next` on any other.
+    macro_rules! beta_screen {
+        ($a:literal, $b:literal, $c:literal) => {
+            beta_screen!($a, $b, $c, "Submit")
+        };
+        ($a:literal, $b:literal, $c:literal, $end:literal) => {
+            concat!(
+                "←  ☒ B  ✔ Submit  →\n\nPick beta?\n\n❯ 1. [", $a, "] Banana\n         Yellow fruit\n  2. [", $b,
+                "] Berry\n         Small fruit\n  3. [", $c,
+                "] Bean\n         Legume seed\n  4. [ ] Type something\n     ", $end,
+                "\n────────────────────\n  5. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel"
+            )
+        };
+    }
+    const BETA: &str = beta_screen!(" ", " ", " ");
+    const BETA_CHECKED: &str = beta_screen!("✔", " ", " ");
+    const BETA_CHECKED_BOTH: &str = beta_screen!("✔", " ", "✔");
+    const BETA_EXTRA: &str = beta_screen!("✔", "✔", " ");
+    const BETA_MEASURED: &str = beta_screen!(" ", "✔", " ");
+    /// The multiple choice as the first of two questions (measured on 2.1.318 with beta, then alpha).
+    const BETA_NEXT: &str = beta_screen!(" ", " ", " ", "Next");
+    const BETA_NEXT_MEASURED: &str = beta_screen!(" ", "✔", " ", "Next");
+    const CONFIRM_BETA_ALPHA: &str = "←  ☒ B  ☒ A  ✔ Submit  →\n\nReview your answers\n\n ● Pick beta?\n   → Berry\n ● Pick alpha?\n   → Apple\n\nReady to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel";
+    const CONFIRM: &str = "←  ☒ A  ☒ B  ✔ Submit  →\n\nReview your answers\n\n ● Pick alpha?\n   → Avocado\n ● Pick beta?\n   → Banana, Bean\n\nReady to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel";
+    /// The permission prompt of a tool, which ends in its own footer.
+    const PERMISSION: &str = "Bash command\n\n  ls\n\nDo you want to proceed?\n❯ 1. Yes\n  2. Yes, and always allow access to /tmp from this project\n  3. Yes, and switch to auto mode\n  4. No\n\nEsc to cancel · Tab to amend";
+    const STATUS: &str = "❯ \n  ⏵⏵ auto mode on (shift+tab to cycle)";
+    /// What Claude may write in its text.
+    const BODY: &str = "Pick alpha?\n1. Apple\n2. Avocado\n3. Apricot\n4. Type something.";
+
+    fn shows(text: &str, want: Screen) -> bool {
+        screen_shows(&lines(text), want)
+    }
+
+    #[test]
+    fn the_questions_are_checked_before_anything_is_typed() {
+        let ok = [alpha(1), beta(&[0, 2])];
+        assert_eq!(check_questions(&ok), Ok(()));
+        let many = vec![alpha(0); MAX_QUESTIONS + 1];
+        let bad = [
+            (vec![], "答える質問がありません"),
+            (many, "一度に答えられる質問は 10 個までです"),
+            (
+                vec![question(" ", false, &["A"], &[0])],
+                "質問の文がありません",
+            ),
+            (
+                vec![question("Q", false, &[], &[0])],
+                "選択肢は 1 個から 9 個までです",
+            ),
+            (
+                vec![question("Q", false, &["a"; 10], &[0])],
+                "選択肢は 1 個から 9 個までです",
+            ),
+            (
+                vec![question("Q", false, &["A", " "], &[0])],
+                "選択肢の文がありません",
+            ),
+            (
+                vec![question("Q", true, &["A"], &[])],
+                "選択肢を選んでください",
+            ),
+            (
+                vec![question("Q", false, &["A", "B"], &[2])],
+                "選んだ選択肢がありません",
+            ),
+            (
+                vec![question("Q", true, &["A", "B"], &[1, 1])],
+                "同じ選択肢を重ねて選べません",
+            ),
+            (
+                vec![question("Q", false, &["A", "B"], &[0, 1])],
+                "選べるのは 1 つだけの質問です",
+            ),
+        ];
+        for (questions, message) in bad {
+            assert_eq!(check_questions(&questions), Err(message.into()));
+        }
+        // 9 choices and 10 questions are the most.
+        assert_eq!(
+            check_questions(&vec![question("Q", false, &["a"; 9], &[8]); MAX_QUESTIONS]),
+            Ok(())
+        );
+    }
+
+    fn keys<'a>(steps: &'a [AnswerStep]) -> Vec<&'a str> {
+        steps.iter().map(|s| s.key.as_str()).collect()
+    }
+
+    #[test]
+    fn one_single_choice_is_sent_by_its_digit_with_no_review() {
+        let questions = [alpha(1)];
+        let steps = answer_steps(&questions);
+        assert_eq!(
+            steps,
+            [AnswerStep {
+                wait: Screen::QuestionShown(&questions[0]),
+                key: "2".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn one_multiple_choice_toggles_in_the_order_of_the_choices_then_tabs_to_the_review() {
+        // The picks come in any order; the keys follow the choices.
+        let questions = [beta(&[2, 0])];
+        let steps = answer_steps(&questions);
+        assert_eq!(keys(&steps), ["1", "3", "\t", "1"]);
+        assert_eq!(steps[0].wait, Screen::QuestionShown(&questions[0]));
+        assert_eq!(steps[1].wait, Screen::OptionChecked(&questions[0], 0));
+        assert_eq!(steps[2].wait, Screen::OptionChecked(&questions[0], 2));
+        assert_eq!(steps[3].wait, Screen::Confirm(&questions));
+    }
+
+    #[test]
+    fn two_single_choices_go_on_by_digit_and_end_at_the_review() {
+        let questions = [
+            alpha(0),
+            question("Pick gamma?", false, &["Fig", "Grape"], &[1]),
+        ];
+        let steps = answer_steps(&questions);
+        assert_eq!(keys(&steps), ["1", "2", "1"]);
+        assert_eq!(steps[0].wait, Screen::QuestionShown(&questions[0]));
+        assert_eq!(steps[1].wait, Screen::QuestionShown(&questions[1]));
+        assert_eq!(steps[2].wait, Screen::Confirm(&questions));
+    }
+
+    #[test]
+    fn a_single_choice_then_a_multiple_choice() {
+        let questions = [alpha(1), beta(&[0, 2])];
+        let steps = answer_steps(&questions);
+        assert_eq!(keys(&steps), ["2", "1", "3", "\t", "1"]);
+        assert_eq!(steps[1].wait, Screen::QuestionShown(&questions[1]));
+        assert_eq!(steps[2].wait, Screen::OptionChecked(&questions[1], 0));
+        assert_eq!(steps[3].wait, Screen::OptionChecked(&questions[1], 2));
+    }
+
+    #[test]
+    fn a_question_is_shown_with_all_its_numbered_choices() {
+        let q = alpha(0);
+        assert!(shows(ALPHA, Screen::QuestionShown(&q)));
+        // The echo of the prompt has the question text but no numbered choices.
+        assert!(!shows(ECHO, Screen::QuestionShown(&q)));
+        // Only some of the choices are there yet.
+        assert!(!shows("Pick alpha?\n❯ 1. Apple", Screen::QuestionShown(&q)));
+        // A question with fewer choices than the form has.
+        let two = question("Pick alpha?", false, &["Apple", "Avocado"], &[0]);
+        assert!(!shows(ALPHA, Screen::QuestionShown(&two)));
+        // The choices of another question.
+        assert!(!shows(BETA, Screen::QuestionShown(&q)));
+        // The review has the question and the answer, not the numbered choices.
+        assert!(!shows(CONFIRM, Screen::QuestionShown(&q)));
+        // An answered screen of the history.
+        assert!(!shows(
+            "● Pick alpha?\n  → Apple",
+            Screen::QuestionShown(&q)
+        ));
+    }
+
+    #[test]
+    fn the_form_must_be_at_the_end_of_the_screen() {
+        let q = alpha(0);
+        // The text of Claude above a permission prompt, which a digit would answer.
+        assert!(!shows(
+            &format!("{BODY}\n\n{PERMISSION}"),
+            Screen::QuestionShown(&q)
+        ));
+        // The text above the input box and the status line.
+        assert!(!shows(
+            &format!("{BODY}\n\n{STATUS}"),
+            Screen::QuestionShown(&q)
+        ));
+        // The text with the footer too, above a permission prompt or the status line.
+        assert!(!shows(
+            &format!("{ALPHA}\n\n{PERMISSION}"),
+            Screen::QuestionShown(&q)
+        ));
+        assert!(!shows(
+            &format!("{ALPHA}\n\n{STATUS}"),
+            Screen::QuestionShown(&q)
+        ));
+        // The form on the screen is another question's.
+        let beta_q = beta(&[0]);
+        let other = format!("{ALPHA}\n\n{BETA}");
+        assert!(!shows(&other, Screen::QuestionShown(&q)));
+        assert!(shows(&other, Screen::QuestionShown(&beta_q)));
+        // The text above the real form does not matter.
+        assert!(shows(
+            &format!("{BODY}\n\n{ALPHA}"),
+            Screen::QuestionShown(&q)
+        ));
+        // Blank lines after the footer do not matter.
+        assert!(shows(
+            &format!("{ALPHA}\n\n   \n"),
+            Screen::QuestionShown(&q)
+        ));
+    }
+
+    #[test]
+    fn a_multiple_choice_is_shown_only_while_nothing_of_it_is_checked() {
+        let q = beta(&[0]);
+        assert!(shows(BETA, Screen::QuestionShown(&q)));
+        assert!(!shows(BETA_CHECKED, Screen::QuestionShown(&q)));
+        assert!(!shows(BETA_EXTRA, Screen::QuestionShown(&q)));
+        // A single-choice screen has no boxes.
+        assert!(!shows(ALPHA, Screen::QuestionShown(&q)));
+    }
+
+    #[test]
+    fn a_wrapped_or_padded_screen_still_matches() {
+        let q = question(
+            "Which of the long-named things?",
+            false,
+            &["Fruit and nuts"],
+            &[0],
+        );
+        let wrapped = [
+            "Which of the long-named",
+            "  things?",
+            "❯ 1. Fruit and",
+            "     nuts",
+            "  2. Type something.",
+            "────────",
+            "  3. Chat about this",
+            "",
+            "Enter to select · Esc to cancel",
+            "",
+            "   ",
+        ]
+        .map(String::from);
+        assert!(screen_shows(&wrapped, Screen::QuestionShown(&q)));
+        // A label cut in the middle of a word by the wrap.
+        let cut = [
+            "Which of the long-named things?",
+            "❯ 1. Fruit a",
+            "nd nuts",
+            "  2. Type something.",
+            "────────",
+            "  3. Chat about this",
+            "Enter to select · Esc to cancel",
+        ]
+        .map(String::from);
+        assert!(screen_shows(&cut, Screen::QuestionShown(&q)));
+    }
+
+    #[test]
+    fn a_multiple_choice_that_is_not_the_last_ends_in_next_and_the_last_in_submit() {
+        let q = beta(&[1]);
+        assert!(shows(BETA_NEXT, Screen::QuestionShown(&q)));
+        assert!(shows(BETA_NEXT_MEASURED, Screen::OptionChecked(&q, 1)));
+        assert!(shows(BETA, Screen::QuestionShown(&q)));
+        // No other word may stand between "Type something" and "Chat about this".
+        for word in ["Skip", "NextSubmit", "SubmitNext", "Nextt", "."] {
+            let other = BETA_NEXT.replace("Next", word);
+            assert!(!shows(&other, Screen::QuestionShown(&q)), "{word}");
+        }
+        // "Next" is the word of a multiple choice; a single choice has the full stop only.
+        let single = ALPHA.replace("Type something.", "Type something\n     Next");
+        assert!(!shows(&single, Screen::QuestionShown(&alpha(0))));
+        let single = ALPHA.replace("Type something.", "Type something\n     Submit");
+        assert!(!shows(&single, Screen::QuestionShown(&alpha(0))));
+    }
+
+    #[test]
+    fn a_choice_is_checked_when_its_box_has_the_mark() {
+        let q = beta(&[0, 2]);
+        assert!(shows(BETA_CHECKED, Screen::OptionChecked(&q, 0)));
+        assert!(shows(BETA_CHECKED_BOTH, Screen::OptionChecked(&q, 2)));
+        // The measured screen: only "Berry" is checked.
+        assert!(shows(BETA_MEASURED, Screen::OptionChecked(&beta(&[1]), 1)));
+        // Nothing is checked yet.
+        assert!(!shows(BETA, Screen::OptionChecked(&q, 0)));
+        // A box that is checked without a pick (here "Berry"), or a pick still to come ("Bean").
+        assert!(!shows(BETA_EXTRA, Screen::OptionChecked(&q, 0)));
+        assert!(!shows(BETA_CHECKED_BOTH, Screen::OptionChecked(&q, 0)));
+        // A pick that is not checked.
+        assert!(!shows(BETA_CHECKED, Screen::OptionChecked(&q, 2)));
+        assert!(!shows(BETA_MEASURED, Screen::OptionChecked(&q, 0)));
+        // The permission prompt under the text of a form.
+        assert!(!shows(
+            &format!("{BETA_CHECKED}\n\n{PERMISSION}"),
+            Screen::OptionChecked(&q, 0)
+        ));
+    }
+
+    #[test]
+    fn the_review_must_show_every_answer_as_it_will_be_submitted() {
+        let questions = [alpha(1), beta(&[2, 0])];
+        assert!(shows(CONFIRM, Screen::Confirm(&questions)));
+        // Another pick of the first question.
+        assert!(!shows(CONFIRM, Screen::Confirm(&[alpha(0), beta(&[0, 2])])));
+        // "Banana" alone is not "Banana, Bean".
+        assert!(!shows(CONFIRM, Screen::Confirm(&[alpha(1), beta(&[0])])));
+        // "Banana, Bean" is not "Bean" either.
+        assert!(!shows(CONFIRM, Screen::Confirm(&[alpha(1), beta(&[2])])));
+        // A question that is not in the review.
+        let other = question("Pick gamma?", false, &["Fig"], &[0]);
+        assert!(!shows(CONFIRM, Screen::Confirm(&[alpha(1), other])));
+        // The answers in another order.
+        assert!(!shows(CONFIRM, Screen::Confirm(&[beta(&[0, 2]), alpha(1)])));
+        // Fewer questions than the review has.
+        assert!(!shows(CONFIRM, Screen::Confirm(&[alpha(1)])));
+        // A line after the review.
+        assert!(!shows(
+            &format!("{CONFIRM}\n  3. Chat about this"),
+            Screen::Confirm(&questions)
+        ));
+        assert!(!shows(
+            &format!("{CONFIRM}\n\nEsc to cancel"),
+            Screen::Confirm(&questions)
+        ));
+        // Without the request to submit it is not the review.
+        let early =
+            "Review your answers\n● Pick alpha?\n  → Avocado\n● Pick beta?\n  → Banana, Bean";
+        assert!(!shows(early, Screen::Confirm(&questions)));
+    }
+
+    #[test]
+    fn the_last_answer_of_the_review_is_not_taken_for_a_longer_one() {
+        let single = [question("Pick gamma?", false, &["Fig", "Fig pie"], &[0])];
+        let review = "Review your answers\n● Pick gamma?\n  → Fig pie\nReady to submit your answers?\n❯ 1. Submit answers\n  2. Cancel";
+        assert!(!shows(review, Screen::Confirm(&single)));
+        let other = [question("Pick gamma?", false, &["Fig", "Fig pie"], &[1])];
+        assert!(shows(review, Screen::Confirm(&other)));
+    }
+
+    /// A terminal that shows the next screen after each key typed, and the last one for good. A read or a send can be made to fail.
+    struct Terminal {
+        screens: Vec<&'static str>,
+        at: usize,
+        reads: usize,
+        typed: Vec<String>,
+        read_fails_at: Option<usize>,
+        press_fails_at: Option<usize>,
+    }
+
+    impl Terminal {
+        fn new(screens: &[&'static str]) -> Self {
+            Terminal {
+                screens: screens.to_vec(),
+                at: 0,
+                reads: 0,
+                typed: Vec::new(),
+                read_fails_at: None,
+                press_fails_at: None,
+            }
+        }
+
+        /// Runs the steps against it; gives the result and the keys typed.
+        fn run(self, steps: &[AnswerStep]) -> (Result<(), String>, Vec<String>) {
+            let this = std::cell::RefCell::new(self);
+            let result = run_steps(
+                steps,
+                || {
+                    let mut t = this.borrow_mut();
+                    t.reads += 1;
+                    if t.read_fails_at == Some(t.reads) {
+                        return Err("読めません".into());
+                    }
+                    Ok(lines(t.screens[t.at]))
+                },
+                |key| {
+                    let mut t = this.borrow_mut();
+                    if t.press_fails_at == Some(t.typed.len()) {
+                        return Err("送れません".into());
+                    }
+                    t.typed.push(key.into());
+                    t.at = (t.at + 1).min(t.screens.len() - 1);
+                    Ok(())
+                },
+                Duration::from_millis(30),
+                Duration::from_millis(1),
+            );
+            (result, this.into_inner().typed)
+        }
+    }
+
+    #[test]
+    fn a_single_choice_is_typed_once_the_question_is_shown() {
+        let questions = [alpha(1)];
+        let (result, typed) = Terminal::new(&[ALPHA, "done"]).run(&answer_steps(&questions));
+        assert_eq!(result, Ok(()));
+        assert_eq!(typed, ["2"]);
+    }
+
+    #[test]
+    fn two_questions_are_typed_key_by_key_through_to_the_submit() {
+        let questions = [alpha(1), beta(&[2, 0])];
+        let screens = [
+            ALPHA,
+            BETA,
+            BETA_CHECKED,
+            BETA_CHECKED_BOTH,
+            CONFIRM,
+            "done",
+        ];
+        let (result, typed) = Terminal::new(&screens).run(&answer_steps(&questions));
+        assert_eq!(result, Ok(()));
+        assert_eq!(typed, ["2", "1", "3", "\t", "1"]);
+    }
+
+    #[test]
+    fn a_multiple_choice_before_another_question_is_typed_through_its_next_form() {
+        let questions = [beta(&[1]), alpha(0)];
+        let steps = answer_steps(&questions);
+        assert_eq!(keys(&steps), ["2", "\t", "1", "1"]);
+        let screens = [
+            BETA_NEXT,
+            BETA_NEXT_MEASURED,
+            ALPHA,
+            CONFIRM_BETA_ALPHA,
+            "done",
+        ];
+        let (result, typed) = Terminal::new(&screens).run(&steps);
+        assert_eq!(result, Ok(()));
+        assert_eq!(typed, ["2", "\t", "1", "1"]);
+    }
+
+    #[test]
+    fn nothing_is_typed_while_the_question_is_not_on_the_screen() {
+        // The prompt's echo has the question text, not the numbered choices.
+        let questions = [alpha(0)];
+        let (result, typed) = Terminal::new(&[ECHO]).run(&answer_steps(&questions));
+        assert_eq!(result, Err(NOT_SHOWN.into()));
+        assert!(typed.is_empty());
+    }
+
+    #[test]
+    fn a_screen_that_comes_late_is_waited_for() {
+        let questions = [alpha(0)];
+        let steps = answer_steps(&questions);
+        let mut reads = 0;
+        let mut typed = Vec::new();
+        let result = run_steps(
+            &steps,
+            || {
+                reads += 1;
+                Ok(lines(if reads < 4 { ECHO } else { ALPHA }))
+            },
+            |key| {
+                typed.push(key.to_owned());
+                Ok(())
+            },
+            Duration::from_millis(500),
+            Duration::from_millis(1),
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(typed, ["1"]);
+        assert_eq!(reads, 4);
+    }
+
+    #[test]
+    fn a_screen_that_changes_midway_stops_after_the_keys_already_typed() {
+        let questions = [alpha(1), beta(&[0])];
+        let (result, typed) = Terminal::new(&[ALPHA, ECHO]).run(&answer_steps(&questions));
+        assert_eq!(result, Err(CHANGED.into()));
+        assert_eq!(typed, ["2"]);
+    }
+
+    #[test]
+    fn a_multiple_choice_that_did_not_check_stops_before_the_next_key() {
+        // The digit did not toggle the box: the next digit is not typed.
+        let questions = [beta(&[0, 1])];
+        let (result, typed) = Terminal::new(&[BETA, BETA]).run(&answer_steps(&questions));
+        assert_eq!(result, Err(CHANGED.into()));
+        assert_eq!(typed, ["1"]);
+    }
+
+    #[test]
+    fn a_failed_read_or_send_says_whether_keys_are_already_in() {
+        let questions = [alpha(1), beta(&[0])];
+        let steps = answer_steps(&questions);
+        let screens = [ALPHA, BETA, BETA_CHECKED, CONFIRM];
+        let midway = |m: &str| {
+            format!("{m}（回答は途中までターミナルに入っています。ターミナルで続けてください）")
+        };
+        let mut first = Terminal::new(&screens);
+        first.read_fails_at = Some(1);
+        let (result, typed) = first.run(&steps);
+        assert_eq!(result, Err("読めません".into()));
+        assert!(typed.is_empty());
+        let mut later = Terminal::new(&screens);
+        later.read_fails_at = Some(2);
+        let (result, typed) = later.run(&steps);
+        assert_eq!(result, Err(midway("読めません")));
+        assert_eq!(typed, ["2"]);
+        let mut press = Terminal::new(&screens);
+        press.press_fails_at = Some(1);
+        let (result, typed) = press.run(&steps);
+        assert_eq!(result, Err(midway("送れません")));
+        assert_eq!(typed, ["2"]);
+        let mut first_key = Terminal::new(&screens);
+        first_key.press_fails_at = Some(0);
+        assert_eq!(first_key.run(&steps).0, Err("送れません".into()));
+    }
+}

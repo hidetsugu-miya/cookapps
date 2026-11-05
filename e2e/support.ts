@@ -556,10 +556,17 @@ export const chatTools = (id: string, summary: string, calls: [string, string][]
   runningSummary,
   calls: calls.map(([name, detail]) => ({ name, detail })),
 });
-export const chatQuestion = (id: string, answer: string | null, waiting: boolean): OrcaChatItem => ({
+export const chatQuestion = (id: string, answer: string | null, waiting: boolean, multi = false): OrcaChatItem => ({
   kind: "question",
   id,
-  questions: [{ text: "Which one?", options: [{ label: "First", description: "the first way" }, { label: "Second", description: "" }], answer }],
+  questions: [{ text: "Which one?", options: [{ label: "First", description: "the first way" }, { label: "Second", description: "" }], multi, answer }],
+  waiting,
+});
+// A question with several parts (A-11): each is `[text, multi, labels]`, without an answer.
+export const chatQuestions = (id: string, waiting: boolean, parts: [string, boolean, string[]][]): OrcaChatItem => ({
+  kind: "question",
+  id,
+  questions: parts.map(([text, multi, labels]) => ({ text, multi, options: labels.map((label) => ({ label, description: "" })), answer: null })),
   waiting,
 });
 export const chatItems = (items: OrcaChatItem[], start = 0, hasMore = false): OrcaChatEvent => ({ kind: "items", start, items, hasMore });

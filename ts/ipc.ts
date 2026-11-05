@@ -206,6 +206,8 @@ export interface Commands {
   orca_compose_text: { args: { text: string; paths: string[] }; result: string };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. A terminal that is already closed is a success.
   orca_close: { args: { handle: string; environment: string | null }; result: null };
+  // A-11: answers the questions of a Claude session that waits (the picks are 0-based indexes into `options`), by typing digits and Tab into its terminal `handle` one key at a time, each only when the screen shows what it is for. Not tried again: a failure carries its message.
+  orca_answer: { args: { handle: string; questions: { text: string; multi: boolean; options: string[]; picks: number[] }[]; environment: string | null }; result: null };
   // The lines on the screen of the plain terminal `handle`, for the mirror (no colors).
   orca_terminal_read: { args: { handle: string; environment: string | null }; result: string[] };
   // Types `text` into the plain terminal `handle` as it is (no Enter is added).

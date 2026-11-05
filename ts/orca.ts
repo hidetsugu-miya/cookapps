@@ -90,7 +90,10 @@ let headerKey = "";
 let noticeKey = "";
 
 // The history of the work pane. It owns the read (orca-chat.ts) while the screen shows a selected session, and a side pane (orca-handoff.ts) may take it while the screen is not shown.
-const screenChat = makeChatView($("orca-chat"), $("orca-items"), $("orca-older"), $("orca-chat-status"));
+const screenChat = makeChatView($("orca-chat"), $("orca-items"), $("orca-older"), $("orca-chat-status"), () => {
+  const handle = selectedRow()?.handle;
+  return handle ? { handle, environment: view?.target ?? null } : null;
+});
 
 const input = () => $<HTMLTextAreaElement>("orca-input");
 const feed = () => $("orca-feed");
