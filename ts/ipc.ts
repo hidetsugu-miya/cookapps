@@ -202,6 +202,8 @@ export interface Commands {
   terminal_open: { args: { target: TerminalTarget; cols: number; rows: number; channel: unknown }; result: string };
   terminal_write: { args: { id: string; data: string }; result: null };
   terminal_resize: { args: { id: string; cols: number; rows: number }; result: null };
+  // The screen has drawn `bytes` more of the output of the terminal; Rust stops reading while too much is unconfirmed.
+  terminal_ack: { args: { id: string; bytes: number }; result: null };
   terminal_close: { args: { id: string }; result: null };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };

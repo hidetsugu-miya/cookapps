@@ -1310,6 +1310,46 @@ describe("orca: projects", () => {
       expect(sizes.every((c) => c.id === "pty_1" && c.cols > 0 && c.rows > 0)).toBe(true);
     });
 
+    it("confirms the output it has drawn to Rust in steps, so that a program that prints faster than the screen draws is held back", async () => {
+      await openDialog();
+      await mock("terminal_open", "pty_1");
+      const ack = await mock("terminal_ack", null);
+      await $('.orca-dest-pop button[data-path="/work/example-app"]').click();
+      await waitForTerminalOpens();
+      // A little output is not confirmed yet.
+      await sendTerminal(termData("short"));
+      await browser.waitUntil(async () => (await screenText()).includes("short"), { timeoutMsg: "the output never showed" });
+      expect(await callsOf(ack)).toEqual([]);
+      // Enough of it is, once, with all the bytes drawn so far.
+      await sendTerminal(termData("a".repeat(40_000)));
+      expect(await waitForCalls(ack)).toEqual([{ id: "pty_1", bytes: 40_005 }]);
+    });
+
+    it("shows the green dot on a project or an SSH host that Orca calls idle while a terminal of the app runs there, and the gray one when it ended", async () => {
+      await openOrca(withTerminals());
+      await mock("orca_terminal_targets", terminalTargets([terminalWorktree("example-idle", "main")], [orcaSsh("s2", "other-host", false)]));
+      await mock("terminal_open", "pty_1");
+      const dot = (name: string) => project(name).$(".orca-ic");
+      await expect(dot("example-idle")).toHaveAttribute("data-status", "idle");
+      await expect(dot("other-host")).toHaveAttribute("data-status", "idle");
+      await $("#orca-new").click();
+      await pickMenu("ターミナルを開く");
+      await $('.orca-dest-pop button[data-path="/work/example-idle"]').click();
+      await waitForTerminalOpens();
+      await expect(dot("example-idle")).toHaveAttribute("data-status", "done");
+      await expect(dot("other-host")).toHaveAttribute("data-status", "idle");
+      await mock("terminal_open", "pty_2");
+      await $("#orca-new").click();
+      await pickMenu("ターミナルを開く");
+      await $('.orca-dest-pop button[data-ssh="s2"]').click();
+      // `mock` cleared the record of the first call.
+      await waitForTerminalOpens();
+      await expect(dot("other-host")).toHaveAttribute("data-status", "done");
+      await sendTerminal(termExit(0));
+      await expect(dot("other-host")).toHaveAttribute("data-status", "idle");
+      await expect(dot("example-idle")).toHaveAttribute("data-status", "done");
+    });
+
     it("keeps running while another project shows, and ends and forgets it when its tab is closed", async () => {
       await openDialog();
       await mock("terminal_open", "pty_1");

@@ -2,6 +2,7 @@
 // A terminal of the app runs in a PTY in Rust (`terminal_open`): the bytes it prints arrive through a channel, what is typed goes to `terminal_write`, and the size to `terminal_resize`.
 // A plain terminal of Orca is a mirror: Orca cannot stream its bytes to this app, so while its tab is shown the screen is read every second (`orca_terminal_read`) and drawn again,
 // and the keys go to `orca_terminal_input`, batched and one send at a time. It has no colors, a full-screen program is only approximate, and its size is not sent.
+// Output is drawn with a callback that confirms the bytes to Rust (`terminal_ack`), which stops reading while too much is unconfirmed.
 // An instance lives while its tab exists and is only hidden when another tab shows. Nothing a terminal prints or is typed is kept or logged here.
 import type { TerminalEvent } from "./bindings/TerminalEvent";
 import { $ } from "./dom.js";
@@ -13,6 +14,8 @@ const MIRROR_MS = 1000;
 const SEND_LIMIT = 50_000;
 // The first frame of a mirror clears what the last one drew.
 const CLEAR = "\x1b[2J\x1b[3J\x1b[H";
+// The drawn output is confirmed to Rust in steps of this many bytes (Rust stops reading at 1 MiB unconfirmed).
+const ACK_EVERY = 32 * 1024;
 const ENDED = "\r\n[終了しました]\r\n";
 
 interface Mirror {
@@ -36,6 +39,8 @@ interface Instance {
   size: { cols: number; rows: number };
   // Whether the process of a terminal of the app has ended: nothing is written to it then.
   ended: boolean;
+  // The bytes of output drawn and not yet confirmed to Rust.
+  drawn: number;
 }
 
 const instances = new Map<string, Instance>();
@@ -60,7 +65,7 @@ function newInstance(): Instance {
   el.className = "orca-term-box";
   container().append(el);
   term.open(el);
-  return { term, fit, el, rustId: null, mirror: null, size: { cols: term.cols, rows: term.rows }, ended: false };
+  return { term, fit, el, rustId: null, mirror: null, size: { cols: term.cols, rows: term.rows }, ended: false, drawn: 0 };
 }
 
 // Fits the shown terminal to the pane; its `onResize` tells Rust.
@@ -174,6 +179,15 @@ export function pruneMirrors(keep: (id: string) => boolean) {
 
 const decode = (data: string) => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
 
+// Confirms the output drawn to Rust once enough of it is (and what is left over when the id arrives), so that a program that prints faster than xterm.js draws is held back.
+function confirmDrawn(instance: Instance, bytes: number, flush = false) {
+  instance.drawn += bytes;
+  if (!instance.rustId || instance.drawn === 0 || (!flush && instance.drawn < ACK_EVERY)) return;
+  const sent = instance.drawn;
+  instance.drawn = 0;
+  invoke("terminal_ack", { id: instance.rustId, bytes: sent }).catch(() => {});
+}
+
 // Opens a terminal of the app for the tab `id` at `target`, sized to the pane when it is shown. `ended` runs when the process ends. A failure is thrown and leaves no terminal behind.
 export async function startPty(id: string, target: TerminalTarget, ended: () => void) {
   const instance = newInstance();
@@ -184,7 +198,8 @@ export async function startPty(id: string, target: TerminalTarget, ended: () => 
   channel.onmessage = (event) => {
     if (instances.get(id) !== instance) return;
     if (event.kind === "data") {
-      instance.term.write(decode(event.data));
+      const bytes = decode(event.data);
+      instance.term.write(bytes, () => confirmDrawn(instance, bytes.length));
     } else {
       instance.ended = true;
       instance.term.write(ENDED);
@@ -203,6 +218,8 @@ export async function startPty(id: string, target: TerminalTarget, ended: () => 
     invoke("terminal_close", { id: instance.rustId }).catch(() => {});
     return;
   }
+  // Output that was drawn before the id was known.
+  confirmDrawn(instance, 0, true);
   instance.term.onData((data) => {
     if (instance.rustId && !instance.ended) invoke("terminal_write", { id: instance.rustId, data }).catch(onError);
   });

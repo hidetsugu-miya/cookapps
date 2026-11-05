@@ -272,15 +272,17 @@ function emptyNode(text: string) {
 }
 
 const ptyCount = (key: string) => ptys.filter((p) => p.project === key).length;
+// Orca does not know the terminals of the app, so a row it calls idle shows the green dot while one of them runs there.
+const withPtys = (key: string, status: OrcaStatus): OrcaStatus => (status === "idle" && ptys.some((p) => p.project === key && !p.exited) ? "done" : status);
 
 function projectNodes(): HTMLElement[] {
-  const nodes: HTMLElement[] = (view?.projects ?? []).map((p: OrcaProject) => projectNode(p.key, p.name, p.status, p.sessions + ptyCount(p.key)));
+  const nodes: HTMLElement[] = (view?.projects ?? []).map((p: OrcaProject) => projectNode(p.key, p.name, withPtys(p.key, p.status), p.sessions + ptyCount(p.key)));
   if (ssh.length) {
     nodes.push(tag("h3", "orca-sec", "SSH"));
     for (const t of ssh) {
       const key = `ssh:${t.id}`;
       const host = view?.hosts.find((h) => h.key === key);
-      nodes.push(projectNode(key, t.label, host?.status ?? "idle", (host?.sessions ?? 0) + ptyCount(key)));
+      nodes.push(projectNode(key, t.label, withPtys(key, host?.status ?? "idle"), (host?.sessions ?? 0) + ptyCount(key)));
     }
   }
   return nodes.length ? nodes : [emptyNode("プロジェクトがありません")];

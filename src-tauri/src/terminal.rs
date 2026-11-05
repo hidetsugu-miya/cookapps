@@ -2,12 +2,13 @@
 //! Nothing a terminal prints or is typed is in a log line, an error text or an event of the app; the screen never names a program, an argument or a host, only a worktree path or an SSH id that Rust checks against Orca's own list just before it runs.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io::{Read, Write},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
+    time::{Duration, Instant},
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -26,6 +27,12 @@ const MAX_SIZE: u16 = 1000;
 const MAX_INPUT: usize = 1024 * 1024;
 /// The most bytes of output in one event: a burst is split into events of this size.
 const CHUNK: usize = 16 * 1024;
+/// How long a short read waits for more output before it is sent, unless the last event was longer ago: a burst of short reads becomes few events, and a key typed after a pause is echoed at once.
+const SEND_GAP: Duration = Duration::from_millis(1);
+/// Output sent to the screen and not yet confirmed (`terminal_ack`) at which the terminal stops reading, so a program that prints faster than the screen draws is held back by the PTY.
+const MAX_UNACKED: usize = 1024 * 1024;
+/// The most bytes of input that wait to be written to one terminal; more is refused.
+const MAX_QUEUED: usize = 4 * 1024 * 1024;
 const SSH: &str = "/usr/bin/ssh";
 
 /// Where a terminal opens. Rust checks it against Orca's list just before it acts.
@@ -140,10 +147,178 @@ fn data_event(bytes: &[u8]) -> TerminalEvent {
 
 // ---- the running terminals ----
 
+#[derive(Default)]
+struct FlowState {
+    /// Output read and not sent yet.
+    pending: Vec<u8>,
+    /// Output sent and not confirmed yet.
+    unacked: usize,
+    last_send: Option<Instant>,
+    /// The output has ended.
+    eof: bool,
+    /// The terminal was closed.
+    closed: bool,
+}
+
+/// The output of one terminal between its reader and its sender: the reader stops while too much is unconfirmed, and the sender joins short reads.
+#[derive(Default)]
+struct Flow {
+    state: Mutex<FlowState>,
+    /// The reader waits here for room.
+    room: Condvar,
+    /// The sender waits here for output.
+    data: Condvar,
+}
+
+impl Flow {
+    /// Waits until fewer than `MAX_UNACKED` bytes are unread by the screen. False: the terminal was closed.
+    fn wait_room(&self) -> bool {
+        let mut s = self.state.lock().unwrap();
+        while !s.closed && s.pending.len() + s.unacked >= MAX_UNACKED {
+            s = self.room.wait(s).unwrap();
+        }
+        !s.closed
+    }
+
+    fn push(&self, bytes: &[u8]) {
+        let mut s = self.state.lock().unwrap();
+        let was_empty = s.pending.is_empty();
+        s.pending.extend_from_slice(bytes);
+        if was_empty || s.pending.len() >= CHUNK {
+            self.data.notify_all();
+        }
+    }
+
+    fn finish(&self) {
+        self.state.lock().unwrap().eof = true;
+        self.data.notify_all();
+    }
+
+    /// The next output to send, at most `CHUNK` bytes: a full chunk at once, a shorter one when `SEND_GAP` has passed since the last send or the output ended. None: nothing more will come.
+    fn next(&self) -> Option<Vec<u8>> {
+        let mut s = self.state.lock().unwrap();
+        loop {
+            if s.closed {
+                return None;
+            }
+            if s.pending.is_empty() {
+                if s.eof {
+                    return None;
+                }
+                s = self.data.wait(s).unwrap();
+                continue;
+            }
+            let since = s.last_send.map_or(SEND_GAP, |at| at.elapsed());
+            if s.pending.len() >= CHUNK || s.eof || since >= SEND_GAP {
+                let n = s.pending.len().min(CHUNK);
+                let chunk: Vec<u8> = s.pending.drain(..n).collect();
+                s.unacked += n;
+                s.last_send = Some(Instant::now());
+                return Some(chunk);
+            }
+            s = self.data.wait_timeout(s, SEND_GAP - since).unwrap().0;
+        }
+    }
+
+    /// The screen has drawn `bytes` more of the output.
+    fn ack(&self, bytes: usize) {
+        let mut s = self.state.lock().unwrap();
+        s.unacked = s.unacked.saturating_sub(bytes);
+        self.room.notify_all();
+    }
+
+    fn close(&self) {
+        self.state.lock().unwrap().closed = true;
+        self.room.notify_all();
+        self.data.notify_all();
+    }
+}
+
+#[derive(Default)]
+struct InputState {
+    queue: VecDeque<Vec<u8>>,
+    /// The bytes of the queue and of the write in progress.
+    bytes: usize,
+    /// A write failed: the process is gone or the PTY is broken.
+    failed: bool,
+    closed: bool,
+}
+
+/// The input of one terminal: a write thread takes it in the order it came, so a program that does not read blocks that thread only.
+#[derive(Default)]
+struct Input {
+    state: Mutex<InputState>,
+    ready: Condvar,
+}
+
+impl Input {
+    fn push(&self, data: &str) -> Result<(), String> {
+        let mut s = self.state.lock().unwrap();
+        if s.closed || s.failed {
+            return Err("ターミナルへ書き込めません。終了している可能性があります".to_owned());
+        }
+        if s.bytes + data.len() > MAX_QUEUED {
+            return Err(
+                "入力が詰まっています。動いているプログラムが入力を読んでいません".to_owned(),
+            );
+        }
+        if !data.is_empty() {
+            s.bytes += data.len();
+            s.queue.push_back(data.as_bytes().to_vec());
+            self.ready.notify_one();
+        }
+        Ok(())
+    }
+
+    fn close(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.closed = true;
+        s.queue.clear();
+        self.ready.notify_all();
+    }
+
+    /// The write thread: writes the queue in order until the terminal is closed or a write fails.
+    fn run(&self, mut writer: impl Write) {
+        loop {
+            let data = {
+                let mut s = self.state.lock().unwrap();
+                loop {
+                    if s.closed {
+                        return;
+                    }
+                    if let Some(data) = s.queue.pop_front() {
+                        break data;
+                    }
+                    s = self.ready.wait(s).unwrap();
+                }
+            };
+            let written = writer.write_all(&data).and_then(|()| writer.flush());
+            let mut s = self.state.lock().unwrap();
+            s.bytes = s.bytes.saturating_sub(data.len());
+            if written.is_err() {
+                s.failed = true;
+                s.queue.clear();
+                s.bytes = 0;
+                return;
+            }
+        }
+    }
+}
+
 struct Pty {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    flow: Arc<Flow>,
+    input: Arc<Input>,
+}
+
+impl Pty {
+    /// Ends the terminal. Nothing here waits for a read or a write.
+    fn end(mut self) {
+        self.flow.close();
+        self.input.close();
+        let _ = self.killer.kill();
+    }
 }
 
 #[derive(Default)]
@@ -167,8 +342,8 @@ impl Terminals {
             .drain()
             .map(|(_, p)| p)
             .collect();
-        for mut pty in all {
-            let _ = pty.killer.kill();
+        for pty in all {
+            pty.end();
         }
     }
 
@@ -200,24 +375,41 @@ impl Terminals {
         let mut reader = pair.master.try_clone_reader().map_err(failed)?;
         let writer = pair.master.take_writer().map_err(failed)?;
         let killer = child.clone_killer();
+        let flow = Arc::new(Flow::default());
+        let input = Arc::new(Input::default());
+        let read_flow = flow.clone();
         std::thread::spawn(move || {
             let mut buffer = vec![0u8; CHUNK];
             // The end of the output is the end of the terminal: a read error (EIO once the shell is gone) is the same as zero bytes.
-            while let Ok(n) = reader.read(&mut buffer) {
-                if n == 0 || !send(data_event(&buffer[..n])) {
+            while read_flow.wait_room() {
+                match reader.read(&mut buffer) {
+                    Ok(n) if n > 0 => read_flow.push(&buffer[..n]),
+                    _ => break,
+                }
+            }
+            read_flow.finish();
+        });
+        let send_flow = flow.clone();
+        std::thread::spawn(move || {
+            while let Some(bytes) = send_flow.next() {
+                if !send(data_event(&bytes)) {
+                    send_flow.close();
                     break;
                 }
             }
             let code = child.wait().ok().map(|status| status.exit_code());
             send(TerminalEvent::Exit { code });
         });
+        let write_input = input.clone();
+        std::thread::spawn(move || write_input.run(writer));
         let id = format!("pty_{}", self.0.next.fetch_add(1, Ordering::Relaxed) + 1);
         self.0.ptys.lock().unwrap().insert(
             id.clone(),
             Pty {
                 master: pair.master,
-                writer,
                 killer,
+                flow,
+                input,
             },
         );
         Ok(id)
@@ -233,14 +425,11 @@ impl Terminals {
         f(pty)
     }
 
+    /// Puts `data` in the queue of the terminal; the write thread types it in the order it came.
     fn write(&self, id: &str, data: &str) -> Result<(), String> {
         check_input(data)?;
-        self.with(id, |pty| {
-            pty.writer
-                .write_all(data.as_bytes())
-                .and_then(|()| pty.writer.flush())
-                .map_err(|_| "ターミナルへ書き込めません。終了している可能性があります".to_owned())
-        })
+        let input = self.with(id, |pty| Ok(pty.input.clone()))?;
+        input.push(data)
     }
 
     fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -252,11 +441,18 @@ impl Terminals {
         })
     }
 
+    /// The screen has drawn `bytes` more of the output of the terminal; one that is gone is no error.
+    fn ack(&self, id: &str, bytes: usize) {
+        if let Ok(flow) = self.with(id, |pty| Ok(pty.flow.clone())) {
+            flow.ack(bytes);
+        }
+    }
+
     /// Ends the terminal and forgets it; one that is already gone is a success.
     fn close(&self, id: &str) {
         let pty = self.0.ptys.lock().unwrap().remove(id);
-        if let Some(mut pty) = pty {
-            let _ = pty.killer.kill();
+        if let Some(pty) = pty {
+            pty.end();
         }
     }
 }
@@ -294,20 +490,21 @@ pub async fn terminal_open(
     blocking(move || terminals.open(&spec, size, move |event| channel.send(event).is_ok())).await?
 }
 
-/// Types `data` into the terminal `id`.
+// The commands below only queue, resize, count or signal: none waits for a PTY, so they are not `async` and not `spawn_blocking`. Tauri runs such a command in the order the screen called it, which keeps the typed keys in order.
+
+/// Types `data` into the terminal `id`: it is queued, and an error says the queue is full or the terminal is gone.
 #[tauri::command]
-pub async fn terminal_write(
+pub fn terminal_write(
     state: tauri::State<'_, Terminals>,
     id: String,
     data: String,
 ) -> Result<(), String> {
-    let terminals = state.inner().clone();
-    blocking(move || terminals.write(&id, &data)).await?
+    state.write(&id, &data)
 }
 
 /// Tells the terminal `id` its size changed.
 #[tauri::command]
-pub async fn terminal_resize(
+pub fn terminal_resize(
     state: tauri::State<'_, Terminals>,
     id: String,
     cols: u16,
@@ -316,11 +513,16 @@ pub async fn terminal_resize(
     state.resize(&id, cols, rows)
 }
 
+/// Tells the terminal `id` that the screen has drawn `bytes` more of its output.
+#[tauri::command]
+pub fn terminal_ack(state: tauri::State<'_, Terminals>, id: String, bytes: usize) {
+    state.ack(&id, bytes);
+}
+
 /// Ends the terminal `id` and forgets it.
 #[tauri::command]
-pub async fn terminal_close(state: tauri::State<'_, Terminals>, id: String) -> Result<(), String> {
+pub fn terminal_close(state: tauri::State<'_, Terminals>, id: String) {
     state.close(&id);
-    Ok(())
 }
 
 #[cfg(test)]
@@ -562,6 +764,169 @@ mod tests {
             total += bytes.len();
         }
         assert!(total >= 100_000);
+        terminals.close(&id);
+    }
+
+    /// Runs `f` on a thread and fails when it has not returned in 5 seconds, so a call that waits on a PTY fails the test instead of hanging it.
+    fn returns_soon<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("{what} did not return"))
+    }
+
+    /// The bytes of the events that arrive until none comes for 500 ms.
+    fn drain(rx: &mpsc::Receiver<TerminalEvent>) -> usize {
+        let mut total = 0;
+        while let Ok(event) = rx.recv_timeout(Duration::from_millis(500)) {
+            if let TerminalEvent::Data { data } = event {
+                total += STANDARD.decode(data).unwrap().len();
+            }
+        }
+        total
+    }
+
+    #[test]
+    fn short_reads_are_joined_into_chunks_and_the_first_one_after_a_pause_goes_at_once() {
+        let flow = Flow::default();
+        flow.push(b"hello");
+        assert_eq!(flow.next().unwrap(), b"hello");
+        // 100 reads of 1000 bytes: full chunks first, then what is left.
+        for _ in 0..100 {
+            flow.push(&[b'a'; 1000]);
+        }
+        flow.finish();
+        let mut sizes = Vec::new();
+        while let Some(chunk) = flow.next() {
+            sizes.push(chunk.len());
+        }
+        assert_eq!(
+            sizes,
+            [
+                CHUNK,
+                CHUNK,
+                CHUNK,
+                CHUNK,
+                CHUNK,
+                CHUNK,
+                100_000 - 6 * CHUNK
+            ]
+        );
+    }
+
+    #[test]
+    fn a_short_read_waits_for_more_output_only_for_the_gap() {
+        let flow = Flow::default();
+        flow.push(b"a");
+        assert_eq!(flow.next().unwrap(), b"a");
+        flow.push(b"b");
+        let started = Instant::now();
+        assert_eq!(flow.next().unwrap(), b"b");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn the_reader_waits_for_the_screen_and_goes_on_when_it_confirms() {
+        let (terminals, id, rx) = open(&sh("yes"));
+        // Nothing is confirmed: the output stops near the limit instead of going on without end.
+        let held = drain(&rx);
+        assert!(held >= MAX_UNACKED, "{held}");
+        assert!(held < MAX_UNACKED + CHUNK, "{held}");
+        assert_eq!(drain(&rx), 0);
+        // Confirming what was drawn lets the reader go on.
+        terminals.ack(&id, held);
+        let more = drain(&rx);
+        assert!(more > 0);
+        // Confirming a terminal that is gone is no error.
+        terminals.close(&id);
+        terminals.ack(&id, more);
+    }
+
+    #[test]
+    fn closing_frees_a_reader_that_waits_for_the_screen() {
+        let (terminals, id, rx) = open(&sh("yes"));
+        drain(&rx);
+        returns_soon("closing", {
+            let terminals = terminals.clone();
+            move || terminals.close(&id)
+        });
+        exit_of(&rx);
+    }
+
+    #[test]
+    fn quitting_frees_a_reader_that_waits_for_the_screen() {
+        let (terminals, _id, rx) = open(&sh("yes"));
+        drain(&rx);
+        returns_soon("quitting", {
+            let terminals = terminals.clone();
+            move || terminals.kill_all()
+        });
+        exit_of(&rx);
+    }
+
+    #[test]
+    fn a_program_that_does_not_read_blocks_nothing_else() {
+        let (terminals, id, _rx) = open(&sh("sleep 30"));
+        let (other, other_id, other_rx) = open(&sh("cat"));
+        // The input is queued and never waits for the program; at the limit it is refused with a message.
+        let chunk = "a".repeat(MAX_INPUT);
+        let mut refused = None;
+        for _ in 0..(MAX_QUEUED / MAX_INPUT + 2) {
+            let (terminals, id, chunk) = (terminals.clone(), id.clone(), chunk.clone());
+            if let Err(e) = returns_soon("a write", move || terminals.write(&id, &chunk)) {
+                refused = Some(e);
+                break;
+            }
+        }
+        assert_eq!(
+            refused.as_deref(),
+            Some("入力が詰まっています。動いているプログラムが入力を読んでいません")
+        );
+        // The others still work while that write is stuck.
+        returns_soon("another terminal", {
+            let other = other.clone();
+            let other_id = other_id.clone();
+            move || {
+                other.write(&other_id, "ping\n").unwrap();
+                other.resize(&other_id, 100, 30).unwrap();
+            }
+        });
+        read_until(&other_rx, "ping");
+        // Closing does not wait for the write, and neither does quitting.
+        returns_soon("closing", {
+            let terminals = terminals.clone();
+            move || terminals.close(&id)
+        });
+        returns_soon("quitting", move || other.kill_all());
+    }
+
+    #[test]
+    fn what_is_typed_reaches_the_process_in_the_order_it_was_written() {
+        let (terminals, id, rx) = open(&sh("stty -echo -onlcr; echo ready; cat"));
+        read_until(&rx, "ready");
+        for line in ["one\n", "two\n", "three\n", "four\n"] {
+            terminals.write(&id, line).unwrap();
+        }
+        read_until(&rx, "one\ntwo\nthree\nfour\n");
+        terminals.close(&id);
+    }
+
+    #[test]
+    fn a_write_to_a_process_that_is_gone_is_refused_once_the_write_failed() {
+        let (terminals, id, rx) = open(&sh("exit 0"));
+        exit_of(&rx);
+        // The first write may still be queued; the one after the failed write is an error.
+        let mut failed = false;
+        for _ in 0..50 {
+            if terminals.write(&id, "x").is_err() {
+                failed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(failed);
         terminals.close(&id);
     }
 }

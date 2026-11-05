@@ -281,6 +281,7 @@ pub fn run() {
             terminal::terminal_open,
             terminal::terminal_write,
             terminal::terminal_resize,
+            terminal::terminal_ack,
             terminal::terminal_close,
             orca_chat::orca_chat_open,
             orca_chat::orca_chat_close,

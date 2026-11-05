@@ -17,7 +17,7 @@ interface XTerm {
   cols: number;
   rows: number;
   open(parent: HTMLElement): void;
-  write(data: string | Uint8Array): void;
+  write(data: string | Uint8Array, callback?: () => void): void;
   focus(): void;
   dispose(): void;
   loadAddon(addon: unknown): void;
