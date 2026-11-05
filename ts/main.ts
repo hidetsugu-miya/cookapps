@@ -1,6 +1,7 @@
 // Startup: each module registers its own handlers, then the lists are drawn. The order is the order the handlers were registered in
 // when the app was one script, and the first Todo and inbox calls start before the Claude check.
 import { initAccounts } from "./accounts.js";
+import { initArrivals } from "./arrivals.js";
 import { initCalendar } from "./calendar.js";
 import { initCalendarDetail } from "./calendar-detail.js";
 import { initClaude, refreshClaude } from "./claude.js";
@@ -29,6 +30,7 @@ initNav();
 initCalendar();
 initCalendarDetail();
 initToast();
+initArrivals();
 initMenu();
 initTodo();
 initTodoAdd();

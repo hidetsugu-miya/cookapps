@@ -989,6 +989,8 @@ struct HistoryMessage {
 #[serde(rename_all = "camelCase")]
 struct HistoryMessageRef {
     thread_id: String,
+    #[serde(default)]
+    label_ids: Vec<String>,
 }
 
 /// Threads touched by any added / deleted message or added / removed label, each once, in record order.
@@ -1006,6 +1008,24 @@ fn changed_thread_ids(records: &[HistoryRecord]) -> Vec<String> {
             if !ids.contains(&m.message.thread_id) {
                 ids.push(m.message.thread_id.clone());
             }
+        }
+    }
+    ids
+}
+
+/// Threads that got a new unread message in the inbox (M-9), each once, in record order, out of the refetched `threads`.
+/// A message that only changed labels (an undo of a trash or an archive) is not new, and a thread that is read or left the inbox before the refetch has not arrived.
+fn arrived_thread_ids(records: &[HistoryRecord], threads: &[ThreadItem]) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for m in records.iter().flat_map(|r| &r.messages_added) {
+        let labels = &m.message.label_ids;
+        let id = &m.message.thread_id;
+        if labels.iter().any(|l| l == "INBOX")
+            && labels.iter().any(|l| l == "UNREAD")
+            && !ids.contains(id)
+            && threads.iter().any(|t| &t.id == id && t.unread)
+        {
+            ids.push(id.clone());
         }
     }
     ids
@@ -1087,6 +1107,8 @@ pub enum Sync {
     Changed {
         threads: Vec<ThreadItem>,
         removed: Vec<String>,
+        /// The IDs among `threads` that are new mail to tell the user about (M-9).
+        arrived: Vec<String>,
         history_id: String,
     },
     /// The history was too old or too large: `threads` is the whole inbox of the account.
@@ -1155,9 +1177,11 @@ async fn sync_account(
     } else {
         list.history_id
     };
+    let arrived = arrived_thread_ids(&list.history, &threads);
     Ok(Sync::Changed {
         threads,
         removed,
+        arrived,
         history_id,
     })
 }
@@ -2316,6 +2340,49 @@ mod tests {
         assert!(list.next_page_token.is_none());
     }
 
+    fn records(v: serde_json::Value) -> Vec<HistoryRecord> {
+        serde_json::from_value::<HistoryList>(v).unwrap().history
+    }
+
+    fn fetched(id: &str, unread: bool) -> ThreadItem {
+        let mut t = item_at(id, "a@example.com", 1);
+        t.unread = unread;
+        t
+    }
+
+    #[test]
+    fn arrived_are_the_unread_inbox_threads_that_got_a_new_unread_inbox_message() {
+        let history = records(json!({"history": [
+            {"id": "1", "messagesAdded": [{"message": {"id": "m1", "threadId": "new", "labelIds": ["INBOX", "UNREAD"]}}]},
+            {"id": "2", "messagesAdded": [{"message": {"id": "m2", "threadId": "sent", "labelIds": ["SENT"]}}]},
+            {"id": "3", "messagesAdded": [{"message": {"id": "m3", "threadId": "read", "labelIds": ["INBOX"]}}]},
+            {"id": "4", "messagesAdded": [{"message": {"id": "m4", "threadId": "bare"}}]},
+            {"id": "5", "labelsAdded": [{"message": {"id": "m5", "threadId": "untrashed", "labelIds": ["INBOX", "UNREAD"]}, "labelIds": ["INBOX"]}]},
+            {"id": "6", "messagesAdded": [{"message": {"id": "m6", "threadId": "new", "labelIds": ["INBOX", "UNREAD"]}}]},
+            {"id": "7", "messagesAdded": [{"message": {"id": "m7", "threadId": "later", "labelIds": ["INBOX", "UNREAD"]}}]}
+        ]}));
+        let threads = vec![
+            fetched("new", true),
+            fetched("sent", true),
+            fetched("read", false),
+            fetched("untrashed", true),
+            fetched("later", true),
+        ];
+        assert_eq!(arrived_thread_ids(&history, &threads), vec!["new", "later"]);
+    }
+
+    #[test]
+    fn a_new_message_that_was_read_or_left_the_inbox_before_the_refetch_has_not_arrived() {
+        let history = records(json!({"history": [
+            {"id": "1", "messagesAdded": [{"message": {"id": "m1", "threadId": "read", "labelIds": ["INBOX", "UNREAD"]}}]},
+            {"id": "2", "messagesAdded": [{"message": {"id": "m2", "threadId": "gone", "labelIds": ["INBOX", "UNREAD"]}}]}
+        ]}));
+        // "gone" is not among the refetched inbox threads; "read" came back read.
+        let threads = vec![fetched("read", false)];
+        assert!(arrived_thread_ids(&history, &threads).is_empty());
+        assert!(arrived_thread_ids(&[], &threads).is_empty());
+    }
+
     #[test]
     fn history_without_changes_is_empty() {
         let list: HistoryList = serde_json::from_str(r#"{"historyId": "5"}"#).unwrap();
@@ -2360,12 +2427,14 @@ mod tests {
         let v = serde_json::to_value(Sync::Changed {
             threads: vec![item_at("t", "a@example.com", 1)],
             removed: vec!["r".into()],
+            arrived: vec!["t".into()],
             history_id: "7".into(),
         })
         .unwrap();
         assert_eq!(v["kind"], "changed");
         assert_eq!(v["historyId"], "7");
         assert_eq!(v["removed"][0], "r");
+        assert_eq!(v["arrived"][0], "t");
         assert_eq!(v["threads"][0]["dateMs"], 1);
         let v = serde_json::to_value(Sync::NeedsLogin).unwrap();
         assert_eq!(v["kind"], "needsLogin");
