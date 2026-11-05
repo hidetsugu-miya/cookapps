@@ -23,7 +23,8 @@ export function initArrivals() {
   document.body.append(stack);
 }
 
-function dismiss(key: string) {
+// Closes the card of a thread; openThread calls it too, so no button of a card acts on a thread the detail view holds.
+export function dismiss(key: string) {
   cards.get(key)?.remove();
   cards.delete(key);
 }
@@ -45,7 +46,7 @@ export function announceArrival(t: ThreadItem) {
   const current = opened.current;
   if (cards.has(key) || (current && !$("thread").hidden && rowKey(current) === key)) return;
   const name = senderName(t.from);
-  const card = el("arrival");
+  const card = el("arrival pop");
   card.setAttribute("role", "status");
   const avatar = span("avatar", initials(name));
   avatar.style.background = avatarColor(name);
@@ -78,7 +79,8 @@ export function announceArrival(t: ThreadItem) {
   let timer = 0;
   const arm = () => {
     clearTimeout(timer);
-    timer = window.setTimeout(() => dismiss(key), SHOW_MS);
+    // A card closed before its time must not close a newer card of the same thread.
+    timer = window.setTimeout(() => cards.get(key) === card && dismiss(key), SHOW_MS);
   };
   const hold = () => clearTimeout(timer);
   for (const type of ["mouseenter", "focusin"]) card.addEventListener(type, hold);

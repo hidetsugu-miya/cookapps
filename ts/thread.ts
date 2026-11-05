@@ -3,8 +3,9 @@ import type { MessageDetail } from "./bindings/MessageDetail";
 import { $, span } from "./dom.js";
 import { avatarColor, formatDate, formatDetailDate, initials, recipientsLabel, senderName, splitAddress, unescapeHtml } from "./format.js";
 import { PERSON_SVG } from "./icons.js";
+import { dismiss } from "./arrivals.js";
 import { applySync, load, removeRow } from "./inbox.js";
-import { rows, setReadState, updateBadge } from "./inbox-rows.js";
+import { rowKey, rows, setReadState, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { autoFit, fitAfterImages, frameObserver, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
@@ -162,6 +163,7 @@ async function markRead(account: string, id: string) {
 
 export async function openThread({ id, account }: { id: string; account: string }, li: HTMLLIElement | null, origin: "mail" | "todo" = "mail") {
   $("error").hidden = true;
+  dismiss(rowKey({ id, account }));
   const seq = ++openCount;
   try {
     const t = await invoke("thread", { account, id });

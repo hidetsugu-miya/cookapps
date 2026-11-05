@@ -42,5 +42,5 @@ Details the owner left open:
 
 - Several new threads at once: one card each, stacked, the newest at the bottom. At most 3 cards show; a fourth makes the oldest go (its thread stays in the list, unread).
 - A card goes by itself after 10 seconds. The pointer or the focus on it holds it, and the 10 seconds start again when they leave. The close button closes it at once.
-- A thread already announced gets no second card, and neither does the thread that is open on screen.
+- A thread whose card is on screen gets no second card, and neither does the thread that is open on screen. A card goes when its thread is opened, from the list or with "詳細を開く", so that no button of it acts on a thread the detail view holds.
 - The cards stack above the toast, which is above the update popup.

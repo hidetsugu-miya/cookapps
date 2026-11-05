@@ -226,7 +226,10 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .toast button { margin-left: 12px; padding: 0; border: 0; background: transparent; color: var(--side-fg); font: inherit; cursor: pointer; }
 /* The new-mail popups (ts/arrivals.ts) stack at the bottom right above the toast, which in turn is above the update popup. */
 .arrivals { position: fixed; right: 24px; bottom: calc(var(--toast-bottom, 24px) + 56px); z-index: 12; width: 320px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-.arrival { pointer-events: auto; box-sizing: border-box; padding: 12px 12px 8px 16px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; gap: 8px; }
+.arrival { pointer-events: auto; padding: 12px 12px 8px 16px; display: flex; flex-direction: column; gap: 8px; }
+/* The card is a .pop for its frame; these put back what .pop would change (it is fixed, 13px, and shrinks the text buttons). */
+.arrival.pop { position: static; z-index: auto; width: auto; font-size: inherit; line-height: normal; }
+.arrival.pop .text-btn { height: 32px; padding: 0 16px; font-size: revert; }
 .arrival-head { display: flex; align-items: flex-start; gap: 12px; }
 .arrival-head .avatar { flex: none; }
 .arrival-head .icon-btn { flex: none; width: 28px; height: 28px; margin-left: auto; }

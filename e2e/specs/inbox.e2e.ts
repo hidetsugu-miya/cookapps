@@ -452,6 +452,29 @@ describe("inbox", () => {
       expect(await cards()).toEqual([]);
     });
 
+    it("closes the popup of a thread that is opened from the list, so its buttons cannot act on the open thread", async () => {
+      await arrive(arrivedThread);
+      await waitForCount(".arrival", 1);
+      await mock("thread", threadDetail("Lunch plan", "Shall we eat at noon?", true));
+      await mock("set_read", true);
+      await rowOf("unread-threads", "Lunch plan").$(".subject").click();
+      await expect($("#thread-subject")).toHaveText("Lunch plan");
+      await waitForCount(".arrival", 0);
+    });
+
+    it("does not let the timer of a closed popup close the next popup of the same thread", async () => {
+      await arrive(arrivedThread);
+      await $('.arrival button[aria-label="閉じる"]').click();
+      await waitForCount(".arrival", 0);
+      // The first card would have gone at 10 seconds; the second one arrives 6 seconds after the first.
+      await browser.pause(6000);
+      await arrive(arrivedThread);
+      await waitForCount(".arrival", 1);
+      await browser.pause(5000);
+      expect(await cards()).toHaveLength(1);
+      await browser.waitUntil(async () => (await cards()).length === 0, { timeout: 15_000, timeoutMsg: "the popup did not go by itself" });
+    });
+
     it("keeps the newest 3 popups, and a popup goes by itself after 10 seconds", async () => {
       const four = ["t5", "t6", "t7", "t8"].map((id) => thread(id, `Mail ${id}`, true));
       await arrive(...four);
