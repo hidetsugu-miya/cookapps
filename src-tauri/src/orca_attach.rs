@@ -16,8 +16,6 @@ const MAX_IMAGE: usize = 20 * 1024 * 1024;
 const CHUNK: usize = 384 * 1024;
 /// Where the files go, inside the worktree.
 const DROPS: &str = ".orca/drops";
-/// How many names are tried (`name.ext`, `name copy.ext`, `name copy 2.ext`, ...) before the upload gives up.
-const NAME_TRIES: usize = 50;
 /// Characters of the stem of a file name. A file name is at most 255 bytes, and the temporary one adds a suffix.
 const STEM_LIMIT: usize = 40;
 /// The characters a shell reads as more than a name: Orca's own paste of an image path (`shared/image-path-paste.js`) escapes the same ones.
@@ -93,17 +91,6 @@ fn file_stem(name: &str) -> String {
     } else {
         stem.to_owned()
     }
-}
-
-/// The names to try, as Orca names a copy: `name.ext`, `name copy.ext`, `name copy 2.ext`, ...
-fn name_candidates(stem: &str, ext: &str) -> Vec<String> {
-    (0..NAME_TRIES)
-        .map(|n| match n {
-            0 => format!("{stem}.{ext}"),
-            1 => format!("{stem} copy.{ext}"),
-            n => format!("{stem} copy {n}.{ext}"),
-        })
-        .collect()
 }
 
 /// The path as the text for Claude: the bare path, each blank and shell character with a backslash before it (Claude reads the image from such a path). A control character is refused, for it would end the line or the command.
@@ -196,7 +183,7 @@ async fn write_chunk(
     .map(|_| ())
 }
 
-/// Puts `bytes` in `.orca/drops/` of the worktree at `path` under the first free name of `stem` and `ext`, and gives the absolute path of the file.
+/// Puts `bytes` in `.orca/drops/` of the worktree at `path` under the name `{stem}.{ext}`, or `{stem}-{random}.{ext}` when that exists (one `files.stat`), and gives the absolute path of the file.
 /// The file is written in chunks to a temporary name (`random` makes it one of its own) and copied to its name, which fails when the name exists, so a file is never overwritten; the temporary file goes in every case.
 /// `.orca/drops/.gitignore` (`*`) is written first when it is missing, so the images do not show as changes, and a failure of that is ignored.
 async fn upload(
@@ -212,14 +199,11 @@ async fn upload(
     if !exists(rpc, path, &ignore).await? {
         let _ = write_chunk(rpc, path, host_id, &ignore, b"*\n", false).await;
     }
-    let mut name = None;
-    for candidate in name_candidates(stem, ext) {
-        if !exists(rpc, path, &format!("{DROPS}/{candidate}")).await? {
-            name = Some(candidate);
-            break;
-        }
-    }
-    let name = name.ok_or("同じ名前の画像が多すぎて、保存先の名前を決められません")?;
+    let name = if exists(rpc, path, &format!("{DROPS}/{stem}.{ext}")).await? {
+        format!("{stem}-{random}.{ext}")
+    } else {
+        format!("{stem}.{ext}")
+    };
     let temporary = format!("{DROPS}/.{name}.orca-upload-{random}");
     let sent = send_and_commit(
         rpc,
@@ -457,23 +441,7 @@ mod tests {
         }
         let long = file_stem(&format!("{}.png", "あ".repeat(100)));
         assert_eq!(long.chars().count(), STEM_LIMIT);
-        assert!(long.len() + ".orca-upload-0123456789abcdef.webp copy 49".len() < 255);
-    }
-
-    #[test]
-    fn names_are_tried_as_orca_names_a_copy() {
-        let names = name_candidates("shot", "png");
-        assert_eq!(names.len(), NAME_TRIES);
-        assert_eq!(
-            &names[..4],
-            [
-                "shot.png",
-                "shot copy.png",
-                "shot copy 2.png",
-                "shot copy 3.png"
-            ]
-        );
-        assert_eq!(names.last().unwrap(), "shot copy 49.png");
+        assert!(long.len() + "-0123456789abcdef.webp.orca-upload-0123456789abcdef".len() < 255);
     }
 
     #[test]
@@ -630,36 +598,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_taken_name_gets_a_copy_name() {
-        let mut fake = with_files(&[
-            ".orca/drops/.gitignore",
-            ".orca/drops/shot.png",
-            ".orca/drops/shot copy.png",
-        ]);
+    async fn a_taken_name_gets_the_random_part_after_one_stat() {
+        let mut fake = with_files(&[".orca/drops/.gitignore", ".orca/drops/shot.png"]);
         let file = run(&mut fake, b"abc").await.unwrap();
-        assert_eq!(file, "/work/a/.orca/drops/shot copy 2.png");
+        assert_eq!(file, "/work/a/.orca/drops/shot-r4nd.png");
+        let stats = methods(&fake)
+            .iter()
+            .filter(|m| **m == "files.stat")
+            .count();
+        assert_eq!(stats, 2);
         let commit = fake
             .calls
             .iter()
             .find(|(m, _)| m == "files.commitUpload")
             .unwrap();
-        assert_eq!(commit.1["finalRelativePath"], ".orca/drops/shot copy 2.png");
+        assert_eq!(commit.1["finalRelativePath"], ".orca/drops/shot-r4nd.png");
         assert_eq!(
             commit.1["tempRelativePath"],
-            ".orca/drops/.shot copy 2.png.orca-upload-r4nd"
+            ".orca/drops/.shot-r4nd.png.orca-upload-r4nd"
         );
-    }
-
-    #[tokio::test]
-    async fn the_upload_gives_up_when_every_name_is_taken() {
-        let taken: Vec<String> = name_candidates("shot", "png")
-            .iter()
-            .map(|n| format!(".orca/drops/{n}"))
-            .chain([".orca/drops/.gitignore".to_owned()])
-            .collect();
-        let mut fake = with_files(&taken.iter().map(String::as_str).collect::<Vec<_>>());
-        assert!(run(&mut fake, b"abc").await.is_err());
-        assert!(!methods(&fake).contains(&"files.writeBase64Chunk"));
     }
 
     #[tokio::test]
