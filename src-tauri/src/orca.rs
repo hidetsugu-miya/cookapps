@@ -3,6 +3,7 @@
 //! A-8 adds the project list, the plain terminals of Orca (closed and mirrored through the CLI) and the destinations of the app's own terminals (`terminal.rs`).
 
 use std::{
+    cell::OnceCell,
     collections::HashSet,
     io::Read,
     path::{Path, PathBuf},
@@ -646,7 +647,34 @@ fn plugin_of(label: &str) -> Option<&str> {
 
 /// The skills of `orca skills installed` (its `result`) that Claude Code runs, as the commands to type: a plugin's skill is `/plugin:name` (its `name` has no prefix), any other `/name`.
 /// A command listed twice is kept once; the list is sorted by command.
-pub fn skills_of(result: &Value) -> Vec<OrcaSkill> {
+/// The skills whose `SKILL.md` says `user-invocable: false` in its front matter are left out (the CLI's output has no such field, so the file is read through `read`).
+/// `home` is the user's home folder. A skill whose file cannot be found or read stays, and so does every skill when there is no home folder.
+pub fn invocable_skills_of(
+    result: &Value,
+    home: Option<&Path>,
+    read: impl Fn(&Path) -> Option<String>,
+) -> Vec<OrcaSkill> {
+    // The list of the installed plugins, read once and only when a plugin's skill needs it.
+    let installed = OnceCell::new();
+    listed_skills(result, |skill, name| {
+        let Some(home) = home.filter(|_| valid_skill_name(name)) else {
+            return false;
+        };
+        skill_files(skill, name, home, || {
+            installed
+                .get_or_init(|| {
+                    let text = read(&home.join(".claude/plugins/installed_plugins.json"))?;
+                    serde_json::from_str::<Value>(&text).ok()
+                })
+                .as_ref()
+        })
+        .iter()
+        .filter_map(|file| read(file))
+        .any(|text| hides_skill(&text))
+    })
+}
+
+fn listed_skills(result: &Value, hidden: impl Fn(&Value, &str) -> bool) -> Vec<OrcaSkill> {
     let mut skills: Vec<OrcaSkill> = Vec::new();
     for skill in result["skills"].as_array().into_iter().flatten() {
         let for_claude = skill["providers"]
@@ -659,7 +687,7 @@ pub fn skills_of(result: &Value) -> Vec<OrcaSkill> {
             .filter(|_| skill["sourceKind"] == "plugin")
             .and_then(plugin_of);
         let command = plugin.map_or_else(|| format!("/{name}"), |p| format!("/{p}:{name}"));
-        if skills.iter().any(|s| s.command == command) {
+        if skills.iter().any(|s| s.command == command) || hidden(skill, name) {
             continue;
         }
         skills.push(OrcaSkill {
@@ -671,6 +699,62 @@ pub fn skills_of(result: &Value) -> Vec<OrcaSkill> {
     }
     skills.sort_by(|a, b| a.command.cmp(&b.command));
     skills
+}
+
+/// Whether `name` (from the CLI's output) is one path element, so it can be a folder name under a skills folder.
+fn valid_skill_name(name: &str) -> bool {
+    !matches!(name, "" | "." | "..") && !name.contains(['/', '\\'])
+}
+
+/// Where the `SKILL.md` of a skill can be: `{home}/.claude/skills/{name}` for `sourceKind` `home`, and `{installPath}/skills/{name}` for each place of its plugin in `installed_plugins.json` (`plugins` has the keys `{plugin}@{marketplace}`, each an array of places) for `sourceKind` `plugin`.
+/// Any other kind of source, or a plugin the file does not know, has none.
+fn skill_files<'a>(
+    skill: &Value,
+    name: &str,
+    home: &Path,
+    installed: impl FnOnce() -> Option<&'a Value>,
+) -> Vec<PathBuf> {
+    match skill["sourceKind"].as_str() {
+        Some("home") => vec![home.join(".claude/skills").join(name).join("SKILL.md")],
+        Some("plugin") => {
+            let Some(plugin) = text_of(skill, "sourceLabel").and_then(plugin_of) else {
+                return Vec::new();
+            };
+            let plugins = installed().and_then(|doc| doc["plugins"].as_object());
+            plugins
+                .into_iter()
+                .flatten()
+                .filter(|(key, _)| {
+                    key.strip_prefix(plugin)
+                        .is_some_and(|rest| rest.starts_with('@'))
+                })
+                .flat_map(|(_, places)| places.as_array().into_iter().flatten())
+                .filter_map(|place| text_of(place, "installPath"))
+                .map(|path| Path::new(path).join("skills").join(name).join("SKILL.md"))
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Whether the front matter of a `SKILL.md` (from its first line `---` to the next `---`, which must exist) has the top-level line `user-invocable: false`.
+/// The same line in the body, a nested key or another value does not count.
+fn hides_skill(text: &str) -> bool {
+    let mut lines = text.lines().map(str::trim_end);
+    if lines.next() != Some("---") {
+        return false;
+    }
+    let mut front_matter = Vec::new();
+    let closed = lines.any(|line| {
+        front_matter.push(line);
+        line == "---"
+    });
+    closed
+        && front_matter.iter().any(|line| {
+            line.split_once(':').is_some_and(|(key, value)| {
+                key.trim_end() == "user-invocable" && value.trim() == "false"
+            })
+        })
 }
 
 /// The session a launch started: `result.outcome` (`{kind: "terminal", handle, paneKey}`).
@@ -1153,7 +1237,11 @@ fn handoff(
 
 fn skills() -> Result<Vec<OrcaSkill>, String> {
     match call(&skills_args(), READ_TIMEOUT) {
-        Ok(result) => Ok(skills_of(&result)),
+        Ok(result) => Ok(invocable_skills_of(
+            &result,
+            dirs::home_dir().as_deref(),
+            |path| std::fs::read_to_string(path).ok(),
+        )),
         Err(RunError::Missing) => Err(not_installed()),
         Err(RunError::Failed(message)) => Err(message),
     }
@@ -1744,6 +1832,11 @@ mod tests {
         })
     }
 
+    /// The skills with no home folder, so that no `SKILL.md` is read.
+    fn all_skills(doc: &Value) -> Vec<OrcaSkill> {
+        invocable_skills_of(doc, None, |_| None)
+    }
+
     #[test]
     fn a_skill_is_a_command_of_claude_code() {
         let doc = json!({"skills": [
@@ -1753,7 +1846,7 @@ mod tests {
             skill("no-providers", &[], "home", "Claude Code home"),
         ]});
         assert_eq!(
-            skills_of(&doc),
+            all_skills(&doc),
             [
                 OrcaSkill {
                     command: "/review".into(),
@@ -1777,7 +1870,7 @@ mod tests {
             skill("home", &["claude"], "home", "Claude plugin x"),
             skill("blank", &["claude"], "plugin", "Claude plugin  "),
         ]});
-        let commands: Vec<_> = skills_of(&doc).into_iter().map(|s| s.command).collect();
+        let commands: Vec<_> = all_skills(&doc).into_iter().map(|s| s.command).collect();
         assert_eq!(
             commands,
             [
@@ -1801,10 +1894,10 @@ mod tests {
         let mut first = skill("b", &["claude"], "home", "Claude Code home");
         first["description"] = json!("second b");
         let doc_dup = json!({"skills": [doc["skills"][0].clone(), first]});
-        let commands: Vec<_> = skills_of(&doc).into_iter().map(|s| s.command).collect();
+        let commands: Vec<_> = all_skills(&doc).into_iter().map(|s| s.command).collect();
         assert_eq!(commands, ["/a", "/b", "/p:a"]);
         // The first of two with one command is kept.
-        assert_eq!(skills_of(&doc_dup)[0].description, "About b");
+        assert_eq!(all_skills(&doc_dup)[0].description, "About b");
     }
 
     #[test]
@@ -1815,15 +1908,174 @@ mod tests {
             json!({"skills": null}),
             json!({"skills": [null, 3, {"providers": "claude", "name": "x"}, {"providers": ["claude"]}]}),
         ] {
-            assert!(skills_of(&doc).is_empty(), "{doc}");
+            assert!(all_skills(&doc).is_empty(), "{doc}");
         }
         let mut long = skill("long", &["claude"], "home", "Claude Code home");
         long["description"] = json!("あ".repeat(1_000));
         let mut none = skill("none", &["claude"], "home", "Claude Code home");
         none.as_object_mut().unwrap().remove("description");
-        let listed = skills_of(&json!({"skills": [long, none]}));
+        let listed = all_skills(&json!({"skills": [long, none]}));
         assert_eq!(listed[0].description.chars().count(), LINE_LIMIT);
         assert_eq!(listed[1].description, "");
+    }
+
+    #[test]
+    fn only_the_front_matter_can_hide_a_skill() {
+        for (text, hidden) in [
+            ("---\nname: x\nuser-invocable: false\n---\nBody", true),
+            (
+                "---\r\nname: x\r\nuser-invocable:   false  \r\n---\r\nBody",
+                true,
+            ),
+            ("---\nuser-invocable : false\n---\n", true),
+            ("---\nuser-invocable: true\n---\n", false),
+            ("---\nname: x\n---\n", false),
+            // The line is in the body, not in the front matter.
+            ("---\nname: x\n---\nuser-invocable: false\n", false),
+            // No front matter at all, or it does not start on the first line, or it never ends.
+            ("user-invocable: false\n", false),
+            ("\n---\nuser-invocable: false\n---\n", false),
+            ("---\nuser-invocable: false\n", false),
+            ("", false),
+            // A nested key or a longer value is another setting.
+            ("---\nmetadata:\n  user-invocable: false\n---\n", false),
+            ("---\nuser-invocable: falsey\n---\n", false),
+            ("---\nxuser-invocable: false\n---\n", false),
+        ] {
+            assert_eq!(hides_skill(text), hidden, "{text:?}");
+        }
+    }
+
+    fn read_from(files: &[(&str, &str)]) -> impl Fn(&Path) -> Option<String> {
+        let files: std::collections::HashMap<PathBuf, String> = files
+            .iter()
+            .map(|(p, t)| (PathBuf::from(p), (*t).to_owned()))
+            .collect();
+        move |p| files.get(p).cloned()
+    }
+
+    const HIDDEN: &str = "---\nuser-invocable: false\n---\n";
+    const SHOWN: &str = "---\nname: x\n---\n";
+
+    fn commands(doc: &Value, home: Option<&str>, files: &[(&str, &str)]) -> Vec<String> {
+        invocable_skills_of(doc, home.map(Path::new), read_from(files))
+            .into_iter()
+            .map(|s| s.command)
+            .collect()
+    }
+
+    #[test]
+    fn a_home_skill_that_is_not_user_invocable_is_left_out() {
+        let doc = json!({"skills": [
+            skill("hidden", &["claude"], "home", "Claude Code home"),
+            skill("shown", &["claude"], "home", "Codex home"),
+            skill("unreadable", &["claude"], "home", "Claude Code home"),
+            skill("body", &["claude"], "home", "Claude Code home"),
+        ]});
+        let files = [
+            ("/h/.claude/skills/hidden/SKILL.md", HIDDEN),
+            ("/h/.claude/skills/shown/SKILL.md", SHOWN),
+            (
+                "/h/.claude/skills/body/SKILL.md",
+                "---\n---\nuser-invocable: false\n",
+            ),
+        ];
+        assert_eq!(
+            commands(&doc, Some("/h"), &files),
+            ["/body", "/shown", "/unreadable"]
+        );
+        // Without a home folder nothing can be read, so everything stays.
+        assert_eq!(commands(&doc, None, &files).len(), 4);
+    }
+
+    #[test]
+    fn a_plugin_skill_is_read_from_every_install_path_of_its_plugin() {
+        let doc = json!({"skills": [
+            skill("one", &["claude"], "plugin", "Claude plugin p"),
+            skill("two", &["claude"], "plugin", "Claude plugin p"),
+            skill("three", &["claude"], "plugin", "Claude plugin q"),
+            skill("four", &["claude"], "plugin", "Claude plugin pp"),
+        ]});
+        let installed = r#"{"version": 2, "plugins": {
+            "p@market": [{"installPath": "/a"}, {"scope": "x"}, {"installPath": "/b"}],
+            "pp@market": [{"installPath": "/c"}],
+            "q@market": [{"installPath": "/d"}],
+            "p": [{"installPath": "/e"}]
+        }}"#;
+        let files = [
+            ("/h/.claude/plugins/installed_plugins.json", installed),
+            // `one` is hidden in the second place only: that is enough.
+            ("/a/skills/one/SKILL.md", SHOWN),
+            ("/b/skills/one/SKILL.md", HIDDEN),
+            // `two` is hidden, but only in a place of the plugin `pp`.
+            ("/c/skills/two/SKILL.md", HIDDEN),
+            ("/d/skills/three/SKILL.md", SHOWN),
+            // `four` is hidden in the place of a key without `@`, which is not the plugin `pp`.
+            ("/e/skills/four/SKILL.md", HIDDEN),
+        ];
+        assert_eq!(
+            commands(&doc, Some("/h"), &files),
+            ["/p:two", "/pp:four", "/q:three"]
+        );
+    }
+
+    #[test]
+    fn skills_stay_when_the_installed_plugins_cannot_be_used() {
+        let doc = json!({"skills": [skill("a", &["claude"], "plugin", "Claude plugin p")]});
+        let place = "/h/.claude/plugins/installed_plugins.json";
+        for installed in [
+            None,
+            Some("not json"),
+            Some("[]"),
+            Some(r#"{"plugins": []}"#),
+            Some(r#"{"plugins": {"p@m": "/a"}}"#),
+            Some(r#"{"plugins": {"p@m": [{"installPath": 3}, null]}}"#),
+        ] {
+            let mut files = vec![("/a/skills/a/SKILL.md", HIDDEN)];
+            files.extend(installed.map(|text| (place, text)));
+            assert_eq!(
+                commands(&doc, Some("/h"), &files),
+                ["/p:a"],
+                "{installed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_that_is_not_one_path_element_is_never_read() {
+        let names = ["../x", "a/b", "a\\b", ".", "..", "/abs"];
+        let skills: Vec<Value> = names
+            .iter()
+            .flat_map(|n| {
+                [
+                    skill(n, &["claude"], "home", "Claude Code home"),
+                    skill(n, &["claude"], "plugin", "Claude plugin p"),
+                ]
+            })
+            .collect();
+        let doc = json!({"skills": skills});
+        let read = std::cell::RefCell::new(Vec::new());
+        let listed = invocable_skills_of(&doc, Some(Path::new("/h")), |p| {
+            read.borrow_mut().push(p.to_path_buf());
+            Some(HIDDEN.to_owned())
+        });
+        // The home and the plugin variant of one name are two commands (`/n` and `/p:n`).
+        assert_eq!(listed.len(), names.len() * 2);
+        // Only the list of the plugins may be read, never a SKILL.md.
+        assert!(
+            read.borrow()
+                .iter()
+                .all(|p| p.ends_with("installed_plugins.json")),
+            "{:?}",
+            read.borrow()
+        );
+    }
+
+    #[test]
+    fn a_skill_of_another_kind_of_source_is_not_read() {
+        let doc = json!({"skills": [skill("a", &["claude"], "bundled", "Claude Code home")]});
+        let files = [("/h/.claude/skills/a/SKILL.md", HIDDEN)];
+        assert_eq!(commands(&doc, Some("/h"), &files), ["/a"]);
     }
 
     #[test]
