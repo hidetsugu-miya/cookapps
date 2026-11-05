@@ -28,7 +28,7 @@ A new requirement gets a section there and an entry here.
 | Calendar | `requirements/calendar.md` | C-1 View, C-2 Event detail, C-3 First day of the week |
 | Tasks | `requirements/tasks.md` | T-1 Todoist, T-2 Nest and unnest tasks, T-3 Comments, T-4 Labels, T-5 Count by due moment |
 | Slack | `requirements/slack.md` | S-1 Paste a mail into Slack, S-2 Summarize a Slack message into a Todo, S-3 Edit the Todo summary prompt, S-4 Proofread the text to paste into Slack with Claude, S-5 Slack list, S-6 Slack thread, S-7 Ask Claude about the thread, S-8 Slack list: unread and read, S-9 Keep a channel off the Slack list, S-10 Emoji in Slack text, S-11 Blocks and attachments in the thread, S-12 Slack styles in the thread, S-13 Watch threads and the header of the Slack list, S-14 Unread replies in the Slack list, S-15 Mark one Slack row read |
-| Integration | `requirements/integration.md` | A-1 Claude integration, A-2 Claude model and effort, A-4 Claude connection, A-3 Settings tabs, A-5 Side menu by screen, A-6 Orca, A-7 Orca session history, A-8 Orca terminal and project list, A-9 Hand to Orca, A-10 Attach an image in Orca |
+| Integration | `requirements/integration.md` | A-1 Claude integration, A-2 Claude model and effort, A-4 Claude connection, A-3 Settings tabs, A-5 Side menu by screen, A-6 Orca, A-7 Orca session history, A-8 Orca terminal and project list, A-9 Hand to Orca, A-10 Attach an image in Orca, A-11 Answer a question in the Orca history |
 | Updates | `requirements/updates.md` | U-1 Auto update, U-2 Update settings and version |
 
 ### Out of scope
@@ -54,6 +54,7 @@ A new requirement gets a section there and an entry here.
 - The history of an Orca session (A-7) is read from Orca's own files, `orca-runtime.json` (this machine, over its unix socket, polled every 3 seconds) and `orca-environments.json` (a paired server, over a WebSocket with end-to-end encryption), in Orca's settings folder; they are read at each connect and never written, and no token or key from them is kept, logged or shown. It was written against Orca 1.4.248 and an Orca update can change it.
 - The SSH hosts come from `ssh.listEditableTargets` of Orca's runtime (the socket of A-7), which is not a public interface. A plain terminal of Orca is only mirrored, by reading its screen every second, because Orca does not stream its bytes: no colors, and full-screen programs are approximate.
 - An image attached in the composer of the Orca screen (A-10) is put in `.orca/drops/` of the worktree through `files.stat`, `files.writeBase64Chunk`, `files.commitUpload` and `files.delete` of Orca's runtime (this machine's unix socket, a paired server's WebSocket), which are not a public interface. It was written against Orca 1.4.248, and an Orca update can change it. The image is held in memory only, and the window's own file drop is off (`dragDropEnabled` false) so that the page gets the dropped files.
+- An answer to a question of Claude in the Orca history (A-11) is typed into the session's terminal, one key at a time (digits and Tab only), with `orca terminal send` after a read of the screen by `orca terminal read --screen` that shows what the key is for (this machine and a saved environment, by the CLI). It was written against Claude Code 2.1.318 and Orca 1.4.249; the screens it waits for are Claude Code's wording, and an update can change them (then nothing is typed).
 - If the OAuth consent screen is "External" and in "Testing", refresh tokens expire after 7 days.
   - Use an "Internal" consent screen, or publish an "External" one.
 
@@ -73,7 +74,7 @@ requirements/  the requirements, one file per area
 - The frontend is plain TypeScript, HTML and CSS.
   `ts/` is split into one module per screen.
 - The backend is Rust.
-  Each service has its own module: `gmail.rs`, `calendar.rs`, `todoist.rs`, `slack.rs`, `claude.rs`, `orca.rs` (with `orca_chat.rs` and `orca_e2ee.rs` for the session history, `orca_handoff.rs` for the prompt of A-9 and its folding in the history, and `orca_attach.rs` for the images of A-10).
+  Each service has its own module: `gmail.rs`, `calendar.rs`, `todoist.rs`, `slack.rs`, `claude.rs`, `orca.rs` (with `orca_chat.rs` and `orca_e2ee.rs` for the session history, `orca_handoff.rs` for the prompt of A-9 and its folding in the history, `orca_attach.rs` for the images of A-10, and `orca_answer.rs` for the answers of A-11).
   The modules are in the library crate (`src-tauri/src/lib.rs`), and `main.rs` only calls `cookapps_lib::run()`.
 - Internal functions take the config directory (`&Path`), not an `AppHandle`, so `cookapps-mcp` can share them.
 - The Rust version is pinned in `rust-toolchain.toml` and in the CI workflow. Keep them equal.

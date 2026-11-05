@@ -4,6 +4,7 @@ import {
   chatAssistant,
   chatItems,
   chatQuestion,
+  chatQuestions,
   chatOpens,
   chatStatus,
   chatTools,
@@ -872,6 +873,162 @@ describe("orca: the session history", () => {
     await sendChat(chatItems([chatQuestion("q1", "First", false)]));
     await expect($("#orca-items .orca-question-answer")).toHaveText("回答: First");
     await expect($("#orca-items .orca-question-waiting")).not.toExist();
+  });
+
+  // ---- answering a question (A-11) ----
+
+  const options = () => $$("#orca-items .orca-pick-option");
+  const pressedOptions = () => browser.execute(() => [...document.querySelectorAll("#orca-items .orca-pick-option")].map((b) => b.getAttribute("aria-pressed")));
+  const sendAnswer = () => $("#orca-items .orca-pick-send");
+  const pickOption = async (n: number) => (await options())[n].click();
+  // A single choice of two, then a multiple choice of three.
+  const asking = () =>
+    chatQuestions("q1", true, [
+      ["Pick alpha?", false, ["Apple", "Avocado"]],
+      ["Pick beta?", true, ["Banana", "Berry", "Bean"]],
+    ]);
+  const pressedAll = (...states: boolean[]) => states.map(String);
+  const T = true;
+  const F = false;
+
+  it("draws a waiting question as choices, picks one of a single choice and any of a multiple choice, and sends nothing until the button is pressed", async () => {
+    await openWorking();
+    await select("example-app");
+    const answerCall = await mock("orca_answer", null);
+    await sendChat(chatItems([asking()]));
+    await waitForCount("#orca-items .orca-pick-option", 5);
+    expect(await textsOf("#orca-items .orca-question-text")).toEqual(["Pick alpha?", "Pick beta?"]);
+    expect(await textsOf("#orca-items .orca-question-label")).toEqual(["Apple", "Avocado", "Banana", "Berry", "Bean"]);
+    await expect($("#orca-items .orca-question-waiting")).toHaveText("回答待ち");
+    await expect(sendAnswer()).toHaveText("回答を送る");
+    expect(await pressedOptions()).toEqual(pressedAll(F, F, F, F, F));
+    await expect(sendAnswer()).toBeDisabled();
+    // A single choice holds one pick: picking another moves it.
+    await pickOption(0);
+    expect(await pressedOptions()).toEqual(pressedAll(T, F, F, F, F));
+    await pickOption(1);
+    expect(await pressedOptions()).toEqual(pressedAll(F, T, F, F, F));
+    // Every question needs a pick before the button works.
+    await expect(sendAnswer()).toBeDisabled();
+    await pickOption(4);
+    await expect(sendAnswer()).toBeEnabled();
+    // A multiple choice toggles each choice, and no pick at all disables the button again.
+    await pickOption(2);
+    expect(await pressedOptions()).toEqual(pressedAll(F, T, T, F, T));
+    await pickOption(2);
+    await pickOption(4);
+    expect(await pressedOptions()).toEqual(pressedAll(F, T, F, F, F));
+    await expect(sendAnswer()).toBeDisabled();
+    expect(await callsOf(answerCall)).toEqual([]);
+  });
+
+  it("sends the picks of every question to the terminal of the selected session with one command, and keeps the button off until the question stops waiting", async () => {
+    await openWorking();
+    await select("example-app");
+    const answerCall = await mock("orca_answer", holds);
+    await sendChat(chatItems([asking()]));
+    await waitForCount("#orca-items .orca-pick-option", 5);
+    await pickOption(1);
+    await pickOption(4);
+    await pickOption(2);
+    await sendAnswer().click();
+    expect(await waitForCalls(answerCall)).toEqual([
+      {
+        handle: "term_example-app",
+        questions: [
+          { text: "Pick alpha?", multi: false, options: ["Apple", "Avocado"], picks: [1] },
+          { text: "Pick beta?", multi: true, options: ["Banana", "Berry", "Bean"], picks: [2, 0] },
+        ],
+        environment: null,
+      },
+    ]);
+    // On its way: the button waits.
+    await expect(sendAnswer()).toHaveText("送信中…");
+    await expect(sendAnswer()).toBeDisabled();
+    await release(answerCall, null);
+    // The answer was taken, but the question still waits in the history: the button stays off.
+    await browser.pause(200);
+    await expect(sendAnswer()).toHaveText("送信中…");
+    await expect(sendAnswer()).toBeDisabled();
+    expect(await callsOf(answerCall)).toHaveLength(1);
+    // The history shows the answer: the choices give way to it.
+    await sendChat(chatItems([chatQuestion("q1", "Avocado", false)]));
+    await waitForCount("#orca-items .orca-pick-option", 0);
+    await expect($("#orca-items .orca-question-answer")).toHaveText("回答: Avocado");
+    expect(await count("#orca-items .orca-pick-send")).toBe(0);
+    expect(await count("#orca-items .orca-question-waiting")).toBe(0);
+  });
+
+  it("keeps the picks when the timeline is drawn again, and a session opened next starts with none", async () => {
+    await openWorking();
+    await select("example-app");
+    await sendChat(chatItems([asking()]));
+    await waitForCount("#orca-items .orca-pick-option", 5);
+    await pickOption(0);
+    await pickOption(3);
+    await pickOption(4);
+    await sendChat(chatItems([asking(), chatAssistant("a2", "Waiting for you")]));
+    await waitForCount("#orca-items .orca-assistant", 1);
+    expect(await pressedOptions()).toEqual(pressedAll(T, F, F, T, T));
+    await expect(sendAnswer()).toBeEnabled();
+    await select("example-api", 2);
+    await sendChat(chatItems([asking()]));
+    await waitForCount("#orca-items .orca-pick-option", 5);
+    expect(await pressedOptions()).toEqual(pressedAll(F, F, F, F, F));
+  });
+
+  it("shows the message of a failed answer in the question, with the picks kept and the button back", async () => {
+    await openWorking();
+    await select("example-app");
+    const answerCall = await mock("orca_answer", rejects("質問が画面に出ていません。ターミナルで答えてください"));
+    await sendChat(chatItems([asking()]));
+    await waitForCount("#orca-items .orca-pick-option", 5);
+    await pickOption(0);
+    await pickOption(3);
+    await sendAnswer().click();
+    await waitForCalls(answerCall);
+    await expect($("#orca-items .orca-pick .pending.fail")).toHaveText("質問が画面に出ていません。ターミナルで答えてください");
+    expect(await pressedOptions()).toEqual(pressedAll(T, F, F, T, F));
+    await expect(sendAnswer()).toHaveText("回答を送る");
+    await expect(sendAnswer()).toBeEnabled();
+    // Pressing again tries again, and the message goes.
+    await mock("orca_answer", null);
+    await sendAnswer().click();
+    await waitForCalls("orca_answer");
+    await expect(sendAnswer()).toHaveText("送信中…");
+    expect(await count("#orca-items .orca-pick .pending.fail")).toBe(0);
+  });
+
+  it("sends to the saved environment the screen shows, and says so when the session has no terminal", async () => {
+    await openWorking(orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }));
+    await select("example-app");
+    const answerCall = await mock("orca_answer", null);
+    await sendChat(chatItems([chatQuestion("q1", null, true)]));
+    await waitForCount("#orca-items .orca-pick-option", 2);
+    await pickOption(0);
+    await sendAnswer().click();
+    expect(await waitForCalls(answerCall)).toEqual([{ handle: "term_example-app", questions: [{ text: "Which one?", multi: false, options: ["First", "Second"], picks: [0] }], environment: "Studio" }]);
+    // A row that can be read but has no terminal takes no answer.
+    await reread([orcaRow("example-app", "feat/a", "Write the docs", { handle: null })], { target: "Studio", environments: ["Studio"] });
+    await mock("orca_answer", null);
+    await sendChat(chatItems([chatQuestion("q2", null, true)]));
+    await waitForCount("#orca-items .orca-pick-option", 2);
+    await pickOption(1);
+    await sendAnswer().click();
+    await expect($("#orca-items .orca-pick .pending.fail")).toHaveText("このセッションには送れません");
+    expect(await callsOf("orca_answer")).toEqual([]);
+    await expect(sendAnswer()).toBeEnabled();
+  });
+
+  it("draws no choices for a question that is answered, or that has a question with no choices", async () => {
+    await openWorking();
+    await select("example-app");
+    await sendChat(chatItems([chatQuestion("q1", "First", false), chatQuestions("q2", true, [["Why?", false, []]])]));
+    await waitForCount("#orca-items .orca-question", 2);
+    expect(await count("#orca-items .orca-pick-option")).toBe(0);
+    expect(await count("#orca-items .orca-pick-send")).toBe(0);
+    await expect($("#orca-items .orca-question-answer")).toHaveText("回答: First");
+    await expect($("#orca-items .orca-question-waiting")).toHaveText("回答待ち");
   });
 
   it("rules the cells of a table in the agent's answer", async () => {

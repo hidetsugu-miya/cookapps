@@ -104,7 +104,7 @@ export class HandoffPane {
 
   constructor(host: HandoffHost) {
     this.host = host;
-    this.chat = makeChatView(tag("div", "ho-chat"), tag("div", "ho-items"), tag("button", "text-btn ho-older", "以前の履歴を読む"), tag("div", "ho-chat-status"));
+    this.chat = makeChatView(tag("div", "ho-chat"), tag("div", "ho-items"), tag("button", "text-btn ho-older", "以前の履歴を読む"), tag("div", "ho-chat-status"), () => this.answerTarget());
     this.chat.older.hidden = true;
     this.chat.box.append(this.chat.older, this.chat.list);
     panes.add(this);
@@ -126,6 +126,13 @@ export class HandoffPane {
 
   private rowOf(s: Session): OrcaRow | undefined {
     return this.overview?.rows.find((r) => (s.paneKey !== null && r.paneKey === s.paneKey) || (s.handle !== null && r.handle === s.handle));
+  }
+
+  // The terminal an answer to a question of the history goes to (A-11): that of the session shown, resolved as the next send is.
+  private answerTarget() {
+    const s = this.session();
+    const handle = s ? (s.handle ?? this.rowOf(s)?.handle ?? null) : null;
+    return s && handle !== null ? { handle, environment: s.environment } : null;
   }
 
   // The pane follows the host: another item (or none) in view changes what it shows, and a session already handed to the item is shown again.

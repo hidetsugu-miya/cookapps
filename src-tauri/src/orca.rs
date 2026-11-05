@@ -1165,6 +1165,29 @@ fn send(handle: &str, text: &str, environment: Option<&str>) -> Result<(), Strin
     write(&send_args(handle, text, environment)).map(|_| ())
 }
 
+/// A-11: the handle must be a row of the list the target gives just now, the environment a saved one.
+pub(crate) fn check_target(handle: &str, environment: Option<&str>) -> Result<(), String> {
+    check_handle(handle)?;
+    check_listed(environment)?;
+    let (ps, terminals) = read_lists(environment, true);
+    check_session(
+        &rows_of(&ps.map_err(message_of)?, &terminals.map_err(message_of)?),
+        handle,
+    )
+}
+
+/// A-11: the lines on the screen of the session `handle`, read without the mirror's check of the handle (the caller checked it).
+pub(crate) fn read_screen(handle: &str, environment: Option<&str>) -> Result<Vec<String>, String> {
+    call(&screen_args(handle, environment), READ_TIMEOUT)
+        .map(|result| screen_lines_of(&result))
+        .map_err(message_of)
+}
+
+/// A-11: one key typed into the session `handle` (no Enter), through the CLI like the keys of a mirror of a saved environment. Only digits and Tab come here, so no secret is in the arguments.
+pub(crate) fn press_key(handle: &str, key: &str, environment: Option<&str>) -> Result<(), String> {
+    write(&input_args(handle, key, environment)).map(|_| ())
+}
+
 fn launch(path: &str, text: &str, environment: Option<&str>) -> Result<OrcaStarted, String> {
     check_path(path)?;
     check_text(text)?;
@@ -1305,7 +1328,9 @@ fn set_target(dir: &Path, environment: Option<&str>) -> Result<(), String> {
     save_target(dir, environment)
 }
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+pub(crate) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|e| e.to_string())

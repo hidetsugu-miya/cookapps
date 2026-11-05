@@ -1,6 +1,7 @@
 // The history of an Orca session (A-7): the user's messages (a handed-over content folded into one line, A-9), the agent's answers, and the tool runs folded into one line each.
 // Rust reads the session and sends events through a channel (`orca_chat_open`): `items` replace the timeline from an index, `status` says how the read goes. One session is open at a time, and an event of a channel that is no longer the current one is ignored.
 // The read has one owner at a time (A-9): the work pane of the Orca screen, or the side pane of a mail, a Slack thread or a Todo. The history is drawn into the owner's `ChatView`, and an owner closes only its own read.
+// A question that waits for an answer is answered here (A-11): the user picks the choices and `orca_answer` types them into the session's terminal.
 // Nothing is kept after the session is closed except what the screen draws.
 import type { OrcaChatEvent } from "./bindings/OrcaChatEvent";
 import type { OrcaChatItem } from "./bindings/OrcaChatItem";
@@ -12,17 +13,26 @@ import { markdownHtml } from "./todo-data.js";
 // The scroll box stays at the bottom when it was this close to it before something changed.
 const BOTTOM_PX = 40;
 const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+const CHECK = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5l2.5 2.5 4.5-5.5"/></svg>';
 
 interface Channel {
   onmessage: (event: OrcaChatEvent) => void;
 }
 
-// Where an owner draws the history: the scroll box, the list in it, the button for older messages and the line of status above the box.
+// The terminal that takes the answer to a question (A-11): its handle, and the target (an environment of Orca, null for this machine).
+export interface ChatTarget {
+  handle: string;
+  environment: string | null;
+}
+
+// Where an owner draws the history: the scroll box, the list in it, the button for older messages and the line of status above the box,
+// and the terminal of the session shown (asked when an answer is sent; null when the session takes none).
 export interface ChatView {
   box: HTMLElement;
   list: HTMLElement;
   older: HTMLElement;
   status: HTMLElement;
+  target: () => ChatTarget | null;
 }
 
 // The channel of the session open now, null when none is, and the view it draws into.
@@ -38,6 +48,10 @@ let atOpen = false;
 const opened = new Set<string>();
 // Whether the selected row's agent is working: a run still going shows its `runningSummary` then.
 let working = false;
+// The questions that wait for an answer (A-11), by item id: the indexes of the choices picked for each question, the items whose answer is on its way (or was taken and the item still waits), and the message of an answer that failed.
+const picked = new Map<string, number[][]>();
+const sending = new Set<string>();
+const failures = new Map<string, string>();
 
 const KIND_LABELS = { mail: "メール", slack: "Slack", todo: "Todo" } as const;
 // The characters of a title the folded line shows.
@@ -46,8 +60,8 @@ const box = () => owner!.box;
 const list = () => owner!.list;
 
 // Makes a view of the given elements; the older button asks for the older page only while the view owns the read.
-export function makeChatView(box: HTMLElement, list: HTMLElement, older: HTMLElement, status: HTMLElement): ChatView {
-  const view = { box, list, older, status };
+export function makeChatView(box: HTMLElement, list: HTMLElement, older: HTMLElement, status: HTMLElement, target: () => ChatTarget | null): ChatView {
+  const view = { box, list, older, status, target };
   older.onclick = () => {
     if (owner === view) invoke("orca_chat_older").catch(() => {});
   };
@@ -91,8 +105,107 @@ function toolsNode(item: Extract<OrcaChatItem, { kind: "tools" }>) {
   return node;
 }
 
-// The agent's questions are never folded: the user has to read them to answer in the session.
-function questionNode(item: Extract<OrcaChatItem, { kind: "question" }>) {
+type QuestionItem = Extract<OrcaChatItem, { kind: "question" }>;
+
+const picksOf = (item: QuestionItem) => {
+  const held = picked.get(item.id);
+  if (held?.length === item.questions.length) return held;
+  const fresh: number[][] = item.questions.map(() => []);
+  picked.set(item.id, fresh);
+  return fresh;
+};
+
+// Draws the item again where it is, from the latest content of the timeline.
+function redraw(id: string) {
+  const at = items.findIndex((item) => item.id === id);
+  if (at >= 0) list().children[at]?.replaceWith(itemNode(items[at]));
+}
+
+// Types the picks of a waiting question into the session (A-11). Nothing is sent before this, and the item stays disabled until it stops waiting; a failure keeps the picks.
+async function answer(id: string) {
+  const item = items.find((i) => i.id === id);
+  const view = owner;
+  const channel = current;
+  if (item?.kind !== "question" || !view || !channel || sending.has(id)) return;
+  const target = view.target();
+  failures.delete(id);
+  if (!target) {
+    failures.set(id, "このセッションには送れません");
+    redraw(id);
+    return;
+  }
+  const chosen = picksOf(item);
+  const questions = item.questions.map((q, i) => ({ text: q.text, multi: q.multi, options: q.options.map((o) => o.label), picks: chosen[i] }));
+  sending.add(id);
+  redraw(id);
+  let failure: string | null = null;
+  try {
+    await invoke("orca_answer", { handle: target.handle, questions, environment: target.environment });
+  } catch (e) {
+    failure = String(e);
+  }
+  // The session was closed or another one opened meanwhile: what this answer left is not this timeline's.
+  if (current !== channel) return;
+  if (failure !== null) {
+    sending.delete(id);
+    failures.set(id, failure);
+  }
+  redraw(id);
+}
+
+// A question that waits (A-11): the choices are buttons (a circle for one pick, a square for several), and nothing is sent until "回答を送る", which needs a pick for every question.
+// A click changes the buttons in place, so the focus stays.
+function pickNode(item: QuestionItem) {
+  const node = tag("div", "orca-question orca-pick");
+  const chosen = picksOf(item);
+  const busy = sending.has(item.id);
+  const send = tag("button", "text-btn primary orca-pick-send", busy ? "送信中…" : "回答を送る");
+  send.type = "button";
+  send.onclick = () => void answer(item.id);
+  const buttons: HTMLButtonElement[][] = [];
+  const refresh = () => {
+    for (const [qi, row] of buttons.entries()) {
+      for (const [oi, b] of row.entries()) b.setAttribute("aria-pressed", String(chosen[qi].includes(oi)));
+    }
+    send.disabled = busy || !chosen.every((p) => p.length > 0);
+  };
+  item.questions.forEach((q, qi) => {
+    node.append(tag("div", "orca-question-text", q.text));
+    const group = tag("div", "orca-pick-options");
+    buttons[qi] = q.options.map((o, oi) => {
+      const button = tag("button", q.multi ? "orca-pick-option multi" : "orca-pick-option");
+      button.type = "button";
+      button.disabled = busy;
+      const mark = tag("span", "orca-pick-mark");
+      if (q.multi) mark.innerHTML = CHECK;
+      button.append(mark, tag("span", "orca-question-label", o.label));
+      if (o.description) button.append(tag("span", "orca-question-desc", o.description));
+      button.onclick = () => {
+        const now = chosen[qi];
+        chosen[qi] = q.multi ? (now.includes(oi) ? now.filter((n) => n !== oi) : [...now, oi]) : [oi];
+        refresh();
+      };
+      return button;
+    });
+    group.append(...buttons[qi]);
+    node.append(group);
+  });
+  const failure = failures.get(item.id);
+  if (failure) {
+    const row = tag("div", "pending fail");
+    row.append(tag("span", "sp", failure));
+    node.append(row);
+  }
+  const foot = tag("div", "orca-pick-foot");
+  foot.append(tag("div", "orca-question-waiting", "回答待ち"), send);
+  node.append(foot);
+  refresh();
+  return node;
+}
+
+// The agent's questions are never folded: the user has to read them to answer. One that waits, with choices for every question, is answered here (pickNode); the others are only drawn.
+function questionNode(item: QuestionItem) {
+  if (item.waiting && item.questions.every((q) => q.options.length > 0)) return pickNode(item);
   const node = tag("div", "orca-question");
   for (const q of item.questions) {
     node.append(tag("div", "orca-question-text", q.text));
@@ -215,6 +328,9 @@ export function openChat(view: ChatView, environment: string | null, path: strin
   message = "";
   atOpen = true;
   opened.clear();
+  picked.clear();
+  sending.clear();
+  failures.clear();
   working = isWorking;
   wipe(view);
   drawStatus();

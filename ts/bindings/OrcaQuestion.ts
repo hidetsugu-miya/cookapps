@@ -4,4 +4,8 @@ import type { OrcaQuestionOption } from "./OrcaQuestionOption";
 /**
  * One question the agent asks, with the user's answer once it is known.
  */
-export type OrcaQuestion = { text: string, options: Array<OrcaQuestionOption>, answer: string | null, };
+export type OrcaQuestion = { text: string, options: Array<OrcaQuestionOption>, 
+/**
+ * Whether more than one choice may be picked (`multiSelect`).
+ */
+multi: boolean, answer: string | null, };

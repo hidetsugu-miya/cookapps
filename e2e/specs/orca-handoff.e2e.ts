@@ -5,6 +5,7 @@ import {
   chatAssistant,
   chatItems,
   chatOpens,
+  chatQuestion,
   chatUser,
   claudeReady,
   count,
@@ -318,6 +319,32 @@ describe("orca handoff", () => {
     await sendButton(MAIL).click();
     expect(await waitForCalls(post)).toEqual([{ handle: "term_new", text: "続けて", environment: null }]);
     await expect(field(MAIL)).toHaveValue("");
+  });
+
+  it("answers a question of the history from the pane, to the terminal of the session", async () => {
+    await openMail();
+    await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseWorktree(MAIL, "/work/example-app");
+    await field(MAIL).setValue("質問して");
+    await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
+    await sendButton(MAIL).click();
+    await waitForOpens(1);
+    const answerCall = await mock("orca_answer", null);
+    await sendChat(chatItems([chatQuestion("q1", null, true, true)]));
+    await waitForCount(`${MAIL.pane} .orca-pick-option`, 2);
+    const send = $(`${MAIL.pane} .orca-pick-send`);
+    await expect(send).toBeDisabled();
+    const options = await $$(`${MAIL.pane} .orca-pick-option`);
+    await options[1].click();
+    await options[0].click();
+    expect(await callsOf(answerCall)).toEqual([]);
+    await send.click();
+    expect(await waitForCalls(answerCall)).toEqual([
+      { handle: "term_new", questions: [{ text: "Which one?", multi: true, options: ["First", "Second"], picks: [1, 0] }], environment: null },
+    ]);
+    await expect($(`${MAIL.pane} .orca-pick-send`)).toHaveText("送信中…");
+    await expect($(`${MAIL.pane} .orca-pick-send`)).toBeDisabled();
   });
 
   it("keeps the notice of a session that finishes while the pane shows it, until the Orca screen shows it", async () => {

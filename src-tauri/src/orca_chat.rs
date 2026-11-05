@@ -106,6 +106,8 @@ pub struct OrcaQuestionOption {
 pub struct OrcaQuestion {
     pub text: String,
     pub options: Vec<OrcaQuestionOption>,
+    /// Whether more than one choice may be picked (`multiSelect`).
+    pub multi: bool,
     pub answer: Option<String>,
 }
 
@@ -360,6 +362,7 @@ fn questions_of(input: &Value) -> Option<Vec<OrcaQuestion>> {
                         })
                     })
                     .collect(),
+                multi: q["multiSelect"] == true,
                 answer: None,
             })
         })
@@ -1985,7 +1988,7 @@ mod tests {
                 {"label": "A", "description": "first"},
                 {"label": "B"},
             ]},
-            {"question": "When?", "options": []},
+            {"question": "When?", "multiSelect": true, "options": []},
         ]})
     }
 
@@ -2023,11 +2026,13 @@ mod tests {
                                 description: String::new()
                             },
                         ],
+                        multi: false,
                         answer: None,
                     },
                     OrcaQuestion {
                         text: "When?".into(),
                         options: vec![],
+                        multi: true,
                         answer: None,
                     },
                 ],
