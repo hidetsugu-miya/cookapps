@@ -14,6 +14,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .nav-dot { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--dot); box-shadow: 0 0 0 2px var(--side); }
 .nav-item:hover .nav-dot { box-shadow: 0 0 0 2px var(--side-hover); }
 .nav-item[aria-current="page"] .nav-dot { box-shadow: 0 0 0 2px var(--accent); }
+/* A session works in Orca (A-6): the icon of its button is yellow and fades slowly (the count stays as it is); it stays yellow where motion is reduced. */
+#nav-orca.working svg { stroke: var(--agent-working); animation: nav-working 2s ease-in-out infinite; }
+@keyframes nav-working { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { #nav-orca.working svg { animation: none; } }
 /* The bottom group (Claude avatar, settings) takes the free space above it, so settings stays last whatever is shown. */
 #sidebar-bottom { margin-top: auto; padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 /* The accounts of a function sit under its icon in a tray (the Google accounts under the calendar, the Slack workspaces under Slack); nav.ts shows the one that fits the screen. */

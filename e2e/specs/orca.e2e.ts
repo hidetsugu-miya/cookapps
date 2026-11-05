@@ -21,6 +21,7 @@ import {
   orcaWorktree,
   rejects,
   release,
+  rowOf as threadRowOf,
   sendChat,
   sendTerminal,
   setClock,
@@ -30,6 +31,7 @@ import {
   terminalTargets,
   terminalWorktree,
   textsOf,
+  threadDetail,
   waitForCalls,
   waitForCount,
   waitForOpens,
@@ -64,6 +66,8 @@ const groups = () => textsOf("#orca-feed .orca-group");
 // The row of the worktree `repo`: the third line of a row names it.
 const rowOf = (repo: string) => $(`//div[@id="orca-feed"]//button[contains(@class,"orca-row")][.//span[@class="orca-where"][starts-with(., "${repo} ・")]]`);
 const classOf = (selector: string) => browser.execute((s) => document.querySelector(s)!.className, selector);
+// Whether the sidebar icon of Orca is marked as working (the yellow icon that fades; the fade itself is not tested).
+const marked = () => browser.execute(() => document.getElementById("nav-orca")!.classList.contains("working"));
 const pressed = (repo: string) => rowOf(repo).getAttribute("aria-pressed");
 
 async function pickMenu(label: string) {
@@ -100,12 +104,36 @@ const setWindowHidden = (hidden: boolean) =>
     hidden,
   );
 
+type Row = ReturnType<typeof orcaRow>;
+
+// The count of the sidebar button: 0 is no number at all.
+const expectCount = (n: number) => (n === 0 ? expect($("#nav-orca .nav-count")).not.toBeDisplayed() : expect($("#nav-orca .nav-count")).toHaveText(String(n)));
+
+// Answers the next read with `rows`, presses the update button, and waits until the working view draws them (waiting, then working, then done), so a count checked after it is the one of that read.
+async function reread(rows: Row[], extra: Partial<Parameters<typeof orcaOverview>[2]> = {}) {
+  const overview = await mock("orca_overview", orcaOverview(rows, worktrees(), extra));
+  await $("#orca-refresh").click();
+  await waitForCalls(overview);
+  const drawn = ["waiting", "working", "done"].flatMap((g) => rows.filter((r) => r.group === g).map((r) => `${r.line}:${r.status}`));
+  await browser.waitUntil(
+    async () => JSON.stringify(await browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-row")].map((r) => `${r.querySelector(".orca-prompt")!.textContent}:${(r.querySelector(".orca-ic") as HTMLElement).dataset.status}`))) === JSON.stringify(drawn),
+    { timeoutMsg: "the working view did not draw the read" },
+  );
+}
+
+const working = (repo: string, extra: Partial<Row> = {}) => orcaRow(repo, "main", `Task of ${repo}`, extra);
+// What Orca says of a finished agent, and of one stopped with Esc (`state` done with `interrupted` true).
+const finished = (repo: string, extra: Partial<Row> = {}) => working(repo, { group: "done", ...extra });
+const stopped = (repo: string) => finished(repo, { status: "interrupted" });
+
 describe("orca", () => {
-  it("draws the agents in three groups with the working count on the sidebar", async () => {
+  it("draws the agents in three groups with the count of what needs the user on the sidebar", async () => {
     await boot({ inbox: inbox(), orca_overview: orcaOverview(sample(), worktrees()), orca_skills: [] });
-    // The count follows the first read, with the screen not shown: working and waiting agents, not the done one.
-    await expect($("#nav-orca .nav-count")).toHaveText("3");
-    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（作業中 3 件）");
+    // The count follows the first read, with the screen not shown: the waiting agent only, not the working ones and not the one done before the start.
+    await expect($("#nav-orca .nav-count")).toHaveText("1");
+    // The two working agents (the one with no pane too) are in the label and mark the icon, not in the count.
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 1 件、作業中 2 件）");
+    expect(await marked()).toBe(true);
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
     // The projects come first; the bell shows the agents.
@@ -131,6 +159,239 @@ describe("orca", () => {
     await expect($("#orca-refresh")).toHaveAttribute("aria-label", "更新");
     // No environment is saved: the label is plain text.
     await expect($("#orca-target")).not.toBeDisplayed();
+  });
+
+  it("counts nothing while the agents only work", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await expectCount(0);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（作業中 2 件）");
+    expect(await marked()).toBe(true);
+  });
+
+  it("marks the icon while an agent works, and clears it when none does", async () => {
+    await openWorking(orcaOverview([working("example-app")], worktrees()));
+    expect(await marked()).toBe(true);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（作業中 1 件）");
+    await reread([finished("example-app")]);
+    expect(await marked()).toBe(false);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 1 件）");
+    await reread([working("example-app")]);
+    expect(await marked()).toBe(true);
+    await reread([]);
+    expect(await marked()).toBe(false);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca");
+  });
+
+  it("does not mark the icon for agents that wait or have stopped", async () => {
+    await openWorking(orcaOverview([working("example-app")], worktrees()));
+    await reread([working("example-api", { group: "waiting" }), finished("example-lib"), stopped("example-web"), working("example-app", { status: "failed" })]);
+    expect(await marked()).toBe(false);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 4 件）");
+  });
+
+  it("clears the mark when a read fails or the command is missing", async () => {
+    await openWorking(orcaOverview([working("example-app")], worktrees()));
+    expect(await marked()).toBe(true);
+    await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }));
+    await $("#orca-refresh").click();
+    await expect($("#orca-status")).toHaveText("このマシン に接続できません");
+    expect(await marked()).toBe(false);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca");
+    await mock("orca_overview", orcaOverview([working("example-app")], worktrees()));
+    await $("#orca-refresh").click();
+    await browser.waitUntil(marked, { timeoutMsg: "the mark never came back" });
+    await mock("orca_overview", orcaOverview([], [], { state: "missing" }));
+    await $("#orca-refresh").click();
+    await expect($("#orca-status")).toHaveText("未インストール");
+    expect(await marked()).toBe(false);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca");
+  });
+
+  it("clears the mark when the target changes, and marks again from the read of the new one", async () => {
+    await openWorking(orcaOverview([working("example-app")], worktrees(), { target: "Studio", environments: ["Studio", "Lab"] }));
+    expect(await marked()).toBe(true);
+    await mock("orca_set_target", null);
+    await mock("orca_overview", orcaOverview([finished("lab-app")], [], { target: "Lab", environments: ["Studio", "Lab"] }));
+    await $("#orca-target").click();
+    await pickMenu("Lab");
+    await expect($("#orca-target")).toHaveText("Lab に接続中");
+    expect(await marked()).toBe(false);
+    await reread([working("lab-app")], { target: "Lab", environments: ["Studio", "Lab"] });
+    expect(await marked()).toBe(true);
+  });
+
+  it("marks and clears the icon from the read for the count alone while another screen is shown", async () => {
+    await openWorking(orcaOverview([finished("example-lib")], worktrees()));
+    expect(await marked()).toBe(false);
+    await $("#nav-mail").click();
+    await expect($("#orca")).not.toBeDisplayed();
+    // The clock reads the count alone once a minute on another screen: a minute later the next tick does.
+    const started = await mock("orca_overview", orcaOverview([working("example-app")], worktrees()));
+    const at = (ms: number) => {
+      const later = new Date(Date.now() + ms);
+      return setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
+    };
+    await at(61_000);
+    expect(await waitForCalls(started)).toEqual([{ scope: "badge", target: null }]);
+    await browser.waitUntil(marked, { timeoutMsg: "the icon was never marked by the read for the count" });
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（作業中 1 件）");
+    const ended = await mock("orca_overview", orcaOverview([finished("example-app")], worktrees()));
+    await at(130_000);
+    expect(await waitForCalls(ended)).toEqual([{ scope: "badge", target: null }]);
+    await browser.waitUntil(async () => !(await marked()), { timeoutMsg: "the mark was never cleared by the read for the count" });
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 1 件）");
+  });
+
+  it("does not count what had finished before the start, or stopped with Esc", async () => {
+    await openWorking(orcaOverview([working("example-app"), finished("example-lib"), stopped("example-web")], worktrees()));
+    await expectCount(0);
+    await reread([working("example-app"), finished("example-lib"), stopped("example-web")]);
+    await expectCount(0);
+  });
+
+  it("counts an agent that goes from working to done", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await reread([finished("example-app"), working("example-api")]);
+    await expectCount(1);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 1 件、作業中 1 件）");
+  });
+
+  it("counts an agent that appears in a later read already done", async () => {
+    await openWorking(orcaOverview([working("example-app")], worktrees()));
+    await reread([working("example-app"), finished("example-lib")]);
+    await expectCount(1);
+  });
+
+  it("counts an interrupted agent and a failed one", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await reread([stopped("example-app"), working("example-api", { status: "failed" })]);
+    await expectCount(2);
+  });
+
+  it("counts a waiting agent and a stopped one together, and a waiting one with no pane", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api", { group: "waiting" })], worktrees()));
+    await expectCount(1);
+    await reread([finished("example-app"), working("example-api", { group: "waiting" }), working("example-web", { group: "waiting", paneKey: null, handle: null })]);
+    await expectCount(3);
+  });
+
+  it("gives an agent with no pane no notice when it stops", async () => {
+    await openWorking(orcaOverview([working("example-app", { paneKey: null, handle: null })], worktrees()));
+    await reread([finished("example-app", { paneKey: null, handle: null })]);
+    await expectCount(0);
+  });
+
+  it("drops the notice when the session is opened on the screen", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await reread([finished("example-app"), finished("example-api")]);
+    await expectCount(2);
+    await select("example-app");
+    await expectCount(1);
+    // The session stays done, and is not noticed again by the next read.
+    await reread([finished("example-app"), finished("example-api")]);
+    await expectCount(1);
+  });
+
+  it("gives no notice to the session shown when it finishes", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await select("example-app");
+    await reread([finished("example-app"), working("example-api")]);
+    await expectCount(0);
+  });
+
+  it("keeps the notice of a session finished while the window is hidden, and drops it when the window shows", async () => {
+    await openWorking(orcaOverview([working("example-app")], worktrees()));
+    await select("example-app");
+    await setWindowHidden(true);
+    await reread([finished("example-app")]);
+    await expectCount(1);
+    await setWindowHidden(false);
+    await expectCount(0);
+  });
+
+  it("drops the notice when the agent runs again, or leaves the list", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await reread([finished("example-app"), finished("example-api")]);
+    await expectCount(2);
+    await reread([working("example-app"), finished("example-api")]);
+    await expectCount(1);
+    await reread([working("example-app")]);
+    await expectCount(0);
+    // It stops again: a new notice.
+    await reread([finished("example-app")]);
+    await expectCount(1);
+  });
+
+  it("does not drop the notices when a read fails, and drops them when the command is missing", async () => {
+    await openWorking(orcaOverview([working("example-app")], worktrees()));
+    await reread([finished("example-app")]);
+    await expectCount(1);
+    await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }));
+    await $("#orca-refresh").click();
+    await expect($("#orca-status")).toHaveText("このマシン に接続できません");
+    await expectCount(1);
+    await mock("orca_overview", orcaOverview([], [], { state: "missing" }));
+    await $("#orca-refresh").click();
+    await expect($("#orca-status")).toHaveText("未インストール");
+    await expectCount(0);
+  });
+
+  it("drops the notices when the target changes, and takes the first read of the new target as the base", async () => {
+    await openWorking(orcaOverview([working("example-app")], worktrees(), { target: "Studio", environments: ["Studio", "Lab"] }));
+    await reread([finished("example-app")], { target: "Studio", environments: ["Studio", "Lab"] });
+    await expectCount(1);
+    await mock("orca_set_target", null);
+    await mock("orca_overview", orcaOverview([finished("lab-app")], [], { target: "Lab", environments: ["Studio", "Lab"] }));
+    await $("#orca-target").click();
+    await pickMenu("Lab");
+    await expect($("#orca-target")).toHaveText("Lab に接続中");
+    await expectCount(0);
+  });
+
+  it("gives no new notice to a stopped agent that left the list for a read and comes back stopped", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await reread([finished("example-app"), working("example-api")]);
+    await expectCount(1);
+    // It leaves the list: its notice goes, and the app remembers that it was stopped.
+    await reread([working("example-api")]);
+    await expectCount(0);
+    await reread([finished("example-app"), working("example-api")]);
+    await expectCount(0);
+    // A pane the app never saw stopped still has a notice when it first appears stopped.
+    await reread([finished("example-app"), working("example-api"), finished("example-lib")]);
+    await expectCount(1);
+  });
+
+  it("drops the notices when a read names another target than the one held, and takes that read as the base", async () => {
+    const environments = ["Studio", "Lab"];
+    await openWorking(orcaOverview([working("example-app")], worktrees(), { target: "Studio", environments }));
+    await reread([finished("example-app")], { target: "Studio", environments });
+    await expectCount(1);
+    // The target changed without the menu (for example the saved one was changed): the rows of the other target are only the base.
+    await reread([finished("lab-app")], { target: "Lab", environments });
+    await expect($("#orca-target")).toHaveText("Lab に接続中");
+    await expectCount(0);
+    await reread([finished("lab-app"), finished("lab-lib")], { target: "Lab", environments });
+    await expectCount(1);
+  });
+
+  it("keeps the notice of a session that finished while another screen is shown, until the Orca screen shows it", async () => {
+    await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await select("example-app");
+    await $("#nav-mail").click();
+    await expect($("#orca")).not.toBeDisplayed();
+    await waitForCount("#unread-threads li", 2);
+    await mock("thread", threadDetail("請求書の件", "本文", false));
+    await threadRowOf("read-threads", "Already read").$(".subject").click();
+    await expect($("#thread-subject")).toHaveText("請求書の件");
+    // The pane of the thread reads the list when it opens, and that read finds the selected session done.
+    const overview = await mock("orca_overview", orcaOverview([finished("example-app"), working("example-api")], worktrees()));
+    await $("#thread-orca").click();
+    await waitForCalls(overview);
+    await expectCount(1);
+    await $("#nav-orca").click();
+    await expect($("#orca")).toBeDisplayed();
+    await expectCount(0);
   });
 
   it("shows no waiting group when no agent waits, and says so when nothing runs", async () => {
