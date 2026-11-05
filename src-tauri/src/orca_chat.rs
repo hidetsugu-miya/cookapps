@@ -315,11 +315,19 @@ fn tag_body<'a>(text: &'a str, lower: &str, tag: &str) -> Option<&'a str> {
 }
 
 /// The line the user typed for a turn that is a slash command: `/{name} {args}`, or `/{name}` with no args.
-/// `None` for any other turn, and for one that only names a command without `command-name` (the body of a skill that follows is not this turn).
+/// `None` for any other turn, for one that only names a command without `command-name` (the body of a skill that follows is not this turn), and for one with `skill-format` (a skill a subagent loaded, which the user did not type).
 fn command_turn_text(text: &str) -> Option<String> {
     let text = text.trim_start();
+    let head: String = text
+        .chars()
+        .take(HARNESS_HEAD_LIMIT)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if !leading_tag(&head).is_some_and(|tag| matches!(tag, "command-message" | "command-name")) {
+        return None;
+    }
     let lower = text.to_ascii_lowercase();
-    if !leading_tag(&lower).is_some_and(|tag| matches!(tag, "command-message" | "command-name")) {
+    if lower.contains("<skill-format>") {
         return None;
     }
     let name = tag_body(text, &lower, "command-name")?.trim_start_matches('/');
@@ -1874,6 +1882,10 @@ mod tests {
             (
                 "<command-name>/a</command-name><command-args>\n x\n y \n</command-args>",
                 Some("/a x\n y"),
+            ),
+            (
+                "<command-message>graphify-conventions</command-message>\n<command-name>graphify-conventions</command-name>\n<skill-format>true</skill-format>",
+                None,
             ),
             ("<command-message>x</command-message>", None),
             ("<command-name>  </command-name>", None),
