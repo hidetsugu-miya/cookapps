@@ -5,8 +5,8 @@
 ### Write public-facing text in `README.md`, `docs/`, `AGENTS.md`, `requirements/` and `CHANGELOG.md`
 
 The repository is public, and the license is MIT (`LICENSE`).
-Readers see only these places, so do not scatter user-facing text elsewhere.
-`README.md` and `docs/` are for users. `AGENTS.md` is the developer guide: what the app is, the list of requirements, the stack, how to run and test it. `requirements/` holds the full text of the requirements. `CHANGELOG.md` is what went into each version, newest first.
+Users read only these places, so do not scatter user-facing text elsewhere.
+`README.md` and `docs/` are for users. `AGENTS.md` is the developer guide: what the app is, the list of requirements, the stack, how to run and test it. `requirements/` holds the full text of the requirements. `CHANGELOG.md` is what went into each version, newest first. `.claude/rules/` is public too, but it is written for whoever develops the app.
 
 ```text
 Good: add the description of a feature to docs/features.md
@@ -17,7 +17,7 @@ Bad:  write the description of a feature only in a commit message
 
 ### Write personal information only in the gitignored rules
 
-Personal information means things like organization names, GCP project names and personal email addresses.
+Personal information means things like organization names, GCP project names, personal email addresses, host names, and where keys and certificates are kept.
 `.claude/rules/` is public, except `machines.md` and `google-cloud.md`, which are gitignored because they hold this (at the owner's instruction, 2026-11-05).
 Check a rule for it before you commit the rule.
 Once something enters a public repository and its history, removing it takes a history rewrite.

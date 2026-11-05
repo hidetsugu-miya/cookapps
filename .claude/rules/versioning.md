@@ -87,7 +87,7 @@ This commit is v0.4.0.
 
 A list of tags alone does not show what went into each version.
 The newest comes first, so the latest changes are the first thing read, and the file is tracked, so the tag and its entry cannot drift apart (at the owner's instruction, 2026-11-04).
-The file is public: keep personal information and work methods (review flow, hooks, skills, where keys are kept) out of it, and put them in `.claude/rules/` (`publishing.md`).
+The file is for the users of the app: keep personal information and work methods (review flow, hooks, skills) out of it. Work methods go in `.claude/rules/`, and personal information in the gitignored rules (`publishing.md`).
 
 ```markdown
 # Changelog
