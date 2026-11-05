@@ -27,6 +27,11 @@ Todoist に接続できないときは、前回取得した内容を表示しま
 「Claude」のタブでは、Claude Code をサブスクリプションと Anthropic の API キーのどちらで使うかを選べます。
 MCP サーバーを設定すると、Claude Code から受信トレイと予定を扱えます。
 
+- [機能](features.md)
+- [セットアップと起動](setup.md)
+- [Slack](slack.md)
+- [Claude](claude-integration.md)
+- [Orca](orca.md)
 - [Claude との連携（MCP）](mcp)
 - [プライバシーポリシー](privacy/)
 - [ソースコード（GitHub）](https://github.com/hidetsugu-miya/cookapps)
