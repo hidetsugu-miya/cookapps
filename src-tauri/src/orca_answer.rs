@@ -186,10 +186,15 @@ fn form_shows(lines: &[String], q: &AnswerQuestion, checked: impl Fn(usize) -> b
     let Some(at) = tail.find(&chat) else {
         return false;
     };
-    // Between the two: the full stop of the single choice or the "Submit" of the multiple one, and the rule.
+    // Between the two: the full stop of the single choice or the "Submit" (the last question) or "Next" (any other) of the multiple one, and the rule.
     let gap = &tail[..at];
-    let gap = gap.strip_prefix('.').unwrap_or(gap);
-    let gap = gap.strip_prefix("Submit").unwrap_or(gap);
+    let gap = if q.multi {
+        gap.strip_prefix("Submit")
+            .or_else(|| gap.strip_prefix("Next"))
+    } else {
+        gap.strip_prefix('.')
+    }
+    .unwrap_or(gap);
     gap.chars().all(|c| c == '─') && tail[at + chat.len()..] == footer
 }
 
@@ -312,12 +317,17 @@ mod tests {
     const ECHO: &str = "> ask me Pick alpha?\n\nThinking...";
     const ALPHA: &str = "←  ☐ A  ☐ B  ✔ Submit  →\n\nPick alpha?\n\n❯ 1. Apple\n     Fruit\n  2. Avocado\n     Fruit\n  3. Apricot\n     Fruit\n  4. Type something.\n────────────────────\n  5. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel";
     /// The multiple choice with a mark in each box ("✔" or " ").
+    /// The word under "Type something" is `Submit` on the last question and `Next` on any other.
     macro_rules! beta_screen {
         ($a:literal, $b:literal, $c:literal) => {
+            beta_screen!($a, $b, $c, "Submit")
+        };
+        ($a:literal, $b:literal, $c:literal, $end:literal) => {
             concat!(
                 "←  ☒ B  ✔ Submit  →\n\nPick beta?\n\n❯ 1. [", $a, "] Banana\n         Yellow fruit\n  2. [", $b,
                 "] Berry\n         Small fruit\n  3. [", $c,
-                "] Bean\n         Legume seed\n  4. [ ] Type something\n     Submit\n────────────────────\n  5. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel"
+                "] Bean\n         Legume seed\n  4. [ ] Type something\n     ", $end,
+                "\n────────────────────\n  5. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel"
             )
         };
     }
@@ -326,6 +336,10 @@ mod tests {
     const BETA_CHECKED_BOTH: &str = beta_screen!("✔", " ", "✔");
     const BETA_EXTRA: &str = beta_screen!("✔", "✔", " ");
     const BETA_MEASURED: &str = beta_screen!(" ", "✔", " ");
+    /// The multiple choice as the first of two questions (measured on 2.1.318 with beta, then alpha).
+    const BETA_NEXT: &str = beta_screen!(" ", " ", " ", "Next");
+    const BETA_NEXT_MEASURED: &str = beta_screen!(" ", "✔", " ", "Next");
+    const CONFIRM_BETA_ALPHA: &str = "←  ☒ B  ☒ A  ✔ Submit  →\n\nReview your answers\n\n ● Pick beta?\n   → Berry\n ● Pick alpha?\n   → Apple\n\nReady to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel";
     const CONFIRM: &str = "←  ☒ A  ☒ B  ✔ Submit  →\n\nReview your answers\n\n ● Pick alpha?\n   → Avocado\n ● Pick beta?\n   → Banana, Bean\n\nReady to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel";
     /// The permission prompt of a tool, which ends in its own footer.
     const PERMISSION: &str = "Bash command\n\n  ls\n\nDo you want to proceed?\n❯ 1. Yes\n  2. Yes, and always allow access to /tmp from this project\n  3. Yes, and switch to auto mode\n  4. No\n\nEsc to cancel · Tab to amend";
@@ -549,6 +563,24 @@ mod tests {
     }
 
     #[test]
+    fn a_multiple_choice_that_is_not_the_last_ends_in_next_and_the_last_in_submit() {
+        let q = beta(&[1]);
+        assert!(shows(BETA_NEXT, Screen::QuestionShown(&q)));
+        assert!(shows(BETA_NEXT_MEASURED, Screen::OptionChecked(&q, 1)));
+        assert!(shows(BETA, Screen::QuestionShown(&q)));
+        // No other word may stand between "Type something" and "Chat about this".
+        for word in ["Skip", "NextSubmit", "SubmitNext", "Nextt", "."] {
+            let other = BETA_NEXT.replace("Next", word);
+            assert!(!shows(&other, Screen::QuestionShown(&q)), "{word}");
+        }
+        // "Next" is the word of a multiple choice; a single choice has the full stop only.
+        let single = ALPHA.replace("Type something.", "Type something\n     Next");
+        assert!(!shows(&single, Screen::QuestionShown(&alpha(0))));
+        let single = ALPHA.replace("Type something.", "Type something\n     Submit");
+        assert!(!shows(&single, Screen::QuestionShown(&alpha(0))));
+    }
+
+    #[test]
     fn a_choice_is_checked_when_its_box_has_the_mark() {
         let q = beta(&[0, 2]);
         assert!(shows(BETA_CHECKED, Screen::OptionChecked(&q, 0)));
@@ -684,6 +716,23 @@ mod tests {
         let (result, typed) = Terminal::new(&screens).run(&answer_steps(&questions));
         assert_eq!(result, Ok(()));
         assert_eq!(typed, ["2", "1", "3", "\t", "1"]);
+    }
+
+    #[test]
+    fn a_multiple_choice_before_another_question_is_typed_through_its_next_form() {
+        let questions = [beta(&[1]), alpha(0)];
+        let steps = answer_steps(&questions);
+        assert_eq!(keys(&steps), ["2", "\t", "1", "1"]);
+        let screens = [
+            BETA_NEXT,
+            BETA_NEXT_MEASURED,
+            ALPHA,
+            CONFIRM_BETA_ALPHA,
+            "done",
+        ];
+        let (result, typed) = Terminal::new(&screens).run(&steps);
+        assert_eq!(result, Ok(()));
+        assert_eq!(typed, ["2", "\t", "1", "1"]);
     }
 
     #[test]
