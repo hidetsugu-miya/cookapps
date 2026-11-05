@@ -320,6 +320,28 @@ describe("orca handoff", () => {
     await expect(field(MAIL)).toHaveValue("");
   });
 
+  it("keeps the notice of a session that finishes while the pane shows it, until the Orca screen shows it", async () => {
+    await openMail();
+    await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseWorktree(MAIL, "/work/example-app");
+    await field(MAIL).setValue("原因を調べて");
+    await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
+    await sendButton(MAIL).click();
+    await waitForOpens(1);
+    await expect($(`${MAIL.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
+    // The waiting agent of the sample is the one in the count.
+    await expect($("#nav-orca .nav-count")).toHaveText("1");
+    // The session finishes; a follow-up makes the pane read the list again, and the pane still shows the session.
+    const overview = await mock("orca_overview", orcaOverview([...sample(), { ...newRow(), group: "done", status: "done" }], worktrees()));
+    await mock("orca_send", null);
+    await field(MAIL).setValue("続けて");
+    await sendButton(MAIL).click();
+    await waitForCalls(overview);
+    await expect($(`${MAIL.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
+    await expect($("#nav-orca .nav-count")).toHaveText("2");
+  });
+
   it("keeps the text of a follow-up when it fails, and says that a session with no pane has no history", async () => {
     await openMail();
     await mock("orca_handoff", { paneKey: null, handle: "term_new" } satisfies OrcaStarted);

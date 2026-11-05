@@ -3,6 +3,7 @@
 // With no project selected the work pane is the start of a new Claude session. Nothing about a session is kept here except the terminals of the app, which end with it.
 // The list is read at startup for the sidebar button's count, every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time, and no more once the `orca` command was found missing (the update button reads again).
 // Only the first read, the screen being shown, the update button, a change of the target and a read after a failure ask for the environments (and the SSH hosts); the clock reads the agents (the screen shown) or only their count (another screen).
+// The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // A read in the background swaps the rows in place: the selection, the text in the composer and the scroll position stay, and `show()` is never called by it.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
@@ -40,8 +41,13 @@ let view: OrcaOverview | null = null;
 let ssh: OrcaSshTarget[] = [];
 // How much a read asks for (see `orca_overview`).
 type Scope = "full" | "screen" | "badge";
-// The agents that wait or run, for the sidebar button: the rows held, or what a read for the count alone found.
-let badge = 0;
+// The sidebar button's count: the agents that wait for the user, and the notices (see `track`). The rows held, or what a read for the count alone found.
+let waitingCount = 0;
+// The notices: the panes of the stopped agents (done, failed or interrupted) that changed while the app ran and have not been shown on this screen yet.
+const notified = new Set<string>();
+// The panes that were stopped when last seen (a pane that left the list stays here, so one that comes back stopped is not noticed again), and whether a read of the target was taken as the base (its rows are never noticed).
+let wasStopped = new Set<string>();
+let baselined = false;
 // The target was just changed and the first read of the new one has not come back: nothing is said about it yet.
 let switching = false;
 // Reads: the latest request is the one used; one is on its way; when the last one started.
@@ -112,7 +118,39 @@ export function elapsed(ms: number, now: number, done: boolean) {
   return done ? `${text}前` : text;
 }
 
-const countOf = (rows: OrcaRow[]) => rows.filter((r) => r.group !== "done").length;
+// An agent that stopped: finished, failed or interrupted (Orca says an interrupted one as `done` with `interrupted` true).
+const isStopped = (r: OrcaRow) => r.group === "done" || r.status === "failed" || r.status === "interrupted";
+
+// The pane of the session this screen shows now: the screen is shown, the window is not hidden, and the session is the selected tab (the side pane of A-9 does not count).
+const viewedPane = () => (shown() && !document.hidden && selectedTab?.startsWith("claude:") ? selectedTab.slice("claude:".length) : null);
+
+// Takes the rows of a read as the one the count follows (the rows of one read, whatever its scope). The first read of a target is only the base: a notice is made for a row that went from not stopped to stopped,
+// or that first appeared in a later read already stopped (a pane seen stopped before is never new, even after it left the list and came back). A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
+function track(rows: OrcaRow[]) {
+  waitingCount = rows.filter((r) => r.group === "waiting").length;
+  const live = new Set<string>();
+  for (const r of rows) {
+    if (r.paneKey === null) continue;
+    live.add(r.paneKey);
+    if (!isStopped(r)) {
+      notified.delete(r.paneKey);
+      wasStopped.delete(r.paneKey);
+    } else {
+      if (baselined && !wasStopped.has(r.paneKey)) notified.add(r.paneKey);
+      wasStopped.add(r.paneKey);
+    }
+  }
+  for (const key of notified) if (!live.has(key)) notified.delete(key);
+  baselined = true;
+}
+
+// Forgets the notices, the stopped panes seen and the base: the command is gone, or the target changed.
+function forgetNotices() {
+  waitingCount = 0;
+  notified.clear();
+  wasStopped = new Set();
+  baselined = false;
+}
 
 // ---- icons ----
 
@@ -185,7 +223,9 @@ const projectName = (key: string) => (key.startsWith("ssh:") ? ssh.find((t) => `
 // ---- drawing ----
 
 function drawBadge() {
-  setNavCount("nav-orca", badge, "Orca", "作業中");
+  const viewed = viewedPane();
+  if (viewed !== null) notified.delete(viewed);
+  setNavCount("nav-orca", waitingCount + notified.size, "Orca", "確認待ち");
 }
 
 // The status label sits at the bottom of the list pane; with an environment saved it is the menu of the targets.
@@ -446,9 +486,12 @@ function drawComposer() {
 function adopt(read: OrcaOverview) {
   const next = !read.known && view !== null ? { ...read, target: view.target, environments: view.environments } : read;
   const keep = next.state === "failed" && view !== null && view.state !== "missing" && view.target === next.target;
+  // A target that changed without `chooseTarget` (the saved one is gone, or the file was changed): the notices and the base of the old one are not the new one's.
+  if (view !== null && next.target !== view.target) forgetNotices();
   view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees, projects: view!.projects, hosts: view!.hosts, terminals: view!.terminals } : next;
   if (read.known) ssh = read.ssh;
-  badge = countOf(view.rows);
+  if (view.state === "ready") track(view.rows);
+  else if (view.state === "missing") forgetNotices();
   switching = false;
   if (newPath !== null && !view.worktrees.some((w) => w.path === newPath)) newPath = null;
   // A plain terminal that left Orca's list leaves the tabs, with its screen.
@@ -500,7 +543,7 @@ async function load(scope: Scope, force = false) {
   lastTry = Date.now();
   // A read for the count alone has no terminals: it only moves the count, and a failure of it is left to the next read.
   if (scope === "badge" && next.state !== "missing") {
-    if (next.state === "ready") badge = countOf(next.rows);
+    if (next.state === "ready") track(next.rows);
     drawBadge();
     return;
   }
@@ -593,7 +636,7 @@ async function chooseTarget(environment: string | null) {
   newPath = null;
   pruneMirrors(() => false);
   view = { ...view, target: environment, rows: [], worktrees: [], projects: [], hosts: [], terminals: [] };
-  badge = 0;
+  forgetNotices();
   switching = true;
   draw();
   load("full", true);
@@ -960,7 +1003,11 @@ export function initOrca() {
   initOrcaTerminal(showError);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.3, property: "--list-w" });
   setInterval(refresh, 1000);
-  document.addEventListener("visibilitychange", refresh);
+  document.addEventListener("visibilitychange", () => {
+    // A session shown again after the window was hidden is seen.
+    drawBadge();
+    refresh();
+  });
   $("orca-refresh").onclick = () => {
     skillsStale = true;
     skillsFailedAt = 0;
