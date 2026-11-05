@@ -139,5 +139,5 @@ macOS では、最初にツールを呼んだとき、キーチェーンへの�
 |---|---|
 | `claude mcp get cookapps` が `Failed to connect` になる | 1 のインストールを済ませたか、`command -v cookapps-mcp`（Windows の PowerShell では `Get-Command cookapps-mcp`）でパスが出るかを確かめる |
 | 「再ログインが必要です」と返る | cookapps アプリでそのアカウントに再ログインする |
-| 「OAuth クライアント JSON を読めません」と返る | アプリの [README](https://github.com/hidetsugu-miya/cookapps#セットアップ) のセットアップを済ませる |
+| 「OAuth クライアント JSON を読めません」と返る | アプリの[セットアップ](setup.md#セットアップ)を済ませる |
 | macOS で、ツールを呼ぶたびにキーチェーンの許可を求められる | 許可のダイアログで「常に許可」を選ぶ |
