@@ -484,7 +484,6 @@ function drawComposer() {
   pick.textContent = worktree ? worktreeLabel(worktree) : worktrees.length ? "worktree を選ぶ" : "worktree がありません";
   // The text is the one being posted while a post is on its way.
   input().disabled = busy;
-  input().placeholder = row ? "追加の指示を書く（/ でスキル）" : "起動するエージェントへの指示を書く（/ でスキル）";
   const send = $<HTMLButtonElement>("orca-send");
   send.textContent = row ? "送る" : "起動する";
   // A session with no terminal can be read but takes no post.
