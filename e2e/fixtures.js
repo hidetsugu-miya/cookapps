@@ -48,12 +48,13 @@ const answers = {
   slack_icons: [],
   slack_file_images: {},
   // No orca command: the Orca screen reads once and stops.
-  orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], known: true },
+  orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: true },
   orca_skills: [],
   orca_chat_open: null,
   orca_chat_close: null,
   orca_chat_older: null,
   orca_chat_pause: null,
+  terminal_ack: null,
   fetch_images: {},
   claude_status: { state: "missing" },
   claude_model_settings: Object.fromEntries(
