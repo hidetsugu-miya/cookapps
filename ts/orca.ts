@@ -71,7 +71,7 @@ const closing = new Set<string>();
 let newPath: string | null = null;
 let busy = false;
 // The launch of the new-session pane that was answered: its pane key (null when Orca's reply gave none), the target and when to stop waiting for its row. With a pane key, the row is selected as soon as a read holds it, and no other launch is made till then.
-let started: { paneKey: string | null; target: string | null; until: number } | null = null;
+let started: { paneKey: string | null; handle: string | null; target: string | null; until: number } | null = null;
 const START_WAIT_MS = 30_000;
 // The session whose history is open (target, path and pane key), null when none is.
 let chatKey: string | null = null;
@@ -454,7 +454,7 @@ function drawComposer() {
   const send = $<HTMLButtonElement>("orca-send");
   send.textContent = row ? "送る" : "起動する";
   // A session with no terminal can be read but takes no post.
-  send.disabled = busy || isReading() || view?.state === "missing" || !(input().value.trim() || hasAttachments()) || (row ? row.handle === null : !worktree || started?.paneKey != null);
+  send.disabled = busy || isReading() || view?.state === "missing" || !(input().value.trim() || hasAttachments()) || (row ? row.handle === null : !worktree || startWaits());
   drawStarted();
   updateCompletion();
 }
@@ -464,7 +464,7 @@ function drawStarted() {
   const box = $("orca-started");
   box.hidden = started === null || selectedRow() !== null;
   if (box.hidden) return;
-  const waiting = started!.paneKey !== null;
+  const waiting = startWaits();
   const key = String(waiting);
   if (box.dataset.state === key) return;
   box.dataset.state = key;
@@ -495,12 +495,21 @@ function adopt(read: OrcaOverview) {
   ensureSelection();
 }
 
-// A launch whose row the read holds now is selected (its project and its tab, so its history opens); one for another target, or one that waited too long, is dropped.
+// A launch that gave a pane key or a handle waits for its row, which is matched by either (as the side pane of A-9 does).
+const startWaits = () => started !== null && (started.paneKey !== null || started.handle !== null);
+
+// A launch whose row the read holds now is selected (its project and its tab, so its history opens); one that waited too long, even if the read failed, or one for another target, is dropped.
 function claimStarted() {
-  if (started?.paneKey == null || view === null || view.state !== "ready") return;
-  const row = started.target === view.target ? view.rows.find((r) => r.paneKey === started!.paneKey) : undefined;
-  if (row) pickRow(row);
-  if (row || started.target !== view.target || Date.now() > started.until) started = null;
+  if (!startWaits()) return;
+  const wait = started!;
+  if (Date.now() > wait.until) {
+    started = null;
+    return;
+  }
+  if (view === null || view.state !== "ready") return;
+  const row = wait.target === view.target ? view.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
+  if (row?.paneKey) pickRow(row);
+  if (row || wait.target !== view.target) started = null;
 }
 
 // The order and the last selection of tabs that are no longer anywhere are dropped, so they do not pile up.
@@ -742,8 +751,8 @@ function pickRow(r: OrcaRow) {
 
 // The new-session pane: no project, no tab.
 function newSession() {
-  // The note of a launch with no pane key goes; one that waits for its row stays, so that no second launch is made meanwhile.
-  if (started?.paneKey === null) started = null;
+  // The note of a launch with nothing to wait for goes, and so does a wait that ran out; one that waits for its row stays, so that no second launch is made meanwhile.
+  if (started !== null && (!startWaits() || Date.now() > started.until)) started = null;
   projectKey = null;
   selectedTab = null;
   draw();
@@ -793,7 +802,7 @@ async function post() {
   const row = selectedRow();
   const target = view?.target ?? null;
   if (busy || isReading() || !(text.trim() || hasAttachments()) || view === null) return;
-  if (row ? row.handle === null : projectKey !== null || !newPath || started?.paneKey != null) return;
+  if (row ? row.handle === null : projectKey !== null || !newPath || startWaits()) return;
   const path = row ? row.path : newPath!;
   if (hasAttachments() && !path) {
     showPostError("画像を置く worktree が分かりません");
@@ -809,7 +818,7 @@ async function post() {
     else {
       const launched = await invoke("orca_launch", { path: newPath!, text: body, environment: target });
       // A session picked while the launch was on its way is not left for the new one.
-      if (projectKey === null) started = { paneKey: launched.paneKey, target, until: Date.now() + START_WAIT_MS };
+      if (projectKey === null) started = { paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
     }
     input().value = "";
     clearAttachments();

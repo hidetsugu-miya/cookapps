@@ -601,6 +601,23 @@ describe("orca", () => {
     expect(await callsOf(launch)).toHaveLength(1);
   });
 
+  it("finds the row of the session it started by the handle when the launch gave no pane key", async () => {
+    await openOrca();
+    const launch = await mock("orca_launch", { paneKey: null, handle: "term_new" } satisfies OrcaStarted);
+    await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await pickDest("/work/example-api");
+    await $("#orca-input").setValue("Write the docs");
+    await $("#orca-send").click();
+    await waitForCalls(launch);
+    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    // The row has the handle and the pane key of the list.
+    await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
+    await $("#orca-refresh").click();
+    expect(await waitForOpens()).toEqual([{ environment: null, path: "/work/example-api", paneKey: "tab_new:leaf_1", channel: true }]);
+    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($("#orca-send")).toHaveText("送る");
+  });
+
   it("drops the wait when the user selects another session", async () => {
     await openOrca();
     const launch = await mock("orca_launch", reply);
