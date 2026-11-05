@@ -468,6 +468,7 @@ function selectAssistant(tab: "claude" | "orca") {
   for (const [id, name] of [["reply-tab-claude", "claude"], ["reply-tab-orca", "orca"]] as const) $(id).setAttribute("aria-selected", String(name === tab));
   for (const el of [$("reply-log"), $("reply-chat").querySelector<HTMLElement>(".chat-foot")!, $("reply-clear")]) el.hidden = tab === "orca";
   $("st-orca").hidden = tab !== "orca";
+  $("slack-thread").classList.toggle("assist-orca", tab === "orca");
   handoff.sync();
 }
 

@@ -285,7 +285,8 @@ export function initTodo() {
     },
   });
   $("todo-orca").onclick = () => handoff.toggle();
-  initSplit($("todo"), $("todo-split"));
+  // 380px at first (the CSS holds that as the least); the divider widens it up to half of the screen.
+  initSplit($("todo"), $("todo-split"), { initial: 0, min: 0, max: 0.5 });
   // The document's pointerdown closes an open menu before the click, so whether this press found it open is read before that.
   let wasOpen = false;
   $("todo-more").onpointerdown = () => (wasOpen = $("todo-more").hasAttribute("aria-expanded"));

@@ -226,7 +226,7 @@ export function initThread() {
     },
   });
   $("thread-orca").onclick = () => handoff.toggle();
-  initSplit($("mail-area"), $("mail-split"));
+  initSplit($("mail-area"), $("mail-split"), { initial: 0.37 });
   $("back").onclick = goBack;
   $("thread-todo").onclick = () => {
     const current = opened.current!;

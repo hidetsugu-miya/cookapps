@@ -323,7 +323,8 @@ describe("orca handoff", () => {
     await $(`${MAIL.pane} [aria-label="閉じる"]`).click();
     await expect($(MAIL.pane)).not.toBeDisplayed();
     await $(MAIL.button).click();
-    await waitForCount(`${MAIL.pane} .ho-row`, 3);
+    // The destinations are back: the three agents of the sample and the session this test started (the list holds it now).
+    await waitForCount(`${MAIL.pane} .ho-row`, 4);
     expect(await textsOf(`${MAIL.pane} .ho-new-btn`)).toEqual(["新しいセッション"]);
     expect(await count(`${MAIL.pane} .ho-session-name`)).toBe(0);
   });

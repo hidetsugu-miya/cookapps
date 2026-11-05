@@ -81,7 +81,6 @@ export class HandoffPane {
     chip?: HTMLButtonElement;
     rows?: HTMLElement;
     cardBox?: HTMLElement;
-    sessionIcon?: HTMLElement;
     sessionTitle?: HTMLElement;
     note?: HTMLElement;
     error: HTMLElement;
@@ -277,21 +276,21 @@ export class HandoffPane {
   }
 
   private buildSession() {
-    const sessionIcon = tag("span", "ho-session-icon");
     const sessionTitle = tag("div", "ho-session-title");
     const open = iconButton("Orca の画面で開く", OPEN_SVG);
     open.onclick = () => openInOrca(this.session()?.paneKey ?? null);
     const close = iconButton("閉じる", CLOSE_SVG);
     close.onclick = () => this.forget();
     const head = tag("div", "ho-head ho-session-head");
-    head.append(sessionIcon, sessionTitle, open, close);
+    head.append(sessionTitle, open, close);
     const notice = tag("div", "ho-notice");
     const note = tag("p", "ho-note", "セッションを始めました。履歴は Orca の画面で見られます。");
     const main = tag("div", "ho-main");
     main.append(head, notice, this.chat.status, this.chat.box, note);
     const foot = this.foot();
     foot.cardBox.hidden = true;
-    this.el = { notice, sessionIcon, sessionTitle, note, error: foot.error, input: foot.input, send: foot.send };
+    foot.input.rows = 2;
+    this.el = { notice, sessionTitle, note, error: foot.error, input: foot.input, send: foot.send };
     this.host.root.replaceChildren(main, foot.foot);
     foot.input.focus();
   }
@@ -384,13 +383,12 @@ export class HandoffPane {
   private drawSessionHead() {
     const s = this.session();
     const el = this.el;
-    if (!s || !el?.sessionIcon) return;
+    if (!s || !el?.sessionTitle) return;
     const row = this.rowOf(s);
     const worktree = this.overview?.worktrees.find((w) => w.path === s.path);
     const name = row ? `${row.repo} ・ ${row.branch}` : worktree ? worktreeLabel(worktree) : s.path;
     const time = row ? elapsed(row.atMs, Date.now(), row.group === "done") : "";
     const state = row ? [STATUS_LABELS[row.status], time].filter(Boolean).join(" ・ ") : "確認中";
-    el.sessionIcon.replaceChildren(statusIcon(row?.status ?? "idle", row ? STATUS_LABELS[row.status] : "確認中"));
     el.sessionTitle!.replaceChildren(tag("span", "ho-session-name", name), tag("span", "ho-session-state", state));
     el.note!.hidden = s.paneKey !== null;
     this.chat.box.hidden = s.paneKey === null;
