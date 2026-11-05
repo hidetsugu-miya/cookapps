@@ -565,7 +565,7 @@ describe("orca: the session history", () => {
   const user = chatUser("u1", "Make the list narrower");
   const answer = chatAssistant("a1", "I will narrow the **list** pane.\n\n- first\n- second");
   const tools = (calls: [string, string][] = [["Read", "ts/orca.ts"], ["Edit", "ts/orca.ts"], ["Bash", "npm test"]], running: string | null = null) =>
-    chatTools("t1", `ツールを ${calls.length} 回実行（Read 1、Edit 1、Bash 1）`, calls, running);
+    chatTools("t1", `ツールを ${calls.length} 回実行`, calls, running);
   const scrollBox = () => ({
     atBottom: () => browser.execute(() => { const b = document.getElementById("orca-chat")!; return b.scrollHeight - b.scrollTop - b.clientHeight < 2; }),
     top: () => browser.execute(() => document.getElementById("orca-chat")!.scrollTop),
@@ -592,7 +592,7 @@ describe("orca: the session history", () => {
     expect(await textsOf("#orca-items .orca-user")).toEqual(["Make the list narrower"]);
     expect(await textsOf("#orca-items .orca-assistant strong")).toEqual(["list"]);
     expect(await textsOf("#orca-items .orca-assistant li")).toEqual(["first", "second"]);
-    expect(await textsOf("#orca-items .orca-tools-label")).toEqual(["ツールを 3 回実行（Read 1、Edit 1、Bash 1）"]);
+    expect(await textsOf("#orca-items .orca-tools-label")).toEqual(["ツールを 3 回実行"]);
     await expect($(".orca-tools-btn")).toHaveAttribute("aria-expanded", "false");
     await expect($(".orca-tool-list")).not.toBeDisplayed();
     // The user's bubble is right-aligned; the agent's text starts at the left.
@@ -674,19 +674,19 @@ describe("orca: the session history", () => {
   it("names what a run still going works on while the agent is working, and the summary when it is not", async () => {
     await openWorking();
     await select("example-app");
-    await sendChat(chatItems([tools([["Edit", "ts/orca.ts"]], "ツールを実行中（Edit 1）")]));
-    expect(await textsOf(".orca-tools-label")).toEqual(["ツールを実行中（Edit 1）"]);
+    await sendChat(chatItems([tools([["Edit", "ts/orca.ts"]], "ツールを実行中")]));
+    expect(await textsOf(".orca-tools-label")).toEqual(["ツールを実行中"]);
     // The agent is done now: the next read of the list says so, and the label is the summary.
     await mock("orca_overview", orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { group: "done" })], worktrees()));
     await $("#orca-refresh").click();
-    await browser.waitUntil(async () => (await textsOf(".orca-tools-label"))[0] === "ツールを 1 回実行（Read 1、Edit 1、Bash 1）", { timeoutMsg: "the label never became the summary" });
+    await browser.waitUntil(async () => (await textsOf(".orca-tools-label"))[0] === "ツールを 1 回実行", { timeoutMsg: "the label never became the summary" });
   });
 
   it("shows a run with no running summary by its summary even while the agent works", async () => {
     await openWorking();
     await select("example-app");
     await sendChat(chatItems([tools()]));
-    expect(await textsOf(".orca-tools-label")).toEqual(["ツールを 3 回実行（Read 1、Edit 1、Bash 1）"]);
+    expect(await textsOf(".orca-tools-label")).toEqual(["ツールを 3 回実行"]);
   });
 
   it("shows the reconnecting and unavailable messages above the chat, and takes them away when the read is live", async () => {
