@@ -24,19 +24,12 @@ import {
   release,
   rowOf as threadRowOf,
   sendChat,
-  sendTerminal,
   setClock,
-  termData,
-  termExit,
-  terminalOpens,
-  terminalTargets,
-  terminalWorktree,
   textsOf,
   threadDetail,
   waitForCalls,
   waitForCount,
   waitForOpens,
-  waitForTerminalOpens,
 } from "../support";
 
 // A running, a waiting and a done agent, and a second running one that has no pane (its session cannot be read). Each has its own project (`proj_{repo}`).
@@ -1501,251 +1494,14 @@ describe("orca: projects", () => {
     await expect(tabOf(claudeTab("example-app")).$(".orca-tab-close")).toBeDisabled();
   });
 
-  it("opens the plus menu with Claude and the terminal", async () => {
+  it("opens the plus menu with Claude", async () => {
     await openOrca();
     await $("#orca-new").click();
-    expect(await textsOf(".menu button")).toEqual(["Claude を起動", "ターミナルを開く"]);
+    expect(await textsOf(".menu button")).toEqual(["Claude を起動"]);
     await expect($("#orca-new")).toHaveAttribute("aria-expanded", "true");
     await pickMenu("Claude を起動");
     await expect($("#orca-work-title")).toHaveText("新しいセッション");
     await expect($(".menu")).not.toExist();
-  });
-
-  it("lists the destinations of a terminal: the worktrees of this machine and the SSH hosts, narrowed by a filter", async () => {
-    await openOrca();
-    await mock("orca_terminal_targets", terminalTargets([terminalWorktree("example-app", "feat/a"), terminalWorktree("example-api", "main")], [orcaSsh("s1", "example-host"), orcaSsh("s2", "other-host", false)]));
-    await $("#orca-new").click();
-    await pickMenu("ターミナルを開く");
-    const pop = $(".orca-dest-pop");
-    await expect(pop).toHaveAttribute("role", "dialog");
-    await expect(pop).toHaveAttribute("aria-label", "起動先");
-    const filter = $('.orca-dest-pop input[aria-label="起動先を絞り込む"]');
-    await expect(filter).toBeFocused();
-    await waitForCount(".orca-dest-pop button", 4);
-    expect(await textsOf(".orca-dest-pop .orca-dest-group")).toEqual(["このマシン", "SSH"]);
-    expect(await textsOf(".orca-dest-pop button b")).toEqual(["example-app", "example-api", "example-host", "other-host"]);
-    // The branch, and 未接続 for a host that is not connected (it can still be chosen).
-    expect(await textsOf(".orca-dest-pop button span")).toEqual(["feat/a", "main", "", "未接続"]);
-    await filter.setValue("API");
-    expect(await textsOf(".orca-dest-pop button b")).toEqual(["example-api"]);
-    await filter.setValue("other");
-    expect(await textsOf(".orca-dest-pop .orca-dest-group")).toEqual(["SSH"]);
-    await filter.setValue("zzz");
-    await expect(pop).toHaveText(expect.stringContaining("該当する起動先がありません"));
-  });
-
-  it("says why the worktrees could not be read in the dialog, and still lists the SSH hosts", async () => {
-    await openOrca();
-    await mock("orca_terminal_targets", terminalTargets([], [orcaSsh("s1", "example-host")], "Orca が時間内に応答しませんでした"));
-    await $("#orca-new").click();
-    await pickMenu("ターミナルを開く");
-    await waitForCount(".orca-dest-pop button", 1);
-    await expect($(".orca-dest-pop")).toHaveText(expect.stringContaining("Orca が時間内に応答しませんでした"));
-    expect(await textsOf(".orca-dest-pop button b")).toEqual(["example-host"]);
-  });
-
-  describe("a terminal of the app", () => {
-    // The app with a worktree and an SSH host to open a terminal in, the dialog open on the plus button.
-    async function openDialog() {
-      await openOrca(withTerminals());
-      await mock("orca_terminal_targets", terminalTargets([terminalWorktree("example-app", "feat/a")], [orcaSsh("s1", "example-host")]));
-      await $("#orca-new").click();
-      await pickMenu("ターミナルを開く");
-      await $('.orca-dest-pop button[data-path="/work/example-app"]').waitForDisplayed();
-    }
-    const screenText = () => $("#orca-term .xterm-rows").getText();
-    const written = async (write: string) => (await callsOf(write)).map((c) => (c as { data: string }).data).join("");
-    const dragDivider = (fraction: number) =>
-      browser.execute((f) => {
-        const box = document.getElementById("orca")!.getBoundingClientRect();
-        const at = (x: number): PointerEventInit => ({ bubbles: true, cancelable: true, pointerId: 7, button: 0, clientX: box.left + box.width * x, clientY: box.top + 80 });
-        document.getElementById("orca-split")!.dispatchEvent(new PointerEvent("pointerdown", at(0.3)));
-        document.dispatchEvent(new PointerEvent("pointermove", at(f)));
-        document.dispatchEvent(new PointerEvent("pointerup", at(f)));
-      }, fraction);
-
-    it("opens at the chosen worktree with the size of the pane, and shows it as the selected tab of its project", async () => {
-      await openDialog();
-      const open = await mock("terminal_open", "pty_1");
-      await $('.orca-dest-pop button[data-path="/work/example-app"]').click();
-      const [call] = await waitForTerminalOpens();
-      expect(call.target).toEqual({ kind: "worktree", path: "/work/example-app" });
-      expect(call.channel).toBe(true);
-      expect(call.cols).toBeGreaterThan(0);
-      expect(call.rows).toBeGreaterThan(0);
-      expect(await callsOf(open)).toHaveLength(1);
-      await expect($(".menu")).not.toExist();
-      await expect($("#orca-term")).toBeDisplayed();
-      await expect($("#orca-form")).not.toBeDisplayed();
-      await expect(selectedTab().$(".orca-tab-title")).toHaveText("ターミナル");
-      await expect(selectedTab().$(".orca-tab-sub")).toHaveText("feat/a");
-      await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
-      // The session count of the project includes it.
-      await expect(project("example-app").$(".orca-n")).toHaveText("3");
-    });
-
-    it("draws the output, sends the typed keys, and sends the new size when the pane changes", async () => {
-      await openDialog();
-      await mock("terminal_open", "pty_1");
-      const write = await mock("terminal_write", null);
-      const resize = await mock("terminal_resize", null);
-      await $('.orca-dest-pop button[data-path="/work/example-app"]').click();
-      const [call] = await waitForTerminalOpens();
-      await sendTerminal(termData("cookapps % hello 端末"));
-      await browser.waitUntil(async () => (await screenText()).includes("hello 端末"), { timeoutMsg: "the output never showed" });
-      await $("#orca-term .xterm-screen").click();
-      // The driver gives a typed letter the keyCode of its lower case (s is 115, which xterm.js reads as F4), so p to z are not typed here.
-      await browser.keys(["c", "d", "Enter"]);
-      await browser.waitUntil(async () => (await written(write)) === "cd\r", { timeoutMsg: `the keys were not sent: ${await written(write)}` });
-      expect((await callsOf(write)).every((c) => (c as { id: string }).id === "pty_1")).toBe(true);
-      // A narrower pane (the divider dragged to the right) has fewer columns, which Rust is told.
-      await dragDivider(0.5);
-      await browser.waitUntil(async () => (await callsOf(resize)).some((c) => (c as { cols: number }).cols < call.cols), { timeoutMsg: "no narrower size was sent" });
-      const sizes = (await callsOf(resize)) as { id: string; cols: number; rows: number }[];
-      expect(sizes.every((c) => c.id === "pty_1" && c.cols > 0 && c.rows > 0)).toBe(true);
-    });
-
-    it("confirms the output it has drawn to Rust in steps, so that a program that prints faster than the screen draws is held back", async () => {
-      await openDialog();
-      await mock("terminal_open", "pty_1");
-      const ack = await mock("terminal_ack", null);
-      await $('.orca-dest-pop button[data-path="/work/example-app"]').click();
-      await waitForTerminalOpens();
-      // A little output is not confirmed yet.
-      await sendTerminal(termData("short"));
-      await browser.waitUntil(async () => (await screenText()).includes("short"), { timeoutMsg: "the output never showed" });
-      expect(await callsOf(ack)).toEqual([]);
-      // Enough of it is, once, with all the bytes drawn so far.
-      await sendTerminal(termData("a".repeat(40_000)));
-      expect(await waitForCalls(ack)).toEqual([{ id: "pty_1", bytes: 40_005 }]);
-    });
-
-    it("shows the green dot on a project or an SSH host that Orca calls idle while a terminal of the app runs there, and the gray one when it ended", async () => {
-      await openOrca(withTerminals());
-      await mock("orca_terminal_targets", terminalTargets([terminalWorktree("example-idle", "main")], [orcaSsh("s2", "other-host", false)]));
-      await mock("terminal_open", "pty_1");
-      const dot = (name: string) => project(name).$(".orca-ic");
-      await expect(dot("example-idle")).toHaveAttribute("data-status", "idle");
-      await expect(dot("other-host")).toHaveAttribute("data-status", "idle");
-      await $("#orca-new").click();
-      await pickMenu("ターミナルを開く");
-      await $('.orca-dest-pop button[data-path="/work/example-idle"]').click();
-      await waitForTerminalOpens();
-      await expect(dot("example-idle")).toHaveAttribute("data-status", "done");
-      await expect(dot("other-host")).toHaveAttribute("data-status", "idle");
-      await mock("terminal_open", "pty_2");
-      await $("#orca-new").click();
-      await pickMenu("ターミナルを開く");
-      await $('.orca-dest-pop button[data-ssh="s2"]').click();
-      // `mock` cleared the record of the first call.
-      await waitForTerminalOpens();
-      await expect(dot("other-host")).toHaveAttribute("data-status", "done");
-      await sendTerminal(termExit(0));
-      await expect(dot("other-host")).toHaveAttribute("data-status", "idle");
-      await expect(dot("example-idle")).toHaveAttribute("data-status", "done");
-    });
-
-    it("keeps a row for a project the list does not show (another machine is the target) while a terminal of the app runs there, and drops it when the last one is closed", async () => {
-      await openOrca({ ...withTerminals(), target: "Studio", environments: ["Studio"] });
-      await mock("orca_terminal_targets", terminalTargets([terminalWorktree("example-local", "main")]));
-      await mock("terminal_open", "pty_1");
-      const close = await mock("terminal_close", null);
-      await $("#orca-new").click();
-      await pickMenu("ターミナルを開く");
-      await $('.orca-dest-pop button[data-path="/work/example-local"]').click();
-      await waitForTerminalOpens();
-      // Under the heading of this machine, selected, with the green dot and the count.
-      await expect(project("example-local")).toHaveAttribute("aria-pressed", "true");
-      await expect(project("example-local").$(".orca-ic")).toHaveAttribute("data-status", "done");
-      await expect(project("example-local").$(".orca-n")).toHaveText("1");
-      expect(await textsOf("#orca-feed .orca-sec")).toEqual(["このマシン", "SSH"]);
-      // Another project shows, and the row brings the terminal back.
-      await project("example-api").click();
-      await expect($("#orca-term")).not.toBeDisplayed();
-      await project("example-local").click();
-      await expect($("#orca-term")).toBeDisplayed();
-      await $('#orca-tabs [data-tab^="pty:"] .orca-tab-close').click();
-      expect(await waitForCalls(close)).toEqual([{ id: "pty_1" }]);
-      await browser.waitUntil(async () => !(await project("example-local").isExisting()), { timeoutMsg: "the row of the project stayed" });
-      // The work pane does not stay on a project with no row.
-      await expect($("#orca-work-title")).toHaveText("新しいセッション");
-    });
-
-    it("goes back to the project that was shown when the terminal cannot be opened", async () => {
-      await openOrca({ ...withTerminals(), target: "Studio", environments: ["Studio"] });
-      await mock("orca_terminal_targets", terminalTargets([terminalWorktree("example-local", "main")]));
-      await project("example-api").click();
-      await expect(selectedTab()).toHaveText(expect.stringContaining("Fix the parser"));
-      await mock("terminal_open", rejects("ターミナルを起動できません"));
-      await $("#orca-new").click();
-      await pickMenu("ターミナルを開く");
-      await $('.orca-dest-pop button[data-path="/work/example-local"]').click();
-      await waitForTerminalOpens();
-      await expect($("#error")).toHaveText("ターミナルを起動できません");
-      await expect(project("example-api")).toHaveAttribute("aria-pressed", "true");
-      await expect(selectedTab()).toHaveText(expect.stringContaining("Fix the parser"));
-      await expect(project("example-local")).not.toExist();
-    });
-
-    it("keeps running while another project shows, and ends and forgets it when its tab is closed", async () => {
-      await openDialog();
-      await mock("terminal_open", "pty_1");
-      const close = await mock("terminal_close", null);
-      await $('.orca-dest-pop button[data-path="/work/example-app"]').click();
-      await waitForTerminalOpens();
-      await sendTerminal(termData("still here"));
-      await project("example-api").click();
-      await expect($("#orca-term")).not.toBeDisplayed();
-      expect(await callsOf(close)).toEqual([]);
-      await project("example-app").click();
-      await browser.waitUntil(async () => (await tabTitles()).length === 3, { timeoutMsg: "the tabs were not drawn" });
-      await expect(selectedTab()).toHaveText(expect.stringContaining("ターミナル"));
-      await browser.waitUntil(async () => (await screenText()).includes("still here"), { timeoutMsg: "the screen was not kept" });
-      await $('#orca-tabs [data-tab^="pty:"] .orca-tab-close').click();
-      expect(await waitForCalls(close)).toEqual([{ id: "pty_1" }]);
-      expect(await tabTitles()).toHaveLength(2);
-      await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
-    });
-
-    it("keeps a finished terminal as a tab with a gray dot and the line 終了しました, and writes nothing to it", async () => {
-      await openDialog();
-      await mock("terminal_open", "pty_1");
-      const write = await mock("terminal_write", null);
-      await $('.orca-dest-pop button[data-path="/work/example-app"]').click();
-      await waitForTerminalOpens();
-      await sendTerminal(termExit(0));
-      await browser.waitUntil(async () => (await screenText()).includes("[終了しました]"), { timeoutMsg: "the end was never drawn" });
-      await expect(selectedTab().$(".orca-ic")).toHaveAttribute("data-status", "idle");
-      await expect(selectedTab()).toBeDisplayed();
-      await $("#orca-term .xterm-screen").click();
-      await browser.keys(["l"]);
-      await browser.pause(300);
-      expect(await callsOf(write)).toEqual([]);
-    });
-
-    it("opens an SSH host by its id, and puts the tab in the host's row", async () => {
-      await openDialog();
-      await mock("terminal_open", "pty_2");
-      await $('.orca-dest-pop button[data-ssh="s1"]').click();
-      const [call] = await waitForTerminalOpens();
-      expect(call.target).toEqual({ kind: "ssh", id: "s1" });
-      await expect(project("example-host")).toHaveAttribute("aria-pressed", "true");
-      await expect(selectedTab().$(".orca-tab-title")).toHaveText("ターミナル");
-      await expect(selectedTab().$(".orca-tab-sub")).toHaveText("example-host");
-    });
-
-    it("shows the message and leaves no tab when the terminal cannot be opened", async () => {
-      await openDialog();
-      await mock("terminal_open", rejects("ターミナルを起動できません"));
-      await $('.orca-dest-pop button[data-path="/work/example-app"]').click();
-      await waitForTerminalOpens();
-      await expect($("#error")).toHaveText("ターミナルを起動できません");
-      // The selection is where it was (none: the new-session pane), and no tab was left behind.
-      await expect($("#orca-work-title")).toHaveText("新しいセッション");
-      await expect(project("example-app")).toHaveAttribute("aria-pressed", "false");
-      expect(await tabTitles()).toEqual([]);
-      expect(await terminalOpens()).toHaveLength(1);
-    });
   });
 
   describe("a plain terminal of Orca", () => {

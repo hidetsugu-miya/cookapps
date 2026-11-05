@@ -1,12 +1,9 @@
-// The terminals of the Orca screen (A-8): one xterm.js for each terminal tab, in `#orca-term`.
-// A terminal of the app runs in a PTY in Rust (`terminal_open`): the bytes it prints arrive through a channel, what is typed goes to `terminal_write`, and the size to `terminal_resize`.
-// A plain terminal of Orca is a mirror: Orca cannot stream its bytes to this app, so while its tab is shown the screen is read every second (`orca_terminal_read`) and drawn again,
+// The mirrors of the plain terminals of Orca on the Orca screen (A-8): one xterm.js for each terminal tab, in `#orca-term`.
+// Orca cannot stream the bytes of a terminal to this app, so while its tab is shown the screen is read every second (`orca_terminal_read`) and drawn again,
 // and the keys go to `orca_terminal_input`, batched and one send at a time. It has no colors, a full-screen program is only approximate, and its size is not sent.
-// Output is drawn with a callback that confirms the bytes to Rust (`terminal_ack`), which stops reading while too much is unconfirmed.
 // An instance lives while its tab exists and is only hidden when another tab shows. Nothing a terminal prints or is typed is kept or logged here.
-import type { TerminalEvent } from "./bindings/TerminalEvent";
 import { $ } from "./dom.js";
-import { invoke, type TerminalTarget } from "./ipc.js";
+import { invoke } from "./ipc.js";
 
 const SCROLLBACK = 5000;
 const MIRROR_MS = 1000;
@@ -15,9 +12,6 @@ const FIT_DELAY_MS = 50;
 const SEND_LIMIT = 50_000;
 // The first frame of a mirror clears what the last one drew.
 const CLEAR = "\x1b[2J\x1b[3J\x1b[H";
-// The drawn output is confirmed to Rust in steps of this many bytes (Rust stops reading at 1 MiB unconfirmed).
-const ACK_EVERY = 32 * 1024;
-const ENDED = "\r\n[終了しました]\r\n";
 
 interface Mirror {
   handle: string;
@@ -33,15 +27,7 @@ interface Instance {
   term: XTerm;
   fit: { fit(): void };
   el: HTMLElement;
-  // The id Rust gave a terminal of the app, null until `terminal_open` answers.
-  rustId: string | null;
-  mirror: Mirror | null;
-  // Where a terminal of the app was last sized to, so that a size is sent only when it changed.
-  size: { cols: number; rows: number };
-  // Whether the process of a terminal of the app has ended: nothing is written to it then.
-  ended: boolean;
-  // The bytes of output drawn and not yet confirmed to Rust.
-  drawn: number;
+  mirror: Mirror;
 }
 
 const instances = new Map<string, Instance>();
@@ -51,7 +37,7 @@ let onError: (e: unknown) => void = () => {};
 
 const container = () => $("orca-term");
 
-function newInstance(): Instance {
+function newInstance(mirror: Mirror): Instance {
   const style = getComputedStyle(document.documentElement);
   const term = new Terminal({
     scrollback: SCROLLBACK,
@@ -66,16 +52,16 @@ function newInstance(): Instance {
   el.className = "orca-term-box";
   container().append(el);
   term.open(el);
-  return { term, fit, el, rustId: null, mirror: null, size: { cols: term.cols, rows: term.rows }, ended: false, drawn: 0 };
+  return { term, fit, el, mirror };
 }
 
-// Fits the shown terminal to the pane; its `onResize` tells Rust.
+// Fits the shown terminal to the pane.
 function fitVisible() {
   const instance = visibleId === null ? undefined : instances.get(visibleId);
   if (instance && !container().hidden) instance.fit.fit();
 }
 
-// A drag of the divider or of the window changes the size many times a second, and each fit reflows the scrollback and signals the process: fit once the size has rested.
+// A drag of the divider or of the window changes the size many times a second, and each fit reflows the scrollback: fit once the size has rested.
 let fitTimer: number | null = null;
 function fitSoon() {
   if (fitTimer !== null) clearTimeout(fitTimer);
@@ -89,7 +75,7 @@ function fitSoon() {
 
 async function readFrame(instance: Instance) {
   const mirror = instance.mirror;
-  if (!mirror || mirror.reading) return;
+  if (mirror.reading) return;
   mirror.reading = true;
   try {
     const lines = await invoke("orca_terminal_read", { handle: mirror.handle, environment: mirror.environment });
@@ -107,7 +93,7 @@ async function readFrame(instance: Instance) {
 
 async function sendKeys(instance: Instance) {
   const mirror = instance.mirror;
-  if (!mirror || mirror.sending || !mirror.pending) return;
+  if (mirror.sending || !mirror.pending) return;
   const text = mirror.pending.slice(0, SEND_LIMIT);
   mirror.pending = mirror.pending.slice(text.length);
   mirror.sending = true;
@@ -125,40 +111,38 @@ async function sendKeys(instance: Instance) {
 function startMirror(instance: Instance) {
   const mirror = instance.mirror;
   // A hidden window reads nothing; it starts again when the window is shown (`initOrcaTerminal`).
-  if (!mirror || mirror.timer !== null || document.hidden) return;
+  if (mirror.timer !== null || document.hidden) return;
   readFrame(instance);
   mirror.timer = window.setInterval(() => readFrame(instance), MIRROR_MS);
 }
 
 function stopMirrors() {
   for (const { mirror } of instances.values()) {
-    if (mirror?.timer != null) clearInterval(mirror.timer);
-    if (mirror) mirror.timer = null;
+    if (mirror.timer !== null) clearInterval(mirror.timer);
+    mirror.timer = null;
   }
 }
 
 // ---- showing ----
 
-// Shows the terminal of the tab `id` and hides the others. A mirror (`mirror`: the plain terminal's handle and the target) is created when its tab is first shown; a terminal of the app that is still being opened shows when it is ready.
-export function showTerminal(id: string, mirror?: { handle: string; environment: string | null }) {
+// Shows the mirror of the tab `id` (`mirror`: the plain terminal's handle and the target) and hides the others. It is created when its tab is first shown.
+export function showTerminal(id: string, mirror: { handle: string; environment: string | null }) {
   // Already shown: a redraw of the screen must not read the mirror again or take the focus.
-  if (visibleId === id && !container().hidden && (instances.has(id) || !mirror)) return;
+  if (visibleId === id && !container().hidden && instances.has(id)) return;
   visibleId = id;
   container().hidden = false;
   stopMirrors();
   let instance = instances.get(id);
-  if (!instance && mirror) {
-    instance = newInstance();
-    instance.mirror = { ...mirror, timer: null, last: null, reading: false, pending: "", sending: false };
+  if (!instance) {
+    instance = newInstance({ ...mirror, timer: null, last: null, reading: false, pending: "", sending: false });
     const made = instance;
     made.term.onData((data) => {
-      made.mirror!.pending += data;
+      made.mirror.pending += data;
       sendKeys(made);
     });
     instances.set(id, instance);
   }
   for (const [other, { el }] of instances) el.hidden = other !== id;
-  if (!instance) return;
   fitVisible();
   startMirror(instance);
   instance.term.focus();
@@ -175,7 +159,7 @@ export function hideTerminals() {
 export function dropTerminal(id: string) {
   const instance = instances.get(id);
   if (!instance) return;
-  if (instance.mirror?.timer != null) clearInterval(instance.mirror.timer);
+  if (instance.mirror.timer !== null) clearInterval(instance.mirror.timer);
   instance.term.dispose();
   instance.el.remove();
   instances.delete(id);
@@ -184,82 +168,10 @@ export function dropTerminal(id: string) {
 
 // Forgets every mirror whose id `keep` does not accept (the sessions that left Orca's list, or the target changed).
 export function pruneMirrors(keep: (id: string) => boolean) {
-  for (const [id, { mirror }] of instances) if (mirror && !keep(id)) dropTerminal(id);
+  for (const id of [...instances.keys()]) if (!keep(id)) dropTerminal(id);
 }
 
-// ---- a terminal of the app ----
-
-function decode(data: string) {
-  const text = atob(data);
-  const bytes = new Uint8Array(text.length);
-  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
-  return bytes;
-}
-
-// Confirms the output drawn to Rust once enough of it is (and what is left over when the id arrives), so that a program that prints faster than xterm.js draws is held back.
-function confirmDrawn(instance: Instance, bytes: number, flush = false) {
-  instance.drawn += bytes;
-  if (!instance.rustId || instance.drawn === 0 || (!flush && instance.drawn < ACK_EVERY)) return;
-  const sent = instance.drawn;
-  instance.drawn = 0;
-  invoke("terminal_ack", { id: instance.rustId, bytes: sent }).catch(() => {});
-}
-
-// Opens a terminal of the app for the tab `id` at `target`, sized to the pane when it is shown. `ended` runs when the process ends. A failure is thrown and leaves no terminal behind.
-export async function startPty(id: string, target: TerminalTarget, ended: () => void) {
-  const instance = newInstance();
-  instances.set(id, instance);
-  instance.el.hidden = visibleId !== id;
-  if (visibleId === id) instance.fit.fit();
-  const channel = new window.__TAURI__.core.Channel<TerminalEvent>();
-  channel.onmessage = (event) => {
-    if (instances.get(id) !== instance) return;
-    if (event.kind === "data") {
-      const bytes = decode(event.data);
-      instance.term.write(bytes, () => confirmDrawn(instance, bytes.length));
-    } else {
-      instance.ended = true;
-      instance.term.write(ENDED);
-      ended();
-    }
-  };
-  instance.size = { cols: instance.term.cols, rows: instance.term.rows };
-  try {
-    instance.rustId = await invoke("terminal_open", { target, cols: instance.term.cols, rows: instance.term.rows, channel });
-  } catch (e) {
-    dropTerminal(id);
-    throw e;
-  }
-  // The tab may have been closed while Rust opened it.
-  if (instances.get(id) !== instance) {
-    invoke("terminal_close", { id: instance.rustId }).catch(() => {});
-    return;
-  }
-  // Output that was drawn before the id was known.
-  confirmDrawn(instance, 0, true);
-  instance.term.onData((data) => {
-    if (instance.rustId && !instance.ended) invoke("terminal_write", { id: instance.rustId, data }).catch(onError);
-  });
-  instance.term.onResize(({ cols, rows }) => sendSize(instance, cols, rows));
-  // The pane may have been sized differently while Rust opened it.
-  sendSize(instance, instance.term.cols, instance.term.rows);
-  if (visibleId === id) instance.term.focus();
-}
-
-function sendSize(instance: Instance, cols: number, rows: number) {
-  if (!instance.rustId || (instance.size.cols === cols && instance.size.rows === rows)) return;
-  instance.size = { cols, rows };
-  invoke("terminal_resize", { id: instance.rustId, cols, rows }).catch(() => {});
-}
-
-// Ends the terminal of the app of the tab `id` and forgets it.
-export async function closePty(id: string) {
-  const instance = instances.get(id);
-  dropTerminal(id);
-  if (instance?.rustId) await invoke("terminal_close", { id: instance.rustId }).catch(() => {});
-}
-
-// What a failed send of typed keys or of a write does (the screen shows the message).
+// What a failed send of typed keys does (the screen shows the message).
 export function initOrcaTerminal(report: (e: unknown) => void) {
   onError = report;
   new ResizeObserver(fitSoon).observe(container());

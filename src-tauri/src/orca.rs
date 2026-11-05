@@ -1,6 +1,6 @@
 //! A-6, A-8: the Orca screen. Orca's CLI (`orca`) lists the agents that run in Orca and posts to them; nothing about a session is stored here.
 //! The CLI is spawned with an argument list, never through a shell, and the prompt text is in no log line.
-//! A-8 adds the project list, the plain terminals of Orca (closed and mirrored through the CLI) and the destinations of the app's own terminals (`terminal.rs`).
+//! A-8 adds the project list and the plain terminals of Orca (closed and mirrored through the CLI).
 
 use std::{
     cell::OnceCell,
@@ -151,7 +151,7 @@ pub struct OrcaProject {
     pub at_ms: i64,
 }
 
-/// A host of `~/.ssh/config` that Orca knows (`ssh.listEditableTargets` of this machine). Only what the screen needs crosses the IPC: `config_host`, the name `ssh` is run with, stays in Rust.
+/// A host of `~/.ssh/config` that Orca knows (`ssh.listEditableTargets` of this machine), for its row in the project list.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -160,31 +160,6 @@ pub struct OrcaSshTarget {
     pub id: String,
     pub label: String,
     pub connected: bool,
-    #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
-    pub config_host: String,
-}
-
-/// A worktree of this machine a terminal can open in (A-8).
-#[derive(Serialize, Clone, Debug, PartialEq)]
-#[cfg_attr(test, derive(TS))]
-#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
-#[serde(rename_all = "camelCase")]
-pub struct OrcaTerminalWorktree {
-    pub path: String,
-    pub repo: String,
-    pub branch: String,
-    pub project_key: String,
-}
-
-/// The destinations of a new terminal: this machine's worktrees and the SSH hosts. `message` is why the worktrees could not be read (the SSH hosts are listed anyway).
-#[derive(Serialize, Clone, Debug, PartialEq)]
-#[cfg_attr(test, derive(TS))]
-#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
-pub struct OrcaTerminalTargets {
-    pub worktrees: Vec<OrcaTerminalWorktree>,
-    pub ssh: Vec<OrcaSshTarget>,
-    pub message: String,
 }
 
 /// A worktree a launch can start an agent in.
@@ -500,7 +475,7 @@ pub fn environments_of(result: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The worktrees that count in the project list and the terminal destinations: not archived, with a path and a project.
+/// The worktrees that count in the project list: not archived, with a path and a project.
 fn live_worktrees(ps: &Value) -> impl Iterator<Item = (&Value, String)> {
     ps["worktrees"]
         .as_array()
@@ -588,45 +563,20 @@ pub fn projects_of(
         .partition(|p| !p.key.starts_with("ssh:"))
 }
 
-/// The worktrees of `ps` a terminal can open in: those of this machine that are listed (not archived).
-pub fn terminal_worktrees_of(ps: &Value) -> Vec<OrcaTerminalWorktree> {
-    live_worktrees(ps)
-        .filter(|(w, _)| host_of(w) == LOCAL_HOST)
-        .filter_map(|(w, key)| {
-            Some(OrcaTerminalWorktree {
-                path: text_of(w, "path")?.to_owned(),
-                repo: text_of(w, "repo").unwrap_or_default().to_owned(),
-                branch: text_of(w, "displayName").unwrap_or_default().to_owned(),
-                project_key: key,
-            })
-        })
-        .collect()
-}
-
-/// A name `ssh` is run with: letters, digits, `.`, `_` and `-`, and not starting with `-` or `.`, so nothing in it can be read as an option or a path.
-pub(crate) fn valid_config_host(name: &str) -> bool {
-    name.len() <= 255
-        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
-
-/// The SSH hosts of `ssh.listEditableTargets` (its `result`), in its order. A target with no id, or whose `configHost` is not a usable name, is dropped.
+/// The SSH hosts of `ssh.listEditableTargets` (its `result`), in its order: the first line of the label, else the `configHost`. A target with no id or no name is dropped.
 pub fn ssh_targets_of(result: &Value) -> Vec<OrcaSshTarget> {
     result["targets"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|t| {
-            let config_host = text_of(t, "configHost").filter(|h| valid_config_host(h))?;
+            let label = text_of(t, "label")
+                .and_then(first_line)
+                .or_else(|| text_of(t, "configHost").and_then(first_line))?;
             Some(OrcaSshTarget {
                 id: text_of(t, "id")?.to_owned(),
-                label: text_of(t, "label")
-                    .and_then(first_line)
-                    .unwrap_or_else(|| config_host.to_owned()),
+                label,
                 connected: t["connected"] == true,
-                config_host: config_host.to_owned(),
             })
         })
         .collect()
@@ -1344,13 +1294,6 @@ fn check_input(
     check_mirrored(mirror, handle, environment)
 }
 
-/// The worktrees of this machine a terminal can open in, read just now (never with an environment).
-pub(crate) fn local_terminal_worktrees() -> Result<Vec<OrcaTerminalWorktree>, String> {
-    call(&ps_args(None), READ_TIMEOUT)
-        .map(|ps| terminal_worktrees_of(&ps))
-        .map_err(message_of)
-}
-
 /// The SSH hosts of this machine's Orca, from its runtime (not a public interface: it was written against Orca 1.4.248). A failure is an empty list.
 pub(crate) async fn local_ssh_targets() -> Vec<OrcaSshTarget> {
     crate::orca_chat::local_call("ssh.listEditableTargets", serde_json::json!({}))
@@ -1495,21 +1438,6 @@ pub async fn orca_terminal_input(
         mirror.forget(&checked);
     }
     sent
-}
-
-/// The destinations of a new terminal: the worktrees of this machine and its SSH hosts.
-#[tauri::command]
-pub async fn orca_terminal_targets() -> Result<OrcaTerminalTargets, String> {
-    let (worktrees, ssh) = tokio::join!(blocking(local_terminal_worktrees), local_ssh_targets());
-    let (worktrees, message) = match worktrees? {
-        Ok(worktrees) => (worktrees, String::new()),
-        Err(message) => (Vec::new(), message),
-    };
-    Ok(OrcaTerminalTargets {
-        worktrees,
-        ssh,
-        message,
-    })
 }
 
 #[cfg(test)]
@@ -2671,31 +2599,13 @@ mod tests {
     }
 
     #[test]
-    fn a_terminal_opens_in_a_worktree_of_this_machine_that_is_not_archived() {
-        let listed = terminal_worktrees_of(&projects_doc());
-        let paths: Vec<_> = listed.iter().map(|w| w.path.as_str()).collect();
-        assert_eq!(paths, ["/work/a", "/work/a2", "/work/b"]);
-        assert_eq!(
-            listed[1],
-            OrcaTerminalWorktree {
-                path: "/work/a2".into(),
-                repo: "alpha".into(),
-                branch: "feat/x".into(),
-                project_key: "ra".into()
-            }
-        );
-        assert!(terminal_worktrees_of(&Value::Null).is_empty());
-    }
-
-    #[test]
-    fn an_ssh_target_needs_an_id_and_a_usable_host_name() {
+    fn an_ssh_target_needs_an_id_and_a_name() {
         let doc = json!({"targets": [
             {"id": "s1", "label": "Example\nsecond", "configHost": "example-host", "host": "203.0.113.5", "username": "u", "identityFile": "/k", "connected": true},
             {"id": "s2", "configHost": "other", "connected": false},
-            {"id": "s3", "label": "Bad", "configHost": "-oProxyCommand=x", "connected": true},
-            {"id": "s4", "label": "Blank", "configHost": " "},
+            {"id": "s3", "label": " ", "configHost": " "},
             {"label": "No id", "configHost": "noid"},
-            {"id": "s5", "label": "No host"},
+            {"id": "s5"},
             null, 5,
         ]});
         assert_eq!(
@@ -2705,27 +2615,16 @@ mod tests {
                     id: "s1".into(),
                     label: "Example".into(),
                     connected: true,
-                    config_host: "example-host".into()
                 },
                 OrcaSshTarget {
                     id: "s2".into(),
                     label: "other".into(),
                     connected: false,
-                    config_host: "other".into()
                 },
             ]
         );
         assert!(ssh_targets_of(&Value::Null).is_empty());
         assert!(ssh_targets_of(&json!({"targets": "x"})).is_empty());
-    }
-
-    #[test]
-    fn the_ssh_target_leaves_the_host_name_out_of_what_the_screen_gets() {
-        let target = ssh_targets_of(
-            &json!({"targets": [{"id": "s1", "label": "L", "configHost": "example-host", "connected": true}]}),
-        );
-        let sent = serde_json::to_value(&target[0]).unwrap();
-        assert_eq!(sent, json!({"id": "s1", "label": "L", "connected": true}));
     }
 
     #[test]
