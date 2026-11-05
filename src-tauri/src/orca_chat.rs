@@ -369,7 +369,11 @@ fn pasted_open_id(line: &str) -> Option<&str> {
 
 /// The tags Claude Code puts around a long paste, each on a line of its own, are taken off: a line that is only an opening tag, and the next line that is only the closing tag of the same id.
 /// A tag with no partner of its id stays, and so does every other line.
-fn without_pasted_tags(text: &str) -> String {
+fn without_pasted_tags(text: String) -> String {
+    // Most messages have no paste: the tag's name is the cheap test.
+    if !text.contains("<pasted_content") {
+        return text;
+    }
     let lines: Vec<&str> = text.lines().collect();
     let mut dropped = vec![false; lines.len()];
     for (open, line) in lines.iter().enumerate() {
@@ -498,7 +502,7 @@ fn held_of(message: &Value) -> Option<Held> {
             "text" if role != Role::Other => {
                 let text = block["text"].as_str()?;
                 let text = if role == Role::User {
-                    without_pasted_tags(&without_image_source_lines(text))
+                    without_pasted_tags(without_image_source_lines(text))
                 } else {
                     text.to_owned()
                 };
