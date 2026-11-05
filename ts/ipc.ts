@@ -204,6 +204,10 @@ export interface Commands {
   orca_chat_pause: { args: { paused: boolean }; result: null };
   // The skills of Claude Code on the machine the app runs on (the CLI cannot list another machine's, so the target does not matter), as the commands to type (`/name`, `/plugin:name`), sorted.
   orca_skills: { args: undefined; result: OrcaSkill[] };
+  // A-10: puts the image `data` (base64) in `.orca/drops/` of the worktree at `path` of the target `environment` and answers the text for Claude: the absolute path of the file, with a backslash before a blank or shell character. `name` only gives the file a name; PNG, JPEG, GIF and WebP up to 20 MiB, by the bytes. Not tried again: a failure carries its message.
+  orca_attach_image: { args: { path: string; name: string; data: string; environment: string | null }; result: string };
+  // A-10: the text of a post with images: the text without its trailing blanks, a blank line and each of `paths` (the answers of `orca_attach_image`) on a line of its own; only the paths when the text is blank.
+  orca_compose_text: { args: { text: string; paths: string[] }; result: string };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. A terminal that is already closed is a success.
   orca_close: { args: { handle: string; environment: string | null }; result: null };
   // The lines on the screen of the plain terminal `handle`, for the mirror (no colors).
