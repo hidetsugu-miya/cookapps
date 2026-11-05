@@ -19,6 +19,7 @@ import { CLAUDE_SVG, svgOf } from "./icons.js";
 import { invoke, type TerminalTarget } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
+import { clearAttachments, hasAttachments, initOrcaAttach, isReading, uploadAttachments } from "./orca-attach.js";
 import { closeChat, initOrcaChat, isChatOwner, makeChatView, openChat, setChatWorking } from "./orca-chat.js";
 import { closePty, hideTerminals, initOrcaTerminal, pruneMirrors, showTerminal, startPty } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
@@ -487,7 +488,7 @@ function drawComposer() {
   const send = $<HTMLButtonElement>("orca-send");
   send.textContent = row ? "送る" : "起動する";
   // A session with no terminal can be read but takes no post.
-  send.disabled = busy || view?.state === "missing" || !input().value.trim() || (row ? row.handle === null : !worktree);
+  send.disabled = busy || isReading() || view?.state === "missing" || !(input().value.trim() || hasAttachments()) || (row ? row.handle === null : !worktree);
   updateCompletion();
 }
 
@@ -887,20 +888,28 @@ function openNewMenu(anchor: Element) {
   menu.querySelector("button")!.focus();
 }
 
-// Sends the text to the selected session, or starts an agent with it. The text stays on a failure and goes on success, which reads the list at once. Nothing is tried twice.
+// Sends the text to the selected session, or starts an agent with it; the images attached (A-10) are put in the worktree first and their paths are added to the text.
+// The text and the images stay on a failure and go on success, which reads the list at once. A send or a launch is never tried twice; an image that was put in the worktree is not put there again by the next post.
 async function post() {
   const text = input().value;
   const row = selectedRow();
   const target = view?.target ?? null;
-  if (busy || !text.trim() || view === null) return;
+  if (busy || isReading() || !(text.trim() || hasAttachments()) || view === null) return;
   if (row ? row.handle === null : projectKey !== null || !newPath) return;
+  const path = row ? row.path : newPath!;
+  if (hasAttachments() && !path) {
+    showPostError("画像を置く worktree が分かりません");
+    return;
+  }
   busy = true;
   showPostError(null);
   drawComposer();
   try {
-    if (row) await invoke("orca_send", { handle: row.handle!, text, environment: target });
-    else await invoke("orca_launch", { path: newPath!, text, environment: target });
+    const body = hasAttachments() ? await invoke("orca_compose_text", { text, paths: await uploadAttachments(path, target) }) : text;
+    if (row) await invoke("orca_send", { handle: row.handle!, text: body, environment: target });
+    else await invoke("orca_launch", { path: newPath!, text: body, environment: target });
     input().value = "";
+    clearAttachments();
     load(clockScope(), true);
   } catch (e) {
     showPostError(String(e));
@@ -1032,6 +1041,7 @@ export function initOrca() {
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
   $("orca-dest-pick").onclick = (e) => openDestPicker(e.currentTarget as Element);
   $("orca-new").onclick = (e) => openNewMenu(e.currentTarget as Element);
+  initOrcaAttach({ busy: () => busy, changed: drawComposer, fail: showPostError });
   $("orca-form").onsubmit = (e) => {
     e.preventDefault();
     post();

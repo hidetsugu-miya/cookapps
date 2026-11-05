@@ -855,8 +855,8 @@ fn load_pairing(environment: Option<&str>) -> Result<Pairing, String> {
 enum LinkError {
     /// The connection or a frame failed: the session reconnects.
     Broken(String),
-    /// Orca answered `ok: false` with this message.
-    Remote(String),
+    /// Orca answered `ok: false`: the text to show (the code), and the message of Orca, which is only looked at (A-10 tells a missing file by it) and never shown.
+    Remote(String, String),
 }
 
 fn broken(message: &str) -> LinkError {
@@ -875,11 +875,20 @@ fn result_of(response: &Value) -> Result<Value, LinkError> {
                 .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
                 .take(64)
                 .collect();
-            Err(LinkError::Remote(if code.is_empty() {
-                "Orca がエラーを返しました".into()
-            } else {
-                format!("Orca がエラーを返しました（{code}）")
-            }))
+            let message: String = response["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect();
+            Err(LinkError::Remote(
+                if code.is_empty() {
+                    "Orca がエラーを返しました".into()
+                } else {
+                    format!("Orca がエラーを返しました（{code}）")
+                },
+                message,
+            ))
         }
         _ => Err(broken("Orca の応答を読めません")),
     }
@@ -1120,9 +1129,38 @@ pub(crate) async fn local_call(method: &str, params: Value) -> Result<Value, Str
         Pairing::Unix { endpoint, token } => unix_request(&endpoint, &token, method, params)
             .await
             .map_err(|e| match e {
-                LinkError::Broken(message) | LinkError::Remote(message) => message,
+                LinkError::Broken(message) | LinkError::Remote(message, _) => message,
             }),
         Pairing::WebSocket { .. } => Err("Orca の接続情報を読めません".into()),
+    }
+}
+
+/// A call that failed: `shown` is for the screen (Japanese, with Orca's code, never its message); `detail` is the message Orca sent (empty when the connection failed), for the caller to look at and not to show.
+pub(crate) struct CallError {
+    pub(crate) shown: String,
+    pub(crate) detail: String,
+}
+
+/// One connection to the Orca of a target, kept for several calls (A-10 sends a file in many): for a paired server one WebSocket, for this machine the unix socket (a connection for each call, as `local_call`).
+/// The pairing is read from Orca's files when it is opened; no token is in a return value or a log.
+pub(crate) struct Connection(Link);
+
+impl Connection {
+    pub(crate) async fn open(environment: Option<String>) -> Result<Self, String> {
+        let pairing = tokio::task::spawn_blocking(move || load_pairing(environment.as_deref()))
+            .await
+            .map_err(|e| e.to_string())??;
+        Link::open(pairing).await.map(Self)
+    }
+
+    pub(crate) async fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
+        self.0.request(method, params).await.map_err(|e| match e {
+            LinkError::Broken(shown) => CallError {
+                shown,
+                detail: String::new(),
+            },
+            LinkError::Remote(shown, detail) => CallError { shown, detail },
+        })
     }
 }
 
@@ -1287,7 +1325,7 @@ fn session_id_of(tabs: &Value, pane_key: &str) -> Option<String> {
 
 fn reason_of(error: LinkError) -> String {
     match error {
-        LinkError::Broken(message) | LinkError::Remote(message) => message,
+        LinkError::Broken(message) | LinkError::Remote(message, _) => message,
     }
 }
 
@@ -1386,7 +1424,7 @@ async fn poll(
             Some(page) => chat.apply_snapshot(page, sink),
             None => chat.unavailable(sink),
         },
-        Err(LinkError::Remote(_)) => chat.unavailable(sink),
+        Err(LinkError::Remote(..)) => chat.unavailable(sink),
         Err(LinkError::Broken(message)) => return Err(message),
     }
     Ok(())
@@ -1412,7 +1450,7 @@ async fn older(
             }
         }
         // The button can be pressed again.
-        Err(LinkError::Remote(_)) => {}
+        Err(LinkError::Remote(..)) => {}
         Err(LinkError::Broken(message)) => return Err(message),
     }
     Ok(())
@@ -2666,7 +2704,7 @@ mod tests {
             Some(json!({"a": 1}))
         );
         let remote = |v: Value| match result_of(&v) {
-            Err(LinkError::Remote(m)) => m,
+            Err(LinkError::Remote(m, _)) => m,
             _ => panic!("{v}"),
         };
         assert_eq!(
@@ -2676,6 +2714,20 @@ mod tests {
             "Orca がエラーを返しました（not_found）"
         );
         assert_eq!(remote(json!({"ok": false})), "Orca がエラーを返しました");
+        // The message is held for the caller to look at, cut at 200 characters.
+        let held = |v: Value| match result_of(&v) {
+            Err(LinkError::Remote(_, m)) => m,
+            _ => panic!("{v}"),
+        };
+        assert_eq!(
+            held(json!({"ok": false, "error": {"code": "runtime_error", "message": "ENOENT: x"}})),
+            "ENOENT: x"
+        );
+        assert_eq!(held(json!({"ok": false})), "");
+        assert_eq!(
+            held(json!({"ok": false, "error": {"message": "x".repeat(500)}})).len(),
+            200
+        );
         // Odd characters of a code are dropped and the code is cut.
         let odd =
             remote(json!({"ok": false, "error": {"code": format!("a b\n{}", "x".repeat(100))}}));
@@ -2811,7 +2863,7 @@ mod tests {
         let queued = link.next_response().await.unwrap().unwrap();
         assert_eq!(queued["id"], "other");
         let failed = link.request("nativeChat.readSession", json!({})).await;
-        assert!(matches!(failed, Err(LinkError::Remote(m)) if m.contains("not_found")));
+        assert!(matches!(failed, Err(LinkError::Remote(m, _)) if m.contains("not_found")));
         server.await.unwrap();
     }
 
@@ -2922,7 +2974,7 @@ mod tests {
             assert_eq!(seen[0].as_object().unwrap().len(), 4);
         }
         let refused = unix_request(&path, "wrong", "x", json!({})).await;
-        assert!(matches!(refused, Err(LinkError::Remote(m)) if m.contains("unauthorized")));
+        assert!(matches!(refused, Err(LinkError::Remote(m, _)) if m.contains("unauthorized")));
         let missing = unix_request("/nonexistent/orca.sock", "t", "x", json!({})).await;
         assert!(matches!(missing, Err(LinkError::Broken(m)) if m.contains("起動")));
     }
