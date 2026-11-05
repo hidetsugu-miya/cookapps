@@ -7,6 +7,10 @@ The project was named cookup until v0.14.6.
 
 The message field of the Orca screen no longer shows a placeholder (#53). Typing `/` still opens the skill list.
 
+The skill list of the Orca screen no longer offers a skill that Claude Code does not let the user choose (`user-invocable: false` in its `SKILL.md`) (#54).
+
+The README is a product page with screen photos, and the how-to moved to `docs/` (#67). The development rules are public (#69).
+
 ## v0.41.1
 
 The history of an Orca session reads as a conversation (#52). It has a tinted ground and the agent's messages are white cards; the heading of a run of tools is small plain text that says only how many times tools ran, or that they are running.
