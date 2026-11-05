@@ -5,7 +5,7 @@ use std::{
     collections::{HashMap, VecDeque},
     io::{Read, Write},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Condvar, Mutex,
     },
     time::{Duration, Instant},
@@ -60,7 +60,7 @@ pub enum TerminalEvent {
     },
 }
 
-/// What runs: no `program` is the login shell of the user (from the password database).
+/// What runs: no `program` is the login shell of the user (`$SHELL` when it is an executable, else the password database).
 #[derive(Debug, PartialEq)]
 struct Spec {
     program: Option<String>,
@@ -180,13 +180,18 @@ impl Flow {
         !s.closed
     }
 
-    fn push(&self, bytes: &[u8]) {
+    /// False: the terminal was closed, and the bytes are dropped.
+    fn push(&self, bytes: &[u8]) -> bool {
         let mut s = self.state.lock().unwrap();
+        if s.closed {
+            return false;
+        }
         let was_empty = s.pending.is_empty();
         s.pending.extend_from_slice(bytes);
         if was_empty || s.pending.len() >= CHUNK {
             self.data.notify_all();
         }
+        true
     }
 
     fn finish(&self) {
@@ -305,9 +310,23 @@ impl Input {
     }
 }
 
+/// Signals the child unless it has been waited for: its pid is free to be used by another process then.
+struct Killer {
+    inner: Box<dyn ChildKiller + Send + Sync>,
+    exited: Arc<AtomicBool>,
+}
+
+impl Killer {
+    fn kill(&mut self) {
+        if !self.exited.load(Ordering::SeqCst) {
+            let _ = self.inner.kill();
+        }
+    }
+}
+
 struct Pty {
     master: Box<dyn MasterPty + Send>,
-    killer: Box<dyn ChildKiller + Send + Sync>,
+    killer: Killer,
     flow: Arc<Flow>,
     input: Arc<Input>,
 }
@@ -317,7 +336,7 @@ impl Pty {
     fn end(mut self) {
         self.flow.close();
         self.input.close();
-        let _ = self.killer.kill();
+        self.killer.kill();
     }
 }
 
@@ -332,7 +351,7 @@ struct Inner {
 pub struct Terminals(Arc<Inner>);
 
 impl Terminals {
-    /// Ends every terminal (the app is quitting). Dropping a master hangs up its shell.
+    /// Ends every terminal (the app is quitting): each child is signalled and nothing waits for it.
     pub fn kill_all(&self) {
         let all: Vec<Pty> = self
             .0
@@ -374,7 +393,11 @@ impl Terminals {
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().map_err(failed)?;
         let writer = pair.master.take_writer().map_err(failed)?;
-        let killer = child.clone_killer();
+        let exited = Arc::new(AtomicBool::new(false));
+        let killer = Killer {
+            inner: child.clone_killer(),
+            exited: exited.clone(),
+        };
         let flow = Arc::new(Flow::default());
         let input = Arc::new(Input::default());
         let read_flow = flow.clone();
@@ -383,7 +406,12 @@ impl Terminals {
             // The end of the output is the end of the terminal: a read error (EIO once the shell is gone) is the same as zero bytes.
             while read_flow.wait_room() {
                 match reader.read(&mut buffer) {
-                    Ok(n) if n > 0 => read_flow.push(&buffer[..n]),
+                    // A read cannot be woken from: output that arrives after the close ends the thread.
+                    Ok(n) if n > 0 => {
+                        if !read_flow.push(&buffer[..n]) {
+                            break;
+                        }
+                    }
                     _ => break,
                 }
             }
@@ -398,6 +426,7 @@ impl Terminals {
                 }
             }
             let code = child.wait().ok().map(|status| status.exit_code());
+            exited.store(true, Ordering::SeqCst);
             send(TerminalEvent::Exit { code });
         });
         let write_input = input.clone();
@@ -548,11 +577,17 @@ mod tests {
     /// Opens `spec` and collects its events: the output decoded and joined, then the exit code, once the end came.
     fn open(spec: &Spec) -> (Terminals, String, mpsc::Receiver<TerminalEvent>) {
         let terminals = Terminals::default();
+        let (id, rx) = open_in(&terminals, spec);
+        (terminals, id, rx)
+    }
+
+    /// Opens `spec` among the terminals that already run in `terminals`.
+    fn open_in(terminals: &Terminals, spec: &Spec) -> (String, mpsc::Receiver<TerminalEvent>) {
         let (tx, rx) = mpsc::channel();
         let id = terminals
             .open(spec, size(), move |event| tx.send(event).is_ok())
             .unwrap();
-        (terminals, id, rx)
+        (id, rx)
     }
 
     /// Reads events until the output holds `needle`; the output so far.
@@ -868,8 +903,10 @@ mod tests {
 
     #[test]
     fn a_program_that_does_not_read_blocks_nothing_else() {
-        let (terminals, id, _rx) = open(&sh("sleep 30"));
-        let (other, other_id, other_rx) = open(&sh("cat"));
+        // Both terminals are in one `Terminals`, so the lock they share is the one tried.
+        let terminals = Terminals::default();
+        let (id, _rx) = open_in(&terminals, &sh("sleep 30"));
+        let (other_id, other_rx) = open_in(&terminals, &sh("cat"));
         // The input is queued and never waits for the program; at the limit it is refused with a message.
         let chunk = "a".repeat(MAX_INPUT);
         let mut refused = None;
@@ -884,13 +921,13 @@ mod tests {
             refused.as_deref(),
             Some("入力が詰まっています。動いているプログラムが入力を読んでいません")
         );
-        // The others still work while that write is stuck.
+        // The other one still works while that write is stuck.
         returns_soon("another terminal", {
-            let other = other.clone();
+            let terminals = terminals.clone();
             let other_id = other_id.clone();
             move || {
-                other.write(&other_id, "ping\n").unwrap();
-                other.resize(&other_id, 100, 30).unwrap();
+                terminals.write(&other_id, "ping\n").unwrap();
+                terminals.resize(&other_id, 100, 30).unwrap();
             }
         });
         read_until(&other_rx, "ping");
@@ -899,7 +936,58 @@ mod tests {
             let terminals = terminals.clone();
             move || terminals.close(&id)
         });
-        returns_soon("quitting", move || other.kill_all());
+        returns_soon("quitting", move || terminals.kill_all());
+    }
+
+    /// A killer that counts the signals it is asked to send.
+    #[derive(Debug, Clone)]
+    struct CountingKiller(Arc<AtomicU64>);
+
+    impl ChildKiller for CountingKiller {
+        fn kill(&mut self) -> std::io::Result<()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
+    #[test]
+    fn a_child_that_was_waited_for_is_not_signalled() {
+        let signals = Arc::new(AtomicU64::new(0));
+        let exited = Arc::new(AtomicBool::new(false));
+        let mut killer = Killer {
+            inner: Box::new(CountingKiller(signals.clone())),
+            exited: exited.clone(),
+        };
+        killer.kill();
+        assert_eq!(signals.load(Ordering::SeqCst), 1);
+        // Its pid may be another process's now.
+        exited.store(true, Ordering::SeqCst);
+        killer.kill();
+        assert_eq!(signals.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_terminal_whose_process_ended_is_marked_so_before_the_exit_is_sent() {
+        let (terminals, id, rx) = open(&sh("exit 0"));
+        exit_of(&rx);
+        assert!(terminals
+            .with(&id, |pty| Ok(pty.killer.exited.load(Ordering::SeqCst)))
+            .unwrap());
+        // Closing it signals no one, and is no error.
+        terminals.close(&id);
+    }
+
+    #[test]
+    fn output_after_the_close_is_dropped_and_ends_the_reader() {
+        let flow = Flow::default();
+        assert!(flow.push(b"a"));
+        flow.close();
+        assert!(!flow.push(b"b"));
+        assert!(flow.next().is_none());
     }
 
     #[test]

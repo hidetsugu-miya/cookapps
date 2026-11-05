@@ -1113,9 +1113,13 @@ async fn unix_request(_: &str, _: &str, _: &str, _: Value) -> Result<Value, Link
     ))
 }
 
-/// A call of this machine's Orca over its unix socket (A-8 asks for the SSH hosts, which the CLI cannot list). The `result`, or a Japanese message; no token is in it.
+/// A call of this machine's Orca over its unix socket (A-8 asks for the SSH hosts, which the CLI cannot list, and sends the keys of a mirrored terminal, which the CLI would put in its arguments). The `result`, or a Japanese message; no token is in it.
 pub(crate) async fn local_call(method: &str, params: Value) -> Result<Value, String> {
-    match load_pairing(None)? {
+    // The file is read off the async workers.
+    let pairing = tokio::task::spawn_blocking(|| load_pairing(None))
+        .await
+        .map_err(|e| e.to_string())??;
+    match pairing {
         Pairing::Unix { endpoint, token } => unix_request(&endpoint, &token, method, params)
             .await
             .map_err(|e| match e {

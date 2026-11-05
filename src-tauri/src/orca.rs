@@ -41,7 +41,7 @@ fn locations() -> Vec<PathBuf> {
     .into()
 }
 
-/// Which group of the screen an agent is in: waiting for the user (`waiting`, `blocked`), `done`, or running (every other state).
+/// Which group of the screen an agent is in: waiting for the user (`waiting`, `blocked`, `permission`), `done`, or running (every other state).
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -266,10 +266,10 @@ fn ms_of(value: &Value, key: &str) -> i64 {
     value[key].as_f64().map_or(0, |ms| ms as i64)
 }
 
-/// The group an agent state belongs to: `waiting` and `blocked` need the user, `done` is finished, anything else (also a state not known yet) runs.
+/// The group an agent state belongs to: `waiting`, `blocked` and `permission` need the user, `done` is finished, anything else (also a state not known yet) runs.
 fn group_of(state: &str) -> OrcaGroup {
     match state {
-        "waiting" | "blocked" => OrcaGroup::Waiting,
+        "waiting" | "blocked" | "permission" => OrcaGroup::Waiting,
         "done" => OrcaGroup::Done,
         _ => OrcaGroup::Working,
     }
@@ -1018,8 +1018,14 @@ fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview 
     match (ps, terminals) {
         (Ok(ps), Ok(terminals)) => {
             let rows = rows_of(&ps, &terminals);
-            let plain = plain_terminals_of(&ps, &terminals);
-            let (projects, hosts) = projects_of(&ps, &rows, &plain);
+            // The count alone is wanted by a `Badge` read: its terminals and projects would not be drawn.
+            let (plain, projects, hosts) = if scope == OrcaScope::Badge {
+                (Vec::new(), Vec::new(), Vec::new())
+            } else {
+                let plain = plain_terminals_of(&ps, &terminals);
+                let (projects, hosts) = projects_of(&ps, &rows, &plain);
+                (plain, projects, hosts)
+            };
             OrcaOverview {
                 target,
                 environments,
@@ -1106,35 +1112,69 @@ fn close(handle: &str, environment: Option<&str>) -> Result<(), String> {
     parse_output(&out).map(|_| ())
 }
 
-/// The lines on the screen of a terminal. Read once a second while its tab is shown, so the list of the environments is not asked for each time.
-fn screen(handle: &str, environment: Option<&str>) -> Result<Vec<String>, String> {
-    check_handle(handle)?;
-    call(&screen_args(handle, environment), READ_TIMEOUT)
-        .map(|result| screen_lines_of(&result))
-        .map_err(message_of)
-}
-
-/// The handles (with their target) that were checked against the plain terminals of the list, so only the first input of a terminal reads the list.
+/// The handles (with their target) that were checked against the plain terminals of the list, so only the first read or input of a terminal reads the list. A key leaves when a read or a send of its terminal fails.
 #[derive(Default, Clone)]
 pub struct OrcaMirror(Arc<Mutex<HashSet<String>>>);
 
-fn terminal_input(
+impl OrcaMirror {
+    fn forget(&self, key: &str) {
+        self.0.lock().unwrap().remove(key);
+    }
+}
+
+/// Checks that `handle` is a plain terminal of the target's list read just now, unless an earlier read or input of it did. The key to `forget` when it fails.
+fn check_mirrored(
     mirror: &OrcaMirror,
     handle: &str,
-    text: &str,
     environment: Option<&str>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     check_handle(handle)?;
-    check_keys(text)?;
     let key = format!("{}\0{handle}", environment.unwrap_or_default());
     if !mirror.0.lock().unwrap().contains(&key) {
         check_listed(environment)?;
         let (ps, terminals) = read_lists(environment, true);
         let plain = plain_terminals_of(&ps.map_err(message_of)?, &terminals.map_err(message_of)?);
         check_plain(&plain, handle)?;
-        mirror.0.lock().unwrap().insert(key);
+        mirror.0.lock().unwrap().insert(key.clone());
     }
-    write(&input_args(handle, text, environment))
+    Ok(key)
+}
+
+/// The lines on the screen of a plain terminal. Read once a second while its tab is shown, so the list is read only the first time.
+fn screen(
+    mirror: &OrcaMirror,
+    handle: &str,
+    environment: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let key = check_mirrored(mirror, handle, environment)?;
+    call(&screen_args(handle, environment), READ_TIMEOUT)
+        .map(|result| screen_lines_of(&result))
+        .map_err(|e| {
+            mirror.forget(&key);
+            message_of(e)
+        })
+}
+
+/// The params of `terminal.send` of this machine's Orca, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed.
+fn input_params(handle: &str, text: &str) -> Value {
+    serde_json::json!({
+        "terminal": handle,
+        "text": text,
+        "enter": false,
+        "client": {"id": "cookapps", "type": "desktop"},
+    })
+}
+
+/// Checks the keys and the terminal; the key to `forget` when the send fails.
+fn check_input(
+    mirror: &OrcaMirror,
+    handle: &str,
+    text: &str,
+    environment: Option<&str>,
+) -> Result<String, String> {
+    check_handle(handle)?;
+    check_keys(text)?;
+    check_mirrored(mirror, handle, environment)
 }
 
 /// The worktrees of this machine a terminal can open in, read just now (never with an environment).
@@ -1231,13 +1271,15 @@ pub async fn orca_close(handle: String, environment: Option<String>) -> Result<(
 /// The lines on the screen of the plain terminal `handle`, for the mirror.
 #[tauri::command]
 pub async fn orca_terminal_read(
+    mirror: tauri::State<'_, OrcaMirror>,
     handle: String,
     environment: Option<String>,
 ) -> Result<Vec<String>, String> {
-    blocking(move || screen(&handle, environment.as_deref())).await?
+    let mirror = mirror.inner().clone();
+    blocking(move || screen(&mirror, &handle, environment.as_deref())).await?
 }
 
-/// Types `text` into the plain terminal `handle` as it is.
+/// Types `text` into the plain terminal `handle` as it is. This machine's Orca takes it over its unix socket (`terminal.send`), so the keys are in no argument of a process; a saved environment has only the CLI, whose argument holds them.
 #[tauri::command]
 pub async fn orca_terminal_input(
     mirror: tauri::State<'_, OrcaMirror>,
@@ -1246,7 +1288,25 @@ pub async fn orca_terminal_input(
     environment: Option<String>,
 ) -> Result<(), String> {
     let mirror = mirror.inner().clone();
-    blocking(move || terminal_input(&mirror, &handle, &text, environment.as_deref())).await?
+    let checked = {
+        let (mirror, handle, text, environment) = (
+            mirror.clone(),
+            handle.clone(),
+            text.clone(),
+            environment.clone(),
+        );
+        blocking(move || check_input(&mirror, &handle, &text, environment.as_deref())).await??
+    };
+    let sent = match environment {
+        None => crate::orca_chat::local_call("terminal.send", input_params(&handle, &text))
+            .await
+            .and_then(|result| check_accepted(&result)),
+        Some(name) => blocking(move || write(&input_args(&handle, &text, Some(&name)))).await?,
+    };
+    if sent.is_err() {
+        mirror.forget(&checked);
+    }
+    sent
 }
 
 /// The destinations of a new terminal: the worktrees of this machine and its SSH hosts.
@@ -1333,6 +1393,7 @@ mod tests {
             ("working", OrcaGroup::Working),
             ("waiting", OrcaGroup::Waiting),
             ("blocked", OrcaGroup::Waiting),
+            ("permission", OrcaGroup::Waiting),
             ("done", OrcaGroup::Done),
             ("something-new", OrcaGroup::Working),
             ("", OrcaGroup::Working),
@@ -2322,11 +2383,37 @@ mod tests {
     #[test]
     fn keys_and_closes_with_a_bad_handle_or_text_run_nothing() {
         let mirror = OrcaMirror::default();
-        assert!(terminal_input(&mirror, "--json", "x", None).is_err());
-        assert!(terminal_input(&mirror, "term_1", "", None).is_err());
-        assert!(terminal_input(&mirror, "term_1", "a\0", None).is_err());
+        assert!(check_input(&mirror, "--json", "x", None).is_err());
+        assert!(check_input(&mirror, "term_1", "", None).is_err());
+        assert!(check_input(&mirror, "term_1", "a\0", None).is_err());
         assert!(close("--json", None).is_err());
-        assert!(screen("term_a b", None).is_err());
+        assert!(screen(&mirror, "term_a b", None).is_err());
         assert!(mirror.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_checked_terminal_is_not_checked_again_until_a_failure_forgets_it() {
+        let mirror = OrcaMirror::default();
+        mirror.0.lock().unwrap().insert("\0term_1".into());
+        // Checked before: no list is read (a list read would fail here, with no Orca).
+        assert_eq!(
+            check_mirrored(&mirror, "term_1", None),
+            Ok("\0term_1".to_owned())
+        );
+        mirror.forget("\0term_1");
+        assert!(mirror.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_keys_go_to_the_socket_as_the_cli_sends_them() {
+        assert_eq!(
+            input_params("term_1", "\u{3}--json"),
+            json!({
+                "terminal": "term_1",
+                "text": "\u{3}--json",
+                "enter": false,
+                "client": {"id": "cookapps", "type": "desktop"},
+            })
+        );
     }
 }

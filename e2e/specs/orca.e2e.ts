@@ -88,6 +88,18 @@ async function select(repo: string, times = 1) {
 const chatTexts = (selector = "") => textsOf(`#orca-items > ${selector || "*"}`);
 const statusLine = () => textsOf("#orca-chat-status");
 
+// fixtures.js makes the page report a shown window; a spec turns it hidden or shown and tells the page.
+const setWindowHidden = (hidden: boolean) =>
+  browser.execute(
+    (id, h) => {
+      if (!window.__e2e_once__(id)) return;
+      Object.defineProperty(document, "hidden", { get: () => h, configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    },
+    onceId(),
+    hidden,
+  );
+
 describe("orca", () => {
   it("draws the agents in three groups with the working count on the sidebar", async () => {
     await boot({ inbox: inbox(), orca_overview: orcaOverview(sample(), worktrees()), orca_skills: [] });
@@ -1047,6 +1059,27 @@ describe("orca: projects", () => {
     expect(place.statusBottom).toBeLessThanOrEqual(place.listBottom + 1);
   });
 
+  it("lists an SSH host of the target that this machine does not list, under SSH", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { ssh: [orcaSsh("s1", "example-host")], hosts: [{ key: "ssh:s9", name: "lost-host", status: "working", sessions: 1, atMs: 0 }] }));
+    expect(await projectNames()).toEqual(["example-app", "example-api", "example-web", "example-lib", "example-host", "lost-host"]);
+    expect(await textsOf("#orca-feed .orca-sec")).toEqual(["SSH"]);
+    expect(await projectStatuses()).toEqual(["working", "question", "working", "done", "idle", "working"]);
+    // Its row is a project like the others: selecting it names it.
+    await project("lost-host").click();
+    await expect(project("lost-host")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#orca-work-title")).toHaveText("lost-host");
+  });
+
+  it("does not draw the list again when only the time of activity of a project moved", async () => {
+    await openOrca(withTerminals());
+    await browser.execute(() => document.querySelector("#orca-feed .orca-project")!.setAttribute("data-marker", "kept"));
+    const overview = await mock("orca_overview", { ...withTerminals(), projects: withTerminals().projects.map((p) => ({ ...p, atMs: 99_000 })) });
+    await $("#orca-refresh").click();
+    await waitForCalls(overview);
+    await browser.pause(500);
+    await expect($('#orca-feed .orca-project[data-marker="kept"]')).toExist();
+  });
+
   it("says so when there is no project", async () => {
     await openOrca(orcaOverview([]));
     await expect($("#orca-feed")).toHaveText(expect.stringContaining("プロジェクトがありません"));
@@ -1350,6 +1383,48 @@ describe("orca: projects", () => {
       await expect(dot("example-idle")).toHaveAttribute("data-status", "done");
     });
 
+    it("keeps a row for a project the list does not show (another machine is the target) while a terminal of the app runs there, and drops it when the last one is closed", async () => {
+      await openOrca({ ...withTerminals(), target: "Studio", environments: ["Studio"] });
+      await mock("orca_terminal_targets", terminalTargets([terminalWorktree("example-local", "main")]));
+      await mock("terminal_open", "pty_1");
+      const close = await mock("terminal_close", null);
+      await $("#orca-new").click();
+      await pickMenu("ターミナルを開く");
+      await $('.orca-dest-pop button[data-path="/work/example-local"]').click();
+      await waitForTerminalOpens();
+      // Under the heading of this machine, selected, with the green dot and the count.
+      await expect(project("example-local")).toHaveAttribute("aria-pressed", "true");
+      await expect(project("example-local").$(".orca-ic")).toHaveAttribute("data-status", "done");
+      await expect(project("example-local").$(".orca-n")).toHaveText("1");
+      expect(await textsOf("#orca-feed .orca-sec")).toEqual(["このマシン", "SSH"]);
+      // Another project shows, and the row brings the terminal back.
+      await project("example-api").click();
+      await expect($("#orca-term")).not.toBeDisplayed();
+      await project("example-local").click();
+      await expect($("#orca-term")).toBeDisplayed();
+      await $('#orca-tabs [data-tab^="pty:"] .orca-tab-close').click();
+      expect(await waitForCalls(close)).toEqual([{ id: "pty_1" }]);
+      await browser.waitUntil(async () => !(await project("example-local").isExisting()), { timeoutMsg: "the row of the project stayed" });
+      // The work pane does not stay on a project with no row.
+      await expect($("#orca-work-title")).toHaveText("新しいセッション");
+    });
+
+    it("goes back to the project that was shown when the terminal cannot be opened", async () => {
+      await openOrca({ ...withTerminals(), target: "Studio", environments: ["Studio"] });
+      await mock("orca_terminal_targets", terminalTargets([terminalWorktree("example-local", "main")]));
+      await project("example-api").click();
+      await expect(selectedTab()).toHaveText(expect.stringContaining("Fix the parser"));
+      await mock("terminal_open", rejects("ターミナルを起動できません"));
+      await $("#orca-new").click();
+      await pickMenu("ターミナルを開く");
+      await $('.orca-dest-pop button[data-path="/work/example-local"]').click();
+      await waitForTerminalOpens();
+      await expect($("#error")).toHaveText("ターミナルを起動できません");
+      await expect(project("example-api")).toHaveAttribute("aria-pressed", "true");
+      await expect(selectedTab()).toHaveText(expect.stringContaining("Fix the parser"));
+      await expect(project("example-local")).not.toExist();
+    });
+
     it("keeps running while another project shows, and ends and forgets it when its tab is closed", async () => {
       await openDialog();
       await mock("terminal_open", "pty_1");
@@ -1403,7 +1478,10 @@ describe("orca: projects", () => {
       await $('.orca-dest-pop button[data-path="/work/example-app"]').click();
       await waitForTerminalOpens();
       await expect($("#error")).toHaveText("ターミナルを起動できません");
-      await browser.waitUntil(async () => (await tabTitles()).length === 2, { timeoutMsg: "the failed terminal stayed as a tab" });
+      // The selection is where it was (none: the new-session pane), and no tab was left behind.
+      await expect($("#orca-work-title")).toHaveText("新しいセッション");
+      await expect(project("example-app")).toHaveAttribute("aria-pressed", "false");
+      expect(await tabTitles()).toEqual([]);
       expect(await terminalOpens()).toHaveLength(1);
     });
   });
@@ -1434,6 +1512,21 @@ describe("orca: projects", () => {
       await mock("orca_terminal_read", ["$"]);
       await browser.pause(2500);
       expect(await callsOf("orca_terminal_read")).toEqual([]);
+    });
+
+    it("stops reading while the window is hidden, and reads at once and goes on when it is shown", async () => {
+      await openOrca(withTerminals());
+      const read = await mock("orca_terminal_read", ["$"]);
+      await project("example-app").click();
+      await tabOf(zsh).$(".orca-tab-btn").click();
+      await waitForCalls(read);
+      await setWindowHidden(true);
+      await mock("orca_terminal_read", ["$"]);
+      await browser.pause(2500);
+      expect(await callsOf("orca_terminal_read")).toEqual([]);
+      await setWindowHidden(false);
+      expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_example-app_zsh", environment: null });
+      await waitForCalls("orca_terminal_read", 2);
     });
 
     it("sends the typed keys as they are, with the target the screen shows", async () => {

@@ -10,6 +10,7 @@ import { invoke, type TerminalTarget } from "./ipc.js";
 
 const SCROLLBACK = 5000;
 const MIRROR_MS = 1000;
+const FIT_DELAY_MS = 50;
 // A send of typed keys carries at most this many characters (Rust takes 100,000).
 const SEND_LIMIT = 50_000;
 // The first frame of a mirror clears what the last one drew.
@@ -74,6 +75,16 @@ function fitVisible() {
   if (instance && !container().hidden) instance.fit.fit();
 }
 
+// A drag of the divider or of the window changes the size many times a second, and each fit reflows the scrollback and signals the process: fit once the size has rested.
+let fitTimer: number | null = null;
+function fitSoon() {
+  if (fitTimer !== null) clearTimeout(fitTimer);
+  fitTimer = window.setTimeout(() => {
+    fitTimer = null;
+    fitVisible();
+  }, FIT_DELAY_MS);
+}
+
 // ---- the mirror ----
 
 async function readFrame(instance: Instance) {
@@ -113,7 +124,8 @@ async function sendKeys(instance: Instance) {
 
 function startMirror(instance: Instance) {
   const mirror = instance.mirror;
-  if (!mirror || mirror.timer !== null) return;
+  // A hidden window reads nothing; it starts again when the window is shown (`initOrcaTerminal`).
+  if (!mirror || mirror.timer !== null || document.hidden) return;
   readFrame(instance);
   mirror.timer = window.setInterval(() => readFrame(instance), MIRROR_MS);
 }
@@ -177,7 +189,12 @@ export function pruneMirrors(keep: (id: string) => boolean) {
 
 // ---- a terminal of the app ----
 
-const decode = (data: string) => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+function decode(data: string) {
+  const text = atob(data);
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+  return bytes;
+}
 
 // Confirms the output drawn to Rust once enough of it is (and what is left over when the id arrives), so that a program that prints faster than xterm.js draws is held back.
 function confirmDrawn(instance: Instance, bytes: number, flush = false) {
@@ -245,5 +262,11 @@ export async function closePty(id: string) {
 // What a failed send of typed keys or of a write does (the screen shows the message).
 export function initOrcaTerminal(report: (e: unknown) => void) {
   onError = report;
-  new ResizeObserver(fitVisible).observe(container());
+  new ResizeObserver(fitSoon).observe(container());
+  // A hidden window stops the reads of the mirror; shown again, the terminal that is shown reads at once and goes on.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return stopMirrors();
+    const instance = visibleId === null ? undefined : instances.get(visibleId);
+    if (instance && !container().hidden) startMirror(instance);
+  });
 }

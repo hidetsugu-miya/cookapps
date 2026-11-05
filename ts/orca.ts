@@ -60,6 +60,8 @@ const seen = new Map<string, number>();
 interface PtyTab {
   id: string;
   project: string;
+  // The name of the project or SSH host, for its row when the list does not show it.
+  name: string;
   title: string;
   sub: string;
   exited: boolean;
@@ -174,7 +176,7 @@ function ensureSelection() {
   selectedTab = tabs.find((t) => t.id === last)?.id ?? tabs[0]?.id ?? null;
 }
 
-const projectName = (key: string) => (key.startsWith("ssh:") ? ssh.find((t) => `ssh:${t.id}` === key)?.label : view?.projects.find((p) => p.key === key)?.name) ?? "";
+const projectName = (key: string) => (key.startsWith("ssh:") ? ssh.find((t) => `ssh:${t.id}` === key)?.label : view?.projects.find((p) => p.key === key)?.name) ?? view?.hosts.find((h) => h.key === key)?.name ?? ptys.find((p) => p.project === key)?.name ?? "";
 
 // ---- drawing ----
 
@@ -275,17 +277,44 @@ const ptyCount = (key: string) => ptys.filter((p) => p.project === key).length;
 // Orca does not know the terminals of the app, so a row it calls idle shows the green dot while one of them runs there.
 const withPtys = (key: string, status: OrcaStatus): OrcaStatus => (status === "idle" && ptys.some((p) => p.project === key && !p.exited) ? "done" : status);
 
-function projectNodes(): HTMLElement[] {
-  const nodes: HTMLElement[] = (view?.projects ?? []).map((p: OrcaProject) => projectNode(p.key, p.name, withPtys(p.key, p.status), p.sessions + ptyCount(p.key)));
-  if (ssh.length) {
-    nodes.push(tag("h3", "orca-sec", "SSH"));
-    for (const t of ssh) {
-      const key = `ssh:${t.id}`;
-      const host = view?.hosts.find((h) => h.key === key);
-      nodes.push(projectNode(key, t.label, withPtys(key, host?.status ?? "idle"), (host?.sessions ?? 0) + ptyCount(key)));
-    }
+// A row of the project list: a project of this machine or an SSH host.
+type ProjectRow = Pick<OrcaProject, "key" | "name" | "status" | "sessions">;
+
+// The rows of the list: the projects of the target, then the SSH hosts (the machine's, then the target's that it does not list).
+// A terminal of the app whose project the list does not show (another machine is the target, or a read failed) has a row of its own, so it can still be reached and closed.
+function projectRows(): { local: ProjectRow[]; hosts: ProjectRow[]; strays: ProjectRow[] } {
+  const local: ProjectRow[] = view?.projects ?? [];
+  const hosts: ProjectRow[] = ssh.map((t) => {
+    const host = view?.hosts.find((h) => h.key === `ssh:${t.id}`);
+    return { key: `ssh:${t.id}`, name: t.label, status: host?.status ?? "idle", sessions: host?.sessions ?? 0 };
+  });
+  for (const h of view?.hosts ?? []) if (!hosts.some((r) => r.key === h.key)) hosts.push(h);
+  const strays: ProjectRow[] = [];
+  for (const p of ptys) {
+    if (![...local, ...hosts, ...strays].some((r) => r.key === p.project)) strays.push({ key: p.project, name: p.name, status: "idle", sessions: 0 });
   }
+  return { local, hosts, strays };
+}
+
+function projectNodes(): HTMLElement[] {
+  const { local, hosts, strays } = projectRows();
+  const node = (r: ProjectRow) => projectNode(r.key, r.name, withPtys(r.key, r.status), r.sessions + ptyCount(r.key));
+  const here = strays.filter((r) => !r.key.startsWith("ssh:"));
+  const remote = [...hosts, ...strays.filter((r) => r.key.startsWith("ssh:"))];
+  const nodes: HTMLElement[] = local.map(node);
+  if (here.length) nodes.push(tag("h3", "orca-sec", THIS_MACHINE), ...here.map(node));
+  if (remote.length) nodes.push(tag("h3", "orca-sec", "SSH"), ...remote.map(node));
   return nodes.length ? nodes : [emptyNode("プロジェクトがありません")];
+}
+
+// The project selected is no place to stay when the list shows no row for it and it has no tab (the last terminal of such a project was closed or failed to open).
+function leaveUnlistedProject() {
+  if (projectKey === null) return;
+  const { local, hosts, strays } = projectRows();
+  if (![...local, ...hosts, ...strays].some((r) => r.key === projectKey)) {
+    projectKey = null;
+    selectedTab = null;
+  }
 }
 
 function workingNodes(now: number): HTMLElement[] {
@@ -302,7 +331,9 @@ function workingNodes(now: number): HTMLElement[] {
 // Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
   const now = Date.now();
-  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects, view?.hosts, ssh, ptys], projectKey, selectedTab, switching, Math.floor(now / 60_000)]);
+  // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
+  const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
+  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, ptys], projectKey, selectedTab, switching, Math.floor(now / 60_000)]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -415,7 +446,15 @@ function adopt(read: OrcaOverview) {
     const held = new Set(view.terminals.map((t) => plainTabId(t.handle)));
     pruneMirrors((id) => held.has(id));
   }
+  if (view.state === "ready") forgetGone();
   ensureSelection();
+}
+
+// The order and the last selection of tabs that are no longer anywhere are dropped, so they do not pile up.
+function forgetGone() {
+  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => plainTabId(t.handle)), ...ptys.map((p) => p.id)]);
+  for (const id of seen.keys()) if (!live.has(id)) seen.delete(id);
+  for (const [key, id] of lastTab) if (!live.has(id)) lastTab.delete(key);
 }
 
 function draw() {
@@ -629,6 +668,7 @@ async function closeTab(tab: Tab) {
     ptys = ptys.filter((p) => p.id !== tab.id);
     await closePty(tab.id);
     ensureSelection();
+    leaveUnlistedProject();
     draw();
     return;
   }
@@ -648,8 +688,9 @@ async function closeTab(tab: Tab) {
 }
 
 // Opens a terminal of the app at `target` in the project `project`, selects it, and fits it to the pane. A failure shows the message and leaves no tab.
-async function openTerminal(target: TerminalTarget, project: string, sub: string) {
-  const tab: PtyTab = { id: `pty:${++ptySeq}`, project, title: "ターミナル", sub, exited: false };
+async function openTerminal(target: TerminalTarget, project: string, name: string, sub: string) {
+  const tab: PtyTab = { id: `pty:${++ptySeq}`, project, name, title: "ターミナル", sub, exited: false };
+  const before = { projectKey, selectedTab };
   ptys.push(tab);
   projectKey = project;
   selectedTab = tab.id;
@@ -663,7 +704,10 @@ async function openTerminal(target: TerminalTarget, project: string, sub: string
     });
   } catch (e) {
     ptys = ptys.filter((p) => p !== tab);
+    // Back to where the user was.
+    ({ projectKey, selectedTab } = before);
     ensureSelection();
+    leaveUnlistedProject();
     draw();
     showError(e);
   }
@@ -706,7 +750,7 @@ async function openTerminalDialog(anchor: Element) {
         b.append(tag("b", "", w.repo), tag("span", "", w.branch));
         b.onclick = () => {
           closeMenu();
-          openTerminal({ kind: "worktree", path: w.path }, w.projectKey, w.branch);
+          openTerminal({ kind: "worktree", path: w.path }, w.projectKey, w.repo, w.branch);
         };
         nodes.push(b);
       }
@@ -720,7 +764,7 @@ async function openTerminalDialog(anchor: Element) {
         b.append(tag("b", "", t.label), tag("span", "", t.connected ? "" : "未接続"));
         b.onclick = () => {
           closeMenu();
-          openTerminal({ kind: "ssh", id: t.id }, `ssh:${t.id}`, t.label);
+          openTerminal({ kind: "ssh", id: t.id }, `ssh:${t.id}`, t.label, t.label);
         };
         nodes.push(b);
       }
