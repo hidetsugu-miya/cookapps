@@ -31,3 +31,16 @@ Sync the inbox with Gmail about every 10 seconds
 ## M-8 AI summary
 
 In the mail detail, an icon summarizes the thread with the Claude Code CLI (`claude -p`, the model and effort of A-2 with sonnet and medium as the default, no tools, no MCP, no settings) and shows a short list of points, in Japanese, on a card under the subject. Only pressing the icon sends the subject and, of each message, the sender, the date and the text (newest first, up to 10,000 characters, the oldest dropped first). The summary is kept in memory per thread (and its latest message), never saved, and shown again without sending when the card is closed and reopened. The icon is shown only while Claude can be used (logged in, or an API key that is not refused, A-4)
+
+## M-9 New mail popup
+
+When auto sync (M-7) finds new mail, show a popup for each new thread at the bottom right of the app window, so that the mail can be handled at once. Nothing else shows it: the load at startup, a load or a reload after the history was too old, and a sync that only changes labels (an undo of a trash or an archive, a mark as read) show none, and no OS notification is used. A thread is new when the sync finds a message added to the inbox with the UNREAD label and the thread is still unread and in the inbox when it is fetched (Rust decides it and `sync` answers the IDs in `arrived`).
+
+The popup shows the sender and the subject, and the actions "ゴミ箱へ移動" (M-3) and "アーカイブ" (M-4) as icon buttons, "詳細を開く" (M-2) as a text button, and a close button. Trash and archive call the same commands as the list row (`removeRow`), so the row leaves the list at once, the notice with "元に戻す" shows, and a failure brings the row back and shows the error. "詳細を開く" goes to the mail screen and opens the thread, even from another screen. The sync alone never changes the screen (`frontend.md`): the popup only appears over the current one. Each action closes the popup.
+
+Details the owner left open:
+
+- Several new threads at once: one card each, stacked, the newest at the bottom. At most 3 cards show; a fourth makes the oldest go (its thread stays in the list, unread).
+- A card goes by itself after 10 seconds. The pointer or the focus on it holds it, and the 10 seconds start again when they leave. The close button closes it at once.
+- A thread whose card is on screen gets no second card, and neither does the thread that is open on screen. A card goes when its thread is opened, from the list or with "詳細を開く", so that no button of it acts on a thread the detail view holds.
+- The cards stack above the toast, which is above the update popup.
