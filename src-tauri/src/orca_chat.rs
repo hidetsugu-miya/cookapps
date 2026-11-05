@@ -307,6 +307,39 @@ fn is_harness_turn(text: &str) -> bool {
         || HARNESS_PREFIXES.iter().any(|p| head.starts_with(p))
 }
 
+/// What is between `<tag>` and `</tag>` (tags in any case), trimmed.
+fn tag_body<'a>(text: &'a str, lower: &str, tag: &str) -> Option<&'a str> {
+    let start = lower.find(&format!("<{tag}>"))? + tag.len() + 2;
+    let end = start + lower[start..].find(&format!("</{tag}>"))?;
+    Some(text[start..end].trim())
+}
+
+/// The line the user typed for a turn that is a slash command: `/{name} {args}`, or `/{name}` with no args.
+/// `None` for any other turn, for one that only names a command without `command-name` (the body of a skill that follows is not this turn), and for one with `skill-format` (a skill a subagent loaded, which the user did not type).
+fn command_turn_text(text: &str) -> Option<String> {
+    let text = text.trim_start();
+    let head: String = text
+        .chars()
+        .take(HARNESS_HEAD_LIMIT)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if !leading_tag(&head).is_some_and(|tag| matches!(tag, "command-message" | "command-name")) {
+        return None;
+    }
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("<skill-format>") {
+        return None;
+    }
+    let name = tag_body(text, &lower, "command-name")?.trim_start_matches('/');
+    if name.is_empty() {
+        return None;
+    }
+    Some(match tag_body(text, &lower, "command-args") {
+        Some(args) if !args.is_empty() => format!("/{name} {args}"),
+        _ => format!("/{name}"),
+    })
+}
+
 /// A line of a user turn that only names the file an image came from (`[Image: source: /path]`).
 fn is_image_source_line(line: &str) -> bool {
     let Some(rest) = line.trim_end().strip_prefix("[Image:") else {
@@ -382,6 +415,7 @@ fn answer_of(output: &str, question: &str, next: Option<&str>) -> Option<String>
 
 /// A message of a page reduced for the timeline. One without an `id` cannot be merged and is dropped.
 /// A message the harness injected, or that starts an agent, is kept empty, so that an update of it by id still finds it.
+/// A slash command the user typed is kept as `/{name} {args}`.
 fn held_of(message: &Value) -> Option<Held> {
     let id = text_of(message, "id")?.to_owned();
     let role_name = message["role"].as_str().unwrap_or_default();
@@ -400,6 +434,15 @@ fn held_of(message: &Value) -> Option<Held> {
         .filter(|b| b["type"] == "text")
         .filter_map(|b| b["text"].as_str())
         .collect();
+    if !starts_agent && !has_tool && role == Role::User {
+        if let Some(command) = command_turn_text(&text_of_blocks) {
+            return Some(Held {
+                id,
+                role,
+                blocks: vec![Block::Text(command)],
+            });
+        }
+    }
     let noise = !starts_agent
         && !has_tool
         && matches!(role_name, "user" | "system")
@@ -1821,6 +1864,71 @@ mod tests {
         assert!(is_harness_turn(&format!("{}{tag}", " ".repeat(64))));
         assert!(!is_harness_turn(&format!("{}{tag}", " ".repeat(65))));
         assert!(!is_harness_turn(&" ".repeat(10)));
+    }
+
+    #[test]
+    fn a_command_turn_is_the_command_and_its_args() {
+        for (turn, want) in [
+            (
+                "<command-message>issue-plan</command-message>\n<command-name>/issue-plan</command-name>\n<command-args>続けて書いた指示</command-args>",
+                Some("/issue-plan 続けて書いた指示"),
+            ),
+            (
+                "  <command-message>compact</command-message>\n<command-name>/compact</command-name>\n<command-args></command-args>",
+                Some("/compact"),
+            ),
+            ("<command-name>/clear</command-name>", Some("/clear")),
+            ("<Command-Name>code-implement</Command-Name>", Some("/code-implement")),
+            (
+                "<command-name>/a</command-name><command-args>\n x\n y \n</command-args>",
+                Some("/a x\n y"),
+            ),
+            (
+                "<command-message>graphify-conventions</command-message>\n<command-name>graphify-conventions</command-name>\n<skill-format>true</skill-format>",
+                None,
+            ),
+            ("<command-message>x</command-message>", None),
+            ("<command-name>  </command-name>", None),
+            ("<command-name>/</command-name>", None),
+            ("<local-command-stdout>ok</local-command-stdout>", None),
+            ("<command-args>x</command-args>", None),
+            ("hello <command-name>/a</command-name>", None),
+            ("hello", None),
+            ("", None),
+        ] {
+            assert_eq!(command_turn_text(turn).as_deref(), want, "{turn}");
+        }
+    }
+
+    #[test]
+    fn a_command_turn_is_drawn_as_the_users_and_other_machinery_is_not() {
+        let messages = [
+            text(
+                "user",
+                "c1",
+                "<command-message>issue-plan</command-message>\n<command-name>/issue-plan</command-name>\n<command-args>続き</command-args>",
+            ),
+            text("user", "c2", "<command-name>/compact</command-name>"),
+            text("user", "o1", "<local-command-stdout>ok</local-command-stdout>"),
+            text("system", "o2", "<command-name>/x</command-name>"),
+            json!({"id": "o3", "role": "user", "blocks": [
+                {"type": "text", "text": "<command-name>/x</command-name>"},
+                {"type": "tool-result", "callId": "k"}]}),
+        ];
+        let held = held(&messages);
+        assert_eq!(held.len(), 5);
+        assert_eq!(held[0].blocks, [Block::Text("/issue-plan 続き".into())]);
+        assert_eq!(held[1].blocks, [Block::Text("/compact".into())]);
+        assert!(held[2].blocks.is_empty());
+        assert!(held[3].blocks.is_empty());
+        assert_eq!(
+            items_of(&held, &HashSet::new()),
+            [
+                user("c1", "/issue-plan 続き"),
+                user("c2", "/compact"),
+                user("o3", "<command-name>/x</command-name>")
+            ]
+        );
     }
 
     #[test]
