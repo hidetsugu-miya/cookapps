@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.43.0
+
+A-11 a question of Claude in the Orca history can be answered there (#57). Pick the choices in its box and press "回答を送る"; nothing is sent before that, and the button waits until every question has a pick. The keys go to the session's terminal one at a time, each after the screen shows the question's form, so a key never lands in another dialog. When the screen does not match, nothing more is sent and the box says to go on in the terminal. It was checked with Claude Code 2.1.318 on this machine; a saved environment uses the same route and is not checked yet.
+
 ## v0.42.1
 
 The Orca screen no longer opens terminals of its own (#78). "ターミナルを開く" of the plus menu, its dialog and the app's PTY are gone, because they were slow over SSH and the cause was not found. The plain terminals of Orca still show as tabs, and the SSH hosts stay in the list.
