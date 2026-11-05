@@ -16,8 +16,9 @@ const STEP_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(100);
 const NOT_SHOWN: &str = "質問が画面に出ていません。ターミナルで答えてください";
 const CHANGED: &str = "回答の途中で画面が変わりました。ターミナルで続けてください";
-/// What follows the last answer on the screen that asks to submit.
-const READY: &str = "Readytosubmityouranswers?";
+/// The heading of the review, and what ends it (no line follows): every blank and the cursor are taken out, as `squash` does.
+const REVIEW: &str = "Reviewyouranswers";
+const REVIEW_END: &str = "Readytosubmityouranswers?1.Submitanswers2.Cancel";
 
 /// One question with the choices picked, as the history shows it. `picks` are 0-based indexes into `options`.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -113,9 +114,11 @@ fn answer_steps(questions: &[AnswerQuestion]) -> Vec<AnswerStep<'_>> {
     steps
 }
 
-/// The text with every blank removed: the screen wraps and pads lines, so only the characters are compared.
+/// The text with every blank and the cursor `❯` removed: the screen wraps and pads lines, and the cursor stands on whichever line is selected, so only the characters are compared.
 fn squash(text: &str) -> String {
-    text.chars().filter(|c| !c.is_whitespace()).collect()
+    text.chars()
+        .filter(|c| !c.is_whitespace() && *c != '❯')
+        .collect()
 }
 
 /// The choices of `q` that are picked, in the order of the choices, as the review lists them.
@@ -129,33 +132,87 @@ fn picked_labels(q: &AnswerQuestion) -> String {
         .join(",")
 }
 
+/// The last line that is not blank, squashed.
+fn last_line(lines: &[String]) -> Option<String> {
+    lines
+        .iter()
+        .rev()
+        .map(|l| squash(l))
+        .find(|l| !l.is_empty())
+}
+
+/// Whether the screen ends in the form of the question `q`, with the boxes of a multiple choice checked as `checked(index)` says.
+/// The text of Claude is always above the interface, so only a form at the end of the screen is real: the last line must be the footer of the form (a permission prompt, a working screen and a waiting input have another), the question's last occurrence must be followed at once by the first choice, the other choices in order (a line of description may lie between), "Type something", and "Chat about this" with the footer after it.
+fn form_shows(lines: &[String], q: &AnswerQuestion, checked: impl Fn(usize) -> bool) -> bool {
+    let Some(footer) = last_line(lines) else {
+        return false;
+    };
+    if !(footer.starts_with("Entertoselect") && footer.ends_with("Esctocancel")) {
+        return false;
+    }
+    let screen = squash(&lines.concat());
+    let text = squash(&q.text);
+    let Some(at) = screen.rfind(&text) else {
+        return false;
+    };
+    let mut tail = &screen[at + text.len()..];
+    for (i, label) in q.options.iter().enumerate() {
+        let choice = squash(&if q.multi {
+            let mark = if checked(i) { "✔" } else { "" };
+            format!("{}.[{mark}]{label}", i + 1)
+        } else {
+            format!("{}.{label}", i + 1)
+        });
+        let rest = if i == 0 {
+            tail.strip_prefix(choice.as_str())
+        } else {
+            tail.find(&choice).map(|at| &tail[at + choice.len()..])
+        };
+        let Some(rest) = rest else {
+            return false;
+        };
+        tail = rest;
+    }
+    let free = squash(&format!(
+        "{}.{}Type something",
+        q.options.len() + 1,
+        if q.multi { "[ ]" } else { "" }
+    ));
+    let Some(at) = tail.find(&free) else {
+        return false;
+    };
+    let tail = &tail[at + free.len()..];
+    let chat = squash(&format!("{}.Chat about this", q.options.len() + 2));
+    let Some(at) = tail.find(&chat) else {
+        return false;
+    };
+    // Between the two: the full stop of the single choice or the "Submit" of the multiple one, and the rule.
+    let gap = &tail[..at];
+    let gap = gap.strip_prefix('.').unwrap_or(gap);
+    let gap = gap.strip_prefix("Submit").unwrap_or(gap);
+    gap.chars().all(|c| c == '─') && tail[at + chat.len()..] == footer
+}
+
 /// Whether the screen is the one `want` names. The comparison has no blanks, so a wrapped line still matches.
 fn screen_shows(lines: &[String], want: Screen) -> bool {
-    let screen = squash(&lines.concat());
-    let has = |text: &str| screen.contains(&squash(text));
     match want {
-        Screen::QuestionShown(q) => {
-            let mark = if q.multi { "[ ]" } else { "" };
-            has(&q.text)
-                && q.options
-                    .iter()
-                    .enumerate()
-                    .all(|(i, label)| has(&format!("{}.{mark}{label}", i + 1)))
-        }
+        Screen::QuestionShown(q) => form_shows(lines, q, |_| false),
         Screen::OptionChecked(q, option) => {
-            has(&format!("{}.[✔]{}", option + 1, q.options[option]))
+            // The boxes checked are the picks up to this one, in the order of the choices.
+            let mut picks = q.picks.clone();
+            picks.sort_unstable();
+            form_shows(lines, q, |i| i <= option && picks.contains(&i))
         }
         Screen::Confirm(questions) => {
-            has("Ready to submit your answers?")
-                && has("1. Submit answers")
-                && questions.iter().all(|q| {
-                    // The answer ends where the next one or the question to submit starts: "Banana" is not "Banana, Bean".
-                    let answer = squash(&format!("●{}→{}", q.text, picked_labels(q)));
-                    screen.match_indices(&answer).any(|(at, found)| {
-                        let rest = &screen[at + found.len()..];
-                        rest.starts_with('●') || rest.starts_with(READY)
-                    })
-                })
+            let screen = squash(&lines.concat());
+            let Some(at) = screen.rfind(REVIEW) else {
+                return false;
+            };
+            let answers: String = questions
+                .iter()
+                .map(|q| squash(&format!("●{}→{}", q.text, picked_labels(q))))
+                .collect();
+            screen[at + REVIEW.len()..] == format!("{answers}{REVIEW_END}")
         }
     }
 }
@@ -235,7 +292,12 @@ mod tests {
     }
 
     fn alpha(pick: usize) -> AnswerQuestion {
-        question("Pick alpha?", false, &["Apple", "Avocado"], &[pick])
+        question(
+            "Pick alpha?",
+            false,
+            &["Apple", "Avocado", "Apricot"],
+            &[pick],
+        )
     }
 
     fn beta(picks: &[usize]) -> AnswerQuestion {
@@ -248,13 +310,28 @@ mod tests {
 
     /// The screens of Claude Code 2.1.318, as measured.
     const ECHO: &str = "> ask me Pick alpha?\n\nThinking...";
-    const ALPHA: &str =
-        "Pick alpha?\n❯ 1. Apple\n  2. Avocado\n  3. Type something\n  4. Chat about this";
-    const BETA: &str =
-        "Pick beta?\n❯ 1. [ ] Banana\n  2. [ ] Berry\n  3. [ ] Bean\n  4. Type something";
-    const BETA_CHECKED: &str =
-        "Pick beta?\n❯ 1. [✔] Banana\n  2. [ ] Berry\n  3. [ ] Bean\n  4. Type something";
-    const CONFIRM: &str = "Review your answers\n\n ● Pick alpha?\n   → Avocado\n ● Pick beta?\n   → Banana, Bean\n\nReady to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel";
+    const ALPHA: &str = "←  ☐ A  ☐ B  ✔ Submit  →\n\nPick alpha?\n\n❯ 1. Apple\n     Fruit\n  2. Avocado\n     Fruit\n  3. Apricot\n     Fruit\n  4. Type something.\n────────────────────\n  5. Chat about this\n\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel";
+    /// The multiple choice with a mark in each box ("✔" or " ").
+    macro_rules! beta_screen {
+        ($a:literal, $b:literal, $c:literal) => {
+            concat!(
+                "←  ☒ B  ✔ Submit  →\n\nPick beta?\n\n❯ 1. [", $a, "] Banana\n         Yellow fruit\n  2. [", $b,
+                "] Berry\n         Small fruit\n  3. [", $c,
+                "] Bean\n         Legume seed\n  4. [ ] Type something\n     Submit\n────────────────────\n  5. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel"
+            )
+        };
+    }
+    const BETA: &str = beta_screen!(" ", " ", " ");
+    const BETA_CHECKED: &str = beta_screen!("✔", " ", " ");
+    const BETA_CHECKED_BOTH: &str = beta_screen!("✔", " ", "✔");
+    const BETA_EXTRA: &str = beta_screen!("✔", "✔", " ");
+    const BETA_MEASURED: &str = beta_screen!(" ", "✔", " ");
+    const CONFIRM: &str = "←  ☒ A  ☒ B  ✔ Submit  →\n\nReview your answers\n\n ● Pick alpha?\n   → Avocado\n ● Pick beta?\n   → Banana, Bean\n\nReady to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel";
+    /// The permission prompt of a tool, which ends in its own footer.
+    const PERMISSION: &str = "Bash command\n\n  ls\n\nDo you want to proceed?\n❯ 1. Yes\n  2. Yes, and always allow access to /tmp from this project\n  3. Yes, and switch to auto mode\n  4. No\n\nEsc to cancel · Tab to amend";
+    const STATUS: &str = "❯ \n  ⏵⏵ auto mode on (shift+tab to cycle)";
+    /// What Claude may write in its text.
+    const BODY: &str = "Pick alpha?\n1. Apple\n2. Avocado\n3. Apricot\n4. Type something.";
 
     fn shows(text: &str, want: Screen) -> bool {
         screen_shows(&lines(text), want)
@@ -367,10 +444,13 @@ mod tests {
     fn a_question_is_shown_with_all_its_numbered_choices() {
         let q = alpha(0);
         assert!(shows(ALPHA, Screen::QuestionShown(&q)));
-        // The echo of the prompt has the question but no numbered choices.
+        // The echo of the prompt has the question text but no numbered choices.
         assert!(!shows(ECHO, Screen::QuestionShown(&q)));
         // Only some of the choices are there yet.
         assert!(!shows("Pick alpha?\n❯ 1. Apple", Screen::QuestionShown(&q)));
+        // A question with fewer choices than the form has.
+        let two = question("Pick alpha?", false, &["Apple", "Avocado"], &[0]);
+        assert!(!shows(ALPHA, Screen::QuestionShown(&two)));
         // The choices of another question.
         assert!(!shows(BETA, Screen::QuestionShown(&q)));
         // The review has the question and the answer, not the numbered choices.
@@ -383,10 +463,50 @@ mod tests {
     }
 
     #[test]
+    fn the_form_must_be_at_the_end_of_the_screen() {
+        let q = alpha(0);
+        // The text of Claude above a permission prompt, which a digit would answer.
+        assert!(!shows(
+            &format!("{BODY}\n\n{PERMISSION}"),
+            Screen::QuestionShown(&q)
+        ));
+        // The text above the input box and the status line.
+        assert!(!shows(
+            &format!("{BODY}\n\n{STATUS}"),
+            Screen::QuestionShown(&q)
+        ));
+        // The text with the footer too, above a permission prompt or the status line.
+        assert!(!shows(
+            &format!("{ALPHA}\n\n{PERMISSION}"),
+            Screen::QuestionShown(&q)
+        ));
+        assert!(!shows(
+            &format!("{ALPHA}\n\n{STATUS}"),
+            Screen::QuestionShown(&q)
+        ));
+        // The form on the screen is another question's.
+        let beta_q = beta(&[0]);
+        let other = format!("{ALPHA}\n\n{BETA}");
+        assert!(!shows(&other, Screen::QuestionShown(&q)));
+        assert!(shows(&other, Screen::QuestionShown(&beta_q)));
+        // The text above the real form does not matter.
+        assert!(shows(
+            &format!("{BODY}\n\n{ALPHA}"),
+            Screen::QuestionShown(&q)
+        ));
+        // Blank lines after the footer do not matter.
+        assert!(shows(
+            &format!("{ALPHA}\n\n   \n"),
+            Screen::QuestionShown(&q)
+        ));
+    }
+
+    #[test]
     fn a_multiple_choice_is_shown_only_while_nothing_of_it_is_checked() {
         let q = beta(&[0]);
         assert!(shows(BETA, Screen::QuestionShown(&q)));
         assert!(!shows(BETA_CHECKED, Screen::QuestionShown(&q)));
+        assert!(!shows(BETA_EXTRA, Screen::QuestionShown(&q)));
         // A single-choice screen has no boxes.
         assert!(!shows(ALPHA, Screen::QuestionShown(&q)));
     }
@@ -404,22 +524,50 @@ mod tests {
             "  things?",
             "❯ 1. Fruit and",
             "     nuts",
+            "  2. Type something.",
+            "────────",
+            "  3. Chat about this",
+            "",
+            "Enter to select · Esc to cancel",
+            "",
+            "   ",
         ]
         .map(String::from);
         assert!(screen_shows(&wrapped, Screen::QuestionShown(&q)));
         // A label cut in the middle of a word by the wrap.
-        let cut = ["Which of the long-named things?", "❯ 1. Fruit a", "nd nuts"].map(String::from);
+        let cut = [
+            "Which of the long-named things?",
+            "❯ 1. Fruit a",
+            "nd nuts",
+            "  2. Type something.",
+            "────────",
+            "  3. Chat about this",
+            "Enter to select · Esc to cancel",
+        ]
+        .map(String::from);
         assert!(screen_shows(&cut, Screen::QuestionShown(&q)));
     }
 
     #[test]
     fn a_choice_is_checked_when_its_box_has_the_mark() {
-        let q = beta(&[0, 1]);
+        let q = beta(&[0, 2]);
         assert!(shows(BETA_CHECKED, Screen::OptionChecked(&q, 0)));
-        assert!(!shows(BETA_CHECKED, Screen::OptionChecked(&q, 1)));
+        assert!(shows(BETA_CHECKED_BOTH, Screen::OptionChecked(&q, 2)));
+        // The measured screen: only "Berry" is checked.
+        assert!(shows(BETA_MEASURED, Screen::OptionChecked(&beta(&[1]), 1)));
+        // Nothing is checked yet.
         assert!(!shows(BETA, Screen::OptionChecked(&q, 0)));
-        let both = "Pick beta?\n❯ 1. [✔] Banana\n  2. [✔] Berry\n  3. [ ] Bean";
-        assert!(shows(both, Screen::OptionChecked(&q, 1)));
+        // A box that is checked without a pick (here "Berry"), or a pick still to come ("Bean").
+        assert!(!shows(BETA_EXTRA, Screen::OptionChecked(&q, 0)));
+        assert!(!shows(BETA_CHECKED_BOTH, Screen::OptionChecked(&q, 0)));
+        // A pick that is not checked.
+        assert!(!shows(BETA_CHECKED, Screen::OptionChecked(&q, 2)));
+        assert!(!shows(BETA_MEASURED, Screen::OptionChecked(&q, 0)));
+        // The permission prompt under the text of a form.
+        assert!(!shows(
+            &format!("{BETA_CHECKED}\n\n{PERMISSION}"),
+            Screen::OptionChecked(&q, 0)
+        ));
     }
 
     #[test]
@@ -435,8 +583,22 @@ mod tests {
         // A question that is not in the review.
         let other = question("Pick gamma?", false, &["Fig"], &[0]);
         assert!(!shows(CONFIRM, Screen::Confirm(&[alpha(1), other])));
+        // The answers in another order.
+        assert!(!shows(CONFIRM, Screen::Confirm(&[beta(&[0, 2]), alpha(1)])));
+        // Fewer questions than the review has.
+        assert!(!shows(CONFIRM, Screen::Confirm(&[alpha(1)])));
+        // A line after the review.
+        assert!(!shows(
+            &format!("{CONFIRM}\n  3. Chat about this"),
+            Screen::Confirm(&questions)
+        ));
+        assert!(!shows(
+            &format!("{CONFIRM}\n\nEsc to cancel"),
+            Screen::Confirm(&questions)
+        ));
         // Without the request to submit it is not the review.
-        let early = "● Pick alpha?\n  → Avocado\n● Pick beta?\n  → Banana, Bean";
+        let early =
+            "Review your answers\n● Pick alpha?\n  → Avocado\n● Pick beta?\n  → Banana, Bean";
         assert!(!shows(early, Screen::Confirm(&questions)));
     }
 
@@ -499,9 +661,6 @@ mod tests {
             (result, this.into_inner().typed)
         }
     }
-
-    const BETA_CHECKED_BOTH: &str =
-        "Pick beta?\n❯ 1. [✔] Banana\n  2. [ ] Berry\n  3. [✔] Bean\n  4. Type something";
 
     #[test]
     fn a_single_choice_is_typed_once_the_question_is_shown() {
