@@ -112,7 +112,7 @@ describe("thread AI summary", () => {
     await expect(summaryButton()).toBeDisplayed();
     await expect(summaryButton()).toHaveAttribute("aria-label", "AI 要約");
     const order = await browser.execute(() => [...document.querySelectorAll("#mail-header > button:not([hidden])")].map((b) => b.id));
-    expect(order).toEqual(["back", "thread-summary", "thread-slack", "thread-todo", "trash", "archive"]);
+    expect(order).toEqual(["back", "thread-summary", "thread-slack", "thread-todo", "thread-orca", "trash", "archive"]);
   });
 
   it("follows the Claude state while a thread is open", async () => {

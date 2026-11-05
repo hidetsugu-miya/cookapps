@@ -8,7 +8,7 @@ import { commentsSection, fitCommentInput } from "./todo-comments.js";
 import { accountSet, dueLabel, linkedMail, markdownHtml, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
 import { checkBox, openMailFromTodo, renderList } from "./todo-list.js";
 import { createLabel, moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
-import { renderTodo, todoMode } from "./todo.js";
+import { renderTodo, syncTodoHandoff, todoMode } from "./todo.js";
 import { copyText } from "./view.js";
 
 // A month of days to pick from, Sunday first; `shown` is the 1st of the month, `current` (a `YYYY-MM-DD` or null) and today are marked.
@@ -540,6 +540,7 @@ export function renderDetail() {
   const area = $("todo-detail").querySelector<HTMLTextAreaElement>(".desc-edit");
   if (area) growDesc(area);
   fitCommentInput();
+  syncTodoHandoff();
   if (field) {
     const again = $("todo-detail").querySelector<HTMLInputElement>(`[data-field="${field}"]`);
     again?.focus();

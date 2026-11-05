@@ -16,7 +16,12 @@ use serde_json::Value;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{accounts::write_synced, auth::config_dir};
+use crate::{
+    accounts::write_synced,
+    auth::config_dir,
+    orca_chat::check_pane_key,
+    orca_handoff::{compose, HandoffContext},
+};
 
 /// Reading the agents is a few local calls (or one to a paired server).
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
@@ -25,7 +30,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 /// `orca worktree ps` is asked for this many worktrees.
 const WORKTREE_LIMIT: &str = "200";
 /// Characters of a post (a send or the first prompt of a launch).
-const TEXT_LIMIT: usize = 100_000;
+pub(crate) const TEXT_LIMIT: usize = 100_000;
 /// Characters of the line a row shows; the screen cuts it with an ellipsis, this only keeps a long message from crossing the IPC.
 const LINE_LIMIT: usize = 200;
 const SETTINGS_FILE: &str = "orca-settings.json";
@@ -94,6 +99,26 @@ pub struct OrcaRow {
     pub status: OrcaStatus,
     /// The project the row belongs to (`OrcaProject::key`); empty when its worktree has none.
     pub project_key: String,
+}
+
+/// The session a launch or a handoff reached (A-9), as far as Orca's reply says: a field the reply lacks (or holds in a shape that is not one) is `None`.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaStarted {
+    /// The agent's pane (`{tabId}:{leafId}`), which finds its history (A-7).
+    pub pane_key: Option<String>,
+    /// The terminal that takes the next send.
+    pub handle: Option<String>,
+}
+
+/// Where a handoff goes (A-9): a new session in a worktree, or the terminal of a running one.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum OrcaDestination {
+    New { path: String },
+    Existing { handle: String },
 }
 
 /// A terminal of Orca that runs no Claude (a shell, or another agent), in a worktree that is listed (A-8). The screen shows it as a tab and mirrors it.
@@ -649,6 +674,19 @@ pub fn skills_of(result: &Value) -> Vec<OrcaSkill> {
 }
 
 /// The `result` of the CLI's JSON (`{ok, result, error: {code, message}}`), or the error's message. The exit code is not looked at: a failure prints JSON too.
+/// The session a launch started: `result.outcome` (`{kind: "terminal", handle, paneKey}`).
+fn started_of(result: &Value) -> OrcaStarted {
+    let outcome = &result["outcome"];
+    OrcaStarted {
+        pane_key: text_of(outcome, "paneKey")
+            .filter(|k| check_pane_key(k).is_ok())
+            .map(str::to_owned),
+        handle: text_of(outcome, "handle")
+            .filter(|h| check_handle(h).is_ok())
+            .map(str::to_owned),
+    }
+}
+
 fn parse_output(out: &str) -> Result<Value, String> {
     let out = out.trim();
     if out.is_empty() {
@@ -1064,11 +1102,11 @@ fn not_installed() -> String {
     "Orca のコマンド（orca）が見つかりません".into()
 }
 
-/// Runs a write of the CLI once. It is never run again: after a lost reply a second run would post twice (the CLI forbids a fresh retry of a launch).
-fn write(args: &[String]) -> Result<(), String> {
-    call(args, WRITE_TIMEOUT)
-        .map_err(message_of)
-        .and_then(|result| check_accepted(&result))
+/// Runs a write of the CLI once and gives its `result`. It is never run again: after a lost reply a second run would post twice (the CLI forbids a fresh retry of a launch).
+fn write(args: &[String]) -> Result<Value, String> {
+    let result = call(args, WRITE_TIMEOUT).map_err(message_of)?;
+    check_accepted(&result)?;
+    Ok(result)
 }
 
 fn send(handle: &str, text: &str, environment: Option<&str>) -> Result<(), String> {
@@ -1081,16 +1119,36 @@ fn send(handle: &str, text: &str, environment: Option<&str>) -> Result<(), Strin
         &rows_of(&ps.map_err(message_of)?, &terminals.map_err(message_of)?),
         handle,
     )?;
-    write(&send_args(handle, text, environment))
+    write(&send_args(handle, text, environment)).map(|_| ())
 }
 
-fn launch(path: &str, text: &str, environment: Option<&str>) -> Result<(), String> {
+fn launch(path: &str, text: &str, environment: Option<&str>) -> Result<OrcaStarted, String> {
     check_path(path)?;
     check_text(text)?;
     check_listed(environment)?;
     let (ps, _) = read_lists(environment, false);
     check_worktree(&worktrees_of(&ps.map_err(message_of)?), path)?;
-    write(&launch_args(path, text, environment))
+    write(&launch_args(path, text, environment)).map(|result| started_of(&result))
+}
+
+/// Hands the content to a new session or a running one (A-9): the prompt is composed here, then the launch or the send of A-6 runs once with its checks.
+fn handoff(
+    destination: &OrcaDestination,
+    instruction: &str,
+    context: Option<&HandoffContext>,
+    environment: Option<&str>,
+) -> Result<OrcaStarted, String> {
+    let text = compose(instruction, context)?;
+    match destination {
+        OrcaDestination::New { path } => launch(path, &text, environment),
+        OrcaDestination::Existing { handle } => {
+            send(handle, &text, environment)?;
+            Ok(OrcaStarted {
+                pane_key: None,
+                handle: Some(handle.clone()),
+            })
+        }
+    }
 }
 
 fn skills() -> Result<Vec<OrcaSkill>, String> {
@@ -1252,14 +1310,33 @@ pub async fn orca_send(
     blocking(move || send(&handle, &text, environment.as_deref())).await?
 }
 
-/// Starts Claude in the worktree at `path`, with `text` as its first prompt.
+/// Starts Claude in the worktree at `path`, with `text` as its first prompt. The answer is the session as Orca's reply names it.
 #[tauri::command]
 pub async fn orca_launch(
     path: String,
     text: String,
     environment: Option<String>,
-) -> Result<(), String> {
+) -> Result<OrcaStarted, String> {
     blocking(move || launch(&path, &text, environment.as_deref())).await?
+}
+
+/// A-9: starts a session in a worktree, or posts to a running one, with the instruction and, when `context` is given, the content quoted as data.
+#[tauri::command]
+pub async fn orca_handoff(
+    destination: OrcaDestination,
+    instruction: String,
+    context: Option<HandoffContext>,
+    environment: Option<String>,
+) -> Result<OrcaStarted, String> {
+    blocking(move || {
+        handoff(
+            &destination,
+            &instruction,
+            context.as_ref(),
+            environment.as_deref(),
+        )
+    })
+    .await?
 }
 
 /// Closes the tab of the Orca terminal `handle` (a Claude session or a plain terminal).
@@ -1301,7 +1378,9 @@ pub async fn orca_terminal_input(
         None => crate::orca_chat::local_call("terminal.send", input_params(&handle, &text))
             .await
             .and_then(|result| check_accepted(&result)),
-        Some(name) => blocking(move || write(&input_args(&handle, &text, Some(&name)))).await?,
+        Some(name) => {
+            blocking(move || write(&input_args(&handle, &text, Some(&name))).map(|_| ())).await?
+        }
     };
     if sent.is_err() {
         mirror.forget(&checked);
@@ -1848,6 +1927,87 @@ mod tests {
         assert!(check_accepted(&Value::Null).is_ok());
         let out = r#"{"ok": true, "result": {"send": {"accepted": false}}}"#;
         assert!(check_accepted(&parse_output(out).unwrap()).is_err());
+    }
+
+    #[test]
+    fn a_launch_reply_names_its_pane_and_terminal() {
+        let reply = json!({"outcome": {"kind": "terminal", "handle": "term_abc-1", "paneKey": "tab1:leaf2"}});
+        assert_eq!(
+            started_of(&reply),
+            OrcaStarted {
+                pane_key: Some("tab1:leaf2".into()),
+                handle: Some("term_abc-1".into())
+            }
+        );
+        // Absent, odd or unusable fields are None, never an error.
+        for odd in [
+            Value::Null,
+            json!({}),
+            json!({"outcome": "x"}),
+            json!({"outcome": {"paneKey": "", "handle": ""}}),
+            json!({"outcome": {"paneKey": "a b", "handle": "notterm"}}),
+            json!({"outcome": {"paneKey": 3, "handle": ["term_1"]}}),
+        ] {
+            assert_eq!(started_of(&odd), OrcaStarted::default(), "{odd}");
+        }
+        let part = json!({"outcome": {"handle": "term_1"}});
+        assert_eq!(started_of(&part).pane_key, None);
+        assert_eq!(started_of(&part).handle.as_deref(), Some("term_1"));
+        let out = r#"{"ok": true, "result": {"outcome": {"kind": "terminal", "handle": "term_9", "paneKey": "t:l"}}}"#;
+        assert_eq!(
+            started_of(&parse_output(out).unwrap()).pane_key.as_deref(),
+            Some("t:l")
+        );
+    }
+
+    #[test]
+    fn a_handoff_destination_is_new_or_existing() {
+        let new: OrcaDestination =
+            serde_json::from_value(json!({"kind": "new", "path": "/w"})).unwrap();
+        assert_eq!(new, OrcaDestination::New { path: "/w".into() });
+        let old: OrcaDestination =
+            serde_json::from_value(json!({"kind": "existing", "handle": "term_1"})).unwrap();
+        assert_eq!(
+            old,
+            OrcaDestination::Existing {
+                handle: "term_1".into()
+            }
+        );
+        assert!(serde_json::from_value::<OrcaDestination>(json!({"kind": "other"})).is_err());
+    }
+
+    #[test]
+    fn a_handoff_refuses_a_blank_instruction_before_it_runs_anything() {
+        for destination in [
+            OrcaDestination::New { path: "/w".into() },
+            OrcaDestination::Existing {
+                handle: "term_1".into(),
+            },
+        ] {
+            assert_eq!(
+                handoff(&destination, " \n", None, None).unwrap_err(),
+                "指示を書いてください"
+            );
+        }
+    }
+
+    #[test]
+    fn a_handoff_checks_its_destination_like_a_post() {
+        let context = HandoffContext {
+            kind: crate::orca_handoff::HandoffKind::Todo,
+            title: "t".into(),
+            body: "b".into(),
+        };
+        let bad_handle = OrcaDestination::Existing {
+            handle: "--x".into(),
+        };
+        assert!(handoff(&bad_handle, "i", Some(&context), None).is_err());
+        let bad_path = OrcaDestination::New {
+            path: "relative".into(),
+        };
+        assert!(handoff(&bad_path, "i", Some(&context), None)
+            .unwrap_err()
+            .contains("worktree"));
     }
 
     #[test]

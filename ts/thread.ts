@@ -11,6 +11,9 @@ import { externalImages, knownSenders, offerImages, resetImageBars, showCidImage
 import { renderSummary, summaryPressed } from "./mail-summary.js";
 import { linkify } from "./mail-text.js";
 import { setScreen } from "./nav.js";
+import { HandoffPane } from "./orca-handoff.js";
+import { mailCard } from "./orca-handoff-cards.js";
+import { initSplit } from "./split.js";
 import { makeTodo } from "./todo-add.js";
 import { show, showError } from "./view.js";
 
@@ -23,6 +26,9 @@ export interface OpenThread {
   subject: string;
 }
 export const opened: { current: OpenThread | null } = { current: null };
+
+// The pane that hands the open thread to Orca (A-9).
+let handoff: HandoffPane;
 
 // The screen the open thread was opened from ("mail" or "todo"): where "戻る" goes.
 let threadOrigin: "mail" | "todo" = "mail";
@@ -184,6 +190,7 @@ export async function openThread({ id, account }: { id: string; account: string 
     // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
     $("trash").hidden = $("archive").hidden = $("thread-label").hidden = !li;
     if (t.unread) markRead(account, id);
+    handoff.sync();
   } catch (e) {
     showError(e);
   }
@@ -193,17 +200,33 @@ export function goBack() {
   $("error").hidden = true;
   if (threadOrigin === "todo") setScreen("todo");
   else show("list");
+  handoff.sync();
 }
 
 // Detail view "trash" / "archive": back to the list at once, the work runs in the background.
 function removeCurrent(command: "archive" | "trash") {
   if (threadOrigin === "todo") setScreen("todo");
   else show("list");
+  handoff.sync();
   const current = opened.current!;
   removeRow(command, current.account, current.id, current.li!);
 }
 
 export function initThread() {
+  handoff = new HandoffPane({
+    root: $("mail-handoff"),
+    current: () => {
+      const t = opened.current;
+      return $("thread").hidden || !t ? null : { key: `mail:${t.account}/${t.id}`, card: () => mailCard(t.subject, t.messages) };
+    },
+    onOpen: (open) => {
+      $("mail-handoff").hidden = !open;
+      $("mail-split").hidden = !open;
+      $("thread-orca").setAttribute("aria-pressed", String(open));
+    },
+  });
+  $("thread-orca").onclick = () => handoff.toggle();
+  initSplit($("mail-area"), $("mail-split"));
   $("back").onclick = goBack;
   $("thread-todo").onclick = () => {
     const current = opened.current!;

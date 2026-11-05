@@ -30,6 +30,7 @@ use ts_rs::TS;
 use crate::{
     orca::{check_path, first_line, text_of},
     orca_e2ee::{AuthReply, Channel as Sealed, Handshake},
+    orca_handoff::{fold, OrcaChatContext},
 };
 
 /// From the socket's open to the answer to the auth frame (`PAIRED_E2EE_HANDSHAKE_DEADLINE_MS` of Orca).
@@ -118,9 +119,11 @@ pub struct OrcaQuestion {
     rename_all_fields = "camelCase"
 )]
 pub enum OrcaChatItem {
+    /// A user's message. When it carries the block of a handoff (A-9), `text` is only the instruction and `context` the content, which the screen folds.
     User {
         id: String,
         text: String,
+        context: Option<OrcaChatContext>,
     },
     Assistant {
         id: String,
@@ -607,7 +610,18 @@ fn flush_text(
     *parts += 1;
     let text = std::mem::take(text).join("\n\n");
     entries.push(Entry::Item(if message.role == Role::User {
-        OrcaChatItem::User { id, text }
+        match fold(&text) {
+            Some((text, context)) => OrcaChatItem::User {
+                id,
+                text,
+                context: Some(context),
+            },
+            None => OrcaChatItem::User {
+                id,
+                text,
+                context: None,
+            },
+        }
     } else {
         OrcaChatItem::Assistant { id, text }
     }));
@@ -1613,7 +1627,7 @@ struct Active {
 pub struct OrcaChat(std::sync::Mutex<Option<Active>>);
 
 /// A pane is `{tabId}:{leafId}`; nothing else is accepted, and a key is never put in a command line.
-fn check_pane_key(pane_key: &str) -> Result<(), String> {
+pub(crate) fn check_pane_key(pane_key: &str) -> Result<(), String> {
     if !pane_key.is_empty()
         && pane_key.chars().count() <= 256
         && pane_key
@@ -1726,6 +1740,7 @@ mod tests {
         OrcaChatItem::User {
             id: id.into(),
             text: text.into(),
+            context: None,
         }
     }
 
@@ -1845,6 +1860,80 @@ mod tests {
             items(&[text("assistant", "a", "[Image: source: /x]")]),
             [assistant("a", "[Image: source: /x]")]
         );
+    }
+
+    // -- handoffs (A-9) --
+
+    fn handed(instruction: &str, body: &str) -> String {
+        let context = crate::orca_handoff::HandoffContext {
+            kind: crate::orca_handoff::HandoffKind::Slack,
+            title: "件名".into(),
+            body: body.into(),
+        };
+        crate::orca_handoff::compose(instruction, Some(&context)).unwrap()
+    }
+
+    #[test]
+    fn a_handoff_block_becomes_the_context_of_the_user_item() {
+        let sent = handed("返信案を作って", "山田: こんにちは");
+        assert!(sent.contains("引用したデータです"));
+        assert_eq!(
+            items(&[text("user", "u", &sent)]),
+            [OrcaChatItem::User {
+                id: "u".into(),
+                // The data line is not part of the instruction.
+                text: "返信案を作って".into(),
+                context: Some(OrcaChatContext {
+                    kind: crate::orca_handoff::HandoffKind::Slack,
+                    title: "件名".into(),
+                    text: "山田: こんにちは".into(),
+                }),
+            }]
+        );
+    }
+
+    #[test]
+    fn the_wrapper_of_a_long_paste_is_taken_off_when_it_wraps_the_block() {
+        let sent = handed("指示", "本文\n二行目");
+        let wrapped =
+            format!("\n\n<pasted_content id=\"f652\">\n{sent}\n</pasted_content id=\"f652\">\n");
+        let [OrcaChatItem::User { text, context, .. }] = &items(&[text("user", "u", &wrapped)])[..]
+        else {
+            panic!("one user item");
+        };
+        assert_eq!(text, "指示");
+        assert_eq!(context.as_ref().unwrap().text, "本文\n二行目");
+    }
+
+    #[test]
+    fn a_message_without_a_well_formed_block_is_unchanged() {
+        let sent = handed("指示", "本文");
+        // A wrapper with no block is left as it is, and so is a block that is cut.
+        let wrapped = "<pasted_content id=\"a\">\nただの長い文\n</pasted_content id=\"a\">";
+        let cut = sent.replace("\n</cookapps-context>", "");
+        for plain in ["ただの指示", wrapped, cut.as_str()] {
+            assert_eq!(
+                items(&[text("user", "u", plain)]),
+                [user("u", plain.trim())],
+                "{plain}"
+            );
+        }
+        // The assistant's text is never folded.
+        assert_eq!(
+            items(&[text("assistant", "a", &sent)]),
+            [assistant("a", &sent)]
+        );
+    }
+
+    #[test]
+    fn a_handoff_with_only_the_block_keeps_an_empty_instruction() {
+        let sent = handed("x", "本文").replacen("x\n\n", "", 1);
+        let [OrcaChatItem::User { text, context, .. }] = &items(&[text("user", "u", &sent)])[..]
+        else {
+            panic!("one user item");
+        };
+        assert_eq!(text, "");
+        assert!(context.is_some());
     }
 
     // -- reducing --

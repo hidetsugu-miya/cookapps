@@ -36,6 +36,7 @@ export function show(view: View) {
   // The inbox has its own header (the unread operation); the login screen has none.
   $("inbox-header").hidden = view !== "list";
   $("main").hidden = own;
+  $("mail-area").hidden = own;
   $("login").hidden = view !== "login";
   $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
   $("threads").hidden = view !== "list";
@@ -44,6 +45,7 @@ export function show(view: View) {
   $("back").hidden = view !== "thread";
   $("thread-slack").hidden = view !== "thread";
   $("thread-todo").hidden = view !== "thread";
+  $("thread-orca").hidden = view !== "thread";
   $("trash").hidden = view !== "thread";
   $("archive").hidden = view !== "thread";
   $("main").scrollTop = view === "list" ? listScroll : 0;

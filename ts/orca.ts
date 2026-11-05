@@ -11,20 +11,21 @@ import type { OrcaSkill } from "./bindings/OrcaSkill";
 import type { OrcaSshTarget } from "./bindings/OrcaSshTarget";
 import type { OrcaStatus } from "./bindings/OrcaStatus";
 import type { OrcaTerminalTargets } from "./bindings/OrcaTerminalTargets";
+import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import { $, composing, tag } from "./dom.js";
 import { CLAUDE_SVG, svgOf } from "./icons.js";
 import { invoke, type TerminalTarget } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
-import { currentScreen } from "./nav.js";
-import { closeChat, initOrcaChat, openChat, setChatWorking } from "./orca-chat.js";
+import { currentScreen, setScreen } from "./nav.js";
+import { closeChat, initOrcaChat, isChatOwner, makeChatView, openChat, setChatWorking } from "./orca-chat.js";
 import { closePty, hideTerminals, initOrcaTerminal, pruneMirrors, showTerminal, startPty } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
 import { setNavCount, show, showError } from "./view.js";
 
-const GROUP_LABELS = { waiting: "入力待ち", working: "作業中", done: "完了" } as const;
+export const GROUP_LABELS = { waiting: "入力待ち", working: "作業中", done: "完了" } as const;
 // The name of each status icon (its `aria-label`), and the status each group of the working view draws.
-const STATUS_LABELS: Record<OrcaStatus, string> = { question: "入力待ち", failed: "失敗", working: "作業中", monitoring: "監視中", interrupted: "中断", done: "完了", idle: "動いていない" };
-const GROUP_STATUS: Record<OrcaRow["group"], OrcaStatus> = { waiting: "question", working: "working", done: "done" };
+export const STATUS_LABELS: Record<OrcaStatus, string> = { question: "入力待ち", failed: "失敗", working: "作業中", monitoring: "監視中", interrupted: "中断", done: "完了", idle: "動いていない" };
+export const GROUP_STATUS: Record<OrcaRow["group"], OrcaStatus> = { waiting: "question", working: "working", done: "done" };
 const ASK_SVG = svgOf('<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>');
 const ACTIVITY_SVG = svgOf('<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>');
 const TERMINAL_SVG = svgOf('<path d="M5 8l4 4-4 4M12 17h7"/>');
@@ -92,15 +93,18 @@ let tabsKey = "";
 let headerKey = "";
 let noticeKey = "";
 
+// The history of the work pane. It owns the read (orca-chat.ts) while the screen shows a selected session, and a side pane (orca-handoff.ts) may take it while the screen is not shown.
+const screenChat = makeChatView($("orca-chat"), $("orca-items"), $("orca-older"), $("orca-chat-status"));
+
 const input = () => $<HTMLTextAreaElement>("orca-input");
 const feed = () => $("orca-feed");
 const shown = () => currentScreen() === "orca";
 
 const targetName = (v: OrcaOverview) => v.target ?? THIS_MACHINE;
-const worktreeLabel = (w: { repo: string; branch: string }) => `${w.repo} ・ ${w.branch}`;
+export const worktreeLabel = (w: { repo: string; branch: string }) => `${w.repo} ・ ${w.branch}`;
 
 // How long ago `ms` was: running and waiting agents show the time since their state began ("2 分"), a done one how long ago it ended ("18 分前").
-function elapsed(ms: number, now: number, done: boolean) {
+export function elapsed(ms: number, now: number, done: boolean) {
   if (!ms) return "";
   const min = Math.max(0, Math.floor((now - ms) / 60_000));
   if (min < 1) return done ? "たった今" : "1 分未満";
@@ -113,7 +117,7 @@ const countOf = (rows: OrcaRow[]) => rows.filter((r) => r.group !== "done").leng
 // ---- icons ----
 
 // The icon of a status (Orca's): the question mark, a ring that turns, the pulse, a green or a faint dot, and a small red or gray one. `label` names it where the word differs ("起動中" for a terminal).
-function statusIcon(status: OrcaStatus, label = STATUS_LABELS[status]) {
+export function statusIcon(status: OrcaStatus, label = STATUS_LABELS[status]) {
   const icon = tag("span", "orca-ic");
   icon.dataset.status = status;
   icon.setAttribute("role", "img");
@@ -201,9 +205,14 @@ function drawHeader() {
   $("orca-target").hidden = !menu;
 }
 
+// What a read that did not work says (the Orca screen and the side pane show it alike), else null.
+export function noticeOf(v: OrcaOverview | null) {
+  return v?.state === "missing" ? "orca コマンドが見つかりません。Orca を入れると、動いているエージェントを見て、指示を送れます" : v?.state === "failed" ? `読み込めませんでした: ${v.message}` : null;
+}
+
 function drawNotice() {
   const v = switching ? null : view;
-  const text = v?.state === "missing" ? "orca コマンドが見つかりません。Orca を入れると、動いているエージェントを見て、指示を送れます" : v?.state === "failed" ? `読み込めませんでした: ${v.message}` : null;
+  const text = noticeOf(v);
   const key = JSON.stringify([v?.state, text]);
   if (key === noticeKey) return;
   noticeKey = key;
@@ -392,7 +401,7 @@ function drawWork() {
   const claude = tab?.kind === "claude";
   for (const id of ["orca-chat", "orca-chat-status", "orca-form"]) $(id).hidden = !(newPane || claude);
   $("orca-dest").hidden = !newPane;
-  setChatWorking(selectedRow()?.group === "working");
+  setChatWorking(screenChat, selectedRow()?.group === "working");
 }
 
 // Shows the terminal of the selected tab, if it is one, and hides them while another screen or another kind of tab is shown.
@@ -407,10 +416,11 @@ function syncTerminal() {
 function syncChat() {
   const row = shown() ? selectedRow() : null;
   const want = row?.paneKey ? JSON.stringify([view?.target ?? null, row.path, row.paneKey]) : null;
-  if (want === chatKey) return;
+  // A side pane may have taken the read since: then the screen opens it again.
+  if (want === chatKey && (want === null || isChatOwner(screenChat))) return;
   chatKey = want;
-  if (row?.paneKey && want) openChat(view?.target ?? null, row.path, row.paneKey);
-  else closeChat();
+  if (row?.paneKey && want) openChat(screenChat, view?.target ?? null, row.path, row.paneKey, row.group === "working");
+  else closeChat(screenChat);
 }
 
 // The composer's chip and button follow the selection: a selected session is posted to; in the new-session pane, a worktree is chosen and a new agent is started.
@@ -534,6 +544,29 @@ function refresh() {
   if (Date.now() - lastTry >= (shown() ? SHOWN_MS : HIDDEN_MS)) load(clockScope());
 }
 
+// ---- the side pane's share (A-9) ----
+
+// The last read, for a side pane to draw at once while it reads again.
+export const heldOrca = () => view;
+
+// Reads the list for a side pane (the agents with their terminals, and the worktrees), whatever screen is shown, and gives what is held after it. The first read of the app asks for the target too.
+export async function refreshOrca() {
+  await load(view?.state === "ready" ? "screen" : "full", true);
+  return view;
+}
+
+// Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the selection as it is.
+export function openInOrca(paneKey: string | null) {
+  const row = paneKey === null ? null : (view?.rows.find((r) => r.paneKey === paneKey) ?? null);
+  if (row) {
+    projectKey = row.projectKey;
+    selectedTab = claudeTabId(row.paneKey!);
+    lastTab.set(row.projectKey, selectedTab);
+    newPath = null;
+  }
+  setScreen("orca");
+}
+
 // The Orca screen is shown: what was read stays on screen while a new read is on its way.
 export function showOrca() {
   show("orca");
@@ -578,9 +611,8 @@ function pickWorktree(path: string) {
   input().focus();
 }
 
-// The dialog under the "起動先" chip: the worktrees, narrowed by a filter on `{repo} ・ {branch}`. A pick closes it.
-function openDestPicker(anchor: Element) {
-  const worktrees = view?.worktrees ?? [];
+// The dialog under the "起動先" chip: the worktrees, narrowed by a filter on `{repo} ・ {branch}`. A pick closes it. The side pane of A-9 opens it too.
+export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], chosen: string | null, pick: (path: string) => void) {
   const pop = tag("div", "menu orca-dest-pop");
   pop.setAttribute("role", "dialog");
   pop.setAttribute("aria-label", "起動先の worktree");
@@ -598,11 +630,11 @@ function openDestPicker(anchor: Element) {
             const b = tag("button");
             b.type = "button";
             b.dataset.path = w.path;
-            b.setAttribute("aria-current", String(w.path === newPath));
+            b.setAttribute("aria-current", String(w.path === chosen));
             b.append(tag("b", "", w.repo), tag("span", "", w.branch));
             b.onclick = () => {
               closeMenu();
-              pickWorktree(w.path);
+              pick(w.path);
             };
             return b;
           })
@@ -615,6 +647,8 @@ function openDestPicker(anchor: Element) {
   showMenu(anchor, pop);
   filter.focus();
 }
+
+const openDestPicker = (anchor: Element) => openWorktreeDialog(anchor, view?.worktrees ?? [], newPath, pickWorktree);
 
 function showPostError(message: string | null) {
   $("orca-error").hidden = message === null;

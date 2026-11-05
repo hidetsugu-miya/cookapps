@@ -6,7 +6,7 @@ Show the threads in the inbox, split into unread and read, each sorted newest fi
 
 ## M-2 Read
 
-Open a thread and show its body
+Open a thread and show its body. The header of the open thread has the icon button "Orca に渡す" (A-9).
 
 ## M-3 Delete
 

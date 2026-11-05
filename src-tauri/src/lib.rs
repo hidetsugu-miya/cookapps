@@ -10,6 +10,7 @@ pub mod images;
 pub mod orca;
 pub mod orca_chat;
 pub mod orca_e2ee;
+pub mod orca_handoff;
 pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
@@ -273,6 +274,7 @@ pub fn run() {
             orca::orca_set_target,
             orca::orca_send,
             orca::orca_launch,
+            orca::orca_handoff,
             orca::orca_skills,
             orca::orca_close,
             orca::orca_terminal_read,
