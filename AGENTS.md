@@ -72,7 +72,7 @@ requirements/  the requirements, one file per area
 - The frontend is plain TypeScript, HTML and CSS.
   `ts/` is split into one module per screen.
 - The backend is Rust.
-  Each service has its own module: `gmail.rs`, `calendar.rs`, `todoist.rs`, `slack.rs`, `claude.rs`, `orca.rs` (with `orca_chat.rs` and `orca_e2ee.rs` for the session history, and `terminal.rs` for the PTY of the terminals).
+  Each service has its own module: `gmail.rs`, `calendar.rs`, `todoist.rs`, `slack.rs`, `claude.rs`, `orca.rs` (with `orca_chat.rs` and `orca_e2ee.rs` for the session history, `orca_handoff.rs` for the prompt of A-9 and its folding in the history, and `terminal.rs` for the PTY of the terminals).
   The modules are in the library crate (`src-tauri/src/lib.rs`), and `main.rs` only calls `cookapps_lib::run()`.
 - Internal functions take the config directory (`&Path`), not an `AppHandle`, so `cookapps-mcp` can share them.
 - The Rust version is pinned in `rust-toolchain.toml` and in the CI workflow. Keep them equal.

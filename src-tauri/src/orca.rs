@@ -673,7 +673,6 @@ pub fn skills_of(result: &Value) -> Vec<OrcaSkill> {
     skills
 }
 
-/// The `result` of the CLI's JSON (`{ok, result, error: {code, message}}`), or the error's message. The exit code is not looked at: a failure prints JSON too.
 /// The session a launch started: `result.outcome` (`{kind: "terminal", handle, paneKey}`).
 fn started_of(result: &Value) -> OrcaStarted {
     let outcome = &result["outcome"];
@@ -687,6 +686,7 @@ fn started_of(result: &Value) -> OrcaStarted {
     }
 }
 
+/// The `result` of the CLI's JSON (`{ok, result, error: {code, message}}`), or the error's message. The exit code is not looked at: a failure prints JSON too.
 fn parse_output(out: &str) -> Result<Value, String> {
     let out = out.trim();
     if out.is_empty() {

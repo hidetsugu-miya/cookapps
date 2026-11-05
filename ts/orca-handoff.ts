@@ -34,10 +34,14 @@ interface Session {
   paneKey: string | null;
   handle: string | null;
   environment: string | null;
+  // Its row has been in the list of Orca: a ready list that lacks it later means the session ended.
+  seen: boolean;
 }
 
 // By item key, in memory only: leaving and coming back to the item shows its session again.
 const sessions = new Map<string, Session>();
+// The instruction of an item whose send failed while another item was in view: it is put back in the field of its own item.
+const drafts = new Map<string, string>();
 // The worktree chosen for a new session, kept for the next handoff.
 let chosenPath: string | null = null;
 const panes = new Set<HandoffPane>();
@@ -70,8 +74,14 @@ export class HandoffPane {
   private cardOpen = false;
   // "new" or the handle of the running session picked.
   private dest = "new";
-  private busy = false;
-  private error = "";
+  // The keys of the items whose post is on its way, and the message of the last failed post of each item. They belong to the item, so a switch of the item loses neither.
+  private sending = new Set<string>();
+  private errors = new Map<string, string>();
+  // What the host was last told, and the minute the pane last drew.
+  private lastOpen: boolean | null = null;
+  private lastMinute = 0;
+  // The card the drawn pane shows (compared by identity).
+  private cardDrawn: HandoffCard | null | undefined;
   private overview: OrcaOverview | null = null;
   private readSeq = 0;
   private lastRead = 0;
@@ -84,6 +94,7 @@ export class HandoffPane {
     rows?: HTMLElement;
     cardBox?: HTMLElement;
     card?: { title: HTMLElement; meta: HTMLElement; body: HTMLElement; toggle: HTMLButtonElement };
+    target?: HTMLElement;
     sessionTitle?: HTMLElement;
     note?: HTMLElement;
     error: HTMLElement;
@@ -125,19 +136,25 @@ export class HandoffPane {
       this.itemKey = key;
       this.removed = false;
       this.cardOpen = false;
-      this.error = "";
       this.dest = "new";
-      this.busy = false;
-      this.card = item?.card() ?? null;
+      // The card is built when the pane opens (the form is drawn), not for each item that goes by.
+      this.card = null;
       this.open = key !== null && (this.host.forced === true || sessions.has(key));
       this.overview = heldOrca();
       this.lastRead = 0;
     }
     this.item = item;
     this.draw();
-    this.host.onOpen(this.open);
+    if (this.lastOpen !== this.open) {
+      this.lastOpen = this.open;
+      this.host.onOpen(this.open);
+    }
     this.syncChat();
-    if (this.open && this.lastRead === 0) this.reload();
+    if (this.open && this.lastRead === 0) this.reload(true);
+  }
+
+  private get busy() {
+    return this.itemKey !== null && this.sending.has(this.itemKey);
   }
 
   // The header button: opens the pane for the item in view, or closes it.
@@ -151,21 +168,30 @@ export class HandoffPane {
 
   // The content of the item changed (a thread was read, a task was edited): the card shows the new one until it is sent or taken off.
   refreshCard() {
-    if (this.itemKey === null || this.mode() !== "form" || this.removed || !this.item) return;
+    if (!this.open || this.itemKey === null || this.mode() !== "form" || this.removed || !this.item) return;
     this.card = this.item.card();
     this.drawCard();
   }
 
   private tick() {
+    // Nothing moves in a window that is hidden.
+    if (document.hidden) return;
     this.sync();
-    if (this.open && this.mode() === "session" && !document.hidden && Date.now() - this.lastRead >= POLL_MS) this.reload();
+    // The times on the pane are in minutes: it is drawn again when the minute changes (a read draws it too).
+    const minute = Math.floor(Date.now() / 60_000);
+    if (minute !== this.lastMinute) {
+      this.lastMinute = minute;
+      this.update();
+    }
+    // A shown session is read again every POLL_MS, unless the command is missing.
+    if (this.open && this.mode() === "session" && this.overview?.state !== "missing" && Date.now() - this.lastRead >= POLL_MS) this.reload(false);
   }
 
-  // Reads the list of Orca (once when the pane opens; a shown session again every POLL_MS).
-  private async reload() {
+  // Reads the list of Orca: forced when the pane opens and after a send, and not while another read is on its way when it is the poll of a shown session.
+  private async reload(force: boolean) {
     const seq = ++this.readSeq;
     this.lastRead = Date.now();
-    const overview = await refreshOrca();
+    const overview = await refreshOrca(force);
     if (seq !== this.readSeq || !this.open) return;
     this.overview = overview;
     this.update();
@@ -175,15 +201,21 @@ export class HandoffPane {
   // The read of the history belongs to this pane only while it shows a session in view; otherwise it is let go (a read that another owner took is not touched).
   private syncChat() {
     const s = this.open ? this.session() : undefined;
-    if (!s?.paneKey) {
+    const paneKey = s ? this.paneKeyOf(s) : null;
+    if (!s || paneKey === null) {
       this.chatKey = null;
       closeChat(this.chat);
       return;
     }
-    const want = JSON.stringify([s.environment, s.path, s.paneKey]);
+    const want = JSON.stringify([s.environment, s.path, paneKey]);
     if (this.chatKey === want && isChatOwner(this.chat)) return;
     this.chatKey = want;
-    openChat(this.chat, s.environment, s.path, s.paneKey, this.rowOf(s)?.group === "working");
+    openChat(this.chat, s.environment, s.path, paneKey, this.rowOf(s)?.group === "working");
+  }
+
+  // The pane of the session: the one the launch named, else the one of its row in the list.
+  private paneKeyOf(s: Session) {
+    return s.paneKey ?? this.rowOf(s)?.paneKey ?? null;
   }
 
   // ---- drawing ----
@@ -199,10 +231,11 @@ export class HandoffPane {
     if (signature !== this.drawn) {
       this.drawn = signature;
       this.keys = {};
+      this.cardDrawn = undefined;
       if (this.mode() === "form") this.buildForm();
       else this.buildSession();
+      this.update();
     }
-    this.update();
   }
 
   // Draws a part again only when what it shows changed.
@@ -271,18 +304,25 @@ export class HandoffPane {
     fresh.append(pick, chip);
     const rows = tag("div", "ho-rows");
     const scroll = tag("div", "ho-scroll");
-    scroll.append(notice, tag("p", "ho-label", "送り先"), fresh, rows);
+    // An environment of Orca (not this machine) is named by the heading, as the status label of the Orca screen names it.
+    const label = tag("p", "ho-label", "送り先");
+    const target = tag("span", "ho-target");
+    label.append(target);
+    scroll.append(notice, label, fresh, rows);
     const main = tag("div", "ho-main");
     main.append(head, scroll);
     const foot = this.foot();
-    this.el = { notice, fresh, chip, rows, cardBox: foot.cardBox, error: foot.error, input: foot.input, send: foot.send };
+    this.el = { notice, fresh, chip, rows, target, cardBox: foot.cardBox, error: foot.error, input: foot.input, send: foot.send };
+    // The content is taken when the form is drawn, that is when the pane opens.
+    this.card = this.item?.card() ?? null;
+    this.restoreDraft(foot.input);
     this.host.root.replaceChildren(main, foot.foot);
   }
 
   private buildSession() {
     const sessionTitle = tag("div", "ho-session-title");
     const open = iconButton("Orca の画面で開く", OPEN_SVG);
-    open.onclick = () => openInOrca(this.session()?.paneKey ?? null);
+    open.onclick = () => openInOrca(this.session() ? this.paneKeyOf(this.session()!) : null);
     const close = iconButton("閉じる", CLOSE_SVG);
     close.onclick = () => this.forget();
     const head = tag("div", "ho-head ho-session-head");
@@ -295,8 +335,17 @@ export class HandoffPane {
     foot.cardBox.hidden = true;
     foot.input.rows = 2;
     this.el = { notice, sessionTitle, note, error: foot.error, input: foot.input, send: foot.send };
+    this.restoreDraft(foot.input);
     this.host.root.replaceChildren(main, foot.foot);
     foot.input.focus();
+  }
+
+  // Puts back the instruction of this item whose send failed while another item was in view.
+  private restoreDraft(input: HTMLTextAreaElement) {
+    const draft = this.itemKey === null ? undefined : drafts.get(this.itemKey);
+    if (draft === undefined) return;
+    input.value = draft;
+    drafts.delete(this.itemKey!);
   }
 
   private update() {
@@ -305,12 +354,13 @@ export class HandoffPane {
     if (this.mode() === "form") {
       const rows = (this.overview?.rows ?? []).filter((r) => r.handle !== null);
       const minute = Math.floor(Date.now() / 60_000);
-      this.part("dest", [this.dest, chosenPath, this.overview?.worktrees, rows, minute], () => this.drawDest());
+      this.part("dest", [this.dest, chosenPath, this.overview?.target, this.overview?.worktrees, rows, minute], () => this.drawDest());
       this.drawCard();
     } else {
       const s = this.session()!;
       const row = this.rowOf(s);
-      this.part("session", [s, row, this.overview?.worktrees, Math.floor(Date.now() / 60_000)], () => this.drawSessionHead());
+      if (row) s.seen = true;
+      this.part("session", [s, row, this.overview?.state, this.overview?.worktrees, Math.floor(Date.now() / 60_000)], () => this.drawSessionHead());
     }
     this.updateSend();
   }
@@ -324,7 +374,8 @@ export class HandoffPane {
 
   // The chip, and the running sessions that can take a send, in the groups of the Orca screen.
   private drawDest() {
-    const { fresh, chip, rows } = this.el!;
+    const { fresh, chip, rows, target } = this.el!;
+    target!.textContent = this.overview?.target ?? "";
     const worktrees = this.overview?.worktrees ?? [];
     if (chosenPath !== null && !worktrees.some((w) => w.path === chosenPath)) chosenPath = null;
     const chosen = worktrees.find((w) => w.path === chosenPath);
@@ -364,7 +415,9 @@ export class HandoffPane {
   // The nodes are kept while the card changes: only their text is set, so an open text stays open and keeps its scroll position and selection.
   private drawCard() {
     const card = this.removed ? null : this.card;
-    this.part("card", card, () => {
+    if (!this.el || this.cardDrawn === card) return;
+    this.cardDrawn = card;
+    {
       const el = this.el;
       const box = el?.cardBox;
       if (!el || !box) return;
@@ -408,7 +461,7 @@ export class HandoffPane {
       // Set only when it changed: setting it again would drop the selection.
       if (ui.body.textContent !== card.body) ui.body.textContent = card.body;
       this.showCardBody();
-    });
+    }
   }
 
   private showCardBody() {
@@ -427,10 +480,11 @@ export class HandoffPane {
     const worktree = this.overview?.worktrees.find((w) => w.path === s.path);
     const name = row ? `${row.repo} ・ ${row.branch}` : worktree ? worktreeLabel(worktree) : s.path;
     const time = row ? elapsed(row.atMs, Date.now(), row.group === "done") : "";
-    const state = row ? [STATUS_LABELS[row.status], time].filter(Boolean).join(" ・ ") : "確認中";
+    // Until its row is in the list a new session is being checked; once it was there and a ready list lacks it, it has ended.
+    const state = row ? [STATUS_LABELS[row.status], time].filter(Boolean).join(" ・ ") : s.seen && this.overview?.state === "ready" ? "終了" : "確認中";
     el.sessionTitle!.replaceChildren(tag("span", "ho-session-name", name), tag("span", "ho-session-state", state));
-    el.note!.hidden = s.paneKey !== null;
-    this.chat.box.hidden = s.paneKey === null;
+    el.note!.hidden = this.paneKeyOf(s) !== null;
+    this.chat.box.hidden = this.paneKeyOf(s) === null;
     setChatWorking(this.chat, row?.group === "working");
   }
 
@@ -445,8 +499,9 @@ export class HandoffPane {
     // A session with no terminal can be read but takes no post; a new one needs a worktree.
     const target = s ? (s.handle ?? this.rowOf(s)?.handle ?? null) !== null : existing || chosenPath !== null;
     el.send.disabled = this.busy || this.overview?.state === "missing" || !el.input.value.trim() || !target;
-    el.error.hidden = !this.error;
-    el.error.textContent = this.error;
+    const error = this.itemKey === null ? "" : (this.errors.get(this.itemKey) ?? "");
+    el.error.hidden = !error;
+    el.error.textContent = error;
   }
 
   // ---- acting ----
@@ -455,11 +510,12 @@ export class HandoffPane {
   private forget() {
     if (this.itemKey === null) return;
     sessions.delete(this.itemKey);
-    this.error = "";
+    this.errors.delete(this.itemKey);
     this.dest = "new";
     this.removed = false;
     this.cardOpen = false;
-    this.card = this.item?.card() ?? null;
+    // The form is drawn again, and takes the content then.
+    this.card = null;
     this.open = this.host.forced === true;
     this.lastRead = 0;
     this.sync();
@@ -479,8 +535,8 @@ export class HandoffPane {
     const handle = known ? (known.handle ?? this.rowOf(known)?.handle ?? null) : null;
     if (known ? handle === null : this.dest === "new" ? path === null : !picked) return;
     const card = this.removed ? null : this.card;
-    this.busy = true;
-    this.error = "";
+    this.sending.add(key);
+    this.errors.delete(key);
     this.updateSend();
     try {
       if (known) {
@@ -489,17 +545,25 @@ export class HandoffPane {
         const destination: HandoffDestination = picked ? { kind: "existing", handle: picked.handle! } : { kind: "new", path: path! };
         const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
         const started = await invoke("orca_handoff", { destination, instruction: text, context, environment });
-        sessions.set(key, picked ? { path: picked.path, paneKey: picked.paneKey, handle: started.handle ?? picked.handle, environment } : { path: path!, paneKey: started.paneKey, handle: started.handle, environment });
+        sessions.set(
+          key,
+          picked
+            ? { path: picked.path, paneKey: picked.paneKey, handle: started.handle ?? picked.handle, environment, seen: true }
+            : { path: path!, paneKey: started.paneKey, handle: started.handle, environment, seen: false },
+        );
       }
       el.input.value = "";
       this.lastRead = 0;
     } catch (e) {
-      this.error = String(e);
+      this.errors.set(key, String(e));
+      // Another item is in view: its field is not this one, so the text waits for its own item.
+      if (this.itemKey !== key) drafts.set(key, text);
     } finally {
-      this.busy = false;
+      this.sending.delete(key);
     }
     if (this.itemKey === key) {
       this.sync();
+      this.update();
       this.el?.input.focus();
     }
   }

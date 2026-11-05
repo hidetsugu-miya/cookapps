@@ -8,12 +8,15 @@ import {
   chatUser,
   claudeReady,
   count,
+  holds,
   inbox,
   mock,
+  onceId,
   orcaOverview,
   orcaRow,
   orcaWorktree,
   rejects,
+  release,
   rowOf,
   sendChat,
   slackLoad,
@@ -483,5 +486,107 @@ describe("orca handoff", () => {
     await $("#reply-tab-orca").click();
     await waitForOpens(2);
     await expect($(`${SLACK.pane} [aria-label="Orca の画面で開く"]`)).toBeDisplayed();
+  });
+
+  it("names the environment beside the heading when the target is a saved one, and sends to it", async () => {
+    await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }) });
+    const handoff = await mock("orca_handoff", started);
+    await openPane(MAIL);
+    expect(await textsOf(`${MAIL.pane} .ho-target`)).toEqual(["Studio"]);
+    await chooseWorktree(MAIL, "/work/example-app");
+    await field(MAIL).setValue("やって");
+    await sendButton(MAIL).click();
+    const [call] = (await waitForCalls(handoff)) as { environment: string | null }[];
+    expect(call.environment).toBe("Studio");
+  });
+
+  it("names nothing beside the heading for this machine", async () => {
+    await openMail();
+    await openPane(MAIL);
+    expect(await textsOf(`${MAIL.pane} .ho-target`)).toEqual([""]);
+  });
+
+  it("puts a failed instruction and its message back in its own item when the failure came on another", async () => {
+    await openMail();
+    const handoff = await mock("orca_handoff", holds);
+    await openPane(MAIL);
+    await chooseWorktree(MAIL, "/work/example-app");
+    await field(MAIL).setValue("守る指示");
+    await sendButton(MAIL).click();
+    await waitForCalls(handoff);
+    // Another thread: its pane is closed and not busy, and the failure arrives meanwhile.
+    await $("#back").click();
+    await mock("thread", threadDetail("Second", "Other mail", false));
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await expect($("#thread-subject")).toHaveText("Second");
+    await expect($(MAIL.pane)).not.toBeDisplayed();
+    await release(handoff, rejects("失敗しました"));
+    await browser.pause(300);
+    // The message is not shown on the other thread.
+    await $(MAIL.button).click();
+    await waitForCount(`${MAIL.pane} .ho-row`, 3);
+    expect(await count(`${MAIL.pane} .ho-form .pending.fail:not([hidden])`)).toBe(0);
+    await expect(field(MAIL)).toHaveValue("");
+    await $("#back").click();
+    // Its own item has the text and the message again.
+    await mock("thread", threadDetail(subject, mailBody, false));
+    await rowOf("read-threads", "Already read").$(".subject").click();
+    await $(MAIL.button).click();
+    await waitForCount(`${MAIL.pane} .ho-row`, 3);
+    await expect(field(MAIL)).toHaveValue("守る指示");
+    await expect($(`${MAIL.pane} .ho-form .pending.fail`)).toHaveText("失敗しました");
+    await expect(field(MAIL)).toBeEnabled();
+  });
+
+  it("keeps the Orca tab selected while another thread opens, and hands the new thread over once it is read", async () => {
+    const olderTs = slackTs(60, 1);
+    const newerTs = slackTs(30, 3);
+    const messages = [timelineMessage(newerTs, "Carol Example", "ops", "Second thread root", { replyCount: 0 }), timelineMessage(olderTs, "Alice Example", "dev-billing", "Please review the deploy notes.", { replyCount: 1 })];
+    await bootOrca({ slack_load: slackLoad, slack_timeline: timeline(messages), claude_status: claudeReady });
+    await mock("slack_thread", slackThread([threadMessage(olderTs, "Alice Example", "Please review the deploy notes.")]));
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 2);
+    await (await $$("#slack-feed .feed-open"))[1].click();
+    await waitForCount("#st-msgs .st-msg", 1);
+    await $("#reply-tab-orca").click();
+    await waitForCount(`${SLACK.pane} .ho-row`, 3);
+    // Another thread, whose read is held: the tab is still Orca and the pane has no content yet.
+    await $("#st-back").click();
+    const read = await mock("slack_thread", holds);
+    await (await $$("#slack-feed .feed-open"))[0].click();
+    await expect($("#reply-tab-orca")).toHaveAttribute("aria-selected", "true");
+    await expect($(SLACK.pane)).toBeDisplayed();
+    await waitForCalls(read);
+    expect(await count(`${SLACK.pane} .ho-card`)).toBe(0);
+    await release(read, slackThread([threadMessage(newerTs, "Carol Example", "Second thread root")]));
+    await waitForCount("#st-msgs .st-msg", 1);
+    await waitForCount(`${SLACK.pane} .ho-card`, 1);
+    expect(await textsOf(`${SLACK.pane} .ho-card-title`)).toEqual(["#ops のスレッド"]);
+    const handoff = await mock("orca_handoff", started);
+    await chooseWorktree(SLACK, "/work/example-app");
+    await field(SLACK).setValue("返信案を作って");
+    await sendButton(SLACK).click();
+    const [call] = (await waitForCalls(handoff)) as { context: { body: string } }[];
+    expect(call.context.body).toContain("Second thread root");
+    expect(call.context.body).not.toContain("Please review the deploy notes.");
+  });
+
+  it("hands over the new content when the Todo detail is drawn again", async () => {
+    await openTodo();
+    await openPane(TODO);
+    const data = todoData();
+    data.tasks[0].content = "Write report v2";
+    data.tasks[0].description = "Check the totals twice.";
+    await mock("todoist_load", data);
+    await browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+    await browser.waitUntil(async () => (await textsOf(`${TODO.pane} .ho-card-title`))[0] === "Write report v2", { timeoutMsg: "the card did not take the new task" });
+    const handoff = await mock("orca_handoff", started);
+    await chooseWorktree(TODO, "/work/example-app");
+    await field(TODO).setValue("直して");
+    await sendButton(TODO).click();
+    const [call] = (await waitForCalls(handoff)) as { context: { title: string; body: string } }[];
+    expect(call.context.title).toBe("Write report v2");
+    expect(call.context.body).toContain("タスク: Write report v2");
+    expect(call.context.body).toContain("Check the totals twice.");
   });
 });

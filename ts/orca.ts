@@ -549,9 +549,9 @@ function refresh() {
 // The last read, for a side pane to draw at once while it reads again.
 export const heldOrca = () => view;
 
-// Reads the list for a side pane (the agents with their terminals, and the worktrees), whatever screen is shown, and gives what is held after it. The first read of the app asks for the target too.
-export async function refreshOrca() {
-  await load(view?.state === "ready" ? "screen" : "full", true);
+// Reads the list for a side pane (the agents with their terminals, and the worktrees), whatever screen is shown, and gives what is held after it. `force` starts the read although another is on its way (the first read of a pane and the read after a send); the poll of a shown session does not. The first read of the app asks for the target too.
+export async function refreshOrca(force: boolean) {
+  await load(view?.state === "ready" ? "screen" : "full", force);
   return view;
 }
 
