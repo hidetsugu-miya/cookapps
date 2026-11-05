@@ -26,7 +26,6 @@ getrandom = "0.4"
 hkdf = "0.13"
 keyring = "4"
 keyring-core = { version = "1", optional = true }
-portable-pty = "0.9"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query", "multipart"] }
 rmcp = { version = "3.8", features = ["server", "transport-io", "macros"] }
 salsa20 = "0.10"

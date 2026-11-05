@@ -18,7 +18,6 @@ import type { HandoffKind } from "./bindings/HandoffKind";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaSkill } from "./bindings/OrcaSkill";
 import type { OrcaStarted } from "./bindings/OrcaStarted";
-import type { OrcaTerminalTargets } from "./bindings/OrcaTerminalTargets";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
@@ -36,9 +35,6 @@ import type { UpdateMode } from "./bindings/UpdateMode";
 import type { Week } from "./bindings/Week";
 import type { Workspace } from "./bindings/Workspace";
 import type { WorkspaceIcon } from "./bindings/WorkspaceIcon";
-
-// Where a terminal of the app opens (A-8): a worktree of this machine by its path, or an SSH host by the id Orca gives it. Rust checks it against Orca's list.
-export type TerminalTarget = { kind: "worktree"; path: string } | { kind: "ssh"; id: string };
 
 // Where a handoff to Orca goes (A-9): a new session in a worktree, or the terminal of a running one. Rust checks both against Orca's list.
 export type HandoffDestination = { kind: "new"; path: string } | { kind: "existing"; handle: string };
@@ -214,15 +210,6 @@ export interface Commands {
   orca_terminal_read: { args: { handle: string; environment: string | null }; result: string[] };
   // Types `text` into the plain terminal `handle` as it is (no Enter is added).
   orca_terminal_input: { args: { handle: string; text: string; environment: string | null }; result: null };
-  // The destinations of a new terminal: this machine's worktrees and its SSH hosts, whatever the target is. `message` says why the worktrees could not be read.
-  orca_terminal_targets: { args: undefined; result: OrcaTerminalTargets };
-  // Opens a terminal of the app at `target` with the given size and sends its output (`TerminalEvent`) to `channel`; answers the id the other commands take.
-  terminal_open: { args: { target: TerminalTarget; cols: number; rows: number; channel: unknown }; result: string };
-  terminal_write: { args: { id: string; data: string }; result: null };
-  terminal_resize: { args: { id: string; cols: number; rows: number }; result: null };
-  // The screen has drawn `bytes` more of the output of the terminal; Rust stops reading while too much is unconfirmed.
-  terminal_ack: { args: { id: string; bytes: number }; result: null };
-  terminal_close: { args: { id: string }; result: null };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

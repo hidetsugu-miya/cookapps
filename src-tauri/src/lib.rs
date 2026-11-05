@@ -16,7 +16,6 @@ pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
 mod slack_mrkdwn;
-pub mod terminal;
 pub mod todoist;
 pub mod update;
 
@@ -186,7 +185,6 @@ pub fn run() {
         .manage(update::Installed::default())
         .manage(orca_chat::OrcaChat::default())
         .manage(orca::OrcaMirror::default())
-        .manage(terminal::Terminals::default())
         .manage(Mutex::new(Badge::default()))
         .setup(|app| {
             // No Dock icon, and no focus taken from the developer's apps while the E2E run drives the window.
@@ -280,14 +278,8 @@ pub fn run() {
             orca::orca_close,
             orca::orca_terminal_read,
             orca::orca_terminal_input,
-            orca::orca_terminal_targets,
             orca_attach::orca_attach_image,
             orca_attach::orca_compose_text,
-            terminal::terminal_open,
-            terminal::terminal_write,
-            terminal::terminal_resize,
-            terminal::terminal_ack,
-            terminal::terminal_close,
             orca_chat::orca_chat_open,
             orca_chat::orca_chat_close,
             orca_chat::orca_chat_older,
@@ -302,12 +294,7 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build tauri application")
-        .run(|app, event| {
-            // The shells of the terminals (A-8) end with the app.
-            if matches!(event, tauri::RunEvent::Exit) {
-                app.state::<terminal::Terminals>().kill_all();
-            }
-        });
+        .run(|_, _| {});
 }
 
 #[cfg(test)]

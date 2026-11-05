@@ -2,7 +2,7 @@
 import type { OrcaStatus } from "./OrcaStatus";
 
 /**
- * A row of the project list (A-8): a repository of this machine (`key` is its id), or an SSH host (`key` is `ssh:{id}`, and only what its worktrees show: its name and whether it is connected come from `OrcaSshTarget`).
+ * A row of the project list (A-8): a repository of this machine (`key` is its id), or an SSH host (`key` is `ssh:{id}`, and only what its worktrees show: its name comes from `OrcaSshTarget`).
  */
 export type OrcaProject = { key: string, name: string, 
 /**
