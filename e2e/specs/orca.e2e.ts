@@ -671,7 +671,7 @@ describe("orca: the session history", () => {
     await expect($(".orca-tools-btn")).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("names what a run still going works on while the agent is working, and the summary when it is not", async () => {
+  it("shows the running summary of a run still going while the agent is working, and the summary when it is not", async () => {
     await openWorking();
     await select("example-app");
     await sendChat(chatItems([tools([["Edit", "ts/orca.ts"]], "ツールを実行中")]));
