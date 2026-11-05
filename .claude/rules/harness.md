@@ -1,0 +1,33 @@
+# The Claude Code harness
+
+## Where things are
+
+### Look in `.claude/` for what guards a change
+
+Hooks are configured in `.claude/settings.local.json`, and worktrees use the main checkout's.
+`guard-public.sh` stops forbidden public words, `post-edit.sh` runs rustfmt and `node --check` after an edit, `guard-e2e.sh` and `guard-review.sh` protect the records, and `pre-git.sh` runs the checks before a push. `session-start.sh` runs `npm ci` when `node_modules` is missing, and `post-gh.sh` keeps the milestones in step after `gh issue create`, the removal of `needs:owner` and `gh pr merge`.
+`.claude/skills/` holds `issue-plan` (an issue and its planned tag), `milestone-dev` (implement the first milestone) and `readme-product` (the README as a product page, and its photos).
+A gate that stops a command is a finding about the change, not an obstacle to route around.
+
+```text
+Good: pre-git.sh refuses the push -> read its message, and fix what it names
+Bad:  pre-git.sh refuses the push -> write the record by hand
+```
+
+### Build graphify only in the main checkout, after the merge
+
+`graphify-out/` is gitignored, so a graph built in a worktree is lost with it, and a branch's graph does not describe main.
+
+```text
+Good: merge -> fast-forward the main checkout -> update the graph there
+Bad:  build the graph in a worktree and delete the worktree
+```
+
+### Write the agents and the rules in their own language
+
+`.claude/rules/` is written in English. `.claude/agents/` and `.claude/rules/` are tracked and edited on a worktree branch, and the rest of `.claude/`, with the two gitignored rules, is edited in the main checkout (`worktree.md`).
+
+```text
+Good: change .claude/rules/review.md on the branch, and .claude/rules/machines.md in the main checkout
+Bad:  change .claude/rules/machines.md in the worktree
+```

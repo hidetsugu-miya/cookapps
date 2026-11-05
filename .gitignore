@@ -7,6 +7,9 @@ AGENTS.local.md
 mise.toml
 .claude/*
 !.claude/agents/
+!.claude/rules/
+.claude/rules/machines.md
+.claude/rules/google-cloud.md
 src-tauri/.cargo/
 e2e/dist/
 src/js/
