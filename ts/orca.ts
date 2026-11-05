@@ -4,6 +4,7 @@
 // The list is read at startup for the sidebar button's count, every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time, and no more once the `orca` command was found missing (the update button reads again).
 // Only the first read, the screen being shown, the update button, a change of the target and a read after a failure ask for the environments (and the SSH hosts); the clock reads the agents (the screen shown) or only their count (another screen).
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
+// While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
 // A read in the background swaps the rows in place: the selection, the text in the composer and the scroll position stay, and `show()` is never called by it.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
@@ -43,6 +44,8 @@ let ssh: OrcaSshTarget[] = [];
 type Scope = "full" | "screen" | "badge";
 // The sidebar button's count: the agents that wait for the user, and the notices (see `track`). The rows held, or what a read for the count alone found.
 let waitingCount = 0;
+// The rows that work now (group `working` and not stopped): the sidebar icon turns yellow and fades while there is one (see `track`).
+let workingCount = 0;
 // The notices: the panes of the stopped agents (done, failed or interrupted) that changed while the app ran and have not been shown on this screen yet.
 const notified = new Set<string>();
 // The panes that were stopped when last seen (a pane that left the list stays here, so one that comes back stopped is not noticed again), and whether a read of the target was taken as the base (its rows are never noticed).
@@ -128,6 +131,7 @@ const viewedPane = () => (shown() && !document.hidden && selectedTab?.startsWith
 // or that first appeared in a later read already stopped (a pane seen stopped before is never new, even after it left the list and came back). A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
 function track(rows: OrcaRow[]) {
   waitingCount = rows.filter((r) => r.group === "waiting").length;
+  workingCount = rows.filter((r) => r.group === "working" && !isStopped(r)).length;
   const live = new Set<string>();
   for (const r of rows) {
     if (r.paneKey === null) continue;
@@ -147,6 +151,7 @@ function track(rows: OrcaRow[]) {
 // Forgets the notices, the stopped panes seen and the base: the command is gone, or the target changed.
 function forgetNotices() {
   waitingCount = 0;
+  workingCount = 0;
   notified.clear();
   wasStopped = new Set();
   baselined = false;
@@ -225,7 +230,13 @@ const projectName = (key: string) => (key.startsWith("ssh:") ? ssh.find((t) => `
 function drawBadge() {
   const viewed = viewedPane();
   if (viewed !== null) notified.delete(viewed);
-  setNavCount("nav-orca", waitingCount + notified.size, "Orca", "確認待ち");
+  const waiting = waitingCount + notified.size;
+  setNavCount("nav-orca", waiting, "Orca", "確認待ち");
+  // The number that work is not drawn: the button's icon is yellow and fades, and the label (read aloud, and the tooltip) says it.
+  const nav = $("nav-orca");
+  nav.classList.toggle("working", workingCount > 0);
+  const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(workingCount > 0 ? [`作業中 ${workingCount} 件`] : [])];
+  nav.setAttribute("aria-label", parts.length === 0 ? "Orca" : `Orca（${parts.join("、")}）`);
 }
 
 // The status label sits at the bottom of the list pane; with an environment saved it is the menu of the targets.
