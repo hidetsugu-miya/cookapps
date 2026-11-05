@@ -258,7 +258,7 @@ export function closeChat(view: ChatView) {
   invoke("orca_chat_close").catch(() => {});
 }
 
-// Whether the session `view` shows is working. A run that is still going names what it runs only then. Only the owner of the read is told.
+// Whether the session `view` shows is working. A run that is still going shows its running summary only then. Only the owner of the read is told.
 export function setChatWorking(view: ChatView, now: boolean) {
   if (owner !== view || now === working) return;
   working = now;

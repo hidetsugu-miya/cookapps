@@ -555,27 +555,10 @@ enum Entry {
     },
 }
 
-/// The names of a run's calls with how many times each is called, in the order of first use: `Read 2、Edit 2、Bash 1`.
-fn counts_text(calls: &[CallRef]) -> String {
-    let mut counts: Vec<(&str, usize)> = Vec::new();
-    for call in calls {
-        match counts.iter_mut().find(|(name, _)| *name == call.name) {
-            Some((_, n)) => *n += 1,
-            None => counts.push((&call.name, 1)),
-        }
-    }
-    counts
-        .iter()
-        .map(|(name, n)| format!("{name} {n}"))
-        .collect::<Vec<_>>()
-        .join("、")
-}
-
 fn tools_item(run: Run, running: bool) -> OrcaChatItem {
-    let counts = counts_text(&run.calls);
     OrcaChatItem::Tools {
-        summary: format!("ツールを {} 回実行（{counts}）", run.calls.len()),
-        running_summary: running.then(|| format!("ツールを実行中（{counts}）")),
+        summary: format!("ツールを {} 回実行", run.calls.len()),
+        running_summary: running.then(|| "ツールを実行中".to_owned()),
         calls: run
             .calls
             .into_iter()
@@ -2329,7 +2312,7 @@ mod tests {
             timeline[1],
             OrcaChatItem::Tools {
                 id: "c1#c0".into(),
-                summary: "ツールを 3 回実行（Read 2、Edit 1）".into(),
+                summary: "ツールを 3 回実行".into(),
                 running_summary: None,
                 calls: vec![
                     OrcaToolCall {
@@ -2422,10 +2405,7 @@ mod tests {
             result("r1", "k1"),
             result("r3", "k3"),
         ]);
-        assert_eq!(
-            running(&timeline).as_deref(),
-            Some("ツールを実行中（Edit 2、Read 1）")
-        );
+        assert_eq!(running(&timeline).as_deref(), Some("ツールを実行中"));
         // All have results: not running.
         let done = items(&[call("c1", "Edit", json!({}), "k1"), result("r1", "k1")]);
         assert_eq!(running(&done), None);
@@ -2454,10 +2434,7 @@ mod tests {
             {"type": "tool-result"}]})
         };
         let two_one = items(&[bare_call("a"), bare_call("b"), bare_result("r")]);
-        assert_eq!(
-            running(&two_one).as_deref(),
-            Some("ツールを実行中（Bash 2）")
-        );
+        assert_eq!(running(&two_one).as_deref(), Some("ツールを実行中"));
         let two_two = items(&[
             bare_call("a"),
             bare_call("b"),
