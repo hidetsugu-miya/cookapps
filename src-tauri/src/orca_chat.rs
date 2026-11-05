@@ -359,6 +359,47 @@ fn without_image_source_lines(text: &str) -> String {
         .join("\n")
 }
 
+/// The id of a line that is only the opening tag of a pasted content (`<pasted_content id="2536">`).
+fn pasted_open_id(line: &str) -> Option<&str> {
+    line.trim()
+        .strip_prefix("<pasted_content id=\"")?
+        .strip_suffix("\">")
+        .filter(|id| !id.is_empty() && !id.contains('"'))
+}
+
+/// The tags Claude Code puts around a long paste, each on a line of its own, are taken off: a line that is only an opening tag, and the next line that is only the closing tag of the same id.
+/// A tag with no partner of its id stays, and so does every other line.
+fn without_pasted_tags(text: String) -> String {
+    // Most messages have no paste: the tag's name is the cheap test.
+    if !text.contains("<pasted_content") {
+        return text;
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let mut dropped = vec![false; lines.len()];
+    for (open, line) in lines.iter().enumerate() {
+        if dropped[open] {
+            continue;
+        }
+        let Some(id) = pasted_open_id(line) else {
+            continue;
+        };
+        let closing = format!("</pasted_content id=\"{id}\">");
+        if let Some(close) =
+            (open + 1..lines.len()).find(|&at| !dropped[at] && lines[at].trim() == closing)
+        {
+            dropped[open] = true;
+            dropped[close] = true;
+        }
+    }
+    lines
+        .iter()
+        .zip(&dropped)
+        .filter(|(_, dropped)| !**dropped)
+        .map(|(line, _)| *line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The first line of the first of the tool input's keys that holds a string, cut to the length of a row's line.
 fn detail_of(input: &Value) -> String {
     DETAIL_KEYS
@@ -461,7 +502,7 @@ fn held_of(message: &Value) -> Option<Held> {
             "text" if role != Role::Other => {
                 let text = block["text"].as_str()?;
                 let text = if role == Role::User {
-                    without_image_source_lines(text)
+                    without_pasted_tags(without_image_source_lines(text))
                 } else {
                     text.to_owned()
                 };
@@ -1994,6 +2035,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_tags_of_a_pasted_content_are_dropped_from_user_text() {
+        let user_text =
+            "<pasted_content id=\"2536\">\n貼った本文\n</pasted_content id=\"2536\">\n\n自分の本文";
+        assert_eq!(
+            items(&[text("user", "u", user_text)]),
+            [user("u", "貼った本文\n\n自分の本文")]
+        );
+        // Several pastes, indented tags, and the body lines are kept as written.
+        let many = "前\n  <pasted_content id=\"a\">  \n  一\n\n二\n</pasted_content id=\"a\">\n<pasted_content id=\"b\">\nx\n</pasted_content id=\"b\">\n後";
+        assert_eq!(
+            items(&[text("user", "u", many)]),
+            [user("u", "前\n  一\n\n二\nx\n後")]
+        );
+        // Only the opening and the closing of the same id are a pair; a lone tag stays.
+        for lone in [
+            "<pasted_content id=\"a\">\n本文",
+            "本文\n</pasted_content id=\"a\">",
+            "<pasted_content id=\"a\">\n本文\n</pasted_content id=\"b\">",
+            "</pasted_content id=\"a\">\n本文\n<pasted_content id=\"a\">",
+            "文中の <pasted_content id=\"a\">本文</pasted_content id=\"a\"> は残す",
+        ] {
+            assert_eq!(
+                items(&[text("user", "u", lone)]),
+                [user("u", lone)],
+                "{lone}"
+            );
+        }
+        // Only the tags: the message is dropped. An assistant's text is left as written.
+        assert!(items(&[text(
+            "user",
+            "u",
+            "<pasted_content id=\"a\">\n</pasted_content id=\"a\">"
+        )])
+        .is_empty());
+        let tagged = "<pasted_content id=\"a\">\nx\n</pasted_content id=\"a\">";
+        assert_eq!(
+            items(&[text("assistant", "a", tagged)]),
+            [assistant("a", tagged)]
+        );
+    }
+
     // -- handoffs (A-9) --
 
     fn handed(instruction: &str, body: &str) -> String {
@@ -2041,9 +2124,8 @@ mod tests {
     fn a_message_without_a_well_formed_block_is_unchanged() {
         let sent = handed("指示", "本文");
         // A wrapper with no block is left as it is, and so is a block that is cut.
-        let wrapped = "<pasted_content id=\"a\">\nただの長い文\n</pasted_content id=\"a\">";
         let cut = sent.replace("\n</cookapps-context>", "");
-        for plain in ["ただの指示", wrapped, cut.as_str()] {
+        for plain in ["ただの指示", cut.as_str()] {
             assert_eq!(
                 items(&[text("user", "u", plain)]),
                 [user("u", plain.trim())],
