@@ -189,14 +189,17 @@ describe("orca", () => {
     await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（確認待ち 4 件）");
   });
 
-  it("keeps the mark when a read fails, and clears it when the command is missing", async () => {
+  it("clears the mark when a read fails or the command is missing", async () => {
     await openWorking(orcaOverview([working("example-app")], worktrees()));
     expect(await marked()).toBe(true);
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }));
     await $("#orca-refresh").click();
     await expect($("#orca-status")).toHaveText("このマシン に接続できません");
-    expect(await marked()).toBe(true);
-    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca（作業中 1 件）");
+    expect(await marked()).toBe(false);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "Orca");
+    await mock("orca_overview", orcaOverview([working("example-app")], worktrees()));
+    await $("#orca-refresh").click();
+    await browser.waitUntil(marked, { timeoutMsg: "the mark never came back" });
     await mock("orca_overview", orcaOverview([], [], { state: "missing" }));
     await $("#orca-refresh").click();
     await expect($("#orca-status")).toHaveText("未インストール");

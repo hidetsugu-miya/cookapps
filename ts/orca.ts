@@ -44,7 +44,7 @@ let ssh: OrcaSshTarget[] = [];
 type Scope = "full" | "screen" | "badge";
 // The sidebar button's count: the agents that wait for the user, and the notices (see `track`). The rows held, or what a read for the count alone found.
 let waitingCount = 0;
-// The rows that work now (group `working` and not stopped): the sidebar icon turns yellow and fades while there is one (see `track`).
+// The rows that work now (group `working`, with a status that says so). A failed read cannot say that any does, so it clears them: the sidebar icon turns yellow and fades while there is one (see `track`).
 let workingCount = 0;
 // The notices: the panes of the stopped agents (done, failed or interrupted) that changed while the app ran and have not been shown on this screen yet.
 const notified = new Set<string>();
@@ -131,7 +131,7 @@ const viewedPane = () => (shown() && !document.hidden && selectedTab?.startsWith
 // or that first appeared in a later read already stopped (a pane seen stopped before is never new, even after it left the list and came back). A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
 function track(rows: OrcaRow[]) {
   waitingCount = rows.filter((r) => r.group === "waiting").length;
-  workingCount = rows.filter((r) => r.group === "working" && !isStopped(r)).length;
+  workingCount = rows.filter((r) => r.group === "working" && (r.status === "working" || r.status === "monitoring")).length;
   const live = new Set<string>();
   for (const r of rows) {
     if (r.paneKey === null) continue;
@@ -232,7 +232,7 @@ function drawBadge() {
   if (viewed !== null) notified.delete(viewed);
   const waiting = waitingCount + notified.size;
   setNavCount("nav-orca", waiting, "Orca", "確認待ち");
-  // The number that work is not drawn: the button's icon is yellow and fades, and the label (read aloud, and the tooltip) says it.
+  // The number that work is not drawn: the button's icon is yellow and fades, and the label says it (read aloud, and in the tooltip on hover).
   const nav = $("nav-orca");
   nav.classList.toggle("working", workingCount > 0);
   const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(workingCount > 0 ? [`作業中 ${workingCount} 件`] : [])];
@@ -503,6 +503,7 @@ function adopt(read: OrcaOverview) {
   if (read.known) ssh = read.ssh;
   if (view.state === "ready") track(view.rows);
   else if (view.state === "missing") forgetNotices();
+  else workingCount = 0;
   switching = false;
   if (newPath !== null && !view.worktrees.some((w) => w.path === newPath)) newPath = null;
   // A plain terminal that left Orca's list leaves the tabs, with its screen.
@@ -555,6 +556,7 @@ async function load(scope: Scope, force = false) {
   // A read for the count alone has no terminals: it only moves the count, and a failure of it is left to the next read.
   if (scope === "badge" && next.state !== "missing") {
     if (next.state === "ready") track(next.rows);
+    else workingCount = 0;
     drawBadge();
     return;
   }
