@@ -134,7 +134,7 @@ pub struct OrcaTerminal {
     pub project_key: String,
 }
 
-/// A row of the project list (A-8): a repository of this machine (`key` is its id), or an SSH host (`key` is `ssh:{id}`, and only what its worktrees show: its name and whether it is connected come from `OrcaSshTarget`).
+/// A row of the project list (A-8): a repository of this machine (`key` is its id), or an SSH host (`key` is `ssh:{id}`, and only what its worktrees show: its name comes from `OrcaSshTarget`).
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -159,7 +159,6 @@ pub struct OrcaProject {
 pub struct OrcaSshTarget {
     pub id: String,
     pub label: String,
-    pub connected: bool,
 }
 
 /// A worktree a launch can start an agent in.
@@ -576,7 +575,6 @@ pub fn ssh_targets_of(result: &Value) -> Vec<OrcaSshTarget> {
             Some(OrcaSshTarget {
                 id: text_of(t, "id")?.to_owned(),
                 label,
-                connected: t["connected"] == true,
             })
         })
         .collect()
@@ -2601,8 +2599,8 @@ mod tests {
     #[test]
     fn an_ssh_target_needs_an_id_and_a_name() {
         let doc = json!({"targets": [
-            {"id": "s1", "label": "Example\nsecond", "configHost": "example-host", "host": "203.0.113.5", "username": "u", "identityFile": "/k", "connected": true},
-            {"id": "s2", "configHost": "other", "connected": false},
+            {"id": "s1", "label": "Example\nsecond", "configHost": "example-host", "host": "203.0.113.5", "username": "u", "identityFile": "/k"},
+            {"id": "s2", "configHost": "other"},
             {"id": "s3", "label": " ", "configHost": " "},
             {"label": "No id", "configHost": "noid"},
             {"id": "s5"},
@@ -2614,12 +2612,10 @@ mod tests {
                 OrcaSshTarget {
                     id: "s1".into(),
                     label: "Example".into(),
-                    connected: true,
                 },
                 OrcaSshTarget {
                     id: "s2".into(),
                     label: "other".into(),
-                    connected: false,
                 },
             ]
         );

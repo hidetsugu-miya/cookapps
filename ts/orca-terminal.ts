@@ -168,7 +168,7 @@ export function dropTerminal(id: string) {
 
 // Forgets every mirror whose id `keep` does not accept (the sessions that left Orca's list, or the target changed).
 export function pruneMirrors(keep: (id: string) => boolean) {
-  for (const id of [...instances.keys()]) if (!keep(id)) dropTerminal(id);
+  for (const id of instances.keys()) if (!keep(id)) dropTerminal(id);
 }
 
 // What a failed send of typed keys does (the screen shows the message).

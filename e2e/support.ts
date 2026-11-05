@@ -513,7 +513,7 @@ export const orcaWorktree = (repo: string, branch: string): OrcaWorktree => ({ p
 
 // A plain terminal of Orca (a shell) in the project of `repo`.
 export const orcaTerminal = (repo: string, title: string, extra: Partial<OrcaTerminal> = {}): OrcaTerminal => ({ handle: `term_${repo}_${title}`, title, branch: "main", projectKey: `proj_${repo}`, ...extra });
-export const orcaSsh = (id: string, label: string, connected = true): OrcaSshTarget => ({ id, label, connected });
+export const orcaSsh = (id: string, label: string): OrcaSshTarget => ({ id, label });
 
 const STATUS_ORDER: OrcaStatus[] = ["question", "failed", "working", "monitoring", "interrupted", "done", "idle"];
 

@@ -3,4 +3,4 @@
 /**
  * A host of `~/.ssh/config` that Orca knows (`ssh.listEditableTargets` of this machine), for its row in the project list.
  */
-export type OrcaSshTarget = { id: string, label: string, connected: boolean, };
+export type OrcaSshTarget = { id: string, label: string, };

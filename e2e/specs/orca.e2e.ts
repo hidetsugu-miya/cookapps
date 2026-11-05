@@ -1284,7 +1284,7 @@ describe("orca: projects", () => {
   const withTerminals = () =>
     orcaOverview(sample(), [...worktrees(), orcaWorktree("example-idle", "main")], {
       terminals: [orcaTerminal("example-app", "zsh")],
-      ssh: [orcaSsh("s1", "example-host"), orcaSsh("s2", "other-host", false)],
+      ssh: [orcaSsh("s1", "example-host"), orcaSsh("s2", "other-host")],
       hosts: [hostRow],
     });
   const projectNames = () => textsOf("#orca-feed .orca-project-name");
