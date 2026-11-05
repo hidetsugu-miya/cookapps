@@ -473,6 +473,17 @@ pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
         .collect()
 }
 
+/// The `hostId` Orca names for the worktree at `path` in `orca worktree ps` (its `result`); `None` when the worktree or its `hostId` is absent (A-10 sends a file there, and Orca wants this id with it).
+fn host_id_of(ps: &Value, path: &str) -> Option<String> {
+    ps["worktrees"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|w| text_of(w, "path") == Some(path))
+        .and_then(|w| text_of(w, "hostId"))
+        .map(str::to_owned)
+}
+
 /// The names of the saved environments of `orca environment list` (its `result`): an entry is a name, or an object with a `name` (else an `id`).
 pub fn environments_of(result: &Value) -> Vec<String> {
     result["environments"]
@@ -1213,6 +1224,16 @@ fn launch(path: &str, text: &str, environment: Option<&str>) -> Result<OrcaStart
     let (ps, _) = read_lists(environment, false);
     check_worktree(&worktrees_of(&ps.map_err(message_of)?), path)?;
     write(&launch_args(path, text, environment)).map(|result| started_of(&result))
+}
+
+/// The `hostId` of the worktree at `path` of the target's list read just now (A-10): the path must be in it.
+pub(crate) fn worktree_host(path: &str, environment: Option<&str>) -> Result<String, String> {
+    check_path(path)?;
+    check_listed(environment)?;
+    let (ps, _) = read_lists(environment, false);
+    let ps = ps.map_err(message_of)?;
+    check_worktree(&worktrees_of(&ps), path)?;
+    host_id_of(&ps, path).ok_or_else(|| "Orca が worktree のホストを答えませんでした".into())
 }
 
 /// Hands the content to a new session or a running one (A-9): the prompt is composed here, then the launch or the send of A-6 runs once with its checks.
@@ -2115,6 +2136,23 @@ mod tests {
         for bad in ["", "work", "./work", "--json", "~/work"] {
             assert!(check_path(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_host_of_a_worktree_is_the_host_id_orca_names() {
+        let ps = json!({"worktrees": [
+            {"path": "/work/a", "hostId": "local"},
+            {"path": "/work/b", "hostId": "ssh:lab"},
+            {"path": "/work/c"},
+            {"path": "/work/d", "hostId": "  "},
+        ]});
+        assert_eq!(host_id_of(&ps, "/work/a").as_deref(), Some("local"));
+        assert_eq!(host_id_of(&ps, "/work/b").as_deref(), Some("ssh:lab"));
+        // No `hostId` is not taken for this machine here: the upload fails.
+        for none in ["/work/c", "/work/d", "/work/x", ""] {
+            assert_eq!(host_id_of(&ps, none), None, "{none}");
+        }
+        assert_eq!(host_id_of(&Value::Null, "/work/a"), None);
     }
 
     #[test]

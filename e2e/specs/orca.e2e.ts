@@ -8,6 +8,7 @@ import {
   chatStatus,
   chatTools,
   chatUser,
+  count,
   holds,
   inbox,
   isoDate,
@@ -1814,5 +1815,190 @@ describe("orca: projects", () => {
       await waitForCalls(input);
       await expect($("#error")).toHaveText("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください");
     });
+  });
+});
+
+describe("orca: attached images", () => {
+  // A one-pixel PNG, and what Rust answers for it: the text for Claude, the path of the file in the worktree.
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const dropped = (repo: string, name = "shot.png") => `/work/${repo}/.orca/drops/${name}`;
+  type Given = { name: string; type: string; base64: string };
+  const image = (name = "shot.png"): Given => ({ name, type: "image/png", base64: PNG });
+  const note: Given = { name: "notes.txt", type: "text/plain", base64: btoa("hello") };
+
+  // Dispatches `kind` ("paste", "dragover" or "drop") on the element at `selector` carrying `files`, as the clipboard or the pointer would (the event objects hold plain stand-ins for the clipboard and the transfer,
+  // which WKWebView builds only from a real gesture). Answers whether the page cancelled the event.
+  const fire = (kind: "paste" | "dragover" | "drop", selector: string, files: Given[]) =>
+    browser.execute(
+      (k, sel, given) => {
+        const list = given.map((g) => new File([Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0))], g.name, { type: g.type }));
+        const event = new Event(k, { bubbles: true, cancelable: true });
+        const transfer = { files: list, types: list.length ? ["Files"] : ["text/plain"], dropEffect: "none" };
+        Object.defineProperty(event, k === "paste" ? "clipboardData" : "dataTransfer", { value: transfer });
+        const target = sel === "document" ? document.body : document.querySelector(sel)!;
+        return !target.dispatchEvent(event);
+      },
+      kind,
+      selector,
+      files,
+    );
+  const thumbs = () => count("#orca-attachments .orca-attachment");
+  const paste = (...files: Given[]) => fire("paste", "#orca-input", files);
+
+  it("takes a pasted image as a thumbnail with a button to remove it, and leaves a paste of text alone", async () => {
+    await openWorking();
+    await rowOf("example-app").click();
+    await expect($("#orca-attachments")).not.toBeDisplayed();
+    expect(await paste()).toBe(false);
+    expect(await thumbs()).toBe(0);
+    expect(await paste(image())).toBe(true);
+    await waitForCount("#orca-attachments .orca-attachment", 1);
+    await expect($("#orca-attachments")).toBeDisplayed();
+    await expect($("#orca-attachments img")).toHaveAttribute("alt", "shot.png");
+    expect(await $("#orca-attachments img").getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    await $('button[aria-label="shot.png を外す"]').click();
+    await waitForCount("#orca-attachments .orca-attachment", 0);
+    await expect($("#orca-attachments")).not.toBeDisplayed();
+  });
+
+  it("takes an image dropped on the composer, and cancels the dragover that carries a file", async () => {
+    await openWorking();
+    await rowOf("example-app").click();
+    expect(await fire("dragover", "#orca-form", [image()])).toBe(true);
+    expect(await fire("dragover", "#orca-form", [])).toBe(false);
+    expect(await fire("drop", "#orca-form", [image("a.png"), image("b.png")])).toBe(true);
+    await waitForCount("#orca-attachments .orca-attachment", 2);
+    expect(await browser.execute(() => [...document.querySelectorAll("#orca-attachments img")].map((i) => (i as HTMLImageElement).alt))).toEqual(["a.png", "b.png"]);
+  });
+
+  it("refuses a file that is not an image with the message of the post error, and does not add it", async () => {
+    await openWorking();
+    await rowOf("example-app").click();
+    await fire("drop", "#orca-form", [note]);
+    await expect($("#orca-error")).toHaveText("画像だけを添付できます");
+    expect(await thumbs()).toBe(0);
+    // An image among them is added and the message stays.
+    await fire("drop", "#orca-form", [note, image()]);
+    await waitForCount("#orca-attachments .orca-attachment", 1);
+    await expect($("#orca-error")).toHaveText("画像だけを添付できます");
+    // A paste of a file that is not an image is left to the textarea.
+    expect(await paste(note)).toBe(false);
+  });
+
+  it("does not take a file dropped anywhere else, and does not let the webview navigate to it", async () => {
+    await openWorking();
+    await rowOf("example-app").click();
+    const before = await browser.execute(() => location.href);
+    expect(await fire("dragover", "document", [image()])).toBe(true);
+    expect(await fire("drop", "document", [image()])).toBe(true);
+    expect(await fire("drop", "#orca-feed", [image()])).toBe(true);
+    // A drag that holds no file is not touched.
+    expect(await fire("drop", "document", [])).toBe(false);
+    expect(await browser.execute(() => location.href)).toBe(before);
+    expect(await thumbs()).toBe(0);
+  });
+
+  it("enables the button for an image alone, and not before", async () => {
+    await openOrca();
+    await pickDest("/work/example-api");
+    await expect($("#orca-send")).toBeDisabled();
+    await paste(image());
+    await waitForCount("#orca-attachments .orca-attachment", 1);
+    await expect($("#orca-send")).toBeEnabled();
+    await $('button[aria-label="shot.png を外す"]').click();
+    await expect($("#orca-send")).toBeDisabled();
+  });
+
+  it("puts each image in the worktree of the selected session, then sends the text with the paths", async () => {
+    await openWorking();
+    const attach = await mock("orca_attach_image", dropped("example-app"));
+    const send = await mock("orca_send", null);
+    await rowOf("example-app").click();
+    await $("#orca-input").setValue("Look at this");
+    await paste(image("shot.png"));
+    await waitForCount("#orca-attachments .orca-attachment", 1);
+    await $("#orca-send").click();
+    expect(await waitForCalls(send)).toEqual([{ handle: "term_example-app", text: `Look at this\n\n${dropped("example-app")}`, environment: null }]);
+    expect(await callsOf(attach)).toEqual([{ path: "/work/example-app", name: "shot.png", data: PNG, environment: null }]);
+    await expect($("#orca-input")).toHaveValue("");
+    await expect($("#orca-attachments")).not.toBeDisplayed();
+    await expect($("#orca-error")).not.toBeDisplayed();
+  });
+
+  // The mock answers the same path for both images; the order of the uploads is the order of their calls.
+  it("sends only the paths, one for each line in order, when the text is blank", async () => {
+    await openWorking();
+    const attach = await mock("orca_attach_image", dropped("example-app", "first.png"));
+    const send = await mock("orca_send", null);
+    await rowOf("example-app").click();
+    await fire("drop", "#orca-form", [image("first.png"), image("second.png")]);
+    await waitForCount("#orca-attachments .orca-attachment", 2);
+    await $("#orca-send").click();
+    expect(await waitForCalls(send)).toEqual([{ handle: "term_example-app", text: `${dropped("example-app", "first.png")}\n${dropped("example-app", "first.png")}`, environment: null }]);
+    expect((await callsOf(attach)).map((c) => (c as { name: string }).name)).toEqual(["first.png", "second.png"]);
+  });
+
+  it("puts the image in the chosen worktree and the saved target when it starts a session", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }));
+    const attach = await mock("orca_attach_image", dropped("example-api"));
+    const launch = await mock("orca_launch", null);
+    await pickDest("/work/example-api");
+    await $("#orca-input").setValue("Write the docs");
+    await paste(image());
+    await waitForCount("#orca-attachments .orca-attachment", 1);
+    await $("#orca-send").click();
+    expect(await waitForCalls(launch)).toEqual([{ path: "/work/example-api", text: `Write the docs\n\n${dropped("example-api")}`, environment: "Studio" }]);
+    expect(await callsOf(attach)).toEqual([{ path: "/work/example-api", name: "shot.png", data: PNG, environment: "Studio" }]);
+    await expect($("#orca-attachments")).not.toBeDisplayed();
+  });
+
+  it("keeps the text and the images and sends nothing when an image cannot be put in the worktree", async () => {
+    await openWorking();
+    const attach = await mock("orca_attach_image", rejects("Orca がエラーを返しました（forbidden）"));
+    const send = await mock("orca_send", null);
+    await rowOf("example-app").click();
+    await $("#orca-input").setValue("Look at this");
+    await paste(image());
+    await waitForCount("#orca-attachments .orca-attachment", 1);
+    await $("#orca-send").click();
+    await waitForCalls(attach);
+    await expect($("#orca-error")).toHaveText("Orca がエラーを返しました（forbidden）");
+    await expect($("#orca-input")).toHaveValue("Look at this");
+    expect(await thumbs()).toBe(1);
+    await expect($("#orca-send")).toBeEnabled();
+    expect(await callsOf(send)).toEqual([]);
+  });
+
+  it("does not put an image in the worktree again when the send after it failed and is pressed again", async () => {
+    await openWorking();
+    const attach = await mock("orca_attach_image", dropped("example-app"));
+    await mock("orca_send", rejects("No such terminal"));
+    await rowOf("example-app").click();
+    await $("#orca-input").setValue("Look at this");
+    await paste(image());
+    await waitForCount("#orca-attachments .orca-attachment", 1);
+    await $("#orca-send").click();
+    await expect($("#orca-error")).toHaveText("No such terminal");
+    await expect($("#orca-input")).toHaveValue("Look at this");
+    expect(await thumbs()).toBe(1);
+    const send = await mock("orca_send", null);
+    await $("#orca-send").click();
+    expect(await waitForCalls(send)).toEqual([{ handle: "term_example-app", text: `Look at this\n\n${dropped("example-app")}`, environment: null }]);
+    expect(await callsOf(attach)).toHaveLength(1);
+    await expect($("#orca-attachments")).not.toBeDisplayed();
+  });
+
+  it("refuses to attach to a session whose worktree is not known", async () => {
+    await openWorking(orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { path: "" })], worktrees()));
+    const attach = await mock("orca_attach_image", null);
+    const send = await mock("orca_send", null);
+    await rowOf("example-app").click();
+    await paste(image());
+    await waitForCount("#orca-attachments .orca-attachment", 1);
+    await $("#orca-send").click();
+    await expect($("#orca-error")).toHaveText("画像を置く worktree が分かりません");
+    expect(await callsOf(attach)).toEqual([]);
+    expect(await callsOf(send)).toEqual([]);
+    expect(await thumbs()).toBe(1);
   });
 });

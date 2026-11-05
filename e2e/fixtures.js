@@ -54,6 +54,7 @@ const answers = {
   orca_chat_close: null,
   orca_chat_older: null,
   orca_chat_pause: null,
+  orca_attach_image: "/work/example/.orca/drops/image.png",
   terminal_ack: null,
   fetch_images: {},
   claude_status: { state: "missing" },
