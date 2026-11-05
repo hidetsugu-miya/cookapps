@@ -978,12 +978,15 @@ describe("slack thread: asking Claude", () => {
     await $("#reply-send").click();
   };
 
-  it("has the Claude icon and クリア in the header, no 校正する button, an arrow send button, no key hints and the new placeholder", async () => {
+  it("has the Claude and Orca tabs and クリア in the header, no 校正する button, an arrow send button, no key hints and the new placeholder", async () => {
     await openDetail();
     const pane = $("#reply-chat");
     await expect(pane).toHaveAttribute("aria-label", "Claude");
-    expect(await textsOf("#reply-chat .chat-head")).toEqual(["クリア"]);
-    expect(await count("#reply-chat .chat-head svg")).toBe(1);
+    // The header holds the tabs (A-9, each with its icon) and クリア.
+    expect(await browser.execute(() => [...document.querySelectorAll("#reply-chat .chat-head > *")].map((e) => e.id))).toEqual(["reply-tabs", "reply-clear"]);
+    expect((await textsOf("#reply-chat .chat-head > #reply-clear"))).toEqual(["クリア"]);
+    expect(await textsOf("#reply-chat .chat-head [role=tab]")).toEqual(["Claude", "Orca"]);
+    expect(await count("#reply-chat .chat-head svg")).toBe(2);
     // The Slack compose screen keeps its own row (S-4).
     expect(await count("#reply-proofread, #reply-chat .proofread-row")).toBe(0);
     await expect($("#reply-input")).toHaveAttribute("placeholder", "Claude に頼みたいことを書く");

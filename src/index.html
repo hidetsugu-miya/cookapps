@@ -54,6 +54,9 @@
       <button id="thread-todo" class="icon-btn" aria-label="Todo にする" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
       </button>
+      <button id="thread-orca" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+      </button>
       <button id="trash" class="icon-btn" aria-label="ゴミ箱へ移動" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
       </button>
@@ -66,6 +69,7 @@
       <button id="mail-mark-all" class="text-btn" disabled>すべて既読にする</button>
     </header>
     <p id="error" hidden></p>
+    <div id="mail-area" class="split-main">
     <main id="main">
       <section id="login" hidden>
         <button id="login-button">Google でログイン</button>
@@ -82,6 +86,9 @@
         <div id="messages"></div>
       </section>
     </main>
+    <div id="mail-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Orca の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="37" tabindex="0" hidden><span></span></div>
+    <aside id="mail-handoff" class="ho-pane split-chat" aria-label="Orca に渡す" hidden></aside>
+    </div>
     <section id="calendar" hidden>
       <div id="cal-bar">
         <h1 id="cal-title"></h1>
@@ -102,7 +109,7 @@
         <div id="cal-body"></div>
       </div>
     </section>
-    <section id="todo" hidden>
+    <section id="todo" class="split-main" hidden>
       <aside id="projects"></aside>
       <div id="todo-body">
         <header>
@@ -111,6 +118,9 @@
           </button>
           <h1 id="todo-title">今日</h1>
           <button id="todo-prompt" class="icon-btn" aria-label="Todo の要約プロンプトを確認・編集" hidden></button>
+          <button id="todo-orca" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+          </button>
           <button id="todo-more" class="icon-btn" aria-label="その他" aria-haspopup="menu" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path stroke-width="3" d="M5 12h.01M12 12h.01M19 12h.01"/></svg>
           </button>
@@ -135,6 +145,8 @@
           <section id="todo-detail" hidden></section>
         </div>
       </div>
+      <div id="todo-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Orca の幅" aria-valuemin="0" aria-valuemax="50" aria-valuenow="33" tabindex="0" hidden><span></span></div>
+      <aside id="todo-handoff" class="ho-pane split-chat" aria-label="Orca に渡す" hidden></aside>
     </section>
     <section id="settings" hidden>
       <div id="settings-head">
@@ -386,10 +398,18 @@
       <div id="reply-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
       <aside id="reply-chat" class="chat-pane split-chat" aria-label="Claude">
         <div class="chat-head">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
+          <div id="reply-tabs" role="tablist" aria-label="Claude と Orca">
+            <button id="reply-tab-claude" class="chat-tab" role="tab" aria-selected="true" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+            </button>
+            <button id="reply-tab-orca" class="chat-tab" role="tab" aria-selected="false" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>Orca
+            </button>
+          </div>
           <button id="reply-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
         </div>
         <div id="reply-log" class="chat-log"></div>
+        <div id="st-orca" class="ho-pane ho-slack" hidden></div>
         <div class="chat-foot">
           <p id="reply-chat-note" class="chat-note" hidden></p>
           <form id="reply-form" class="chat-form">

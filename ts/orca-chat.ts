@@ -1,10 +1,11 @@
-// The history of the selected Orca session (A-7), in the work pane of the Orca screen: the user's messages, the agent's answers, and the tool runs folded into one line each.
+// The history of an Orca session (A-7): the user's messages (a handed-over content folded into one line, A-9), the agent's answers, and the tool runs folded into one line each.
 // Rust reads the session and sends events through a channel (`orca_chat_open`): `items` replace the timeline from an index, `status` says how the read goes. One session is open at a time, and an event of a channel that is no longer the current one is ignored.
+// The read has one owner at a time (A-9): the work pane of the Orca screen, or the side pane of a mail, a Slack thread or a Todo. The history is drawn into the owner's `ChatView`, and an owner closes only its own read.
 // Nothing is kept after the session is closed except what the screen draws.
 import type { OrcaChatEvent } from "./bindings/OrcaChatEvent";
 import type { OrcaChatItem } from "./bindings/OrcaChatItem";
 import type { OrcaChatState } from "./bindings/OrcaChatState";
-import { $, tag } from "./dom.js";
+import { tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { markdownHtml } from "./todo-data.js";
 
@@ -16,8 +17,17 @@ interface Channel {
   onmessage: (event: OrcaChatEvent) => void;
 }
 
-// The channel of the session open now, null when none is.
+// Where an owner draws the history: the scroll box, the list in it, the button for older messages and the line of status above the box.
+export interface ChatView {
+  box: HTMLElement;
+  list: HTMLElement;
+  older: HTMLElement;
+  status: HTMLElement;
+}
+
+// The channel of the session open now, null when none is, and the view it draws into.
 let current: Channel | null = null;
+let owner: ChatView | null = null;
 // What is drawn: the items (one child of the list each), and how the read goes.
 let items: OrcaChatItem[] = [];
 let state: OrcaChatState = "connecting";
@@ -29,8 +39,22 @@ const opened = new Set<string>();
 // Whether the selected row's agent is working: a run still going shows its `runningSummary` then.
 let working = false;
 
-const box = () => $("orca-chat");
-const list = () => $("orca-items");
+const KIND_LABELS = { mail: "メール", slack: "Slack", todo: "Todo" } as const;
+// The characters of a title the folded line shows.
+const TITLE_CHARS = 12;
+const box = () => owner!.box;
+const list = () => owner!.list;
+
+// Makes a view of the given elements; the older button asks for the older page only while the view owns the read.
+export function makeChatView(box: HTMLElement, list: HTMLElement, older: HTMLElement, status: HTMLElement): ChatView {
+  const view = { box, list, older, status };
+  older.onclick = () => {
+    if (owner === view) invoke("orca_chat_older").catch(() => {});
+  };
+  return view;
+}
+
+export const isChatOwner = (view: ChatView) => current !== null && owner === view;
 
 const labelOf = (item: Extract<OrcaChatItem, { kind: "tools" }>) => (working && item.runningSummary ? item.runningSummary : item.summary);
 
@@ -88,8 +112,41 @@ function questionNode(item: Extract<OrcaChatItem, { kind: "question" }>) {
   return node;
 }
 
+const chars = (text: string) => [...text].length;
+
+// A message that handed a content over (A-9): the instruction, then the content folded into one line that opens to its text. Everything is drawn as text.
+function userNode(item: Extract<OrcaChatItem, { kind: "user" }>) {
+  const ctx = item.context;
+  if (!ctx) return tag("div", "orca-user", item.text);
+  const node = tag("div", "orca-user");
+  if (item.text) node.append(tag("div", "orca-user-text", item.text));
+  const key = `ctx:${item.id}`;
+  const fold = tag("div", "orca-ctx");
+  const button = tag("button", "orca-ctx-btn");
+  button.type = "button";
+  const open = opened.has(key);
+  button.setAttribute("aria-expanded", String(open));
+  const chevron = tag("span", "orca-chev");
+  chevron.innerHTML = CHEVRON;
+  const title = [...ctx.title];
+  const shortTitle = title.length > TITLE_CHARS ? `${title.slice(0, TITLE_CHARS).join("")}…` : ctx.title;
+  button.append(chevron, tag("span", "orca-ctx-label", `${KIND_LABELS[ctx.kind]}「${shortTitle}」${chars(ctx.text)} 字`));
+  const text = tag("div", "orca-ctx-text", ctx.text);
+  text.hidden = !open;
+  button.onclick = () => {
+    const now = button.getAttribute("aria-expanded") !== "true";
+    button.setAttribute("aria-expanded", String(now));
+    text.hidden = !now;
+    if (now) opened.add(key);
+    else opened.delete(key);
+  };
+  fold.append(button, text);
+  node.append(fold);
+  return node;
+}
+
 function nodeOf(item: OrcaChatItem) {
-  if (item.kind === "user") return tag("div", "orca-user", item.text);
+  if (item.kind === "user") return userNode(item);
   if (item.kind === "assistant") return markdownNode(item.text);
   return item.kind === "question" ? questionNode(item) : toolsNode(item);
 }
@@ -101,7 +158,7 @@ function itemNode(item: OrcaChatItem) {
 }
 
 function drawStatus() {
-  const note = $("orca-chat-status");
+  const note = owner!.status;
   const text = state === "connecting" ? (items.length ? "" : "読み込んでいます…") : state === "live" ? "" : message;
   if (!text) return note.replaceChildren();
   const row = tag("div", state === "unavailable" ? "pending fail" : "pending");
@@ -130,7 +187,7 @@ function applyItems(start: number, next: OrcaChatItem[], more: boolean) {
   for (const child of children.slice(at)) child.remove();
   items = [...items.slice(0, at), ...next];
   list().append(...next.map(itemNode));
-  $("orca-older").hidden = !more;
+  owner!.older.hidden = !more;
   if (bottom) {
     scroll.scrollTop = scroll.scrollHeight;
   } else if (anchor?.id) {
@@ -140,17 +197,26 @@ function applyItems(start: number, next: OrcaChatItem[], more: boolean) {
   atOpen = false;
 }
 
-// Starts reading the session of the pane `paneKey` in the worktree `path`; what was drawn goes.
-export function openChat(environment: string | null, path: string, paneKey: string) {
+// Clears what a view drew.
+function wipe(view: ChatView) {
+  view.list.replaceChildren();
+  view.older.hidden = true;
+  view.status.replaceChildren();
+}
+
+// Starts reading the session of the pane `paneKey` in the worktree `path` for `view`, which becomes the owner; what the owner before drew goes. `isWorking`: whether the session's agent is working.
+export function openChat(view: ChatView, environment: string | null, path: string, paneKey: string, isWorking: boolean) {
   const channel: Channel = new window.__TAURI__.core.Channel<OrcaChatEvent>();
+  if (owner && owner !== view) wipe(owner);
   current = channel;
+  owner = view;
   items = [];
   state = "connecting";
   message = "";
   atOpen = true;
   opened.clear();
-  list().replaceChildren();
-  $("orca-older").hidden = true;
+  working = isWorking;
+  wipe(view);
   drawStatus();
   channel.onmessage = (event) => {
     if (current !== channel) return;
@@ -182,19 +248,19 @@ function sendPause() {
   invoke("orca_chat_pause", { paused: document.hidden }).catch(() => {});
 }
 
-export function closeChat() {
-  if (current === null) return;
+// Ends the read, when `view` owns it: a view that lost it to another owner has nothing to close.
+export function closeChat(view: ChatView) {
+  if (current === null || owner !== view) return;
   current = null;
   items = [];
-  list().replaceChildren();
-  $("orca-older").hidden = true;
-  $("orca-chat-status").replaceChildren();
+  wipe(view);
+  owner = null;
   invoke("orca_chat_close").catch(() => {});
 }
 
-// Whether the selected row's agent is working. A run that is still going names what it runs only then.
-export function setChatWorking(now: boolean) {
-  if (now === working) return;
+// Whether the session `view` shows is working. A run that is still going names what it runs only then. Only the owner of the read is told.
+export function setChatWorking(view: ChatView, now: boolean) {
+  if (owner !== view || now === working) return;
   working = now;
   items.forEach((item, i) => {
     if (item.kind === "tools") list().children[i]?.querySelector(".orca-tools-label")?.replaceChildren(labelOf(item));
@@ -203,7 +269,4 @@ export function setChatWorking(now: boolean) {
 
 export function initOrcaChat() {
   document.addEventListener("visibilitychange", sendPause);
-  $("orca-older").onclick = () => {
-    invoke("orca_chat_older").catch(() => {});
-  };
 }

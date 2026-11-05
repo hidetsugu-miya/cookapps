@@ -8,13 +8,26 @@ import { COPY_SVG, DELETE_SVG, LINK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { currentScreen } from "./nav.js";
+import { HandoffPane } from "./orca-handoff.js";
+import { todoCard } from "./orca-handoff-cards.js";
+import { initSplit } from "./split.js";
 import { renderDetail } from "./todo-detail.js";
-import { editingField, projectOf, recountTodo, setTodoCount, settleLocal, todoState } from "./todo-data.js";
+import { loadedComments } from "./todo-comments.js";
+import { editingField, projectName, projectOf, recountTodo, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
 import { cancelTodoReload, todoCall } from "./todo-write.js";
 import { copyText, showError } from "./view.js";
 
 const TODO_REFRESH_MS = 10 * 1000;
+
+// The pane that hands the open task to Orca (A-9).
+let handoff: HandoffPane;
+
+// Follows the open task: another task, or none, changes what the pane shows, and the card takes the task as it is now.
+export function syncTodoHandoff() {
+  handoff.sync();
+  handoff.refreshCard();
+}
 
 // Which part the Todo screen shows: the token form, the task list, or one task.
 export function todoMode(mode: "token" | "list" | "detail") {
@@ -27,6 +40,7 @@ export function todoMode(mode: "token" | "list" | "detail") {
   $("todo-back").hidden = mode !== "detail";
   $("todo-prompt").hidden = mode !== "list";
   $("todo-more").hidden = mode !== "detail";
+  $("todo-orca").hidden = mode !== "detail";
   // A redraw of the same task keeps its menu open; another task or another part closes it.
   if (moreMenu && (mode !== "detail" || todoState.open !== moreMenu.id)) closeMoreMenu();
 }
@@ -250,6 +264,29 @@ async function refreshTodo() {
 }
 
 export function initTodo() {
+  handoff = new HandoffPane({
+    root: $("todo-handoff"),
+    current: () => {
+      const id = todoState.open;
+      return $("todo").hidden || $("todo-detail").hidden || id === null || !todoState.taskById.has(id)
+        ? null
+        : {
+            key: `todo:${id}`,
+            card: () => {
+              const task = todoState.taskById.get(id);
+              return task ? todoCard(task, projectName(projectOf(task.projectId)), loadedComments(id)) : null;
+            },
+          };
+    },
+    onOpen: (open) => {
+      $("todo-handoff").hidden = !open;
+      $("todo-split").hidden = !open;
+      $("todo-orca").setAttribute("aria-pressed", String(open));
+    },
+  });
+  $("todo-orca").onclick = () => handoff.toggle();
+  // 380px at first (the CSS holds that as the least); the divider widens it up to half of the screen.
+  initSplit($("todo"), $("todo-split"), { initial: 0, min: 0, max: 0.5 });
   // The document's pointerdown closes an open menu before the click, so whether this press found it open is read before that.
   let wasOpen = false;
   $("todo-more").onpointerdown = () => (wasOpen = $("todo-more").hasAttribute("aria-expanded"));
@@ -262,6 +299,7 @@ export function initTodo() {
   $("todo-back").onclick = () => {
     todoState.open = null;
     renderTodo();
+    handoff.sync();
   };
   $("todo-token").onsubmit = async (e) => {
     e.preventDefault();

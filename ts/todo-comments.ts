@@ -28,6 +28,9 @@ const loading = new Set<string>();
 const sending = new Set<string>();
 const folded = new Set<string>();
 
+// The comments of a task that are loaded (none when they were not fetched), for the content handed to Orca (A-9).
+export const loadedComments = (taskId: string) => held.get(taskId);
+
 function draftOf(taskId: string) {
   const draft = drafts.get(taskId) ?? { text: "", file: null, uploaded: null };
   drafts.set(taskId, draft);

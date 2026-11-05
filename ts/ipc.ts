@@ -14,8 +14,10 @@ import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
+import type { HandoffKind } from "./bindings/HandoffKind";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaSkill } from "./bindings/OrcaSkill";
+import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaTerminalTargets } from "./bindings/OrcaTerminalTargets";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
@@ -37,6 +39,15 @@ import type { WorkspaceIcon } from "./bindings/WorkspaceIcon";
 
 // Where a terminal of the app opens (A-8): a worktree of this machine by its path, or an SSH host by the id Orca gives it. Rust checks it against Orca's list.
 export type TerminalTarget = { kind: "worktree"; path: string } | { kind: "ssh"; id: string };
+
+// Where a handoff to Orca goes (A-9): a new session in a worktree, or the terminal of a running one. Rust checks both against Orca's list.
+export type HandoffDestination = { kind: "new"; path: string } | { kind: "existing"; handle: string };
+// What is handed over: the card's kind, title and plain text.
+export interface HandoffContext {
+  kind: HandoffKind;
+  title: string;
+  body: string;
+}
 
 type Account = { account: string };
 // What Todoist says about an uploaded file (`file_name`, `file_url`, `file_type`, ...): it is handed back as the attachment of a comment, as it is.
@@ -179,8 +190,11 @@ export interface Commands {
   orca_set_target: { args: { environment: string | null }; result: null };
   // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.
   orca_send: { args: { handle: string; text: string; environment: string | null }; result: null };
-  // Starts Claude in the worktree at `path` with `text` as its first prompt.
-  orca_launch: { args: { path: string; text: string; environment: string | null }; result: null };
+  // Starts Claude in the worktree at `path` with `text` as its first prompt. The answer is the session as Orca's reply names it (`paneKey` and `handle` are null when the reply lacks them).
+  orca_launch: { args: { path: string; text: string; environment: string | null }; result: OrcaStarted };
+  // A-9: starts a session in a worktree, or posts to a running one, with the instruction and, when `context` is not null, the content quoted as data after it. Never run twice.
+  // For a running session the answer has only its `handle`.
+  orca_handoff: { args: { destination: HandoffDestination; instruction: string; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
   // Reads the history of the session in the pane `paneKey` of the worktree `path` (A-7) and sends it to `channel` (an `OrcaChatEvent` at a time) until it is closed or another is opened; only one session is read.
   orca_chat_open: { args: { environment: string | null; path: string; paneKey: string; channel: unknown }; result: null };
   orca_chat_close: { args: undefined; result: null };

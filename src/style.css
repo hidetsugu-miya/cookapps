@@ -1,4 +1,4 @@
-:root { --on-accent: #fff; --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; }
+:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 body { font-family: -apple-system, sans-serif; font-size: 14px; margin: 0; display: flex; }
@@ -745,9 +745,10 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-menu-item:first-child svg { color: var(--claude); }
 .orca-dest-group { margin: 8px 10px 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
 #orca-chat-status:not(:empty) { padding: 8px 24px 0; }
-#orca-chat { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 8px; }
-#orca-older { display: block; margin: 0 auto 12px; height: 28px; padding: 0 12px; font: inherit; font-size: 12px; }
-#orca-items { display: flex; flex-direction: column; gap: 12px; }
+.ho-chat-status:not(:empty) { padding: 8px 16px 0; }
+#orca-chat, .ho-chat { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 8px; }
+#orca-older, .ho-older { display: block; margin: 0 auto 12px; height: 28px; padding: 0 12px; font: inherit; font-size: 12px; }
+#orca-items, .ho-items { display: flex; flex-direction: column; gap: 12px; }
 .orca-user { align-self: flex-end; max-width: 80%; padding: 8px 12px; border-radius: 12px; background: var(--soft); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .orca-assistant { line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .orca-assistant > :first-child { margin-top: 0; }
@@ -769,7 +770,17 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-tools-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .orca-chev { display: inline-flex; transition: transform .1s; }
 .orca-chev svg { width: 16px; height: 16px; }
-.orca-tools-btn[aria-expanded="true"] .orca-chev { transform: rotate(90deg); }
+.orca-tools-btn[aria-expanded="true"] .orca-chev, .orca-ctx-btn[aria-expanded="true"] .orca-chev { transform: rotate(90deg); }
+/* A content handed to Orca (A-9) is folded into one line inside the user's bubble; it opens to the text. */
+.orca-user-text { white-space: pre-wrap; }
+.orca-user-text + .orca-ctx { margin-top: 6px; }
+.orca-ctx-btn { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--accent-text); cursor: pointer; }
+.orca-ctx-btn:hover { text-decoration: underline; }
+.orca-ctx-btn .orca-chev svg { width: 14px; height: 14px; }
+.ho-chat .orca-user { max-width: 85%; }
+.orca-ctx-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.orca-ctx-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-ctx-text { margin-top: 6px; padding: 8px 10px; max-height: 240px; overflow: auto; border-radius: 8px; background: #fff; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .orca-tool-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--code); font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: #444; user-select: text; -webkit-user-select: text; }
 .orca-tool-call { white-space: pre-wrap; overflow-wrap: anywhere; }
 .orca-question { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--bar); line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
@@ -801,6 +812,81 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-skill[aria-selected="true"] { background: var(--soft); }
 .orca-skill code { flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .orca-skill span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
+
+/* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail and the Todo have it on the right of the screen (a third to a half, the divider of ts/split.ts); the Slack thread has it as the Orca tab of its right pane. */
+#mail-area { flex: 1; min-height: 0; display: flex; }
+#main { min-width: 0; }
+#mail-header .icon-btn[aria-pressed="true"], #todo-body > header .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+.ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
+/* The mail's pane is 37% wide, at least 400px; the Todo's is 380px (wider when dragged); the Slack tab keeps the width of the Claude pane, at least 400px. */
+#mail-handoff { min-width: 400px; }
+#todo-handoff { width: clamp(380px, var(--chat-w, 0%), 50%); }
+#slack-thread.assist-orca { grid-template-columns: minmax(0, 1fr) auto max(400px, clamp(33.3333%, var(--chat-w, 33.3333%), 50%)); }
+.ho-pane.ho-slack { display: contents; }
+.ho-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.ho-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 8px 12px 16px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: bold; }
+.ho-icon, .ho-icon svg { width: 16px; height: 16px; }
+.ho-icon { flex: none; display: inline-flex; color: var(--accent); }
+.ho-icon svg, .ho-card-icon svg, .ho-head .icon-btn svg, .chat-tab svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ho-head .icon-btn { width: 28px; height: 28px; flex: none; }
+.ho-head .icon-btn svg { width: 16px; height: 16px; }
+.ho-title { flex: 1; }
+.ho-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 4px; }
+.ho-notice:not(:empty) { padding: 8px 12px 0; }
+.ho-scroll .ho-notice:not(:empty) { padding: 0 4px 8px; }
+.ho-label { margin: 4px 8px; font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+.ho-new { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 12px; border-radius: 12px; }
+.ho-new:has([aria-pressed="true"]) { background: var(--soft); }
+.ho-target { margin-left: 6px; font-weight: normal; color: var(--muted); }
+.ho-new-btn { padding: 0; border: 0; background: transparent; font: inherit; font-weight: 600; color: inherit; cursor: pointer; }
+.ho-new-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ho-chip { height: 26px; padding: 0 10px; border-radius: 13px; }
+.ho-chip:disabled { opacity: .6; cursor: default; }
+.ho-group { display: flex; align-items: center; gap: 8px; margin: 10px 8px 4px; font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+.ho-count { margin-left: auto; font-weight: normal; color: var(--muted); }
+.ho-row { display: flex; flex-direction: column; gap: 3px; width: 100%; box-sizing: border-box; padding: 8px 12px; border: 0; border-radius: 12px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.ho-row:hover { background: var(--hover); }
+.ho-row[aria-pressed="true"] { background: var(--soft); }
+.ho-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ho-row-top { display: flex; gap: 8px; width: 100%; }
+.ho-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ho-row-time, .ho-row-sub { font-size: 12px; color: var(--muted); }
+.ho-foot { flex: none; min-width: 0; padding: 12px 16px 20px; border-top: 1px solid var(--line); background: var(--bar); }
+.ho-form { display: flex; flex-direction: column; gap: 8px; }
+.ho-form .pending { margin: 0; }
+.ho-form .composer { flex-direction: row; align-items: flex-end; gap: 12px; padding: 10px 12px; }
+.ho-form .chat-input { flex: 1; min-width: 0; }
+.ho-form .text-btn.primary { flex: none; height: 44px; padding: 0 20px; border-radius: 22px; font: inherit; }
+.ho-form .text-btn.primary:disabled { opacity: .4; cursor: default; }
+.ho-form .text-btn.primary:disabled:hover { background: var(--accent); filter: none; }
+.ho-card { padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.ho-card-row { display: flex; align-items: center; gap: 10px; }
+.ho-card-toggle { margin-top: 2px; }
+.ho-card-body { margin: 6px 4px 4px 0; padding: 8px 10px; max-height: 160px; overflow: auto; border-radius: 8px; background: var(--bar); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.ho-card-icon { flex: none; display: inline-flex; color: var(--muted); }
+.ho-card-icon svg { width: 16px; height: 16px; }
+.ho-card-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ho-card-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.ho-card-meta { font-size: 12px; color: var(--muted); }
+.ho-card-row .icon-btn { width: 28px; height: 28px; flex: none; }
+.ho-card-row .icon-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.ho-session-head { padding: 8px 8px 8px 16px; }
+.ho-session-head .icon-btn { width: 32px; height: 32px; }
+.ho-session-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ho-session-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ho-session-state { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 12px; font-weight: normal; color: var(--accent); }
+.ho-session-state::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.ho-note { margin: 0; padding: 16px; font-size: 13px; color: var(--muted); }
+/* The Orca tab of the Slack thread's right pane sits in the rows of the grid that the Claude pane uses. */
+#reply-chat .chat-head { padding: 8px 16px 0; border-bottom-color: var(--chip-line); }
+#reply-tabs { display: flex; gap: 2px; align-self: stretch; }
+.chat-tab { display: inline-flex; align-items: center; gap: 6px; height: 38px; margin-bottom: -1px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: none; font: inherit; font-size: 13px; font-weight: normal; color: var(--muted); cursor: pointer; }
+.chat-tab svg { width: 16px; height: 16px; }
+.chat-tab[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chat-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#reply-chat .chat-clear { align-self: center; }
+.chat-tab#reply-tab-claude svg { color: var(--claude); }
+.chat-tab#reply-tab-orca svg { color: var(--accent); }
 
 /* The Slack list: a row per message, newest first. The dot on the avatar is the workspace's color. */
 #slack-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -877,7 +963,6 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 #st-detail { grid-column: 1; }
 #reply-split { grid-row: 1 / -1; grid-column: 2; }
 #reply-chat { grid-column: 3; }
-#reply-chat .chat-head { padding: 14px 16px 10px; }
 #st-body { min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 .chat-foot { display: flex; flex-direction: column; background: var(--bar); }
 #reply-chat .composer-foot, #st-reply .composer-foot { justify-content: flex-end; }

@@ -19,6 +19,8 @@ import { revealSlackList, seeThread } from "./slack-list.js";
 import { decorateAvatar, loadIcons, slackMs } from "./slack-view.js";
 import { initSplit } from "./split.js";
 import { toast } from "./toast.js";
+import { HandoffPane } from "./orca-handoff.js";
+import { slackCard } from "./orca-handoff-cards.js";
 import { projectOf } from "./todo-data.js";
 import { reviewCard } from "./todo-add.js";
 import { ensureTodoData } from "./todo.js";
@@ -29,12 +31,17 @@ interface Open {
   key: string;
   teamId: string;
   channel: string;
+  channelName: string;
   ts: string;
   permalink: string;
 }
 let current: Open | null = null;
 // Whether `open` is the thread shown now: reopening the same thread makes a new object with the same key.
 const isOpen = (open: Open) => current?.key === open.key;
+// The right pane is the conversation with Claude (S-7) or the handoff to Orca (A-9), by tab; Claude is the first and the one selected at first.
+let assistant: "claude" | "orca" = "claude";
+let handoff: HandoffPane;
+
 // The thread as last read for `current`, and why the last read failed (null when it did not).
 let thread: SlackThread | null = null;
 let readError: string | null = null;
@@ -327,6 +334,7 @@ async function readThread(where: "keep" | "end") {
   }
   // The reply that was just posted shows at the end; a read that failed keeps what was read before.
   drawMessages(readError === null ? where : "keep");
+  handoff.refreshCard();
 }
 
 // Opens the thread of a message of the list.
@@ -334,7 +342,7 @@ export function openSlackThread(m: TimelineMessage) {
   const ts = m.threadTs ?? m.ts;
   const key = `${m.teamId}/${m.channel}/${ts}`;
   const same = current?.key === key;
-  current = { key, teamId: m.teamId, channel: m.channel, ts, permalink: m.permalink };
+  current = { key, teamId: m.teamId, channel: m.channel, channelName: m.channelName, ts, permalink: m.permalink };
   if (!same) {
     thread = null;
     thumbs.clear();
@@ -374,6 +382,7 @@ export function openSlackThread(m: TimelineMessage) {
   );
   refreshSlackThread();
   readThread(same && thread && !endPending ? "keep" : "end");
+  handoff.sync();
 }
 
 async function reply() {
@@ -453,7 +462,27 @@ async function makeTodo() {
   }
 }
 
+// Shows the Claude pane or the Orca pane of the right side.
+function selectAssistant(tab: "claude" | "orca") {
+  assistant = tab;
+  for (const [id, name] of [["reply-tab-claude", "claude"], ["reply-tab-orca", "orca"]] as const) $(id).setAttribute("aria-selected", String(name === tab));
+  for (const el of [$("reply-log"), $("reply-chat").querySelector<HTMLElement>(".chat-foot")!, $("reply-clear")]) el.hidden = tab === "orca";
+  $("st-orca").hidden = tab !== "orca";
+  $("slack-thread").classList.toggle("assist-orca", tab === "orca");
+  handoff.sync();
+}
+
 export function initSlackThread() {
+  handoff = new HandoffPane({
+    root: $("st-orca"),
+    forced: true,
+    current: () => {
+      const open = current;
+      return $("slack-thread").hidden || assistant !== "orca" || !open ? null : { key: `slack:${open.key}`, card: () => (thread ? slackCard(open.channelName, thread.messages) : null) };
+    },
+    onOpen: () => {},
+  });
+  for (const [id, tab] of [["reply-tab-claude", "claude"], ["reply-tab-orca", "orca"]] as const) $(id).onclick = () => selectAssistant(tab);
   $("st-back").onclick = () => {
     closeMenu();
     revealSlackList();

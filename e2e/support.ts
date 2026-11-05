@@ -553,7 +553,7 @@ export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], ex
 export const orcaSkill = (command: string, description = ""): OrcaSkill => ({ command, description });
 
 // The session history (A-7): the items the screen draws, and the delivery of an event to the channel the screen gave `orca_chat_open` (the last one, or the `nth` counting from 0).
-export const chatUser = (id: string, text: string): OrcaChatItem => ({ kind: "user", id, text });
+export const chatUser = (id: string, text: string, context: Extract<OrcaChatItem, { kind: "user" }>["context"] = null): OrcaChatItem => ({ kind: "user", id, text, context });
 export const chatAssistant = (id: string, text: string): OrcaChatItem => ({ kind: "assistant", id, text });
 export const chatTools = (id: string, summary: string, calls: [string, string][], runningSummary: string | null = null): OrcaChatItem => ({
   kind: "tools",
