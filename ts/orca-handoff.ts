@@ -5,7 +5,7 @@
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
 import { tag } from "./dom.js";
-import { CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
+import { CHEVRON_SVG, CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
 import { type HandoffDestination, invoke } from "./ipc.js";
 import { closeChat, isChatOwner, makeChatView, openChat, setChatWorking, type ChatView } from "./orca-chat.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
@@ -66,6 +66,8 @@ export class HandoffPane {
   private keys: Record<string, string> = {};
   private card: HandoffCard | null = null;
   private removed = false;
+  // The text of the card is open (A-9): it stays open while the card is drawn again, and is closed by another item.
+  private cardOpen = false;
   // "new" or the handle of the running session picked.
   private dest = "new";
   private busy = false;
@@ -81,6 +83,7 @@ export class HandoffPane {
     chip?: HTMLButtonElement;
     rows?: HTMLElement;
     cardBox?: HTMLElement;
+    card?: { title: HTMLElement; meta: HTMLElement; body: HTMLElement; toggle: HTMLButtonElement };
     sessionTitle?: HTMLElement;
     note?: HTMLElement;
     error: HTMLElement;
@@ -121,6 +124,7 @@ export class HandoffPane {
     if (key !== this.itemKey) {
       this.itemKey = key;
       this.removed = false;
+      this.cardOpen = false;
       this.error = "";
       this.dest = "new";
       this.busy = false;
@@ -356,27 +360,62 @@ export class HandoffPane {
     rows!.replaceChildren(...nodes);
   }
 
-  // The card with the content to hand over, until it is taken off.
+  // The card with the content to hand over, until it is taken off. Its text can be opened to read exactly what the command will get as `context.body`.
+  // The nodes are kept while the card changes: only their text is set, so an open text stays open and keeps its scroll position and selection.
   private drawCard() {
     const card = this.removed ? null : this.card;
     this.part("card", card, () => {
-      const box = this.el?.cardBox;
-      if (!box) return;
-      if (!card) return box.replaceChildren();
-      const node = tag("div", "ho-card");
-      const icon = tag("span", "ho-card-icon");
-      icon.innerHTML = KIND_ICONS[card.kind];
-      const text = tag("span", "ho-card-text");
-      text.append(tag("span", "ho-card-title", card.title), tag("span", "ho-card-meta", card.meta));
-      const off = iconButton("渡す内容を外す", CLOSE_SVG);
-      off.onclick = () => {
-        this.removed = true;
-        this.drawCard();
-        this.el?.input.focus();
-      };
-      node.append(icon, text, off);
-      box.replaceChildren(node);
+      const el = this.el;
+      const box = el?.cardBox;
+      if (!el || !box) return;
+      if (!card) {
+        el.card = undefined;
+        return box.replaceChildren();
+      }
+      if (!el.card) {
+        const node = tag("div", "ho-card");
+        const row = tag("div", "ho-card-row");
+        const icon = tag("span", "ho-card-icon");
+        icon.innerHTML = KIND_ICONS[card.kind];
+        const title = tag("span", "ho-card-title");
+        const meta = tag("span", "ho-card-meta");
+        const text = tag("span", "ho-card-text");
+        text.append(title, meta);
+        const off = iconButton("渡す内容を外す", CLOSE_SVG);
+        off.onclick = () => {
+          this.removed = true;
+          this.drawCard();
+          this.el?.input.focus();
+        };
+        row.append(icon, text, off);
+        const toggle = tag("button", "orca-ctx-btn ho-card-toggle");
+        toggle.type = "button";
+        const chevron = tag("span", "orca-chev");
+        chevron.innerHTML = CHEVRON_SVG;
+        toggle.append(chevron, tag("span", "", "送る内容を読む"));
+        const body = tag("div", "ho-card-body");
+        toggle.onclick = () => {
+          this.cardOpen = !this.cardOpen;
+          this.showCardBody();
+        };
+        node.append(row, toggle, body);
+        box.replaceChildren(node);
+        el.card = { title, meta, body, toggle };
+      }
+      const ui = el.card;
+      if (ui.title.textContent !== card.title) ui.title.textContent = card.title;
+      if (ui.meta.textContent !== card.meta) ui.meta.textContent = card.meta;
+      // Set only when it changed: setting it again would drop the selection.
+      if (ui.body.textContent !== card.body) ui.body.textContent = card.body;
+      this.showCardBody();
     });
+  }
+
+  private showCardBody() {
+    const ui = this.el?.card;
+    if (!ui) return;
+    ui.toggle.setAttribute("aria-expanded", String(this.cardOpen));
+    ui.body.hidden = !this.cardOpen;
   }
 
   // The header of a session: "{repo} ・ {branch}", and its state with the time. Until the list holds the session (a new one) it says it is being checked.
@@ -419,6 +458,7 @@ export class HandoffPane {
     this.error = "";
     this.dest = "new";
     this.removed = false;
+    this.cardOpen = false;
     this.card = this.item?.card() ?? null;
     this.open = this.host.forced === true;
     this.lastRead = 0;
