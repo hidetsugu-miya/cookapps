@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.44.0
+
+M-9 new mail found by the auto sync shows as a card at the bottom right of the window (#61). It has the sender and the subject, and trash, archive and "詳細を開く", which opens the thread even from another screen. At most 3 cards show, and each goes after 10 seconds unless the pointer is on it. The load at startup shows none, and no OS notification is used.
+
+A session started with "起動する" on the Orca screen now opens in its tab once it appears in the list, and the next text goes to it with "送る" instead of starting another session (#74).
+
+The Orca history shows a turn that starts with a skill name as `/{name} {args}` (#56).
+
 ## v0.43.0
 
 A-11 a question of Claude in the Orca history can be answered there (#57). Pick the choices in its box and press "回答を送る"; nothing is sent before that, and the button waits until every question has a pick. The keys go to the session's terminal one at a time, each after the screen shows the question's form, so a key never lands in another dialog. When the screen does not match, nothing more is sent and the box says to go on in the terminal. It was checked with Claude Code 2.1.318 on this machine; a saved environment uses the same route and is not checked yet.
