@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.42.1
+
+The Orca screen no longer opens terminals of its own (#78). "ターミナルを開く" of the plus menu, its dialog and the app's PTY are gone, because they were slow over SSH and the cause was not found. The plain terminals of Orca still show as tabs, and the SSH hosts stay in the list.
+
 ## v0.42.0
 
 A-10 the message field of the Orca screen takes images, by a drop and by a paste (#55). They show as thumbnails above the field, and each can be taken off. On send, each image goes to `.orca/drops/` of the destination worktree, and its path goes in the text, so Claude reads it. PNG, JPEG, GIF and WebP up to 20 MiB; an SSH workspace takes none. Old files in `.orca/drops/` are not removed, as in Orca itself. Written against Orca 1.4.248. This machine's Orca was tried; a saved server was not tried, and neither was a real drag or paste on the screen.
