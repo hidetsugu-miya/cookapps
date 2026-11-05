@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.42.0
+
+A-10 the message field of the Orca screen takes images, by a drop and by a paste (#55). They show as thumbnails above the field, and each can be taken off. On send, each image goes to `.orca/drops/` of the destination worktree, and its path goes in the text, so Claude reads it. PNG, JPEG, GIF and WebP up to 20 MiB; an SSH workspace takes none. Old files in `.orca/drops/` are not removed, as in Orca itself. Written against Orca 1.4.248. This machine's Orca was tried; a saved server was not tried, and neither was a real drag or paste on the screen.
+
 ## v0.41.2
 
 The message field of the Orca screen no longer shows a placeholder (#53). Typing `/` still opens the skill list.
