@@ -647,11 +647,7 @@ fn plugin_of(label: &str) -> Option<&str> {
 
 /// The skills of `orca skills installed` (its `result`) that Claude Code runs, as the commands to type: a plugin's skill is `/plugin:name` (its `name` has no prefix), any other `/name`.
 /// A command listed twice is kept once; the list is sorted by command.
-pub fn skills_of(result: &Value) -> Vec<OrcaSkill> {
-    listed_skills(result, |_, _| false)
-}
-
-/// `skills_of` without the skills whose `SKILL.md` says `user-invocable: false` in its front matter (the CLI's output has no such field, so the file is read through `read`).
+/// The skills whose `SKILL.md` says `user-invocable: false` in its front matter are left out (the CLI's output has no such field, so the file is read through `read`).
 /// `home` is the user's home folder. A skill whose file cannot be found or read stays, and so does every skill when there is no home folder.
 pub fn invocable_skills_of(
     result: &Value,
@@ -1836,6 +1832,11 @@ mod tests {
         })
     }
 
+    /// The skills with no home folder, so that no `SKILL.md` is read.
+    fn all_skills(doc: &Value) -> Vec<OrcaSkill> {
+        invocable_skills_of(doc, None, |_| None)
+    }
+
     #[test]
     fn a_skill_is_a_command_of_claude_code() {
         let doc = json!({"skills": [
@@ -1845,7 +1846,7 @@ mod tests {
             skill("no-providers", &[], "home", "Claude Code home"),
         ]});
         assert_eq!(
-            skills_of(&doc),
+            all_skills(&doc),
             [
                 OrcaSkill {
                     command: "/review".into(),
@@ -1869,7 +1870,7 @@ mod tests {
             skill("home", &["claude"], "home", "Claude plugin x"),
             skill("blank", &["claude"], "plugin", "Claude plugin  "),
         ]});
-        let commands: Vec<_> = skills_of(&doc).into_iter().map(|s| s.command).collect();
+        let commands: Vec<_> = all_skills(&doc).into_iter().map(|s| s.command).collect();
         assert_eq!(
             commands,
             [
@@ -1893,10 +1894,10 @@ mod tests {
         let mut first = skill("b", &["claude"], "home", "Claude Code home");
         first["description"] = json!("second b");
         let doc_dup = json!({"skills": [doc["skills"][0].clone(), first]});
-        let commands: Vec<_> = skills_of(&doc).into_iter().map(|s| s.command).collect();
+        let commands: Vec<_> = all_skills(&doc).into_iter().map(|s| s.command).collect();
         assert_eq!(commands, ["/a", "/b", "/p:a"]);
         // The first of two with one command is kept.
-        assert_eq!(skills_of(&doc_dup)[0].description, "About b");
+        assert_eq!(all_skills(&doc_dup)[0].description, "About b");
     }
 
     #[test]
@@ -1907,13 +1908,13 @@ mod tests {
             json!({"skills": null}),
             json!({"skills": [null, 3, {"providers": "claude", "name": "x"}, {"providers": ["claude"]}]}),
         ] {
-            assert!(skills_of(&doc).is_empty(), "{doc}");
+            assert!(all_skills(&doc).is_empty(), "{doc}");
         }
         let mut long = skill("long", &["claude"], "home", "Claude Code home");
         long["description"] = json!("あ".repeat(1_000));
         let mut none = skill("none", &["claude"], "home", "Claude Code home");
         none.as_object_mut().unwrap().remove("description");
-        let listed = skills_of(&json!({"skills": [long, none]}));
+        let listed = all_skills(&json!({"skills": [long, none]}));
         assert_eq!(listed[0].description.chars().count(), LINE_LIMIT);
         assert_eq!(listed[1].description, "");
     }
