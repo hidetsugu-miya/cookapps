@@ -417,7 +417,7 @@ describe("orca", () => {
     await expect($("#orca-dest")).toBeDisplayed();
     await expect($("#orca-dest-pick")).toHaveText("worktree を選ぶ");
     await expect($("#orca-send")).toHaveText("起動する");
-    await expect($("#orca-input")).toHaveAttribute("placeholder", "起動するエージェントへの指示を書く（/ でスキル）");
+    expect(await $("#orca-input").getProperty("placeholder")).toBe("");
     expect(await chatOpens()).toEqual([]);
   });
 
@@ -430,7 +430,7 @@ describe("orca", () => {
     await expect($("#orca-work-title")).not.toBeDisplayed();
     await expect($('#orca-tabs [role="tab"][aria-selected="true"]')).toHaveText(expect.stringContaining("Write the docs"));
     await expect($("#orca-send")).toHaveText("送る");
-    await expect($("#orca-input")).toHaveAttribute("placeholder", "追加の指示を書く（/ でスキル）");
+    expect(await $("#orca-input").getProperty("placeholder")).toBe("");
     await expect($("#orca-dest")).not.toBeDisplayed();
     // Another row takes the selection and its history.
     await select("example-lib", 2);
