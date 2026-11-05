@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.41.0
+
+A-9 the content of a mail, a Slack thread or a Todo goes to Orca from a pane beside it (#33). The pane shows the destinations (a new session in a chosen worktree, or a running session) and a card of what goes, which can be opened to read the exact text or removed. Nothing is sent until the instruction is written and the button pressed. After that the pane shows the session's history and takes more instructions, beside the mail, the thread or the Todo, and the Orca screen folds the handed content into one line too.
+
 ## v0.40.0
 
 A-8 the Orca screen has terminals and a project list (#42). The left pane lists the projects and the SSH hosts, newest first, each with the state icon Orca uses and its number of sessions, and a bell switches to the working sessions, which show the tool an agent is running. The right pane switches the sessions of a project with tabs, which can be closed. `+` starts Claude or opens a terminal in a worktree of this machine or on an SSH host: a real PTY, so full-screen programs work, and the shells end with the app. A plain terminal of Orca is only mirrored, with no colors, because Orca does not stream its bytes over its socket. The label of the target moved to the bottom of the left pane. Written against Orca 1.4.248.
