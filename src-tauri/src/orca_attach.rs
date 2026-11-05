@@ -300,6 +300,23 @@ pub async fn orca_attach_image(
     escape_path(&file)
 }
 
+/// The text of a post that has images: the text without its trailing blanks, a blank line, and each path on a line of its own; only the paths when the text is blank; the text as it is when there is no path.
+fn compose(text: &str, paths: &[String]) -> String {
+    if paths.is_empty() {
+        text.to_owned()
+    } else if text.trim().is_empty() {
+        paths.join("\n")
+    } else {
+        format!("{}\n\n{}", text.trim_end(), paths.join("\n"))
+    }
+}
+
+/// A-10: the text a post sends, from the text of the composer and the text for Claude of each image (what `orca_attach_image` answered).
+#[tauri::command]
+pub fn orca_compose_text(text: String, paths: Vec<String>) -> String {
+    compose(&text, &paths)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -694,6 +711,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(file, "/work/a/.orca/drops/shot.png");
+    }
+
+    #[test]
+    fn the_text_of_a_post_is_the_text_then_a_blank_line_and_the_paths() {
+        let paths = [
+            "/w/.orca/drops/a.png".to_owned(),
+            "/w/.orca/drops/b.png".to_owned(),
+        ];
+        assert_eq!(
+            compose("Look at this", &paths),
+            "Look at this\n\n/w/.orca/drops/a.png\n/w/.orca/drops/b.png"
+        );
+        // The trailing blanks of the text go, its leading ones and inner lines stay.
+        assert_eq!(
+            compose("  a\n\nb \n\n", &paths[..1]),
+            "  a\n\nb\n\n/w/.orca/drops/a.png"
+        );
+        // A blank text gives only the paths.
+        for blank in ["", "  ", "\n\t "] {
+            assert_eq!(
+                compose(blank, &paths),
+                "/w/.orca/drops/a.png\n/w/.orca/drops/b.png"
+            );
+        }
+        // No path gives the text as it is.
+        for text in ["Look at this \n", "", "  "] {
+            assert_eq!(compose(text, &[]), text);
+        }
     }
 
     #[test]

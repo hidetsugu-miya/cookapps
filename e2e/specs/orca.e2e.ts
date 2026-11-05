@@ -1822,25 +1822,33 @@ describe("orca: attached images", () => {
   // A one-pixel PNG, and what Rust answers for it: the text for Claude, the path of the file in the worktree.
   const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const dropped = (repo: string, name = "shot.png") => `/work/${repo}/.orca/drops/${name}`;
-  type Given = { name: string; type: string; base64: string };
+  // `size` stands in for the size of a file too large to be made here.
+  type Given = { name: string; type: string; base64: string; size?: number };
   const image = (name = "shot.png"): Given => ({ name, type: "image/png", base64: PNG });
   const note: Given = { name: "notes.txt", type: "text/plain", base64: btoa("hello") };
 
   // Dispatches `kind` ("paste", "dragover" or "drop") on the element at `selector` carrying `files`, as the clipboard or the pointer would (the event objects hold plain stand-ins for the clipboard and the transfer,
-  // which WKWebView builds only from a real gesture). Answers whether the page cancelled the event.
-  const fire = (kind: "paste" | "dragover" | "drop", selector: string, files: Given[]) =>
+  // which WKWebView builds only from a real gesture). Answers whether the page cancelled the event; `later` are more events at once, with no wait for the reads of the first.
+  const fire = (kind: "paste" | "dragover" | "drop", selector: string, files: Given[], ...later: Given[][]) =>
     browser.execute(
-      (k, sel, given) => {
-        const list = given.map((g) => new File([Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0))], g.name, { type: g.type }));
-        const event = new Event(k, { bubbles: true, cancelable: true });
-        const transfer = { files: list, types: list.length ? ["Files"] : ["text/plain"], dropEffect: "none" };
-        Object.defineProperty(event, k === "paste" ? "clipboardData" : "dataTransfer", { value: transfer });
+      (k, sel, batches) => {
         const target = sel === "document" ? document.body : document.querySelector(sel)!;
-        return !target.dispatchEvent(event);
+        const cancelled = batches.map((given) => {
+          const list = given.map((g) => {
+            const file = new File([Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0))], g.name, { type: g.type });
+            if (g.size !== undefined) Object.defineProperty(file, "size", { value: g.size });
+            return file;
+          });
+          const event = new Event(k, { bubbles: true, cancelable: true });
+          const transfer = { files: list, types: list.length ? ["Files"] : ["text/plain"], dropEffect: "none" };
+          Object.defineProperty(event, k === "paste" ? "clipboardData" : "dataTransfer", { value: transfer });
+          return !target.dispatchEvent(event);
+        });
+        return cancelled[0];
       },
       kind,
       selector,
-      files,
+      [files, ...later],
     );
   const thumbs = () => count("#orca-attachments .orca-attachment");
   const paste = (...files: Given[]) => fire("paste", "#orca-input", files);
@@ -1859,6 +1867,30 @@ describe("orca: attached images", () => {
     await $('button[aria-label="shot.png を外す"]').click();
     await waitForCount("#orca-attachments .orca-attachment", 0);
     await expect($("#orca-attachments")).not.toBeDisplayed();
+  });
+
+  it("keeps both images when two are pasted in a row, before the first is read", async () => {
+    await openWorking();
+    await rowOf("example-app").click();
+    expect(await fire("paste", "#orca-input", [image("first.png")], [image("second.png")])).toBe(true);
+    await waitForCount("#orca-attachments .orca-attachment", 2);
+    expect(await browser.execute(() => [...document.querySelectorAll("#orca-attachments img")].map((i) => (i as HTMLImageElement).alt))).toEqual(["first.png", "second.png"]);
+    await expect($("#orca-send")).toBeEnabled();
+  });
+
+  it("refuses a file over 20 MiB before reading it, and adds the other images", async () => {
+    await openWorking();
+    await rowOf("example-app").click();
+    const big: Given = { ...image("big.png"), size: 20 * 1024 * 1024 + 1 };
+    await fire("drop", "#orca-form", [big]);
+    await expect($("#orca-error")).toHaveText("画像は 20 MiB までです");
+    expect(await thumbs()).toBe(0);
+    await expect($("#orca-send")).toBeDisabled();
+    // A file of exactly 20 MiB is taken, and the image beside the large one too.
+    await fire("drop", "#orca-form", [big, { ...image("edge.png"), size: 20 * 1024 * 1024 }]);
+    await waitForCount("#orca-attachments .orca-attachment", 1);
+    await expect($("#orca-attachments img")).toHaveAttribute("alt", "edge.png");
+    await expect($("#orca-error")).toHaveText("画像は 20 MiB までです");
   });
 
   it("takes an image dropped on the composer, and cancels the dragover that carries a file", async () => {
@@ -1920,6 +1952,7 @@ describe("orca: attached images", () => {
     await $("#orca-send").click();
     expect(await waitForCalls(send)).toEqual([{ handle: "term_example-app", text: `Look at this\n\n${dropped("example-app")}`, environment: null }]);
     expect(await callsOf(attach)).toEqual([{ path: "/work/example-app", name: "shot.png", data: PNG, environment: null }]);
+    expect(await callsOf("orca_compose_text")).toEqual([{ text: "Look at this", paths: [dropped("example-app")] }]);
     await expect($("#orca-input")).toHaveValue("");
     await expect($("#orca-attachments")).not.toBeDisplayed();
     await expect($("#orca-error")).not.toBeDisplayed();
@@ -1936,6 +1969,7 @@ describe("orca: attached images", () => {
     await $("#orca-send").click();
     expect(await waitForCalls(send)).toEqual([{ handle: "term_example-app", text: `${dropped("example-app", "first.png")}\n${dropped("example-app", "first.png")}`, environment: null }]);
     expect((await callsOf(attach)).map((c) => (c as { name: string }).name)).toEqual(["first.png", "second.png"]);
+    expect(await callsOf("orca_compose_text")).toEqual([{ text: "", paths: [dropped("example-app", "first.png"), dropped("example-app", "first.png")] }]);
   });
 
   it("puts the image in the chosen worktree and the saved target when it starts a session", async () => {

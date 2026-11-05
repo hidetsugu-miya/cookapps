@@ -84,6 +84,10 @@ const invoke = async (cmd, args, options) => {
   // A raw body (a file's bytes, with its name in the headers) is recorded as {bytes, headers}, the bytes as numbers: the record is read through the driver, which cannot carry bytes.
   const raw = args instanceof Uint8Array || args instanceof ArrayBuffer;
   window.__e2e_calls__[cmd].push(raw ? { bytes: Array.from(new Uint8Array(args)), headers: options?.headers ?? {} } : (args ?? null));
+  // A-10: Rust composes the text of a post with images (a pure function, unit-tested there). This stand-in makes the same text, so the specs still check what `orca_send` and `orca_launch` receive.
+  if (cmd === "orca_compose_text" && !(cmd in window.__e2e_mocks__)) {
+    return args.paths.length ? (args.text.trim() ? [args.text.trimEnd(), "", ...args.paths] : args.paths).join("\n") : args.text;
+  }
   if (!(cmd in window.__e2e_mocks__) && !(cmd in answers)) {
     window.__e2e_unmocked__ ??= [];
     window.__e2e_unmocked__.push(cmd);

@@ -19,7 +19,7 @@ import { CLAUDE_SVG, svgOf } from "./icons.js";
 import { invoke, type TerminalTarget } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
-import { clearAttachments, hasAttachments, initOrcaAttach, uploadAttachments } from "./orca-attach.js";
+import { clearAttachments, hasAttachments, initOrcaAttach, isReading, uploadAttachments } from "./orca-attach.js";
 import { closeChat, initOrcaChat, isChatOwner, makeChatView, openChat, setChatWorking } from "./orca-chat.js";
 import { closePty, hideTerminals, initOrcaTerminal, pruneMirrors, showTerminal, startPty } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
@@ -488,7 +488,7 @@ function drawComposer() {
   const send = $<HTMLButtonElement>("orca-send");
   send.textContent = row ? "送る" : "起動する";
   // A session with no terminal can be read but takes no post.
-  send.disabled = busy || view?.state === "missing" || !(input().value.trim() || hasAttachments()) || (row ? row.handle === null : !worktree);
+  send.disabled = busy || isReading() || view?.state === "missing" || !(input().value.trim() || hasAttachments()) || (row ? row.handle === null : !worktree);
   updateCompletion();
 }
 
@@ -888,16 +888,13 @@ function openNewMenu(anchor: Element) {
   menu.querySelector("button")!.focus();
 }
 
-// The text of a post: the text, then the path of each image on a line of its own after a blank line; only the paths when the text is blank.
-const withImages = (text: string, paths: string[]) => (text.trim() ? [text.trimEnd(), "", ...paths] : paths).join("\n");
-
 // Sends the text to the selected session, or starts an agent with it; the images attached (A-10) are put in the worktree first and their paths are added to the text.
 // The text and the images stay on a failure and go on success, which reads the list at once. A send or a launch is never tried twice; an image that was put in the worktree is not put there again by the next post.
 async function post() {
   const text = input().value;
   const row = selectedRow();
   const target = view?.target ?? null;
-  if (busy || !(text.trim() || hasAttachments()) || view === null) return;
+  if (busy || isReading() || !(text.trim() || hasAttachments()) || view === null) return;
   if (row ? row.handle === null : projectKey !== null || !newPath) return;
   const path = row ? row.path : newPath!;
   if (hasAttachments() && !path) {
@@ -908,7 +905,7 @@ async function post() {
   showPostError(null);
   drawComposer();
   try {
-    const body = hasAttachments() ? withImages(text, await uploadAttachments(path, target)) : text;
+    const body = hasAttachments() ? await invoke("orca_compose_text", { text, paths: await uploadAttachments(path, target) }) : text;
     if (row) await invoke("orca_send", { handle: row.handle!, text: body, environment: target });
     else await invoke("orca_launch", { path: newPath!, text: body, environment: target });
     input().value = "";

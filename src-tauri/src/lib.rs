@@ -282,6 +282,7 @@ pub fn run() {
             orca::orca_terminal_input,
             orca::orca_terminal_targets,
             orca_attach::orca_attach_image,
+            orca_attach::orca_compose_text,
             terminal::terminal_open,
             terminal::terminal_write,
             terminal::terminal_resize,

@@ -7,6 +7,9 @@ import { invoke } from "./ipc.js";
 
 const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const ONLY_IMAGES = "画像だけを添付できます";
+// The most a file may be before it is read, in bytes: the same as `MAX_IMAGE` in `orca_attach.rs`, which stays the authority.
+const MAX_IMAGE = 20 * 1024 * 1024;
+const TOO_LARGE = `画像は ${MAX_IMAGE / 1024 / 1024} MiB までです`;
 
 interface Attachment {
   name: string;
@@ -19,10 +22,13 @@ interface Attachment {
 }
 
 let attachments: Attachment[] = [];
+// The reads on their way: the post waits for them, and the images they give are added to the list as it is when they end.
+let reading = 0;
 // What the screen gives: `busy` (a post is on its way: nothing is added or removed), `changed` (the composer's button follows) and `fail` (the post error line; null clears it).
 let screen: { busy: () => boolean; changed: () => void; fail: (message: string | null) => void };
 
 export const hasAttachments = () => attachments.length > 0;
+export const isReading = () => reading > 0;
 
 export function clearAttachments() {
   attachments = [];
@@ -68,15 +74,23 @@ function drawStrip() {
   );
 }
 
-// Adds the images among `files`; a file that is not an image is refused with the message of the post error.
+// Adds the images among `files`; a file that is not an image, or is over the limit, is refused with the message of the post error.
 async function add(files: File[]) {
   if (screen.busy()) return;
   const images = files.filter(isImage);
-  screen.fail(images.length < files.length ? ONLY_IMAGES : null);
+  const small = images.filter((file) => file.size <= MAX_IMAGE);
+  screen.fail(images.length < files.length ? ONLY_IMAGES : small.length < images.length ? TOO_LARGE : null);
+  reading++;
+  screen.changed();
   try {
-    attachments = [...attachments, ...(await Promise.all(images.map(read)))];
+    const added = await Promise.all(small.map(read));
+    // A post that began while the files were read has taken the list: the images are not added to it.
+    if (screen.busy()) screen.fail("送信中のため画像を追加できませんでした");
+    else attachments = [...attachments, ...added];
   } catch (e) {
     screen.fail(e instanceof Error ? e.message : String(e));
+  } finally {
+    reading--;
   }
   drawStrip();
   screen.changed();
