@@ -7,6 +7,10 @@ The project was named cookup until v0.14.6.
 
 The history of an Orca session reads as a conversation (#52). It has a tinted ground and the agent's messages are white cards; the heading of a run of tools is small plain text that says only how many times tools ran, or that they are running.
 
+The count on the Orca icon of the side menu is now the sessions that need you (#47): the ones that wait for input, and the ones that finished or stopped while the app ran, until you open them. A session that works is no longer counted; while one works the icon is yellow and fades slowly (#48).
+
+The README starts with what the app is for and who it suits (#45).
+
 ## v0.41.0
 
 A-9 the content of a mail, a Slack thread or a Todo goes to Orca from a pane beside it (#33). The pane shows the destinations (a new session in a chosen worktree, or a running session) and a card of what goes, which can be opened to read the exact text or removed. Nothing is sent until the instruction is written and the button pressed. After that the pane shows the session's history and takes more instructions, beside the mail, the thread or the Todo, and the Orca screen folds the handed content into one line too.
