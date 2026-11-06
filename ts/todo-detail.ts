@@ -304,6 +304,11 @@ interface Creating {
 }
 const creating: Creating[] = [];
 
+// A description longer than this many lines on the screen is folded at it.
+const FOLD_LINES = 10;
+// The tasks whose long description is shown in full; kept here so the redraws of the detail do not fold it again.
+const unfolded = new Set<string>();
+
 function creatingRow(job: Creating) {
   const li = tag("li", "task single creating");
   const body = tag("div", "body");
@@ -339,6 +344,31 @@ function subtaskRow(s: TaskItem["subtasks"][number]) {
 function growDesc(area: HTMLTextAreaElement) {
   area.style.height = "auto";
   area.style.height = `${area.scrollHeight}px`;
+}
+
+// Folds the long description `view` at FOLD_LINES lines, with the button under it that shows the rest and folds it back.
+// The lines are counted as drawn, from the height and the line height, and counted again when the width changes.
+function foldDesc(t: TaskItem, view: HTMLElement, wrap: HTMLElement) {
+  const button = tag("button", "text-btn desc-fold");
+  button.type = "button";
+  button.hidden = true;
+  wrap.append(button);
+  const fit = () => {
+    const style = getComputedStyle(view);
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const lines = Math.round((view.scrollHeight - padding) / parseFloat(style.lineHeight));
+    const long = lines > FOLD_LINES;
+    const open = unfolded.has(t.id);
+    view.classList.toggle("folded", long && !open);
+    button.hidden = !long;
+    button.setAttribute("aria-expanded", String(open));
+    button.textContent = open ? "折りたたむ" : `… 続きを表示（残り ${lines - FOLD_LINES} 行）`;
+  };
+  button.onclick = () => {
+    if (!unfolded.delete(t.id)) unfolded.add(t.id);
+    fit();
+  };
+  new ResizeObserver(fit).observe(view);
 }
 
 // The description of `t`: its Markdown shown in full, or, while it is edited, the textarea and its buttons.
@@ -395,6 +425,7 @@ function descParts(t: TaskItem): HTMLElement[] {
       copy.setAttribute("aria-label", "説明をコピー");
       copy.onclick = () => void copyText(t.description, "説明をコピーしました");
       wrap.append(copy);
+      foldDesc(t, view, wrap);
     }
     return [wrap];
   }
