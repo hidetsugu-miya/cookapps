@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs a skill headlessly from the main checkout; launchd starts milestone-dev every day at 01:00 and improvement-proposal every day at 22:00 (issues.md).
+# Runs a skill headlessly from the main checkout; launchd starts milestone-dev every day at 01:00 (issues.md).
 # Usage: nightly.sh milestone-dev|improvement-proposal  (the exit code is claude's)
 # Keeps one run per skill with a lock directory, writes .claude/nightly/{skill}-{date}.log (logs older than 30 days are deleted), runs proposal-reminder.sh after claude, and shows a macOS notification at the end.
 # At the start it sends the Pushover messages that waited for 09:00 when it is inside the window (notify.sh flush; the 09:00 notify-flush job sends them otherwise), and on a failure or a skipped run it sends one (notify.sh send); the skill itself sends the summary of its run.
