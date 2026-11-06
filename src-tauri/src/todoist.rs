@@ -312,6 +312,11 @@ pub struct TaskItem {
     priority: u8,
     due: Option<Due>,
     bucket: Bucket,
+    /// When the due falls, in epoch milliseconds: its local date and time, 00:00 of the date when it has no time. `None` with no due date.
+    /// Set again when a cache is read, so a cache written before this field existed gets it.
+    #[serde(default)]
+    #[cfg_attr(test, ts(type = "number | null"))]
+    due_at: Option<i64>,
     /// Active subtasks first, then the completed ones.
     subtasks: Vec<Subtask>,
     sub_done: usize,
@@ -415,26 +420,28 @@ fn remove_cache(dir: &Path) -> Result<(), String> {
     }
 }
 
-/// Sets each task's bucket again against `today`: the cached ones were set on the day they were fetched.
+/// Sets each task's bucket again against `today`, and its due moment in `tz`: the cached ones were set on the day they were fetched, and a cache of an older version has no moment.
 /// shortcut: the order and which subtasks are rows stay as fetched, so a task that became due today since then is not added; the next successful fetch fixes it.
-fn rebucket(todo: &mut Todo, today: NaiveDate) {
+fn rebucket<Tz: TimeZone>(todo: &mut Todo, today: NaiveDate, tz: &Tz) {
     for t in &mut todo.tasks {
         t.bucket = bucket_of(t.due.as_ref().and_then(|d| d.date.parse().ok()), today);
+        t.due_at = t.due.as_ref().and_then(|d| due_at(tz, d));
     }
 }
 
 /// The answer to a failed fetch: the cached `Todo` marked with `reason`, or the failure itself when nothing is cached.
-fn offline_todo(
+fn offline_todo<Tz: TimeZone>(
     cached: Option<CacheFile>,
     reason: String,
     today: NaiveDate,
+    tz: &Tz,
 ) -> Result<Todo, String> {
     match cached {
         Some(CacheFile {
             fetched_at,
             mut todo,
         }) => {
-            rebucket(&mut todo, today);
+            rebucket(&mut todo, today, tz);
             Ok(Todo {
                 offline: Some(Offline { fetched_at, reason }),
                 ..todo
@@ -478,6 +485,63 @@ fn parse_due<Tz: TimeZone>(tz: &Tz, date: &str) -> Option<(NaiveDate, Option<Nai
         .with_timezone(tz)
         .naive_local();
     Some((t.date(), Some(t.time())))
+}
+
+/// When `due` falls, in epoch milliseconds: its date and time in `tz`, 00:00 of the date when it has no time. `None` when it cannot be read.
+/// A time the clock skips (the hour a daylight saving change jumps over) is read as an hour later, and one it passes twice as the first.
+fn due_at<Tz: TimeZone>(tz: &Tz, due: &Due) -> Option<i64> {
+    let time = match &due.time {
+        Some(t) => NaiveTime::parse_from_str(t, "%H:%M").ok()?,
+        None => NaiveTime::MIN,
+    };
+    let local = due.date.parse::<NaiveDate>().ok()?.and_time(time);
+    let at = tz.from_local_datetime(&local).earliest().or_else(|| {
+        tz.from_local_datetime(&(local + Duration::hours(1)))
+            .earliest()
+    })?;
+    Some(at.timestamp_millis())
+}
+
+/// What the screen shows for a due text before Todoist answers.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct PickedDue {
+    due: Option<Due>,
+    bucket: Bucket,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    due_at: Option<i64>,
+}
+
+/// The due a text from the calendar (`YYYY-MM-DD`, with ` HH:MM` for a time) makes, or no due date for an empty one, judged against `today` in `tz`.
+/// `None` for other text: Todoist reads it, and the task stays as it is until the reload.
+fn picked_due<Tz: TimeZone>(text: &str, today: NaiveDate, tz: &Tz) -> Option<PickedDue> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Some(PickedDue {
+            due: None,
+            bucket: Bucket::NoDue,
+            due_at: None,
+        });
+    }
+    if !is_plain_due(text) {
+        return None;
+    }
+    let (date, time) = text
+        .split_once(' ')
+        .map_or((text, None), |(d, t)| (d, Some(t)));
+    let due = Due {
+        date: date.to_owned(),
+        time: time.map(str::to_owned),
+        string: text.to_owned(),
+        recurring: false,
+    };
+    Some(PickedDue {
+        bucket: bucket_of(Some(date.parse().ok()?), today),
+        due_at: due_at(tz, &due),
+        due: Some(due),
+    })
 }
 
 fn bucket_of(due: Option<NaiveDate>, today: NaiveDate) -> Bucket {
@@ -758,6 +822,7 @@ fn build_todo<Tz: TimeZone>(
             project_id: t.project_id.clone(),
             priority: flip_priority(t.priority),
             bucket: bucket_of(due.as_ref().and_then(|d| d.date.parse().ok()), today),
+            due_at: due.as_ref().and_then(|d| due_at(tz, d)),
             sub_done: subtasks.iter().filter(|s| s.done).count(),
             sub_total: subtasks.len(),
             subtasks,
@@ -1100,7 +1165,7 @@ pub async fn todoist_load(
             } else {
                 None
             };
-            return offline_todo(cached, reason, Local::now().date_naive()).map(Some);
+            return offline_todo(cached, reason, Local::now().date_naive(), &Local).map(Some);
         }
     };
     match done {
@@ -1180,7 +1245,7 @@ pub async fn todoist_cached(app: AppHandle) -> Result<Option<Todo>, String> {
         .await
         .map_err(|e| e.to_string())?;
     Ok(cached.map(|CacheFile { mut todo, .. }| {
-        rebucket(&mut todo, Local::now().date_naive());
+        rebucket(&mut todo, Local::now().date_naive(), &Local);
         todo
     }))
 }
@@ -1479,6 +1544,13 @@ pub async fn todoist_update(
     .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let done = request(&auth, &state, command, Method::POST, &url, Some(body)).await?;
     Ok(done.map(|_| true))
+}
+
+/// The due a text makes on the task, which the screen puts on it at once while `todoist_update` is on its way: the text a day picked in the calendar writes (`YYYY-MM-DD`, with ` HH:MM`), or an empty one. `None` for other text, which Todoist reads.
+/// Asks Todoist nothing.
+#[tauri::command]
+pub async fn todoist_picked_due(text: String) -> Option<PickedDue> {
+    picked_due(&text, Local::now().date_naive(), &Local)
 }
 
 /// Todoist refuses a label name longer than this many characters (`POST /api/v1/labels`).
@@ -2091,6 +2163,214 @@ mod tests {
     fn unreadable_due_date_is_none() {
         assert_eq!(parse_due(&jst(), ""), None);
         assert_eq!(parse_due(&jst(), "tomorrow"), None);
+    }
+
+    /// A zone with a gap: on 2026-03-29 the local clock jumps from 02:00 to 03:00, as a daylight saving change does.
+    #[derive(Clone, Copy, Debug)]
+    struct Spring;
+
+    #[derive(Clone, Copy, Debug)]
+    struct SpringOffset(i32);
+
+    impl std::fmt::Display for SpringOffset {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl chrono::Offset for SpringOffset {
+        fn fix(&self) -> FixedOffset {
+            FixedOffset::east_opt(self.0).unwrap()
+        }
+    }
+
+    impl TimeZone for Spring {
+        type Offset = SpringOffset;
+
+        fn from_offset(_: &SpringOffset) -> Spring {
+            Spring
+        }
+
+        fn offset_from_local_date(&self, d: &NaiveDate) -> chrono::LocalResult<SpringOffset> {
+            self.offset_from_local_datetime(&d.and_time(NaiveTime::MIN))
+        }
+
+        fn offset_from_local_datetime(
+            &self,
+            t: &NaiveDateTime,
+        ) -> chrono::LocalResult<SpringOffset> {
+            let (from, to) = (
+                date("2026-03-29").and_hms_opt(2, 0, 0),
+                date("2026-03-29").and_hms_opt(3, 0, 0),
+            );
+            if Some(*t) >= from && Some(*t) < to {
+                chrono::LocalResult::None
+            } else if Some(*t) < from {
+                chrono::LocalResult::Single(SpringOffset(0))
+            } else {
+                chrono::LocalResult::Single(SpringOffset(3600))
+            }
+        }
+
+        fn offset_from_utc_date(&self, d: &NaiveDate) -> SpringOffset {
+            self.offset_from_utc_datetime(&d.and_time(NaiveTime::MIN))
+        }
+
+        fn offset_from_utc_datetime(&self, t: &NaiveDateTime) -> SpringOffset {
+            SpringOffset(if Some(*t) < date("2026-03-29").and_hms_opt(2, 0, 0) {
+                0
+            } else {
+                3600
+            })
+        }
+    }
+
+    fn due(date: &str, time: Option<&str>) -> Due {
+        Due {
+            date: date.into(),
+            time: time.map(Into::into),
+            string: date.into(),
+            recurring: false,
+        }
+    }
+
+    #[test]
+    fn a_due_moment_is_the_local_date_and_time() {
+        // 2026-10-29 15:00 JST is 06:00 UTC.
+        assert_eq!(
+            due_at(&jst(), &due("2026-10-29", Some("15:00"))),
+            Some(1_793_253_600_000)
+        );
+        assert_eq!(
+            due_at(&jst(), &due("2026-10-29", Some("15:00"))),
+            Some(
+                Utc.with_ymd_and_hms(2026, 10, 29, 6, 0, 0)
+                    .unwrap()
+                    .timestamp_millis()
+            )
+        );
+    }
+
+    #[test]
+    fn a_due_date_without_a_time_falls_at_local_midnight() {
+        // 00:00 on the 29th in JST is 15:00 UTC on the 28th.
+        assert_eq!(
+            due_at(&jst(), &due("2026-10-29", None)),
+            Some(
+                Utc.with_ymd_and_hms(2026, 10, 28, 15, 0, 0)
+                    .unwrap()
+                    .timestamp_millis()
+            )
+        );
+    }
+
+    #[test]
+    fn a_due_moment_in_the_hour_the_clock_skips_is_an_hour_later() {
+        // 02:30 does not exist on 2026-03-29, so it is read as 03:30, which is 02:30 UTC.
+        assert_eq!(
+            due_at(&Spring, &due("2026-03-29", Some("02:30"))),
+            Some(
+                Utc.with_ymd_and_hms(2026, 3, 29, 2, 30, 0)
+                    .unwrap()
+                    .timestamp_millis()
+            )
+        );
+        assert_eq!(
+            due_at(&Spring, &due("2026-03-29", Some("01:30"))),
+            Some(
+                Utc.with_ymd_and_hms(2026, 3, 29, 1, 30, 0)
+                    .unwrap()
+                    .timestamp_millis()
+            )
+        );
+    }
+
+    #[test]
+    fn an_unreadable_due_has_no_moment() {
+        assert_eq!(due_at(&jst(), &due("tomorrow", None)), None);
+        assert_eq!(due_at(&jst(), &due("2026-10-29", Some("noon"))), None);
+    }
+
+    #[test]
+    fn every_task_carries_its_due_moment() {
+        let t = todo(
+            vec![
+                task(
+                    json!({"id": "A", "due": {"date": "2026-10-29T15:00:00", "string": "today 15:00"}}),
+                ),
+                task(json!({"id": "B", "due": {"date": "2026-10-30", "string": "tomorrow"}})),
+                task(json!({"id": "C"})),
+            ],
+            vec![],
+        );
+        let got: Vec<_> = t.tasks.iter().map(|t| (t.id.as_str(), t.due_at)).collect();
+        let at = |h, d| {
+            Some(
+                Utc.with_ymd_and_hms(2026, 10, d, h, 0, 0)
+                    .unwrap()
+                    .timestamp_millis(),
+            )
+        };
+        assert_eq!(got, [("A", at(6, 29)), ("B", at(15, 29)), ("C", None)]);
+        assert_eq!(
+            serde_json::to_value(&t.tasks[0]).unwrap()["dueAt"],
+            1_793_253_600_000_i64
+        );
+        assert!(serde_json::to_value(&t.tasks[2]).unwrap()["dueAt"].is_null());
+    }
+
+    #[test]
+    fn a_picked_day_and_time_are_the_due_with_their_bucket_and_moment() {
+        let today = date("2026-10-29");
+        let got = picked_due(" 2026-10-30 15:00 ", today, &jst()).unwrap();
+        assert_eq!(
+            got.due,
+            Some(due_with("2026-10-30", Some("15:00"), "2026-10-30 15:00"))
+        );
+        assert_eq!(got.bucket, Bucket::Upcoming);
+        assert_eq!(got.due_at, due_at(&jst(), got.due.as_ref().unwrap()));
+        let got = picked_due("2026-10-29", today, &jst()).unwrap();
+        assert_eq!(got.due, Some(due_with("2026-10-29", None, "2026-10-29")));
+        assert_eq!(got.bucket, Bucket::Today);
+        assert!(got.due_at.is_some());
+        assert_eq!(
+            picked_due("2026-10-28", today, &jst()).unwrap().bucket,
+            Bucket::Overdue
+        );
+    }
+
+    fn due_with(date: &str, time: Option<&str>, string: &str) -> Due {
+        Due {
+            string: string.into(),
+            ..due(date, time)
+        }
+    }
+
+    #[test]
+    fn an_empty_picked_text_clears_the_due() {
+        let got = picked_due("  ", date("2026-10-29"), &jst()).unwrap();
+        assert_eq!(
+            got,
+            PickedDue {
+                due: None,
+                bucket: Bucket::NoDue,
+                due_at: None
+            }
+        );
+    }
+
+    #[test]
+    fn other_text_is_left_to_todoist() {
+        for text in [
+            "明日",
+            "every day",
+            "2026-13-01",
+            "2026-10-29 25:00",
+            "2026-10-29 9:00",
+            "2026-10-29T10:00",
+        ] {
+            assert_eq!(picked_due(text, date("2026-10-29"), &jst()), None, "{text}");
+        }
     }
 
     #[test]
@@ -3026,7 +3306,7 @@ mod tests {
             fetched_at: "2026-10-29T01:02:03Z".into(),
             todo: cached_todo(),
         };
-        let todo = offline_todo(Some(cached), "503".into(), date("2026-10-29")).unwrap();
+        let todo = offline_todo(Some(cached), "503".into(), date("2026-10-29"), &jst()).unwrap();
         assert_eq!(
             todo.offline,
             Some(Offline {
@@ -3047,17 +3327,38 @@ mod tests {
             todo: cached_todo(),
         };
         assert_eq!(cached.todo.tasks[0].bucket, Bucket::Today);
-        let next_day =
-            offline_todo(Some(cached.clone()), "503".into(), date("2026-10-30")).unwrap();
+        let next_day = offline_todo(
+            Some(cached.clone()),
+            "503".into(),
+            date("2026-10-30"),
+            &jst(),
+        )
+        .unwrap();
         assert_eq!(next_day.tasks[0].bucket, Bucket::Overdue);
-        let day_before = offline_todo(Some(cached), "503".into(), date("2026-10-28")).unwrap();
+        let day_before =
+            offline_todo(Some(cached), "503".into(), date("2026-10-28"), &jst()).unwrap();
         assert_eq!(day_before.tasks[0].bucket, Bucket::Upcoming);
+    }
+
+    #[test]
+    fn a_cache_written_without_due_moments_gets_them_when_it_is_read() {
+        let mut sent = serde_json::to_value(cached_todo()).unwrap();
+        sent["tasks"][0].as_object_mut().unwrap().remove("dueAt");
+        let old: Todo = serde_json::from_value(sent).unwrap();
+        assert_eq!(old.tasks[0].due_at, None);
+        let cached = CacheFile {
+            fetched_at: "2026-10-29T01:02:03Z".into(),
+            todo: old,
+        };
+        let todo = offline_todo(Some(cached), "503".into(), date("2026-10-29"), &jst()).unwrap();
+        assert_eq!(todo.tasks[0].due_at, cached_todo().tasks[0].due_at);
+        assert!(todo.tasks[0].due_at.is_some());
     }
 
     #[test]
     fn a_failed_fetch_without_a_cache_is_the_failure() {
         assert_eq!(
-            offline_todo(None, "503".into(), date("2026-10-29")).unwrap_err(),
+            offline_todo(None, "503".into(), date("2026-10-29"), &jst()).unwrap_err(),
             "503"
         );
     }

@@ -11,6 +11,11 @@ export type TaskItem = { id: string, content: string, description: string, proje
  */
 priority: number, due: Due | null, bucket: Bucket, 
 /**
+ * When the due falls, in epoch milliseconds: its local date and time, 00:00 of the date when it has no time. `None` with no due date.
+ * Set again when a cache is read, so a cache written before this field existed gets it.
+ */
+dueAt: number | null, 
+/**
  * Active subtasks first, then the completed ones.
  */
 subtasks: Array<Subtask>, subDone: number, subTotal: number, mail: MailRef | null, 

@@ -70,8 +70,11 @@ export async function todoCall<C extends Write>(
   return answer;
 }
 
-export const saveTask = (id: string, fields: TaskFields, redraw = !("content" in fields)) =>
-  todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields), redraw);
+// A due text is put on the task as Rust reads it (`todoist_picked_due`, which asks Todoist nothing), before the change starts; the other fields need no wait.
+export async function saveTask(id: string, fields: TaskFields, redraw = !("content" in fields)) {
+  const picked = fields.dueString === undefined ? null : await invoke("todoist_picked_due", { text: fields.dueString });
+  return todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields, picked), redraw);
+}
 // Makes the label `name` and puts it on the task `id`, whose labels are `labels` (the new name in them) afterwards.
 export const createLabel = (id: string, name: string, labels: string[]) =>
   todoCall("todoist_create_label", { id, name, labels }, null, () => addLabelLocal(id, name));

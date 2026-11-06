@@ -19,6 +19,7 @@ import type { HandoffKind } from "./bindings/HandoffKind";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaViewport } from "./bindings/OrcaViewport";
+import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
@@ -100,6 +101,8 @@ export interface Commands {
     args: { id: string; content?: string; description?: string; dueString?: string; labels?: string[] };
     result: boolean | null;
   };
+  // The due a text makes on a task (a day picked in the calendar, or empty for none), to put on it at once; null for other text, which Todoist reads.
+  todoist_picked_due: { args: { text: string }; result: PickedDue | null };
   // Makes the personal label `name` and sets the task's labels to `labels` (its whole list, the new name in it).
   todoist_create_label: { args: { id: string; name: string; labels: string[] }; result: boolean | null };
   todoist_move: { args: { id: string; projectId: string }; result: boolean | null };
