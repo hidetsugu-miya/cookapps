@@ -487,7 +487,7 @@ pub fn plain_terminals_of(ps: &Value, terminals: &Value) -> Vec<OrcaTerminal> {
         .collect()
 }
 
-/// The project list from `ps` (its `result`), the rows and the plain terminals: the repositories of this machine, and apart from them what the worktrees of each SSH host show. Newest activity first.
+/// The project list from `ps` (its `result`), the rows and the plain terminals: the repositories of this machine (the working ones first, then the rest, each newest activity first), and apart from them what the worktrees of each SSH host show (newest activity first).
 /// A project has the highest rank among its agents (top-level, with a live pty), its worktrees' status and its plain terminals (a green dot), and as sessions its Claude rows and plain terminals.
 pub fn projects_of(
     ps: &Value,
@@ -534,9 +534,12 @@ pub fn projects_of(
     }
     // Newest first; a stable sort keeps the CLI's order between equal times.
     projects.sort_by_key(|p| std::cmp::Reverse(p.at_ms));
-    projects
+    let (mut repos, hosts): (Vec<_>, Vec<_>) = projects
         .into_iter()
-        .partition(|p| !p.key.starts_with("ssh:"))
+        .partition(|p| !p.key.starts_with("ssh:"));
+    // The working projects first; the stable sort keeps the newest-first order inside each part. The SSH hosts keep theirs.
+    repos.sort_by_key(|p| p.status != OrcaStatus::Working);
+    (repos, hosts)
 }
 
 /// The SSH hosts of `ssh.listEditableTargets` (its `result`), in its order: the first line of the label, else the `configHost`. A target with no id or no name is dropped.
@@ -2124,6 +2127,32 @@ mod tests {
             .collect();
         // The archived worktree makes no project and does not move the activity of its repository; a repository with no id has none.
         assert_eq!(names, [("ra", "alpha", 5_000), ("rb", "beta", 3_000)]);
+    }
+
+    #[test]
+    fn working_projects_come_first_and_each_part_is_newest_first() {
+        let worktree = |repo: &str, host: &str, status: &str, at: u64| {
+            json!({"path": format!("/w/{repo}"), "repo": repo, "repoId": repo, "displayName": "main", "hostId": host,
+                   "isArchived": false, "sidebarStatus": status, "lastActivityAt": at, "agents": []})
+        };
+        let doc = json!({"worktrees": [
+            worktree("old-working", "local", "working", 1_000),
+            worktree("new-idle", "local", "inactive", 5_000),
+            worktree("new-working", "local", "working", 3_000),
+            // A waiting project is `question`, not `working`: it stays in the second part.
+            worktree("newest-waiting", "local", "waiting", 9_000),
+            worktree("ssh-old-working", "ssh-1", "working", 2_000),
+            worktree("ssh-new-idle", "ssh-2", "inactive", 8_000),
+        ]});
+        let (projects, hosts) = projects_of(&doc, &[], &[]);
+        let names: Vec<_> = projects.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["new-working", "old-working", "newest-waiting", "new-idle"]
+        );
+        // The SSH hosts keep their own order: newest activity first, whatever their status.
+        let keys: Vec<_> = hosts.iter().map(|h| h.key.as_str()).collect();
+        assert_eq!(keys, ["ssh:ssh-2", "ssh:ssh-1"]);
     }
 
     #[test]
