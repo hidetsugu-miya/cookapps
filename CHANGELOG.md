@@ -3,6 +3,19 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.48.0
+
+A-14 the colors of the Orca terminals are chosen in the settings (#109). The new "ターミナルの配色" card of the Orca tab has a light and a dark row, each with a theme of Orca's built-in themes and its swatch, and the terminals follow the system's appearance. The first choice is taken from the themes picked in the Orca on this Mac. The chosen theme comes before the colors imported from Ghostty.
+
+The Orca screen:
+
+- The project list puts the projects at work first, each part newest first (#98).
+- A tab no longer loses its terminal when Orca drops Claude's state for a moment (#103).
+- A terminal of a saved server shown in cookapps and in Orca at once is no longer drawn broken (#106). A key typed in cookapps gives the pane's size to Orca again, and the size Orca sends is drawn.
+- The "合わせる" and "固定" switch is gone; a terminal always fits the pane (#115).
+
+A plain-text mail body no longer draws a full-width space as a dotted box (#114).
+
 ## v0.47.0
 
 S-16 the Slack list follows Socket Mode events (#96). In the new "リアルタイム更新" card of the Slack tab of the settings, register an App-Level Token (`xapp-`, scope `connections:write`) for a workspace; it is kept in the keychain. The app then stays connected to Slack, and a message posted, replied, changed or deleted in a channel reaches the list and the badge within about a second. While every workspace is connected, the whole list is read again every 5 minutes instead of every 2. `docs/slack.md` has how to make the token.
