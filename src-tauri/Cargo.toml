@@ -28,6 +28,7 @@ keyring = "4"
 keyring-core = { version = "1", optional = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query", "multipart"] }
 rmcp = { version = "3.8", features = ["server", "transport-io", "macros"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 salsa20 = "0.10"
 schemars = "1"
 serde = { version = "1", features = ["derive", "rc"] }
@@ -39,7 +40,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-wdio = { version = "1.5.1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1.5.1", optional = true }
 tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "sync", "time"] }
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 url = "2"
 x25519-dalek = "3"
 

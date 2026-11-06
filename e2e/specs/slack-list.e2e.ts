@@ -1,4 +1,4 @@
-import { attachment, boot, callsOf, claudeReady, count, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, rejects, release, slackLoad, slackThread, slackTs, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace } from "../support";
+import { attachment, boot, callsOf, claudeReady, count, emitEvent, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, rejects, release, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 
@@ -1634,5 +1634,64 @@ describe("slack list", () => {
     expect(cached.every((call) => JSON.stringify(call) === JSON.stringify({ cached: true }))).toBe(true);
     for (let i = 0; i < cached.length; i++) await release(read, timeline([messages[1]]));
     await browser.waitUntil(async () => (await layout()).join() === ["未読", "unread:other"].join());
+  });
+});
+
+describe("slack list: Socket Mode", () => {
+  const badge = () => $("#nav-slack .nav-count");
+
+  it("makes the list again from Rust's cache when an event was read, with no full read, and updates the badge", async () => {
+    await openList(timeline(unreadSample()));
+    await waitForCount("#slack-feed .feed-row", 3);
+    await expect(badge()).toHaveText("3");
+    const read = await mock("slack_timeline", timeline([timelineMessage(slackTs(0), "Carol Example", "dev", "just posted", { unread: true }), ...unreadSample()]));
+    await emitEvent("slack-timeline-dirty");
+    expect(await waitForCalls(read)).toEqual([{ cached: true }]);
+    await waitForCount("#slack-feed .feed-row", 4);
+    expect((await layout())[1]).toBe("unread:just posted");
+    await expect(badge()).toHaveText("4");
+    // Slack is not asked: no call follows.
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([{ cached: true }]);
+  });
+
+  it("reads the list in full when a connection is made", async () => {
+    await openList(timeline(sample()));
+    await waitForCount("#slack-feed .feed-row", 2);
+    const read = await mock("slack_timeline", timeline(unreadSample()));
+    await emitEvent("slack-socket-resync");
+    expect(await waitForCalls(read)).toEqual([null]);
+    await waitForCount("#slack-feed .feed-row", 3);
+  });
+
+  it("does not start a full read at a connection made while one is on its way", async () => {
+    await openList(timeline(sample(), { refreshSecs: 2 }));
+    await waitForCount("#slack-feed .feed-row", 2);
+    // The periodic read is on its way: held.
+    const read = await mock("slack_timeline", holds);
+    await waitForCalls(read);
+    await emitEvent("slack-socket-resync");
+    await emitEvent("slack-socket-resync");
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([null]);
+    await release(read, timeline(sample(), { refreshSecs: 300 }));
+  });
+
+  it("makes the list again when a connection changes state, so that the wait follows it", async () => {
+    await openList(timeline(sample(), { refreshSecs: 300 }));
+    await waitForCount("#slack-feed .feed-row", 2);
+    const read = await mock("slack_timeline", timeline(sample(), { refreshSecs: 120 }));
+    await emitEvent("slack-socket-status", socketStatus("reconnecting"));
+    expect(await waitForCalls(read)).toEqual([{ cached: true }]);
+  });
+
+  it("does nothing at an event while there is no workspace", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady });
+    const read = await mock("slack_timeline", timeline(sample()));
+    await emitEvent("slack-timeline-dirty");
+    await emitEvent("slack-socket-resync");
+    await emitEvent("slack-socket-status", socketStatus("connected"));
+    await browser.pause(500);
+    expect(await callsOf(read)).toEqual([]);
   });
 });

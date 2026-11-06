@@ -13,7 +13,14 @@ export const bumpSlackList = () => ++listVersion;
 export const slackListVersion = () => listVersion;
 
 export const getSlackWorkspaces = () => slackWorkspaces;
-export const setSlackWorkspaces = (list: Workspace[]) => (slackWorkspaces = list);
+// Called with the new list each time it is set (the Socket Mode card of the settings draws a row per workspace).
+const workspaceListeners: ((list: Workspace[]) => void)[] = [];
+export const onSlackWorkspaces = (listener: (list: Workspace[]) => void) => workspaceListeners.push(listener);
+export function setSlackWorkspaces(list: Workspace[]) {
+  slackWorkspaces = list;
+  for (const listener of workspaceListeners) listener(list);
+  return list;
+}
 
 export async function loadSlackWorkspaces() {
   if (loadingSlack) return;

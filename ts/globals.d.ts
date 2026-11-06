@@ -6,6 +6,10 @@ interface Window {
       // A stream from Rust: it is passed as an argument of a command, and what Rust sends reaches `onmessage`.
       Channel: new <T>() => { onmessage: (message: T) => void };
     };
+    // What Rust sends with `emit` (the Slack list's Socket Mode, S-16); the answer takes the listener off.
+    event: {
+      listen<T>(event: string, handler: (event: { payload: T }) => void): Promise<() => void>;
+    };
   };
 }
 

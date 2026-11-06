@@ -24,6 +24,7 @@ import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
+import type { SocketStatus } from "./bindings/SocketStatus";
 import type { Summary } from "./bindings/Summary";
 import type { Sync } from "./bindings/Sync";
 import type { Target } from "./bindings/Target";
@@ -113,6 +114,12 @@ export interface Commands {
   slack_check: { args: { teamId: string }; result: Checked };
   slack_add_workspace: { args: { token: string }; result: Workspace[] };
   slack_remove_workspace: { args: { teamId: string }; result: Workspace[] };
+  // S-16: keeps the workspace's App-Level Token (xapp-) once Slack accepts it, and connects it by Socket Mode; answers the connections (a workspace not in the list has none).
+  slack_app_token_set: { args: { teamId: string; token: string }; result: SocketStatus[] };
+  // S-16: stops the workspace's connection and deletes its App-Level Token; answers the connections.
+  slack_app_token_remove: { args: { teamId: string }; result: SocketStatus[] };
+  // S-16: the connections now. A change is sent to the screen as the event `slack-socket-status` (one `SocketStatus`).
+  slack_socket_status: { args: undefined; result: SocketStatus[] };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   slack_link: { args: { url: string }; result: Target };
   // What a post of the mail starts out as (plain text); the user edits it on the compose screen.

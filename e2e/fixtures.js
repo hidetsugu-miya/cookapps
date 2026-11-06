@@ -46,6 +46,7 @@ const answers = {
   slack_hide_channel: true,
   slack_unhide_channel: true,
   slack_icons: [],
+  slack_socket_status: [],
   slack_file_images: {},
   // No orca command: the Orca screen reads once and stops.
   orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: true },
