@@ -1661,14 +1661,17 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
     await project("example-app").click();
     await browser.waitUntil(async () => (await screenText()).includes("example.org"), { timeoutMsg: "the screen never showed" });
   }
-  async function openStream(text: string) {
+  // `shows` is a word of `text` that the screen has once it is drawn (not a phrase: the DOM renderer draws a space as U+00A0).
+  async function openStream(text: string, shows: string) {
     await openOrca(orcaOverview([], [], { target: "Studio", environments: ["Studio"] }));
     await waitForCalls("orca_stream_open");
     await sendStream(streamList(sample(), worktrees()));
     await project("example-app").click();
     await waitForCalls("orca_stream_terminal");
+    // Showing the pane makes the terminal fit it once more (the ResizeObserver, then FIT_DELAY_MS of ts/orca-terminal.ts). Let that fit pass, or it moves the text under the pointer.
+    await browser.pause(300);
     await sendTerm({ kind: "snapshot", data: text, cols: 80, rows: 24 });
-    await browser.waitUntil(async () => (await screenText()).includes("example"), { timeoutMsg: "the screen never showed" });
+    await browser.waitUntil(async () => (await screenText()).includes(shows), { timeoutMsg: "the screen never showed" });
   }
 
   it("opens the URL of a link ⌘+clicked in the mirror of this machine, cut where the Japanese sentence goes on and before the closing bracket", async () => {
@@ -1704,7 +1707,7 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
   });
 
   it("opens the URL of a link ⌘+clicked in the terminal streamed from a saved environment", async () => {
-    await openStream("$ claude\r\ndocs: https://example.com/docs");
+    await openStream("$ claude\r\ndocs: https://example.com/docs", "example.com");
     const open = await mock("orca_open_url", null);
     await clickOn("example.com");
     await browser.pause(300);
@@ -1714,7 +1717,7 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
   });
 
   it("opens a link that a program set with OSC 8 the same way, and shows the message when Rust refuses its URL", async () => {
-    await openStream("$ cat\r\n\x1b]8;;file:///etc/hosts\x1b\\hosts file\x1b]8;;\x1b\\");
+    await openStream("$ cat\r\n\x1b]8;;file:///etc/hosts\x1b\\hosts file\x1b]8;;\x1b\\", "hosts");
     const open = await mock("orca_open_url", rejects("開けるのは http か https の URL だけです"));
     await clickOn("hosts", { metaKey: true });
     expect(await waitForCalls(open)).toEqual([{ url: "file:///etc/hosts" }]);

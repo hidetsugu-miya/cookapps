@@ -162,7 +162,7 @@ function newInstance(source: TermSource): Instance {
   const el = document.createElement("div");
   el.className = "orca-term-box";
   container().append(el);
-  // The click on a link: only ⌘ with the left button opens it, and the selection goes. Rust opens http and https URLs and refuses the others (an OSC 8 link may name any).
+  // The click on a link: only ⌘ with the left button opens it, and the selection goes. Rust opens http and https URLs and refuses the others (an OSC 8 link may name any: xterm.js drops a non-http one before this unless `allowNonHttpProtocols` is set, as Orca sets it).
   const open = (event: MouseEvent, uri: string) => {
     if (!event.metaKey || event.ctrlKey || event.altKey || event.button !== 0) return;
     invoke("orca_open_url", { url: uri }).catch(onError);
@@ -179,7 +179,7 @@ function newInstance(source: TermSource): Instance {
     scrollback: SCROLLBACK,
     cursorBlink: true,
     allowProposedApi: true,
-    linkHandler: { activate: open, hover, leave },
+    linkHandler: { allowNonHttpProtocols: true, activate: open, hover, leave },
     ...termOptions(),
   });
   const fit = new FitAddon.FitAddon();
