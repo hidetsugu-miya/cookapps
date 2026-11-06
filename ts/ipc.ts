@@ -216,7 +216,7 @@ export interface Commands {
   // A-12: the new size of the pane, for the terminal shown while it fits the pane.
   orca_stream_viewport: { args: { viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal shown as it is (no Enter is added); the answer says whether Orca took it.
-  orca_stream_input: { args: { text: string }; result: null };
+  orca_stream_input: { args: { handle: string; text: string }; result: null };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

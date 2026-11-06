@@ -1139,6 +1139,26 @@ describe("orca: a saved environment's stream", () => {
     // A digit: the driver gives a letter the keyCode of its character, and xterm.js reads the keyCode of p to z as a function key (y is F10).
     await browser.keys(["1", "Enter"]);
     await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "1\r", { timeoutMsg: "the keys were not sent" });
+    expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_example-app")).toBe(true);
+  });
+
+  it("drops the keys not sent yet when another tab shows, so none reaches its terminal", async () => {
+    await openStudio(sample(), [orcaTerminal("example-app", "zsh")]);
+    await project("example-app").click();
+    await waitForCalls("orca_stream_terminal");
+    const input = await mock("orca_stream_input", holds);
+    await $("#orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+    await browser.keys(["1"]);
+    await waitForCalls(input);
+    // Typed while the first send is on its way: they wait for it.
+    await browser.keys(["2", "Enter"]);
+    await browser.pause(300);
+    expect(await callsOf(input)).toHaveLength(1);
+    await tabOf("orca:term_example-app_zsh").$(".orca-tab-btn").click();
+    await waitForCalls("orca_stream_terminal", 2);
+    await release(input, null);
+    await browser.pause(500);
+    expect(await callsOf(input)).toEqual([{ handle: "term_example-app", text: "1" }]);
   });
 
   it("shows the message when the keys cannot be sent", async () => {

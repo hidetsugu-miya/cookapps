@@ -107,8 +107,8 @@ pub enum StreamCommand {
     Terminal(Option<Watch>),
     /// The pane's size changed while the terminal fits it.
     Viewport(OrcaViewport),
-    /// Keys typed into the terminal shown; the answer says whether Orca took them.
-    Input(String, oneshot::Sender<Result<(), String>>),
+    /// Keys typed into the terminal `handle` (the first field); they go only while it is the terminal subscribed, and the answer says whether Orca took them.
+    Input(String, String, oneshot::Sender<Result<(), String>>),
     Close,
 }
 
@@ -365,6 +365,7 @@ struct Stream {
 }
 
 const NOT_CONNECTED: &str = "接続先につながっていません";
+const OTHER_TERMINAL: &str = "入力したターミナルは表示されていないため、送りませんでした";
 
 impl Connection {
     /// Subscribes the terminal the screen shows, once the list is held (it must be a terminal of it).
@@ -521,7 +522,11 @@ impl Connection {
                     }
                 }
             }
-            Some(StreamCommand::Input(text, reply)) => match &self.terminal {
+            Some(StreamCommand::Input(handle, text, reply)) => match &self.terminal {
+                // Keys typed into another terminal (the screen showed another tab meanwhile) never reach this one.
+                Some(sub) if sub.handle != handle => {
+                    let _ = reply.send(Err(OTHER_TERMINAL.into()));
+                }
                 Some(sub) => {
                     let id = link
                         .send_request(
@@ -627,7 +632,7 @@ async fn run_loop<F, Fut>(
                             watch.viewport = Some(viewport);
                         }
                     }
-                    Some(StreamCommand::Input(_, reply)) => {
+                    Some(StreamCommand::Input(_, _, reply)) => {
                         let _ = reply.send(Err(NOT_CONNECTED.into()));
                     }
                 },
@@ -732,15 +737,17 @@ pub async fn orca_stream_viewport(
     state.send(StreamCommand::Viewport(viewport))
 }
 
-/// Types `text` into the terminal shown, as it is (no Enter is added).
+/// Types `text` into the terminal `handle`, as it is (no Enter is added), only while it is the terminal shown.
 #[tauri::command]
 pub async fn orca_stream_input(
     state: tauri::State<'_, OrcaStream>,
+    handle: String,
     text: String,
 ) -> Result<(), String> {
+    check_handle(&handle)?;
     check_keys(&text)?;
     let (reply, answer) = oneshot::channel();
-    state.send(StreamCommand::Input(text, reply))?;
+    state.send(StreamCommand::Input(handle, text, reply))?;
     answer
         .await
         .unwrap_or_else(|_| Err("接続が切れたため、入力を送れたか分かりません".into()))
@@ -1218,7 +1225,7 @@ mod tests {
         for (accepted, ok) in [(true, true), (false, false)] {
             let (reply, answer) = oneshot::channel();
             commands
-                .send(StreamCommand::Input("ls\r".into(), reply))
+                .send(StreamCommand::Input("term_c".into(), "ls\r".into(), reply))
                 .ok()
                 .unwrap();
             let send = server.request().await;
@@ -1232,6 +1239,14 @@ mod tests {
                 .await;
             assert_eq!(answer.await.unwrap().is_ok(), ok);
         }
+
+        // Keys typed into another terminal than the one shown are refused without a request (the next request is the read below).
+        let (reply, answer) = oneshot::channel();
+        commands
+            .send(StreamCommand::Input("term_s".into(), "\r".into(), reply))
+            .ok()
+            .unwrap();
+        assert_eq!(answer.await.unwrap(), Err(OTHER_TERMINAL.to_owned()));
 
         // A worktree that `worktree.ps` did not list makes it read again, once.
         let update = json!({"type": "updated", "worktree": "r9::/w/z", "tabs": [shell_tab("t9", "term_9", "zsh")]});
@@ -1255,7 +1270,7 @@ mod tests {
         // Keys with no terminal shown are refused without a request.
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("x".into(), reply))
+            .send(StreamCommand::Input("term_c".into(), "x".into(), reply))
             .ok()
             .unwrap();
         assert_eq!(answer.await.unwrap(), Err(NOT_CONNECTED.to_owned()));
@@ -1332,7 +1347,7 @@ mod tests {
         );
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("x".into(), reply))
+            .send(StreamCommand::Input("term_c".into(), "x".into(), reply))
             .ok()
             .unwrap();
         assert_eq!(answer.await.unwrap(), Err(NOT_CONNECTED.to_owned()));

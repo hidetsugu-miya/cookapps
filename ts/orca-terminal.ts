@@ -2,7 +2,8 @@
 // A saved environment streams the terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. While it fits the pane ("画面に合わせる", the first state) the pane's size is sent and Orca sizes the terminal to it;
 // "固定" keeps the font and Orca's size, and the box scrolls when it does not fit. Leaving the tab, the screen or a shown window ends the stream, and Orca gives the terminal back its own size.
 // This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminal shown is a mirror: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
-// The keys typed go one send at a time, and the keys typed while a send is on its way go together in the next one. Nothing a terminal prints or is typed is kept or logged here.
+// The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
+// Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
 import { $ } from "./dom.js";
 import { invoke } from "./ipc.js";
@@ -107,7 +108,7 @@ async function sendKeys(instance: Instance) {
   instance.pending = instance.pending.slice(text.length);
   instance.sending = true;
   try {
-    if (instance.source.kind === "stream") await invoke("orca_stream_input", { text });
+    if (instance.source.kind === "stream") await invoke("orca_stream_input", { handle: instance.source.handle, text });
     else await invoke("orca_terminal_input", { handle: instance.source.handle, text });
   } catch (e) {
     onError(e);
@@ -200,6 +201,7 @@ function start(instance: Instance) {
 function stop() {
   stopMirrors();
   stopStream();
+  for (const instance of instances.values()) instance.pending = "";
 }
 
 // ---- showing ----
@@ -240,6 +242,7 @@ function dropTerminal(id: string) {
     visibleId = null;
   }
   if (instance.timer !== null) clearInterval(instance.timer);
+  instance.pending = "";
   instance.term.dispose();
   instance.el.remove();
   instances.delete(id);
