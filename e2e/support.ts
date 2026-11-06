@@ -7,6 +7,7 @@ import type { Claude } from "../ts/bindings/Claude";
 import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
+import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
 import type { OrcaChatEvent } from "../ts/bindings/OrcaChatEvent";
@@ -553,6 +554,15 @@ export const streamList = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], term
   projects: projectsOf(rows, worktrees, terminals),
   hosts: [],
   terminals,
+});
+
+// A-13: what `ghostty_import` and `ghostty_saved` answer: an import of nothing (one config file read), with the given parts.
+export const ghosttyImport = (parts: Partial<GhosttyImport> = {}): GhosttyImport => ({
+  settings: { fontFamilies: [], fontSize: null, fontThicken: false, light: null, dark: null, keybinds: [] },
+  imported: [],
+  skipped: [],
+  files: ["~/.config/ghostty/config"],
+  ...parts,
 });
 
 // Gives `event` to the channel of the last call of `command` (or the `nth`, counting from 0), as Rust does.

@@ -6,6 +6,7 @@ import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
 import type { Effort } from "./bindings/Effort";
+import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
 import type { MailSummary } from "./bindings/MailSummary";
@@ -217,6 +218,10 @@ export interface Commands {
   orca_stream_viewport: { args: { viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal shown as it is (no Enter is added); the answer says whether Orca took it.
   orca_stream_input: { args: { handle: string; text: string }; result: null };
+  // A-13: the import of Ghostty's settings saved last, null before the first one.
+  ghostty_saved: { args: undefined; result: GhosttyImport | null };
+  // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.
+  ghostty_import: { args: undefined; result: GhosttyImport };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

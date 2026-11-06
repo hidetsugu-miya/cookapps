@@ -1,6 +1,6 @@
-import { account, boot, checked, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "update";
+type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "orca" | "update";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -13,7 +13,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["update", "アップデート"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["orca", "Orca"], ["update", "アップデート"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -1046,6 +1046,70 @@ describe("settings: update", () => {
   });
 });
 
+describe("settings: Ghostty (the Orca tab)", () => {
+  // The app with `fixtures` added, and the settings screen open on the Orca tab.
+  async function openOrcaTab(fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await expect($("#settings-panel-orca")).toBeDisplayed();
+  }
+
+  const status = () => $("#ghostty-items .status");
+
+  it("says nothing has been imported yet, and asks nothing of Ghostty by itself", async () => {
+    await openOrcaTab();
+    await expect(status()).toHaveText("未取り込み");
+    await expect($("#ghostty-items .item-meta")).toHaveText("まだ取り込んでいません");
+    await expect($("#ghostty-import")).toBeEnabled();
+    expect(await callsOf("ghostty_import")).toEqual([]);
+  });
+
+  it("imports with the button, and lists the files read, the entries taken and the entries left with the reason", async () => {
+    await openOrcaTab();
+    const imported = await mock(
+      "ghostty_import",
+      ghosttyImport({
+        imported: ["font-size = 14", "theme = light:Paper,dark:Dracula", "keybind = delete=text:\\x08"],
+        skipped: [
+          { entry: "window-width = 100", reason: "対応していません" },
+          { entry: "theme = Nope", reason: "テーマ Nope が見つかりません" },
+        ],
+        files: ["~/.config/ghostty/config", "~/Library/Application Support/com.mitchellh.ghostty/config.ghostty"],
+      }),
+    );
+    await $("#ghostty-import").click();
+    expect(await waitForCalls(imported)).toEqual([null]);
+    await expect(status()).toHaveText("取り込み済み");
+    await expect($("#ghostty-items .item-meta")).toHaveText("読んだファイル: ~/.config/ghostty/config、~/Library/Application Support/com.mitchellh.ghostty/config.ghostty");
+    await expect($("#ghostty-imported h3")).toHaveText("取り込んだ項目（3）");
+    expect(await textsOf("#ghostty-imported li code")).toEqual(["font-size = 14", "theme = light:Paper,dark:Dracula", "keybind = delete=text:\\x08"]);
+    await expect($("#ghostty-skipped h3")).toHaveText("取り込めなかった項目（2）");
+    expect(await textsOf("#ghostty-skipped li code")).toEqual(["window-width = 100", "theme = Nope"]);
+    expect(await textsOf("#ghostty-skipped .ghostty-reason")).toEqual(["対応していません", "テーマ Nope が見つかりません"]);
+    await expect($("#ghostty-import")).toBeEnabled();
+  });
+
+  it("shows the import saved before, without reading the config again", async () => {
+    await openOrcaTab({ ghostty_saved: ghosttyImport({ imported: ["font-size = 14"], skipped: [] }) });
+    await expect(status()).toHaveText("取り込み済み");
+    await expect($("#ghostty-imported h3")).toHaveText("取り込んだ項目（1）");
+    await expect($("#ghostty-skipped h3")).toHaveText("取り込めなかった項目（0）");
+    expect(await count("#ghostty-skipped li")).toBe(0);
+    expect(await callsOf("ghostty_import")).toEqual([]);
+  });
+
+  it("shows the message when the config cannot be read, and keeps the import it had", async () => {
+    await openOrcaTab({ ghostty_saved: ghosttyImport({ imported: ["font-size = 14"] }) });
+    await mock("ghostty_import", rejects("Ghostty の設定ファイルが見つかりません。探した場所: ~/.config/ghostty/config.ghostty"));
+    await $("#ghostty-import").click();
+    await expect($("#error")).toHaveText("Ghostty の設定ファイルが見つかりません。探した場所: ~/.config/ghostty/config.ghostty");
+    await expect(status()).toHaveText("取り込み済み");
+    await expect($("#ghostty-imported h3")).toHaveText("取り込んだ項目（1）");
+    await expect($("#ghostty-import")).toBeEnabled();
+  });
+});
+
 describe("settings: tabs", () => {
   const tab = (name: Tab) => $(`#settings-tab-${name}`);
   const panel = (name: Tab) => $(`#settings-panel-${name}`);
@@ -1062,7 +1126,7 @@ describe("settings: tabs", () => {
       key,
     );
 
-  it("has the six tabs in order, in a tablist, each controlling the card it names", async () => {
+  it("has the seven tabs in order, in a tablist, each controlling the card it names", async () => {
     await openSettings([]);
     await expect($("#settings-tabs")).toHaveAttribute("role", "tablist");
     expect(await textsOf('#settings-tabs [role="tab"]')).toEqual(TABS.map(([, label]) => label));
