@@ -46,6 +46,14 @@ const EVENT_STATUS: &str = "slack-socket-status";
 const DEBOUNCE: Duration = Duration::from_secs(1);
 /// The most threads of one channel a single read again checks.
 const THREADS_PER_REFRESH: usize = 5;
+/// The least time between two reads of the same channel by events. A busy channel would otherwise be read every second (a history call, and up to `THREADS_PER_REFRESH` replies calls);
+/// the events in between are not lost: they wait, merged (their threads are added), for the next read.
+const CHANNEL_GAP: Duration = Duration::from_secs(10);
+/// The most calls (`conversations.history` and `conversations.replies`, a read of a channel being 1 and 1 for each thread it checks) events may make for one workspace in `BUDGET_WINDOW`.
+/// Slack allows about 50 a minute for each method (Tier 3) and a full read uses up to 40 `conversations.history` calls (`HISTORY_BUDGET`), so these are kept to 20 to leave it room:
+/// a 429 stops the full read's history reads for the workspace (`TimelineCache::limit`). Reads over the budget wait for the next minute, merged, and are not dropped.
+const EVENT_CALLS_PER_WINDOW: usize = 20;
+const BUDGET_WINDOW: Duration = Duration::from_secs(60);
 /// A ping goes out this often, and a connection that has sent no frame for `SILENCE_LIMIT` is taken as dead.
 const PING_EVERY: Duration = Duration::from_secs(30);
 const SILENCE_LIMIT: Duration = Duration::from_secs(90);
@@ -251,6 +259,66 @@ fn merge_refreshes(refreshes: Vec<Refresh>) -> Vec<Refresh> {
         refresh.threads.truncate(THREADS_PER_REFRESH);
     }
     merged
+}
+
+/// What the events may read now: `CHANNEL_GAP` between two reads of a channel and `EVENT_CALLS_PER_WINDOW` calls in `BUDGET_WINDOW`.
+#[derive(Default)]
+struct EventBudget {
+    /// When each channel was last let through.
+    last_read: HashMap<String, Instant>,
+    /// When the calls were let through, and how many.
+    spent: Vec<(Instant, usize)>,
+}
+
+impl EventBudget {
+    /// Splits `waiting` into the reads to make now (and counts them as made) and the ones that wait, with the time the first of those can be read.
+    /// A read waits while its channel is within `CHANNEL_GAP` of the last one, or while its calls (`1 +` the threads it checks) do not fit in what is left of `EVENT_CALLS_PER_WINDOW`;
+    /// one that does not fit does not hold back a smaller one behind it. The order of `waiting` is kept in both.
+    fn admit(
+        &mut self,
+        waiting: Vec<Refresh>,
+        now: Instant,
+    ) -> (Vec<Refresh>, Vec<Refresh>, Option<Instant>) {
+        self.spent.retain(|(at, _)| *at + BUDGET_WINDOW > now);
+        self.last_read.retain(|_, at| *at + CHANNEL_GAP > now);
+        let (mut ready, mut rest, mut wake) = (Vec::new(), Vec::new(), None::<Instant>);
+        for refresh in waiting {
+            let cost = (1 + refresh.threads.len()).min(EVENT_CALLS_PER_WINDOW);
+            let used: usize = self.spent.iter().map(|(_, n)| n).sum();
+            let can_at = match self.last_read.get(&refresh.channel) {
+                Some(last) => Some(*last + CHANNEL_GAP),
+                None if used + cost > EVENT_CALLS_PER_WINDOW => Some(self.room_at(used, cost)),
+                None => None,
+            };
+            match can_at {
+                None => {
+                    self.spent.push((now, cost));
+                    self.last_read.insert(refresh.channel.clone(), now);
+                    ready.push(refresh);
+                }
+                Some(at) => {
+                    wake = Some(wake.map_or(at, |w| w.min(at)));
+                    rest.push(refresh);
+                }
+            }
+        }
+        (ready, rest, wake)
+    }
+
+    /// The first time `cost` calls fit, when `used` are counted now: the calls leave the window oldest first.
+    fn room_at(&self, used: usize, cost: usize) -> Instant {
+        let mut used = used;
+        let mut at = None;
+        for (when, n) in &self.spent {
+            used -= n;
+            at = Some(*when + BUDGET_WINDOW);
+            if used + cost <= EVENT_CALLS_PER_WINDOW {
+                break;
+            }
+        }
+        // `spent` is not empty whenever `used` is over the limit.
+        at.unwrap_or_else(Instant::now)
+    }
 }
 
 /// How long to wait before connecting again after the `attempt`th failure in a row (0 is the first): doubling from `BACKOFF_FIRST` up to `BACKOFF_MAX`.
@@ -774,14 +842,27 @@ async fn refresh_channel(app: &AppHandle, team_id: &str, request: &Refresh) -> b
     true
 }
 
-/// Reads the channels whose events arrive, one channel at a time, and tells the screen to draw from the cache after each.
+/// Reads the channels whose events arrive, one channel at a time, as `EventBudget` lets them through, and tells the screen to draw from the cache after each.
+/// What the budget holds back waits here, merged with the events that come meanwhile, and is read when the budget allows.
 async fn refresh_worker(app: &AppHandle, team_id: &str, mut rx: UnboundedReceiver<Refresh>) {
-    while let Some(first) = rx.recv().await {
-        let mut backlog = vec![first];
-        while let Ok(more) = rx.try_recv() {
-            backlog.push(more);
+    let mut budget = EventBudget::default();
+    let mut waiting: Vec<Refresh> = Vec::new();
+    let mut wake: Option<Instant> = None;
+    loop {
+        tokio::select! {
+            incoming = rx.recv() => {
+                let Some(first) = incoming else { return };
+                waiting.push(first);
+                while let Ok(more) = rx.try_recv() {
+                    waiting.push(more);
+                }
+                waiting = merge_refreshes(std::mem::take(&mut waiting));
+            }
+            () = wait_until(wake) => {}
         }
-        for request in merge_refreshes(backlog) {
+        let (ready, rest, next_wake) = budget.admit(std::mem::take(&mut waiting), Instant::now());
+        (waiting, wake) = (rest, next_wake);
+        for request in ready {
             if refresh_channel(app, team_id, &request).await {
                 if let Err(e) = app.emit(EVENT_DIRTY, ()) {
                     log_failure("slack_socket", team_id, e.to_string());
@@ -1292,6 +1373,93 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         (listener, url)
+    }
+
+    #[test]
+    fn a_channel_is_read_at_once_and_again_only_after_the_gap_with_the_events_in_between_merged() {
+        let mut budget = EventBudget::default();
+        let (ready, rest, wake) = budget.admit(vec![refresh("C1", &["1.2"])], at(100));
+        assert_eq!(ready, vec![refresh("C1", &["1.2"])]);
+        assert!(rest.is_empty());
+        assert_eq!(wake, None);
+        // Events of the channel in the gap wait, with their threads merged, until the gap is over.
+        let (ready, rest, wake) = budget.admit(vec![refresh("C1", &["3.4"])], at(103));
+        assert!(ready.is_empty());
+        assert_eq!(rest, vec![refresh("C1", &["3.4"])]);
+        assert_eq!(wake, Some(at(100) + CHANNEL_GAP));
+        let (ready, rest, wake) = budget.admit(rest, at(100) + CHANNEL_GAP);
+        assert_eq!(ready, vec![refresh("C1", &["3.4"])]);
+        assert!(rest.is_empty());
+        assert_eq!(wake, None);
+        // Another channel is not held by it.
+        let (ready, _, _) = budget.admit(vec![refresh("C2", &[])], at(111));
+        assert_eq!(ready, vec![refresh("C2", &[])]);
+    }
+
+    #[test]
+    fn a_workspace_gets_a_limited_number_of_calls_a_minute_and_the_rest_waits_for_the_next() {
+        let mut budget = EventBudget::default();
+        // Each read of a channel with four threads is 5 calls: four of them are the whole budget of 20.
+        let four = ["1.1", "1.2", "1.3", "1.4"];
+        let waiting: Vec<Refresh> = (1..=6).map(|n| refresh(&format!("C{n}"), &four)).collect();
+        let (ready, rest, wake) = budget.admit(waiting, at(200));
+        assert_eq!(
+            ready.iter().map(|r| r.channel.as_str()).collect::<Vec<_>>(),
+            ["C1", "C2", "C3", "C4"]
+        );
+        assert_eq!(
+            rest.iter().map(|r| r.channel.as_str()).collect::<Vec<_>>(),
+            ["C5", "C6"]
+        );
+        // The calls of the first read leave the minute after it was made.
+        assert_eq!(wake, Some(at(200) + BUDGET_WINDOW));
+        let (ready, rest, _) = budget.admit(rest.clone(), at(259));
+        assert!(ready.is_empty());
+        assert_eq!(rest.len(), 2);
+        // Nothing was dropped, and the next minute lets them through (all four calls of the minute are over together here).
+        let (ready, rest, wake) = budget.admit(rest, at(200) + BUDGET_WINDOW);
+        assert_eq!(
+            ready.iter().map(|r| r.channel.as_str()).collect::<Vec<_>>(),
+            ["C5", "C6"]
+        );
+        assert!(rest.is_empty());
+        assert_eq!(wake, None);
+    }
+
+    #[test]
+    fn a_read_that_fits_is_let_through_past_one_that_does_not() {
+        let mut budget = EventBudget::default();
+        let four = ["1.1", "1.2", "1.3", "1.4"];
+        let mut waiting: Vec<Refresh> = (1..=3).map(|n| refresh(&format!("C{n}"), &four)).collect();
+        // 15 calls so far; a read of 5 more fits, one of 6 does not.
+        waiting.push(refresh("C4", &["1.1", "1.2", "1.3", "1.4", "1.5"]));
+        waiting.push(refresh("C5", &[]));
+        let (ready, rest, _) = budget.admit(waiting, at(300));
+        assert_eq!(
+            ready.iter().map(|r| r.channel.as_str()).collect::<Vec<_>>(),
+            ["C1", "C2", "C3", "C5"]
+        );
+        assert_eq!(
+            rest.iter().map(|r| r.channel.as_str()).collect::<Vec<_>>(),
+            ["C4"]
+        );
+    }
+
+    #[test]
+    fn the_wake_is_the_earliest_time_something_can_be_read() {
+        let mut budget = EventBudget::default();
+        budget.admit(vec![refresh("C1", &[])], at(400));
+        let (_, rest, _) = budget.admit(
+            vec![refresh("C2", &["1.1", "1.2", "1.3", "1.4", "1.5"])],
+            at(402),
+        );
+        assert!(rest.is_empty());
+        // C1 waits for its gap (410) and C2 for its own (412): the earlier is the wake.
+        let (ready, rest, wake) =
+            budget.admit(vec![refresh("C1", &[]), refresh("C2", &[])], at(405));
+        assert!(ready.is_empty());
+        assert_eq!(rest.len(), 2);
+        assert_eq!(wake, Some(at(400) + CHANNEL_GAP));
     }
 
     #[tokio::test]
