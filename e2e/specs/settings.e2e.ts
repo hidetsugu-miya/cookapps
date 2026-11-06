@@ -1,4 +1,4 @@
-import { account, boot, checked, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "orca" | "update";
 
@@ -1191,6 +1191,80 @@ describe("settings: Ghostty (the Orca tab)", () => {
     await expect(status()).toHaveText("取り込み済み");
     await expect($("#ghostty-imported h3")).toHaveText("取り込んだ項目（1）");
     await expect($("#ghostty-import")).toBeEnabled();
+  });
+});
+
+describe("settings: terminal colors (the Orca tab, A-14)", () => {
+  // The app with `fixtures` added, and the settings screen open on the Orca tab.
+  async function openOrcaTab(fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await expect($("#settings-panel-orca")).toBeDisplayed();
+  }
+
+  const names = (id: string) => textsOf(`#${id} option`);
+  // The background, the text color and the number of colors of the swatch in the row of `slot`.
+  const swatch = (slot: "light" | "dark") =>
+    browser.execute(
+      (s) => {
+        const box = document.getElementById(`terminal-theme-${s}`)!.parentElement!.querySelector<HTMLElement>(".theme-swatch")!;
+        return { theme: box.dataset.theme, background: getComputedStyle(box).backgroundColor, color: getComputedStyle(box).color, dots: box.querySelectorAll(".theme-dots i").length, red: getComputedStyle(box.querySelectorAll<HTMLElement>(".theme-dots i")[1]!).backgroundColor };
+      },
+      slot,
+    );
+
+  it("puts the card of the colors above the card of Ghostty, with a row for the light and one for the dark appearance", async () => {
+    await openOrcaTab({ terminal_themes: terminalThemes() });
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "Ghostty の設定"]);
+    expect(await textsOf("#terminal-theme-items .item-name")).toEqual(["ライト", "ダーク"]);
+    expect(await textsOf("#terminal-theme-items .item-meta")).toEqual(["システムの外観がライトのとき", "システムの外観がダークのとき"]);
+  });
+
+  it("offers every theme in each row and shows the chosen one with its swatch", async () => {
+    await openOrcaTab({ terminal_themes: terminalThemes({ light: "One Light", dark: "Dracula" }) });
+    const all = ["Ghostty Default Style Dark", "Builtin Tango Light", "Dracula", "One Light"];
+    expect(await names("terminal-theme-light")).toEqual(all);
+    expect(await names("terminal-theme-dark")).toEqual(all);
+    await expect($("#terminal-theme-light")).toHaveValue("One Light");
+    await expect($("#terminal-theme-dark")).toHaveValue("Dracula");
+    expect(await swatch("light")).toEqual({ theme: "One Light", background: "rgb(253, 246, 227)", color: "rgb(101, 123, 131)", dots: 16, red: "rgb(220, 50, 47)" });
+    expect(await swatch("dark")).toEqual({ theme: "Dracula", background: "rgb(40, 42, 54)", color: "rgb(248, 248, 242)", dots: 16, red: "rgb(255, 85, 85)" });
+  });
+
+  it("saves the theme chosen for one appearance with the other as it is, and draws its swatch", async () => {
+    await openOrcaTab({ terminal_themes: terminalThemes({ light: "One Light", dark: "Dracula" }) });
+    const set = await mock("terminal_theme_set", { light: "One Light", dark: "Ghostty Default Style Dark" });
+    await chooseTheme("dark", "Ghostty Default Style Dark");
+    expect(await waitForCalls(set)).toEqual([{ selection: { light: "One Light", dark: "Ghostty Default Style Dark" } }]);
+    await browser.waitUntil(async () => (await swatch("dark")).theme === "Ghostty Default Style Dark", { timeoutMsg: "the swatch never changed" });
+    expect((await swatch("dark")).background).toBe("rgb(16, 32, 58)");
+    expect((await swatch("light")).theme).toBe("One Light");
+    await expect($("#terminal-theme-dark")).toHaveValue("Ghostty Default Style Dark");
+    await expect($("#terminal-theme-dark")).toBeEnabled();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the message of a failed save and puts the chosen theme back", async () => {
+    await openOrcaTab({ terminal_themes: terminalThemes({ light: "One Light", dark: "Dracula" }) });
+    await mock("terminal_theme_set", rejects("テーマ Nope は選べません"));
+    await chooseTheme("light", "Dracula");
+    await expect($("#error")).toHaveText("テーマ Nope は選べません");
+    await expect($("#terminal-theme-light")).toHaveValue("One Light");
+    await expect($("#terminal-theme-light")).toBeEnabled();
+    expect((await swatch("light")).theme).toBe("One Light");
+  });
+
+  it("asks for the themes at startup and by itself saves nothing", async () => {
+    await openOrcaTab({ terminal_themes: terminalThemes() });
+    expect(await callsOf("terminal_themes")).toEqual([null]);
+    expect(await callsOf("terminal_theme_set")).toEqual([]);
+  });
+
+  it("shows the message of a failed read and no rows", async () => {
+    await openOrcaTab({ terminal_themes: rejects("テーマを読めません") });
+    await expect($("#error")).toHaveText("テーマを読めません");
+    expect(await count("#terminal-theme-items .item")).toBe(0);
   });
 });
 

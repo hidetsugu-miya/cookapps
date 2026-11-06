@@ -530,7 +530,7 @@ a.c-file:hover { background: var(--hover); }
 .item .who { flex: 1; min-width: 0; }
 .item select, .card-add select, .model-grid select { height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; font: inherit; color: #333; }
 .item select:focus, .card-add select:focus, .model-grid select:focus { outline: 2px solid var(--accent); border-color: transparent; }
-/* The Claude tab holds three cards (the connection, the model and effort of the four purposes, the prompt), so its panel is no card itself. */
+/* The Claude tab holds three cards (the connection, the model and effort of the four purposes, the prompt), and the Orca tab two (the terminal colors, Ghostty's settings), so their panels are no card themselves. */
 .model-note { padding: 0 20px 4px; }
 .model-grid { display: grid; grid-template-columns: minmax(0, 1fr) 108px 100px; gap: 6px 8px; align-items: center; padding: 4px 12px 14px 20px; }
 .model-grid .who { min-width: 0; }
@@ -557,6 +557,11 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .ghostty-report ul { margin: 0; padding: 0; list-style: none; font-size: 12px; }
 .ghostty-report li { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 2px 0; overflow-wrap: anywhere; }
 .ghostty-reason { color: var(--warn); }
+/* The swatch of a terminal theme (A-14): its ground with a sample of its text, and its 16 colors under it. The colors are the theme's, set from the script. */
+.theme-swatch { flex: none; display: flex; flex-direction: column; justify-content: space-between; gap: 4px; width: 88px; height: 44px; padding: 5px 7px; border: 1px solid var(--chip-line); border-radius: 8px; font: 12px/1 ui-monospace, monospace; }
+.theme-dots { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
+.theme-dots i { height: 6px; border-radius: 50%; }
+.item select.theme-select { width: 200px; }
 .card-add { display: flex; gap: 8px; padding: 12px 12px 14px 20px; border-top: 1px solid var(--line); background: var(--bar); border-radius: 0 0 12px 12px; }
 .card-add input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: #fff; }
 .card-add input:focus { outline: 2px solid var(--accent); border-color: transparent; }

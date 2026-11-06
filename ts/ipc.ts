@@ -28,6 +28,8 @@ import type { SocketStatus } from "./bindings/SocketStatus";
 import type { Summary } from "./bindings/Summary";
 import type { Sync } from "./bindings/Sync";
 import type { Target } from "./bindings/Target";
+import type { TerminalThemes } from "./bindings/TerminalThemes";
+import type { ThemeSelection } from "./bindings/ThemeSelection";
 import type { Timeline } from "./bindings/Timeline";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { Todo } from "./bindings/Todo";
@@ -229,6 +231,10 @@ export interface Commands {
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.
   ghostty_import: { args: undefined; result: GhosttyImport };
+  // A-14: Orca's built-in terminal themes and the theme chosen for each appearance. The first time Orca's settings on this Mac can be read they give the choice.
+  terminal_themes: { args: undefined; result: TerminalThemes };
+  // A-14: saves the theme chosen for each appearance and answers it; a name that is not a built-in theme is an error.
+  terminal_theme_set: { args: { selection: ThemeSelection }; result: ThemeSelection };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };
