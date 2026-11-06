@@ -304,7 +304,7 @@ fn term_event_of(result: &Value) -> Option<OrcaTermEvent> {
 }
 
 /// A size Orca takes: a pane too small or too large for it is sent at the nearest size it takes.
-fn clamp_viewport(viewport: OrcaViewport) -> OrcaViewport {
+pub(crate) fn clamp_viewport(viewport: OrcaViewport) -> OrcaViewport {
     OrcaViewport {
         cols: viewport.cols.clamp(MIN_COLS, MAX_COLS),
         rows: viewport.rows.clamp(MIN_ROWS, MAX_ROWS),
@@ -545,10 +545,12 @@ impl Connection {
                     let _ = reply.send(Err(OTHER_TERMINAL.into()));
                 }
                 Some(sub) => {
+                    // A terminal that fits the pane claims the pane's size at every send, as Orca's own screen does.
+                    let viewport = stream.watch.as_ref().and_then(|w| w.viewport);
                     let id = link
                         .send_request(
                             "terminal.send",
-                            input_params(&sub.handle, &text, &stream.client),
+                            input_params(&sub.handle, &text, &stream.client, viewport),
                         )
                         .await
                         .map_err(reason_of)?;
@@ -1324,7 +1326,15 @@ mod tests {
             assert_eq!(send["method"], "terminal.send");
             assert_eq!(
                 send["params"],
-                input_params("term_c", "ls\r", "cookapps-test")
+                input_params(
+                    "term_c",
+                    "ls\r",
+                    "cookapps-test",
+                    Some(OrcaViewport {
+                        cols: 120,
+                        rows: 40
+                    })
+                )
             );
             server
                 .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": accepted}}}))

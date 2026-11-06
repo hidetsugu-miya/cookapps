@@ -1173,6 +1173,21 @@ describe("orca: a saved environment's stream", () => {
     await expect($("#error")).toHaveText("接続先につながっていません");
   });
 
+  it("draws the size Orca sends while it fits the pane, from the snapshot and from each size", async () => {
+    await openStudio();
+    await project("example-app").click();
+    const [call] = await waitForCalls("orca_stream_terminal");
+    const paneRows = viewportOf(call)!.rows;
+    const rowsDrawn = () => browser.execute(() => document.querySelectorAll("#orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
+    // Fitting the pane is the first state, and Orca's size is drawn all the same: another screen of Orca may have taken it.
+    expect(await $("#orca-fit").getText()).toBe("合わせる");
+    await sendTerm({ kind: "snapshot", data: "from the snapshot", cols: 80, rows: paneRows + 3 });
+    await browser.waitUntil(async () => (await screenText()).includes("from the snapshot"), { timeoutMsg: "the screen never showed" });
+    expect(await rowsDrawn()).toBe(paneRows + 3);
+    await sendTerm({ kind: "size", cols: 90, rows: paneRows + 5 });
+    await browser.waitUntil(async () => (await rowsDrawn()) === paneRows + 5, { timeoutMsg: "the size of Orca never drew" });
+  });
+
   it("sends the new size when the pane changes", async () => {
     await openStudio();
     await project("example-app").click();

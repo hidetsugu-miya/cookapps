@@ -21,6 +21,7 @@ use crate::{
     auth::config_dir,
     orca_chat::check_pane_key,
     orca_handoff::{compose, HandoffContext},
+    orca_stream::{clamp_viewport, OrcaViewport},
 };
 
 /// Reading the agents is a few local calls (or one to a paired server).
@@ -1130,14 +1131,24 @@ fn screen(mirror: &OrcaMirror, handle: &str) -> Result<Vec<String>, String> {
         })
 }
 
-/// The params of `terminal.send`, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed. `client` names this app (A-12 gives the id its stream subscribed with).
-pub(crate) fn input_params(handle: &str, text: &str, client: &str) -> Value {
-    serde_json::json!({
+/// The params of `terminal.send`, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed. `client` names this app (A-12 gives the id its stream subscribed with). With a `viewport` (the pane's size while the terminal fits it, A-12) the send claims that size again, as Orca's own screen does at every key.
+pub(crate) fn input_params(
+    handle: &str,
+    text: &str,
+    client: &str,
+    viewport: Option<OrcaViewport>,
+) -> Value {
+    let mut params = serde_json::json!({
         "terminal": handle,
         "text": text,
         "enter": false,
         "client": {"id": client, "type": "desktop"},
-    })
+    });
+    if let Some(v) = viewport.map(clamp_viewport) {
+        params["viewport"] = serde_json::json!({"cols": v.cols, "rows": v.rows});
+        params["claimViewport"] = true.into();
+    }
+    params
 }
 
 /// Checks the keys and the terminal.
@@ -1264,10 +1275,12 @@ pub async fn orca_terminal_input(
         let (mirror, handle, text) = (mirror.clone(), handle.clone(), text.clone());
         blocking(move || check_input(&mirror, &handle, &text)).await??;
     }
-    let sent =
-        crate::orca_chat::local_call("terminal.send", input_params(&handle, &text, "cookapps"))
-            .await
-            .and_then(|result| check_accepted(&result));
+    let sent = crate::orca_chat::local_call(
+        "terminal.send",
+        input_params(&handle, &text, "cookapps", None),
+    )
+    .await
+    .and_then(|result| check_accepted(&result));
     if sent.is_err() {
         mirror.forget(&handle);
     }
@@ -2332,7 +2345,7 @@ mod tests {
     #[test]
     fn the_keys_go_to_the_socket_as_the_cli_sends_them() {
         assert_eq!(
-            input_params("term_1", "\u{3}--json", "cookapps"),
+            input_params("term_1", "\u{3}--json", "cookapps", None),
             json!({
                 "terminal": "term_1",
                 "text": "\u{3}--json",
@@ -2340,5 +2353,24 @@ mod tests {
                 "client": {"id": "cookapps", "type": "desktop"},
             })
         );
+    }
+
+    #[test]
+    fn the_keys_of_a_terminal_that_fits_the_pane_claim_its_size_as_orca_does() {
+        let viewport = |cols, rows| Some(OrcaViewport { cols, rows });
+        assert_eq!(
+            input_params("term_1", "ls\r", "cookapps-1", viewport(120, 40)),
+            json!({
+                "terminal": "term_1",
+                "text": "ls\r",
+                "enter": false,
+                "client": {"id": "cookapps-1", "type": "desktop"},
+                "viewport": {"cols": 120, "rows": 40},
+                "claimViewport": true,
+            })
+        );
+        // A pane too small or too large is claimed at the nearest size Orca takes, as the other messages of the size do.
+        let params = input_params("term_1", "x", "cookapps-1", viewport(5, 900));
+        assert_eq!(params["viewport"], json!({"cols": 20, "rows": 500}));
     }
 }

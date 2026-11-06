@@ -1,6 +1,6 @@
 // The terminals of the Orca screen (A-8, A-12): one xterm.js for each tab, in `#orca-term`, of which the selected one is shown. Every tab is a terminal, a Claude session's or a plain one.
-// A saved environment streams the terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. While it fits the pane ("画面に合わせる", the first state) the pane's size is sent and Orca sizes the terminal to it;
-// "固定" keeps the font and Orca's size, and the box scrolls when it does not fit. Leaving the tab, the screen or a shown window ends the stream, and Orca gives the terminal back its own size.
+// A saved environment streams the terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. While it fits the pane ("画面に合わせる", the first state) the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
+// the size Orca sends (the snapshot's and each `size`) is drawn in both states, as another screen of Orca may take the size. "固定" sends no size, keeps the font and Orca's size, and the box scrolls when it does not fit. Leaving the tab, the screen or a shown window ends the stream, and Orca gives the terminal back its own size.
 // This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminal shown is a mirror: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
@@ -251,12 +251,12 @@ function drawEvent(instance: Instance, event: OrcaTermEvent) {
   if (event.kind === "snapshot") {
     // The screen now replaces everything drawn before (a resubscription after a lost connection sends it again).
     term.reset();
-    if (fixed(instance) && event.cols && event.rows) term.resize(event.cols, event.rows);
+    if (event.cols && event.rows) term.resize(event.cols, event.rows);
     term.write(event.data);
   } else if (event.kind === "output") {
     term.write(event.data);
   } else if (event.kind === "size") {
-    if (fixed(instance)) term.resize(event.cols, event.rows);
+    term.resize(event.cols, event.rows);
   } else {
     term.write(`\r\n\x1b[2m（ターミナルとのつながりが終わりました${event.message ? `: ${event.message}` : ""}）\x1b[0m`);
   }
