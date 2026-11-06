@@ -70,9 +70,9 @@ export async function todoCall<C extends Write>(
   return answer;
 }
 
-// A due text is put on the task as Rust reads it (`todoist_picked_due`, which asks Todoist nothing), before the change starts; the other fields need no wait.
+// A due text is put on the task as Rust reads it (`todoist_picked_due`, which asks Todoist nothing), before the change starts; the other fields need no wait. If that read fails, the task is not changed at once, and the change still goes to Todoist.
 export async function saveTask(id: string, fields: TaskFields, redraw = !("content" in fields)) {
-  const picked = fields.dueString === undefined ? null : await invoke("todoist_picked_due", { text: fields.dueString });
+  const picked = fields.dueString === undefined ? null : await invoke("todoist_picked_due", { text: fields.dueString }).catch(() => null);
   return todoCall("todoist_update", { id, ...fields }, null, () => patchTask(id, fields, picked), redraw);
 }
 // Makes the label `name` and puts it on the task `id`, whose labels are `labels` (the new name in them) afterwards.
