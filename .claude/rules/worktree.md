@@ -35,7 +35,8 @@ Bad:  merge first, and find on main that the two branches break each other
 
 ### Call `.claude/tools/` by the main checkout's path from a worktree
 
-`.claude/tools/` and `.claude/hooks/` exist only in the main checkout, and `.worktreeinclude` does not copy them.
+`.claude/hooks/` exists only in the main checkout, and `.worktreeinclude` does not copy it.
+`.claude/tools/` is tracked, so a worktree has the branch's copy, but the hooks and the gates run the main checkout's, and a worktree runs the same ones.
 Run them from the worktree, so that they act on the worktree's HEAD.
 
 ```sh

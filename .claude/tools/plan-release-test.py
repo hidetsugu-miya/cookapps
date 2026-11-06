@@ -1,0 +1,546 @@
+#!/usr/bin/env python3
+"""Tests of the pure functions of plan-release.py. No network and no gh.
+Run: python3 -I .claude/tools/plan-release-test.py
+"""
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+here = os.path.dirname(os.path.abspath(__file__))
+spec = importlib.util.spec_from_file_location("plan_release", os.path.join(here, "plan-release.py"))
+pr = importlib.util.module_from_spec(spec)
+sys.modules["plan_release"] = pr
+spec.loader.exec_module(pr)
+
+
+def mk(n, labels=(), milestone=None, created=None, state="open", closed=None, blocked=(), ms_number=None):
+    return pr.Issue(
+        number=n,
+        id=1000 + n,
+        title=f"issue {n}",
+        body="",
+        labels=list(labels),
+        milestone=milestone,
+        milestone_number=ms_number,
+        created_at=created or f"2026-11-01T00:00:{n:02d}Z",
+        closed_at=closed,
+        state=state,
+        blocked_by=list(blocked),
+    )
+
+
+def ms(number, title, state="open", open_issues=0, closed_issues=0):
+    return {"number": number, "title": title, "state": state, "open_issues": open_issues, "closed_issues": closed_issues}
+
+
+def slot_view(slots):
+    return [(s["version"], s["issues"]) for s in slots]
+
+
+class Versions(unittest.TestCase):
+    def test_parse_and_compare_numerically(self):
+        self.assertEqual(pr.parse_version("v0.9.0"), (0, 9, 0))
+        self.assertIsNone(pr.parse_version("plan-tmp-3"))
+        self.assertIsNone(pr.parse_version(None))
+        self.assertEqual(pr.highest_tag(["v0.9.0", "v0.10.0", "nightly", "v0.2.5"]), "v0.10.0")
+        self.assertIsNone(pr.highest_tag(["nightly"]))
+
+    def test_base_skips_a_tag_whose_milestone_is_open(self):
+        tags = ["v0.45.0", "v0.46.0"]
+        open_ms = [ms(1, "v0.46.0"), ms(2, "v0.47.0")]
+        self.assertEqual(pr.base_tag(tags, open_ms), "v0.45.0")
+        self.assertEqual(pr.base_tag(tags, [ms(1, "v0.46.0", state="closed"), ms(2, "v0.47.0")]), "v0.46.0")
+        self.assertEqual(pr.base_tag(tags, [ms(2, "v0.47.0")]), "v0.46.0")
+        self.assertIsNone(pr.base_tag(["v0.46.0"], open_ms))
+
+    def test_bump(self):
+        self.assertEqual(pr.bump((0, 39, 2), True), (0, 40, 0))
+        self.assertEqual(pr.bump((0, 39, 2), False), (0, 39, 3))
+        self.assertEqual(pr.format_version((0, 40, 0)), "v0.40.0")
+
+
+class Ordering(unittest.TestCase):
+    def test_existing_order(self):
+        a = mk(1, milestone="v0.41.0", created="2026-11-01T00:00:09Z")
+        b = mk(2, milestone="v0.40.0", created="2026-11-01T00:00:08Z")
+        c = mk(3, milestone="v0.40.0", created="2026-11-01T00:00:01Z")
+        d = mk(4, created="2026-11-01T00:00:02Z")
+        e = mk(5, milestone="plan-tmp-7", created="2026-11-01T00:00:00Z")
+        order = [i.number for i in pr.existing_order([a, b, c, d, e])]
+        self.assertEqual(order, [3, 2, 1, 5, 4])
+        self.assertEqual(pr.existing_order([]), [])
+
+    def test_version_order_is_numeric(self):
+        a = mk(1, milestone="v0.10.0")
+        b = mk(2, milestone="v0.9.0")
+        self.assertEqual([i.number for i in pr.existing_order([a, b])], [2, 1])
+
+    def test_split_queue(self):
+        w2 = mk(1, state="closed", closed="2026-11-02T00:00:00Z", milestone="v0.40.0")
+        w1 = mk(2, state="closed", closed="2026-11-01T00:00:00Z", milestone="v0.40.0")
+        prog = mk(3, created="2026-11-01T00:00:05Z")
+        now = mk(4, labels=["release:now"])
+        now_and_pr = mk(5, labels=["release:now"])
+        rest = mk(6)
+        waiting, in_progress, release_now, others = pr.split_issues([w2, w1, prog, now, now_and_pr, rest], {3, 5})
+        self.assertEqual([i.number for i in waiting], [2, 1])
+        self.assertEqual([i.number for i in in_progress], [3, 5])
+        self.assertEqual([i.number for i in release_now], [4])
+        self.assertEqual([i.number for i in others], [6])
+
+
+class Allocation(unittest.TestCase):
+    def test_current_repository(self):
+        queue = [
+            mk(43, ["documentation", "size:light"], state="closed"),
+            mk(42, ["size:heavy", "adds:requirement"]),
+            mk(33, ["size:heavy", "adds:requirement"]),
+            mk(45, ["documentation", "size:light"]),
+            mk(47, ["size:standard"]),
+            mk(48, ["size:standard"]),
+        ]
+        slots = pr.allocate(queue, [], "v0.39.2")
+        self.assertEqual(
+            slot_view(slots),
+            [("v0.40.0", [43, 42]), ("v0.41.0", [33]), ("v0.41.1", [45, 47, 48])],
+        )
+
+    def test_cap_of_three_and_patch_bumps(self):
+        queue = [mk(n, ["size:standard"]) for n in range(1, 5)]
+        self.assertEqual(
+            slot_view(pr.allocate(queue, [], "v0.1.0")),
+            [("v0.1.1", [1, 2, 3]), ("v0.1.2", [4])],
+        )
+
+    def test_documentation_does_not_count(self):
+        queue = [mk(1, ["size:standard"]), mk(2, ["size:standard"]), mk(3, ["documentation"]), mk(4, ["size:standard"]), mk(5, ["size:standard"])]
+        self.assertEqual(
+            slot_view(pr.allocate(queue, [], "v0.1.0")),
+            [("v0.1.1", [1, 2, 3, 4]), ("v0.1.2", [5])],
+        )
+
+    def test_release_now_closes_the_slot(self):
+        queue = [mk(1, ["release:now", "size:light"]), mk(2, ["size:light"]), mk(3, ["size:light"])]
+        self.assertEqual(
+            slot_view(pr.allocate(queue, [], "v0.1.0")),
+            [("v0.1.1", [1]), ("v0.1.2", [2, 3])],
+        )
+
+    def test_documentation_only_slot_joins_next(self):
+        queue = [mk(1, ["documentation"]), mk(2, ["size:heavy"]), mk(3, ["size:standard"])]
+        self.assertEqual(
+            slot_view(pr.allocate(queue, [], "v0.1.0")),
+            [("v0.1.1", [1, 2]), ("v0.1.2", [3])],
+        )
+
+    def test_trailing_documentation_only_slot_stays(self):
+        queue = [mk(1, ["size:heavy"]), mk(2, ["documentation"])]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1]), ("v0.1.2", [2])])
+
+    def test_group_that_does_not_fit_starts_a_new_slot(self):
+        queue = [mk(1, ["size:standard"]), mk(2, ["size:standard"]), mk(3, ["size:standard"]), mk(4, ["size:standard"])]
+        slots = pr.allocate(queue, [[3, 4]], "v0.1.0")
+        self.assertEqual(slot_view(slots), [("v0.1.1", [1, 2]), ("v0.1.2", [3, 4])])
+
+    def test_group_that_fits_stays(self):
+        queue = [mk(1, ["size:standard"]), mk(2, ["size:standard"]), mk(3, ["size:standard"])]
+        self.assertEqual(slot_view(pr.allocate(queue, [[2, 3]], "v0.1.0")), [("v0.1.1", [1, 2, 3])])
+
+    def test_minor_bump_for_requirement_then_patch(self):
+        queue = [mk(1, ["size:heavy", "adds:requirement"]), mk(2, ["size:heavy"]), mk(3, ["size:heavy", "adds:requirement"])]
+        self.assertEqual(
+            slot_view(pr.allocate(queue, [], "v0.5.3")),
+            [("v0.6.0", [1]), ("v0.6.1", [2]), ("v0.7.0", [3])],
+        )
+
+    def test_no_tag_starts_from_zero(self):
+        self.assertEqual(slot_view(pr.allocate([mk(1, ["adds:requirement"])], [], None)), [("v0.1.0", [1])])
+
+    def test_empty_queue(self):
+        self.assertEqual(pr.allocate([], [], "v0.1.0"), [])
+
+
+class Validation(unittest.TestCase):
+    def setUp(self):
+        self.free = [mk(32), mk(50), mk(42, ["size:heavy"]), mk(33)]
+        self.fixed = [mk(7, ["release:now"])]
+        self.states = {7: "open", 32: "open", 50: "open", 42: "open", 33: "open", 9: "closed"}
+
+    def check(self, plan):
+        return pr.validate_plan(plan, self.free, self.fixed, self.states)
+
+    def test_valid(self):
+        plan = {"order": [42, 32, 50, 33], "groups": [[32, 50]], "blocked_by": {"33": [42, 7, 9]}, "reasons": {}}
+        self.assertEqual(self.check(plan), [])
+
+    def test_order_must_hold_each_free_issue_once(self):
+        problems = self.check({"order": [42, 32, 32, 7, 99], "groups": [], "blocked_by": {}})
+        text = "\n".join(problems)
+        for needle in ("#50", "#33", "twice", "#7", "#99"):
+            self.assertIn(needle, text)
+
+    def test_group_must_be_adjacent(self):
+        problems = self.check({"order": [32, 42, 50, 33], "groups": [[32, 50]], "blocked_by": {}})
+        self.assertTrue(any("adjacent" in p for p in problems))
+
+    def test_group_with_heavy_and_over_three(self):
+        problems = self.check({"order": [32, 42, 50, 33], "groups": [[32, 42]], "blocked_by": {}})
+        self.assertTrue(any("size:heavy" in p for p in problems))
+        free = [mk(n) for n in (1, 2, 3, 4)]
+        problems = pr.validate_plan({"order": [1, 2, 3, 4], "groups": [[1, 2, 3, 4]], "blocked_by": {}}, free, [], {})
+        self.assertTrue(any("3" in p for p in problems))
+
+    def test_group_of_documentation_may_exceed_three_members(self):
+        free = [mk(1), mk(2), mk(3), mk(4, ["documentation"])]
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4], "groups": [[1, 2, 3, 4]], "blocked_by": {}}, free, [], {}), [])
+
+    def test_blocker_must_come_first(self):
+        problems = self.check({"order": [33, 42, 32, 50], "groups": [], "blocked_by": {"33": [42]}})
+        self.assertTrue(any("#33" in p and "#42" in p for p in problems))
+
+    def test_cycle(self):
+        problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"32": [50], "50": [32]}})
+        self.assertTrue(any("cycle" in p for p in problems))
+
+    def test_self_block_is_a_cycle(self):
+        problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"32": [32]}})
+        self.assertTrue(any("cycle" in p for p in problems))
+
+    def test_unknown_blocker_and_fixed_blocked(self):
+        problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"33": [99], "7": [32]}})
+        text = "\n".join(problems)
+        self.assertIn("#99", text)
+        self.assertIn("#7", text)
+
+    def test_malformed(self):
+        self.assertTrue(self.check({"groups": [], "blocked_by": {}}))
+        self.assertTrue(self.check({"order": "x"}))
+
+
+class Relations(unittest.TestCase):
+    def test_diff_adds_and_removes_for_free_issues_only(self):
+        current = {1: [5], 2: [6], 9: [1]}
+        add, remove = pr.diff_relations([1, 2, 3], current, {1: [5, 7], 3: [2]})
+        self.assertEqual(add, [(1, 7), (3, 2)])
+        self.assertEqual(remove, [(2, 6)])
+
+    def test_no_change(self):
+        self.assertEqual(pr.diff_relations([1], {1: [2]}, {1: [2]}), ([], []))
+
+
+class Refuse(unittest.TestCase):
+    def test_open_issue_without_size_label(self):
+        issues = [mk(1, ["size:light"]), mk(2, ["bug"]), mk(3, state="closed")]
+        self.assertEqual([i.number for i in pr.missing_size(issues)], [2])
+
+
+def simulate(ops, milestones):
+    """Replays the ops against fake titles and fails like GitHub (422) on a held title."""
+    titles = {m["number"]: m["title"] for m in milestones}
+    gone = set()
+    next_number = 100
+    created = {}
+    for op in ops:
+        if op[0] == "create":
+            assert op[2] not in titles.values(), f"422 on create {op[2]}"
+            titles[next_number] = op[2]
+            created[op[1]] = next_number
+            next_number += 1
+        elif op[0] == "rename":
+            assert op[2] not in titles.values(), f"422 on rename to {op[2]}"
+            titles[op[1]] = op[2]
+        elif op[0] == "delete":
+            gone.add(op[1])
+            del titles[op[1]]
+    return titles, created
+
+
+class Writes(unittest.TestCase):
+    def test_steady_state_makes_no_write(self):
+        slots = [{"version": "v0.40.0", "issues": [43, 42]}, {"version": "v0.41.0", "issues": [33]}]
+        milestones = [ms(4, "v0.40.0", open_issues=1, closed_issues=1), ms(5, "v0.41.0", open_issues=1)]
+        ops, errors = pr.plan_writes(slots, milestones, {43: 4, 42: 4, 33: 5})
+        self.assertEqual((ops, errors), ([], []))
+
+    def test_new_issue_creates_a_milestone_and_sets_it(self):
+        slots = [{"version": "v0.40.0", "issues": [42]}, {"version": "v0.41.0", "issues": [50]}]
+        milestones = [ms(4, "v0.40.0", open_issues=1)]
+        ops, errors = pr.plan_writes(slots, milestones, {42: 4, 50: None})
+        self.assertEqual(errors, [])
+        self.assertEqual(ops, [("create", 1, "v0.41.0"), ("set", 50, ("new", 1))])
+
+    def test_moving_an_issue_only_sets_it(self):
+        slots = [{"version": "v0.40.0", "issues": [1, 2]}, {"version": "v0.41.0", "issues": [3]}]
+        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=2)]
+        ops, _ = pr.plan_writes(slots, milestones, {1: 4, 2: 5, 3: 5})
+        self.assertEqual(ops, [("set", 2, 4)])
+
+    def test_swap_goes_through_a_temporary_title(self):
+        slots = [{"version": "v0.40.0", "issues": [2]}, {"version": "v0.41.0", "issues": [1]}]
+        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=1)]
+        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 5})
+        self.assertEqual(errors, [])
+        titles, _ = simulate(ops, milestones)
+        self.assertEqual(titles, {4: "v0.41.0", 5: "v0.40.0"})
+        self.assertTrue(any(op[0] == "rename" and op[2].startswith("plan-tmp-") for op in ops))
+        self.assertEqual([op for op in ops if op[0] == "set"], [])
+
+    def test_three_cycle(self):
+        slots = [
+            {"version": "v0.40.0", "issues": [3]},
+            {"version": "v0.41.0", "issues": [1]},
+            {"version": "v0.42.0", "issues": [2]},
+        ]
+        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=1), ms(6, "v0.42.0", open_issues=1)]
+        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 5, 3: 6})
+        self.assertEqual(errors, [])
+        titles, _ = simulate(ops, milestones)
+        self.assertEqual(titles, {4: "v0.41.0", 5: "v0.42.0", 6: "v0.40.0"})
+
+    def test_shift_by_one_needs_no_temporary_title(self):
+        slots = [{"version": "v0.41.0", "issues": [1]}, {"version": "v0.42.0", "issues": [2]}]
+        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=1)]
+        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 5})
+        self.assertEqual(errors, [])
+        titles, _ = simulate(ops, milestones)
+        self.assertEqual(sorted(titles.values()), ["v0.41.0", "v0.42.0"])
+        self.assertFalse(any(op[2].startswith("plan-tmp-") for op in ops if op[0] == "rename"))
+
+    def test_target_held_by_a_closed_milestone_is_an_error(self):
+        slots = [{"version": "v0.39.2", "issues": [1]}]
+        milestones = [ms(3, "v0.39.2", state="closed", closed_issues=1)]
+        ops, errors = pr.plan_writes(slots, milestones, {1: None})
+        self.assertEqual(ops, [])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("v0.39.2", errors[0])
+        self.assertIn("#3", errors[0])
+
+    def test_empty_milestone_is_deleted_only_when_its_title_is_ours(self):
+        slots = [{"version": "v0.40.0", "issues": [1]}]
+        milestones = [
+            ms(4, "v0.40.0", open_issues=1),
+            ms(5, "v0.41.0"),
+            ms(6, "plan-tmp-6"),
+            ms(7, "backlog"),
+            ms(8, "v0.42.0", open_issues=1),
+        ]
+        ops, _ = pr.plan_writes(slots, milestones, {1: 4})
+        self.assertEqual(ops, [("delete", 5), ("delete", 6)])
+
+    def test_unclaimed_milestone_with_foreign_issues_is_kept(self):
+        slots = [{"version": "v0.40.0", "issues": [1]}]
+        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=2)]
+        ops, _ = pr.plan_writes(slots, milestones, {1: 4})
+        self.assertEqual(ops, [])
+
+    def test_issue_leaving_makes_its_old_milestone_empty_and_deleted(self):
+        slots = [{"version": "v0.40.0", "issues": [1, 2]}]
+        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=1)]
+        ops, _ = pr.plan_writes(slots, milestones, {1: 4, 2: 5})
+        self.assertEqual(ops, [("set", 2, 4), ("delete", 5)])
+
+    def test_leftover_temporary_milestone_is_reused(self):
+        slots = [{"version": "v0.40.0", "issues": [1, 2]}]
+        milestones = [ms(4, "plan-tmp-4", open_issues=2)]
+        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 4})
+        self.assertEqual(errors, [])
+        self.assertEqual(ops, [("rename", 4, "v0.40.0")])
+
+    def test_unclaimed_holder_of_a_needed_title_is_reused_instead_of_a_create(self):
+        slots = [{"version": "v0.40.0", "issues": [1]}, {"version": "v0.41.0", "issues": [2]}]
+        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0")]
+        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: None})
+        self.assertEqual(errors, [])
+        self.assertEqual(ops, [("set", 2, 5)])
+
+    def test_rename_blocked_by_an_unclaimed_holder_evicts_it(self):
+        slots = [{"version": "v0.40.0", "issues": [1]}]
+        milestones = [ms(4, "v0.39.9", open_issues=1), ms(5, "v0.40.0", open_issues=1)]
+        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 5})
+        self.assertEqual(errors, [])
+        titles, _ = simulate(ops, milestones)
+        self.assertEqual(titles[4], "v0.40.0")
+
+    def test_milestone_with_most_members_is_taken(self):
+        slots = [{"version": "v0.40.0", "issues": [1, 2, 3]}]
+        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.99.0", open_issues=2)]
+        ops, _ = pr.plan_writes(slots, milestones, {1: 4, 2: 5, 3: 5})
+        titles, _ = simulate(ops, milestones)
+        self.assertEqual(titles[5], "v0.40.0")
+        self.assertIn(("set", 1, 5), ops)
+
+
+class Report(unittest.TestCase):
+    def test_lines(self):
+        slots = [{"version": "v0.40.0", "issues": [42, 43]}, {"version": "v0.41.0", "issues": [33]}]
+        issues = {42: mk(42, milestone="v0.40.0"), 43: mk(43, milestone="v0.39.2"), 33: mk(33)}
+        lines = pr.result_lines(slots, issues, {"33": "after #42"})
+        self.assertEqual(lines, ["#42 v0.40.0", "#43 v0.40.0 (was v0.39.2)", "#33 v0.41.0 - after #42"])
+
+
+class Next(unittest.TestCase):
+    def test_next(self):
+        milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0"), ms(6, "v0.41.1"), ms(7, "backlog")]
+        issues = [
+            mk(43, ["documentation"], milestone="v0.40.0", state="closed", closed="2026-11-04T00:00:00Z"),
+            mk(42, ["size:heavy"], milestone="v0.40.0"),
+            mk(41, ["size:light"], milestone="v0.40.0", created="2026-11-01T00:00:01Z"),
+            mk(40, ["size:light"], milestone="v0.40.0", blocked=[42]),
+            mk(39, ["needs:owner"], milestone="v0.40.0"),
+            mk(38, ["needs:owner"], milestone="v0.40.0", blocked=[42]),
+            mk(37, [], milestone="v0.40.0"),
+            mk(33, [], milestone="v0.41.0"),
+            mk(48, ["needs:owner"], milestone="v0.41.1"),
+        ]
+        out = pr.build_next(issues, milestones, {37})
+        self.assertEqual(out["milestone"], "v0.40.0")
+        self.assertEqual([i["number"] for i in out["start"]], [41, 42])
+        self.assertEqual([i["number"] for i in out["in_progress"]], [37])
+        self.assertEqual([i["number"] for i in out["needs_owner"]], [38, 39])
+        self.assertEqual(out["blocked"], [{"number": 40, "title": "issue 40", "blocked_by": [42]}])
+        self.assertEqual([i["number"] for i in out["waiting"]], [43])
+        self.assertFalse(out["later_needs_owner_only"])
+        self.assertEqual(set(out["start"][0]), {"number", "title", "labels"})
+
+    def test_later_milestones_only_need_the_owner(self):
+        milestones = [ms(4, "v0.40.0"), ms(6, "v0.41.1")]
+        issues = [mk(1, [], milestone="v0.40.0"), mk(2, ["needs:owner"], milestone="v0.41.1")]
+        self.assertTrue(pr.build_next(issues, milestones, set())["later_needs_owner_only"])
+
+    def test_skips_a_milestone_without_open_issues(self):
+        milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0")]
+        issues = [mk(1, milestone="v0.40.0", state="closed", closed="2026-11-04T00:00:00Z"), mk(2, milestone="v0.41.0")]
+        out = pr.build_next(issues, milestones, set())
+        self.assertEqual(out["milestone"], "v0.41.0")
+        self.assertEqual([i["number"] for i in out["waiting"]], [1])
+
+    def test_nothing_planned(self):
+        out = pr.build_next([], [ms(4, "v0.40.0")], set())
+        self.assertIsNone(out["milestone"])
+        self.assertEqual(out["start"], [])
+        self.assertFalse(out["later_needs_owner_only"])
+
+
+class DeriveGroups(unittest.TestCase):
+    def test_consecutive_issues_of_one_milestone_form_a_group(self):
+        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.40.0"), mk(3, milestone="v0.41.0"), mk(4, milestone="v0.41.0"), mk(5, milestone="v0.41.0")]
+        self.assertEqual(pr.derive_groups(free), [[1, 2], [3, 4, 5]])
+
+    def test_singles_unplanned_and_temporary_milestones_form_no_group(self):
+        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.41.0"), mk(3), mk(4), mk(5, milestone="plan-tmp-7"), mk(6, milestone="plan-tmp-7")]
+        self.assertEqual(pr.derive_groups(free), [])
+
+    def test_not_consecutive_is_not_a_group(self):
+        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.41.0"), mk(3, milestone="v0.40.0")]
+        self.assertEqual(pr.derive_groups(free), [])
+
+    def test_heavy_breaks_a_run(self):
+        free = [mk(1, milestone="v0.40.0"), mk(2, ["size:heavy"], milestone="v0.40.0"), mk(3, milestone="v0.40.0"), mk(4, milestone="v0.40.0")]
+        self.assertEqual(pr.derive_groups(free), [[3, 4]])
+
+    def test_run_over_the_cap_is_left_to_the_allocation(self):
+        free = [mk(n, milestone="v0.40.0") for n in range(1, 5)]
+        self.assertEqual(pr.derive_groups(free), [])
+
+    def test_documentation_does_not_count_toward_the_cap(self):
+        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.40.0"), mk(3, milestone="v0.40.0"), mk(4, ["documentation"], milestone="v0.40.0")]
+        self.assertEqual(pr.derive_groups(free), [[1, 2, 3, 4]])
+
+    def test_sync_keeps_the_slots_of_a_previous_plan(self):
+        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.40.0"), mk(3, milestone="v0.41.0"), mk(4, milestone="v0.41.0"), mk(5, milestone="v0.41.0")]
+        ordered = pr.existing_order(free)
+        self.assertEqual(
+            slot_view(pr.allocate(ordered, pr.derive_groups(ordered), "v0.39.2")),
+            [("v0.39.3", [1, 2]), ("v0.39.4", [3, 4, 5])],
+        )
+        # without the groups, the second slot would have been packed into the first
+        self.assertEqual(slot_view(pr.allocate(ordered, [], "v0.39.2")), [("v0.39.3", [1, 2, 3]), ("v0.39.4", [4, 5])])
+
+
+HOOK = os.path.join(os.path.dirname(here), "hooks", "post-gh.sh")
+
+
+class Hook(unittest.TestCase):
+    """post-gh.sh against a stub project whose plan-release.py prints STUB."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = cls.tmp.name
+        subprocess.run(["git", "init", "-q", root], check=True)
+        os.makedirs(os.path.join(root, ".claude", "tools"))
+        stub = os.path.join(root, ".claude", "tools", "plan-release.py")
+        with open(stub, "w") as f:
+            f.write("#!/bin/sh\necho STUB\n")
+        os.chmod(stub, 0o755)
+        cls.root = root
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def run_hook(self, command):
+        r = subprocess.run(
+            ["bash", HOOK],
+            input=json.dumps({"tool_input": {"command": command}}),
+            capture_output=True,
+            text=True,
+            env={**os.environ, "CLAUDE_PROJECT_DIR": self.root},
+        )
+        self.assertEqual(r.returncode, 0)
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout.strip() else ""
+
+    def test_merge_runs_sync(self):
+        for cmd in ["gh pr merge --merge", "cd x && gh pr merge 5 --merge", "a; gh pr merge", "echo hi | gh pr merge", "echo x\ngh pr merge"]:
+            self.assertIn("STUB", self.run_hook(cmd), cmd)
+
+    def test_sync_failure_is_passed_on(self):
+        stub = os.path.join(self.root, ".claude", "tools", "plan-release.py")
+        with open(stub, "w") as f:
+            f.write("#!/bin/sh\necho boom >&2\nexit 2\n")
+        try:
+            out = self.run_hook("gh pr merge")
+            self.assertIn("exit 2", out)
+            self.assertIn("boom", out)
+        finally:
+            with open(stub, "w") as f:
+                f.write("#!/bin/sh\necho STUB\n")
+
+    def test_issue_create_and_needs_owner_removal_point_to_issue_plan(self):
+        for cmd in [
+            "gh issue create --title x",
+            "gh issue edit 5 --remove-label needs:owner",
+            'gh issue edit 5 --remove-label "bug,needs:owner"',
+            "cd x && gh issue create",
+        ]:
+            self.assertIn("issue-plan", self.run_hook(cmd), cmd)
+
+    def test_text_that_only_mentions_a_command_does_nothing(self):
+        for cmd in [
+            "ls -la",
+            "gh issue edit 5 --add-label bug",
+            'echo "gh pr merge"',
+            "echo 'gh issue create'",
+            "printf '%s' 'gh pr merge --merge' | jq -Rs .",
+            'git commit -m "docs: gh issue create flow"',
+            'echo "a; gh pr merge"',
+            "git commit -m 'x\ngh pr merge\ny'",
+            "echo gh pr merge-now",
+            "git log --grep='gh issue edit --remove-label needs:owner'",
+        ]:
+            self.assertEqual(self.run_hook(cmd), "", cmd)
+
+
+class Stream(unittest.TestCase):
+    def test_paginated_output_is_flattened(self):
+        self.assertEqual(pr.parse_stream('[{"a":1}][{"a":2}]\n[]'), [{"a": 1}, {"a": 2}])
+        self.assertEqual(pr.parse_stream('{"a":1}'), [{"a": 1}])
+        self.assertEqual(pr.parse_stream(""), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
