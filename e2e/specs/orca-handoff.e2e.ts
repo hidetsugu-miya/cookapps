@@ -699,7 +699,7 @@ describe("orca handoff: the session history", () => {
   it("draws the user's messages on the right, the agent's answers as Markdown and the tools as a folded line", async () => {
     await openSession();
     await sendChat(chatItems([user, answer, tools()]));
-    expect(await textsOf(`${items} .orca-user-text`)).toEqual(["Make the list narrower"]);
+    expect(await textsOf(`${items} .orca-user`)).toEqual(["Make the list narrower"]);
     expect(await textsOf(`${items} .orca-assistant strong`)).toEqual(["list"]);
     expect(await textsOf(`${items} .orca-assistant li`)).toEqual(["first", "second"]);
     expect(await textsOf(`${items} .orca-tools-label`)).toEqual(["ツールを 3 回実行"]);

@@ -68,7 +68,8 @@ const selectedTab = () => $('#orca-tabs [role="tab"][aria-selected="true"]');
 const tabTitles = () => textsOf("#orca-tabs .orca-tab-title");
 const tabOf = (id: string) => $(`#orca-tabs [data-tab="${id}"]`);
 const claudeTab = (repo: string) => `claude:tab_${repo}:leaf_1`;
-const screenText = () => $("#orca-term .xterm-rows").getText();
+// The text of the terminal shown (the terminals of the other tabs stay, hidden).
+const screenText = () => $("#orca-term .orca-term-box:not([hidden]) .xterm-rows").getText();
 
 async function pickMenu(label: string) {
   for (const item of await $$(".menu button")) {
@@ -1097,7 +1098,8 @@ describe("orca: a saved environment's stream", () => {
     await sendStream(streamList(sample(), worktrees()));
     await waitForCount("#orca-feed .orca-project", 4);
     await expect($("#orca-target")).toHaveText("Studio に接続中");
-    await expect($("#nav-orca .nav-count")).toHaveText("1");
+    // The row that waits, and the finished one: the first read of Studio (at startup) had no rows, so it first appeared in a later read already stopped.
+    await expect($("#nav-orca .nav-count")).toHaveText("2");
     // The next list replaces it.
     await sendStream(streamList([working("example-app"), finished("example-api")], worktrees()));
     await waitForCount("#orca-feed .orca-project", 2);
@@ -1134,8 +1136,9 @@ describe("orca: a saved environment's stream", () => {
     await browser.waitUntil(async () => (await screenText()).includes("Done."), { timeoutMsg: "the output never showed" });
     const input = await mock("orca_stream_input", null);
     await $("#orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
-    await browser.keys(["y", "Enter"]);
-    await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "y\r", { timeoutMsg: "the keys were not sent" });
+    // A digit: the driver gives a letter the keyCode of its character, and xterm.js reads the keyCode of p to z as a function key (y is F10).
+    await browser.keys(["1", "Enter"]);
+    await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "1\r", { timeoutMsg: "the keys were not sent" });
   });
 
   it("shows the message when the keys cannot be sent", async () => {
@@ -1174,7 +1177,8 @@ describe("orca: a saved environment's stream", () => {
     // Another screen.
     await $("#nav-mail").click();
     await waitForCalls(close, 2);
-    // Back on the screen the stream starts again, and a hidden window ends it.
+    // Back on the screen the stream starts again, and a hidden window ends it. Showing the screen reads the list once with the CLI, which holds what the stream sent.
+    await mock("orca_overview", orcaOverview(sample(), worktrees(), { ...studioOnly, terminals: [orcaTerminal("example-app", "zsh")] }));
     await $("#nav-orca").click();
     await waitForCalls(subscribe, 2);
     await setWindowHidden(true);
