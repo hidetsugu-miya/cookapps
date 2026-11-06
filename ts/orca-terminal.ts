@@ -58,6 +58,7 @@ let visibleId: string | null = null;
 let mode: FitMode = "fit";
 // The channel of the stream shown, null when none is: an event of another channel is not drawn.
 let current: { onmessage: (event: OrcaTermEvent) => void } | null = null;
+let unclosed = false;
 let onError: (e: unknown) => void = () => {};
 // Ghostty's settings as imported, null before the first import; the colors follow the system's appearance.
 let settings: TerminalSettings | null = null;
@@ -266,6 +267,7 @@ function startStream(instance: Instance) {
   if (document.hidden) return;
   const channel = new window.__TAURI__.core.Channel<OrcaTermEvent>();
   current = channel;
+  unclosed = false;
   channel.onmessage = (event) => {
     if (current === channel) drawEvent(instance, event);
   };
@@ -278,9 +280,12 @@ function startStream(instance: Instance) {
 
 // Ends the stream of the terminal shown, so Orca gives it back its own size. With `close` false another stream follows at once, and its subscription lets this one go:
 // a close is a call of its own, which could reach Rust after that subscription and end it.
+// A stream let go without a close is still subscribed in Rust until the next subscription or close: `unclosed` keeps that for the next close.
 function stopStream(close = true) {
-  if (current === null) return;
+  if (current === null && !unclosed) return;
+  const subscribed = current !== null;
   current = null;
+  unclosed = !close && (subscribed || unclosed);
   if (close) invoke("orca_stream_terminal_close").catch(() => {});
 }
 
@@ -331,7 +336,8 @@ function dropTerminal(id: string) {
   const instance = instances.get(id);
   if (!instance) return;
   if (visibleId === id) {
-    stop();
+    // The tab shown next lets this stream go by its own subscription; with none (`hideTerminals`) the close is sent then.
+    stop(false);
     visibleId = null;
   }
   if (instance.timer !== null) clearInterval(instance.timer);
