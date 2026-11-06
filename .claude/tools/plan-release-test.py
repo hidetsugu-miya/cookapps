@@ -2,6 +2,7 @@
 """Tests of the pure functions of plan-release.py. No network and no gh.
 Run: python3 -I .claude/tools/plan-release-test.py
 """
+import datetime
 import importlib.util
 import json
 import os
@@ -116,14 +117,38 @@ class Ordering(unittest.TestCase):
         w2 = mk(1, state="closed", closed="2026-11-02T00:00:00Z", milestone="v0.40.0")
         w1 = mk(2, state="closed", closed="2026-11-01T00:00:00Z", milestone="v0.40.0")
         prog = mk(3, created="2026-11-01T00:00:05Z")
-        now = mk(4, labels=["release:now"])
-        now_and_pr = mk(5, labels=["release:now"])
+        urgent = mk(4, labels=["urgency:high"])
+        urgent_and_pr = mk(5, labels=["urgency:high"])
+        old_label = mk(7, labels=["release:now"])
         rest = mk(6)
-        waiting, in_progress, release_now, others = pr.split_issues([w2, w1, prog, now, now_and_pr, rest], {3, 5})
+        waiting, in_progress, others = pr.split_issues([w2, w1, prog, urgent, urgent_and_pr, old_label, rest], {3, 5})
         self.assertEqual([i.number for i in waiting], [2, 1])
         self.assertEqual([i.number for i in in_progress], [3, 5])
-        self.assertEqual([i.number for i in release_now], [4])
-        self.assertEqual([i.number for i in others], [6])
+        # an urgent issue is planned like the others (the order puts it first); release:now means nothing any more
+        self.assertEqual([i.number for i in others], [4, 7, 6])
+
+    def test_urgent_issues_go_before_light_bugs_and_the_rest(self):
+        a = mk(1, milestone="v0.40.0", created="2026-11-01T00:00:01Z")
+        b = mk(2, ["bug", "size:light"], milestone="v0.40.0", created="2026-11-01T00:00:02Z")
+        c = mk(3, ["urgency:high"], milestone="v0.42.0", created="2026-11-01T00:00:03Z")
+        d = mk(4, ["urgency:high", "bug", "size:light"], created="2026-11-01T00:00:04Z")
+        e = mk(5, ["urgency:high"], milestone="v0.41.0", created="2026-11-01T00:00:05Z")
+        self.assertEqual([i.number for i in pr.existing_order([a, b, c, d, e])], [5, 3, 4, 2, 1])
+
+    def test_an_urgent_issue_takes_its_free_blocker_with_it(self):
+        a = mk(1, milestone="v0.40.0")
+        b = mk(2, ["urgency:high"], milestone="v0.41.0", blocked=[1])
+        c = mk(3, ["bug", "size:light"], milestone="v0.39.0")
+        self.assertEqual([i.number for i in pr.existing_order([c, a, b])], [1, 2, 3])
+
+    def test_urgency_importance_and_pin_in_the_snapshot(self):
+        i = mk(1, ["urgency:high", "importance:low", "release:pin"], milestone="v0.40.0")
+        j = pr.issue_json(i)
+        self.assertEqual((j["urgency"], j["importance"], j["pin"]), ("high", "low", True))
+        j = pr.issue_json(mk(2, ["importance:high"]))
+        self.assertEqual((j["urgency"], j["importance"], j["pin"]), ("normal", "high", False))
+        j = pr.issue_json(mk(3, ["release:now"]))
+        self.assertEqual((j["urgency"], j["importance"], j["pin"]), ("normal", "normal", False))
 
 
 class Allocation(unittest.TestCase):
@@ -156,12 +181,74 @@ class Allocation(unittest.TestCase):
             [("v0.1.1", [1, 2, 3, 4]), ("v0.1.2", [5])],
         )
 
-    def test_release_now_closes_the_slot(self):
-        queue = [mk(1, ["release:now", "size:light"]), mk(2, ["size:light"]), mk(3, ["size:light"])]
+    def test_urgent_closes_the_slot(self):
+        queue = [mk(1, ["urgency:high", "size:light"]), mk(2, ["size:light"]), mk(3, ["size:light"])]
         self.assertEqual(
             slot_view(pr.allocate(queue, [], "v0.1.0")),
             [("v0.1.1", [1]), ("v0.1.2", [2, 3])],
         )
+
+    def test_release_now_no_longer_closes_the_slot(self):
+        queue = [mk(1, ["release:now", "size:light"]), mk(2, ["size:light"]), mk(3, ["size:light"])]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1, 2, 3])])
+
+    def test_pinned_issues_share_their_version_even_with_a_heavy_one(self):
+        queue = [
+            mk(128, ["size:standard", "release:pin"], milestone="v0.42.0", state="closed"),
+            mk(135, ["size:heavy", "release:pin"], milestone="v0.42.0"),
+            mk(140, ["size:standard"]),
+        ]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [128, 135]), ("v0.42.1", [140])])
+
+    def test_a_pinned_slot_keeps_its_version_and_closes_the_slot_before_it(self):
+        queue = [
+            mk(1, ["size:standard"]),
+            mk(128, ["size:standard", "release:pin"], milestone="v0.42.0"),
+            mk(135, ["size:heavy", "release:pin"], milestone="v0.42.0"),
+        ]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.41.1", [1]), ("v0.42.0", [128, 135])])
+
+    def test_a_later_pinned_issue_joins_the_first_one_and_the_others_stay_in_order(self):
+        queue = [
+            mk(128, ["size:standard", "release:pin"], milestone="v0.42.0", state="closed"),
+            mk(130, ["size:standard"], state="closed"),
+            mk(135, ["size:heavy", "release:pin"], milestone="v0.42.0"),
+        ]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [128, 135]), ("v0.42.1", [130])])
+
+    def test_pins_of_different_versions_or_without_a_version_stay_ordinary(self):
+        queue = [
+            mk(1, ["size:heavy", "release:pin"], milestone="v0.42.0"),
+            mk(2, ["size:standard", "release:pin"], milestone="v0.43.0"),
+            mk(3, ["size:heavy", "release:pin"]),
+            mk(4, ["size:standard", "release:pin"]),
+        ]
+        self.assertEqual(
+            slot_view(pr.allocate(queue, [], "v0.41.0")),
+            [("v0.42.0", [1]), ("v0.43.0", [2]), ("v0.43.1", [3]), ("v0.43.2", [4])],
+        )
+
+    def test_a_pinned_version_that_is_already_reached_is_refused(self):
+        queue = [mk(1, ["adds:requirement"]), mk(2, ["size:heavy"]), mk(128, ["release:pin"], milestone="v0.42.0")]
+        with self.assertRaises(pr.PlanError) as ctx:
+            pr.allocate(queue, [], "v0.41.0")
+        self.assertIn("v0.42.0 is pinned (#128)", ctx.exception.problems[0])
+        with self.assertRaises(pr.PlanError):
+            pr.allocate([mk(128, ["release:pin"], milestone="v0.41.0")], [], "v0.41.0")
+
+    def test_an_unpinned_heavy_issue_stays_alone(self):
+        queue = [mk(1, ["size:standard", "release:pin"], milestone="v0.42.0"), mk(2, ["size:heavy"], milestone="v0.42.0")]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [1]), ("v0.42.1", [2])])
+
+    def test_a_documentation_only_pin_does_not_wait_for_the_next_slot(self):
+        queue = [mk(1, ["documentation", "release:pin"], milestone="v0.42.0"), mk(2, ["size:standard"])]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [1]), ("v0.42.1", [2])])
+
+    def test_pinned_issues_are_not_derived_into_groups(self):
+        a = mk(1, ["release:pin"], milestone="v0.42.0")
+        b = mk(2, milestone="v0.42.0")
+        c = mk(3, milestone="v0.42.0")
+        self.assertEqual(pr.derive_groups([a, b, c]), [[2, 3]])
 
     def test_documentation_only_slot_joins_next(self):
         queue = [mk(1, ["documentation"]), mk(2, ["size:heavy"]), mk(3, ["size:standard"])]
@@ -200,7 +287,7 @@ class Allocation(unittest.TestCase):
 class Validation(unittest.TestCase):
     def setUp(self):
         self.free = [mk(32), mk(50), mk(42, ["size:heavy"]), mk(33)]
-        self.fixed = [mk(7, ["release:now"])]
+        self.fixed = [mk(7)]
         self.states = {7: "open", 32: "open", 50: "open", 42: "open", 33: "open", 9: "closed"}
 
     def check(self, plan):
@@ -263,6 +350,40 @@ class Validation(unittest.TestCase):
         problems = check([2, 1, 4, 5], {"2": [1]})
         self.assertTrue(any("blocks #2" in p for p in problems))
 
+    def test_urgent_issue_must_come_before_other_issues_but_after_its_blockers(self):
+        free = [mk(1), mk(2, ["urgency:high"]), mk(3, ["bug", "size:light"]), mk(4, ["urgency:high"])]
+        states = {1: "open", 2: "open", 3: "open", 4: "open"}
+        check = lambda order, blocked=None: pr.validate_plan(  # noqa: E731
+            {"order": order, "groups": [], "blocked_by": blocked or {}}, free, [], states
+        )
+        self.assertEqual(check([2, 4, 3, 1]), [])
+        problems = check([3, 2, 4, 1])
+        self.assertEqual(len(problems), 2)
+        self.assertTrue(all("urgency:high" in p and "#3" in p for p in problems))
+        problems = check([1, 2, 4, 3])
+        self.assertTrue(any("#2" in p and "#1" in p for p in problems))
+        self.assertEqual(check([1, 2, 4, 3], {"2": [1], "4": [1], "3": [1]}), [])
+
+    def test_light_bug_may_follow_urgent_issues_only(self):
+        free = [mk(1), mk(2, ["urgency:high"]), mk(3, ["bug", "size:light"])]
+        states = {1: "open", 2: "open", 3: "open"}
+        ok = pr.validate_plan({"order": [2, 3, 1], "groups": [], "blocked_by": {}}, free, [], states)
+        self.assertEqual(ok, [])
+        bad = pr.validate_plan({"order": [1, 3, 2], "groups": [], "blocked_by": {}}, free, [], states)
+        self.assertEqual(len(bad), 2)
+
+    def test_release_now_has_no_rule(self):
+        free = [mk(1), mk(2, ["release:now"])]
+        self.assertEqual(pr.validate_plan({"order": [1, 2], "groups": [], "blocked_by": {}}, free, [], {}), [])
+
+    def test_a_group_may_not_hold_a_pinned_issue(self):
+        free = [mk(1, ["release:pin"], milestone="v0.42.0"), mk(2), mk(3, ["release:pin"])]
+        plan = {"order": [1, 2, 3], "groups": [[1, 2]], "blocked_by": {}}
+        problems = pr.validate_plan(plan, free, [], {})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("release:pin", problems[0])
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "groups": [[2, 3]], "blocked_by": {}}, free, [], {}), [])
+
     def test_cycle(self):
         problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"32": [50], "50": [32]}})
         self.assertTrue(any("cycle" in p for p in problems))
@@ -291,6 +412,56 @@ class Relations(unittest.TestCase):
 
     def test_no_change(self):
         self.assertEqual(pr.diff_relations([1], {1: [2]}, {1: [2]}), ([], []))
+
+
+class ReleaseDecision(unittest.TestCase):
+    NOW = datetime.datetime(2026, 11, 6, 12, 0, tzinfo=datetime.timezone.utc)
+
+    def waiting(self, n, labels=(), hours=1):
+        closed = self.NOW - datetime.timedelta(hours=hours)
+        return mk(n, labels, state="closed", milestone="v0.40.0", closed=closed.strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+    def decide(self, waiting, pr_labels=None):
+        return pr.release_facts(waiting, pr_labels, self.NOW)
+
+    def test_nothing_waits(self):
+        out = self.decide([])
+        self.assertEqual((out["rule"], out["decision"]), ("R4", None))
+        self.assertEqual((out["changes"], out["bugs"], out["oldest_hours"]), (0, 0, None))
+
+    def test_hold_wins_over_everything(self):
+        out = self.decide([self.waiting(1, ["urgency:high"])], ["release:hold", "urgency:high"])
+        self.assertEqual((out["rule"], out["decision"]), ("R0", "wait"))
+
+    def test_urgent_change_or_urgent_release_pr(self):
+        out = self.decide([self.waiting(1, ["urgency:high", "size:light"]), self.waiting(2, ["size:heavy"])])
+        self.assertEqual((out["rule"], out["decision"]), ("R1", "release"))
+        out = self.decide([self.waiting(1)], ["urgency:high"])
+        self.assertEqual((out["rule"], out["decision"]), ("R1", "release"))
+        out = self.decide([self.waiting(1, ["release:now"])])
+        self.assertEqual(out["rule"], "R4")
+
+    def test_heavy_change(self):
+        out = self.decide([self.waiting(1, ["size:heavy"])])
+        self.assertEqual((out["rule"], out["decision"]), ("R2", "release"))
+
+    def test_important_bug(self):
+        out = self.decide([self.waiting(1, ["bug", "importance:high"])])
+        self.assertEqual((out["rule"], out["decision"]), ("R3", "release"))
+        out = self.decide([self.waiting(1, ["importance:high"])])
+        self.assertEqual(out["rule"], "R4")
+
+    def test_documentation_is_not_counted(self):
+        out = self.decide([self.waiting(1, ["documentation", "urgency:high"]), self.waiting(2, ["documentation", "size:heavy"])])
+        self.assertEqual((out["rule"], out["decision"], out["changes"]), ("R4", None, 0))
+
+    def test_judgment_facts(self):
+        out = self.decide(
+            [self.waiting(1, ["bug"], hours=30), self.waiting(2, ["bug", "importance:low"], hours=5), self.waiting(3, hours=2)]
+        )
+        self.assertEqual((out["rule"], out["decision"]), ("R4", None))
+        self.assertEqual((out["changes"], out["bugs"], out["oldest_hours"]), (3, 2, 30.0))
+        self.assertEqual([w["number"] for w in out["waiting"]], [1, 2, 3])
 
 
 class Refuse(unittest.TestCase):
@@ -457,15 +628,38 @@ class Next(unittest.TestCase):
             mk(33, [], milestone="v0.41.0"),
             mk(48, ["needs:owner"], milestone="v0.41.1"),
         ]
-        out = pr.build_next(issues, milestones, {37})
+        out = pr.build_next(issues, milestones, {37}, mine={37})
         self.assertEqual(out["milestone"], "v0.40.0")
         self.assertEqual([i["number"] for i in out["start"]], [41, 42])
         self.assertEqual([i["number"] for i in out["in_progress"]], [37])
+        self.assertEqual(out["held"], [])
         self.assertEqual([i["number"] for i in out["needs_owner"]], [38, 39])
         self.assertEqual(out["blocked"], [{"number": 40, "title": "issue 40", "blocked_by": [42]}])
         self.assertEqual([i["number"] for i in out["waiting"]], [43])
         self.assertFalse(out["later_needs_owner_only"])
         self.assertEqual(set(out["start"][0]), {"number", "title", "labels"})
+
+    def test_an_issue_another_session_has_is_held(self):
+        milestones = [ms(4, "v0.40.0")]
+        issues = [mk(n, milestone="v0.40.0") for n in (1, 2, 3, 4)] + [mk(5, ["needs:owner"], milestone="v0.40.0")]
+        out = pr.build_next(issues, milestones, {1, 2}, {3: "fix/issue-3-x", 4: "fix/issue-4-y", 5: "fix/issue-5-z"}, mine={2, 4})
+        self.assertEqual([i["number"] for i in out["start"]], [4])
+        self.assertEqual([i["number"] for i in out["in_progress"]], [2])
+        self.assertEqual(
+            [(i["number"], i["reason"]) for i in out["held"]], [(1, "pull request open"), (3, "worktree fix/issue-3-x")]
+        )
+        self.assertEqual([i["number"] for i in out["needs_owner"]], [5])
+
+    def test_worktree_issues(self):
+        porcelain = (
+            "worktree /w/cookapps\nHEAD aaa\nbranch refs/heads/issue-9-main\n\n"
+            "worktree /w/cookapps/.claude/worktrees/fix-issue-12-foo\nHEAD bbb\nbranch refs/heads/fix/issue-12-foo\n\n"
+            "worktree /w/cookapps/.claude/worktrees/issue-7\nHEAD ccc\nbranch refs/heads/feat/C-2\n\n"
+            "worktree /w/cookapps/.claude/worktrees/feat-C-2\nHEAD ddd\nbranch refs/heads/feat/C-2\nlocked\n\n"
+            "worktree /w/cookapps/.claude/worktrees/x\nHEAD eee\ndetached\n"
+        )
+        self.assertEqual(pr.worktree_issues(porcelain), {12: "fix/issue-12-foo", 7: "feat/C-2"})
+        self.assertEqual(pr.worktree_issues(""), {})
 
     def test_later_milestones_only_need_the_owner(self):
         milestones = [ms(4, "v0.40.0"), ms(6, "v0.41.1")]

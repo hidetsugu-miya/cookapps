@@ -5,7 +5,7 @@
 ### Start work only from a Claude Code session or from the owner's nightly job
 
 The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
-The one exception is the daily 01:00 launchd job that the owner registered: `nightly.sh milestone-dev` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06).
+The one exception is the launchd job that the owner registered, which runs three times a day, at 01:00, 09:00 and 13:00: `nightly.sh milestone-dev` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06; three times a day since Discussion #136).
 Do not start an issue with `needs:owner`: a product decision is still open.
 Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05).
 
@@ -54,9 +54,42 @@ Good: #13 adds slack-watched.json and reads conversations.replies -> size:heavy
 Bad:  #13 is 2,000 lines -> size:heavy
 ```
 
-### Use `release:now` and `needs:owner` only for what they say
+### Use `urgency:high` only on the owner's word
 
-`release:now` is for a bug that stops use or loses data, or when the owner writes that it is urgent; without it the change waits with the others.
+`urgency:high` is put on an issue by the owner, or by an agent that follows the owner's instruction ("urgent", "top priority", "as soon as possible"). An agent never adds it on its own judgment (at the owner's instruction, 2026-11-06; Discussion #136).
+It replaces `release:now`, which is retired: nothing reads `release:now` any more.
+An urgent issue goes ahead of every issue that is not urgent, and its release does not wait (R1 below).
+Urgency is about time; how much the issue matters is `importance:*`, which is a separate axis.
+
+```text
+Good: the owner writes "this is urgent" in the session -> the agent adds urgency:high and says whose word it was
+Bad:  a bug looks serious to the agent -> the agent adds urgency:high (rate its importance instead)
+```
+
+### Rate the importance of an issue when you first read it
+
+`importance:high` and `importance:low` are put by whoever reads the issue first, with the reason as a one-line comment; no label means normal. Do not change a label the owner set (at the owner's instruction, 2026-11-06; Discussion #136).
+A bug that stops use or loses data is `importance:high`.
+Importance orders the issues that are not urgent, and a waiting bug with `importance:high` releases at once (R3 below).
+
+```text
+Good: #150 loses the saved Todo on a failed sync -> importance:high, with "データを失う" as the comment
+Bad:  #150 loses data, and no importance label is put, so it waits for the count
+```
+
+### Pin an issue to a version with `release:pin`, and never move it
+
+The owner puts `release:pin` on an issue to say which version it goes out in; the version is the issue's milestone. `plan-release.py` never moves the milestone of a pinned issue, and refuses a plan whose slots have already passed that version (at the owner's instruction, 2026-11-06; Discussion #136).
+Pinned issues of one version share it, even with a `size:heavy` one and even over the cap of 3; no other issue joins them, and they are not put in a group.
+A pin without a version milestone means nothing.
+
+```text
+Good: #128 and #135 are pinned to v0.42.0 -> both go out in v0.42.0, #135 being heavy
+Bad:  #135 is heavy, so plan-release.py moves it to a version of its own and #128 stays alone
+```
+
+### Use `needs:owner` only for a product decision
+
 `needs:owner` is for a product decision left open, such as a 決めること section; the owner removes it.
 Keep state out of labels: an open pull request and the Release PR already show it.
 
@@ -71,7 +104,15 @@ Each open milestone is one planned tag, and its title is that tag; a closed mile
 Every issue has one, `needs:owner` included: it waits unstarted, and when the release of its tag comes first, it moves to the next tag.
 `release-planner` decides the order from how the issues relate, and `plan-release.py` checks the order against the table below, computes the versions and writes the milestones.
 A tag is a forecast, so the title changes when the order does: `sync` runs after every merge. It does not decide when to release.
-An issue with both `bug` and `size:light` goes ahead of every other waiting issue except its blockers, so a quick fix ships in the earliest tag (at the owner's instruction, 2026-11-06); `plan-release.py` refuses an order that breaks this, and `sync` puts such issues first, each after the open issues that block it, behind the issues in progress and waiting for a release.
+The hard rules of the order are checked by `plan-release.py`, which refuses a plan that breaks one (at the owner's instruction, 2026-11-06; Discussion #136):
+- Issues in progress and waiting for a release (fixed) stay at the front and do not move.
+- An issue comes after the issues it depends on.
+- An issue with `urgency:high` goes ahead of every issue that is not urgent, except its own blockers.
+- An issue with both `bug` and `size:light` comes next, after the urgent ones, again except its blockers, so that a quick fix ships in the earliest tag.
+
+Everything else is `release-planner`'s judgment, with this as the basis: urgency, then importance, then the lighter size first, then the older issue first. Where it moves an issue ahead of an older one, it writes the reason.
+`sync` puts the urgent issues first, then the light bugs, each after the open issues that block it, behind the issues in progress and waiting for a release.
+The reorder (`issue-plan`, from its step 4) runs when an issue is created or its `needs:owner` is removed (the hook says so), after `plan-release.py close {tag}` of a release, and at the start of every `milestone-dev` run, which also places the issues made outside a session, such as on the GitHub screen. There is no separate schedule for it.
 Plan only the owner's issues.
 
 ```text
@@ -92,8 +133,45 @@ The owner accepts a proposal by removing `needs:owner`, which makes it an ordina
 ```text
 Good: 2 proposals are open and unanswered -> the 22:00 run files 3 -> the next run files none until the owner answers
 Good: #140 was declined with wontfix -> a later run does not propose the same thing again
-Bad:  the proposal agent removes needs:owner from its own proposal, so that milestone-dev implements it at 01:00
+Bad:  the proposal agent removes needs:owner from its own proposal, so that milestone-dev implements it at its next run
 Bad:  a proposal is filed without proposal, and the reminder never lists it
+```
+
+### Run `milestone-dev` three times a day, within its limits
+
+The job runs at 01:00, 09:00 and 13:00 (at the owner's instruction, 2026-11-06; Discussion #136).
+A run lasts 3 hours at most and takes any number of issues. `nightly.sh` hands the run the end of its 3 hours as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh` before it starts a new issue or a release; nothing kills the process.
+When the limit stops a run, the issue in hand stays as it is, and the hand-over says where.
+A run releases only from 09:00 up to 15:00, so that a hotfix can follow in the same day; the 01:00 run develops and merges only, and the 13:00 run starts no release after 15:00. A release the owner orders in a session has no such limit.
+A run leaves alone an issue that a session of the owner may hold: an open pull request that closes it, or a worktree named `issue-{n}`, unless the previous hand-over lists it as the run's own (`plan-release.py next --mine`).
+
+```text
+Good: the 13:00 run merges an issue at 14:50 and the release table says release -> it releases (before 15:00)
+Good: the 01:00 run merges three issues -> it writes the Release PR body and leaves the release to the 09:00 run
+Bad:  the 13:00 run starts a release at 15:20
+```
+
+### Hand over from one run to the next through one Discussion
+
+One fixed Discussion in the Ideas category, titled 自走の引き継ぎ, holds the hand-over; `handover.sh` creates it when it is missing (at the owner's instruction, 2026-11-06; Discussion #136).
+Each run ends with one comment: the issues in hand with their branch, worktree and stage; the run's decisions with the reasons (the order, the release, why something waited); the questions to the owner; and what the next run does first.
+The runs write with the owner's account, so the author does not tell them apart: `handover.sh write` puts the mark `<!-- handover run-start=... -->` on the first line, and a comment without the mark is the owner's. The next run reads the owner's comments first and takes them as instructions.
+The repository is public: write no personal information (`publishing.md`).
+
+```text
+Good: the 09:00 run reads the owner's reply to a question, answers it in its work, and writes it into its own hand-over
+Bad:  a run starts without reading the Discussion, and does again what the owner told it not to
+```
+
+### Notify the owner with Pushover from 09:00 to 20:00 only
+
+`notify.sh` sends the notifications (at the owner's instruction, 2026-11-06; Discussion #136). Outside 09:00 to 20:00 it only queues them in `.claude/nightly/pushover-queue`, and the first `nightly.sh` or `notify.sh flush` from 09:00 sends the queue as one message.
+The moments are: the end of a run (the summary and the URL of its hand-over), a question to the owner, a failure, and a release.
+The credentials are in the keychain (service `jp.mysis.cookapps.pushover-token` for the application token and `jp.mysis.cookapps.pushover-user` for the user key, account `cookapps`) and reach `curl` through its standard input. Never put them in an argument, a log or an output.
+
+```text
+Good: a failure at 03:10 is queued -> the 09:00 run sends it with what else happened in the night, as one message
+Bad:  the token is passed as a curl argument and shows in ps
 ```
 
 ### Record a design or layout discussion in a Discussion (Ideas) when it starts
@@ -134,7 +212,7 @@ Its title is `release: v{version}`, and its body holds the decision, the digit a
 Merged Release PRs are the release history, so the reason for each release stays with it.
 
 ```text
-判定: 待つ（R5）  2/3 件、最古の merge から 5 時間
+判定: 待つ（R4）  変更 2 件・バグ 1 件、最古の待ちは 5 時間（目安のどれにも届かない）
 版:   minor（要件 ID S-12 が増えた）
 
 - #21 Slack の書式を表示する  size:standard  (closes #12)
@@ -142,25 +220,26 @@ Merged Release PRs are the release history, so the reason for each release stays
 
 ### Decide the release by these rules, top to bottom
 
-Evaluate them after every merge and when a session starts work on an issue, and write the result in the body.
-An agent applies the table and does not weigh anything else.
+Evaluate them after every merge and when a session starts work on an issue, and write the result in the body (at the owner's instruction, 2026-11-06; Discussion #136).
+`plan-release.py release-facts` applies R0 to R3 and prints the figures of R4; when the rule is R4, launch `release-planner` with `mode: release` and that output, and write its decision and reason in the body. `milestone-dev` and a session do this after every merge.
 
 | Rule | Condition | Result |
 |------|-----------|--------|
 | R0 | The Release PR has `release:hold` | Wait |
-| R1 | The Release PR or a waiting change has `release:now` | Release now |
-| R2 | A waiting change is `size:heavy` | Release now |
-| R3 | 3 or more changes are waiting | Release |
-| R4 | The oldest waiting merge is 24 hours old or more | Release |
-| R5 | None of the above | Wait |
+| R1 | A waiting change has `urgency:high` | Release now |
+| R2 | A waiting change is `size:heavy` | Release now (a heavy change is a version of its own) |
+| R3 | A waiting bug has `importance:high` | Release now |
+| R4 | None of the above | `release-planner` judges |
 
+For R4 the guide is to release when 2 or more bugs are waiting, when 3 or more changes are waiting, or when the oldest waiting merge is 24 hours old or more. When the planner departs from the guide, it writes the reason, and the body keeps it.
 Before merging a `size:heavy` pull request, release what is waiting, so that a heavy change is a version of its own and a fault in it can be told apart.
 A change that is only documentation, `.claude/agents/` or `.claude/rules/` is not counted; it goes out with the next tag.
-3 changes and 24 hours are first values, not measurements; each release shows the owner a restart prompt (U-2), so correct them from use.
+The guide's figures are first values, not measurements; each release shows the owner a restart prompt (U-2), so correct them from use.
 
 ```text
-Good: 2 waiting, the oldest 5 hours old -> R5, write the reason in the body and wait
-Bad:  2 waiting, but they look important -> release
+Good: 2 changes waiting, no bug, the oldest 5 hours old -> R4, the planner says wait, and the body says why
+Good: a waiting bug has importance:high -> R3, release now
+Bad:  2 waiting, but they look important -> release at R4 without writing why it departs from the guide
 ```
 
 ### Take the digit from the requirement IDs
@@ -178,8 +257,9 @@ Bad:  the issue says enhancement -> minor
 1. In `release/next`, take in main, correct the version, and write `CHANGELOG.md` and `docs/features.md`.
 2. Run `run-e2e.sh`, push, run `post-checks.sh` (the release-only diff stands for the review), and merge.
 3. Tag the merge commit and push the tag (`versioning.md`), then watch the release (`review.md`).
-4. Run `plan-release.py close {tag}`: it closes the milestone and moves what is left in it to the next tag.
+4. Run `plan-release.py close {tag}`: it closes the milestone and moves what is left in it to the next tag. Then reorder with `issue-plan` (from its step 4), so that the issues that moved are in the right order for the new tags.
 5. Comment the version on each issue that went out.
+6. Send the owner the version with `notify.sh send` (the release is one of its moments).
 
 ```text
 Good: Release PR merged -> tag -> watch-ci.sh succeeds -> "v0.33.0 で対応しました" on each issue
