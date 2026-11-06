@@ -10,7 +10,7 @@ log="$(pwd -P)/.claude/nightly/$(date +%Y-%m-%d).log"
 notify() {
   osascript -e "display notification \"$1\" with title \"cookapps 夜間 milestone-dev\"" >/dev/null 2>&1 || true
 }
-# A lock left by a run that died without its trap (power loss, SIGKILL) is taken over when its PID is gone.
+# A lock left by a run that died without its trap (power loss, SIGKILL) is taken over when its PID is gone or now runs another command.
 lock=.claude/nightly/lock
 if ! mkdir "$lock" 2>/dev/null; then
   if ps -p "$(cat "$lock/pid" 2>/dev/null)" -o command= 2>/dev/null | grep -q nightly-milestone-dev; then
