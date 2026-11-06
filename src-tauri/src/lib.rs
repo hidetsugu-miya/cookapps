@@ -4,6 +4,7 @@ pub mod calendar;
 pub mod claude;
 pub mod claude_auth;
 mod disk_cache;
+pub mod ghostty;
 pub mod gmail;
 pub mod image_senders;
 pub mod images;
@@ -290,6 +291,8 @@ pub fn run() {
             orca_stream::orca_stream_terminal_close,
             orca_stream::orca_stream_viewport,
             orca_stream::orca_stream_input,
+            ghostty::ghostty_saved,
+            ghostty::ghostty_import,
             update::app_info,
             update::update_mode,
             update::set_update_mode,

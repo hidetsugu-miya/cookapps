@@ -3,6 +3,7 @@ import {
   boot,
   callsOf,
   count,
+  ghosttyImport,
   holds,
   inbox,
   isoDate,
@@ -1259,5 +1260,119 @@ describe("orca: a saved environment's stream", () => {
     await sendStream(streamList([], worktrees()));
     await browser.pause(300);
     expect(await count("#orca-feed .orca-project")).toBe(4);
+  });
+});
+
+describe("orca: Ghostty's settings in the terminals (A-13)", () => {
+  const colors = { background: "#112233", foreground: "#ddeeff", cursor: null, cursorAccent: null, selectionBackground: null, selectionForeground: null, palette: [{ index: 1, color: "#ff0000" }] };
+  // Imported settings with a font, colors for both appearances (so the system's does not matter) and two keys.
+  const saved = ghosttyImport({
+    settings: {
+      fontFamilies: ["Example Mono"],
+      fontSize: 15,
+      fontThicken: true,
+      light: colors,
+      dark: colors,
+      keybinds: [
+        { key: "Delete", shift: false, ctrl: false, alt: false, meta: false, text: "\x08" },
+        { key: "Enter", shift: false, ctrl: true, alt: false, meta: false, text: "\n" },
+      ],
+    },
+  });
+
+  // The terminal of the Claude session of example-app (this machine's mirror), shown with the given fixtures; the answer of the command that takes its keys is the returned name.
+  async function openTerminal(fixtures: Record<string, unknown> = {}) {
+    await openOrca(orcaOverview(sample(), worktrees()), fixtures);
+    await mock("orca_terminal_read", ["$ ls"]);
+    const input = await mock("orca_terminal_input", null);
+    await project("example-app").click();
+    await browser.waitUntil(async () => (await screenText()).includes("$ ls"), { timeoutMsg: "the screen never showed" });
+    return input;
+  }
+
+  // What xterm.js draws the terminal with (the only one made), and the pane around it.
+  const look = () =>
+    browser.execute(() => {
+      const rows = document.querySelector(".orca-term-box .xterm-rows")!;
+      const style = getComputedStyle(rows);
+      const span = rows.querySelector("span");
+      return {
+        size: style.fontSize,
+        family: style.fontFamily,
+        color: style.color,
+        weight: span ? getComputedStyle(span).fontWeight : null,
+        pane: getComputedStyle(document.getElementById("orca-term")!).backgroundColor,
+      };
+    });
+
+  // A keydown on the terminal shown, as the key event xterm.js listens for.
+  const press = (init: KeyboardEventInit) =>
+    browser.execute(
+      (id, i) => {
+        if (!window.__e2e_once__(id)) return;
+        document.querySelector(".orca-term-box:not([hidden]) .xterm-helper-textarea")!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...i }));
+      },
+      onceId(),
+      init,
+    );
+
+  it("keeps the app's own font and colors until something is imported", async () => {
+    await openTerminal();
+    const own = await look();
+    expect(own.size).toBe("13px");
+    expect(own.family).not.toContain("Example Mono");
+    expect(own.weight).toBe("400");
+    expect(own.pane).not.toBe("rgb(17, 34, 51)");
+  });
+
+  it("draws the terminal with the font and colors of the import saved before", async () => {
+    await openTerminal({ ghostty_saved: saved });
+    expect(await look()).toMatchObject({ size: "15px", color: "rgb(221, 238, 255)", weight: "500", pane: "rgb(17, 34, 51)" });
+    expect((await look()).family).toContain("Example Mono");
+  });
+
+  it("draws the terminals again with an import made in the settings, with no restart", async () => {
+    await openTerminal();
+    await $("#nav-settings").click();
+    await $("#settings-tab-orca").click();
+    const imported = await mock("ghostty_import", saved);
+    await $("#ghostty-import").click();
+    await waitForCalls(imported);
+    await $("#nav-orca").click();
+    await browser.waitUntil(async () => (await look()).size === "15px", { timeoutMsg: "the terminal never took the font" });
+    expect(await look()).toMatchObject({ color: "rgb(221, 238, 255)", pane: "rgb(17, 34, 51)" });
+  });
+
+  it("sends the text of a key of the import in place of the key", async () => {
+    const input = await openTerminal({ ghostty_saved: saved });
+    await press({ key: "Delete" });
+    expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app", text: "\x08" }]);
+    await press({ key: "Enter", ctrlKey: true });
+    await waitForCalls(input, 2);
+    expect(await callsOf(input)).toEqual([
+      { handle: "term_example-app", text: "\x08" },
+      { handle: "term_example-app", text: "\n" },
+    ]);
+  });
+
+  it("sends a newline for Shift+Enter, with or without an import", async () => {
+    const input = await openTerminal();
+    await press({ key: "Enter", shiftKey: true });
+    expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app", text: "\x1b\r" }]);
+  });
+
+  it("matches an Alt key by its physical key, since Option makes another character on macOS", async () => {
+    const altB = { key: "b", shift: false, ctrl: false, alt: true, meta: false, text: "\x1bb" };
+    const input = await openTerminal({ ghostty_saved: ghosttyImport({ settings: { ...saved.settings, keybinds: [altB] } }) });
+    // Option+B makes ∫ on a US keyboard; the physical key is KeyB.
+    await press({ key: "∫", code: "KeyB", altKey: true });
+    expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app", text: "\x1bb" }]);
+  });
+
+  it("lets a key of the import for Shift+Enter take the place of the newline", async () => {
+    const shiftEnter = { key: "Enter", shift: true, ctrl: false, alt: false, meta: false, text: "\n" };
+    const input = await openTerminal({ ghostty_saved: ghosttyImport({ settings: { ...saved.settings, keybinds: [shiftEnter] } }) });
+    await press({ key: "Enter", shiftKey: true });
+    expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app", text: "\n" }]);
   });
 });

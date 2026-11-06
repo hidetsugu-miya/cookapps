@@ -1,4 +1,4 @@
-// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Claude and the updater, each with its card.
+// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Claude, Orca (the card of Ghostty's settings is `ts/ghostty.ts`) and the updater, each with its card.
 // The heading and the tabs stay at the top while a card scrolls. A token is never shown; Rust keeps it in the keychain.
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -20,7 +20,7 @@ import { showError } from "./view.js";
 
 let settingsSeq = 0;
 
-export const SETTINGS_TABS = ["google", "calendar", "todoist", "slack", "claude", "update"] as const;
+export const SETTINGS_TABS = ["google", "calendar", "todoist", "slack", "claude", "orca", "update"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 // The tab shown; the settings screen opens on Google unless the way in names another.

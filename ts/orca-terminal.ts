@@ -4,8 +4,12 @@
 // This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminal shown is a mirror: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
+// Ghostty's settings (A-13) set the font, the colors (the light or dark ones, by the system's appearance) and the keys that send a text; Shift+Enter sends a newline for Claude Code's input.
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
-import { $ } from "./dom.js";
+import type { TerminalColors } from "./bindings/TerminalColors";
+import type { TerminalSettings } from "./bindings/TerminalSettings";
+import type { TextKeybind } from "./bindings/TextKeybind";
+import { $, composing } from "./dom.js";
 import { invoke } from "./ipc.js";
 
 const SCROLLBACK = 5000;
@@ -15,6 +19,15 @@ const FIT_DELAY_MS = 50;
 const SEND_LIMIT = 50_000;
 // The first frame of a mirror clears what the last one drew.
 const CLEAR = "\x1b[2J\x1b[3J\x1b[H";
+
+const DEFAULT_FONT = "ui-monospace, Menlo, monospace";
+const DEFAULT_FONT_SIZE = 13;
+// Ghostty's `font-thicken`: the weight between regular and bold (a font without it draws regular).
+const THICK_WEIGHT = 500;
+// Shift+Enter makes a newline in the input of Claude Code, which a plain Enter would send. ESC CR is what Orca sends for it when the program has not asked for the Kitty protocol, which xterm.js has none of.
+const SHIFT_ENTER: TextKeybind = { key: "Enter", shift: true, ctrl: false, alt: false, meta: false, text: "\x1b\r" };
+// The names xterm.js gives the first 16 colors of the palette.
+const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"];
 
 // Where a terminal comes from: the stream of a saved environment, or the mirror of this machine.
 export interface TermSource {
@@ -46,21 +59,88 @@ let mode: FitMode = "fit";
 // The channel of the stream shown, null when none is: an event of another channel is not drawn.
 let current: { onmessage: (event: OrcaTermEvent) => void } | null = null;
 let onError: (e: unknown) => void = () => {};
+// Ghostty's settings as imported, null before the first import; the colors follow the system's appearance.
+let settings: TerminalSettings | null = null;
+const darkScheme = window.matchMedia("(prefers-color-scheme: dark)");
 
 const container = () => $("orca-term");
 const visible = () => (visibleId === null ? undefined : instances.get(visibleId));
 // Only a stream can keep Orca's size: the mirror is always drawn at the pane's width.
 const fixed = (instance: Instance) => instance.source.kind === "stream" && mode === "fixed";
 
-function newInstance(source: TermSource): Instance {
+// The colors of the imported settings for the system's appearance, null when there are none.
+const importedColors = (): TerminalColors | null => (darkScheme.matches ? settings?.dark : settings?.light) ?? null;
+
+// The theme of xterm.js: the app's own colors, with those of the imported settings over them.
+function xtermTheme(): Record<string, unknown> {
   const style = getComputedStyle(document.documentElement);
+  const colors = importedColors();
+  const theme: Record<string, unknown> = {
+    background: colors?.background ?? style.getPropertyValue("--term-bg").trim(),
+    foreground: colors?.foreground ?? style.getPropertyValue("--term-fg").trim(),
+    cursor: colors?.cursor ?? undefined,
+    cursorAccent: colors?.cursorAccent ?? undefined,
+    selectionBackground: colors?.selectionBackground ?? undefined,
+    selectionForeground: colors?.selectionForeground ?? undefined,
+  };
+  // The colors 16 and over go in `extendedAnsi` from its index 0; one that is not set (an empty string) stays xterm.js's.
+  const extended: string[] = [];
+  for (const { index, color } of colors?.palette ?? []) {
+    if (index < ANSI.length) theme[ANSI[index]!] = color;
+    else {
+      while (extended.length < index - ANSI.length) extended.push("");
+      extended[index - ANSI.length] = color;
+    }
+  }
+  if (extended.length) theme.extendedAnsi = extended;
+  return theme;
+}
+
+// The font and colors of the terminals: Ghostty's families come first, then the app's own.
+function termOptions() {
+  const families = [...(settings?.fontFamilies ?? []).map((name) => JSON.stringify(name)), DEFAULT_FONT];
+  return { fontFamily: families.join(", "), fontSize: settings?.fontSize ?? DEFAULT_FONT_SIZE, fontWeight: settings?.fontThicken ? THICK_WEIGHT : "normal", theme: xtermTheme() };
+}
+
+// The keys that send a text: those of the settings, then Shift+Enter. Made when the settings are applied, not at each key event.
+let keybinds: TextKeybind[] = [SHIFT_ENTER];
+
+// The punctuation keys by `KeyboardEvent.code`; letters and digits are read from the code itself.
+const CODE_CHARS: Record<string, string> = { Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\", Semicolon: ";", Quote: "'", Backquote: "`", Comma: ",", Period: ".", Slash: "/", Space: " " };
+
+// The character of the key a `code` names on a US keyboard, which Option does not change.
+function charOfCode(code: string) {
+  const letterOrDigit = /^(?:Key([A-Z])|Digit([0-9]))$/.exec(code);
+  return letterOrDigit ? (letterOrDigit[1] ?? letterOrDigit[2])?.toLowerCase() : CODE_CHARS[code];
+}
+
+// The key of the settings (or Shift+Enter) that a key event is; Ghostty compares the character the key makes, case folded, and the exact set of modifiers.
+// With Option held, macOS makes another character (Option+B is ∫), so a one-character key is also compared with the character of the physical key.
+function keybindOf(event: KeyboardEvent) {
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  const physical = event.altKey ? charOfCode(event.code) : undefined;
+  return keybinds.find(
+    (b) => (b.key === key || b.key === physical) && b.shift === event.shiftKey && b.ctrl === event.ctrlKey && b.alt === event.altKey && b.meta === event.metaKey,
+  );
+}
+
+// Draws Ghostty's imported settings in every terminal and in the pane around them (null: the app's own font and colors).
+export function applyTerminalSettings(next: TerminalSettings | null) {
+  settings = next;
+  keybinds = [...(next?.keybinds ?? []), SHIFT_ENTER];
+  const options = termOptions();
+  for (const { term } of instances.values()) Object.assign(term.options, options);
+  container().style.background = importedColors()?.background ?? "";
+  // The size of a cell changed with the font: the terminal shown fits the pane again.
+  fitSoon();
+}
+
+function newInstance(source: TermSource): Instance {
   const term = new Terminal({
     scrollback: SCROLLBACK,
     cursorBlink: true,
-    fontFamily: "ui-monospace, Menlo, monospace",
-    fontSize: 13,
     allowProposedApi: true,
-    theme: { background: style.getPropertyValue("--term-bg").trim(), foreground: style.getPropertyValue("--term-fg").trim() },
+    ...termOptions(),
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -75,6 +155,17 @@ function newInstance(source: TermSource): Instance {
   term.onData((data) => {
     instance.pending += data;
     sendKeys(instance);
+  });
+  // A key of the settings sends its text in place of the key. All three events of the key are kept from xterm.js, or its keypress would print the character too; the text goes once, at the keydown.
+  term.attachCustomKeyEventHandler((event) => {
+    const bind = composing(event) ? undefined : keybindOf(event);
+    if (!bind) return true;
+    if (event.type === "keydown") {
+      event.preventDefault();
+      instance.pending += bind.text;
+      sendKeys(instance);
+    }
+    return false;
   });
   return instance;
 }
@@ -275,6 +366,8 @@ export function initOrcaTerminal(report: (e: unknown) => void) {
   new ResizeObserver(fitSoon).observe(container());
   // The cell size is measured with the font, so the fit is made again once the fonts are there.
   document.fonts?.ready.then(fitSoon).catch(() => {});
+  // The system's appearance picks the light or the dark colors of the settings.
+  darkScheme.addEventListener("change", () => applyTerminalSettings(settings));
   // A hidden window stops the reads and the stream; shown again, the terminal that is shown starts again (a stream sends its screen anew).
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return stop();

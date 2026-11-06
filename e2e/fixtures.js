@@ -63,6 +63,8 @@ const answers = {
   orca_stream_terminal_close: null,
   orca_stream_viewport: null,
   orca_stream_input: null,
+  // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
+  ghostty_saved: null,
   fetch_images: {},
   claude_status: { state: "missing" },
   claude_model_settings: Object.fromEntries(

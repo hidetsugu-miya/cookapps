@@ -515,7 +515,7 @@ a.c-file:hover { background: var(--hover); }
 .logo.slack { background: var(--slack); }
 .logo.todoist { background: var(--todoist); }
 .logo.claude { background: var(--claude); }
-.logo.update, .logo.calendar { background: var(--accent); }
+.logo.update, .logo.calendar, .logo.orca { background: var(--accent); }
 .day-picks { display: flex; gap: 4px; }
 .day-picks .text-btn { width: 40px; padding: 0; }
 .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 20px; border-top: 1px solid var(--line); }
@@ -543,6 +543,12 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .item-meta.warn { color: var(--warn); }
 .hidden-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; }
 .card-empty { padding: 12px 20px 14px; border-top: 1px solid var(--line); color: #666; font-size: 13px; }
+/* The entries of Ghostty's config (A-13): the ones taken, and the ones left with the reason. */
+.ghostty-report { padding: 10px 20px 12px; border-top: 1px solid var(--line); }
+.ghostty-report h3 { margin: 0 0 6px; font-size: 13px; }
+.ghostty-report ul { margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.ghostty-report li { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 2px 0; overflow-wrap: anywhere; }
+.ghostty-reason { color: var(--warn); }
 .card-add { display: flex; gap: 8px; padding: 12px 12px 14px 20px; border-top: 1px solid var(--line); background: var(--bar); border-radius: 0 0 12px 12px; }
 .card-add input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: #fff; }
 .card-add input:focus { outline: 2px solid var(--accent); border-color: transparent; }
@@ -563,7 +569,7 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 :is(.pop, .pane) .text-btn svg { width: 13px; height: 13px; }
 :is(.pop, .pane) .foot { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line); color: #666; font-size: 12px; }
 :is(.pop, .pane) .foot svg { width: 14px; height: 14px; flex: none; }
-:is(.pop, .pane) code, .item-meta code { padding: 1px 5px; border-radius: 4px; background: var(--code); font-family: ui-monospace, monospace; font-size: 12px; }
+:is(.pop, .pane) code, .item-meta code, .ghostty-report code { padding: 1px 5px; border-radius: 4px; background: var(--code); font-family: ui-monospace, monospace; font-size: 12px; }
 
 .pop p { margin: 0 0 12px; }
 /* The update popup (ts/update.ts): bottom right, the icon and the text above, the buttons at the right below. */
