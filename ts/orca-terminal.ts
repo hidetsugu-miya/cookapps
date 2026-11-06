@@ -6,6 +6,7 @@
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
 // An image pasted or dropped on the terminal shown is put in its worktree and its path is typed in the terminal (A-10).
 // Ghostty's settings (A-13) set the font and the keys that send a text; Shift+Enter sends a newline for Claude Code's input.
+// A URL in the text, or in an OSC 8 link, opens in the default browser with ⌘+click (the left button, no Ctrl or Alt), as in Orca's own terminal; the click on a URL without ⌘ selects as before.
 // The colors are those of the theme chosen in the settings (A-14), the light or the dark one by the system's appearance, or the one the settings fix (A-15); the colors of Ghostty's settings are used only while there is no theme.
 import type { Appearance } from "./bindings/Appearance";
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
@@ -32,6 +33,9 @@ const THICK_WEIGHT = 500;
 const SHIFT_ENTER: TextKeybind = { key: "Enter", shift: true, ctrl: false, alt: false, meta: false, text: "\x1b\r" };
 // The names xterm.js gives the first 16 colors of the palette.
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"];
+
+// What a link in the text is: it starts with http:// or https:// and ends before a space, a quote, a bracket, or a full-width punctuation mark or bracket (U+3000 to U+303F and U+FF00 to U+FFEF), so a URL in a Japanese sentence is cut where the sentence goes on.
+const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-\uffef]*[^\s"':,.!?{}|\\^~[\]`()<>\u3000-\u303f\uff00-\uffef]/;
 
 // Where a terminal comes from: the stream of a saved environment, or the mirror of this machine.
 // `path` is the worktree the terminal runs in and `environment` the target, where an image dropped on it is put (A-10).
@@ -155,10 +159,27 @@ export function applyTerminalSettings(next: TerminalSettings | null) {
 }
 
 function newInstance(source: TermSource): Instance {
+  const el = document.createElement("div");
+  el.className = "orca-term-box";
+  container().append(el);
+  // The click on a link: only ⌘ with the left button opens it, and the selection goes. Rust opens http and https URLs and refuses the others (an OSC 8 link may name any: xterm.js drops a non-http one before this unless `allowNonHttpProtocols` is set, as Orca sets it).
+  const open = (event: MouseEvent, uri: string) => {
+    if (!event.metaKey || event.ctrlKey || event.altKey || event.button !== 0) return;
+    invoke("orca_open_url", { url: uri }).catch(onError);
+    term.clearSelection();
+  };
+  // The URL is the tooltip of the box while the pointer is over a link.
+  const hover = (_event: MouseEvent, uri: string) => {
+    el.title = uri;
+  };
+  const leave = () => {
+    el.title = "";
+  };
   const term = new Terminal({
     scrollback: SCROLLBACK,
     cursorBlink: true,
     allowProposedApi: true,
+    linkHandler: { allowNonHttpProtocols: true, activate: open, hover, leave },
     ...termOptions(),
   });
   const fit = new FitAddon.FitAddon();
@@ -166,9 +187,7 @@ function newInstance(source: TermSource): Instance {
   // An emoji or a CJK character takes the cells Unicode 11 gives it, as Orca's own terminal counts them.
   term.loadAddon(new Unicode11Addon.Unicode11Addon());
   term.unicode.activeVersion = "11";
-  const el = document.createElement("div");
-  el.className = "orca-term-box";
-  container().append(el);
+  term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
   const instance: Instance = { term, fit, el, source, timer: null, last: null, reading: false, pending: "", sending: false };
   term.onData((data) => {

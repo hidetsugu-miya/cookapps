@@ -218,6 +218,8 @@ export interface Commands {
   orca_terminal_read: { args: { handle: string }; result: string[] };
   // Types `text` into the terminal `handle` of this machine as it is (no Enter is added).
   orca_terminal_input: { args: { handle: string; text: string }; result: null };
+  // A-8, A-12: opens `url` in the default browser, for a link ⌘+clicked in a terminal. Only an http or https URL is opened; any other fails with the message.
+  orca_open_url: { args: { url: string }; result: null };
   // A-12: the stream of the saved environment `environment`: the list goes to `channel` (an `OrcaStreamEvent` at a time) until it is closed or another is opened; only one runs.
   orca_stream_open: { args: { environment: string; channel: unknown }; result: null };
   orca_stream_close: { args: undefined; result: null };

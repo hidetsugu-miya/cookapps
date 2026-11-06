@@ -286,6 +286,7 @@ pub fn run() {
             orca::orca_close,
             orca::orca_terminal_read,
             orca::orca_terminal_input,
+            orca::orca_open_url,
             orca_attach::orca_attach_image,
             orca_answer::orca_answer,
             orca_chat::orca_chat_open,

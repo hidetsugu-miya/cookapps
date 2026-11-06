@@ -70,6 +70,7 @@ const answers = {
   // The terminals of the Orca screen (A-8, A-12): this machine's mirror reads an empty screen, and a saved environment's stream sends nothing until a spec gives it events.
   orca_terminal_read: [],
   orca_terminal_input: null,
+  orca_open_url: null,
   orca_attach_image: "/work/example/.orca/drops/image.png",
   orca_stream_open: null,
   orca_stream_close: null,
