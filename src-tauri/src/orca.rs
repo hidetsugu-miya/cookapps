@@ -1178,6 +1178,26 @@ pub(crate) fn input_params(
     params
 }
 
+/// The URL a ⌘+click in a terminal opens (A-8): an `http` or `https` URL with a host, read again by the `url` crate, so what reaches the browser is the parsed form and never another scheme.
+fn browser_url(raw: &str) -> Result<String, String> {
+    let url =
+        url::Url::parse(raw).map_err(|_| "開けるのは http か https の URL だけです".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err("開けるのは http か https の URL だけです".into());
+    }
+    Ok(url.into())
+}
+
+/// Opens the URL of a link that was ⌘+clicked in a terminal (A-8, A-12) in the default browser. Nothing else is opened.
+#[tauri::command]
+pub fn orca_open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = browser_url(&url)?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("ブラウザを開けません: {e}"))
+}
+
 /// Checks the keys and the terminal.
 fn check_input(mirror: &OrcaMirror, handle: &str, text: &str) -> Result<(), String> {
     check_handle(handle)?;
@@ -1340,6 +1360,49 @@ mod tests {
             {"handle": "term_1", "tabId": "tabA", "leafId": "leaf1"},
             {"handle": "term_2", "tabId": "tabB", "leafId": "leaf2"},
         ]})
+    }
+
+    #[test]
+    fn a_link_to_open_is_an_http_or_https_url_read_again() {
+        assert_eq!(
+            browser_url("https://example.com/docs?q=1#top").unwrap(),
+            "https://example.com/docs?q=1#top"
+        );
+        assert_eq!(
+            browser_url("http://example.com").unwrap(),
+            "http://example.com/"
+        );
+        assert_eq!(
+            browser_url("HTTPS://Example.COM/A").unwrap(),
+            "https://example.com/A"
+        );
+        assert_eq!(
+            browser_url("http://localhost:3000/").unwrap(),
+            "http://localhost:3000/"
+        );
+        assert_eq!(
+            browser_url("https://example.com/日本語").unwrap(),
+            "https://example.com/%E6%97%A5%E6%9C%AC%E8%AA%9E"
+        );
+    }
+
+    #[test]
+    fn a_link_that_is_not_http_or_https_is_refused() {
+        for raw in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ftp://example.com/",
+            "ssh://example.com",
+            "mailto:me@example.com",
+            "data:text/html,x",
+            "x-apple.systempreferences:com.apple.preference",
+            "",
+            "example.com",
+            "/usr/bin/open",
+            "https://",
+        ] {
+            assert!(browser_url(raw).is_err(), "{raw} was accepted");
+        }
     }
 
     #[test]

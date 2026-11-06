@@ -1611,3 +1611,113 @@ describe("orca: images on a terminal (A-10)", () => {
     expect(await callsOf(input)).toEqual([]);
   });
 });
+
+describe("orca: links in a terminal (A-8, A-12)", () => {
+  const lines = ["$ open", "docs: https://example.com/docs。続きを読む", "see (https://example.org/a)."];
+  const shownBox = "#orca-term .orca-term-box:not([hidden])";
+
+  // The centre of `needle` on the screen of the terminal shown (the text of a row is drawn in the DOM).
+  const aim = (needle: string) =>
+    browser.execute(
+      (selector, text) => {
+        const walker = document.createTreeWalker(document.querySelector(`${selector} .xterm-rows`)!, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.textContent!.indexOf(text);
+          if (at < 0) continue;
+          const range = document.createRange();
+          range.setStart(node, at);
+          range.setEnd(node, at + text.length);
+          const box = range.getBoundingClientRect();
+          return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        }
+        throw new Error(`no "${text}" on the screen`);
+      },
+      shownBox,
+      needle,
+    );
+  const mouse = (type: "mousemove" | "mousedown" | "mouseup", at: { x: number; y: number }, init: MouseEventInit) =>
+    browser.execute(
+      (selector, t, point, extra) => {
+        document.querySelector(`${selector} .xterm-screen`)!.dispatchEvent(new MouseEvent(t, { clientX: point.x, clientY: point.y, button: 0, bubbles: true, cancelable: true, ...extra }));
+      },
+      shownBox,
+      type,
+      at,
+      init,
+    );
+  // A click on `needle` with the modifiers in `init`: the pointer comes first, so xterm.js finds the link under it.
+  async function clickOn(needle: string, init: MouseEventInit = {}) {
+    const at = await aim(needle);
+    await mouse("mousemove", at, init);
+    await browser.pause(100);
+    await mouse("mousedown", at, init);
+    await mouse("mouseup", at, init);
+  }
+  const titleOf = () => browser.execute((selector) => document.querySelector(selector)!.getAttribute("title") ?? "", shownBox);
+
+  async function openMirror() {
+    await openOrca(orcaOverview(sample(), worktrees()));
+    await mock("orca_terminal_read", lines);
+    await project("example-app").click();
+    await browser.waitUntil(async () => (await screenText()).includes("example.org"), { timeoutMsg: "the screen never showed" });
+  }
+  async function openStream(text: string) {
+    await openOrca(orcaOverview([], [], { target: "Studio", environments: ["Studio"] }));
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList(sample(), worktrees()));
+    await project("example-app").click();
+    await waitForCalls("orca_stream_terminal");
+    await sendTerm({ kind: "snapshot", data: text, cols: 80, rows: 24 });
+    await browser.waitUntil(async () => (await screenText()).includes("example"), { timeoutMsg: "the screen never showed" });
+  }
+
+  it("opens the URL of a link ⌘+clicked in the mirror of this machine, cut where the Japanese sentence goes on and before the closing bracket", async () => {
+    await openMirror();
+    const open = await mock("orca_open_url", null);
+    await clickOn("example.com", { metaKey: true });
+    expect(await waitForCalls(open)).toEqual([{ url: "https://example.com/docs" }]);
+    await clickOn("example.org", { metaKey: true });
+    expect(await waitForCalls(open, 2)).toEqual([{ url: "https://example.com/docs" }, { url: "https://example.org/a" }]);
+  });
+
+  it("opens nothing for a click without ⌘, with Ctrl or Alt held, or with another button", async () => {
+    await openMirror();
+    const open = await mock("orca_open_url", null);
+    await clickOn("example.com");
+    await clickOn("example.com", { metaKey: true, ctrlKey: true });
+    await clickOn("example.com", { metaKey: true, altKey: true });
+    await clickOn("example.com", { metaKey: true, button: 2 });
+    await browser.pause(300);
+    expect(await callsOf(open)).toEqual([]);
+    // The same click with ⌘ alone opens it, so the clicks above did reach the link.
+    await clickOn("example.com", { metaKey: true });
+    expect(await waitForCalls(open)).toEqual([{ url: "https://example.com/docs" }]);
+  });
+
+  it("shows the URL as the title while the pointer is over a link, and takes it away when the pointer leaves", async () => {
+    await openMirror();
+    await mock("orca_open_url", null);
+    await mouse("mousemove", await aim("example.com"), {});
+    await browser.waitUntil(async () => (await titleOf()) === "https://example.com/docs", { timeoutMsg: "the title never showed the URL" });
+    await mouse("mousemove", await aim("$ open"), {});
+    await browser.waitUntil(async () => (await titleOf()) === "", { timeoutMsg: "the title stayed" });
+  });
+
+  it("opens the URL of a link ⌘+clicked in the terminal streamed from a saved environment", async () => {
+    await openStream("$ claude\r\ndocs: https://example.com/docs");
+    const open = await mock("orca_open_url", null);
+    await clickOn("example.com");
+    await browser.pause(300);
+    expect(await callsOf(open)).toEqual([]);
+    await clickOn("example.com", { metaKey: true });
+    expect(await waitForCalls(open)).toEqual([{ url: "https://example.com/docs" }]);
+  });
+
+  it("opens a link that a program set with OSC 8 the same way, and shows the message when Rust refuses its URL", async () => {
+    await openStream("$ cat\r\n\x1b]8;;file:///etc/hosts\x1b\\hosts file\x1b]8;;\x1b\\");
+    const open = await mock("orca_open_url", rejects("開けるのは http か https の URL だけです"));
+    await clickOn("hosts", { metaKey: true });
+    expect(await waitForCalls(open)).toEqual([{ url: "file:///etc/hosts" }]);
+    await expect($("#error")).toHaveText("開けるのは http か https の URL だけです");
+  });
+});

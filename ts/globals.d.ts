@@ -16,7 +16,7 @@ interface Window {
 declare const marked: { parse(markdown: string, options?: { breaks?: boolean }): string };
 declare const DOMPurify: { sanitize(html: string, config?: Record<string, unknown>): string };
 
-// xterm.js (src/vendor/xterm.js), its fit addon (src/vendor/addon-fit.js) and its Unicode 11 addon (src/vendor/addon-unicode11.js): only what the terminals of the Orca screen use.
+// xterm.js (src/vendor/xterm.js), its fit addon (src/vendor/addon-fit.js), its Unicode 11 addon (src/vendor/addon-unicode11.js) and its web links addon (src/vendor/addon-web-links.js): only what the terminals of the Orca screen use.
 interface XTerm {
   cols: number;
   rows: number;
@@ -29,6 +29,8 @@ interface XTerm {
   focus(): void;
   // Types `data` as a paste: wrapped in the bracketed-paste marks when the program asked for them (A-10).
   paste(data: string): void;
+  // Drops the selection (a link that was opened leaves none, as in Orca).
+  clearSelection(): void;
   dispose(): void;
   loadAddon(addon: unknown): void;
   onData(listener: (data: string) => void): { dispose(): void };
@@ -40,3 +42,10 @@ interface XTerm {
 declare const Terminal: new (options?: Record<string, unknown>) => XTerm;
 declare const FitAddon: { FitAddon: new () => { fit(): void; proposeDimensions(): { cols: number; rows: number } | undefined } };
 declare const Unicode11Addon: { Unicode11Addon: new () => unknown };
+// `handler` is called with the click on a link; `hover` and `leave` with the pointer over it; `urlRegex` finds the URLs in a line.
+declare const WebLinksAddon: {
+  WebLinksAddon: new (
+    handler: (event: MouseEvent, uri: string) => void,
+    options: { hover: (event: MouseEvent, uri: string) => void; leave: (event: MouseEvent, uri: string) => void; urlRegex: RegExp },
+  ) => unknown;
+};
