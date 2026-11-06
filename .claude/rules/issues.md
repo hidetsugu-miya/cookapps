@@ -260,6 +260,7 @@ Bad:  the issue says enhancement -> minor
 ### Release by merging the Release PR
 
 1. In `release/next`, take in main, correct the version, and write `CHANGELOG.md` and `docs/features.md`.
+   Read `README.md` against the changes that go out, with `readme-product`: fix a photo or a claim they make out of date in `release/next`, and write in the body that nothing needed it otherwise (at the owner's instruction, 2026-11-07). `README.md` and `docs/` keep the diff release-only.
 2. Run `run-e2e.sh`, push, run `post-checks.sh` (the release-only diff stands for the review), and merge.
 3. Tag the merge commit and push the tag (`versioning.md`), then watch the release (`review.md`).
 4. Run `plan-release.py close {tag}`: it closes the milestone and moves what is left in it to the next tag. Then reorder with `issue-plan` (from its step 4), so that the issues that moved are in the right order for the new tags.
