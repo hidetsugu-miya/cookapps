@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.49.0
+
+A-15 the Orca terminals can keep the light or the dark appearance (#128). The "ターミナルの配色" card of the Orca tab has a new "外観" row: "システムに合わせる" (the default, as before), "ライト" or "ダーク". With "ライト" or "ダーク" the terminals draw that appearance's theme whatever the system's appearance is.
+
+An image can be attached again in an Orca terminal and in the "Orca に渡す" pane, by pasting or dropping it (#135).
+
 ## v0.48.0
 
 A-14 the colors of the Orca terminals are chosen in the settings (#109). The new "ターミナルの配色" card of the Orca tab has a light and a dark row, each with a theme of Orca's built-in themes and its swatch, and the terminals follow the system's appearance. The first choice is taken from the themes picked in the Orca on this Mac. The chosen theme comes before the colors imported from Ghostty.
