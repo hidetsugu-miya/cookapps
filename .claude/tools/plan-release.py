@@ -81,6 +81,10 @@ def has(issue, label):
     return label in issue.labels
 
 
+def light_bug(issue):
+    return has(issue, "bug") and has(issue, "size:light")
+
+
 def counted(issue):
     return not has(issue, "documentation")
 
@@ -114,9 +118,14 @@ def parse_stream(text):
 
 
 def existing_order(free):
+    """The light bugs first, then the rest, each in the order of the previous plan.
+    A light bug that waits for a free issue keeps its place, so that it stays behind that issue."""
+    free_numbers = {i.number for i in free}
+
     def key(i):
+        first = 0 if light_bug(i) and not free_numbers & set(i.blocked_by) else 1
         v = parse_version(i.milestone)
-        return (0, v, i.created_at, i.number) if v else (1, (), i.created_at, i.number)
+        return (first, 0, v, i.created_at, i.number) if v else (first, 1, (), i.created_at, i.number)
 
     return sorted(free, key=key)
 
@@ -280,6 +289,21 @@ def validate_plan(plan, free, fixed, states):
                 problems.append(f"blocked_by: #{b} blocks #{n} but is not placed earlier in order")
             elif state == "open" and b not in free_by and b not in fixed_nums:
                 problems.append(f"blocked_by: #{n} names #{b}, which is open but not planned")
+
+    # a light bug comes before every other issue, except the issues that block it or an earlier light bug
+    needed = set()
+    for k, n in enumerate(order):
+        if n not in free_by or not light_bug(free_by[n]):
+            continue
+        todo = [n]
+        while todo:
+            for b in blocked_by.get(todo.pop(), []):
+                if b not in needed and b in free_by:
+                    needed.add(b)
+                    todo.append(b)
+        late = next((m for m in order[:k] if m in free_by and not light_bug(free_by[m]) and m not in needed), None)
+        if late is not None:
+            problems.append(f"order: #{n} is a bug with size:light but is placed after #{late}")
 
     # cycle
     color = {}
