@@ -16,8 +16,8 @@ import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
 import type { HandoffKind } from "./bindings/HandoffKind";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
-import type { OrcaSkill } from "./bindings/OrcaSkill";
 import type { OrcaStarted } from "./bindings/OrcaStarted";
+import type { OrcaViewport } from "./bindings/OrcaViewport";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
@@ -186,8 +186,8 @@ export interface Commands {
   orca_set_target: { args: { environment: string | null }; result: null };
   // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.
   orca_send: { args: { handle: string; text: string; environment: string | null }; result: null };
-  // Starts Claude in the worktree at `path` with `text` as its first prompt. The answer is the session as Orca's reply names it (`paneKey` and `handle` are null when the reply lacks them).
-  orca_launch: { args: { path: string; text: string; environment: string | null }; result: OrcaStarted };
+  // A-12: starts Claude in the worktree at `path` with no first prompt ("新規"). The answer is the session as Orca's reply names it (`paneKey` and `handle` are null when the reply lacks them). Never run twice.
+  orca_start: { args: { path: string; environment: string | null }; result: OrcaStarted };
   // A-9: starts a session in a worktree, or posts to a running one, with the instruction and, when `context` is not null, the content quoted as data after it. Never run twice.
   // For a running session the answer has only its `handle`.
   orca_handoff: { args: { destination: HandoffDestination; instruction: string; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
@@ -198,20 +198,25 @@ export interface Commands {
   orca_chat_older: { args: undefined; result: null };
   // Pauses (`true`, the window is hidden) or resumes the periodic reads of the session that is read; the connection and what is held stay.
   orca_chat_pause: { args: { paused: boolean }; result: null };
-  // The skills of Claude Code on the machine the app runs on (the CLI cannot list another machine's, so the target does not matter), as the commands to type (`/name`, `/plugin:name`), sorted.
-  orca_skills: { args: undefined; result: OrcaSkill[] };
-  // A-10: puts the image `data` (base64) in `.orca/drops/` of the worktree at `path` of the target `environment` and answers the text for Claude: the absolute path of the file, with a backslash before a blank or shell character. `name` only gives the file a name; PNG, JPEG, GIF and WebP up to 20 MiB, by the bytes. Not tried again: a failure carries its message.
-  orca_attach_image: { args: { path: string; name: string; data: string; environment: string | null }; result: string };
-  // A-10: the text of a post with images: the text without its trailing blanks, a blank line and each of `paths` (the answers of `orca_attach_image`) on a line of its own; only the paths when the text is blank.
-  orca_compose_text: { args: { text: string; paths: string[] }; result: string };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. A terminal that is already closed is a success.
   orca_close: { args: { handle: string; environment: string | null }; result: null };
   // A-11: answers the questions of a Claude session that waits (the picks are 0-based indexes into `options`), by typing digits and Tab into its terminal `handle` one key at a time, each only when the screen shows what it is for. Not tried again: a failure carries its message.
   orca_answer: { args: { handle: string; questions: { text: string; multi: boolean; options: string[]; picks: number[] }[]; environment: string | null }; result: null };
-  // The lines on the screen of the plain terminal `handle`, for the mirror (no colors).
-  orca_terminal_read: { args: { handle: string; environment: string | null }; result: string[] };
-  // Types `text` into the plain terminal `handle` as it is (no Enter is added).
-  orca_terminal_input: { args: { handle: string; text: string; environment: string | null }; result: null };
+  // The lines on the screen of the terminal `handle` of this machine (a Claude session's or a plain one), for the mirror (no colors).
+  orca_terminal_read: { args: { handle: string }; result: string[] };
+  // Types `text` into the terminal `handle` of this machine as it is (no Enter is added).
+  orca_terminal_input: { args: { handle: string; text: string }; result: null };
+  // A-12: the stream of the saved environment `environment`: the list goes to `channel` (an `OrcaStreamEvent` at a time) until it is closed or another is opened; only one runs.
+  orca_stream_open: { args: { environment: string; channel: unknown }; result: null };
+  orca_stream_close: { args: undefined; result: null };
+  // A-12: shows the terminal `handle` of the stream: its screen and its bytes go to `channel` (an `OrcaTermEvent` at a time). With `viewport` the terminal fits the pane; with null Orca's size stays.
+  orca_stream_terminal: { args: { handle: string; viewport: OrcaViewport | null; channel: unknown }; result: null };
+  // A-12: shows no terminal; Orca gives the one shown back its own size.
+  orca_stream_terminal_close: { args: undefined; result: null };
+  // A-12: the new size of the pane, for the terminal shown while it fits the pane.
+  orca_stream_viewport: { args: { viewport: OrcaViewport }; result: null };
+  // A-12: types `text` into the terminal shown as it is (no Enter is added); the answer says whether Orca took it.
+  orca_stream_input: { args: { text: string }; result: null };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

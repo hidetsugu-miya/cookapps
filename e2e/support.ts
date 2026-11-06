@@ -14,9 +14,10 @@ import type { OrcaChatItem } from "../ts/bindings/OrcaChatItem";
 import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
 import type { OrcaProject } from "../ts/bindings/OrcaProject";
 import type { OrcaRow } from "../ts/bindings/OrcaRow";
-import type { OrcaSkill } from "../ts/bindings/OrcaSkill";
 import type { OrcaSshTarget } from "../ts/bindings/OrcaSshTarget";
 import type { OrcaStatus } from "../ts/bindings/OrcaStatus";
+import type { OrcaStreamEvent } from "../ts/bindings/OrcaStreamEvent";
+import type { OrcaTermEvent } from "../ts/bindings/OrcaTermEvent";
 import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
@@ -501,7 +502,7 @@ export const connection = (
   claude: Claude = method === "apiKey" ? claudeKeyReady : subscription,
 ): ClaudeConnection => ({ method, subscription, apiKey, claude });
 
-// The Orca screen (A-6, A-8). `minutes` is how long ago the state began (the time of a running or waiting agent) or the agent ended (a done one). The row's icon follows its group unless `extra` says another status, and its project is `proj_{repo}`.
+// The Orca screen (A-6, A-8, A-12). `minutes` is how long ago the state began (the time of a running or waiting agent) or the agent ended (a done one). The row's icon follows its group unless `extra` says another status, and its project is `proj_{repo}`.
 const GROUP_STATUS: Record<OrcaRow["group"], OrcaStatus> = { waiting: "question", working: "working", done: "done" };
 export const orcaRow = (repo: string, branch: string, line: string, extra: Partial<OrcaRow> & { minutes?: number } = {}): OrcaRow => {
   const { minutes = 2, ...rest } = extra;
@@ -544,7 +545,33 @@ export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], ex
   ...extra,
 });
 
-export const orcaSkill = (command: string, description = ""): OrcaSkill => ({ command, description });
+// A-12: the list a saved environment streams, as `orca_stream_open`'s channel gets it.
+export const streamList = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], terminals: OrcaTerminal[] = []): OrcaStreamEvent => ({
+  kind: "list",
+  rows,
+  worktrees,
+  projects: projectsOf(rows, worktrees, terminals),
+  hosts: [],
+  terminals,
+});
+
+// Gives `event` to the channel of the last call of `command` (or the `nth`, counting from 0), as Rust does.
+const deliver = (command: string, event: unknown, nth: number) =>
+  browser.execute(
+    (id, c, e, n) => {
+      if (!window.__e2e_once__(id)) return;
+      const calls = (window as unknown as { __e2e_calls__: Record<string, { channel: { onmessage: (event: unknown) => void } }[]> }).__e2e_calls__[c];
+      calls.at(n)!.channel.onmessage(e);
+    },
+    onceId(),
+    command,
+    event,
+    nth,
+  );
+
+// A-12: an event of the stream of the list (`orca_stream_open`), and of the terminal shown (`orca_stream_terminal`).
+export const sendStream = (event: OrcaStreamEvent, nth = -1) => deliver("orca_stream_open", event, nth);
+export const sendTerm = (event: OrcaTermEvent, nth = -1) => deliver("orca_stream_terminal", event, nth);
 
 // The session history (A-7): the items the screen draws, and the delivery of an event to the channel the screen gave `orca_chat_open` (the last one, or the `nth` counting from 0).
 export const chatUser = (id: string, text: string, context: Extract<OrcaChatItem, { kind: "user" }>["context"] = null): OrcaChatItem => ({ kind: "user", id, text, context });
@@ -579,17 +606,7 @@ export const chatOpens = () =>
     return calls.map((c) => ({ ...c, channel: !!c.channel }));
   });
 
-export const sendChat = (event: OrcaChatEvent, nth = -1) =>
-  browser.execute(
-    (id, e, n) => {
-      if (!window.__e2e_once__(id)) return;
-      const calls = (window as unknown as { __e2e_calls__: Record<string, { channel: { onmessage: (event: unknown) => void } }[]> }).__e2e_calls__.orca_chat_open;
-      calls.at(n)!.channel.onmessage(e);
-    },
-    onceId(),
-    event,
-    nth,
-  );
+export const sendChat = (event: OrcaChatEvent, nth = -1) => deliver("orca_chat_open", event, nth);
 
 // Waits until `orca_chat_open` was called `times` times; the calls are read with `chatOpens`.
 export async function waitForOpens(times = 1) {

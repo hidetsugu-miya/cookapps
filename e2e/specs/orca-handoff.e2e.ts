@@ -6,6 +6,9 @@ import {
   chatItems,
   chatOpens,
   chatQuestion,
+  chatQuestions,
+  chatStatus,
+  chatTools,
   chatUser,
   claudeReady,
   count,
@@ -47,7 +50,7 @@ const started: OrcaStarted = { paneKey: "tab_new:leaf_9", handle: "term_new" };
 const newRow = () => orcaRow("example-app", "feat/a", "Fix the invoice", { minutes: 1, handle: "term_new", paneKey: "tab_new:leaf_9", path: "/work/example-app" });
 
 const bootOrca = (fixtures: Record<string, unknown> = {}) =>
-  boot({ inbox: inbox(), orca_overview: orcaOverview(sample(), worktrees()), orca_skills: [], ...fixtures });
+  boot({ inbox: inbox(), orca_overview: orcaOverview(sample(), worktrees()), ...fixtures });
 
 // ---- the three screens ----
 
@@ -162,7 +165,7 @@ describe("orca handoff", () => {
     expect(call.context.body).toContain("日時: ");
     expect(call.context.body).toContain(mailBody);
     // Nothing else was sent, and the Orca screen's own launch was not used.
-    expect(await callsOf("orca_launch")).toHaveLength(0);
+    expect(await callsOf("orca_start")).toHaveLength(0);
     expect(await callsOf(handoff)).toHaveLength(1);
   });
 
@@ -427,42 +430,32 @@ describe("orca handoff", () => {
     expect(await count(`${MAIL.pane} .ho-session-name`)).toBe(0);
   });
 
-  it("opens the session on the Orca screen, which reads its history, and the pane reads it again when the thread is opened again", async () => {
+  it("opens the session on the Orca screen, which selects its tab and shows its terminal, and the pane reads the history again when the thread is opened again", async () => {
     await openMail();
     await mock("orca_handoff", started);
-    await mock("orca_chat_close", null);
+    const close = await mock("orca_chat_close", null);
     await openPane(MAIL);
     await chooseWorktree(MAIL, "/work/example-app");
     await field(MAIL).setValue("原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();
     await waitForOpens(1);
+    const read = await mock("orca_terminal_read", ["$ claude"]);
     await $(`${MAIL.pane} [aria-label="Orca の画面で開く"]`).click();
     await expect($("#orca")).toBeDisplayed();
-    // The screen's own read takes it over from the pane: one session is read at a time.
-    const opens = await waitForOpens(2);
-    expect(opens[1]).toEqual({ environment: null, path: "/work/example-app", paneKey: "tab_new:leaf_9", channel: true });
-    await expect($('#orca-tabs [role="tab"][aria-selected="true"]')).toBeDisplayed();
-    // The history shows in the screen's box (the pane's one was wiped), with the folded content.
-    await sendChat(chatItems([chatUser("u1", "原因を調べて", { kind: "mail", title: "題", text: "本文" }), chatAssistant("a1", "調べます")]));
-    await waitForCount("#orca-items > *", 2);
-    expect(await textsOf("#orca-items .orca-ctx-label")).toEqual(["メール「題」2 字"]);
-    // Leaving the screen closes its own read.
+    await expect($('#orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new" });
+    // The screen reads no history: the pane, out of view, lets its read go.
+    await waitForCalls(close);
+    await browser.pause(1500);
+    expect(await chatOpens()).toHaveLength(1);
+    // The thread is open again: the pane reads the history again.
     await $("#nav-mail").click();
-    await browser.waitUntil(async () => (await callsOf("orca_chat_close")).length >= 1, { timeoutMsg: "the screen did not let its read go" });
-    // The thread is open again: the pane has the read back, and the screen's box is empty.
     await rowOf("read-threads", "Already read").$(".subject").click();
     await expect($(`${MAIL.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
-    await waitForOpens(3);
+    await waitForOpens(2);
     await sendChat(chatItems([chatAssistant("a9", "戻りました")]));
     await waitForCount(`${MAIL.pane} .orca-assistant`, 1);
-    expect(await count("#orca-items > *")).toBe(0);
-    // Going to the Orca screen again hands the read to it again; the pane's tick must not take it back or close it.
-    await $(`${MAIL.pane} [aria-label="Orca の画面で開く"]`).click();
-    await waitForOpens(4);
-    await browser.pause(1500);
-    expect(await chatOpens()).toHaveLength(4);
-    expect(await count(`${MAIL.pane} .orca-assistant`)).toBe(0);
   });
 
   it("opens from the header icon of a Todo, with its content as the card", async () => {
@@ -637,5 +630,439 @@ describe("orca handoff", () => {
     expect(call.context.title).toBe("Write report v2");
     expect(call.context.body).toContain("タスク: Write report v2");
     expect(call.context.body).toContain("Check the totals twice.");
+  });
+});
+
+// The history of a session (A-7) and the answer to a question in it (A-11), as the side pane draws them: the Orca screen shows terminals only (A-12).
+describe("orca handoff: the session history", () => {
+  const P = MAIL.pane;
+  const items = `${P} .ho-items`;
+  const statusLine = () => textsOf(`${P} .ho-chat-status`);
+  const chatTexts = () => textsOf(`${items} > *`);
+  const user = chatUser("u1", "Make the list narrower");
+  const answer = chatAssistant("a1", "I will narrow the **list** pane.\n\n- first\n- second");
+  const tools = (calls: [string, string][] = [["Read", "ts/orca.ts"], ["Edit", "ts/orca.ts"], ["Bash", "npm test"]], running: string | null = null) =>
+    chatTools("t1", `ツールを ${calls.length} 回実行`, calls, running);
+  const scrollBox = () => ({
+    atBottom: () =>
+      browser.execute((p) => {
+        const b = document.querySelector(`${p} .ho-chat`)!;
+        return b.scrollHeight - b.scrollTop - b.clientHeight < 2;
+      }, P),
+    top: () => browser.execute((p) => document.querySelector(`${p} .ho-chat`)!.scrollTop, P),
+    set: (y: number) =>
+      browser.execute(
+        (p, v) => {
+          document.querySelector(`${p} .ho-chat`)!.scrollTop = v;
+        },
+        P,
+        y,
+      ),
+    offsetOf: (id: string) =>
+      browser.execute((p, i) => document.querySelector(`${p} .ho-items [data-id="${i}"]`)!.getBoundingClientRect().top - document.querySelector(`${p} .ho-chat`)!.getBoundingClientRect().top, P, id),
+  });
+  const many = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => chatUser(`m${from + i}`, `message ${from + i}`));
+
+  // The pane of the mail on the session it started in example-app (pane tab_new:leaf_9, terminal term_new), with its history asked for once. `rows` is what the list holds after the send.
+  async function openSession(launched: OrcaStarted = started, rows = [...sample(), newRow()], fixtures: Record<string, unknown> = {}) {
+    await openMail(fixtures);
+    await mock("orca_handoff", launched);
+    await openPane(MAIL);
+    await chooseWorktree(MAIL, "/work/example-app");
+    await field(MAIL).setValue("原因を調べて");
+    await mock("orca_overview", orcaOverview(rows, worktrees()));
+    await sendButton(MAIL).click();
+    await waitForOpens(1);
+  }
+
+  // Forgets the session shown and hands the mail to the running session of example-api, whose history is asked for next (`times` opens in all).
+  async function switchSession(times: number) {
+    await $(`${P} [aria-label="閉じる"]`).click();
+    await $(MAIL.button).click();
+    await waitForCount(`${P} .ho-row`, 4);
+    await mock("orca_handoff", { paneKey: null, handle: "term_example-api" } satisfies OrcaStarted);
+    await rowByHandle(MAIL, "term_example-api").click();
+    await field(MAIL).setValue("こちらも");
+    await sendButton(MAIL).click();
+    await waitForOpens(times);
+  }
+
+  it("says it is loading until the first items come, and then nothing", async () => {
+    await openSession();
+    expect(await statusLine()).toEqual(["読み込んでいます…"]);
+    await sendChat(chatStatus("live"));
+    expect(await statusLine()).toEqual([""]);
+    await sendChat(chatItems([user]));
+    expect(await statusLine()).toEqual([""]);
+  });
+
+  it("draws the user's messages on the right, the agent's answers as Markdown and the tools as a folded line", async () => {
+    await openSession();
+    await sendChat(chatItems([user, answer, tools()]));
+    expect(await textsOf(`${items} .orca-user-text`)).toEqual(["Make the list narrower"]);
+    expect(await textsOf(`${items} .orca-assistant strong`)).toEqual(["list"]);
+    expect(await textsOf(`${items} .orca-assistant li`)).toEqual(["first", "second"]);
+    expect(await textsOf(`${items} .orca-tools-label`)).toEqual(["ツールを 3 回実行"]);
+    await expect($(`${items} .orca-tools-btn`)).toHaveAttribute("aria-expanded", "false");
+    await expect($(`${items} .orca-tool-list`)).not.toBeDisplayed();
+    // The user's bubble is right-aligned; the agent's text starts at the left.
+    const sides = await browser.execute((p) => {
+      const chat = document.querySelector(`${p} .ho-chat`)!.getBoundingClientRect();
+      const left = (selector: string) => document.querySelector(`${p} ${selector}`)!.getBoundingClientRect().left - chat.left;
+      return { user: left(".orca-user"), assistant: left(".orca-assistant") };
+    }, P);
+    expect(sides.user).toBeGreaterThan(sides.assistant + 50);
+  });
+
+  it("shows the agent's question unfolded, with its choices, and whether it waits or what was answered", async () => {
+    await openSession();
+    await sendChat(chatItems([chatQuestion("q1", null, true)]));
+    await expect($(`${items} .orca-question`)).toBeDisplayed();
+    await expect($(`${items} .orca-question-text`)).toHaveText("Which one?");
+    expect(await textsOf(`${items} .orca-question-label`)).toEqual(["First", "Second"]);
+    expect(await textsOf(`${items} .orca-question-desc`)).toEqual(["the first way"]);
+    await expect($(`${items} .orca-question-waiting`)).toHaveText("回答待ち");
+    await expect($(`${items} .orca-question-answer`)).not.toExist();
+    await sendChat(chatItems([chatQuestion("q1", "First", false)]));
+    await expect($(`${items} .orca-question-answer`)).toHaveText("回答: First");
+    await expect($(`${items} .orca-question-waiting`)).not.toExist();
+  });
+
+  // ---- answering a question (A-11) ----
+
+  const options = () => $$(`${items} .orca-pick-option`);
+  const pressedOptions = () => browser.execute((s) => [...document.querySelectorAll(`${s} .orca-pick-option`)].map((b) => b.getAttribute("aria-pressed")), items);
+  const sendAnswer = () => $(`${items} .orca-pick-send`);
+  const pickOption = async (n: number) => (await options())[n].click();
+  // A single choice of two, then a multiple choice of three.
+  const asking = () =>
+    chatQuestions("q1", true, [
+      ["Pick alpha?", false, ["Apple", "Avocado"]],
+      ["Pick beta?", true, ["Banana", "Berry", "Bean"]],
+    ]);
+  const pressedAll = (...states: boolean[]) => states.map(String);
+  const T = true;
+  const F = false;
+
+  it("draws a waiting question as choices, picks one of a single choice and any of a multiple choice, and sends nothing until the button is pressed", async () => {
+    await openSession();
+    const answerCall = await mock("orca_answer", null);
+    await sendChat(chatItems([asking()]));
+    await waitForCount(`${items} .orca-pick-option`, 5);
+    expect(await textsOf(`${items} .orca-question-text`)).toEqual(["Pick alpha?", "Pick beta?"]);
+    expect(await textsOf(`${items} .orca-question-label`)).toEqual(["Apple", "Avocado", "Banana", "Berry", "Bean"]);
+    await expect($(`${items} .orca-question-waiting`)).toHaveText("回答待ち");
+    await expect(sendAnswer()).toHaveText("回答を送る");
+    expect(await pressedOptions()).toEqual(pressedAll(F, F, F, F, F));
+    await expect(sendAnswer()).toBeDisabled();
+    // A single choice holds one pick: picking another moves it.
+    await pickOption(0);
+    expect(await pressedOptions()).toEqual(pressedAll(T, F, F, F, F));
+    await pickOption(1);
+    expect(await pressedOptions()).toEqual(pressedAll(F, T, F, F, F));
+    // Every question needs a pick before the button works.
+    await expect(sendAnswer()).toBeDisabled();
+    await pickOption(4);
+    await expect(sendAnswer()).toBeEnabled();
+    // A multiple choice toggles each choice, and no pick at all disables the button again.
+    await pickOption(2);
+    expect(await pressedOptions()).toEqual(pressedAll(F, T, T, F, T));
+    await pickOption(2);
+    await pickOption(4);
+    expect(await pressedOptions()).toEqual(pressedAll(F, T, F, F, F));
+    await expect(sendAnswer()).toBeDisabled();
+    expect(await callsOf(answerCall)).toEqual([]);
+  });
+
+  it("sends the picks of every question to the terminal of the session with one command, and keeps the button off until the question stops waiting", async () => {
+    await openSession();
+    const answerCall = await mock("orca_answer", holds);
+    await sendChat(chatItems([asking()]));
+    await waitForCount(`${items} .orca-pick-option`, 5);
+    await pickOption(1);
+    await pickOption(4);
+    await pickOption(2);
+    await sendAnswer().click();
+    expect(await waitForCalls(answerCall)).toEqual([
+      {
+        handle: "term_new",
+        questions: [
+          { text: "Pick alpha?", multi: false, options: ["Apple", "Avocado"], picks: [1] },
+          { text: "Pick beta?", multi: true, options: ["Banana", "Berry", "Bean"], picks: [2, 0] },
+        ],
+        environment: null,
+      },
+    ]);
+    // On its way: the button waits.
+    await expect(sendAnswer()).toHaveText("送信中…");
+    await expect(sendAnswer()).toBeDisabled();
+    await release(answerCall, null);
+    // The answer was taken, but the question still waits in the history: the button stays off.
+    await browser.pause(200);
+    await expect(sendAnswer()).toHaveText("送信中…");
+    await expect(sendAnswer()).toBeDisabled();
+    expect(await callsOf(answerCall)).toHaveLength(1);
+    // The history shows the answer: the choices give way to it.
+    await sendChat(chatItems([chatQuestion("q1", "Avocado", false)]));
+    await waitForCount(`${items} .orca-pick-option`, 0);
+    await expect($(`${items} .orca-question-answer`)).toHaveText("回答: Avocado");
+    expect(await count(`${items} .orca-pick-send`)).toBe(0);
+    expect(await count(`${items} .orca-question-waiting`)).toBe(0);
+  });
+
+  it("keeps the picks when the timeline is drawn again, and a session shown next starts with none", async () => {
+    await openSession();
+    await sendChat(chatItems([asking()]));
+    await waitForCount(`${items} .orca-pick-option`, 5);
+    await pickOption(0);
+    await pickOption(3);
+    await pickOption(4);
+    await sendChat(chatItems([asking(), chatAssistant("a2", "Waiting for you")]));
+    await waitForCount(`${items} .orca-assistant`, 1);
+    expect(await pressedOptions()).toEqual(pressedAll(T, F, F, T, T));
+    await expect(sendAnswer()).toBeEnabled();
+    await switchSession(2);
+    await sendChat(chatItems([asking()]));
+    await waitForCount(`${items} .orca-pick-option`, 5);
+    expect(await pressedOptions()).toEqual(pressedAll(F, F, F, F, F));
+  });
+
+  it("shows the message of a failed answer in the question, with the picks kept and the button back", async () => {
+    await openSession();
+    const answerCall = await mock("orca_answer", rejects("質問が画面に出ていません。ターミナルで答えてください"));
+    await sendChat(chatItems([asking()]));
+    await waitForCount(`${items} .orca-pick-option`, 5);
+    await pickOption(0);
+    await pickOption(3);
+    await sendAnswer().click();
+    await waitForCalls(answerCall);
+    await expect($(`${items} .orca-pick .pending.fail`)).toHaveText("質問が画面に出ていません。ターミナルで答えてください");
+    expect(await pressedOptions()).toEqual(pressedAll(T, F, F, T, F));
+    await expect(sendAnswer()).toHaveText("回答を送る");
+    await expect(sendAnswer()).toBeEnabled();
+    // Pressing again tries again, and the message goes.
+    await mock("orca_answer", null);
+    await sendAnswer().click();
+    await waitForCalls("orca_answer");
+    await expect(sendAnswer()).toHaveText("送信中…");
+    expect(await count(`${items} .orca-pick .pending.fail`)).toBe(0);
+  });
+
+  it("draws nothing of an answer that fails after another session was shown, and leaves that session's picks", async () => {
+    await openSession();
+    const answerCall = await mock("orca_answer", holds);
+    await sendChat(chatItems([asking()]));
+    await waitForCount(`${items} .orca-pick-option`, 5);
+    await pickOption(0);
+    await pickOption(3);
+    await sendAnswer().click();
+    await waitForCalls(answerCall);
+    await switchSession(2);
+    await sendChat(chatItems([asking()]));
+    await waitForCount(`${items} .orca-pick-option`, 5);
+    await pickOption(1);
+    await release(answerCall, rejects("質問が画面に出ていません。ターミナルで答えてください"));
+    await browser.pause(200);
+    expect(await count(`${items} .orca-pick .pending.fail`)).toBe(0);
+    expect(await pressedOptions()).toEqual(pressedAll(F, T, F, F, F));
+    await expect(sendAnswer()).toHaveText("回答を送る");
+  });
+
+  it("sends the answer to the saved environment of the session", async () => {
+    await openSession(started, [...sample(), newRow()], { orca_overview: orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }) });
+    const answerCall = await mock("orca_answer", null);
+    await sendChat(chatItems([chatQuestion("q1", null, true)]));
+    await waitForCount(`${items} .orca-pick-option`, 2);
+    await pickOption(0);
+    await sendAnswer().click();
+    expect(await waitForCalls(answerCall)).toEqual([{ handle: "term_new", questions: [{ text: "Which one?", multi: false, options: ["First", "Second"], picks: [0] }], environment: "Studio" }]);
+  });
+
+  it("says so when the session has no terminal, and sends nothing", async () => {
+    await openSession({ paneKey: "tab_new:leaf_9", handle: null }, [...sample(), { ...newRow(), handle: null }]);
+    const answerCall = await mock("orca_answer", null);
+    await sendChat(chatItems([chatQuestion("q2", null, true)]));
+    await waitForCount(`${items} .orca-pick-option`, 2);
+    await pickOption(1);
+    await sendAnswer().click();
+    await expect($(`${items} .orca-pick .pending.fail`)).toHaveText("このセッションには送れません");
+    expect(await callsOf(answerCall)).toEqual([]);
+    await expect(sendAnswer()).toBeEnabled();
+  });
+
+  it("draws no choices for a question that is answered, or that has a question with no choices", async () => {
+    await openSession();
+    await sendChat(chatItems([chatQuestion("q1", "First", false), chatQuestions("q2", true, [["Why?", false, []]])]));
+    await waitForCount(`${items} .orca-question`, 2);
+    expect(await count(`${items} .orca-pick-option`)).toBe(0);
+    expect(await count(`${items} .orca-pick-send`)).toBe(0);
+    await expect($(`${items} .orca-question-answer`)).toHaveText("回答: First");
+    await expect($(`${items} .orca-question-waiting`)).toHaveText("回答待ち");
+  });
+
+  it("rules the cells of a table in the agent's answer", async () => {
+    await openSession();
+    await sendChat(chatItems([chatAssistant("a1", "| a | b |\n|---|---|\n| 1 | 2 |")]));
+    await expect($(`${items} .orca-assistant td`)).toExist();
+    for (const cell of ["th", "td"]) {
+      const border = await browser.execute((s) => getComputedStyle(document.querySelector(s)!).borderTopWidth, `${items} .orca-assistant ${cell}`);
+      expect(border).toBe("1px");
+    }
+  });
+
+  it("does not load a remote image of the agent's answer", async () => {
+    await openSession();
+    await sendChat(chatItems([chatAssistant("a1", "![logo](https://example.com/logo.png) is shown")]));
+    expect(await textsOf(`${items} .orca-assistant`)).toEqual(["logo is shown"]);
+    await expect($(`${items} img`)).not.toExist();
+  });
+
+  it("replaces the timeline from the index an event names", async () => {
+    await openSession();
+    await sendChat(chatItems([user, chatAssistant("a1", "Narrowing now."), tools()]));
+    await sendChat(chatItems([chatAssistant("a2", "Done."), chatUser("u2", "Thanks")], 2));
+    expect(await chatTexts()).toEqual(["Make the list narrower", "Narrowing now.", "Done.", "Thanks"]);
+    // From the start, and shorter: the rest is dropped.
+    await sendChat(chatItems([chatUser("u3", "Only one")]));
+    expect(await chatTexts()).toEqual(["Only one"]);
+  });
+
+  it("folds and unfolds the tool calls, and keeps a run open while it grows and the timeline is drawn again", async () => {
+    await openSession();
+    const button = () => $(`${items} .orca-tools-btn`);
+    const list = () => $(`${items} .orca-tool-list`);
+    await sendChat(chatItems([user, tools([["Read", "ts/orca.ts"]])]));
+    await button().click();
+    await expect(button()).toHaveAttribute("aria-expanded", "true");
+    expect(await textsOf(`${items} .orca-tool-call`)).toEqual(["Read  ts/orca.ts"]);
+    // The run grows (the same id, drawn again from its index): it stays open.
+    await sendChat(chatItems([tools([["Read", "ts/orca.ts"], ["Bash", "npm test"], ["TodoWrite", ""]])], 1));
+    await expect(button()).toHaveAttribute("aria-expanded", "true");
+    await expect(list()).toBeDisplayed();
+    expect(await textsOf(`${items} .orca-tool-call`)).toEqual(["Read  ts/orca.ts", "Bash  npm test", "TodoWrite"]);
+    // A whole redraw keeps it too.
+    await sendChat(chatItems([user, tools([["Read", "ts/orca.ts"], ["Bash", "npm test"], ["TodoWrite", ""]])]));
+    await expect(list()).toBeDisplayed();
+    await button().click();
+    await expect(button()).toHaveAttribute("aria-expanded", "false");
+    await expect(list()).not.toBeDisplayed();
+    await sendChat(chatItems([tools([["Read", "ts/orca.ts"]])], 1));
+    await expect(button()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows the running summary of a run still going while the agent is working, and the summary when it is not", async () => {
+    await openSession();
+    await sendChat(chatItems([tools([["Edit", "ts/orca.ts"]], "ツールを実行中")]));
+    expect(await textsOf(`${items} .orca-tools-label`)).toEqual(["ツールを実行中"]);
+    // The agent is done now: the read after a follow-up says so, and the label is the summary.
+    const overview = await mock("orca_overview", orcaOverview([...sample(), { ...newRow(), group: "done", status: "done" }], worktrees()));
+    await mock("orca_send", null);
+    await field(MAIL).setValue("続けて");
+    await sendButton(MAIL).click();
+    await waitForCalls(overview);
+    await browser.waitUntil(async () => (await textsOf(`${items} .orca-tools-label`))[0] === "ツールを 1 回実行", { timeoutMsg: "the label never became the summary" });
+  });
+
+  it("shows a run with no running summary by its summary even while the agent works", async () => {
+    await openSession();
+    await sendChat(chatItems([tools()]));
+    expect(await textsOf(`${items} .orca-tools-label`)).toEqual(["ツールを 3 回実行"]);
+  });
+
+  it("shows the reconnecting and unavailable messages above the chat, and takes them away when the read is live", async () => {
+    await openSession();
+    await sendChat(chatItems([user]));
+    await sendChat(chatStatus("reconnecting", "Orca に接続できません。つなぎ直しています"));
+    expect(await statusLine()).toEqual(["Orca に接続できません。つなぎ直しています"]);
+    await expect($(`${P} .ho-chat-status .pending`)).toBeDisplayed();
+    // What was drawn stays.
+    expect(await chatTexts()).toEqual(["Make the list narrower"]);
+    await sendChat(chatStatus("unavailable", "このセッションの履歴は読めません"));
+    expect(await statusLine()).toEqual(["このセッションの履歴は読めません"]);
+    await sendChat(chatStatus("live"));
+    expect(await statusLine()).toEqual([""]);
+  });
+
+  it("shows the message of a history that could not be opened", async () => {
+    await openMail();
+    await mock("orca_chat_open", rejects("エージェントの場所が正しくありません"));
+    await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseWorktree(MAIL, "/work/example-app");
+    await field(MAIL).setValue("原因を調べて");
+    await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
+    await sendButton(MAIL).click();
+    await waitForOpens();
+    await browser.waitUntil(async () => (await statusLine())[0] === "エージェントの場所が正しくありません", { timeoutMsg: "the message never showed" });
+  });
+
+  it("pauses the history read while the window is hidden, and resumes it when shown", async () => {
+    await openSession();
+    const pause = await mock("orca_chat_pause", null);
+    // fixtures.js makes the page report a shown window; the spec turns it hidden and tells the page.
+    const setHidden = (hidden: boolean) =>
+      browser.execute(
+        (id, h) => {
+          if (!window.__e2e_once__(id)) return;
+          Object.defineProperty(document, "hidden", { get: () => h, configurable: true });
+          document.dispatchEvent(new Event("visibilitychange"));
+        },
+        onceId(),
+        hidden,
+      );
+    await setHidden(true);
+    expect(await waitForCalls(pause)).toEqual([{ paused: true }]);
+    await setHidden(false);
+    expect(await waitForCalls(pause, 2)).toEqual([{ paused: true }, { paused: false }]);
+  });
+
+  it("ignores the events of a channel that is no longer the current one", async () => {
+    await openSession();
+    await switchSession(2);
+    await sendChat(chatItems([chatUser("old", "From the first session")]), 0);
+    expect(await chatTexts()).toEqual([]);
+    await sendChat(chatItems([chatUser("new", "From the second session")]), 1);
+    expect(await chatTexts()).toEqual(["From the second session"]);
+  });
+
+  it("scrolls to the bottom when a session is opened, and stays at the bottom as items arrive", async () => {
+    await openSession();
+    await sendChat(chatItems(many(0, 40)));
+    expect(await scrollBox().atBottom()).toBe(true);
+    expect(await scrollBox().top()).toBeGreaterThan(0);
+    await sendChat(chatItems(many(40, 43), 40));
+    expect(await scrollBox().atBottom()).toBe(true);
+  });
+
+  it("does not move the scroll position when items arrive while it is scrolled up", async () => {
+    await openSession();
+    await sendChat(chatItems(many(0, 40)));
+    await scrollBox().set(300);
+    const before = await scrollBox().offsetOf("m10");
+    await sendChat(chatItems(many(40, 43), 40));
+    expect(await scrollBox().top()).toBeCloseTo(300, 0);
+    expect(await scrollBox().offsetOf("m10")).toBeCloseTo(before, 0);
+    expect(await scrollBox().atBottom()).toBe(false);
+  });
+
+  it("offers older history while there is more, reads it on a press, and keeps the message in view where it is when it arrives", async () => {
+    await openSession();
+    const older = await mock("orca_chat_older", null);
+    const olderButton = () => $(`${P} .ho-older`);
+    await expect(olderButton()).not.toBeDisplayed();
+    await sendChat(chatItems(many(10, 50), 0, true));
+    await expect(olderButton()).toBeDisplayed();
+    await expect(olderButton()).toHaveText("以前の履歴を読む");
+    await scrollBox().set(400);
+    await olderButton().click();
+    expect(await waitForCalls(older)).toEqual([null]);
+    // Measured after the press: the button is at the top of the list, so the driver scrolls up to it.
+    const before = await scrollBox().offsetOf("m20");
+    // The older page arrives as a redraw from the start with no more to read.
+    await sendChat(chatItems(many(0, 50), 0, false));
+    await expect(olderButton()).not.toBeDisplayed();
+    // scrollTop moves in whole pixels.
+    expect(Math.abs((await scrollBox().offsetOf("m20")) - before)).toBeLessThan(2);
+    expect(await textsOf(`${items} > *`)).toHaveLength(50);
   });
 });
