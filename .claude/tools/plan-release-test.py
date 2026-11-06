@@ -461,7 +461,11 @@ class DeriveGroups(unittest.TestCase):
         self.assertEqual(slot_view(pr.allocate(ordered, [], "v0.39.2")), [("v0.39.3", [1, 2, 3]), ("v0.39.4", [4, 5])])
 
 
-HOOK = os.path.join(os.path.dirname(here), "hooks", "post-gh.sh")
+# .claude/hooks/ is untracked, so a worktree has none: use the main checkout's
+_common = subprocess.run(
+    ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=here, check=True, capture_output=True, text=True
+).stdout.strip()
+HOOK = os.path.join(os.path.dirname(_common), ".claude", "hooks", "post-gh.sh")
 
 
 class Hook(unittest.TestCase):
