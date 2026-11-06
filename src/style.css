@@ -143,7 +143,9 @@ h1, h2 { flex: 1; font-size: 15px; margin: 0; overflow: hidden; text-overflow: e
 .msg-head.folded .avatar { justify-self: center; }
 .msg-head.folded .snip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5e5e5e; }
 .msg-body { margin: 12px 0 0 56px; }
-.plain { white-space: pre-wrap; overflow-wrap: anywhere; font-family: "HackGen Console NF", ui-monospace, Menlo, monospace; font-size: 13px; }
+/* HackGen draws U+3000 as a dotted box, so this face leaves it out; the next font in `.plain` draws it as a blank of full width. */
+@font-face { font-family: "HackGen Console NF no U+3000"; src: local("HackGen Console NF"); unicode-range: U+0-2FFF, U+3001-10FFFF; }
+.plain { white-space: pre-wrap; overflow-wrap: anywhere; font-family: "HackGen Console NF no U+3000", ui-monospace, Menlo, monospace; font-size: 13px; }
 .plain a { color: var(--accent); }
 #messages iframe { display: block; width: 100%; border: 0; }
 /* The images switch is one small line of text above the body, its button drawn as a link. */
