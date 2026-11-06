@@ -12,10 +12,9 @@ import { showError } from "./view.js";
 let current: GhosttyImport | null = null;
 let importing = false;
 
-// A list of entries under a heading; `reason` is shown beside an entry that has one.
+// A block (the one with the id) of a heading with the number of entries, and the list of entries; `reason` is shown beside an entry that has one.
 function report(id: string, title: string, entries: { entry: string; reason?: string }[]) {
   const list = tag("ul");
-  list.id = id;
   for (const { entry, reason } of entries) {
     const item = tag("li");
     item.append(code(entry));
@@ -23,6 +22,7 @@ function report(id: string, title: string, entries: { entry: string; reason?: st
     list.append(item);
   }
   const box = tag("div", "ghostty-report");
+  box.id = id;
   box.append(tag("h3", "", `${title}（${entries.length}）`), ...(entries.length ? [list] : []));
   return box;
 }
