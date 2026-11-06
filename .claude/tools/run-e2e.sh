@@ -3,6 +3,7 @@
 # ビルドと E2E の出力は .claude/e2e/{HEAD の SHA}.log に残す（同じ HEAD で再実行すると上書き）。後から回数や失敗を検証するため。
 # 使い方: run-e2e.sh [checkout のパス]（省略時はカレント）。終了コードは E2E の結果。
 # 作業ツリーが汚れていれば、記録を書かずに exit 2 で止まる（記録は HEAD のコミットの中身についてだけ言うため）。
+# node_modules が無ければ、先に npm ci する（ログに入る）。
 set -uo pipefail
 cd "${1:-.}" || exit 2
 root=$(git rev-parse --show-toplevel) && cd "$root" || exit 2
@@ -15,7 +16,9 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)
 
 mkdir -p "$main/.claude/e2e" || exit 2
 log="$main/.claude/e2e/$sha.log"
-mise exec -- npm run e2e:build >"$log" 2>&1 && mise exec -- npm run e2e >>"$log" 2>&1
+# node_modules は追跡されないので、後から git worktree add した worktree には無い。無ければ npm ci する。
+{ [ -d node_modules ] || mise exec -- npm ci; } >"$log" 2>&1 \
+  && mise exec -- npm run e2e:build >>"$log" 2>&1 && mise exec -- npm run e2e >>"$log" 2>&1
 code=$?
 
 clean=true
