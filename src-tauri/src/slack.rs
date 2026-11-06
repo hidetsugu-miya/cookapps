@@ -1926,11 +1926,10 @@ impl TimelineCache {
         joined: &HashSet<&str>,
     ) {
         let mut history = self.history.lock().unwrap();
-        let current: History = history
+        let current = history
             .iter()
             .filter(|((t, _), _)| t == team_id)
-            .map(|((_, channel), read)| (channel.clone(), read.clone()))
-            .collect();
+            .map(|((_, channel), read)| (channel, read));
         let kept = keep_newer(kept, current, started, joined);
         history.retain(|(t, _), _| t != team_id);
         history.extend(
@@ -1939,12 +1938,13 @@ impl TimelineCache {
         );
     }
 
-    /// The channel's remembered messages become `messages`, read now (a read of the channel alone, after an event of Socket Mode).
-    fn put_channel_history(&self, team_id: &str, channel: &str, messages: Vec<Raw>) {
-        self.history.lock().unwrap().insert(
-            (team_id.to_owned(), channel.to_owned()),
-            (Instant::now(), messages),
-        );
+    /// The channel's remembered messages become `messages`, read at `at`: when the call began (a read of the channel alone, after an event of Socket Mode),
+    /// so that a full read that began after it is not taken for older than it.
+    fn put_channel_history(&self, team_id: &str, channel: &str, messages: Vec<Raw>, at: Instant) {
+        self.history
+            .lock()
+            .unwrap()
+            .insert((team_id.to_owned(), channel.to_owned()), (at, messages));
     }
 
     /// The workspace's timeline reads stop for `wait` (or the rest of an earlier stop, if that is longer).
@@ -2850,16 +2850,17 @@ fn next_history(
 }
 
 /// `next`, with the entries of `current` that were read after `started` and belong to `joined` in place of the full read's own: an event read them while the full read was on its way.
-fn keep_newer(
+fn keep_newer<'a>(
     mut next: History,
-    current: History,
+    current: impl Iterator<Item = (&'a String, &'a (Instant, Vec<Raw>))>,
     started: Instant,
     joined: &HashSet<&str>,
 ) -> History {
+    // Only the entries that are kept are cloned.
     next.extend(
         current
-            .into_iter()
-            .filter(|(channel, (at, _))| *at > started && joined.contains(channel.as_str())),
+            .filter(|(channel, (at, _))| *at > started && joined.contains(channel.as_str()))
+            .map(|(channel, read)| (channel.clone(), read.clone())),
     );
     next
 }
@@ -4034,9 +4035,10 @@ async fn fill_workspace(
         None => read.scopes = cache.scopes(&team_id),
     }
     let next = next_history(&list, history, fresh, Instant::now());
-    read.pending = pending_channels(&list, &next);
     let joined: HashSet<&str> = list.iter().map(|c| c.id.as_str()).collect();
     cache.replace_history(&team_id, next, started, &joined);
+    // Counted from what is kept, which has the channels events read meanwhile.
+    read.pending = pending_channels(&list, &cache.team_history(&team_id));
     match first_error {
         Some(e) if read_ok == 0 => Err(e),
         Some(e) => {
@@ -6122,9 +6124,14 @@ mod tests {
         let copy = cache.team_history("T1");
         std::thread::sleep(Duration::from_millis(5));
         // Meanwhile events are read: C1 gets a new message, C3 had never been read, C4 is no longer in the list.
-        cache.put_channel_history("T1", "C1", vec![raw("C1", "1.2"), raw("C1", "1.1")]);
-        cache.put_channel_history("T1", "C3", vec![raw("C3", "3.1")]);
-        cache.put_channel_history("T1", "C4", vec![raw("C4", "4.1")]);
+        cache.put_channel_history(
+            "T1",
+            "C1",
+            vec![raw("C1", "1.2"), raw("C1", "1.1")],
+            Instant::now(),
+        );
+        cache.put_channel_history("T1", "C3", vec![raw("C3", "3.1")], Instant::now());
+        cache.put_channel_history("T1", "C4", vec![raw("C4", "4.1")], Instant::now());
         // The full read ends with a result fetched before the events: C2 is new, C1 is as it was.
         let fresh = HashMap::from([
             ("C1".to_owned(), vec![raw("C1", "1.1")]),
@@ -6141,12 +6148,36 @@ mod tests {
         ts.sort();
         // C1 and C3 keep what the events read; C2 takes the full read's; C4 is dropped as before.
         assert_eq!(ts, ["1.1", "1.2", "2.2", "3.1"]);
+        // C3 was read by an event, so no channel of the list is left to read: counted from the history kept, not from the full read's own.
+        assert_eq!(pending_channels(&list, &cache.team_history("T1")), 0);
+    }
+
+    #[test]
+    fn an_event_read_is_dated_by_when_it_was_fetched_not_when_it_was_written() {
+        let cache = TimelineCache::default();
+        let fetched = Instant::now();
+        std::thread::sleep(Duration::from_millis(5));
+        let started = Instant::now();
+        std::thread::sleep(Duration::from_millis(5));
+        // The event's call began before the full read did, and its answer was written after.
+        cache.put_channel_history("T1", "C1", vec![raw("C1", "1.1")], fetched);
+        let list = vec![channel("C1")];
+        let fresh = HashMap::from([("C1".to_owned(), vec![raw("C1", "1.2")])]);
+        let next = next_history(&list, cache.team_history("T1"), fresh, Instant::now());
+        let joined: HashSet<&str> = ["C1"].into();
+        cache.replace_history("T1", next, started, &joined);
+        let ts: Vec<String> = cache
+            .team_messages("T1")
+            .into_iter()
+            .map(|m| m.ts)
+            .collect();
+        assert_eq!(ts, ["1.2"]);
     }
 
     #[test]
     fn a_channel_read_before_the_full_read_began_takes_the_full_reads_result() {
         let cache = TimelineCache::default();
-        cache.put_channel_history("T1", "C1", vec![raw("C1", "1.1")]);
+        cache.put_channel_history("T1", "C1", vec![raw("C1", "1.1")], Instant::now());
         std::thread::sleep(Duration::from_millis(5));
         let started = Instant::now();
         let list = vec![channel("C1")];
@@ -6176,9 +6207,14 @@ mod tests {
             Instant::now(),
             &HashSet::new(),
         );
-        cache.put_channel_history("T1", "C1", vec![raw("C1", "1.2"), raw("C1", "1.3")]);
+        cache.put_channel_history(
+            "T1",
+            "C1",
+            vec![raw("C1", "1.2"), raw("C1", "1.3")],
+            Instant::now(),
+        );
         // A channel that was never read comes in with it.
-        cache.put_channel_history("T1", "C3", vec![raw("C3", "3.1")]);
+        cache.put_channel_history("T1", "C3", vec![raw("C3", "3.1")], Instant::now());
         let mut ts: Vec<String> = cache
             .team_messages("T1")
             .into_iter()

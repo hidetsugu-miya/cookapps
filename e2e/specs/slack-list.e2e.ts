@@ -1677,6 +1677,18 @@ describe("slack list: Socket Mode", () => {
     await release(read, timeline(sample(), { refreshSecs: 300 }));
   });
 
+  it("reads the list in full once the read that was on its way is done, for a connection made meanwhile", async () => {
+    await openList(timeline(sample(), { refreshSecs: 2 }));
+    await waitForCount("#slack-feed .feed-row", 2);
+    const read = await mock("slack_timeline", holds);
+    await waitForCalls(read);
+    await emitEvent("slack-socket-resync");
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([null]);
+    await release(read, timeline(sample(), { refreshSecs: 300 }));
+    expect(await waitForCalls(read, 2)).toEqual([null, null]);
+  });
+
   it("makes the list again when a connection changes state, so that the wait follows it", async () => {
     await openList(timeline(sample(), { refreshSecs: 300 }));
     await waitForCount("#slack-feed .feed-row", 2);

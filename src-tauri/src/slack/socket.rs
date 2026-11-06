@@ -24,12 +24,11 @@ use ts_rs::TS;
 use url::Url;
 
 use super::{
-    blocking, call, call_scoped_retrying, check_threads, check_watched, held_messages,
-    is_bot_token, kept_channel_name, load_hidden, load_thread_seen, load_watched, load_workspaces,
-    lookup_users, needing_lookup, own_user_id, people_of, raw_of, refresh_read_marks,
-    thread_candidates, token_key, token_of, unread_threads, valid_channel, valid_ts, Channel,
-    Hidden, Payload, Raw, SlackState, TimelineCache, WatchKey, Watched, Workspace, HISTORY_LIMIT,
-    USER_LOOKUPS,
+    blocking, call, call_scoped_retrying, check_threads, check_watched, is_bot_token,
+    kept_channel_name, load_hidden, load_watched, load_workspaces, lookup_users, needing_lookup,
+    own_user_id, people_of, raw_of, refresh_read_marks, token_key, token_of, valid_channel,
+    valid_ts, Channel, Hidden, Payload, Raw, SlackState, TimelineCache, WatchKey, Watched,
+    Workspace, HISTORY_LIMIT, USER_LOOKUPS,
 };
 use crate::{
     auth::{config_dir, delete_entry, Auth},
@@ -60,6 +59,8 @@ const SILENCE_LIMIT: Duration = Duration::from_secs(90);
 const CONNECT_DEADLINE: Duration = Duration::from_secs(15);
 const BACKOFF_FIRST: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// A connection must last this long after its hello for the waits to start over (`backoff_resets`).
+const STABLE_AFTER: Duration = Duration::from_secs(60);
 const BAD_APP_TOKEN: &str = "App-Level Token は xapp- で始まります";
 const NO_SUCH_WORKSPACE: &str = "このワークスペースは接続されていません";
 
@@ -240,7 +241,7 @@ impl Pending {
     }
 }
 
-/// `refreshes` with each channel once, in the order the channels first come, and the threads of all its entries (`THREADS_PER_REFRESH` at most).
+/// `refreshes` with each channel once, in the order the channels first come, and the threads of all its entries (the newest `THREADS_PER_REFRESH` at most).
 fn merge_refreshes(refreshes: Vec<Refresh>) -> Vec<Refresh> {
     let mut merged: Vec<Refresh> = Vec::new();
     for refresh in refreshes {
@@ -255,10 +256,39 @@ fn merge_refreshes(refreshes: Vec<Refresh>) -> Vec<Refresh> {
             None => merged.push(refresh),
         }
     }
+    // The threads come oldest event first: the newest are kept.
     for refresh in &mut merged {
-        refresh.threads.truncate(THREADS_PER_REFRESH);
+        let extra = refresh.threads.len().saturating_sub(THREADS_PER_REFRESH);
+        refresh.threads.drain(..extra);
     }
     merged
+}
+
+/// Whether the token stored for the workspace is the one Slack refused: only then is it deleted, so that a token registered meanwhile stays.
+fn delete_refused(refused: &str, stored: Option<&str>) -> bool {
+    stored == Some(refused)
+}
+
+/// Whether a connection that said hello and then lasted `stable_for` (`None`: it never did) was steady enough to start the waits over:
+/// one that drops right after the hello would otherwise be connected again every second, and each hello starts a full read.
+fn backoff_resets(stable_for: Option<Duration>) -> bool {
+    stable_for.is_some_and(|lasted| lasted >= STABLE_AFTER)
+}
+
+/// The threads to check with `conversations.replies`, each with its reply count: the one on its parent message among `found` (the history just read), else `known` (the count kept for it); a thread with neither is left out.
+fn thread_checks(
+    threads: Vec<WatchKey>,
+    found: &[Raw],
+    known: impl Fn(&WatchKey) -> Option<u32>,
+) -> Vec<(WatchKey, u32)> {
+    threads
+        .into_iter()
+        .filter_map(|key| {
+            let parent = found.iter().find(|m| m.ts == key.2).map(|m| m.reply_count);
+            let count = parent.or_else(|| known(&key))?;
+            Some((key, count))
+        })
+        .collect()
 }
 
 /// The channel's name when a read of it should be made now: it is not kept off the list (S-9), `listed` (its name in the channel list the app holds) says it is a channel the user is in,
@@ -562,8 +592,10 @@ fn install_crypto_provider() {
 
 /// Why a connection could not be made.
 enum Failure {
-    /// The token is gone or Slack refuses it for good: the connection is not tried again.
-    Gone,
+    /// The token is gone or Slack refuses it for good: the connection is not tried again. `refused` is the token Slack refused (`None`: there was none).
+    Gone {
+        refused: Option<String>,
+    },
     Retry(String),
 }
 
@@ -573,13 +605,17 @@ type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 async fn open_socket(app: &AppHandle, team_id: &str) -> Result<Socket, Failure> {
     let token = match read_app_secret(team_id.to_owned()).await {
         Ok(Some(token)) => token,
-        Ok(None) => return Err(Failure::Gone),
+        Ok(None) => return Err(Failure::Gone { refused: None }),
         Err(e) => return Err(Failure::Retry(e)),
     };
     let auth = app.state::<Auth>();
     let reply = match call(auth.http(), &token, "apps.connections.open", Payload::Empty).await {
         Ok(reply) => reply,
-        Err(e) if e.token_dead => return Err(Failure::Gone),
+        Err(e) if e.token_dead => {
+            return Err(Failure::Gone {
+                refused: Some(token),
+            })
+        }
         Err(e) => return Err(Failure::Retry(e.message)),
     };
     let url = reply["url"]
@@ -594,10 +630,10 @@ async fn open_socket(app: &AppHandle, team_id: &str) -> Result<Socket, Failure> 
     Ok(socket)
 }
 
-/// How a session ended: whether Slack said hello in it, and whether to connect again without a wait.
+/// How a session ended: when Slack said hello in it (`None`: it did not), and whether to connect again without a wait.
 #[derive(Default)]
 struct SessionEnd {
-    greeted: bool,
+    greeted_at: Option<Instant>,
     fast: bool,
 }
 
@@ -626,7 +662,7 @@ where
                 match message {
                     Message::Text(text) => match parse_frame(text.as_str(), team_id) {
                         Frame::Hello => {
-                            end.greeted = true;
+                            end.greeted_at = Some(Instant::now());
                             on_hello();
                         }
                         Frame::Disconnect(Disconnect::Warning) | Frame::Other => {}
@@ -696,14 +732,22 @@ async fn keep_connected(
                 };
                 session(&mut socket, team_id, &tx, DEBOUNCE, &mut on_hello).await
             }
-            Err(Failure::Gone) => {
+            Err(Failure::Gone { refused }) => {
                 log_failure(
                     COMMAND,
                     team_id,
                     "App-Level Token が使えないため、リアルタイム更新を止めます".to_owned(),
                 );
-                if let Err(e) = delete_app_secret(team_id.to_owned()).await {
-                    log_failure(COMMAND, team_id, e);
+                // Under the lock of the commands that register a token, and only if the token stored is the one refused: one registered meanwhile stays.
+                let _files = state.files.lock().await;
+                let stored = read_app_secret(team_id.to_owned()).await.unwrap_or(None);
+                if refused
+                    .as_deref()
+                    .is_some_and(|token| delete_refused(token, stored.as_deref()))
+                {
+                    if let Err(e) = delete_app_secret(team_id.to_owned()).await {
+                        log_failure(COMMAND, team_id, e);
+                    }
                 }
                 state.sockets.finish(app, team_id, generation);
                 return;
@@ -713,7 +757,7 @@ async fn keep_connected(
                 SessionEnd::default()
             }
         };
-        if end.greeted {
+        if backoff_resets(end.greeted_at.map(|at| at.elapsed())) {
             attempt = 0;
         }
         state
@@ -741,7 +785,12 @@ fn thread_people(cache: &TimelineCache, key: &WatchKey) -> Vec<String> {
 /// Reads the channel again, as a read of the list does: `conversations.history`, the read position when none is kept, the threads the events named
 /// (`conversations.replies`, as the watched threads and the threads with unread replies are checked), and the names of the people the new messages draw.
 /// A channel kept off the list (S-9), one that is not in the channel list kept, or a workspace Slack has rate-limited is left alone. Whether the cache changed.
-async fn refresh_channel(app: &AppHandle, team_id: &str, request: &Refresh) -> bool {
+async fn refresh_channel(
+    app: &AppHandle,
+    team_id: &str,
+    request: &Refresh,
+    hidden: &[Hidden],
+) -> bool {
     const COMMAND: &str = "slack_socket";
     let state = app.state::<SlackState>();
     let auth = app.state::<Auth>();
@@ -753,9 +802,8 @@ async fn refresh_channel(app: &AppHandle, team_id: &str, request: &Refresh) -> b
             return false;
         }
     };
-    let hidden = load_hidden(&dir).await;
     let Some(name) = name_to_read(
-        &hidden,
+        hidden,
         team_id,
         &request.channel,
         kept_channel_name(&state.channels, team_id, &request.channel),
@@ -780,6 +828,8 @@ async fn refresh_channel(app: &AppHandle, team_id: &str, request: &Refresh) -> b
         ("channel", channel.id.clone()),
         ("limit", HISTORY_LIMIT.to_owned()),
     ];
+    // The read is dated by when the call began: a full read that began after it has newer data.
+    let fetched_at = Instant::now();
     let found: Vec<Raw> = match call_scoped_retrying(
         http,
         &token,
@@ -818,7 +868,22 @@ async fn refresh_channel(app: &AppHandle, team_id: &str, request: &Refresh) -> b
         }
     };
     let mut people: Vec<String> = found.iter().flat_map(people_of).collect();
-    cache.put_channel_history(team_id, &channel.id, found);
+    // The threads the events name: the watched ones are checked as they are, the others with the reply count on their parent message in what was just read.
+    let watched = if request.threads.is_empty() {
+        Vec::new()
+    } else {
+        load_watched(&dir).await
+    };
+    let (watch, plain) = split_threads(team_id, &channel.id, &request.threads, &watched);
+    let picked = thread_checks(plain, &found, |key| {
+        cache
+            .threads
+            .lock()
+            .unwrap()
+            .get(key)
+            .and_then(|entry| entry.reply_count)
+    });
+    cache.put_channel_history(team_id, &channel.id, found, fetched_at);
     // The unread marks are judged by the channel's read position: a channel that has none yet is asked for it.
     if cache.last_read(team_id, &channel.id).is_none() {
         refresh_read_marks(
@@ -831,31 +896,8 @@ async fn refresh_channel(app: &AppHandle, team_id: &str, request: &Refresh) -> b
     if !request.threads.is_empty() && !cache.replies_limited(team_id) {
         let tokens = HashMap::from([(team_id, token.as_str())]);
         own_user_id(http, cache, team_id, &token).await;
-        let watched = load_watched(&dir).await;
-        let (watch, plain) = split_threads(team_id, &channel.id, &request.threads, &watched);
         check_watched(http, cache, &state.channels, &tokens, watch).await;
-        if !plain.is_empty() {
-            let workspaces = load_workspaces(&dir).await.unwrap_or_default();
-            let seen = load_thread_seen(&dir).await;
-            let held = held_messages(cache, &workspaces, &hidden);
-            let unread = unread_threads(
-                cache,
-                &state.channels,
-                &workspaces,
-                &hidden,
-                &watched,
-                &seen,
-            );
-            let candidates = thread_candidates(cache, &held, &unread, &watched);
-            let picked = plain
-                .into_iter()
-                .filter_map(|key| {
-                    let count = candidates.iter().find(|c| c.key == key)?.reply_count;
-                    Some((key, count))
-                })
-                .collect();
-            check_threads(http, cache, &state.channels, &tokens, picked).await;
-        }
+        check_threads(http, cache, &state.channels, &tokens, picked).await;
         for ts in &request.threads {
             people.extend(thread_people(
                 cache,
@@ -898,25 +940,32 @@ async fn refresh_worker(app: &AppHandle, team_id: &str, mut rx: UnboundedReceive
             }
             () = wait_until(wake) => {}
         }
+        if waiting.is_empty() {
+            continue;
+        }
         // The reads that would make no call (a channel kept off the list, one not in the list, a limited workspace) must not use the budget.
         let state = app.state::<SlackState>();
-        if let Ok(dir) = config_dir(app) {
-            let hidden = load_hidden(&dir).await;
-            waiting = keep_readable(
-                std::mem::take(&mut waiting),
-                &hidden,
-                team_id,
-                |channel| kept_channel_name(&state.channels, team_id, channel),
-                state.timeline.rate_limited(team_id),
-            );
-        }
+        let hidden = match config_dir(app) {
+            Ok(dir) => load_hidden(&dir).await,
+            Err(_) => Vec::new(),
+        };
+        waiting = keep_readable(
+            std::mem::take(&mut waiting),
+            &hidden,
+            team_id,
+            |channel| kept_channel_name(&state.channels, team_id, channel),
+            state.timeline.rate_limited(team_id),
+        );
         let (ready, rest, next_wake) = budget.admit(std::mem::take(&mut waiting), Instant::now());
         (waiting, wake) = (rest, next_wake);
+        // The screen draws from the cache once for the reads made, not once for each.
+        let mut changed = false;
         for request in ready {
-            if refresh_channel(app, team_id, &request).await {
-                if let Err(e) = app.emit(EVENT_DIRTY, ()) {
-                    log_failure("slack_socket", team_id, e.to_string());
-                }
+            changed |= refresh_channel(app, team_id, &request, &hidden).await;
+        }
+        if changed {
+            if let Err(e) = app.emit(EVENT_DIRTY, ()) {
+                log_failure("slack_socket", team_id, e.to_string());
             }
         }
     }
@@ -1037,7 +1086,7 @@ pub fn slack_socket_status(state: State<'_, SlackState>) -> Vec<SocketStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slack::name_in;
+    use crate::slack::{name_in, raw_from};
 
     fn at(secs: u64) -> Instant {
         // One fixed origin per test is enough: the checks use the differences.
@@ -1567,6 +1616,65 @@ mod tests {
         assert!(keep_readable(vec![refresh("C2", &[])], &hidden, "T1", names, true).is_empty());
     }
 
+    #[test]
+    fn a_token_slack_refused_is_deleted_only_while_it_is_still_the_stored_one() {
+        assert!(delete_refused("xapp-1-old", Some("xapp-1-old")));
+        // A token registered while the refusal was on its way stays.
+        assert!(!delete_refused("xapp-1-old", Some("xapp-1-new")));
+        assert!(!delete_refused("xapp-1-old", None));
+    }
+
+    #[test]
+    fn the_waits_start_over_only_after_a_connection_that_lasted() {
+        assert!(!backoff_resets(None));
+        assert!(!backoff_resets(Some(Duration::from_secs(1))));
+        assert!(!backoff_resets(Some(
+            STABLE_AFTER - Duration::from_millis(1)
+        )));
+        assert!(backoff_resets(Some(STABLE_AFTER)));
+    }
+
+    #[test]
+    fn the_threads_to_check_take_their_count_from_the_history_just_read() {
+        let channel = Channel {
+            id: "C1".into(),
+            name: "dev".into(),
+        };
+        let parent = |ts: &str, replies: u32| {
+            raw_from(
+                "T1",
+                &channel,
+                &json!({"ts": ts, "text": "x", "user": "U1", "reply_count": replies}),
+            )
+            .unwrap()
+        };
+        let key = |ts: &str| ("T1".to_owned(), "C1".to_owned(), ts.to_owned());
+        let found = vec![parent("1.1", 3), parent("2.1", 0)];
+        let known = |k: &WatchKey| (k.2 == "9.1").then_some(4);
+        let checks = thread_checks(
+            vec![key("1.1"), key("2.1"), key("9.1"), key("8.1")],
+            &found,
+            known,
+        );
+        // 8.1 is neither in the history nor known: it is left out.
+        assert_eq!(
+            checks,
+            vec![(key("1.1"), 3), (key("2.1"), 0), (key("9.1"), 4)]
+        );
+        assert!(thread_checks(vec![], &found, known).is_empty());
+    }
+
+    #[test]
+    fn more_threads_than_one_read_checks_keep_the_newest() {
+        let many: Vec<String> = (0..9).map(|n| format!("{n}.1")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let merged = merge_refreshes(vec![refresh("C1", &many[..4]), refresh("C1", &many[4..])]);
+        assert_eq!(
+            merged,
+            vec![refresh("C1", &["4.1", "5.1", "6.1", "7.1", "8.1"])]
+        );
+    }
+
     #[tokio::test]
     async fn a_session_answers_every_envelope_and_passes_the_events_on_once() {
         let (listener, url) = server().await;
@@ -1620,7 +1728,7 @@ mod tests {
             &mut on_hello,
         )
         .await;
-        assert!(end.greeted);
+        assert!(end.greeted_at.is_some());
         assert!(end.fast);
         assert_eq!(hellos, 1);
         assert_eq!(rx.try_recv().unwrap(), refresh("C1", &["1.2"]));
@@ -1650,7 +1758,7 @@ mod tests {
             &mut on_hello,
         )
         .await;
-        assert!(!end.greeted);
+        assert!(end.greeted_at.is_none());
         assert!(!end.fast);
         slack.await.unwrap();
     }
@@ -1681,7 +1789,7 @@ mod tests {
             &mut on_hello,
         )
         .await;
-        assert!(end.greeted);
+        assert!(end.greeted_at.is_some());
         assert!(!end.fast);
         drop(socket);
         slack.await.unwrap();
