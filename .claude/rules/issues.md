@@ -38,20 +38,26 @@ Good: a temporary spec shows the title unchanged after the launch -> file the is
 Bad:  the code seems to drop the return value -> file the issue, marked "not reproduced"
 ```
 
-### Give each issue one size label when it is first read
+### Give each issue one points label when it is first read
+
+The points are story points: they measure what the change touches, not lines or hours.
 
 | Label | When |
 |-------|------|
-| `size:light` | Only wording, CSS or a small bug fix; no new command and no new communication |
-| `size:standard` | Neither light nor heavy |
-| `size:heavy` | Touches a security-reviewer condition of `review.md`, or adds a saved file or a new call to an outside API |
+| `point:1` | Only wording, CSS or a setting value; no new command and no new communication |
+| `point:2` | A small fix inside one screen or one module, and not `point:1`; no new command and no new communication |
+| `point:3` | None of `point:1`, `point:2`, `point:5` and `point:8` |
+| `point:5` | Spans several screens or modules, or adds a requirement ID, and does not meet the condition of `point:8` |
+| `point:8` | Touches a security-reviewer condition of `review.md`, or adds a saved file or a new call to an outside API |
 
-Size by what the change touches, not by lines: v0.31.0 was +1,150 lines in 3 files, most of it a generated table.
-Write the reason in a one-line comment. Do not change a label the owner set. Correct the size from the real diff when the pull request opens.
+Give points by what the change touches, not by lines: v0.31.0 was +1,150 lines in 3 files, most of it a generated table.
+The five levels let a bug of 1, 2 or 3 points come out ahead of the other issues, while a bug of 5 or 8 points waits its turn (at the owner's instruction, 2026-11-07, who asked for story points).
+Write the reason in a one-line comment. Do not change a label the owner set. Correct the points from the real diff when the pull request opens.
 
 ```text
-Good: #13 adds slack-watched.json and reads conversations.replies -> size:heavy
-Bad:  #13 is 2,000 lines -> size:heavy
+Good: #13 adds slack-watched.json and reads conversations.replies -> point:8
+Good: #150 fixes the wording of one error message -> point:1
+Bad:  #13 is 2,000 lines -> point:8
 ```
 
 ### Use `urgency:high` only on the owner's word
@@ -80,12 +86,12 @@ Bad:  #150 loses data, and no importance label is put, so it waits for the count
 ### Pin an issue to a version with `release:pin`, and never move it
 
 The owner puts `release:pin` on an issue to say which version it goes out in; the version is the issue's milestone. `plan-release.py` never moves the milestone of a pinned issue, and refuses a plan whose slots have already passed that version (at the owner's instruction, 2026-11-06; Discussion #136).
-Pinned issues of one version share it, even with a `size:heavy` one and even over the cap of 3; no other issue joins them, and they are not put in a group.
+Pinned issues of one version share it, even with a `point:8` one and even over the cap of 3; no other issue joins them, and they are not put in a group.
 A pin without a version milestone means nothing.
 
 ```text
-Good: #128 and #135 are pinned to v0.42.0 -> both go out in v0.42.0, #135 being heavy
-Bad:  #135 is heavy, so plan-release.py moves it to a version of its own and #128 stays alone
+Good: #128 and #135 are pinned to v0.42.0 -> both go out in v0.42.0, #135 being 8 points
+Bad:  #135 is 8 points, so plan-release.py moves it to a version of its own and #128 stays alone
 ```
 
 ### Use `needs:owner` only for a product decision
@@ -108,10 +114,10 @@ The hard rules of the order are checked by `plan-release.py`, which refuses a pl
 - Issues in progress and waiting for a release (fixed) stay at the front and do not move.
 - An issue comes after the issues it depends on.
 - An issue with `urgency:high` goes ahead of every issue that is not urgent, except its own blockers.
-- An issue with both `bug` and `size:light` comes next, after the urgent ones, again except its blockers, so that a quick fix ships in the earliest tag.
+- A bug of 1, 2 or 3 points (`bug` with `point:1`, `point:2` or `point:3`) comes next, after the urgent ones, again except its blockers, so that a quick fix ships in the earliest tag (at the owner's instruction, 2026-11-07). A bug of 5 or 8 points is not moved forward.
 
-Everything else is `release-planner`'s judgment, with this as the basis: urgency, then importance, then the lighter size first, then the older issue first. Where it moves an issue ahead of an older one, it writes the reason.
-`sync` puts the urgent issues first, then the light bugs, each after the open issues that block it, behind the issues in progress and waiting for a release.
+Everything else is `release-planner`'s judgment, with this as the basis: urgency, then importance, then fewer points first (1 < 2 < 3 < 5 < 8), then the older issue first. Where it moves an issue ahead of an older one, it writes the reason.
+`sync` puts the urgent issues first, then the bugs of 1, 2 or 3 points, each after the open issues that block it, behind the issues in progress and waiting for a release.
 The reorder (`issue-plan`, from its step 4) runs when an issue is created or its `needs:owner` is removed (the hook says so), after `plan-release.py close {tag}` of a release, and at the start of every `milestone-dev` run, which also places the issues made outside a session, such as on the GitHub screen. There is no separate schedule for it.
 Plan only the owner's issues.
 
@@ -214,7 +220,7 @@ Merged Release PRs are the release history, so the reason for each release stays
 判定: 待つ（R4）  変更 2 件・バグ 1 件、最古の待ちは 5 時間（目安のどれにも届かない）
 版:   minor（要件 ID S-12 が増えた）
 
-- #21 Slack の書式を表示する  size:standard  (closes #12)
+- #21 Slack の書式を表示する  point:3  (closes #12)
 ```
 
 ### Decide the release by these rules, top to bottom
@@ -226,12 +232,12 @@ Evaluate them after every merge and when a session starts work on an issue, and 
 |------|-----------|--------|
 | R0 | The Release PR has `release:hold` | Wait |
 | R1 | The Release PR or a waiting change has `urgency:high` | Release now |
-| R2 | A waiting change is `size:heavy` | Release now (a heavy change is a version of its own) |
+| R2 | A waiting change is `point:8` | Release now (an 8-point change is a version of its own) |
 | R3 | A waiting bug has `importance:high` | Release now |
 | R4 | None of the above | `release-planner` judges |
 
 For R4 the guide is to release when 2 or more bugs are waiting, when 3 or more changes are waiting, or when the oldest waiting merge is 24 hours old or more. When the planner departs from the guide, it writes the reason, and the body keeps it.
-Before merging a `size:heavy` pull request, release what is waiting, so that a heavy change is a version of its own and a fault in it can be told apart.
+Before merging a `point:8` pull request, release what is waiting, so that an 8-point change is a version of its own and a fault in it can be told apart.
 A change that is only documentation, `.claude/agents/` or `.claude/rules/` is not counted; it goes out with the next tag.
 The guide's figures are first values, not measurements; each release shows the owner a restart prompt (U-2), so correct them from use.
 

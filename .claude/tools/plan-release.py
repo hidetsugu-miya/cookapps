@@ -84,8 +84,17 @@ def has(issue, label):
     return label in issue.labels
 
 
-def light_bug(issue):
-    return has(issue, "bug") and has(issue, "size:light")
+QUICK_POINTS = ("point:1", "point:2", "point:3")
+
+
+def quick_bug(issue):
+    """A bug of 1, 2 or 3 points goes to the front of the queue; a bug of 5 or 8 points does not."""
+    return has(issue, "bug") and any(has(issue, label) for label in QUICK_POINTS)
+
+
+def solo(issue):
+    """A change of 8 points is a version of its own."""
+    return has(issue, "point:8")
 
 
 def urgent(issue):
@@ -109,8 +118,8 @@ def eligible_title(title):
     return parse_version(title) is not None or (title.startswith(TMP_PREFIX) and len(title) > len(TMP_PREFIX))
 
 
-def missing_size(issues):
-    return [i for i in issues if i.state == "open" and not any(label.startswith("size:") for label in i.labels)]
+def missing_points(issues):
+    return [i for i in issues if i.state == "open" and not any(label.startswith("point:") for label in i.labels)]
 
 
 def parse_stream(text):
@@ -134,8 +143,8 @@ def parse_stream(text):
 
 
 def existing_order(free):
-    """The urgent issues first, then the light bugs, then the rest, each in the order of the previous plan.
-    An urgent issue or a light bug that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
+    """The urgent issues first, then the quick bugs, then the rest, each in the order of the previous plan.
+    An urgent issue or a quick bug that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
 
     def key(i):
         v = parse_version(i.milestone)
@@ -155,7 +164,7 @@ def existing_order(free):
             take(by_number[b])
         lead.append(i)
 
-    for front in (urgent, light_bug):
+    for front in (urgent, quick_bug):
         for i in ordered:
             if front(i):
                 take(i)
@@ -164,7 +173,7 @@ def existing_order(free):
 
 def derive_groups(ordered):
     """Groups of a previous plan: consecutive issues that share a version milestone, so that a sync keeps them together.
-    A size:heavy issue ends a run, a pinned issue is never in a run (it has its own slot), and a run over the cap is left to the allocation."""
+    An 8-point issue ends a run, a pinned issue is never in a run (it has its own slot), and a run over the cap is left to the allocation."""
     groups = []
     run = []
 
@@ -174,10 +183,10 @@ def derive_groups(ordered):
         run.clear()
 
     for i in ordered:
-        solo = has(i, "size:heavy") or pin_version(i) is not None
-        if solo or parse_version(i.milestone) is None or (run and run[-1].milestone != i.milestone):
+        alone = solo(i) or pin_version(i) is not None
+        if alone or parse_version(i.milestone) is None or (run and run[-1].milestone != i.milestone):
             flush()
-        if not solo and parse_version(i.milestone) is not None:
+        if not alone and parse_version(i.milestone) is not None:
             run.append(i)
     flush()
     return groups
@@ -199,7 +208,7 @@ def split_issues(issues, pr_closing):
 
 def allocate(queue, groups, base):
     """Walks the queue and returns [{"version", "issues": [numbers]}].
-    The issues pinned to one version (release:pin) share one slot of that version, placed where the first of them stands; nothing else joins it, and a heavy one needs no slot of its own.
+    The issues pinned to one version (release:pin) share one slot of that version, placed where the first of them stands; nothing else joins it, and an 8-point one needs no slot of its own.
     A pinned version that earlier slots have reached already is refused: the pin is never moved."""
     pos = {i.number: k for k, i in enumerate(queue)}
     group_len = {}
@@ -239,7 +248,7 @@ def allocate(queue, groups, base):
         n = group_len.get(k, 1)
         unit = queue[k : k + n]
         k += n
-        if n == 1 and has(unit[0], "size:heavy"):
+        if n == 1 and solo(unit[0]):
             close()
             slots.append(unit)
             continue
@@ -338,8 +347,8 @@ def validate_plan(plan, free, fixed, states):
             problems.append(f"{label}: members are not adjacent in order")
         if any(pin_version(free_by[n]) for n in g):
             problems.append(f"{label}: holds an issue with release:pin (pinned issues share their version without a group)")
-        if len(g) > 1 and any(has(free_by[n], "size:heavy") for n in g):
-            problems.append(f"{label}: holds a size:heavy issue with another issue")
+        if len(g) > 1 and any(solo(free_by[n]) for n in g):
+            problems.append(f"{label}: holds a point:8 issue with another issue")
         if sum(1 for n in g if counted(free_by[n])) > MAX_COUNTED:
             problems.append(f"{label}: holds more than {MAX_COUNTED} counted issues")
 
@@ -373,7 +382,7 @@ def validate_plan(plan, free, fixed, states):
             elif state == "open" and b not in free_by and b not in fixed_nums:
                 problems.append(f"blocked_by: #{n} names #{b}, which is open but not planned")
 
-    # An urgent issue comes before every other issue, then a light bug comes before every other issue but the urgent ones.
+    # An urgent issue comes before every other issue, then a quick bug (a bug of 1, 2 or 3 points) comes before every other issue but the urgent ones.
     # The issues that block it, or an earlier issue of its kind, may stand before it.
     def front(member, allowed, message):
         needed = set()
@@ -392,9 +401,9 @@ def validate_plan(plan, free, fixed, states):
 
     front(urgent, urgent, lambda n, late: f"order: #{n} has urgency:high but is placed after #{late}")
     front(
-        light_bug,
-        lambda i: light_bug(i) or urgent(i),
-        lambda n, late: f"order: #{n} is a bug with size:light but is placed after #{late}",
+        quick_bug,
+        lambda i: quick_bug(i) or urgent(i),
+        lambda n, late: f"order: #{n} is a bug of 1, 2 or 3 points but is placed after #{late}",
     )
 
     # cycle
@@ -628,7 +637,7 @@ def release_facts(waiting, pr_labels, now):
         rule, decision = "R0", "wait"
     elif "urgency:high" in pr_labels or any(urgent(i) for i in changes):
         rule, decision = "R1", "release"
-    elif any(has(i, "size:heavy") for i in changes):
+    elif any(solo(i) for i in changes):
         rule, decision = "R2", "release"
     elif any(has(i, "bug") and has(i, "importance:high") for i in changes):
         rule, decision = "R3", "release"
@@ -758,10 +767,10 @@ def load_state():
     )
 
 
-def refuse_missing_size(state):
-    bad = missing_size(state.issues.values())
+def refuse_missing_points(state):
+    bad = missing_points(state.issues.values())
     if bad:
-        raise PlanError([f"#{i.number} has no size:* label; run the issue-plan skill" for i in bad])
+        raise PlanError([f"#{i.number} has no point:* label; run the issue-plan skill" for i in bad])
 
 
 def describe(op):
@@ -863,7 +872,7 @@ def cmd_apply(args):
     except (OSError, ValueError) as e:
         raise PlanError([f"{args.plan}: {e}"])
     state = load_state()
-    refuse_missing_size(state)
+    refuse_missing_points(state)
     problems = validate_plan(plan, state.free, state.fixed, state.states)
     if problems:
         raise PlanError(problems)
@@ -881,7 +890,7 @@ def cmd_apply(args):
 
 def sync(args, base=None):
     state = load_state()
-    refuse_missing_size(state)
+    refuse_missing_points(state)
     execute(state, [i.number for i in state.free], derive_groups(state.free), None, {}, base or state.base, args.dry_run)
 
 
@@ -895,7 +904,7 @@ def cmd_close(args):
     if tag not in [t["name"] for t in api(f"repos/{repo}/tags?per_page=100", paginate=True)]:
         raise PlanError([f"tag {tag} does not exist on GitHub"])
     state = load_state()
-    refuse_missing_size(state)
+    refuse_missing_points(state)
     versions = sorted(
         (parse_version(m["title"]), m) for m in state.milestones if m["state"] == "open" and parse_version(m["title"])
     )
