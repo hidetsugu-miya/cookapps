@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.46.0
+
+A-13 the terminals of the Orca screen take their font, colors and keys from Ghostty's config (#90). The new Orca tab of the settings has "取り込む", which reads Ghostty's config files once: `font-family`, `font-size`, `font-thicken`, the colors and `palette`, `theme` (also `light:…,dark:…`, following the system's appearance) and the `keybind` entries that send a text. The entries it could not take are listed with the reason. Shift+Enter in a terminal now sends a newline that Claude Code takes without sending.
+
 ## v0.45.0
 
 A-12 every tab of the Orca screen is the session's terminal, typed into directly (#89). For a saved server, the list and the terminals are drawn from what Orca streams, with colors and no rereads by the clock. The keys go only to the terminal they were typed in. "合わせる" gives the pane's size to Orca and "固定" keeps Orca's size with a horizontal scroll; the switch is at the bottom of the left pane. This machine's Orca cannot stream to the app, because its WebSocket takes only a paired device, so its terminals stay mirrored. "新規" at the top of the left pane picks a worktree and starts Claude in a terminal.
