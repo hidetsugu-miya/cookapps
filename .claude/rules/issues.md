@@ -87,7 +87,7 @@ Give every proposal `proposal` and `needs:owner`, because its author is the owne
 File at most 3 in a run, and none while 5 or more proposals are open with `needs:owner`.
 Do not file a proposal with the same purpose as a closed proposal or an open issue.
 The owner accepts a proposal by removing `needs:owner`, which makes it an ordinary issue for `milestone-dev`, and declines it by closing it with `wontfix`.
-`proposal-reminder.sh` writes the unanswered proposals into `CLAUDE.local.md` of the main checkout after each nightly run, and the first reply of a session tells the owner about them until they answer.
+`proposal-reminder.sh` writes the unanswered proposals into `CLAUDE.local.md` of the main checkout after each nightly run. The first reply of a session talking to the owner (not a subagent) runs it again and tells the owner the proposals still unanswered, until they answer.
 
 ```text
 Good: 2 proposals are open and unanswered -> the 22:00 run files 3 -> the next run files none until the owner answers

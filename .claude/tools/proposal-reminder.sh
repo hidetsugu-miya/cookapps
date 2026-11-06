@@ -22,7 +22,9 @@ if [ -n "$list" ]; then
     echo "$start"
     echo "## 未回答の提案（${n} 件）"
     echo
-    echo "セッションの最初の返答で、未回答の提案が ${n} 件あることをオーナーに知らせ、下の一覧を示す。オーナーが答えるまで、毎回のセッションで知らせる。"
+    echo "オーナーと話すメインのセッションだけが知らせる（サブエージェントは知らせない）。"
+    echo "最初の返答の前に \`.claude/tools/proposal-reminder.sh\` を実行してこの節を最新にし、\`gh issue list --state open --label proposal --label needs:owner\` に残る提案だけを、件数と一覧で知らせる。オーナーが答えるまで、毎回のセッションで知らせる。"
+    echo "下の一覧は ${n} 件（更新の時点）。"
     echo "採用はオーナーが needs:owner を外すこと、不採用は wontfix で閉じること。"
     echo
     printf '%s\n' "$list"
