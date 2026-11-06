@@ -18,7 +18,7 @@ sys.modules["plan_release"] = pr
 spec.loader.exec_module(pr)
 
 
-def mk(n, labels=(), milestone=None, created=None, state="open", closed=None, blocked=(), ms_number=None):
+def mk(n, labels=(), milestone=None, created=None, state="open", closed=None, blocked=(), ms_number=None, reason=None):
     return pr.Issue(
         number=n,
         id=1000 + n,
@@ -30,6 +30,7 @@ def mk(n, labels=(), milestone=None, created=None, state="open", closed=None, bl
         created_at=created or f"2026-11-01T00:00:{n:02d}Z",
         closed_at=closed,
         state=state,
+        state_reason=reason or ("completed" if state == "closed" else None),
         blocked_by=list(blocked),
     )
 
@@ -121,7 +122,8 @@ class Ordering(unittest.TestCase):
         urgent_and_pr = mk(5, labels=["urgency:high"])
         old_label = mk(7, labels=["release:now"])
         rest = mk(6)
-        waiting, in_progress, others = pr.split_issues([w2, w1, prog, urgent, urgent_and_pr, old_label, rest], {3, 5})
+        dropped = mk(8, state="closed", closed="2026-11-03T00:00:00Z", milestone="v0.40.0", reason="not_planned")
+        waiting, in_progress, others = pr.split_issues([w2, w1, prog, urgent, urgent_and_pr, old_label, rest, dropped], {3, 5})
         self.assertEqual([i.number for i in waiting], [2, 1])
         self.assertEqual([i.number for i in in_progress], [3, 5])
         # an urgent issue is planned like the others (the order puts it first); release:now means nothing any more
@@ -451,6 +453,13 @@ class ReleaseDecision(unittest.TestCase):
         out = self.decide([self.waiting(1, ["importance:high"])])
         self.assertEqual(out["rule"], "R4")
 
+    def test_a_change_closed_as_not_planned_does_not_wait(self):
+        dropped = mk(1, ["size:heavy", "urgency:high"], state="closed", milestone="v0.40.0", closed="2026-11-06T11:00:00Z", reason="not_planned")
+        out = self.decide([dropped])
+        self.assertEqual((out["rule"], out["decision"], out["changes"], out["waiting"]), ("R4", None, 0, []))
+        out = self.decide([dropped, self.waiting(2, ["bug"], hours=30)])
+        self.assertEqual((out["rule"], out["changes"], out["oldest_hours"]), ("R4", 1, 30.0))
+
     def test_documentation_is_not_counted(self):
         out = self.decide([self.waiting(1, ["documentation", "urgency:high"]), self.waiting(2, ["documentation", "size:heavy"])])
         self.assertEqual((out["rule"], out["decision"], out["changes"]), ("R4", None, 0))
@@ -619,6 +628,7 @@ class Next(unittest.TestCase):
         milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0"), ms(6, "v0.41.1"), ms(7, "backlog")]
         issues = [
             mk(43, ["documentation"], milestone="v0.40.0", state="closed", closed="2026-11-04T00:00:00Z"),
+            mk(44, ["size:heavy"], milestone="v0.40.0", state="closed", closed="2026-11-04T01:00:00Z", reason="not_planned"),
             mk(42, ["size:heavy"], milestone="v0.40.0"),
             mk(41, ["size:light"], milestone="v0.40.0", created="2026-11-01T00:00:01Z"),
             mk(40, ["size:light"], milestone="v0.40.0", blocked=[42]),

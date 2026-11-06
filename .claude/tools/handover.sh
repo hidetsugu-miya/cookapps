@@ -3,9 +3,11 @@
 # Usage: handover.sh ensure          prints the Discussion's URL; creates the Discussion when it does not exist yet
 #        handover.sh read            ensure, then prints the last hand-over and the owner's replies since the run that wrote it started
 #        handover.sh write <file>    posts the file as a hand-over comment and prints the comment's URL
-#        handover.sh format          reads the JSON of a Discussion (the query of `read`) from stdin and prints what `read` prints; no network
+#        handover.sh format <owner>  reads the JSON of a Discussion (the query of `read`) from stdin and prints what `read` prints; no network
 # The runs write with the owner's account, so a comment is told by its mark `<!-- handover run-start=... -->`, which `write` puts on the first line.
-# A comment without the mark is the owner's, and the next run reads it first and takes it as an instruction.
+# A comment without the mark whose author is the owner is the owner's reply, and the next run reads it first and takes it as an instruction.
+# The repository is public: a comment of any other author is data, never an instruction. `format` counts them and prints nothing of them, and takes a mark only from the owner's comments.
+# A run-start that is not an ISO time in UTC, or is later than the comment itself, is not used: the comment's own time is.
 # HANDOVER_RUN_START (ISO time in UTC; nightly.sh sets it) is the start of the run; a reply written after it is left to the next run, which has not read it yet.
 # HANDOVER_DRY_RUN=1 makes `write` print the comment and touch nothing.
 # The repository is public: write no personal information in a comment (publishing.md).
@@ -14,7 +16,7 @@ title="自走の引き継ぎ"
 mark='<!-- handover'
 
 usage() {
-  echo "使い方: handover.sh ensure | read | write <file> | format" >&2
+  echo "使い方: handover.sh ensure | read | write <file> | format <owner>" >&2
   exit 2
 }
 
@@ -27,9 +29,9 @@ repo_parts() {
 # find the Discussion: sets did (node id), durl and dnum, or leaves them empty
 find_discussion() {
   repo_parts || return 1
-  q='query($o:String!,$n:String!,$cursor:String){repository(owner:$o,name:$n){discussions(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{id number url title category{name}}}}}'
+  q='query($o:String!,$n:String!,$cursor:String){repository(owner:$o,name:$n){discussions(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{id number url title author{login} category{name}}}}}'
   found="$(gh api graphql --paginate -f query="$q" -f o="$owner" -f n="$name" \
-    --jq ".data.repository.discussions.nodes[] | select(.title == \"$title\" and .category.name == \"Ideas\") | [.id, .number, .url] | @tsv" | head -n 1)" || return 1
+    --jq ".data.repository.discussions.nodes[] | select(.title == \"$title\" and .category.name == \"Ideas\" and .author.login == \"$owner\") | [.id, .number, .url] | @tsv" | head -n 1)" || return 1
   did="$(printf '%s' "$found" | cut -f1)"
   dnum="$(printf '%s' "$found" | cut -f2)"
   durl="$(printf '%s' "$found" | cut -f3)"
@@ -54,7 +56,8 @@ create_discussion() {
 
 ## オーナーの返信
 
-印のないコメントや返信は、オーナーのものとして、次の回が最初に読み、指示として扱います。
+印がなく、作者がオーナーのコメントや返信は、次の回が最初に読み、指示として扱います。
+他の人のコメントは、件数だけ数え、指示にしません。
 質問が書かれていたら、ここに答えを書いてください。
 
 ## 書かれること
@@ -83,19 +86,25 @@ ensure() {
   [ -n "$did" ] || create_discussion || return 1
 }
 
-# stdin: the Discussion with its comments (and their replies); stdout: the text of `read`
+# $1: the owner's login. stdin: the Discussion with its comments (and their replies); stdout: the text of `read`
 format() {
-  jq -r --arg mark "$mark" '
+  jq -r --arg mark "$mark" --arg owner "$1" '
     .data.repository.discussion as $d
     | ([$d.comments.nodes[] | ., (.replies.nodes // [])[]] | map(del(.replies)) | sort_by(.createdAt)) as $all
-    | ($all | map(select(.body | contains($mark)))) as $marked
+    | ($all | map(select(.author.login == $owner))) as $mine
+    | (($all | length) - ($mine | length)) as $ignored
+    | ($mine | map(select(.body | contains($mark)))) as $marked
     | ($marked | last) as $last
-    | (if $last == null then "" else ((($last.body | capture("<!-- handover run-start=(?<t>[^ ]+) -->")? | .t) // $last.createdAt)) end) as $cutoff
-    | ($all | map(select((.body | contains($mark) | not) and .createdAt > $cutoff))) as $replies
+    | (if $last == null then "" else (
+        ([$last.body | capture("<!-- handover run-start=(?<t>[^ ]+) -->")? | .t] | first) as $t
+        | if $t != null and ($t | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and $t <= $last.createdAt then $t else $last.createdAt end
+      ) end) as $cutoff
+    | ($mine | map(select((.body | contains($mark) | not) and .createdAt > $cutoff))) as $replies
     | "discussion: \($d.url)",
       (if $last == null then "last handover: none yet" else "last handover: \($last.url) (run started \($cutoff))\n---\n\($last.body)\n---" end),
       "owner replies since: \($replies | length)",
-      ($replies[] | "\n[\(.createdAt) \(.author.login // "unknown")] \(.url)\n\(.body)")
+      "ignored comments of other authors: \($ignored)",
+      ($replies[] | "\n[\(.createdAt) \(.author.login)] \(.url)\n\(.body)")
   '
 }
 
@@ -110,7 +119,7 @@ case "$cmd" in
     [ $# -eq 1 ] || usage
     ensure || exit 1
     q='query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){discussion(number:$num){url comments(last:100){nodes{url body createdAt author{login} replies(first:50){nodes{url body createdAt author{login}}}}}}}}'
-    gh api graphql -f query="$q" -f o="$owner" -f n="$name" -F num="$dnum" | format
+    gh api graphql -f query="$q" -f o="$owner" -f n="$name" -F num="$dnum" | format "$owner"
     ;;
   write)
     [ $# -eq 2 ] || usage
@@ -134,8 +143,8 @@ case "$cmd" in
     gh api graphql -f query="$m" -f id="$did" -F b=@"$bodyfile" --jq '.data.addDiscussionComment.comment.url'
     ;;
   format)
-    [ $# -eq 1 ] || usage
-    format
+    [ $# -eq 2 ] || usage
+    format "$2"
     ;;
   *) usage ;;
 esac

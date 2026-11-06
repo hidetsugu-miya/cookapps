@@ -48,6 +48,7 @@ class Issue:
     created_at: str
     closed_at: str | None
     state: str
+    state_reason: str | None = None  # "completed" or "not_planned" for a closed issue
     blocked_by: list = field(default_factory=list)  # numbers of the open blockers
 
 
@@ -182,9 +183,14 @@ def derive_groups(ordered):
     return groups
 
 
+def is_waiting(i):
+    """A merged change not released yet: closed as completed. An issue closed as not planned (wontfix) is no change."""
+    return i.state == "closed" and i.state_reason == "completed"
+
+
 def split_issues(issues, pr_closing):
-    """-> waiting, in progress, the rest. Closed issues are the waiting ones."""
-    waiting = sorted((i for i in issues if i.state == "closed"), key=lambda i: (i.closed_at or "", i.number))
+    """-> waiting, in progress, the rest. Issues closed as completed are the waiting ones."""
+    waiting = sorted((i for i in issues if is_waiting(i)), key=lambda i: (i.closed_at or "", i.number))
     open_ = [i for i in issues if i.state == "open"]
     in_progress = sorted((i for i in open_ if i.number in pr_closing), key=lambda i: (i.created_at, i.number))
     rest = [i for i in open_ if i.number not in pr_closing]
@@ -553,7 +559,7 @@ def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=froze
         return {"number": i.number, "title": i.title, "labels": i.labels}
 
     by_created = lambda i: (i.created_at, i.number)  # noqa: E731
-    waiting = sorted((i for i in issues if i.state == "closed" and i.milestone in titles), key=lambda i: (i.closed_at or "", i.number))
+    waiting = sorted((i for i in issues if is_waiting(i) and i.milestone in titles), key=lambda i: (i.closed_at or "", i.number))
     open_issues = [i for i in issues if i.state == "open" and i.milestone in titles]
     chosen = next((t for t in titles if any(i.milestone == t for i in open_issues)), None)
     out = {
@@ -600,7 +606,7 @@ def release_facts(waiting, pr_labels, now):
     `waiting` are the merged changes not released yet, `pr_labels` the labels of the Release PR (None when there is none).
     -> {"rule": "R0".."R3" | "R4", "decision": "wait" | "release" | None, ...}"""
     pr_labels = pr_labels or []
-    changes = sorted((i for i in waiting if counted(i)), key=lambda i: (i.closed_at or "", i.number))
+    changes = sorted((i for i in waiting if is_waiting(i) and counted(i)), key=lambda i: (i.closed_at or "", i.number))
     if "release:hold" in pr_labels:
         rule, decision = "R0", "wait"
     elif "urgency:high" in pr_labels or any(urgent(i) for i in changes):
@@ -679,6 +685,7 @@ def to_issue(raw):
         created_at=raw["created_at"],
         closed_at=raw.get("closed_at"),
         state=raw["state"],
+        state_reason=raw.get("state_reason"),
     )
 
 
@@ -914,7 +921,7 @@ def cmd_release_facts(args):
         now = parse_time(args.now) if args.now else datetime.datetime.now(datetime.timezone.utc)
     except ValueError as e:
         raise PlanError([f"--now: {e}"])
-    waiting = [i for i in state.issues.values() if i.state == "closed"]
+    waiting = [i for i in state.issues.values() if is_waiting(i)]
     print(json.dumps(release_facts(waiting, labels, now), ensure_ascii=False, indent=2))
 
 
