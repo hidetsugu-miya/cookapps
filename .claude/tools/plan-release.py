@@ -6,11 +6,13 @@ Usage:
   plan-release.py apply <plan.json> [--dry-run]
   plan-release.py sync [--dry-run]
   plan-release.py close <tag>
-  plan-release.py next
+  plan-release.py next [--mine <issue numbers>]
+  plan-release.py release-facts [--now <ISO time>]
 
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
 """
 import argparse
+import datetime
 import json
 import re
 import subprocess
@@ -46,6 +48,7 @@ class Issue:
     created_at: str
     closed_at: str | None
     state: str
+    state_reason: str | None = None  # "completed" or "not_planned" for a closed issue
     blocked_by: list = field(default_factory=list)  # numbers of the open blockers
 
 
@@ -85,6 +88,19 @@ def light_bug(issue):
     return has(issue, "bug") and has(issue, "size:light")
 
 
+def urgent(issue):
+    return has(issue, "urgency:high")
+
+
+def importance(issue):
+    return "high" if has(issue, "importance:high") else "low" if has(issue, "importance:low") else "normal"
+
+
+def pin_version(issue):
+    """The version the owner pinned the issue to (its milestone), or None. A pin without a version milestone means nothing."""
+    return parse_version(issue.milestone) if has(issue, "release:pin") else None
+
+
 def counted(issue):
     return not has(issue, "documentation")
 
@@ -118,8 +134,8 @@ def parse_stream(text):
 
 
 def existing_order(free):
-    """The light bugs first, then the rest, each in the order of the previous plan.
-    A light bug that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
+    """The urgent issues first, then the light bugs, then the rest, each in the order of the previous plan.
+    An urgent issue or a light bug that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
 
     def key(i):
         v = parse_version(i.milestone)
@@ -139,15 +155,16 @@ def existing_order(free):
             take(by_number[b])
         lead.append(i)
 
-    for i in ordered:
-        if light_bug(i):
-            take(i)
+    for front in (urgent, light_bug):
+        for i in ordered:
+            if front(i):
+                take(i)
     return lead + [i for i in ordered if i.number not in taken]
 
 
 def derive_groups(ordered):
     """Groups of a previous plan: consecutive issues that share a version milestone, so that a sync keeps them together.
-    A size:heavy issue ends a run, and a run over the cap is left to the allocation."""
+    A size:heavy issue ends a run, a pinned issue is never in a run (it has its own slot), and a run over the cap is left to the allocation."""
     groups = []
     run = []
 
@@ -157,33 +174,45 @@ def derive_groups(ordered):
         run.clear()
 
     for i in ordered:
-        if has(i, "size:heavy") or parse_version(i.milestone) is None or (run and run[-1].milestone != i.milestone):
+        solo = has(i, "size:heavy") or pin_version(i) is not None
+        if solo or parse_version(i.milestone) is None or (run and run[-1].milestone != i.milestone):
             flush()
-        if not has(i, "size:heavy") and parse_version(i.milestone) is not None:
+        if not solo and parse_version(i.milestone) is not None:
             run.append(i)
     flush()
     return groups
 
 
+def is_waiting(i):
+    """A merged change not released yet: closed as completed. An issue closed as not planned (wontfix) is no change."""
+    return i.state == "closed" and i.state_reason == "completed"
+
+
 def split_issues(issues, pr_closing):
-    """-> waiting, in progress, release:now, the rest. Closed issues are the waiting ones."""
-    waiting = sorted((i for i in issues if i.state == "closed"), key=lambda i: (i.closed_at or "", i.number))
+    """-> waiting, in progress, the rest. Issues closed as completed are the waiting ones."""
+    waiting = sorted((i for i in issues if is_waiting(i)), key=lambda i: (i.closed_at or "", i.number))
     open_ = [i for i in issues if i.state == "open"]
-    by_created = lambda i: (i.created_at, i.number)  # noqa: E731
-    in_progress = sorted((i for i in open_ if i.number in pr_closing), key=by_created)
-    release_now = sorted((i for i in open_ if i.number not in pr_closing and has(i, "release:now")), key=by_created)
-    rest = [i for i in open_ if i.number not in pr_closing and not has(i, "release:now")]
-    return waiting, in_progress, release_now, rest
+    in_progress = sorted((i for i in open_ if i.number in pr_closing), key=lambda i: (i.created_at, i.number))
+    rest = [i for i in open_ if i.number not in pr_closing]
+    return waiting, in_progress, rest
 
 
 def allocate(queue, groups, base):
-    """Walks the queue and returns [{"version", "issues": [numbers]}]."""
+    """Walks the queue and returns [{"version", "issues": [numbers]}].
+    The issues pinned to one version (release:pin) share one slot of that version, placed where the first of them stands; nothing else joins it, and a heavy one needs no slot of its own.
+    A pinned version that earlier slots have reached already is refused: the pin is never moved."""
     pos = {i.number: k for k, i in enumerate(queue)}
     group_len = {}
     for g in groups:
         positions = sorted(pos[n] for n in g if n in pos)
         if positions:
             group_len[positions[0]] = len(positions)
+    pins = {}
+    for i in queue:
+        v = pin_version(i)
+        if v:
+            pins.setdefault(v, []).append(i)
+    placed = set()
 
     slots = []
     cur = []
@@ -199,6 +228,14 @@ def allocate(queue, groups, base):
 
     k = 0
     while k < len(queue):
+        v = pin_version(queue[k])
+        if v:
+            k += 1
+            if v not in placed:
+                placed.add(v)
+                close()
+                slots.append(pins[v])
+            continue
         n = group_len.get(k, 1)
         unit = queue[k : k + n]
         k += n
@@ -209,15 +246,18 @@ def allocate(queue, groups, base):
         if n > 1 and count(cur) + count(unit) > MAX_COUNTED:
             close()
         cur = cur + unit
-        if any(has(i, "release:now") for i in unit) or count(cur) >= MAX_COUNTED:
+        if any(urgent(i) for i in unit) or count(cur) >= MAX_COUNTED:
             close()
     close()
+
+    def slot_pin(slot):
+        return next((pin_version(i) for i in slot if pin_version(i)), None)
 
     merged = []
     carry = []
     for idx, slot in enumerate(slots):
         slot = carry + slot
-        if idx < len(slots) - 1 and not any(counted(i) for i in slot):
+        if idx < len(slots) - 1 and not any(counted(i) for i in slot) and not slot_pin(slot):
             carry = slot
             continue
         carry = []
@@ -226,7 +266,16 @@ def allocate(queue, groups, base):
     out = []
     version = parse_version(base) or (0, 0, 0)
     for slot in merged:
-        version = bump(version, any(has(i, "adds:requirement") for i in slot))
+        pinned = slot_pin(slot)
+        if pinned:
+            if pinned <= version:
+                held = ", ".join(f"#{i.number}" for i in slot if pin_version(i))
+                raise PlanError(
+                    [f"{format_version(pinned)} is pinned ({held}) but the slots before it already reach {format_version(version)}"]
+                )
+            version = pinned
+        else:
+            version = bump(version, any(has(i, "adds:requirement") for i in slot))
         out.append({"version": format_version(version), "issues": [i.number for i in slot]})
     return out
 
@@ -287,16 +336,35 @@ def validate_plan(plan, free, fixed, states):
         ps = sorted(position[n] for n in g if n in position)
         if ps != list(range(ps[0], ps[0] + len(ps))):
             problems.append(f"{label}: members are not adjacent in order")
+        if any(pin_version(free_by[n]) for n in g):
+            problems.append(f"{label}: holds an issue with release:pin (pinned issues share their version without a group)")
         if len(g) > 1 and any(has(free_by[n], "size:heavy") for n in g):
             problems.append(f"{label}: holds a size:heavy issue with another issue")
         if sum(1 for n in g if counted(free_by[n])) > MAX_COUNTED:
             problems.append(f"{label}: holds more than {MAX_COUNTED} counted issues")
 
+    # The issues pinned to one version share the slot where the first of them stands (allocate).
+    first_pin = {}
+    for n in order:
+        v = pin_version(free_by[n]) if n in free_by else None
+        if v and v not in first_pin:
+            first_pin[v] = position[n]
+
     for n, blockers in sorted(blocked_by.items()):
         if n not in free_by:
             problems.append(f"blocked_by: #{n} is not an issue to plan")
             continue
+        pinned = pin_version(free_by[n])
         for b in blockers:
+            if (
+                pinned
+                and b in free_by
+                and position.get(b, -1) > first_pin[pinned]
+                and pin_version(free_by[b]) != pinned
+            ):
+                problems.append(
+                    f"blocked_by: #{n} is pinned to {format_version(pinned)} and goes out with the first pinned issue, but #{b}, which blocks it, is placed after that"
+                )
             state = states.get(b)
             if state is None:
                 problems.append(f"blocked_by: #{n} names #{b}, which is unknown")
@@ -305,20 +373,29 @@ def validate_plan(plan, free, fixed, states):
             elif state == "open" and b not in free_by and b not in fixed_nums:
                 problems.append(f"blocked_by: #{n} names #{b}, which is open but not planned")
 
-    # a light bug comes before every other issue, except the issues that block it or an earlier light bug
-    needed = set()
-    for k, n in enumerate(order):
-        if n not in free_by or not light_bug(free_by[n]):
-            continue
-        todo = [n]
-        while todo:
-            for b in blocked_by.get(todo.pop(), []):
-                if b not in needed and b in free_by:
-                    needed.add(b)
-                    todo.append(b)
-        late = next((m for m in order[:k] if m in free_by and not light_bug(free_by[m]) and m not in needed), None)
-        if late is not None:
-            problems.append(f"order: #{n} is a bug with size:light but is placed after #{late}")
+    # An urgent issue comes before every other issue, then a light bug comes before every other issue but the urgent ones.
+    # The issues that block it, or an earlier issue of its kind, may stand before it.
+    def front(member, allowed, message):
+        needed = set()
+        for k, n in enumerate(order):
+            if n not in free_by or not member(free_by[n]):
+                continue
+            todo = [n]
+            while todo:
+                for b in blocked_by.get(todo.pop(), []):
+                    if b not in needed and b in free_by:
+                        needed.add(b)
+                        todo.append(b)
+            late = next((m for m in order[:k] if m in free_by and not allowed(free_by[m]) and m not in needed), None)
+            if late is not None:
+                problems.append(message(n, late))
+
+    front(urgent, urgent, lambda n, late: f"order: #{n} has urgency:high but is placed after #{late}")
+    front(
+        light_bug,
+        lambda i: light_bug(i) or urgent(i),
+        lambda n, late: f"order: #{n} is a bug with size:light but is placed after #{late}",
+    )
 
     # cycle
     color = {}
@@ -469,7 +546,27 @@ def result_lines(slots, issues, reasons):
 # ---- pure: next ----
 
 
-def build_next(issues, milestones, pr_closing):
+def worktree_issues(porcelain):
+    """-> {issue number: branch} from `git worktree list --porcelain`, for the worktrees other than the first (the main checkout).
+    A worktree belongs to an issue when its branch or its folder name holds `issue-{n}`."""
+    out = {}
+    for block in porcelain.strip().split("\n\n")[1:]:
+        path = branch = ""
+        for line in block.splitlines():
+            if line.startswith("worktree "):
+                path = line[len("worktree ") :]
+            elif line.startswith("branch "):
+                branch = line[len("branch ") :].removeprefix("refs/heads/")
+        for text in (branch, path.rstrip("/").rsplit("/", 1)[-1]):
+            for m in re.finditer(r"issue-(\d+)(?!\d)", text):
+                out.setdefault(int(m.group(1)), branch or path)
+    return out
+
+
+def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=frozenset()):
+    """`held`: an issue that another session may be working on (an open pull request closes it, or a worktree named issue-{n} exists)
+    and that the previous hand-over does not list as this run's own (`mine`). It is neither started nor continued."""
+    held_by_worktree = held_by_worktree or {}
     open_versions = sorted(
         (parse_version(m["title"]), m["title"]) for m in milestones if m["state"] == "open" and parse_version(m["title"])
     )
@@ -479,13 +576,14 @@ def build_next(issues, milestones, pr_closing):
         return {"number": i.number, "title": i.title, "labels": i.labels}
 
     by_created = lambda i: (i.created_at, i.number)  # noqa: E731
-    waiting = sorted((i for i in issues if i.state == "closed" and i.milestone in titles), key=lambda i: (i.closed_at or "", i.number))
+    waiting = sorted((i for i in issues if is_waiting(i) and i.milestone in titles), key=lambda i: (i.closed_at or "", i.number))
     open_issues = [i for i in issues if i.state == "open" and i.milestone in titles]
     chosen = next((t for t in titles if any(i.milestone == t for i in open_issues)), None)
     out = {
         "milestone": chosen,
         "start": [],
         "in_progress": [],
+        "held": [],
         "needs_owner": [],
         "blocked": [],
         "waiting": [dict(brief(i), milestone=i.milestone) for i in waiting],
@@ -496,9 +594,14 @@ def build_next(issues, milestones, pr_closing):
     here = sorted((i for i in open_issues if i.milestone == chosen), key=by_created)
     for i in here:
         if i.number in pr_closing:
-            out["in_progress"].append(brief(i))
+            if i.number in mine:
+                out["in_progress"].append(brief(i))
+            else:
+                out["held"].append(dict(brief(i), reason="pull request open"))
         elif has(i, "needs:owner"):
             out["needs_owner"].append(brief(i))
+        elif i.number in held_by_worktree and i.number not in mine:
+            out["held"].append(dict(brief(i), reason="worktree " + held_by_worktree[i.number]))
         elif i.blocked_by:
             out["blocked"].append({"number": i.number, "title": i.title, "blocked_by": sorted(i.blocked_by)})
         else:
@@ -506,6 +609,47 @@ def build_next(issues, milestones, pr_closing):
     later = [i for i in open_issues if i.milestone != chosen]
     out["later_needs_owner_only"] = bool(later) and all(has(i, "needs:owner") for i in later)
     return out
+
+
+# ---- pure: release facts ----
+
+
+def parse_time(s):
+    return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+
+def release_facts(waiting, pr_labels, now):
+    """Applies R0 to R3 of issues.md and gathers the figures of R4, which the release-planner judges.
+    `waiting` are the merged changes not released yet, `pr_labels` the labels of the Release PR (None when there is none).
+    -> {"rule": "R0".."R3" | "R4", "decision": "wait" | "release" | None, ...}"""
+    pr_labels = pr_labels or []
+    changes = sorted((i for i in waiting if is_waiting(i) and counted(i)), key=lambda i: (i.closed_at or "", i.number))
+    if "release:hold" in pr_labels:
+        rule, decision = "R0", "wait"
+    elif "urgency:high" in pr_labels or any(urgent(i) for i in changes):
+        rule, decision = "R1", "release"
+    elif any(has(i, "size:heavy") for i in changes):
+        rule, decision = "R2", "release"
+    elif any(has(i, "bug") and has(i, "importance:high") for i in changes):
+        rule, decision = "R3", "release"
+    else:
+        rule, decision = "R4", None
+
+    def hours(i):
+        return round((now - parse_time(i.closed_at)).total_seconds() / 3600, 1) if i.closed_at else None
+
+    rows = [
+        {"number": i.number, "title": i.title, "labels": i.labels, "closed_at": i.closed_at, "hours": hours(i)} for i in changes
+    ]
+    ages = [r["hours"] for r in rows if r["hours"] is not None]
+    return {
+        "rule": rule,
+        "decision": decision,
+        "changes": len(changes),
+        "bugs": sum(1 for i in changes if has(i, "bug")),
+        "oldest_hours": max(ages) if ages else None,
+        "waiting": rows,
+    }
 
 
 # ---- gh ----
@@ -558,6 +702,7 @@ def to_issue(raw):
         created_at=raw["created_at"],
         closed_at=raw.get("closed_at"),
         state=raw["state"],
+        state_reason=raw.get("state_reason"),
     )
 
 
@@ -597,14 +742,14 @@ def load_state():
         ref["number"] for p in prs if p["author"]["login"] == owner for ref in p.get("closingIssuesReferences", [])
     }
 
-    waiting, in_progress, release_now, rest = split_issues(list(issues.values()), pr_closing)
+    waiting, in_progress, rest = split_issues(list(issues.values()), pr_closing)
     return State(
         repo=repo,
         owner=owner,
         base=base,
         milestones=milestones,
         issues=issues,
-        fixed=waiting + in_progress + release_now,
+        fixed=waiting + in_progress,
         free=existing_order(rest),
         pr_closing=pr_closing,
         ids=ids,
@@ -686,6 +831,9 @@ def issue_json(i):
         "title": i.title,
         "body": i.body,
         "labels": i.labels,
+        "urgency": "high" if urgent(i) else "normal",
+        "importance": importance(i),
+        "pin": has(i, "release:pin"),
         "milestone": i.milestone,
         "createdAt": i.created_at,
         "blocked_by": sorted(i.blocked_by),
@@ -771,7 +919,27 @@ def cmd_close(args):
 
 def cmd_next(args):
     state = load_state()
-    print(json.dumps(build_next(list(state.issues.values()), state.milestones, state.pr_closing), ensure_ascii=False, indent=2))
+    mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
+    worktrees = worktree_issues(subprocess.run(["git", "worktree", "list", "--porcelain"], capture_output=True, text=True).stdout)
+    print(
+        json.dumps(
+            build_next(list(state.issues.values()), state.milestones, state.pr_closing, worktrees, mine),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def cmd_release_facts(args):
+    state = load_state()
+    labels = json.loads(gh("pr", "list", "--state", "open", "--head", "release/next", "--json", "author,labels"))
+    labels = [label["name"] for p in labels if p["author"]["login"] == state.owner for label in p["labels"]]
+    try:
+        now = parse_time(args.now) if args.now else datetime.datetime.now(datetime.timezone.utc)
+    except ValueError as e:
+        raise PlanError([f"--now: {e}"])
+    waiting = [i for i in state.issues.values() if is_waiting(i)]
+    print(json.dumps(release_facts(waiting, labels, now), ensure_ascii=False, indent=2))
 
 
 def main(argv=None):
@@ -788,7 +956,12 @@ def main(argv=None):
     c = sub.add_parser("close")
     c.add_argument("tag")
     c.set_defaults(fn=cmd_close, dry_run=False)
-    sub.add_parser("next").set_defaults(fn=cmd_next)
+    n = sub.add_parser("next")
+    n.add_argument("--mine", default="", help="issue numbers the previous hand-over lists as this run's own, such as 140,141")
+    n.set_defaults(fn=cmd_next)
+    r = sub.add_parser("release-facts")
+    r.add_argument("--now", help="ISO time such as 2026-11-06T12:00:00Z; the time of the run when omitted")
+    r.set_defaults(fn=cmd_release_facts)
     args = p.parse_args(argv)
     try:
         args.fn(args)
