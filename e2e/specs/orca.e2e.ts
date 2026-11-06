@@ -1180,6 +1180,8 @@ describe("orca: a saved environment's stream", () => {
     const [call] = await waitForCalls("orca_stream_terminal");
     const paneRows = viewportOf(call).rows;
     const rowsDrawn = () => browser.execute(() => document.querySelectorAll("#orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
+    // Showing the pane makes the terminal fit it once more: the ResizeObserver tells (a frame later), and the fit waits FIT_DELAY_MS (50 ms) of ts/orca-terminal.ts. Let that fit pass, or it shrinks the size the snapshot draws.
+    await browser.pause(300);
     // The terminal fits the pane, and Orca's size is drawn all the same: another screen of Orca may have taken it.
     await sendTerm({ kind: "snapshot", data: "from the snapshot", cols: 80, rows: paneRows + 3 });
     await browser.waitUntil(async () => (await screenText()).includes("from the snapshot"), { timeoutMsg: "the screen never showed" });
