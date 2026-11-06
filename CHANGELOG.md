@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.44.1
+
+The Orca history no longer shows the tags that Claude Code puts around a long paste (#58). The pasted text and the rest of the message stay.
+
 ## v0.44.0
 
 M-9 new mail found by the auto sync shows as a card at the bottom right of the window (#61). It has the sender and the subject, and trash, archive and "詳細を開く", which opens the thread even from another screen. At most 3 cards show, and each goes after 10 seconds unless the pointer is on it. The load at startup shows none, and no OS notification is used.
