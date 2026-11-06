@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.46.1
+
+A Todo's description longer than 10 lines is folded at the 10th line in the detail (#93). The last line fades out, and "… 続きを表示（残り n 行）" under it shows the whole text; "折りたたむ" folds it again. Pressing the text still starts editing.
+
 ## v0.46.0
 
 A-13 the terminals of the Orca screen take their font, colors and keys from Ghostty's config (#90). The new Orca tab of the settings has "取り込む", which reads Ghostty's config files once: `font-family`, `font-size`, `font-thicken`, the colors and `palette`, `theme` (also `light:…,dark:…`, following the system's appearance) and the `keybind` entries that send a text. The entries it could not take are listed with the reason. Shift+Enter in a terminal now sends a newline that Claude Code takes without sending.
