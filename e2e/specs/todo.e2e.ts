@@ -1200,9 +1200,15 @@ describe("todo detail description fold", () => {
   // A list of `n` items, one drawn line each.
   const lines = (n: number) => Array.from({ length: n }, (_, i) => `- line ${i + 1}`).join("\n");
 
-  async function openReport(n: number) {
+  // `n` lines in paragraphs of `size` lines each, separated by blank lines: the margins between paragraphs are not lines.
+  const paragraphs = (n: number, size: number) =>
+    Array.from({ length: Math.ceil(n / size) }, (_, p) =>
+      Array.from({ length: Math.min(size, n - p * size) }, (_, i) => `line ${p * size + i + 1}`).join("\n"),
+    ).join("\n\n");
+
+  async function openReport(n: number, text = lines(n)) {
     const data = todoData();
-    data.tasks[0].description = lines(n);
+    data.tasks[0].description = text;
     await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
     await $("#nav-todo").click();
     await $(ROWS).click();
@@ -1249,6 +1255,44 @@ describe("todo detail description fold", () => {
     await expect($(desc)).not.toHaveElementClass("folded");
     const { shown, whole } = await heights();
     expect(shown).toBe(whole);
+  });
+
+  it("shows 10 drawn lines in paragraphs in full, with no button", async () => {
+    await openReport(10, "line 1\nline 2\nline 3\n\nline 4\nline 5\nline 6\n\nline 7\nline 8\n\nline 9\nline 10");
+    // Past the first draw, in which the lines are counted.
+    await browser.pause(300);
+    await expect($(fold)).not.toBeDisplayed();
+    await expect($(desc)).not.toHaveElementClass("folded");
+    const { shown, whole } = await heights();
+    expect(shown).toBe(whole);
+  });
+
+  it("folds 15 drawn lines in paragraphs below the 10th line, which shows whole, and not the 11th", async () => {
+    await openReport(15, paragraphs(15, 3));
+    await expect($(fold)).toBeDisplayed();
+    await expect($(fold)).toHaveText("… 続きを表示（残り 5 行）");
+    const edges = await browser.execute(() => {
+      const view = document.querySelector<HTMLElement>("#todo-detail .desc")!;
+      const walker = document.createTreeWalker(view, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      const at = (text: string) => {
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (node.textContent!.trim() !== text) continue;
+          range.selectNodeContents(node);
+          const r = range.getBoundingClientRect();
+          walker.currentNode = view;
+          return { top: r.top, bottom: r.bottom };
+        }
+        return null;
+      };
+      return { view: view.getBoundingClientRect().bottom, tenth: at("line 10"), eleventh: at("line 11") };
+    });
+    expect(edges.tenth!.bottom).toBeLessThanOrEqual(edges.view + 0.5);
+    expect(edges.eleventh!.top).toBeGreaterThanOrEqual(edges.view - 0.5);
+    await $(fold).click();
+    await expect($(fold)).toHaveText("折りたたむ");
+    const open = await heights();
+    expect(open.shown).toBe(open.whole);
   });
 
   it("still opens the editor on a press of the text of a folded description", async () => {
