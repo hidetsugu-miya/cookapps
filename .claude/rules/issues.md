@@ -70,6 +70,7 @@ Each open milestone is one planned tag, and its title is that tag; a closed mile
 Every issue has one, `needs:owner` included: it waits unstarted, and when the release of its tag comes first, it moves to the next tag.
 `release-planner` decides the order from how the issues relate, and `plan-release.py` checks the order against the table below, computes the versions and writes the milestones.
 A tag is a forecast, so the title changes when the order does: `sync` runs after every merge. It does not decide when to release.
+An issue with both `bug` and `size:light` goes ahead of every other waiting issue except its blockers, so a quick fix ships in the earliest tag (at the owner's instruction, 2026-11-06); `plan-release.py` refuses an order that breaks this, and `sync` puts such issues first, behind the issues in progress and waiting for a release.
 Plan only the owner's issues.
 
 ```text
