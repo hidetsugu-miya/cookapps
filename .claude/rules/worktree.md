@@ -7,8 +7,16 @@
 Name the branch `feat/{requirement ID}` or `fix/{summary}`, or `docs/{summary}` for documentation only.
 Every branch reaches main through a pull request (`issues.md`), so several sessions can work and merge at once.
 
+### Make a worktree with `new-worktree.sh`
+
+`.claude/tools/new-worktree.sh {branch}` makes the branch from `origin/main`, puts the worktree in `.claude/worktrees/{branch with / as -}`, copies the files and directories of `.worktreeinclude` from the main checkout to the same places, and runs `npm ci`.
+A worktree made by hand has no `node_modules` and none of the private files (`run-e2e.sh` runs `npm ci` itself when `node_modules` is missing, but nothing copies the private files).
+Call it by the main checkout's path, from any checkout.
+
 ```sh
-claude --worktree feat-c1   # Good: one worktree per feature
+main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
+"$main/.claude/tools/new-worktree.sh" feat/C-2   # Good: branch, copied files and node_modules in one command
+git worktree add -b feat/C-2 .claude/worktrees/feat-C-2 origin/main   # Bad: no copied files, no node_modules
 ```
 
 ### Merge the pull request from the worktree, and keep the main checkout free of work

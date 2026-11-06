@@ -853,7 +853,7 @@ enum Pairing {
     },
 }
 
-fn orca_dir() -> Option<PathBuf> {
+pub(crate) fn orca_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("orca"))
 }
 

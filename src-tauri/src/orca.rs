@@ -21,6 +21,7 @@ use crate::{
     auth::config_dir,
     orca_chat::check_pane_key,
     orca_handoff::{compose, HandoffContext},
+    orca_stream::{clamp_viewport, OrcaViewport},
 };
 
 /// Reading the agents is a few local calls (or one to a paired server).
@@ -487,7 +488,7 @@ pub fn plain_terminals_of(ps: &Value, terminals: &Value) -> Vec<OrcaTerminal> {
         .collect()
 }
 
-/// The project list from `ps` (its `result`), the rows and the plain terminals: the repositories of this machine, and apart from them what the worktrees of each SSH host show. Newest activity first.
+/// The project list from `ps` (its `result`), the rows and the plain terminals: the repositories of this machine (the working ones first, then the rest, each newest activity first), and apart from them what the worktrees of each SSH host show (newest activity first).
 /// A project has the highest rank among its agents (top-level, with a live pty), its worktrees' status and its plain terminals (a green dot), and as sessions its Claude rows and plain terminals.
 pub fn projects_of(
     ps: &Value,
@@ -534,9 +535,12 @@ pub fn projects_of(
     }
     // Newest first; a stable sort keeps the CLI's order between equal times.
     projects.sort_by_key(|p| std::cmp::Reverse(p.at_ms));
-    projects
+    let (mut repos, hosts): (Vec<_>, Vec<_>) = projects
         .into_iter()
-        .partition(|p| !p.key.starts_with("ssh:"))
+        .partition(|p| !p.key.starts_with("ssh:"));
+    // The working projects first; the stable sort keeps the newest-first order inside each part. The SSH hosts keep theirs.
+    repos.sort_by_key(|p| p.status != OrcaStatus::Working);
+    (repos, hosts)
 }
 
 /// The SSH hosts of `ssh.listEditableTargets` (its `result`), in its order: the first line of the label, else the `configHost`. A target with no id or no name is dropped.
@@ -1130,14 +1134,24 @@ fn screen(mirror: &OrcaMirror, handle: &str) -> Result<Vec<String>, String> {
         })
 }
 
-/// The params of `terminal.send`, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed. `client` names this app (A-12 gives the id its stream subscribed with).
-pub(crate) fn input_params(handle: &str, text: &str, client: &str) -> Value {
-    serde_json::json!({
+/// The params of `terminal.send`, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed. `client` names this app (A-12 gives the id its stream subscribed with). With a `viewport` (the pane's size, A-12) the send claims that size again, as Orca's own screen does at every key.
+pub(crate) fn input_params(
+    handle: &str,
+    text: &str,
+    client: &str,
+    viewport: Option<OrcaViewport>,
+) -> Value {
+    let mut params = serde_json::json!({
         "terminal": handle,
         "text": text,
         "enter": false,
         "client": {"id": client, "type": "desktop"},
-    })
+    });
+    if let Some(v) = viewport.map(clamp_viewport) {
+        params["viewport"] = serde_json::json!({"cols": v.cols, "rows": v.rows});
+        params["claimViewport"] = true.into();
+    }
+    params
 }
 
 /// Checks the keys and the terminal.
@@ -1264,10 +1278,12 @@ pub async fn orca_terminal_input(
         let (mirror, handle, text) = (mirror.clone(), handle.clone(), text.clone());
         blocking(move || check_input(&mirror, &handle, &text)).await??;
     }
-    let sent =
-        crate::orca_chat::local_call("terminal.send", input_params(&handle, &text, "cookapps"))
-            .await
-            .and_then(|result| check_accepted(&result));
+    let sent = crate::orca_chat::local_call(
+        "terminal.send",
+        input_params(&handle, &text, "cookapps", None),
+    )
+    .await
+    .and_then(|result| check_accepted(&result));
     if sent.is_err() {
         mirror.forget(&handle);
     }
@@ -2127,6 +2143,32 @@ mod tests {
     }
 
     #[test]
+    fn working_projects_come_first_and_each_part_is_newest_first() {
+        let worktree = |repo: &str, host: &str, status: &str, at: u64| {
+            json!({"path": format!("/w/{repo}"), "repo": repo, "repoId": repo, "displayName": "main", "hostId": host,
+                   "isArchived": false, "sidebarStatus": status, "lastActivityAt": at, "agents": []})
+        };
+        let doc = json!({"worktrees": [
+            worktree("old-working", "local", "working", 1_000),
+            worktree("new-idle", "local", "inactive", 5_000),
+            worktree("new-working", "local", "working", 3_000),
+            // A waiting project is `question`, not `working`: it stays in the second part.
+            worktree("newest-waiting", "local", "waiting", 9_000),
+            worktree("ssh-old-working", "ssh-1", "working", 2_000),
+            worktree("ssh-new-idle", "ssh-2", "inactive", 8_000),
+        ]});
+        let (projects, hosts) = projects_of(&doc, &[], &[]);
+        let names: Vec<_> = projects.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["new-working", "old-working", "newest-waiting", "new-idle"]
+        );
+        // The SSH hosts keep their own order: newest activity first, whatever their status.
+        let keys: Vec<_> = hosts.iter().map(|h| h.key.as_str()).collect();
+        assert_eq!(keys, ["ssh:ssh-2", "ssh:ssh-1"]);
+    }
+
+    #[test]
     fn a_project_shows_the_highest_rank_of_its_agents_and_worktrees() {
         let (projects, _) = project_lists(&projects_doc(), &Value::Null);
         // alpha: a waiting agent (question) outranks a working worktree and an idle one; beta is idle.
@@ -2332,7 +2374,7 @@ mod tests {
     #[test]
     fn the_keys_go_to_the_socket_as_the_cli_sends_them() {
         assert_eq!(
-            input_params("term_1", "\u{3}--json", "cookapps"),
+            input_params("term_1", "\u{3}--json", "cookapps", None),
             json!({
                 "terminal": "term_1",
                 "text": "\u{3}--json",
@@ -2340,5 +2382,24 @@ mod tests {
                 "client": {"id": "cookapps", "type": "desktop"},
             })
         );
+    }
+
+    #[test]
+    fn the_keys_of_a_terminal_that_fits_the_pane_claim_its_size_as_orca_does() {
+        let viewport = |cols, rows| Some(OrcaViewport { cols, rows });
+        assert_eq!(
+            input_params("term_1", "ls\r", "cookapps-1", viewport(120, 40)),
+            json!({
+                "terminal": "term_1",
+                "text": "ls\r",
+                "enter": false,
+                "client": {"id": "cookapps-1", "type": "desktop"},
+                "viewport": {"cols": 120, "rows": 40},
+                "claimViewport": true,
+            })
+        );
+        // A pane too small or too large is claimed at the nearest size Orca takes, as the other messages of the size do.
+        let params = input_params("term_1", "x", "cookapps-1", viewport(5, 900));
+        assert_eq!(params["viewport"], json!({"cols": 20, "rows": 500}));
     }
 }

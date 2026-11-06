@@ -30,7 +30,7 @@ interface XTerm {
   dispose(): void;
   loadAddon(addon: unknown): void;
   onData(listener: (data: string) => void): { dispose(): void };
-  // The options that are set while the terminal lives (A-13): the font and the colors of Ghostty's settings.
+  // The options that are set while the terminal lives (A-13): the font of Ghostty's settings and the colors of the theme (A-14).
   options: { fontFamily: string; fontSize: number; fontWeight: string | number; theme: Record<string, unknown> };
   // `handler` is asked for each key event first; false keeps xterm.js from handling it.
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void;

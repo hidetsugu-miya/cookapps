@@ -81,6 +81,10 @@ def has(issue, label):
     return label in issue.labels
 
 
+def light_bug(issue):
+    return has(issue, "bug") and has(issue, "size:light")
+
+
 def counted(issue):
     return not has(issue, "documentation")
 
@@ -114,11 +118,31 @@ def parse_stream(text):
 
 
 def existing_order(free):
+    """The light bugs first, then the rest, each in the order of the previous plan.
+    A light bug that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
+
     def key(i):
         v = parse_version(i.milestone)
         return (0, v, i.created_at, i.number) if v else (1, (), i.created_at, i.number)
 
-    return sorted(free, key=key)
+    ordered = sorted(free, key=key)
+    rank = {i.number: k for k, i in enumerate(ordered)}
+    by_number = {i.number: i for i in ordered}
+    lead = []
+    taken = set()
+
+    def take(i):
+        if i.number in taken:
+            return
+        taken.add(i.number)
+        for b in sorted((b for b in i.blocked_by if b in by_number), key=rank.get):
+            take(by_number[b])
+        lead.append(i)
+
+    for i in ordered:
+        if light_bug(i):
+            take(i)
+    return lead + [i for i in ordered if i.number not in taken]
 
 
 def derive_groups(ordered):
@@ -280,6 +304,21 @@ def validate_plan(plan, free, fixed, states):
                 problems.append(f"blocked_by: #{b} blocks #{n} but is not placed earlier in order")
             elif state == "open" and b not in free_by and b not in fixed_nums:
                 problems.append(f"blocked_by: #{n} names #{b}, which is open but not planned")
+
+    # a light bug comes before every other issue, except the issues that block it or an earlier light bug
+    needed = set()
+    for k, n in enumerate(order):
+        if n not in free_by or not light_bug(free_by[n]):
+            continue
+        todo = [n]
+        while todo:
+            for b in blocked_by.get(todo.pop(), []):
+                if b not in needed and b in free_by:
+                    needed.add(b)
+                    todo.append(b)
+        late = next((m for m in order[:k] if m in free_by and not light_bug(free_by[m]) and m not in needed), None)
+        if late is not None:
+            problems.append(f"order: #{n} is a bug with size:light but is placed after #{late}")
 
     # cycle
     color = {}

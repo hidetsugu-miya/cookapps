@@ -16,6 +16,18 @@ Object.defineProperty(document, "hidden", { get: () => false, configurable: true
 Object.defineProperty(document, "visibilityState", { get: () => "visible" });
 window.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 16);
 
+// The system's appearance, which a spec cannot change: the app's `matchMedia("(prefers-color-scheme: dark)")` answers the real one until `setDark` in e2e/support.ts sets it, and then tells the listeners.
+const darkQuery = new EventTarget();
+darkQuery.media = "(prefers-color-scheme: dark)";
+const realMatchMedia = window.matchMedia.bind(window);
+let forcedDark = null;
+Object.defineProperty(darkQuery, "matches", { get: () => forcedDark ?? realMatchMedia(darkQuery.media).matches });
+window.__e2e_set_dark__ = (dark) => {
+  forcedDark = dark;
+  darkQuery.dispatchEvent(new Event("change"));
+};
+window.matchMedia = (query) => (query === darkQuery.media ? darkQuery : realMatchMedia(query));
+
 // Lets a script run once even when the driver runs it twice: see `onceId` in e2e/support.ts.
 const ran = new Set();
 window.__e2e_once__ = (id) => !ran.has(id) && !!ran.add(id);
@@ -66,6 +78,14 @@ const answers = {
   orca_stream_input: null,
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
   ghostty_saved: null,
+  // A-14: the two default themes, with example colors (a spec that chooses among themes gives `terminalThemes` of e2e/support.ts); a spec that presses a select mocks `terminal_theme_set`.
+  terminal_themes: {
+    themes: [
+      { name: "Ghostty Default Style Dark", colors: { background: "#10203a", foreground: "#e0e0e0", cursor: "#e0e0e0", cursorAccent: "#10203a", selectionBackground: "#445566", selectionForeground: "#e0e0e0", palette: [] } },
+      { name: "Builtin Tango Light", colors: { background: "#fafafa", foreground: "#202020", cursor: "#202020", cursorAccent: "#fafafa", selectionBackground: "#445566", selectionForeground: "#202020", palette: [] } },
+    ],
+    selection: { light: "Builtin Tango Light", dark: "Ghostty Default Style Dark" },
+  },
   fetch_images: {},
   claude_status: { state: "missing" },
   claude_model_settings: Object.fromEntries(

@@ -73,7 +73,7 @@ export function initGhostty() {
         "Ghostty の設定の取り込み",
         [
           ["Ghostty の設定ファイルを読んで、Orca 画面のターミナルに取り込みます。ファイルは ", code("~/.config/ghostty/"), " と ", code("~/Library/Application Support/com.mitchellh.ghostty/"), " の ", code("config.ghostty"), "、", code("config"), " の順に読み（Orca と同じ場所と順です）、後のファイルが前のものを上書きします"],
-          ["取り込むのは、", code("font-family"), "、", code("font-size"), "、", code("font-thicken"), "、", code("theme"), "（", code("light:…,dark:…"), " も。macOS の外観に合わせます）、", code("background"), " などの色、", code("palette"), "、文字を送る ", code("keybind"), "（例 ", code("delete=text:\\x08"), "）です"],
+          ["取り込むのは、", code("font-family"), "、", code("font-size"), "、", code("font-thicken"), "、", code("theme"), "（", code("light:…,dark:…"), " も。macOS の外観に合わせます）、", code("background"), " などの色、", code("palette"), "、文字を送る ", code("keybind"), "（例 ", code("delete=text:\\x08"), "）です。色は「ターミナルの配色」で選んだテーマが優先し、取り込んだ色は使いません"],
           ["ほかの項目は「取り込めなかった項目」に理由とともに出ます。設定を変えたら、もう一度取り込みます"],
           ["Shift+Enter は、取り込まなくても改行になります（Claude Code の入力で送信しません）"],
         ],

@@ -18,7 +18,7 @@ import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { initOrcaChat } from "./orca-chat.js";
-import { fitMode, hideTerminals, initOrcaTerminal, pruneTerminals, setFitMode, showTerminal } from "./orca-terminal.js";
+import { hideTerminals, initOrcaTerminal, pruneTerminals, showTerminal } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
 import { setNavCount, show, showError } from "./view.js";
 
@@ -218,15 +218,6 @@ function drawHeader() {
   }
   $("orca-status").hidden = menu;
   $("orca-target").hidden = !menu;
-}
-
-// The switch of the terminal's size, beside the connection: only a streamed terminal (a saved environment) can keep Orca's size, so it shows only then.
-function drawFit() {
-  const button = $("orca-fit");
-  button.hidden = streamTarget === null || streamTarget !== view?.target;
-  const fit = fitMode() === "fit";
-  button.textContent = fit ? "合わせる" : "固定";
-  button.setAttribute("aria-label", fit ? "表示: 画面に合わせる（押すと固定）" : "表示: 固定（押すと画面に合わせる）");
 }
 
 // What a read that did not work says (the Orca screen and the side pane show it alike), else null.
@@ -469,7 +460,6 @@ function draw() {
   drawBadge();
   if (!shown()) return;
   drawHeader();
-  drawFit();
   drawNotice();
   drawBell();
   drawFeed();
@@ -749,9 +739,5 @@ export function initOrca() {
   };
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
   $("orca-new").onclick = (e) => openNewDialog(e.currentTarget as Element);
-  $("orca-fit").onclick = () => {
-    setFitMode(fitMode() === "fit" ? "fixed" : "fit");
-    drawFit();
-  };
   load("full");
 }

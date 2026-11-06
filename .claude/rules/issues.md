@@ -70,11 +70,24 @@ Each open milestone is one planned tag, and its title is that tag; a closed mile
 Every issue has one, `needs:owner` included: it waits unstarted, and when the release of its tag comes first, it moves to the next tag.
 `release-planner` decides the order from how the issues relate, and `plan-release.py` checks the order against the table below, computes the versions and writes the milestones.
 A tag is a forecast, so the title changes when the order does: `sync` runs after every merge. It does not decide when to release.
+An issue with both `bug` and `size:light` goes ahead of every other waiting issue except its blockers, so a quick fix ships in the earliest tag (at the owner's instruction, 2026-11-06); `plan-release.py` refuses an order that breaks this, and `sync` puts such issues first, each after the open issues that block it, behind the issues in progress and waiting for a release.
 Plan only the owner's issues.
 
 ```text
 Good: #50 depends on #42 -> planner puts it after #42 -> #50 v0.41.0, and #33 moves to v0.42.0
 Bad:  gh issue create alone, and the issue waits with no milestone
+```
+
+### Record a design or layout discussion in a Discussion (Ideas) when it starts
+
+When you put options to the owner and a discussion begins (layout options, design choices), create a Discussion in the Ideas category (at the owner's instruction, 2026-11-06).
+Write the body in the form of Discussion #108 (what the record is for, the background, what was investigated, the options), and add the URL of the artifact to the options.
+When the owner decides, comment the decisions on the Discussion, and point to it from the body of the issue.
+The repository is public, so keep personal information out (`publishing.md`).
+
+```text
+Good: two layouts are put to the owner -> a Discussion in Ideas with both and the artifact URL -> the owner picks A -> "decisions" comment -> the issue body points to the Discussion
+Bad:  two layouts are put to the owner in the conversation only, and the reason for the choice cannot be found on GitHub later
 ```
 
 ## Pull requests

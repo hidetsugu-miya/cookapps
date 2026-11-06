@@ -1,10 +1,11 @@
 // The terminals of the Orca screen (A-8, A-12): one xterm.js for each tab, in `#orca-term`, of which the selected one is shown. Every tab is a terminal, a Claude session's or a plain one.
-// A saved environment streams the terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. While it fits the pane ("画面に合わせる", the first state) the pane's size is sent and Orca sizes the terminal to it;
-// "固定" keeps the font and Orca's size, and the box scrolls when it does not fit. Leaving the tab, the screen or a shown window ends the stream, and Orca gives the terminal back its own size.
+// A saved environment streams the terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. The terminal is fitted to the pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
+// the size Orca sends (the snapshot's and each `size`) is drawn, as another screen of Orca may take the size. Leaving the tab, the screen or a shown window ends the stream, and Orca gives the terminal back its own size.
 // This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminal shown is a mirror: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
-// Ghostty's settings (A-13) set the font, the colors (the light or dark ones, by the system's appearance) and the keys that send a text; Shift+Enter sends a newline for Claude Code's input.
+// Ghostty's settings (A-13) set the font and the keys that send a text; Shift+Enter sends a newline for Claude Code's input.
+// The colors are those of the theme chosen in the settings (A-14), the light or the dark one by the system's appearance; the colors of Ghostty's settings are used only while there is no theme.
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
 import type { TerminalColors } from "./bindings/TerminalColors";
 import type { TerminalSettings } from "./bindings/TerminalSettings";
@@ -35,9 +36,6 @@ export interface TermSource {
   handle: string;
 }
 
-// How the terminal shown is sized: to the pane (the first state), or as Orca has it. Kept in memory only.
-export type FitMode = "fit" | "fixed";
-
 interface Instance {
   term: XTerm;
   fit: { fit(): void };
@@ -55,26 +53,29 @@ interface Instance {
 const instances = new Map<string, Instance>();
 // The tab whose terminal is shown, null when none is.
 let visibleId: string | null = null;
-let mode: FitMode = "fit";
 // The channel of the stream shown, null when none is: an event of another channel is not drawn.
 let current: { onmessage: (event: OrcaTermEvent) => void } | null = null;
+let unclosed = false;
 let onError: (e: unknown) => void = () => {};
-// Ghostty's settings as imported, null before the first import; the colors follow the system's appearance.
+// Ghostty's settings as imported, null before the first import.
 let settings: TerminalSettings | null = null;
+// The colors of the theme chosen for each appearance (A-14), null before they are read.
+let themeColors: { light: TerminalColors; dark: TerminalColors } | null = null;
 const darkScheme = window.matchMedia("(prefers-color-scheme: dark)");
 
 const container = () => $("orca-term");
 const visible = () => (visibleId === null ? undefined : instances.get(visibleId));
-// Only a stream can keep Orca's size: the mirror is always drawn at the pane's width.
-const fixed = (instance: Instance) => instance.source.kind === "stream" && mode === "fixed";
 
-// The colors of the imported settings for the system's appearance, null when there are none.
-const importedColors = (): TerminalColors | null => (darkScheme.matches ? settings?.dark : settings?.light) ?? null;
+// The colors for the system's appearance: those of the chosen theme, else those of the imported settings; null when there are none.
+const termColors = (): TerminalColors | null => {
+  const dark = darkScheme.matches;
+  return (dark ? themeColors?.dark : themeColors?.light) ?? (dark ? settings?.dark : settings?.light) ?? null;
+};
 
-// The theme of xterm.js: the app's own colors, with those of the imported settings over them.
+// The theme of xterm.js: the app's own colors, with those of the theme (or of the imported settings) over them.
 function xtermTheme(): Record<string, unknown> {
   const style = getComputedStyle(document.documentElement);
-  const colors = importedColors();
+  const colors = termColors();
   const theme: Record<string, unknown> = {
     background: colors?.background ?? style.getPropertyValue("--term-bg").trim(),
     foreground: colors?.foreground ?? style.getPropertyValue("--term-fg").trim(),
@@ -124,13 +125,24 @@ function keybindOf(event: KeyboardEvent) {
   );
 }
 
-// Draws Ghostty's imported settings in every terminal and in the pane around them (null: the app's own font and colors).
+// Draws the font and colors in every terminal and in the pane around them.
+function drawLook() {
+  const options = termOptions();
+  for (const { term } of instances.values()) Object.assign(term.options, options);
+  container().style.background = termColors()?.background ?? "";
+}
+
+// Draws the theme chosen in the settings (A-14) in every terminal (null: the colors of Ghostty's settings, else the app's own).
+export function applyTerminalTheme(next: { light: TerminalColors; dark: TerminalColors } | null) {
+  themeColors = next;
+  drawLook();
+}
+
+// Draws Ghostty's imported settings in every terminal and in the pane around them (null: the app's own font and keys).
 export function applyTerminalSettings(next: TerminalSettings | null) {
   settings = next;
   keybinds = [...(next?.keybinds ?? []), SHIFT_ENTER];
-  const options = termOptions();
-  for (const { term } of instances.values()) Object.assign(term.options, options);
-  container().style.background = importedColors()?.background ?? "";
+  drawLook();
   // The size of a cell changed with the font: the terminal shown fits the pane again.
   fitSoon();
 }
@@ -170,10 +182,10 @@ function newInstance(source: TermSource): Instance {
   return instance;
 }
 
-// Fits the shown terminal to the pane, and tells the stream the new size. A fixed terminal keeps Orca's size.
+// Fits the shown terminal to the pane, and tells the stream the new size.
 function fitVisible() {
   const instance = visible();
-  if (!instance || container().hidden || fixed(instance)) return;
+  if (!instance || container().hidden) return;
   const { cols, rows } = instance.term;
   instance.fit.fit();
   if (instance.source.kind === "stream" && current !== null && (instance.term.cols !== cols || instance.term.rows !== rows)) {
@@ -250,27 +262,28 @@ function drawEvent(instance: Instance, event: OrcaTermEvent) {
   if (event.kind === "snapshot") {
     // The screen now replaces everything drawn before (a resubscription after a lost connection sends it again).
     term.reset();
-    if (fixed(instance) && event.cols && event.rows) term.resize(event.cols, event.rows);
+    if (event.cols && event.rows) term.resize(event.cols, event.rows);
     term.write(event.data);
   } else if (event.kind === "output") {
     term.write(event.data);
   } else if (event.kind === "size") {
-    if (fixed(instance)) term.resize(event.cols, event.rows);
+    term.resize(event.cols, event.rows);
   } else {
     term.write(`\r\n\x1b[2m（ターミナルとのつながりが終わりました${event.message ? `: ${event.message}` : ""}）\x1b[0m`);
   }
 }
 
-// Subscribes the stream of the shown terminal, with the pane's size while it fits the pane.
+// Subscribes the stream of the shown terminal, with the pane's size.
 function startStream(instance: Instance) {
   if (document.hidden) return;
   const channel = new window.__TAURI__.core.Channel<OrcaTermEvent>();
   current = channel;
+  unclosed = false;
   channel.onmessage = (event) => {
     if (current === channel) drawEvent(instance, event);
   };
-  if (!fixed(instance)) instance.fit.fit();
-  const viewport = fixed(instance) ? null : { cols: instance.term.cols, rows: instance.term.rows };
+  instance.fit.fit();
+  const viewport = { cols: instance.term.cols, rows: instance.term.rows };
   invoke("orca_stream_terminal", { handle: instance.source.handle, viewport, channel }).catch((e) => {
     if (current === channel) drawEvent(instance, { kind: "ended", message: String(e) });
   });
@@ -278,9 +291,12 @@ function startStream(instance: Instance) {
 
 // Ends the stream of the terminal shown, so Orca gives it back its own size. With `close` false another stream follows at once, and its subscription lets this one go:
 // a close is a call of its own, which could reach Rust after that subscription and end it.
+// A stream let go without a close is still subscribed in Rust until the next subscription or close: `unclosed` keeps that for the next close.
 function stopStream(close = true) {
-  if (current === null) return;
+  if (current === null && !unclosed) return;
+  const subscribed = current !== null;
   current = null;
+  unclosed = !close && (subscribed || unclosed);
   if (close) invoke("orca_stream_terminal_close").catch(() => {});
 }
 
@@ -312,7 +328,6 @@ export function showTerminal(id: string, source: TermSource) {
     instances.set(id, instance);
   }
   for (const [other, { el }] of instances) el.hidden = other !== id;
-  container().classList.toggle("fixed", fixed(instance));
   fitVisible();
   start(instance);
   instance.term.focus();
@@ -331,7 +346,8 @@ function dropTerminal(id: string) {
   const instance = instances.get(id);
   if (!instance) return;
   if (visibleId === id) {
-    stop();
+    // The tab shown next lets this stream go by its own subscription; with none (`hideTerminals`) the close is sent then.
+    stop(false);
     visibleId = null;
   }
   if (instance.timer !== null) clearInterval(instance.timer);
@@ -346,27 +362,13 @@ export function pruneTerminals(keep: (id: string) => boolean) {
   for (const id of instances.keys()) if (!keep(id)) dropTerminal(id);
 }
 
-export const fitMode = () => mode;
-
-// Switches how the terminal shown is sized. A stream shown is subscribed again: with the pane's size to fit it, without to give Orca its own.
-export function setFitMode(next: FitMode) {
-  if (next === mode) return;
-  mode = next;
-  const instance = visible();
-  if (!instance || container().hidden) return;
-  container().classList.toggle("fixed", fixed(instance));
-  if (instance.source.kind !== "stream") return fitVisible();
-  stopStream(false);
-  startStream(instance);
-}
-
 // What a failed send of typed keys does (the screen shows the message).
 export function initOrcaTerminal(report: (e: unknown) => void) {
   onError = report;
   new ResizeObserver(fitSoon).observe(container());
   // The cell size is measured with the font, so the fit is made again once the fonts are there.
   document.fonts?.ready.then(fitSoon).catch(() => {});
-  // The system's appearance picks the light or the dark colors of the settings.
+  // The system's appearance picks the light or the dark colors.
   darkScheme.addEventListener("change", () => applyTerminalSettings(settings));
   // A hidden window stops the reads and the stream; shown again, the terminal that is shown starts again (a stream sends its screen anew).
   document.addEventListener("visibilitychange", () => {

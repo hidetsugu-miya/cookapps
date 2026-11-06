@@ -2,6 +2,7 @@ import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import {
   boot,
   callsOf,
+  chooseTheme,
   count,
   ghosttyImport,
   holds,
@@ -20,7 +21,9 @@ import {
   sendStream,
   sendTerm,
   setClock,
+  setDark,
   streamList,
+  terminalThemes,
   textsOf,
   threadDetail,
   waitForCalls,
@@ -1008,8 +1011,6 @@ describe("orca: projects", () => {
       await mock("orca_terminal_read", ["$ pwd", "/work/example-app"]);
       await browser.waitUntil(async () => (await screenText()).includes("/work/example-app"), { timeoutMsg: "the next frame never showed" });
       expect(await screenText()).not.toContain("file-b");
-      // A mirror is always drawn at the pane's width: no switch of the size.
-      await expect($("#orca-fit")).not.toBeDisplayed();
     });
 
     it("fits the terminal inside the pane, its last row included", async () => {
@@ -1091,7 +1092,7 @@ describe("orca: a saved environment's stream", () => {
     await waitForCalls("orca_stream_open");
     await sendStream(streamList(rows, worktrees(), terminals));
   }
-  const viewportOf = (call: unknown) => (call as { viewport: { cols: number; rows: number } | null }).viewport;
+  const viewportOf = (call: unknown) => (call as { viewport: { cols: number; rows: number } }).viewport;
 
   it("opens the stream of the saved environment, draws each list it sends, and reads nothing by the clock", async () => {
     await openOrca(orcaOverview([], [], studioOnly));
@@ -1126,8 +1127,8 @@ describe("orca: a saved environment's stream", () => {
     await project("example-app").click();
     const [call] = await waitForCalls("orca_stream_terminal");
     expect(call).toMatchObject({ handle: "term_example-app" });
-    expect(viewportOf(call)!.cols).toBeGreaterThan(20);
-    expect(viewportOf(call)!.rows).toBeGreaterThan(8);
+    expect(viewportOf(call).cols).toBeGreaterThan(20);
+    expect(viewportOf(call).rows).toBeGreaterThan(8);
     expect((await channelCalls("orca_stream_terminal"))[0].channel).toBe(true);
     // No mirror for a streamed terminal.
     expect(await callsOf("orca_terminal_read")).toEqual([]);
@@ -1173,6 +1174,22 @@ describe("orca: a saved environment's stream", () => {
     await expect($("#error")).toHaveText("接続先につながっていません");
   });
 
+  it("draws the size Orca sends, from the snapshot and from each size", async () => {
+    await openStudio();
+    await project("example-app").click();
+    const [call] = await waitForCalls("orca_stream_terminal");
+    const paneRows = viewportOf(call).rows;
+    const rowsDrawn = () => browser.execute(() => document.querySelectorAll("#orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
+    // Showing the pane makes the terminal fit it once more: the ResizeObserver tells (a frame later), and the fit waits FIT_DELAY_MS (50 ms) of ts/orca-terminal.ts. Let that fit pass, or it shrinks the size the snapshot draws.
+    await browser.pause(300);
+    // The terminal fits the pane, and Orca's size is drawn all the same: another screen of Orca may have taken it.
+    await sendTerm({ kind: "snapshot", data: "from the snapshot", cols: 80, rows: paneRows + 3 });
+    await browser.waitUntil(async () => (await screenText()).includes("from the snapshot"), { timeoutMsg: "the screen never showed" });
+    expect(await rowsDrawn()).toBe(paneRows + 3);
+    await sendTerm({ kind: "size", cols: 90, rows: paneRows + 5 });
+    await browser.waitUntil(async () => (await rowsDrawn()) === paneRows + 5, { timeoutMsg: "the size of Orca never drew" });
+  });
+
   it("sends the new size when the pane changes", async () => {
     await openStudio();
     await project("example-app").click();
@@ -1181,8 +1198,8 @@ describe("orca: a saved environment's stream", () => {
     // The list narrows to 20%, so the terminal widens.
     await dragDivider(0.2);
     const [sent] = await waitForCalls(viewport);
-    expect(viewportOf(sent)!.cols).toBeGreaterThan(viewportOf(call)!.cols);
-    expect(viewportOf(sent)!.rows).toBe(viewportOf(call)!.rows);
+    expect(viewportOf(sent).cols).toBeGreaterThan(viewportOf(call).cols);
+    expect(viewportOf(sent).rows).toBe(viewportOf(call).rows);
   });
 
   it("subscribes another tab with no close, and ends the stream of the terminal when another screen or a hidden window shows", async () => {
@@ -1208,29 +1225,26 @@ describe("orca: a saved environment's stream", () => {
     await waitForCalls(subscribe, 3);
   });
 
-  it("keeps Orca's size with 固定, which asks for no size, and fits the pane again with 合わせる", async () => {
+  it("subscribes the next tab with no close when the tab shown leaves the list", async () => {
     await openStudio();
-    await expect($("#orca-fit")).toBeDisplayed();
-    await expect($("#orca-fit")).toHaveText("合わせる");
-    await expect($("#orca-fit")).toHaveAttribute("aria-label", "表示: 画面に合わせる（押すと固定）");
     await project("example-app").click();
     await waitForCalls("orca_stream_terminal");
     const close = await mock("orca_stream_terminal_close", null);
     const subscribe = await mock("orca_stream_terminal", null);
-    await $("#orca-fit").click();
-    await expect($("#orca-fit")).toHaveText("固定");
-    await expect($("#orca-fit")).toHaveAttribute("aria-label", "表示: 固定（押すと画面に合わせる）");
-    expect(viewportOf((await waitForCalls(subscribe))[0])).toBeNull();
-    // Orca's size is drawn as it is, and the pane scrolls.
-    await sendTerm({ kind: "snapshot", data: "wide", cols: 300, rows: 24 });
-    await browser.waitUntil(async () => (await screenText()).includes("wide"), { timeoutMsg: "the screen never showed" });
-    expect(await browser.execute(() => document.getElementById("orca-term")!.classList.contains("fixed"))).toBe(true);
-    expect(await browser.execute(() => document.getElementById("orca-term")!.scrollWidth > document.getElementById("orca-term")!.clientWidth)).toBe(true);
-    await $("#orca-fit").click();
-    await expect($("#orca-fit")).toHaveText("合わせる");
-    expect(viewportOf((await waitForCalls(subscribe, 2))[1])).not.toBeNull();
-    // The new subscription lets the old one go, with no close that could come after it.
+    // The Claude row of the tab shown goes and the project keeps a shell: the tab and its terminal are dropped, and the shell's subscription lets the old one go.
+    await sendStream(streamList(sample().slice(1), worktrees(), [orcaTerminal("example-app", "zsh")]));
+    expect(await waitForCalls(subscribe)).toMatchObject([{ handle: "term_example-app_zsh" }]);
+    await browser.pause(500);
     expect(await callsOf(close)).toEqual([]);
+  });
+
+  it("ends the stream of the terminal when the tab shown leaves the list and no tab is left to show", async () => {
+    await openStudio();
+    await project("example-app").click();
+    await waitForCalls("orca_stream_terminal");
+    const close = await mock("orca_stream_terminal_close", null);
+    await sendStream(streamList(sample().slice(1), worktrees()));
+    await waitForCalls(close);
   });
 
   it("closes a session in Orca and leaves the tab to the next list, with no read", async () => {
@@ -1246,7 +1260,7 @@ describe("orca: a saved environment's stream", () => {
     await expect($("#orca-empty")).toHaveText("セッションはありません");
   });
 
-  it("ends the stream of the list when the target becomes this machine, and hides the size switch", async () => {
+  it("ends the stream of the list when the target becomes this machine", async () => {
     await openStudio();
     const close = await mock("orca_stream_close", null);
     await mock("orca_set_target", null);
@@ -1255,13 +1269,37 @@ describe("orca: a saved environment's stream", () => {
     await pickMenu("このマシン");
     await waitForCalls(close);
     await expect($("#orca-target")).toHaveText("このマシン に接続中");
-    await expect($("#orca-fit")).not.toBeDisplayed();
     // An event of the old stream is not drawn.
     await sendStream(streamList([], worktrees()));
     await browser.pause(300);
     expect(await count("#orca-feed .orca-project")).toBe(4);
   });
 });
+
+// The terminal of the Claude session of example-app (this machine's mirror), shown with the given fixtures; the answer of the command that takes its keys is the returned name.
+async function openTerminal(fixtures: Record<string, unknown> = {}) {
+  await openOrca(orcaOverview(sample(), worktrees()), fixtures);
+  await mock("orca_terminal_read", ["$ ls"]);
+  const input = await mock("orca_terminal_input", null);
+  await project("example-app").click();
+  await browser.waitUntil(async () => (await screenText()).includes("$ ls"), { timeoutMsg: "the screen never showed" });
+  return input;
+}
+
+// What xterm.js draws the terminal with (the only one made), and the pane around it.
+const look = () =>
+  browser.execute(() => {
+    const rows = document.querySelector(".orca-term-box .xterm-rows")!;
+    const style = getComputedStyle(rows);
+    const span = rows.querySelector("span");
+    return {
+      size: style.fontSize,
+      family: style.fontFamily,
+      color: style.color,
+      weight: span ? getComputedStyle(span).fontWeight : null,
+      pane: getComputedStyle(document.getElementById("orca-term")!).backgroundColor,
+    };
+  });
 
 describe("orca: Ghostty's settings in the terminals (A-13)", () => {
   const colors = { background: "#112233", foreground: "#ddeeff", cursor: null, cursorAccent: null, selectionBackground: null, selectionForeground: null, palette: [{ index: 1, color: "#ff0000" }] };
@@ -1280,31 +1318,6 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
     },
   });
 
-  // The terminal of the Claude session of example-app (this machine's mirror), shown with the given fixtures; the answer of the command that takes its keys is the returned name.
-  async function openTerminal(fixtures: Record<string, unknown> = {}) {
-    await openOrca(orcaOverview(sample(), worktrees()), fixtures);
-    await mock("orca_terminal_read", ["$ ls"]);
-    const input = await mock("orca_terminal_input", null);
-    await project("example-app").click();
-    await browser.waitUntil(async () => (await screenText()).includes("$ ls"), { timeoutMsg: "the screen never showed" });
-    return input;
-  }
-
-  // What xterm.js draws the terminal with (the only one made), and the pane around it.
-  const look = () =>
-    browser.execute(() => {
-      const rows = document.querySelector(".orca-term-box .xterm-rows")!;
-      const style = getComputedStyle(rows);
-      const span = rows.querySelector("span");
-      return {
-        size: style.fontSize,
-        family: style.fontFamily,
-        color: style.color,
-        weight: span ? getComputedStyle(span).fontWeight : null,
-        pane: getComputedStyle(document.getElementById("orca-term")!).backgroundColor,
-      };
-    });
-
   // A keydown on the terminal shown, as the key event xterm.js listens for.
   const press = (init: KeyboardEventInit) =>
     browser.execute(
@@ -1316,18 +1329,17 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
       init,
     );
 
-  it("keeps the app's own font and colors until something is imported", async () => {
+  it("keeps the app's own font until something is imported", async () => {
     await openTerminal();
     const own = await look();
     expect(own.size).toBe("13px");
     expect(own.family).not.toContain("Example Mono");
     expect(own.weight).toBe("400");
-    expect(own.pane).not.toBe("rgb(17, 34, 51)");
   });
 
-  it("draws the terminal with the font and colors of the import saved before", async () => {
+  it("draws the terminal with the font of the import saved before", async () => {
     await openTerminal({ ghostty_saved: saved });
-    expect(await look()).toMatchObject({ size: "15px", color: "rgb(221, 238, 255)", weight: "500", pane: "rgb(17, 34, 51)" });
+    expect(await look()).toMatchObject({ size: "15px", weight: "500" });
     expect((await look()).family).toContain("Example Mono");
   });
 
@@ -1340,7 +1352,7 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
     await waitForCalls(imported);
     await $("#nav-orca").click();
     await browser.waitUntil(async () => (await look()).size === "15px", { timeoutMsg: "the terminal never took the font" });
-    expect(await look()).toMatchObject({ color: "rgb(221, 238, 255)", pane: "rgb(17, 34, 51)" });
+    expect((await look()).family).toContain("Example Mono");
   });
 
   it("sends the text of a key of the import in place of the key", async () => {
@@ -1374,5 +1386,62 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
     const input = await openTerminal({ ghostty_saved: ghosttyImport({ settings: { ...saved.settings, keybinds: [shiftEnter] } }) });
     await press({ key: "Enter", shiftKey: true });
     expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app", text: "\n" }]);
+  });
+});
+
+describe("orca: the terminal colors (A-14)", () => {
+  // The light theme is on a cream ground, the dark one on a dark violet.
+  const light = { pane: "rgb(253, 246, 227)", color: "rgb(101, 123, 131)" };
+  const dark = { pane: "rgb(40, 42, 54)", color: "rgb(248, 248, 242)" };
+  const chosen = terminalThemes({ light: "One Light", dark: "Dracula" });
+  const colorsNow = async () => {
+    const { pane, color } = await look();
+    return { pane, color };
+  };
+
+  it("draws the terminal with the theme of the system's appearance, and with the other one when it changes", async () => {
+    await openTerminal({ terminal_themes: chosen });
+    await setDark(false);
+    await browser.waitUntil(async () => (await look()).pane === light.pane, { timeoutMsg: "the terminal never took the light theme" });
+    expect(await colorsNow()).toEqual(light);
+    await setDark(true);
+    await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never took the dark theme" });
+    expect(await colorsNow()).toEqual(dark);
+    await setDark(false);
+    await browser.waitUntil(async () => (await look()).pane === light.pane, { timeoutMsg: "the terminal never went back to the light theme" });
+    expect(await colorsNow()).toEqual(light);
+  });
+
+  it("prefers the theme to the colors of the Ghostty import, and keeps the import's font", async () => {
+    const colors = { background: "#112233", foreground: "#ddeeff", cursor: null, cursorAccent: null, selectionBackground: null, selectionForeground: null, palette: [] };
+    const imported = ghosttyImport({ settings: { fontFamilies: ["Example Mono"], fontSize: 15, fontThicken: false, light: colors, dark: colors, keybinds: [] } });
+    await openTerminal({ terminal_themes: chosen, ghostty_saved: imported });
+    await setDark(true);
+    await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never took the dark theme" });
+    expect(await colorsNow()).toEqual(dark);
+    expect((await look()).size).toBe("15px");
+  });
+
+  it("draws the colors of the Ghostty import while no theme could be read", async () => {
+    const colors = { background: "#112233", foreground: "#ddeeff", cursor: null, cursorAccent: null, selectionBackground: null, selectionForeground: null, palette: [] };
+    const imported = ghosttyImport({ settings: { fontFamilies: [], fontSize: null, fontThicken: false, light: colors, dark: colors, keybinds: [] } });
+    await openTerminal({ terminal_themes: rejects("テーマを読めません"), ghostty_saved: imported });
+    expect(await colorsNow()).toEqual({ pane: "rgb(17, 34, 51)", color: "rgb(221, 238, 255)" });
+  });
+
+  it("draws the terminals again with a theme chosen in the settings, with no restart", async () => {
+    await openTerminal({ terminal_themes: chosen });
+    await setDark(true);
+    await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never took the dark theme" });
+    await $("#nav-settings").click();
+    await $("#settings-tab-orca").click();
+    const set = await mock("terminal_theme_set", { light: "One Light", dark: "Ghostty Default Style Dark" });
+    await chooseTheme("dark", "Ghostty Default Style Dark");
+    expect(await waitForCalls(set)).toEqual([{ selection: { light: "One Light", dark: "Ghostty Default Style Dark" } }]);
+    await $("#nav-orca").click();
+    await browser.waitUntil(async () => (await look()).pane === "rgb(16, 32, 58)", { timeoutMsg: "the terminal never took the chosen theme" });
+    // The theme of the other appearance is unchanged.
+    await setDark(false);
+    await browser.waitUntil(async () => (await look()).pane === light.pane, { timeoutMsg: "the terminal never took the light theme" });
   });
 });

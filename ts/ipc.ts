@@ -28,6 +28,8 @@ import type { SocketStatus } from "./bindings/SocketStatus";
 import type { Summary } from "./bindings/Summary";
 import type { Sync } from "./bindings/Sync";
 import type { Target } from "./bindings/Target";
+import type { TerminalThemes } from "./bindings/TerminalThemes";
+import type { ThemeSelection } from "./bindings/ThemeSelection";
 import type { Timeline } from "./bindings/Timeline";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { Todo } from "./bindings/Todo";
@@ -217,11 +219,11 @@ export interface Commands {
   // A-12: the stream of the saved environment `environment`: the list goes to `channel` (an `OrcaStreamEvent` at a time) until it is closed or another is opened; only one runs.
   orca_stream_open: { args: { environment: string; channel: unknown }; result: null };
   orca_stream_close: { args: undefined; result: null };
-  // A-12: shows the terminal `handle` of the stream: its screen and its bytes go to `channel` (an `OrcaTermEvent` at a time). With `viewport` the terminal fits the pane; with null Orca's size stays.
-  orca_stream_terminal: { args: { handle: string; viewport: OrcaViewport | null; channel: unknown }; result: null };
+  // A-12: shows the terminal `handle` of the stream: its screen and its bytes go to `channel` (an `OrcaTermEvent` at a time). The terminal fits the pane's size, `viewport`.
+  orca_stream_terminal: { args: { handle: string; viewport: OrcaViewport; channel: unknown }; result: null };
   // A-12: shows no terminal; Orca gives the one shown back its own size.
   orca_stream_terminal_close: { args: undefined; result: null };
-  // A-12: the new size of the pane, for the terminal shown while it fits the pane.
+  // A-12: the new size of the pane, for the terminal shown.
   orca_stream_viewport: { args: { viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal shown as it is (no Enter is added); the answer says whether Orca took it.
   orca_stream_input: { args: { handle: string; text: string }; result: null };
@@ -229,6 +231,10 @@ export interface Commands {
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.
   ghostty_import: { args: undefined; result: GhosttyImport };
+  // A-14: Orca's built-in terminal themes and the theme chosen for each appearance. The first time Orca's settings on this Mac can be read they give the choice.
+  terminal_themes: { args: undefined; result: TerminalThemes };
+  // A-14: saves the theme chosen for each appearance and answers it; a name that is not a built-in theme is an error.
+  terminal_theme_set: { args: { selection: ThemeSelection }; result: ThemeSelection };
   app_info: { args: undefined; result: AppInfo };
   update_mode: { args: undefined; result: UpdateMode };
   set_update_mode: { args: { mode: UpdateMode }; result: null };

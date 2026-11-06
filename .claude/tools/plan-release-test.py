@@ -79,6 +79,39 @@ class Ordering(unittest.TestCase):
         b = mk(2, milestone="v0.9.0")
         self.assertEqual([i.number for i in pr.existing_order([a, b])], [2, 1])
 
+    def test_light_bugs_go_first_in_their_old_order(self):
+        a = mk(1, milestone="v0.40.0", created="2026-11-01T00:00:01Z")
+        b = mk(2, ["bug", "size:light"], milestone="v0.42.0", created="2026-11-01T00:00:02Z")
+        c = mk(3, ["bug", "size:light"], milestone="v0.41.0", created="2026-11-01T00:00:03Z")
+        d = mk(4, ["bug", "size:standard"], milestone="v0.41.0", created="2026-11-01T00:00:04Z")
+        e = mk(5, ["size:light"], created="2026-11-01T00:00:05Z")
+        f = mk(6, ["bug", "size:light"], created="2026-11-01T00:00:06Z")
+        self.assertEqual([i.number for i in pr.existing_order([a, b, c, d, e, f])], [3, 2, 6, 1, 4, 5])
+
+    def test_a_light_bug_takes_its_free_blocker_with_it(self):
+        a = mk(1, milestone="v0.40.0")
+        b = mk(2, ["bug", "size:light"], milestone="v0.41.0", blocked=[1])
+        c = mk(3, ["bug", "size:light"], milestone="v0.42.0", blocked=[99])
+        d = mk(4, milestone="v0.40.0")
+        self.assertEqual([i.number for i in pr.existing_order([d, a, b, c])], [1, 2, 3, 4])
+
+    def test_blockers_of_a_light_bug_are_taken_through_the_chain_and_shared_ones_once(self):
+        x = mk(1, milestone="v0.40.0")
+        y = mk(2, milestone="v0.40.0", blocked=[1])
+        z = mk(3, milestone="v0.40.0")
+        b1 = mk(4, ["bug", "size:light"], milestone="v0.41.0", blocked=[2])
+        b2 = mk(5, ["bug", "size:light"], milestone="v0.42.0", blocked=[1, 3])
+        free = [z, y, x, b2, b1]
+        order = [i.number for i in pr.existing_order(free)]
+        self.assertEqual(order, [1, 2, 4, 3, 5])
+        problems = pr.validate_plan(
+            {"order": order, "groups": [], "blocked_by": {"2": [1], "4": [2], "5": [1, 3]}},
+            free,
+            [],
+            {n: "open" for n in range(1, 6)},
+        )
+        self.assertEqual(problems, [])
+
     def test_split_queue(self):
         w2 = mk(1, state="closed", closed="2026-11-02T00:00:00Z", milestone="v0.40.0")
         w1 = mk(2, state="closed", closed="2026-11-01T00:00:00Z", milestone="v0.40.0")
@@ -201,6 +234,34 @@ class Validation(unittest.TestCase):
     def test_blocker_must_come_first(self):
         problems = self.check({"order": [33, 42, 32, 50], "groups": [], "blocked_by": {"33": [42]}})
         self.assertTrue(any("#33" in p and "#42" in p for p in problems))
+
+    def test_light_bug_must_come_before_other_issues(self):
+        free = [mk(1), mk(2, ["bug", "size:light"]), mk(3, ["bug", "size:standard"]), mk(4, ["bug", "size:light"])]
+        plan = lambda order, blocked=None: {"order": order, "groups": [], "blocked_by": blocked or {}}  # noqa: E731
+        check = lambda p: pr.validate_plan(p, free, [], {1: "open", 2: "open", 3: "open", 4: "open"})  # noqa: E731
+        self.assertEqual(check(plan([2, 4, 1, 3])), [])
+        problems = check(plan([1, 2, 4, 3]))
+        self.assertEqual(len(problems), 2)
+        self.assertTrue(all("size:light" in p and "#1" in p for p in problems))
+        self.assertTrue(any("#2" in p for p in problems) and any("#4" in p for p in problems))
+        problems = check(plan([2, 3, 4, 1]))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("#3", problems[0])
+
+    def test_light_bug_may_follow_what_blocks_it(self):
+        free = [mk(1), mk(5), mk(2, ["bug", "size:light"]), mk(4, ["bug", "size:light"])]
+        states = {1: "open", 2: "open", 4: "open", 5: "open", 9: "closed"}
+        check = lambda order, blocked: pr.validate_plan(  # noqa: E731
+            {"order": order, "groups": [], "blocked_by": blocked}, free, [], states
+        )
+        # #2 waits for #1 directly, and #4 for #1 through #2; #5 blocks nothing
+        self.assertEqual(check([1, 2, 4, 5], {"2": [1], "4": [2]}), [])
+        self.assertEqual(check([1, 2, 4, 5], {"2": [1], "4": [9]}), [])
+        problems = check([1, 5, 2, 4], {"2": [1]})
+        self.assertTrue(any("#5" in p and "#2" in p for p in problems))
+        # a blocker placed after the bug does not excuse it, and the blocker rule still applies
+        problems = check([2, 1, 4, 5], {"2": [1]})
+        self.assertTrue(any("blocks #2" in p for p in problems))
 
     def test_cycle(self):
         problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"32": [50], "50": [32]}})
