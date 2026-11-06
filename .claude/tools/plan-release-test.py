@@ -83,27 +83,27 @@ class Ordering(unittest.TestCase):
 
     def test_quick_bugs_go_first_in_their_old_order(self):
         a = mk(1, milestone="v0.40.0", created="2026-11-01T00:00:01Z")
-        b = mk(2, ["bug", "size:s"], milestone="v0.42.0", created="2026-11-01T00:00:02Z")
-        c = mk(3, ["bug", "size:s"], milestone="v0.41.0", created="2026-11-01T00:00:03Z")
-        d = mk(4, ["bug", "size:l"], milestone="v0.41.0", created="2026-11-01T00:00:04Z")
-        e = mk(5, ["size:s"], created="2026-11-01T00:00:05Z")
-        f = mk(6, ["bug", "size:s"], created="2026-11-01T00:00:06Z")
+        b = mk(2, ["bug", "point:2"], milestone="v0.42.0", created="2026-11-01T00:00:02Z")
+        c = mk(3, ["bug", "point:2"], milestone="v0.41.0", created="2026-11-01T00:00:03Z")
+        d = mk(4, ["bug", "point:5"], milestone="v0.41.0", created="2026-11-01T00:00:04Z")
+        e = mk(5, ["point:2"], created="2026-11-01T00:00:05Z")
+        f = mk(6, ["bug", "point:2"], created="2026-11-01T00:00:06Z")
         self.assertEqual([i.number for i in pr.existing_order([a, b, c, d, e, f])], [3, 2, 6, 1, 4, 5])
 
-    def test_bugs_of_xs_s_and_m_go_first_but_not_those_of_l_and_xl(self):
+    def test_bugs_of_1_2_and_3_points_go_first_but_not_those_of_5_and_8(self):
         a = mk(1, created="2026-11-01T00:00:01Z")
-        b = mk(2, ["bug", "size:xl"], created="2026-11-01T00:00:02Z")
-        c = mk(3, ["bug", "size:l"], created="2026-11-01T00:00:03Z")
-        d = mk(4, ["bug", "size:m"], created="2026-11-01T00:00:04Z")
-        e = mk(5, ["bug", "size:s"], created="2026-11-01T00:00:05Z")
-        f = mk(6, ["bug", "size:xs"], created="2026-11-01T00:00:06Z")
-        g = mk(7, ["size:xs"], created="2026-11-01T00:00:07Z")
+        b = mk(2, ["bug", "point:8"], created="2026-11-01T00:00:02Z")
+        c = mk(3, ["bug", "point:5"], created="2026-11-01T00:00:03Z")
+        d = mk(4, ["bug", "point:3"], created="2026-11-01T00:00:04Z")
+        e = mk(5, ["bug", "point:2"], created="2026-11-01T00:00:05Z")
+        f = mk(6, ["bug", "point:1"], created="2026-11-01T00:00:06Z")
+        g = mk(7, ["point:1"], created="2026-11-01T00:00:07Z")
         self.assertEqual([i.number for i in pr.existing_order([a, b, c, d, e, f, g])], [4, 5, 6, 1, 2, 3, 7])
 
     def test_a_quick_bug_takes_its_free_blocker_with_it(self):
         a = mk(1, milestone="v0.40.0")
-        b = mk(2, ["bug", "size:s"], milestone="v0.41.0", blocked=[1])
-        c = mk(3, ["bug", "size:s"], milestone="v0.42.0", blocked=[99])
+        b = mk(2, ["bug", "point:2"], milestone="v0.41.0", blocked=[1])
+        c = mk(3, ["bug", "point:2"], milestone="v0.42.0", blocked=[99])
         d = mk(4, milestone="v0.40.0")
         self.assertEqual([i.number for i in pr.existing_order([d, a, b, c])], [1, 2, 3, 4])
 
@@ -111,8 +111,8 @@ class Ordering(unittest.TestCase):
         x = mk(1, milestone="v0.40.0")
         y = mk(2, milestone="v0.40.0", blocked=[1])
         z = mk(3, milestone="v0.40.0")
-        b1 = mk(4, ["bug", "size:s"], milestone="v0.41.0", blocked=[2])
-        b2 = mk(5, ["bug", "size:s"], milestone="v0.42.0", blocked=[1, 3])
+        b1 = mk(4, ["bug", "point:2"], milestone="v0.41.0", blocked=[2])
+        b2 = mk(5, ["bug", "point:2"], milestone="v0.42.0", blocked=[1, 3])
         free = [z, y, x, b2, b1]
         order = [i.number for i in pr.existing_order(free)]
         self.assertEqual(order, [1, 2, 4, 3, 5])
@@ -141,16 +141,16 @@ class Ordering(unittest.TestCase):
 
     def test_urgent_issues_go_before_quick_bugs_and_the_rest(self):
         a = mk(1, milestone="v0.40.0", created="2026-11-01T00:00:01Z")
-        b = mk(2, ["bug", "size:s"], milestone="v0.40.0", created="2026-11-01T00:00:02Z")
+        b = mk(2, ["bug", "point:2"], milestone="v0.40.0", created="2026-11-01T00:00:02Z")
         c = mk(3, ["urgency:high"], milestone="v0.42.0", created="2026-11-01T00:00:03Z")
-        d = mk(4, ["urgency:high", "bug", "size:s"], created="2026-11-01T00:00:04Z")
+        d = mk(4, ["urgency:high", "bug", "point:2"], created="2026-11-01T00:00:04Z")
         e = mk(5, ["urgency:high"], milestone="v0.41.0", created="2026-11-01T00:00:05Z")
         self.assertEqual([i.number for i in pr.existing_order([a, b, c, d, e])], [5, 3, 4, 2, 1])
 
     def test_an_urgent_issue_takes_its_free_blocker_with_it(self):
         a = mk(1, milestone="v0.40.0")
         b = mk(2, ["urgency:high"], milestone="v0.41.0", blocked=[1])
-        c = mk(3, ["bug", "size:s"], milestone="v0.39.0")
+        c = mk(3, ["bug", "point:2"], milestone="v0.39.0")
         self.assertEqual([i.number for i in pr.existing_order([c, a, b])], [1, 2, 3])
 
     def test_urgency_importance_and_pin_in_the_snapshot(self):
@@ -166,12 +166,12 @@ class Ordering(unittest.TestCase):
 class Allocation(unittest.TestCase):
     def test_current_repository(self):
         queue = [
-            mk(43, ["documentation", "size:s"], state="closed"),
-            mk(42, ["size:xl", "adds:requirement"]),
-            mk(33, ["size:xl", "adds:requirement"]),
-            mk(45, ["documentation", "size:s"]),
-            mk(47, ["size:m"]),
-            mk(48, ["size:m"]),
+            mk(43, ["documentation", "point:2"], state="closed"),
+            mk(42, ["point:8", "adds:requirement"]),
+            mk(33, ["point:8", "adds:requirement"]),
+            mk(45, ["documentation", "point:2"]),
+            mk(47, ["point:3"]),
+            mk(48, ["point:3"]),
         ]
         slots = pr.allocate(queue, [], "v0.39.2")
         self.assertEqual(
@@ -180,60 +180,60 @@ class Allocation(unittest.TestCase):
         )
 
     def test_cap_of_three_and_patch_bumps(self):
-        queue = [mk(n, ["size:m"]) for n in range(1, 5)]
+        queue = [mk(n, ["point:3"]) for n in range(1, 5)]
         self.assertEqual(
             slot_view(pr.allocate(queue, [], "v0.1.0")),
             [("v0.1.1", [1, 2, 3]), ("v0.1.2", [4])],
         )
 
     def test_documentation_does_not_count(self):
-        queue = [mk(1, ["size:m"]), mk(2, ["size:m"]), mk(3, ["documentation"]), mk(4, ["size:m"]), mk(5, ["size:m"])]
+        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["documentation"]), mk(4, ["point:3"]), mk(5, ["point:3"])]
         self.assertEqual(
             slot_view(pr.allocate(queue, [], "v0.1.0")),
             [("v0.1.1", [1, 2, 3, 4]), ("v0.1.2", [5])],
         )
 
     def test_urgent_closes_the_slot(self):
-        queue = [mk(1, ["urgency:high", "size:s"]), mk(2, ["size:s"]), mk(3, ["size:s"])]
+        queue = [mk(1, ["urgency:high", "point:2"]), mk(2, ["point:2"]), mk(3, ["point:2"])]
         self.assertEqual(
             slot_view(pr.allocate(queue, [], "v0.1.0")),
             [("v0.1.1", [1]), ("v0.1.2", [2, 3])],
         )
 
     def test_release_now_no_longer_closes_the_slot(self):
-        queue = [mk(1, ["release:now", "size:s"]), mk(2, ["size:s"]), mk(3, ["size:s"])]
+        queue = [mk(1, ["release:now", "point:2"]), mk(2, ["point:2"]), mk(3, ["point:2"])]
         self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1, 2, 3])])
 
-    def test_pinned_issues_share_their_version_even_with_an_xl_one(self):
+    def test_pinned_issues_share_their_version_even_with_an_8_point_one(self):
         queue = [
-            mk(128, ["size:m", "release:pin"], milestone="v0.42.0", state="closed"),
-            mk(135, ["size:xl", "release:pin"], milestone="v0.42.0"),
-            mk(140, ["size:m"]),
+            mk(128, ["point:3", "release:pin"], milestone="v0.42.0", state="closed"),
+            mk(135, ["point:8", "release:pin"], milestone="v0.42.0"),
+            mk(140, ["point:3"]),
         ]
         self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [128, 135]), ("v0.42.1", [140])])
 
     def test_a_pinned_slot_keeps_its_version_and_closes_the_slot_before_it(self):
         queue = [
-            mk(1, ["size:m"]),
-            mk(128, ["size:m", "release:pin"], milestone="v0.42.0"),
-            mk(135, ["size:xl", "release:pin"], milestone="v0.42.0"),
+            mk(1, ["point:3"]),
+            mk(128, ["point:3", "release:pin"], milestone="v0.42.0"),
+            mk(135, ["point:8", "release:pin"], milestone="v0.42.0"),
         ]
         self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.41.1", [1]), ("v0.42.0", [128, 135])])
 
     def test_a_later_pinned_issue_joins_the_first_one_and_the_others_stay_in_order(self):
         queue = [
-            mk(128, ["size:m", "release:pin"], milestone="v0.42.0", state="closed"),
-            mk(130, ["size:m"], state="closed"),
-            mk(135, ["size:xl", "release:pin"], milestone="v0.42.0"),
+            mk(128, ["point:3", "release:pin"], milestone="v0.42.0", state="closed"),
+            mk(130, ["point:3"], state="closed"),
+            mk(135, ["point:8", "release:pin"], milestone="v0.42.0"),
         ]
         self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [128, 135]), ("v0.42.1", [130])])
 
     def test_pins_of_different_versions_or_without_a_version_stay_ordinary(self):
         queue = [
-            mk(1, ["size:xl", "release:pin"], milestone="v0.42.0"),
-            mk(2, ["size:m", "release:pin"], milestone="v0.43.0"),
-            mk(3, ["size:xl", "release:pin"]),
-            mk(4, ["size:m", "release:pin"]),
+            mk(1, ["point:8", "release:pin"], milestone="v0.42.0"),
+            mk(2, ["point:3", "release:pin"], milestone="v0.43.0"),
+            mk(3, ["point:8", "release:pin"]),
+            mk(4, ["point:3", "release:pin"]),
         ]
         self.assertEqual(
             slot_view(pr.allocate(queue, [], "v0.41.0")),
@@ -241,19 +241,19 @@ class Allocation(unittest.TestCase):
         )
 
     def test_a_pinned_version_that_is_already_reached_is_refused(self):
-        queue = [mk(1, ["adds:requirement"]), mk(2, ["size:xl"]), mk(128, ["release:pin"], milestone="v0.42.0")]
+        queue = [mk(1, ["adds:requirement"]), mk(2, ["point:8"]), mk(128, ["release:pin"], milestone="v0.42.0")]
         with self.assertRaises(pr.PlanError) as ctx:
             pr.allocate(queue, [], "v0.41.0")
         self.assertIn("v0.42.0 is pinned (#128)", ctx.exception.problems[0])
         with self.assertRaises(pr.PlanError):
             pr.allocate([mk(128, ["release:pin"], milestone="v0.41.0")], [], "v0.41.0")
 
-    def test_an_unpinned_xl_issue_stays_alone(self):
-        queue = [mk(1, ["size:m", "release:pin"], milestone="v0.42.0"), mk(2, ["size:xl"], milestone="v0.42.0")]
+    def test_an_unpinned_8_point_issue_stays_alone(self):
+        queue = [mk(1, ["point:3", "release:pin"], milestone="v0.42.0"), mk(2, ["point:8"], milestone="v0.42.0")]
         self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [1]), ("v0.42.1", [2])])
 
     def test_a_documentation_only_pin_does_not_wait_for_the_next_slot(self):
-        queue = [mk(1, ["documentation", "release:pin"], milestone="v0.42.0"), mk(2, ["size:m"])]
+        queue = [mk(1, ["documentation", "release:pin"], milestone="v0.42.0"), mk(2, ["point:3"])]
         self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [1]), ("v0.42.1", [2])])
 
     def test_pinned_issues_are_not_derived_into_groups(self):
@@ -263,27 +263,27 @@ class Allocation(unittest.TestCase):
         self.assertEqual(pr.derive_groups([a, b, c]), [[2, 3]])
 
     def test_documentation_only_slot_joins_next(self):
-        queue = [mk(1, ["documentation"]), mk(2, ["size:xl"]), mk(3, ["size:m"])]
+        queue = [mk(1, ["documentation"]), mk(2, ["point:8"]), mk(3, ["point:3"])]
         self.assertEqual(
             slot_view(pr.allocate(queue, [], "v0.1.0")),
             [("v0.1.1", [1, 2]), ("v0.1.2", [3])],
         )
 
     def test_trailing_documentation_only_slot_stays(self):
-        queue = [mk(1, ["size:xl"]), mk(2, ["documentation"])]
+        queue = [mk(1, ["point:8"]), mk(2, ["documentation"])]
         self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1]), ("v0.1.2", [2])])
 
     def test_group_that_does_not_fit_starts_a_new_slot(self):
-        queue = [mk(1, ["size:m"]), mk(2, ["size:m"]), mk(3, ["size:m"]), mk(4, ["size:m"])]
+        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["point:3"]), mk(4, ["point:3"])]
         slots = pr.allocate(queue, [[3, 4]], "v0.1.0")
         self.assertEqual(slot_view(slots), [("v0.1.1", [1, 2]), ("v0.1.2", [3, 4])])
 
     def test_group_that_fits_stays(self):
-        queue = [mk(1, ["size:m"]), mk(2, ["size:m"]), mk(3, ["size:m"])]
+        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["point:3"])]
         self.assertEqual(slot_view(pr.allocate(queue, [[2, 3]], "v0.1.0")), [("v0.1.1", [1, 2, 3])])
 
     def test_minor_bump_for_requirement_then_patch(self):
-        queue = [mk(1, ["size:xl", "adds:requirement"]), mk(2, ["size:xl"]), mk(3, ["size:xl", "adds:requirement"])]
+        queue = [mk(1, ["point:8", "adds:requirement"]), mk(2, ["point:8"]), mk(3, ["point:8", "adds:requirement"])]
         self.assertEqual(
             slot_view(pr.allocate(queue, [], "v0.5.3")),
             [("v0.6.0", [1]), ("v0.6.1", [2]), ("v0.7.0", [3])],
@@ -298,7 +298,7 @@ class Allocation(unittest.TestCase):
 
 class Validation(unittest.TestCase):
     def setUp(self):
-        self.free = [mk(32), mk(50), mk(42, ["size:xl"]), mk(33)]
+        self.free = [mk(32), mk(50), mk(42, ["point:8"]), mk(33)]
         self.fixed = [mk(7)]
         self.states = {7: "open", 32: "open", 50: "open", 42: "open", 33: "open", 9: "closed"}
 
@@ -319,9 +319,9 @@ class Validation(unittest.TestCase):
         problems = self.check({"order": [32, 42, 50, 33], "groups": [[32, 50]], "blocked_by": {}})
         self.assertTrue(any("adjacent" in p for p in problems))
 
-    def test_group_with_xl_and_over_three(self):
+    def test_group_with_8_points_and_over_three(self):
         problems = self.check({"order": [32, 42, 50, 33], "groups": [[32, 42]], "blocked_by": {}})
-        self.assertTrue(any("size:xl" in p for p in problems))
+        self.assertTrue(any("point:8" in p for p in problems))
         free = [mk(n) for n in (1, 2, 3, 4)]
         problems = pr.validate_plan({"order": [1, 2, 3, 4], "groups": [[1, 2, 3, 4]], "blocked_by": {}}, free, [], {})
         self.assertTrue(any("3" in p for p in problems))
@@ -335,20 +335,20 @@ class Validation(unittest.TestCase):
         self.assertTrue(any("#33" in p and "#42" in p for p in problems))
 
     def test_quick_bug_must_come_before_other_issues(self):
-        free = [mk(1), mk(2, ["bug", "size:s"]), mk(3, ["bug", "size:l"]), mk(4, ["bug", "size:s"])]
+        free = [mk(1), mk(2, ["bug", "point:2"]), mk(3, ["bug", "point:5"]), mk(4, ["bug", "point:2"])]
         plan = lambda order, blocked=None: {"order": order, "groups": [], "blocked_by": blocked or {}}  # noqa: E731
         check = lambda p: pr.validate_plan(p, free, [], {1: "open", 2: "open", 3: "open", 4: "open"})  # noqa: E731
         self.assertEqual(check(plan([2, 4, 1, 3])), [])
         problems = check(plan([1, 2, 4, 3]))
         self.assertEqual(len(problems), 2)
-        self.assertTrue(all("bug of size xs, s or m" in p and "#1" in p for p in problems))
+        self.assertTrue(all("bug of 1, 2 or 3 points" in p and "#1" in p for p in problems))
         self.assertTrue(any("#2" in p for p in problems) and any("#4" in p for p in problems))
         problems = check(plan([2, 3, 4, 1]))
         self.assertEqual(len(problems), 1)
         self.assertIn("#3", problems[0])
 
-    def test_bugs_of_xs_s_and_m_must_come_first_but_not_those_of_l_and_xl(self):
-        free = [mk(1), mk(2, ["bug", "size:xs"]), mk(3, ["bug", "size:m"]), mk(4, ["bug", "size:l"]), mk(5, ["bug", "size:xl"])]
+    def test_bugs_of_1_2_and_3_points_must_come_first_but_not_those_of_5_and_8(self):
+        free = [mk(1), mk(2, ["bug", "point:1"]), mk(3, ["bug", "point:3"]), mk(4, ["bug", "point:5"]), mk(5, ["bug", "point:8"])]
         states = {n: "open" for n in range(1, 6)}
         check = lambda order: pr.validate_plan({"order": order, "groups": [], "blocked_by": {}}, free, [], states)  # noqa: E731
         self.assertEqual(check([2, 3, 1, 4, 5]), [])
@@ -356,7 +356,7 @@ class Validation(unittest.TestCase):
         self.assertEqual(check([2, 3, 5, 4, 1]), [])
 
     def test_quick_bug_may_follow_what_blocks_it(self):
-        free = [mk(1), mk(5), mk(2, ["bug", "size:s"]), mk(4, ["bug", "size:s"])]
+        free = [mk(1), mk(5), mk(2, ["bug", "point:2"]), mk(4, ["bug", "point:2"])]
         states = {1: "open", 2: "open", 4: "open", 5: "open", 9: "closed"}
         check = lambda order, blocked: pr.validate_plan(  # noqa: E731
             {"order": order, "groups": [], "blocked_by": blocked}, free, [], states
@@ -371,7 +371,7 @@ class Validation(unittest.TestCase):
         self.assertTrue(any("blocks #2" in p for p in problems))
 
     def test_urgent_issue_must_come_before_other_issues_but_after_its_blockers(self):
-        free = [mk(1), mk(2, ["urgency:high"]), mk(3, ["bug", "size:s"]), mk(4, ["urgency:high"])]
+        free = [mk(1), mk(2, ["urgency:high"]), mk(3, ["bug", "point:2"]), mk(4, ["urgency:high"])]
         states = {1: "open", 2: "open", 3: "open", 4: "open"}
         check = lambda order, blocked=None: pr.validate_plan(  # noqa: E731
             {"order": order, "groups": [], "blocked_by": blocked or {}}, free, [], states
@@ -385,7 +385,7 @@ class Validation(unittest.TestCase):
         self.assertEqual(check([1, 2, 4, 3], {"2": [1], "4": [1], "3": [1]}), [])
 
     def test_quick_bug_may_follow_urgent_issues_only(self):
-        free = [mk(1), mk(2, ["urgency:high"]), mk(3, ["bug", "size:s"])]
+        free = [mk(1), mk(2, ["urgency:high"]), mk(3, ["bug", "point:2"])]
         states = {1: "open", 2: "open", 3: "open"}
         ok = pr.validate_plan({"order": [2, 3, 1], "groups": [], "blocked_by": {}}, free, [], states)
         self.assertEqual(ok, [])
@@ -467,15 +467,15 @@ class ReleaseDecision(unittest.TestCase):
         self.assertEqual((out["rule"], out["decision"]), ("R0", "wait"))
 
     def test_urgent_change_or_urgent_release_pr(self):
-        out = self.decide([self.waiting(1, ["urgency:high", "size:s"]), self.waiting(2, ["size:xl"])])
+        out = self.decide([self.waiting(1, ["urgency:high", "point:2"]), self.waiting(2, ["point:8"])])
         self.assertEqual((out["rule"], out["decision"]), ("R1", "release"))
         out = self.decide([self.waiting(1)], ["urgency:high"])
         self.assertEqual((out["rule"], out["decision"]), ("R1", "release"))
         out = self.decide([self.waiting(1, ["release:now"])])
         self.assertEqual(out["rule"], "R4")
 
-    def test_xl_change(self):
-        out = self.decide([self.waiting(1, ["size:xl"])])
+    def test_8_point_change(self):
+        out = self.decide([self.waiting(1, ["point:8"])])
         self.assertEqual((out["rule"], out["decision"]), ("R2", "release"))
 
     def test_important_bug(self):
@@ -485,14 +485,14 @@ class ReleaseDecision(unittest.TestCase):
         self.assertEqual(out["rule"], "R4")
 
     def test_a_change_closed_as_not_planned_does_not_wait(self):
-        dropped = mk(1, ["size:xl", "urgency:high"], state="closed", milestone="v0.40.0", closed="2026-11-06T11:00:00Z", reason="not_planned")
+        dropped = mk(1, ["point:8", "urgency:high"], state="closed", milestone="v0.40.0", closed="2026-11-06T11:00:00Z", reason="not_planned")
         out = self.decide([dropped])
         self.assertEqual((out["rule"], out["decision"], out["changes"], out["waiting"]), ("R4", None, 0, []))
         out = self.decide([dropped, self.waiting(2, ["bug"], hours=30)])
         self.assertEqual((out["rule"], out["changes"], out["oldest_hours"]), ("R4", 1, 30.0))
 
     def test_documentation_is_not_counted(self):
-        out = self.decide([self.waiting(1, ["documentation", "urgency:high"]), self.waiting(2, ["documentation", "size:xl"])])
+        out = self.decide([self.waiting(1, ["documentation", "urgency:high"]), self.waiting(2, ["documentation", "point:8"])])
         self.assertEqual((out["rule"], out["decision"], out["changes"]), ("R4", None, 0))
 
     def test_judgment_facts(self):
@@ -505,9 +505,9 @@ class ReleaseDecision(unittest.TestCase):
 
 
 class Refuse(unittest.TestCase):
-    def test_open_issue_without_size_label(self):
-        issues = [mk(1, ["size:s"]), mk(2, ["bug"]), mk(3, state="closed")]
-        self.assertEqual([i.number for i in pr.missing_size(issues)], [2])
+    def test_open_issue_without_points_label(self):
+        issues = [mk(1, ["point:2"]), mk(2, ["bug"]), mk(3, state="closed")]
+        self.assertEqual([i.number for i in pr.missing_points(issues)], [2])
 
 
 def simulate(ops, milestones):
@@ -659,10 +659,10 @@ class Next(unittest.TestCase):
         milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0"), ms(6, "v0.41.1"), ms(7, "backlog")]
         issues = [
             mk(43, ["documentation"], milestone="v0.40.0", state="closed", closed="2026-11-04T00:00:00Z"),
-            mk(44, ["size:xl"], milestone="v0.40.0", state="closed", closed="2026-11-04T01:00:00Z", reason="not_planned"),
-            mk(42, ["size:xl"], milestone="v0.40.0"),
-            mk(41, ["size:s"], milestone="v0.40.0", created="2026-11-01T00:00:01Z"),
-            mk(40, ["size:s"], milestone="v0.40.0", blocked=[42]),
+            mk(44, ["point:8"], milestone="v0.40.0", state="closed", closed="2026-11-04T01:00:00Z", reason="not_planned"),
+            mk(42, ["point:8"], milestone="v0.40.0"),
+            mk(41, ["point:2"], milestone="v0.40.0", created="2026-11-01T00:00:01Z"),
+            mk(40, ["point:2"], milestone="v0.40.0", blocked=[42]),
             mk(39, ["needs:owner"], milestone="v0.40.0"),
             mk(38, ["needs:owner"], milestone="v0.40.0", blocked=[42]),
             mk(37, [], milestone="v0.40.0"),
@@ -734,8 +734,8 @@ class DeriveGroups(unittest.TestCase):
         free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.41.0"), mk(3, milestone="v0.40.0")]
         self.assertEqual(pr.derive_groups(free), [])
 
-    def test_xl_breaks_a_run(self):
-        free = [mk(1, milestone="v0.40.0"), mk(2, ["size:xl"], milestone="v0.40.0"), mk(3, milestone="v0.40.0"), mk(4, milestone="v0.40.0")]
+    def test_8_point_issue_breaks_a_run(self):
+        free = [mk(1, milestone="v0.40.0"), mk(2, ["point:8"], milestone="v0.40.0"), mk(3, milestone="v0.40.0"), mk(4, milestone="v0.40.0")]
         self.assertEqual(pr.derive_groups(free), [[3, 4]])
 
     def test_run_over_the_cap_is_left_to_the_allocation(self):

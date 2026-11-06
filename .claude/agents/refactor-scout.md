@@ -42,7 +42,7 @@ tools: Read, Grep, Glob, Bash
 根拠: {path:line を、必要なだけ}
 影響範囲: {触れるファイルと呼び出し元の数。graphify affected か rg か}
 直す方向: {具体的な方向。動きを変えないこと}
-size の見立て: {xs|s|m|l|xl} {理由を一行}
+ポイントの見立て: {1|2|3|5|8} {理由を一行}
 ```
 
-size は `.claude/rules/issues.md` の表で決める。
+ポイントは `.claude/rules/issues.md` の表で決める。

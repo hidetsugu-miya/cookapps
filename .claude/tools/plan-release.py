@@ -84,17 +84,17 @@ def has(issue, label):
     return label in issue.labels
 
 
-QUICK_SIZES = ("size:xs", "size:s", "size:m")
+QUICK_POINTS = ("point:1", "point:2", "point:3")
 
 
 def quick_bug(issue):
-    """A bug of size xs, s or m goes to the front of the queue; a bug of size l or xl does not."""
-    return has(issue, "bug") and any(has(issue, size) for size in QUICK_SIZES)
+    """A bug of 1, 2 or 3 points goes to the front of the queue; a bug of 5 or 8 points does not."""
+    return has(issue, "bug") and any(has(issue, label) for label in QUICK_POINTS)
 
 
 def solo(issue):
-    """A size:xl change is a version of its own."""
-    return has(issue, "size:xl")
+    """A change of 8 points is a version of its own."""
+    return has(issue, "point:8")
 
 
 def urgent(issue):
@@ -118,8 +118,8 @@ def eligible_title(title):
     return parse_version(title) is not None or (title.startswith(TMP_PREFIX) and len(title) > len(TMP_PREFIX))
 
 
-def missing_size(issues):
-    return [i for i in issues if i.state == "open" and not any(label.startswith("size:") for label in i.labels)]
+def missing_points(issues):
+    return [i for i in issues if i.state == "open" and not any(label.startswith("point:") for label in i.labels)]
 
 
 def parse_stream(text):
@@ -173,7 +173,7 @@ def existing_order(free):
 
 def derive_groups(ordered):
     """Groups of a previous plan: consecutive issues that share a version milestone, so that a sync keeps them together.
-    A size:xl issue ends a run, a pinned issue is never in a run (it has its own slot), and a run over the cap is left to the allocation."""
+    An 8-point issue ends a run, a pinned issue is never in a run (it has its own slot), and a run over the cap is left to the allocation."""
     groups = []
     run = []
 
@@ -208,7 +208,7 @@ def split_issues(issues, pr_closing):
 
 def allocate(queue, groups, base):
     """Walks the queue and returns [{"version", "issues": [numbers]}].
-    The issues pinned to one version (release:pin) share one slot of that version, placed where the first of them stands; nothing else joins it, and an xl one needs no slot of its own.
+    The issues pinned to one version (release:pin) share one slot of that version, placed where the first of them stands; nothing else joins it, and an 8-point one needs no slot of its own.
     A pinned version that earlier slots have reached already is refused: the pin is never moved."""
     pos = {i.number: k for k, i in enumerate(queue)}
     group_len = {}
@@ -348,7 +348,7 @@ def validate_plan(plan, free, fixed, states):
         if any(pin_version(free_by[n]) for n in g):
             problems.append(f"{label}: holds an issue with release:pin (pinned issues share their version without a group)")
         if len(g) > 1 and any(solo(free_by[n]) for n in g):
-            problems.append(f"{label}: holds a size:xl issue with another issue")
+            problems.append(f"{label}: holds a point:8 issue with another issue")
         if sum(1 for n in g if counted(free_by[n])) > MAX_COUNTED:
             problems.append(f"{label}: holds more than {MAX_COUNTED} counted issues")
 
@@ -382,7 +382,7 @@ def validate_plan(plan, free, fixed, states):
             elif state == "open" and b not in free_by and b not in fixed_nums:
                 problems.append(f"blocked_by: #{n} names #{b}, which is open but not planned")
 
-    # An urgent issue comes before every other issue, then a quick bug (a bug of size xs, s or m) comes before every other issue but the urgent ones.
+    # An urgent issue comes before every other issue, then a quick bug (a bug of 1, 2 or 3 points) comes before every other issue but the urgent ones.
     # The issues that block it, or an earlier issue of its kind, may stand before it.
     def front(member, allowed, message):
         needed = set()
@@ -403,7 +403,7 @@ def validate_plan(plan, free, fixed, states):
     front(
         quick_bug,
         lambda i: quick_bug(i) or urgent(i),
-        lambda n, late: f"order: #{n} is a bug of size xs, s or m but is placed after #{late}",
+        lambda n, late: f"order: #{n} is a bug of 1, 2 or 3 points but is placed after #{late}",
     )
 
     # cycle
@@ -767,10 +767,10 @@ def load_state():
     )
 
 
-def refuse_missing_size(state):
-    bad = missing_size(state.issues.values())
+def refuse_missing_points(state):
+    bad = missing_points(state.issues.values())
     if bad:
-        raise PlanError([f"#{i.number} has no size:* label; run the issue-plan skill" for i in bad])
+        raise PlanError([f"#{i.number} has no point:* label; run the issue-plan skill" for i in bad])
 
 
 def describe(op):
@@ -872,7 +872,7 @@ def cmd_apply(args):
     except (OSError, ValueError) as e:
         raise PlanError([f"{args.plan}: {e}"])
     state = load_state()
-    refuse_missing_size(state)
+    refuse_missing_points(state)
     problems = validate_plan(plan, state.free, state.fixed, state.states)
     if problems:
         raise PlanError(problems)
@@ -890,7 +890,7 @@ def cmd_apply(args):
 
 def sync(args, base=None):
     state = load_state()
-    refuse_missing_size(state)
+    refuse_missing_points(state)
     execute(state, [i.number for i in state.free], derive_groups(state.free), None, {}, base or state.base, args.dry_run)
 
 
@@ -904,7 +904,7 @@ def cmd_close(args):
     if tag not in [t["name"] for t in api(f"repos/{repo}/tags?per_page=100", paginate=True)]:
         raise PlanError([f"tag {tag} does not exist on GitHub"])
     state = load_state()
-    refuse_missing_size(state)
+    refuse_missing_points(state)
     versions = sorted(
         (parse_version(m["title"]), m) for m in state.milestones if m["state"] == "open" and parse_version(m["title"])
     )
