@@ -4,6 +4,7 @@
 // This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminal shown is a mirror: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
+// An image pasted or dropped on the terminal shown is put in its worktree and its path is typed in the terminal (A-10).
 // Ghostty's settings (A-13) set the font and the keys that send a text; Shift+Enter sends a newline for Claude Code's input.
 // The colors are those of the theme chosen in the settings (A-14), the light or the dark one by the system's appearance, or the one the settings fix (A-15); the colors of Ghostty's settings are used only while there is no theme.
 import type { Appearance } from "./bindings/Appearance";
@@ -13,6 +14,7 @@ import type { TerminalSettings } from "./bindings/TerminalSettings";
 import type { TextKeybind } from "./bindings/TextKeybind";
 import { $, composing } from "./dom.js";
 import { invoke } from "./ipc.js";
+import { listenForImages, readImages, uploadAttachments } from "./orca-attach.js";
 
 const SCROLLBACK = 5000;
 const MIRROR_MS = 1000;
@@ -32,9 +34,12 @@ const SHIFT_ENTER: TextKeybind = { key: "Enter", shift: true, ctrl: false, alt: 
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"];
 
 // Where a terminal comes from: the stream of a saved environment, or the mirror of this machine.
+// `path` is the worktree the terminal runs in and `environment` the target, where an image dropped on it is put (A-10).
 export interface TermSource {
   kind: "stream" | "mirror";
   handle: string;
+  path: string;
+  environment: string | null;
 }
 
 interface Instance {
@@ -224,6 +229,24 @@ async function sendKeys(instance: Instance) {
   if (instance.source.kind === "mirror") setTimeout(() => readFrame(instance), 150);
 }
 
+// ---- images (A-10) ----
+
+// Puts the images pasted or dropped on the terminal shown in its worktree and types their paths in it, as Orca's own terminal does. A file that is not an image is refused with the message.
+async function attach(files: File[]) {
+  const instance = visible();
+  if (!instance) return;
+  const { images, message } = await readImages(files);
+  if (message !== null) onError(message);
+  if (!images.length) return;
+  try {
+    const lines = await uploadAttachments(images, instance.source.path, instance.source.environment);
+    // The paths go only to the terminal the images were put on.
+    if (visible() === instance) instance.term.paste(`${lines.join(" ")} `);
+  } catch (e) {
+    onError(e);
+  }
+}
+
 // ---- the mirror (this machine) ----
 
 async function readFrame(instance: Instance) {
@@ -367,6 +390,7 @@ export function pruneTerminals(keep: (id: string) => boolean) {
 // What a failed send of typed keys does (the screen shows the message).
 export function initOrcaTerminal(report: (e: unknown) => void) {
   onError = report;
+  listenForImages(container(), attach);
   new ResizeObserver(fitSoon).observe(container());
   // The cell size is measured with the font, so the fit is made again once the fonts are there.
   document.fonts?.ready.then(fitSoon).catch(() => {});

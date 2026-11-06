@@ -8,6 +8,7 @@ import { tag } from "./dom.js";
 import { CHEVRON_SVG, CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
 import { type HandoffDestination, invoke } from "./ipc.js";
 import { closeChat, isChatOwner, makeChatView, openChat, setChatWorking, type ChatView } from "./orca-chat.js";
+import { type Attachment, drawStrip, listenForImages, readImages, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
 import { elapsed, GROUP_LABELS, GROUP_STATUS, heldOrca, noticeOf, openInOrca, openWorktreeDialog, refreshOrca, STATUS_LABELS, statusIcon, worktreeLabel } from "./orca.js";
 
@@ -42,6 +43,8 @@ interface Session {
 const sessions = new Map<string, Session>();
 // The instruction of an item whose send failed while another item was in view: it is put back in the field of its own item.
 const drafts = new Map<string, string>();
+// The images attached to the instruction of an item (A-10), by item key: they stay with the item while another is in view, and go with the send.
+const attached = new Map<string, Attachment[]>();
 // The worktree chosen for a new session, kept for the next handoff.
 let chosenPath: string | null = null;
 const panes = new Set<HandoffPane>();
@@ -50,6 +53,9 @@ let ticking = false;
 const POLL_MS = 10_000;
 const KIND_ICONS = { mail: MAIL_SVG, slack: SLACK_SVG, todo: TODO_SVG } as const;
 const GROUPS = ["waiting", "working", "done"] as const;
+
+// The text of a send: the instruction, then the path of each image on a line of its own after a blank line; only the paths when the instruction is blank.
+const withImages = (text: string, paths: string[]) => (text.trim() ? [text.trimEnd(), "", ...paths] : paths).join("\n");
 
 function iconButton(label: string, svg: string, className = "icon-btn") {
   const button = tag("button", className);
@@ -93,6 +99,7 @@ export class HandoffPane {
     chip?: HTMLButtonElement;
     rows?: HTMLElement;
     cardBox?: HTMLElement;
+    strip: HTMLElement;
     card?: { title: HTMLElement; meta: HTMLElement; body: HTMLElement; toggle: HTMLButtonElement };
     target?: HTMLElement;
     sessionTitle?: HTMLElement;
@@ -107,6 +114,7 @@ export class HandoffPane {
     this.chat = makeChatView(tag("div", "ho-chat"), tag("div", "ho-items"), tag("button", "text-btn ho-older", "以前の履歴を読む"), tag("div", "ho-chat-status"), () => this.answerTarget());
     this.chat.older.hidden = true;
     this.chat.box.append(this.chat.older, this.chat.list);
+    listenForImages(host.root, (files) => this.addImages(files));
     panes.add(this);
     if (!ticking) {
       ticking = true;
@@ -260,6 +268,8 @@ export class HandoffPane {
     error.setAttribute("role", "alert");
     error.hidden = true;
     const cardBox = tag("div", "ho-card-box");
+    const strip = tag("div", "attachments");
+    strip.hidden = true;
     const box = tag("div", "composer");
     const input = tag("textarea", "chat-input");
     input.rows = 3;
@@ -274,10 +284,10 @@ export class HandoffPane {
       this.submit();
     };
     box.append(input, send);
-    form.append(error, cardBox, box);
+    form.append(error, cardBox, strip, box);
     const foot = tag("div", "ho-foot");
     foot.append(form);
-    return { foot, error, cardBox, input, send };
+    return { foot, error, cardBox, strip, input, send };
   }
 
   private buildForm() {
@@ -319,7 +329,7 @@ export class HandoffPane {
     const main = tag("div", "ho-main");
     main.append(head, scroll);
     const foot = this.foot();
-    this.el = { notice, fresh, chip, rows, target, cardBox: foot.cardBox, error: foot.error, input: foot.input, send: foot.send };
+    this.el = { notice, fresh, chip, rows, target, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
     this.restoreDraft(foot.input);
@@ -341,7 +351,7 @@ export class HandoffPane {
     const foot = this.foot();
     foot.cardBox.hidden = true;
     foot.input.rows = 2;
-    this.el = { notice, sessionTitle, note, error: foot.error, input: foot.input, send: foot.send };
+    this.el = { notice, sessionTitle, note, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
     this.restoreDraft(foot.input);
     this.host.root.replaceChildren(main, foot.foot);
     foot.input.focus();
@@ -369,7 +379,27 @@ export class HandoffPane {
       if (row) s.seen = true;
       this.part("session", [s, row, this.overview?.state, this.overview?.worktrees, Math.floor(Date.now() / 60_000)], () => this.drawSessionHead());
     }
+    const key = this.itemKey;
+    const images = key === null ? [] : (attached.get(key) ?? []);
+    this.part("attachments", images.map((a) => a.id), () =>
+      drawStrip(this.el!.strip, images, (a) => {
+        if (key === null || this.busy) return;
+        attached.set(key, images.filter((x) => x !== a));
+        this.update();
+      }),
+    );
     this.updateSend();
+  }
+
+  // Takes the images pasted or dropped on the pane for the item in view (A-10); a file that is not an image is refused with the message of a failed send.
+  private async addImages(files: File[]) {
+    const key = this.itemKey;
+    if (!this.el || key === null || this.busy) return;
+    const { images, message } = await readImages(files);
+    if (message === null) this.errors.delete(key);
+    else this.errors.set(key, message);
+    attached.set(key, [...(attached.get(key) ?? []), ...images]);
+    this.update();
   }
 
   private drawNotice() {
@@ -505,7 +535,8 @@ export class HandoffPane {
     el.input.placeholder = s || existing ? "追加の指示を書く" : "起動するエージェントへの指示を書く";
     // A session with no terminal can be read but takes no post; a new one needs a worktree.
     const target = s ? (s.handle ?? this.rowOf(s)?.handle ?? null) !== null : existing || chosenPath !== null;
-    el.send.disabled = this.busy || this.overview?.state === "missing" || !el.input.value.trim() || !target;
+    const hasImages = this.itemKey !== null && (attached.get(this.itemKey)?.length ?? 0) > 0;
+    el.send.disabled = this.busy || this.overview?.state === "missing" || !(el.input.value.trim() || hasImages) || !target;
     const error = this.itemKey === null ? "" : (this.errors.get(this.itemKey) ?? "");
     el.error.hidden = !error;
     el.error.textContent = error;
@@ -534,7 +565,8 @@ export class HandoffPane {
     const key = this.itemKey;
     if (!el || key === null || this.busy) return;
     const text = el.input.value;
-    if (!text.trim()) return;
+    const images = attached.get(key) ?? [];
+    if (!text.trim() && !images.length) return;
     const environment = this.overview?.target ?? null;
     const known = sessions.get(key);
     const picked = this.overview?.rows.find((r) => r.handle !== null && r.handle === this.dest);
@@ -546,12 +578,15 @@ export class HandoffPane {
     this.errors.delete(key);
     this.updateSend();
     try {
+      // The images go into the worktree of the session first, and their paths into the text.
+      const worktree = known ? known.path : picked ? picked.path : path!;
+      const body = images.length ? withImages(text, await uploadAttachments(images, worktree, known ? known.environment : environment)) : text;
       if (known) {
-        await invoke("orca_send", { handle: handle!, text, environment: known.environment });
+        await invoke("orca_send", { handle: handle!, text: body, environment: known.environment });
       } else {
         const destination: HandoffDestination = picked ? { kind: "existing", handle: picked.handle! } : { kind: "new", path: path! };
         const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
-        const started = await invoke("orca_handoff", { destination, instruction: text, context, environment });
+        const started = await invoke("orca_handoff", { destination, instruction: body, context, environment });
         sessions.set(
           key,
           picked
@@ -560,6 +595,7 @@ export class HandoffPane {
         );
       }
       el.input.value = "";
+      attached.delete(key);
       this.lastRead = 0;
     } catch (e) {
       this.errors.set(key, String(e));

@@ -208,6 +208,8 @@ export interface Commands {
   orca_chat_older: { args: undefined; result: null };
   // Pauses (`true`, the window is hidden) or resumes the periodic reads of the session that is read; the connection and what is held stay.
   orca_chat_pause: { args: { paused: boolean }; result: null };
+  // A-10: puts the image `data` (base64) in `.orca/drops/` of the worktree at `path` of the target `environment` and answers the text for Claude: the absolute path of the file, with a backslash before a blank or shell character. `name` only gives the file a name; PNG, JPEG, GIF and WebP up to 20 MiB, by the bytes. Not tried again: a failure carries its message.
+  orca_attach_image: { args: { path: string; name: string; data: string; environment: string | null }; result: string };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. A terminal that is already closed is a success.
   orca_close: { args: { handle: string; environment: string | null }; result: null };
   // A-11: answers the questions of a Claude session that waits (the picks are 0-based indexes into `options`), by typing digits and Tab into its terminal `handle` one key at a time, each only when the screen shows what it is for. Not tried again: a failure carries its message.

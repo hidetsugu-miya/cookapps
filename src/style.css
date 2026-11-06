@@ -894,6 +894,13 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .ho-form .text-btn.primary { flex: none; height: 44px; padding: 0 20px; border-radius: 22px; font: inherit; }
 .ho-form .text-btn.primary:disabled { opacity: .4; cursor: default; }
 .ho-form .text-btn.primary:disabled:hover { background: var(--accent); filter: none; }
+/* A-10: the images attached to an instruction, above the composer; a file dragged over the pane or the terminal outlines it. */
+.attachments { display: flex; flex-wrap: wrap; gap: 8px; }
+.attachment { position: relative; width: 64px; height: 64px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; overflow: hidden; }
+.attachment img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.attachment .icon-btn { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%; background: rgba(255, 255, 255, .85); }
+.attachment .icon-btn svg { width: 12px; height: 12px; }
+.dropping { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .ho-card { padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .ho-card-row { display: flex; align-items: center; gap: 10px; }
 .ho-card-toggle { margin-top: 2px; }

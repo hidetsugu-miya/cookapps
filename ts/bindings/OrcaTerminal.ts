@@ -3,4 +3,8 @@
 /**
  * A terminal of Orca that runs no Claude (a shell, or another agent), in a worktree that is listed (A-8). The screen shows it as a tab and mirrors it.
  */
-export type OrcaTerminal = { handle: string, title: string, branch: string, projectKey: string, };
+export type OrcaTerminal = { handle: string, title: string, branch: string, projectKey: string, 
+/**
+ * The worktree's path, where an image dropped on the terminal is put (A-10).
+ */
+path: string, };
