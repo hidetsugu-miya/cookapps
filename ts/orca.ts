@@ -156,6 +156,8 @@ interface Tab {
   title: string;
   // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
   handle: string | null;
+  // The worktree it runs in.
+  path: string;
 }
 
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
@@ -166,10 +168,10 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of view?.rows ?? []) {
     if (r.projectKey !== key || r.paneKey === null) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", handle: r.handle });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", handle: r.handle, path: r.path });
   }
   for (const t of view?.terminals ?? []) {
-    if (t.projectKey === key) tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle });
+    if (t.projectKey === key) tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle, path: t.path });
   }
   for (const t of tabs) if (!seen.has(t.id)) seen.set(t.id, seen.size);
   return tabs.sort((a, b) => seen.get(a.id)! - seen.get(b.id)!);
@@ -394,7 +396,7 @@ function drawWork() {
 function syncTerminal() {
   const tab = shown() ? selectedTabObj() : null;
   if (!tab?.handle) return hideTerminals();
-  showTerminal(tab.id, { kind: streaming() ? "stream" : "mirror", handle: tab.handle });
+  showTerminal(tab.id, { kind: streaming() ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: view?.target ?? null });
 }
 
 // The note of a launch that was answered: it waits for the row of the session, or (Orca named neither its pane nor its terminal) says it was started.

@@ -11,6 +11,7 @@ import { initInbox, load, showKeptInbox } from "./inbox.js";
 import { initMenu } from "./menu.js";
 import { initNav } from "./nav.js";
 import { initOrca } from "./orca.js";
+import { initFileDrops } from "./orca-attach.js";
 import { initOrcaTheme } from "./orca-theme.js";
 import { initSettings } from "./settings.js";
 import { initSlackCompose } from "./slack-compose.js";
@@ -48,6 +49,7 @@ initSlackCompose();
 initSlackList();
 initSlackThread();
 initOrca();
+initFileDrops();
 
 showKeptInbox();
 refreshClaude();

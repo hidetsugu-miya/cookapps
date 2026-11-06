@@ -10,6 +10,7 @@ pub mod image_senders;
 pub mod images;
 pub mod orca;
 pub mod orca_answer;
+pub mod orca_attach;
 pub mod orca_chat;
 pub mod orca_e2ee;
 pub mod orca_handoff;
@@ -285,6 +286,7 @@ pub fn run() {
             orca::orca_close,
             orca::orca_terminal_read,
             orca::orca_terminal_input,
+            orca_attach::orca_attach_image,
             orca_answer::orca_answer,
             orca_chat::orca_chat_open,
             orca_chat::orca_chat_close,
