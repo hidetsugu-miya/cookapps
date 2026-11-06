@@ -84,7 +84,7 @@ const answers = {
       { name: "Ghostty Default Style Dark", colors: { background: "#10203a", foreground: "#e0e0e0", cursor: "#e0e0e0", cursorAccent: "#10203a", selectionBackground: "#445566", selectionForeground: "#e0e0e0", palette: [] } },
       { name: "Builtin Tango Light", colors: { background: "#fafafa", foreground: "#202020", cursor: "#202020", cursorAccent: "#fafafa", selectionBackground: "#445566", selectionForeground: "#202020", palette: [] } },
     ],
-    selection: { light: "Builtin Tango Light", dark: "Ghostty Default Style Dark" },
+    selection: { light: "Builtin Tango Light", dark: "Ghostty Default Style Dark", appearance: "system" },
   },
   fetch_images: {},
   claude_status: { state: "missing" },
