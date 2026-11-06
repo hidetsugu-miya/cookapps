@@ -6,8 +6,11 @@
 
 Hooks are configured in `.claude/settings.local.json`, and worktrees use the main checkout's.
 `guard-public.sh` stops forbidden public words, `post-edit.sh` runs rustfmt and `node --check` after an edit, `guard-e2e.sh` and `guard-review.sh` protect the records, and `pre-git.sh` runs the checks before a push. `session-start.sh` runs `npm ci` when `node_modules` is missing, and `post-gh.sh` keeps the milestones in step after `gh issue create`, the removal of `needs:owner` and `gh pr merge`.
-`.claude/skills/` holds `issue-plan` (an issue and its planned tag), `milestone-dev` (implement the first milestone) and `readme-product` (the README as a product page, and its photos).
-The nightly run of `milestone-dev` (`issues.md`) is `.claude/tools/nightly-milestone-dev.sh`, which logs to `.claude/nightly/` and deletes logs older than 30 days; its launchd plist is `~/Library/LaunchAgents/jp.mysis.cookapps.milestone-dev.plist`, outside the repository.
+`.claude/skills/` holds `improvement-proposal` (file UI/UX and refactoring proposals as issues), `issue-plan` (an issue and its planned tag), `milestone-dev` (implement the first milestone) and `readme-product` (the README as a product page, and its photos).
+`.claude/agents/` holds the reviewers (`code-reviewer`, `performance-reviewer`, `security-reviewer`), `release-verifier`, `release-planner`, and the two scouts of `improvement-proposal`, `ux-scout` and `refactor-scout`.
+The nightly runs (`issues.md`) are `.claude/tools/nightly.sh {skill}`: `milestone-dev` at 01:00 and `improvement-proposal` at 22:00, each with its own lock (`.claude/nightly/{skill}.lock`) and log (`.claude/nightly/{skill}-{date}.log`, deleted after 30 days).
+After each run it calls `.claude/tools/proposal-reminder.sh`, which writes the unanswered proposals between the `proposal-reminder` markers of `CLAUDE.local.md` in the main checkout.
+The launchd plists are `~/Library/LaunchAgents/jp.mysis.cookapps.milestone-dev.plist` and `jp.mysis.cookapps.improvement-proposal.plist`, outside the repository.
 A gate that stops a command is a finding about the change, not an obstacle to route around.
 
 ```text

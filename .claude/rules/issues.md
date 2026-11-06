@@ -5,7 +5,7 @@
 ### Start work only from a Claude Code session or from the owner's nightly job
 
 The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
-The one exception is the daily 01:00 launchd job that the owner registered: `nightly-milestone-dev.sh` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06).
+The one exception is the daily 01:00 launchd job that the owner registered: `nightly.sh milestone-dev` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06).
 Do not start an issue with `needs:owner`: a product decision is still open.
 Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05).
 
@@ -77,6 +77,23 @@ Plan only the owner's issues.
 ```text
 Good: #50 depends on #42 -> planner puts it after #42 -> #50 v0.41.0, and #33 moves to v0.42.0
 Bad:  gh issue create alone, and the issue waits with no milestone
+```
+
+### Let the proposal agent file issues, and let only the owner accept them
+
+`improvement-proposal` looks for UI/UX and refactoring improvements and files them as issues; the daily 22:00 launchd job the owner registered runs it as `nightly.sh improvement-proposal` (at the owner's instruction, 2026-11-06).
+It only creates issues. It never removes `needs:owner`, implements, or opens a pull request.
+Give every proposal `proposal` and `needs:owner`, because its author is the owner's own account and cannot tell it from an issue the owner wrote.
+File at most 3 in a run, and none while 5 or more proposals are open with `needs:owner`.
+Do not file a proposal with the same purpose as a closed proposal or an open issue.
+The owner accepts a proposal by removing `needs:owner`, which makes it an ordinary issue for `milestone-dev`, and declines it by closing it with `wontfix`.
+`proposal-reminder.sh` writes the unanswered proposals into `CLAUDE.local.md` of the main checkout after each nightly run. The first reply of a session talking to the owner (not a subagent) runs it again and tells the owner the proposals still unanswered, until they answer.
+
+```text
+Good: 2 proposals are open and unanswered -> the 22:00 run files 3 -> the next run files none until the owner answers
+Good: #140 was declined with wontfix -> a later run does not propose the same thing again
+Bad:  the proposal agent removes needs:owner from its own proposal, so that milestone-dev implements it at 01:00
+Bad:  a proposal is filed without proposal, and the reminder never lists it
 ```
 
 ### Record a design or layout discussion in a Discussion (Ideas) when it starts
