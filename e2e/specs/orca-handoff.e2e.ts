@@ -1207,6 +1207,33 @@ describe("orca handoff: attached images (A-10)", () => {
     expect(await callsOf("orca_attach_image")).toHaveLength(1);
   });
 
+  it("keeps an image whose read was still running when the send began", async () => {
+    await openMail();
+    await mock("orca_attach_image", dropped("example-app"));
+    const handoff = await mock("orca_handoff", holds);
+    await openPane(MAIL);
+    await chooseWorktree(MAIL, "/work/example-app");
+    await paste(image("first.png"));
+    await waitForCount(`${MAIL.pane} .attachment`, 1);
+    // The paste and the press happen in one turn of the page: the second image is read after the send has begun.
+    await browser.execute(
+      (pane, sendSelector, base64) => {
+        const file = new File([Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))], "second.png", { type: "image/png" });
+        const event = new Event("paste", { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "clipboardData", { value: { files: [file], types: ["Files"], getData: () => "" } });
+        document.querySelector(`${pane} textarea`)!.dispatchEvent(event);
+        (document.querySelector(sendSelector) as HTMLElement).click();
+      },
+      MAIL.pane,
+      `${MAIL.pane} .ho-form .text-btn.primary`,
+      PNG,
+    );
+    await waitForCalls(handoff);
+    await release(handoff, started);
+    await expect($(`${MAIL.pane} .ho-session-name`)).toExist();
+    expect(await browser.execute((p) => [...document.querySelectorAll(`${p} .attachment img`)].map((i) => (i as HTMLImageElement).alt), MAIL.pane)).toEqual(["second.png"]);
+  });
+
   it("adds the paths to a follow-up of the session shown, and puts the image in its worktree", async () => {
     await openMail();
     await mock("orca_handoff", started);

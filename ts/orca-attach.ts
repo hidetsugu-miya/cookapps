@@ -10,9 +10,7 @@ export const ONLY_IMAGES = "画像だけを添付できます";
 export interface Attachment {
   id: number;
   name: string;
-  // Base64 of the file, as `orca_attach_image` takes it.
-  data: string;
-  // The data: URL the thumbnail shows (the CSP allows data:, not blob:).
+  // The data: URL of the file, which the thumbnail shows (the CSP allows data:, not blob:); its base64 is what `orca_attach_image` takes.
   thumb: string;
   // The text for Claude of the upload, by worktree and target: a send that failed after the upload does not upload it again.
   uploaded: Map<string, string>;
@@ -31,7 +29,7 @@ function read(file: File): Promise<Attachment> {
     const reader = new FileReader();
     reader.onload = () => {
       const url = String(reader.result);
-      resolve({ id: ++lastId, name: file.name || "image", data: url.slice(url.indexOf(",") + 1), thumb: url, uploaded: new Map() });
+      resolve({ id: ++lastId, name: file.name || "image", thumb: url, uploaded: new Map() });
     };
     reader.onerror = () => reject(new Error(`${file.name || "画像"} を読めません`));
     reader.readAsDataURL(file);
@@ -56,7 +54,7 @@ export async function uploadAttachments(images: Attachment[], path: string, targ
   for (const a of images) {
     let line = a.uploaded.get(key);
     if (line === undefined) {
-      line = await invoke("orca_attach_image", { path, name: a.name, data: a.data, environment: target });
+      line = await invoke("orca_attach_image", { path, name: a.name, data: a.thumb.slice(a.thumb.indexOf(",") + 1), environment: target });
       a.uploaded.set(key, line);
     }
     lines.push(line);

@@ -595,7 +595,10 @@ export class HandoffPane {
         );
       }
       el.input.value = "";
-      attached.delete(key);
+      // Only the images sent: one added while the send ran (still being read when it began) stays.
+      const left = (attached.get(key) ?? []).filter((a) => !images.includes(a));
+      if (left.length) attached.set(key, left);
+      else attached.delete(key);
       this.lastRead = 0;
     } catch (e) {
       this.errors.set(key, String(e));

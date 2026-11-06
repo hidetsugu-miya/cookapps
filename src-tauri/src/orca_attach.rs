@@ -278,12 +278,15 @@ pub async fn orca_attach_image(
     environment: Option<String>,
 ) -> Result<String, String> {
     check_path(&path)?;
-    let (stem, ext, bytes) = prepare(&name, &data)?;
-    let host_id = {
+    let (stem, ext, bytes, host_id) = {
         let (path, environment) = (path.clone(), environment.clone());
-        tokio::task::spawn_blocking(move || worktree_host(&path, environment.as_deref()))
-            .await
-            .map_err(|e| e.to_string())??
+        tokio::task::spawn_blocking(move || {
+            let (stem, ext, bytes) = prepare(&name, &data)?;
+            let host_id = worktree_host(&path, environment.as_deref())?;
+            Ok::<_, String>((stem, ext, bytes, host_id))
+        })
+        .await
+        .map_err(|e| e.to_string())??
     };
     check_host(&host_id)?;
     let mut connection = Connection::open(environment).await?;
