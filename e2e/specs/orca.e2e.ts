@@ -1361,6 +1361,14 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
     expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app", text: "\x1b\r" }]);
   });
 
+  it("matches an Alt key by its physical key, since Option makes another character on macOS", async () => {
+    const altB = { key: "b", shift: false, ctrl: false, alt: true, meta: false, text: "\x1bb" };
+    const input = await openTerminal({ ghostty_saved: ghosttyImport({ settings: { ...saved.settings, keybinds: [altB] } }) });
+    // Option+B makes ∫ on a US keyboard; the physical key is KeyB.
+    await press({ key: "∫", code: "KeyB", altKey: true });
+    expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app", text: "\x1bb" }]);
+  });
+
   it("lets a key of the import for Shift+Enter take the place of the newline", async () => {
     const shiftEnter = { key: "Enter", shift: true, ctrl: false, alt: false, meta: false, text: "\n" };
     const input = await openTerminal({ ghostty_saved: ghosttyImport({ settings: { ...saved.settings, keybinds: [shiftEnter] } }) });

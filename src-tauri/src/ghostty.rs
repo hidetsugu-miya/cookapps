@@ -444,7 +444,12 @@ fn parse_keybind(value: &str) -> Keybind {
     }
 }
 
-/// Names a trigger, so that a later key with the same one replaces the earlier.
+/// Whether two keys have the same trigger, so that a later key replaces the earlier.
+fn same_trigger(a: &TextKeybind, b: &TextKeybind) -> bool {
+    (a.shift, a.ctrl, a.alt, a.meta, &a.key) == (b.shift, b.ctrl, b.alt, b.meta, &b.key)
+}
+
+/// Names a trigger for `taken`, which lists the entries in force.
 fn trigger_id(bind: &TextKeybind) -> String {
     format!(
         "keybind:{}{}{}{}:{}",
@@ -540,15 +545,14 @@ fn build(
                     taken.insert("keybind-clear".to_owned(), i);
                 }
                 Keybind::Text(bind) => {
-                    let id = trigger_id(&bind);
-                    settings.keybinds.retain(|b| trigger_id(b) != id);
+                    settings.keybinds.retain(|b| !same_trigger(b, &bind));
+                    taken.insert(trigger_id(&bind), i);
                     settings.keybinds.push(bind);
-                    taken.insert(id, i);
                 }
                 Keybind::Left(trigger, reason) => {
-                    if let Some(id) = trigger.as_ref().map(trigger_id) {
-                        settings.keybinds.retain(|b| trigger_id(b) != id);
-                        taken.remove(&id);
+                    if let Some(bind) = &trigger {
+                        settings.keybinds.retain(|b| !same_trigger(b, bind));
+                        taken.remove(&trigger_id(bind));
                     }
                     left.push((i, reason));
                 }
@@ -620,9 +624,10 @@ fn read_limited(path: &Path, limit: u64) -> Option<String> {
     if !meta.is_file() || meta.len() > limit {
         return None;
     }
-    let mut text = String::new();
-    file.take(limit).read_to_string(&mut text).ok()?;
-    Some(text)
+    // A byte that is not UTF-8 (a comment in another encoding) is replaced, so the rest of the file is still read.
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// A path with `~` for the home folder.
@@ -1296,6 +1301,18 @@ mod tests {
             &format!("font-size = 12\n{}", "# x\n".repeat(300_000)),
         );
         assert!(import_from(&places(&home)).is_err());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_file_with_a_byte_that_is_not_utf8_is_still_read() {
+        let home = temp_dir("latin1");
+        let path = home.join(".config/ghostty/config");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"# caf\xe9\nfont-size = 12\n").unwrap();
+        let got = import_from(&places(&home)).unwrap();
+        assert_eq!(got.settings.font_size, Some(12.0));
+        assert_eq!(got.files, ["~/.config/ghostty/config"]);
         let _ = std::fs::remove_dir_all(&home);
     }
 

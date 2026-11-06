@@ -102,17 +102,32 @@ function termOptions() {
   return { fontFamily: families.join(", "), fontSize: settings?.fontSize ?? DEFAULT_FONT_SIZE, fontWeight: settings?.fontThicken ? THICK_WEIGHT : "normal", theme: xtermTheme() };
 }
 
+// The keys that send a text: those of the settings, then Shift+Enter. Made when the settings are applied, not at each key event.
+let keybinds: TextKeybind[] = [SHIFT_ENTER];
+
+// The punctuation keys by `KeyboardEvent.code`; letters and digits are read from the code itself.
+const CODE_CHARS: Record<string, string> = { Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\", Semicolon: ";", Quote: "'", Backquote: "`", Comma: ",", Period: ".", Slash: "/", Space: " " };
+
+// The character of the key a `code` names on a US keyboard, which Option does not change.
+function charOfCode(code: string) {
+  const letterOrDigit = /^(?:Key([A-Z])|Digit([0-9]))$/.exec(code);
+  return letterOrDigit ? (letterOrDigit[1] ?? letterOrDigit[2])?.toLowerCase() : CODE_CHARS[code];
+}
+
 // The key of the settings (or Shift+Enter) that a key event is; Ghostty compares the character the key makes, case folded, and the exact set of modifiers.
+// With Option held, macOS makes another character (Option+B is ∫), so a one-character key is also compared with the character of the physical key.
 function keybindOf(event: KeyboardEvent) {
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  return [...(settings?.keybinds ?? []), SHIFT_ENTER].find(
-    (b) => b.key === key && b.shift === event.shiftKey && b.ctrl === event.ctrlKey && b.alt === event.altKey && b.meta === event.metaKey,
+  const physical = event.altKey ? charOfCode(event.code) : undefined;
+  return keybinds.find(
+    (b) => (b.key === key || b.key === physical) && b.shift === event.shiftKey && b.ctrl === event.ctrlKey && b.alt === event.altKey && b.meta === event.metaKey,
   );
 }
 
 // Draws Ghostty's imported settings in every terminal and in the pane around them (null: the app's own font and colors).
 export function applyTerminalSettings(next: TerminalSettings | null) {
   settings = next;
+  keybinds = [...(next?.keybinds ?? []), SHIFT_ENTER];
   const options = termOptions();
   for (const { term } of instances.values()) Object.assign(term.options, options);
   container().style.background = importedColors()?.background ?? "";
