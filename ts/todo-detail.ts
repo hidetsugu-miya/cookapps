@@ -392,7 +392,12 @@ function foldDesc(t: TaskItem, view: HTMLElement, wrap: HTMLElement) {
     if (!unfolded.delete(t.id)) unfolded.add(t.id);
     fit();
   };
-  new ResizeObserver(fit).observe(view);
+  const observer = new ResizeObserver(() => {
+    // A redraw of the detail replaced the view: the old observer has nothing left to watch.
+    if (!view.isConnected) return observer.disconnect();
+    fit();
+  });
+  observer.observe(view);
 }
 
 // The description of `t`: its Markdown shown in full, or, while it is edited, the textarea and its buttons.
