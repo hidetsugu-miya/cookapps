@@ -1,5 +1,5 @@
 // The card of the terminal colors in the Orca tab of the settings screen (A-14, A-15): which appearance the terminals draw, and a theme for the light appearance and one for the dark, each with a swatch of its colors.
-// Rust holds the themes (Orca's built-in ones) and the choice (`terminal-theme.json`); this module draws them and hands the colors of the choice to the terminals (`ts/orca-terminal.ts`), which take those of the system's appearance.
+// Rust holds the themes (Orca's built-in ones) and the choice (`terminal-theme.json`); this module draws them and hands the colors of the choice to the terminals (`ts/orca-terminal.ts`), which take those of the system's appearance, or of the one the appearance fixes (A-15).
 import type { Appearance } from "./bindings/Appearance";
 import type { TerminalTheme } from "./bindings/TerminalTheme";
 import type { ThemeSelection } from "./bindings/ThemeSelection";
@@ -20,8 +20,8 @@ const APPEARANCES: [Appearance, string][] = [
 
 // The rows: the key of the choice, the name, and when it is used.
 const SLOTS: [Slot, string, string][] = [
-  ["light", "ライト", "システムの外観がライトのとき"],
-  ["dark", "ダーク", "システムの外観がダークのとき"],
+  ["light", "ライト", "ライトの外観で使うテーマ"],
+  ["dark", "ダーク", "ダークの外観で使うテーマ"],
 ];
 
 // The themes to choose from and the choice; empty and null until read.

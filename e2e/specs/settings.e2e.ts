@@ -1218,7 +1218,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
     await openOrcaTab({ terminal_themes: terminalThemes() });
     expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "Ghostty の設定"]);
     expect(await textsOf("#terminal-theme-items .item-name")).toEqual(["外観", "ライト", "ダーク"]);
-    expect(await textsOf("#terminal-theme-items .item-meta")).toEqual(["ターミナルが使うテーマ", "システムの外観がライトのとき", "システムの外観がダークのとき"]);
+    expect(await textsOf("#terminal-theme-items .item-meta")).toEqual(["ターミナルが使うテーマ", "ライトの外観で使うテーマ", "ダークの外観で使うテーマ"]);
   });
 
   it("offers every theme in each row and shows the chosen one with its swatch", async () => {

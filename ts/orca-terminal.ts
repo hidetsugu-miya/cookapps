@@ -370,8 +370,11 @@ export function initOrcaTerminal(report: (e: unknown) => void) {
   new ResizeObserver(fitSoon).observe(container());
   // The cell size is measured with the font, so the fit is made again once the fonts are there.
   document.fonts?.ready.then(fitSoon).catch(() => {});
-  // The system's appearance picks the light or the dark colors (unless the settings fix it).
-  darkScheme.addEventListener("change", () => applyTerminalSettings(settings));
+  // The system's appearance picks the light or the dark colors (unless the settings fix it, then a change of it draws nothing new).
+  darkScheme.addEventListener("change", () => {
+    if (themeColors && themeColors.appearance !== "system") return;
+    applyTerminalSettings(settings);
+  });
   // A hidden window stops the reads and the stream; shown again, the terminal that is shown starts again (a stream sends its screen anew).
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return stop();
