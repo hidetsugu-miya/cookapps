@@ -194,6 +194,7 @@ pub fn run() {
             #[cfg(all(feature = "e2e", target_os = "macos"))]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             start_badge_clock(app.handle().clone());
+            tauri::async_runtime::spawn(slack::socket::start_all(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -258,6 +259,9 @@ pub fn run() {
             slack::slack_reply,
             slack::slack_file_images,
             slack::slack_icons,
+            slack::socket::slack_app_token_set,
+            slack::socket::slack_app_token_remove,
+            slack::socket::slack_socket_status,
             claude::claude_status,
             claude::claude_connection,
             claude::claude_key_save,

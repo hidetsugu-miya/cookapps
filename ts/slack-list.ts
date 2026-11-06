@@ -3,6 +3,7 @@
 // A row opens the thread (slack-thread.ts) and sets the channel's read position to it; the buttons on a row read it without opening the thread (S-15), keep its channel off the list (S-9) and watch or let go of its thread (S-13), and its toggle folds its unread replies (S-14).
 // The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only.
 // The list is read at startup and again every `refreshSecs` while the window is visible, on whatever screen (the Slack button's badge follows it); showing the screen reads it only when no read is on its way and the one held is older than `refreshSecs`.
+// Socket Mode (S-16) makes it again from Rust's cache when an event was read, and reads it in full when a connection is made.
 // A read on another screen draws nothing of the list (it is drawn when the screen is shown) and never calls `show()`.
 import type { Timeline } from "./bindings/Timeline";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
@@ -38,6 +39,13 @@ const isLoading = () => fullReads > 0;
 let latestCached = false;
 // Hide / put-back requests on their way: no answer is used meanwhile, so that an answer that began before the file changed cannot bring a hidden row back.
 let changing = 0;
+// A connection of Socket Mode was made while a read or a save was on its way: the full read it asks for is made once they are done.
+let resyncPending = false;
+function runPendingResync() {
+  if (!resyncPending || isLoading() || changing > 0) return;
+  resyncPending = false;
+  load();
+}
 let lastTry = 0;
 // The version of `slackListVersion` the list was last made current with.
 let seenVersion = 0;
@@ -167,6 +175,7 @@ async function saveHidden(command: "slack_hide_channel" | "slack_unhide_channel"
     return false;
   } finally {
     changing--;
+    runPendingResync();
   }
 }
 
@@ -321,6 +330,7 @@ async function readOne(m: TimelineMessage) {
     otherFailed = (await done).some((r) => r.status === "rejected");
   } finally {
     changing--;
+    runPendingResync();
   }
   if (failed) showError("既読を Slack に送れませんでした");
   else if (otherFailed) showError("既読にできませんでした");
@@ -427,6 +437,7 @@ async function guarded<T>(run: () => Promise<T>): Promise<{ value: T } | null> {
     return null;
   } finally {
     changing--;
+    runPendingResync();
   }
 }
 
@@ -640,6 +651,7 @@ async function load(cached = false) {
   }
   if (seq !== loadSeq || changing > 0) {
     if (!cached && latestCached && changing === 0) load(true);
+    runPendingResync();
     return;
   }
   // A failed read keeps the list that was read before.
@@ -654,6 +666,7 @@ async function load(cached = false) {
   }
   drawTray();
   draw();
+  runPendingResync();
 }
 
 // Takes the workspaces as the new list. The last one removed takes its rows, its failure and its badge with it; a workspace added or removed makes the list held stale at once.
@@ -742,6 +755,17 @@ export function initSlackList() {
   start();
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", refresh);
+  // Socket Mode (S-16), by what Rust tells. An event it read again is in its cache: the list is made again from there, with no call to Slack.
+  // A connection that was made reads the list in full (what came while there was none is not sent again); when a read or a save is on its way, once it is done.
+  // A change of a connection makes the list again too, so that `refreshSecs` follows it (it is longer only while every workspace is connected).
+  const { listen } = window.__TAURI__.event;
+  listen("slack-timeline-dirty", () => workspaces?.length && load(true));
+  listen("slack-socket-resync", () => {
+    if (!workspaces?.length) return;
+    resyncPending = true;
+    runPendingResync();
+  });
+  listen("slack-socket-status", () => workspaces?.length && load(true));
   feed().addEventListener("scroll", () => {
     if (!$("slack-list").hidden) listScroll = feed().scrollTop;
   });

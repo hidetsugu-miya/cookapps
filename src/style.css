@@ -526,8 +526,8 @@ a.c-file:hover { background: var(--hover); }
 .day-picks .text-btn { width: 40px; padding: 0; }
 .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 20px; border-top: 1px solid var(--line); }
 .item .who { flex: 1; min-width: 0; }
-.item select, .model-grid select { height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; font: inherit; color: #333; }
-.item select:focus, .model-grid select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.item select, .card-add select, .model-grid select { height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; font: inherit; color: #333; }
+.item select:focus, .card-add select:focus, .model-grid select:focus { outline: 2px solid var(--accent); border-color: transparent; }
 /* The Claude tab holds three cards (the connection, the model and effort of the four purposes, the prompt), so its panel is no card itself. */
 .model-note { padding: 0 20px 4px; }
 .model-grid { display: grid; grid-template-columns: minmax(0, 1fr) 108px 100px; gap: 6px 8px; align-items: center; padding: 4px 12px 14px 20px; }

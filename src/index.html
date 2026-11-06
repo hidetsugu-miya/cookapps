@@ -214,6 +214,20 @@
         </div>
         <div id="slack-hidden"></div>
       </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>リアルタイム更新</h2>
+          <button id="slack-socket-help" class="icon-btn" data-hint aria-label="リアルタイム更新の設定方法" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4"/><path d="M12 17h.01"/></svg>
+          </button>
+        </div>
+        <div id="slack-socket-items"></div>
+        <form id="slack-socket-form" class="card-add">
+          <select id="slack-socket-team" aria-label="ワークスペース"></select>
+          <input id="slack-socket-token" type="password" autocomplete="off" aria-label="Slack の App-Level Token" placeholder="App-Level Token（xapp-…）">
+          <button class="text-btn">登録</button>
+        </form>
+      </section>
       </div>
       <div id="settings-panel-claude" role="tabpanel" aria-labelledby="settings-tab-claude" hidden>
       <section class="card">

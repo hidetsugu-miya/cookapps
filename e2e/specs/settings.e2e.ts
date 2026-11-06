@@ -1,4 +1,4 @@
-import { account, boot, checked, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, holds, inbox, mock, rejects, onceId, release, slackLoad, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "orca" | "update";
 
@@ -239,6 +239,90 @@ describe("settings: Slack", () => {
     await waitForCalls(remove);
     expect(await callsOf(remove)).toEqual([{ teamId: "T1" }]);
     await expect($("#slack-workspaces")).toHaveText(expect.stringContaining("ワークスペースはまだありません"));
+  });
+});
+
+describe("settings: Slack リアルタイム更新", () => {
+  // The workspace's row of the card, and the label of its state.
+  const label = () => $("#slack-socket-items .status");
+  const tokenField = () => $("#slack-socket-token");
+
+  it("shows 未登録 for a workspace with no App-Level Token, with no button to delete one", async () => {
+    await openSettings([], claudeMissing, "slack");
+    await expect($("#slack-socket-items .item-name")).toHaveText("Example Team");
+    await expect(label()).toHaveText("未登録");
+    await expect(label()).toHaveElementClass("off");
+    await expect($("#slack-socket-items .item-meta")).toHaveText("未登録の間は、2 分ごとに読み直します");
+    await expect($("#slack-socket-items button")).not.toExist();
+    // The field takes the token without showing it.
+    await expect(tokenField()).toHaveAttribute("type", "password");
+    expect(await textsOf("#slack-socket-team option")).toEqual(["Example Team"]);
+  });
+
+  it("registers a token for the workspace chosen, empties the field, and follows the states Rust sends", async () => {
+    await openSettings([], claudeMissing, "slack");
+    const set = await mock("slack_app_token_set", [socketStatus("connecting")]);
+    await tokenField().setValue("xapp-1-A0123-4567-abcdef");
+    await $("#slack-socket-form button").click();
+    expect(await waitForCalls(set)).toEqual([{ teamId: "T1", token: "xapp-1-A0123-4567-abcdef" }]);
+    await expect(label()).toHaveText("接続中");
+    await expect(tokenField()).toHaveValue("");
+
+    await emitEvent("slack-socket-status", socketStatus("connected"));
+    await browser.waitUntil(async () => (await label().getText()) === "つながっている", { timeoutMsg: "the state did not follow the event" });
+    await expect(label()).toHaveElementClass("ok");
+    await expect($("#slack-socket-items .item-meta")).toHaveText("新着をすぐに一覧へ出します。読み直しは 5 分ごとです");
+
+    await emitEvent("slack-socket-status", socketStatus("reconnecting"));
+    await browser.waitUntil(async () => (await label().getText()) === "つなぎ直し中", { timeoutMsg: "the state did not follow the event" });
+    await expect(label()).toHaveElementClass("warn");
+  });
+
+  it("shows the state a connection had before the page listened", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, slack_socket_status: [socketStatus("connected")] });
+    await $("#nav-settings").click();
+    await openTab("slack");
+    await expect(label()).toHaveText("つながっている");
+  });
+
+  it("shows why a token was refused, and stays 未登録", async () => {
+    await openSettings([], claudeMissing, "slack");
+    await mock("slack_app_token_set", rejects("App-Level Token は xapp- で始まります"));
+    await tokenField().setValue("xoxp-1-2-3");
+    await $("#slack-socket-form button").click();
+    await expect($("#error")).toHaveText(expect.stringContaining("App-Level Token は xapp- で始まります"));
+    await expect(label()).toHaveText("未登録");
+    await expect(tokenField()).toHaveValue("");
+  });
+
+  it("asks before deleting a token: キャンセル sends nothing, 解除 calls slack_app_token_remove", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, slack_socket_status: [socketStatus("connected")] });
+    await $("#nav-settings").click();
+    await openTab("slack");
+    const gone = await mock("slack_app_token_remove", []);
+    await expect(label()).toHaveText("つながっている");
+    const unlink = () => $('button[aria-label="Example Team の App-Level Token を削除"]');
+
+    await unlink().click();
+    const dialog = $('[role="alertdialog"]');
+    await expect(dialog).toBeDisplayed();
+    await dialog.$("button=キャンセル").click();
+    await expect(dialog).not.toExist();
+    expect(await callsOf(gone)).toHaveLength(0);
+
+    await unlink().click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    expect(await waitForCalls(gone)).toEqual([{ teamId: "T1" }]);
+    await expect(label()).toHaveText("未登録");
+    await expect(unlink()).not.toExist();
+  });
+
+  it("lists the events to subscribe to and the scope of the token in the setup hint", async () => {
+    await openSettings([], claudeMissing, "slack");
+    await $("#slack-socket-help").click();
+    const hint = $('[role="dialog"][aria-label="リアルタイム更新の設定方法"]');
+    await expect(hint).toBeDisplayed();
+    expect(await hint.$$("code").map((code) => code.getText())).toEqual(["message.channels", "message.groups", "connections:write", "xapp-"]);
   });
 });
 

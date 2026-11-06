@@ -1,3 +1,5 @@
+pub mod socket;
+
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
@@ -152,6 +154,8 @@ pub struct SlackState {
     timeline: Arc<TimelineCache>,
     /// The attached images fetched so far, by workspace and URL, in memory only. Mail's `fetch_images` cannot read them.
     images: SlackFileCache,
+    /// The Socket Mode connections (S-16), one per workspace that has an App-Level Token.
+    sockets: socket::SocketHub,
 }
 
 fn valid_channel(id: &str) -> bool {
@@ -1047,6 +1051,8 @@ pub async fn slack_remove_workspace(
     state.channels.lock().unwrap().remove(&team_id);
     state.timeline.forget(&team_id);
     state.images.forget(&team_id);
+    // The Socket Mode connection and its App-Level Token go with the workspace (S-16).
+    socket::forget_workspace(&app, &state.sockets, &team_id).await;
     if let Some(token) = token {
         if let Err(e) = call(auth.http(), &token, "auth.revoke", Payload::Empty).await {
             log_failure("slack_revoke", &team_id, e);
@@ -1409,6 +1415,8 @@ const USER_MISS_TTL: Duration = Duration::from_secs(5 * 60);
 /// The wait between two reads of the timeline: `REFRESH_MIN_SECS`, or `REFRESH_BUSY_SECS` while channels are still unread or a workspace has more than `HISTORY_BUDGET`.
 const REFRESH_MIN_SECS: u32 = 120;
 const REFRESH_BUSY_SECS: u32 = 60;
+/// The wait that replaces `REFRESH_MIN_SECS` while every workspace is connected by Socket Mode (S-16): the events keep the list current, and this read catches what they do not carry (a channel read on another device).
+const REFRESH_LIVE_SECS: u32 = 300;
 /// How long a workspace's timeline reads stop after Slack rate-limits one: the `Retry-After` it gave, else `RATE_LIMIT_DEFAULT`, never more than `RATE_LIMIT_MAX`.
 const RATE_LIMIT_DEFAULT: Duration = Duration::from_secs(60);
 const RATE_LIMIT_MAX: Duration = Duration::from_secs(10 * 60);
@@ -1908,14 +1916,35 @@ impl TimelineCache {
             .collect()
     }
 
-    /// The workspace's remembered channels become `kept`.
-    fn replace_history(&self, team_id: &str, kept: History) {
+    /// The workspace's remembered channels become `kept`, a full read's result, which began at `started`.
+    /// A channel of `joined` that was read after that (by an event of Socket Mode, S-16) keeps what that read gave: the full read's copy of it is older.
+    fn replace_history(
+        &self,
+        team_id: &str,
+        kept: History,
+        started: Instant,
+        joined: &HashSet<&str>,
+    ) {
         let mut history = self.history.lock().unwrap();
+        let current = history
+            .iter()
+            .filter(|((t, _), _)| t == team_id)
+            .map(|((_, channel), read)| (channel, read));
+        let kept = keep_newer(kept, current, started, joined);
         history.retain(|(t, _), _| t != team_id);
         history.extend(
             kept.into_iter()
                 .map(|(channel, read)| ((team_id.to_owned(), channel), read)),
         );
+    }
+
+    /// The channel's remembered messages become `messages`, read at `at`: when the call began (a read of the channel alone, after an event of Socket Mode),
+    /// so that a full read that began after it is not taken for older than it.
+    fn put_channel_history(&self, team_id: &str, channel: &str, messages: Vec<Raw>, at: Instant) {
+        self.history
+            .lock()
+            .unwrap()
+            .insert((team_id.to_owned(), channel.to_owned()), (at, messages));
     }
 
     /// The workspace's timeline reads stop for `wait` (or the rest of an earlier stop, if that is longer).
@@ -2762,12 +2791,12 @@ fn hidden_channels(
 
 /// The name of the channel in the list kept for the workspace (also an old one), or `None`.
 fn kept_channel_name(cache: &ChannelCache, team_id: &str, channel: &str) -> Option<String> {
-    cache
-        .lock()
-        .unwrap()
-        .get(team_id)?
-        .1
-        .iter()
+    name_in(&cache.lock().unwrap().get(team_id)?.1, channel)
+}
+
+/// The name of the channel in `list` (the public and private channels the user is in; no direct messages), or `None` when it is not in it.
+fn name_in(list: &[Channel], channel: &str) -> Option<String> {
+    list.iter()
         .find(|c| c.id == channel)
         .map(|c| c.name.clone())
 }
@@ -2818,6 +2847,22 @@ fn next_history(
             .map(|(id, messages)| (id, (now, messages))),
     );
     history
+}
+
+/// `next`, with the entries of `current` that were read after `started` and belong to `joined` in place of the full read's own: an event read them while the full read was on its way.
+fn keep_newer<'a>(
+    mut next: History,
+    current: impl Iterator<Item = (&'a String, &'a (Instant, Vec<Raw>))>,
+    started: Instant,
+    joined: &HashSet<&str>,
+) -> History {
+    // Only the entries that are kept are cloned.
+    next.extend(
+        current
+            .filter(|(channel, (at, _))| *at > started && joined.contains(channel.as_str()))
+            .map(|(channel, read)| (channel.clone(), read.clone())),
+    );
+    next
 }
 
 /// How many channels of `list` no read has reached yet.
@@ -3012,6 +3057,16 @@ fn refresh_secs(pending: usize, largest: usize, unchecked: usize) -> u32 {
         REFRESH_BUSY_SECS
     } else {
         REFRESH_MIN_SECS
+    }
+}
+
+/// `base`, the wait `refresh_secs` gave, with `REFRESH_MIN_SECS` replaced by `REFRESH_LIVE_SECS` while every workspace is `live` (connected by Socket Mode).
+/// A busy wait stays: the channels and threads still to read are read by this call, not by events.
+fn live_refresh_secs(base: u32, live: bool) -> u32 {
+    if live && base == REFRESH_MIN_SECS {
+        REFRESH_LIVE_SECS
+    } else {
+        base
     }
 }
 
@@ -3734,7 +3789,19 @@ async fn refresh_watched(
         .cloned()
         .zip(cache.watch_checked(&keys))
         .collect();
-    let calls: Vec<Call<WatchKey>> = choose_watch_checks(&candidates, WATCH_BUDGET)
+    let keys = choose_watch_checks(&candidates, WATCH_BUDGET);
+    check_watched(http, cache, channels, tokens, keys).await;
+}
+
+/// Checks the watched threads `keys` with `conversations.replies` (the workspaces of `tokens`) and keeps what each found, as `refresh_watched` describes.
+async fn check_watched(
+    http: &reqwest::Client,
+    cache: &Arc<TimelineCache>,
+    channels: &ChannelCache,
+    tokens: &HashMap<&str, &str>,
+    keys: Vec<WatchKey>,
+) {
+    let calls: Vec<Call<WatchKey>> = keys
         .into_iter()
         .map(|key| Call {
             team: key.0.clone(),
@@ -3803,16 +3870,27 @@ async fn refresh_threads(
         })
         .cloned()
         .collect();
-    let calls: Vec<Call<(WatchKey, u32)>> =
-        choose_thread_checks(&usable, THREAD_BUDGET, Instant::now())
-            .into_iter()
-            .map(|(key, count)| Call {
-                team: key.0.clone(),
-                token: tokens[key.0.as_str()].to_owned(),
-                form: watch_params(&key.1, &key.2),
-                key: (key, count),
-            })
-            .collect();
+    let picked = choose_thread_checks(&usable, THREAD_BUDGET, Instant::now());
+    check_threads(http, cache, channels, tokens, picked).await;
+}
+
+/// Checks the threads `picked` (each with the reply count `conversations.history` said) with `conversations.replies` (the workspaces of `tokens`) and keeps what each found, as `refresh_threads` describes.
+async fn check_threads(
+    http: &reqwest::Client,
+    cache: &Arc<TimelineCache>,
+    channels: &ChannelCache,
+    tokens: &HashMap<&str, &str>,
+    picked: Vec<(WatchKey, u32)>,
+) {
+    let calls: Vec<Call<(WatchKey, u32)>> = picked
+        .into_iter()
+        .map(|(key, count)| Call {
+            team: key.0.clone(),
+            token: tokens[key.0.as_str()].to_owned(),
+            form: watch_params(&key.1, &key.2),
+            key: (key, count),
+        })
+        .collect();
     let mut logged = HashSet::new();
     for (team, (key, count), got) in call_each(http, "conversations.replies", calls).await {
         match got {
@@ -3887,6 +3965,8 @@ async fn fill_workspace(
     // The channels kept off the list are not read, not counted, and drop out of the history kept.
     let list = visible_channels(list, hidden);
     read.channels = list.len();
+    // Events read channels while this goes on: what they read after this point is newer than what is read here (`replace_history`).
+    let started = Instant::now();
     let history = cache.team_history(&team_id);
     let chosen = if cache.rate_limited(&team_id) {
         Vec::new()
@@ -3955,8 +4035,10 @@ async fn fill_workspace(
         None => read.scopes = cache.scopes(&team_id),
     }
     let next = next_history(&list, history, fresh, Instant::now());
-    read.pending = pending_channels(&list, &next);
-    cache.replace_history(&team_id, next);
+    let joined: HashSet<&str> = list.iter().map(|c| c.id.as_str()).collect();
+    cache.replace_history(&team_id, next, started, &joined);
+    // Counted from what is kept, which has the channels events read meanwhile.
+    read.pending = pending_channels(&list, &cache.team_history(&team_id));
     match first_error {
         Some(e) if read_ok == 0 => Err(e),
         Some(e) => {
@@ -4251,14 +4333,19 @@ pub async fn slack_timeline(
         let hidden = load_hidden(&dir).await;
         let watched = load_watched(&dir).await;
         let seen = load_thread_seen(&dir).await;
-        return Ok(cached_timeline(
+        let mut timeline = cached_timeline(
             &state.timeline,
             &state.channels,
             &workspaces,
             &hidden,
             &watched,
             &seen,
-        ));
+        );
+        timeline.refresh_secs = live_refresh_secs(
+            timeline.refresh_secs,
+            state.sockets.all_connected(&workspaces),
+        );
+        return Ok(timeline);
     }
     migrate(&dir, auth.http(), &state).await;
     let workspaces = load_workspaces(&dir)
@@ -4464,12 +4551,13 @@ pub async fn slack_timeline(
     let messages = timeline_messages(&state.timeline, &workspaces, &picked.top);
     let watched = watched_messages(&state.timeline, &workspaces, &rows);
     state.timeline.put_notice(&failed, &missing);
+    let live = state.sockets.all_connected(&workspaces);
     Ok(Timeline {
         messages,
         watched,
         failed,
         missing,
-        refresh_secs: refresh_secs(pending, largest, unchecked),
+        refresh_secs: live_refresh_secs(refresh_secs(pending, largest, unchecked), live),
         pending_channels: u32::try_from(pending).unwrap_or(u32::MAX),
         unread_total: picked.unread_total,
         markable_channels: picked.markable_channels,
@@ -5995,10 +6083,15 @@ mod tests {
             ("C1".to_owned(), vec![raw("C1", "1.1")]),
             ("C2".to_owned(), vec![raw("C2", "2.1")]),
         ]);
-        cache.replace_history("T1", next_history(&list, History::new(), read, now));
+        cache.replace_history(
+            "T1",
+            next_history(&list, History::new(), read, now),
+            Instant::now(),
+            &HashSet::new(),
+        );
         // A round in which nothing could be read changes nothing.
         let next = next_history(&list, cache.team_history("T1"), HashMap::new(), now);
-        cache.replace_history("T1", next);
+        cache.replace_history("T1", next, Instant::now(), &HashSet::new());
         let mut ts: Vec<String> = cache
             .team_messages("T1")
             .into_iter()
@@ -6009,6 +6102,128 @@ mod tests {
         assert!(cache.team_messages("T2").is_empty());
         cache.forget("T1");
         assert!(cache.team_messages("T1").is_empty());
+    }
+
+    #[test]
+    fn a_full_read_does_not_overwrite_a_channel_an_event_read_after_it_began() {
+        let cache = TimelineCache::default();
+        let list = vec![channel("C1"), channel("C2"), channel("C3")];
+        let old = Instant::now();
+        let read = HashMap::from([
+            ("C1".to_owned(), vec![raw("C1", "1.1")]),
+            ("C2".to_owned(), vec![raw("C2", "2.1")]),
+        ]);
+        cache.replace_history(
+            "T1",
+            next_history(&list, History::new(), read, old),
+            Instant::now(),
+            &HashSet::new(),
+        );
+        // A full read begins: it copies the history, and reads for a while.
+        let started = Instant::now();
+        let copy = cache.team_history("T1");
+        std::thread::sleep(Duration::from_millis(5));
+        // Meanwhile events are read: C1 gets a new message, C3 had never been read, C4 is no longer in the list.
+        cache.put_channel_history(
+            "T1",
+            "C1",
+            vec![raw("C1", "1.2"), raw("C1", "1.1")],
+            Instant::now(),
+        );
+        cache.put_channel_history("T1", "C3", vec![raw("C3", "3.1")], Instant::now());
+        cache.put_channel_history("T1", "C4", vec![raw("C4", "4.1")], Instant::now());
+        // The full read ends with a result fetched before the events: C2 is new, C1 is as it was.
+        let fresh = HashMap::from([
+            ("C1".to_owned(), vec![raw("C1", "1.1")]),
+            ("C2".to_owned(), vec![raw("C2", "2.2")]),
+        ]);
+        let next = next_history(&list, copy, fresh, Instant::now());
+        let joined: HashSet<&str> = ["C1", "C2", "C3"].into();
+        cache.replace_history("T1", next, started, &joined);
+        let mut ts: Vec<String> = cache
+            .team_messages("T1")
+            .into_iter()
+            .map(|m| m.ts)
+            .collect();
+        ts.sort();
+        // C1 and C3 keep what the events read; C2 takes the full read's; C4 is dropped as before.
+        assert_eq!(ts, ["1.1", "1.2", "2.2", "3.1"]);
+        // C3 was read by an event, so no channel of the list is left to read: counted from the history kept, not from the full read's own.
+        assert_eq!(pending_channels(&list, &cache.team_history("T1")), 0);
+    }
+
+    #[test]
+    fn an_event_read_is_dated_by_when_it_was_fetched_not_when_it_was_written() {
+        let cache = TimelineCache::default();
+        let fetched = Instant::now();
+        std::thread::sleep(Duration::from_millis(5));
+        let started = Instant::now();
+        std::thread::sleep(Duration::from_millis(5));
+        // The event's call began before the full read did, and its answer was written after.
+        cache.put_channel_history("T1", "C1", vec![raw("C1", "1.1")], fetched);
+        let list = vec![channel("C1")];
+        let fresh = HashMap::from([("C1".to_owned(), vec![raw("C1", "1.2")])]);
+        let next = next_history(&list, cache.team_history("T1"), fresh, Instant::now());
+        let joined: HashSet<&str> = ["C1"].into();
+        cache.replace_history("T1", next, started, &joined);
+        let ts: Vec<String> = cache
+            .team_messages("T1")
+            .into_iter()
+            .map(|m| m.ts)
+            .collect();
+        assert_eq!(ts, ["1.2"]);
+    }
+
+    #[test]
+    fn a_channel_read_before_the_full_read_began_takes_the_full_reads_result() {
+        let cache = TimelineCache::default();
+        cache.put_channel_history("T1", "C1", vec![raw("C1", "1.1")], Instant::now());
+        std::thread::sleep(Duration::from_millis(5));
+        let started = Instant::now();
+        let list = vec![channel("C1")];
+        let fresh = HashMap::from([("C1".to_owned(), vec![raw("C1", "1.2")])]);
+        let next = next_history(&list, cache.team_history("T1"), fresh, Instant::now());
+        let joined: HashSet<&str> = ["C1"].into();
+        cache.replace_history("T1", next, started, &joined);
+        let ts: Vec<String> = cache
+            .team_messages("T1")
+            .into_iter()
+            .map(|m| m.ts)
+            .collect();
+        assert_eq!(ts, ["1.2"]);
+    }
+
+    #[test]
+    fn a_read_of_one_channel_replaces_only_that_channel() {
+        let cache = TimelineCache::default();
+        let list = vec![channel("C1"), channel("C2")];
+        let read = HashMap::from([
+            ("C1".to_owned(), vec![raw("C1", "1.1")]),
+            ("C2".to_owned(), vec![raw("C2", "2.1")]),
+        ]);
+        cache.replace_history(
+            "T1",
+            next_history(&list, History::new(), read, Instant::now()),
+            Instant::now(),
+            &HashSet::new(),
+        );
+        cache.put_channel_history(
+            "T1",
+            "C1",
+            vec![raw("C1", "1.2"), raw("C1", "1.3")],
+            Instant::now(),
+        );
+        // A channel that was never read comes in with it.
+        cache.put_channel_history("T1", "C3", vec![raw("C3", "3.1")], Instant::now());
+        let mut ts: Vec<String> = cache
+            .team_messages("T1")
+            .into_iter()
+            .map(|m| m.ts)
+            .collect();
+        ts.sort();
+        assert_eq!(ts, ["1.2", "1.3", "2.1", "3.1"]);
+        assert!(cache.team_history("T1").contains_key("C3"));
+        assert!(cache.team_messages("T2").is_empty());
     }
 
     #[test]
@@ -6350,7 +6565,7 @@ mod tests {
             ("C1".to_owned(), (now, one("C1", n))),
             ("C2".to_owned(), (now, one("C2", m))),
         ]);
-        cache.replace_history("T1", history);
+        cache.replace_history("T1", history, Instant::now(), &HashSet::new());
         cache
     }
 
@@ -6594,6 +6809,15 @@ mod tests {
         assert_eq!(refresh_secs(0, HISTORY_BUDGET, 0), 120);
         assert_eq!(refresh_secs(0, HISTORY_BUDGET + 1, 0), 60);
         assert_eq!(refresh_secs(1, 3, 0), 60);
+    }
+
+    #[test]
+    fn the_wait_is_five_minutes_only_when_every_workspace_is_live_and_nothing_is_left_to_read() {
+        assert_eq!(live_refresh_secs(REFRESH_MIN_SECS, true), 300);
+        assert_eq!(live_refresh_secs(REFRESH_MIN_SECS, false), 120);
+        // Channels and threads still to read are read by this call, not by events.
+        assert_eq!(live_refresh_secs(REFRESH_BUSY_SECS, true), 60);
+        assert_eq!(live_refresh_secs(REFRESH_BUSY_SECS, false), 60);
     }
 
     #[test]

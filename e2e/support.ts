@@ -26,6 +26,8 @@ import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
 import type { RichBlock } from "../ts/bindings/RichBlock";
 import type { SlackThread } from "../ts/bindings/SlackThread";
+import type { SocketState } from "../ts/bindings/SocketState";
+import type { SocketStatus } from "../ts/bindings/SocketStatus";
 import type { Span } from "../ts/bindings/Span";
 import type { Summary } from "../ts/bindings/Summary";
 import type { TaskItem } from "../ts/bindings/TaskItem";
@@ -343,6 +345,21 @@ export const pickFile = (name: string, content: string, size?: number) =>
 
 export const workspace: Workspace = { teamId: "T1", team: "Example Team", user: "alice", url: "https://example-team.slack.com/" };
 export const slackLoad: SlackLoad = { workspaces: [workspace], recent: [] };
+// A connection of Socket Mode (S-16) as `slack_socket_status` answers it; the workspace is `workspace`.
+export const socketStatus = (state: SocketState, teamId = workspace.teamId): SocketStatus => ({ teamId, state });
+
+// Sends the event Rust sends (`emit`) to the page, as Socket Mode's tasks do: `slack-timeline-dirty`, `slack-socket-resync` and `slack-socket-status` (a `SocketStatus`).
+export const emitEvent = (name: string, payload: unknown = null) =>
+  browser.execute(
+    (id, n, p) => {
+      if (!window.__e2e_once__(id)) return;
+      (window as unknown as { __TAURI__: { event: { emit(event: string, payload: unknown): Promise<void> } } }).__TAURI__.event.emit(n, p);
+    },
+    onceId(),
+    name,
+    payload,
+  );
+
 export const slackMessageUrl = "https://example-team.slack.com/archives/C0123ABCD/p1700000000123456";
 
 // What `todoist_summarize_slack` answers for `slackMessageUrl`.
