@@ -7,7 +7,7 @@
 Hooks are configured in `.claude/settings.local.json`, and worktrees use the main checkout's.
 `guard-public.sh` stops forbidden public words, `post-edit.sh` runs rustfmt and `node --check` after an edit, `guard-e2e.sh` and `guard-review.sh` protect the records, and `pre-git.sh` runs the checks before a push. `session-start.sh` runs `npm ci` when `node_modules` is missing, and `post-gh.sh` keeps the milestones in step after `gh issue create`, the removal of `needs:owner` and `gh pr merge`.
 `.claude/skills/` holds `issue-plan` (an issue and its planned tag), `milestone-dev` (implement the first milestone) and `readme-product` (the README as a product page, and its photos).
-The nightly run of `milestone-dev` (`issues.md`) is `.claude/tools/nightly-milestone-dev.sh`, which logs to `.claude/nightly/`; its launchd plist is `~/Library/LaunchAgents/jp.mysis.cookapps.milestone-dev.plist`, outside the repository.
+The nightly run of `milestone-dev` (`issues.md`) is `.claude/tools/nightly-milestone-dev.sh`, which logs to `.claude/nightly/` and deletes logs older than 30 days; its launchd plist is `~/Library/LaunchAgents/jp.mysis.cookapps.milestone-dev.plist`, outside the repository.
 A gate that stops a command is a finding about the change, not an obstacle to route around.
 
 ```text

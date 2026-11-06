@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs milestone-dev headlessly from the main checkout; launchd starts it every day at 01:00 (issues.md).
 # Usage: nightly-milestone-dev.sh  (no arguments; the exit code is claude's)
-# Keeps one run at a time with a lock directory, writes .claude/nightly/{date}.log, and shows a macOS notification at the end.
+# Keeps one run at a time with a lock directory, writes .claude/nightly/{date}.log (logs older than 30 days are deleted), and shows a macOS notification at the end.
 set -u
 main="$(cd "$(dirname "$0")" && git rev-parse --path-format=absolute --git-common-dir)/.."
 cd "$main" || exit 1
@@ -13,7 +13,7 @@ notify() {
 # A lock left by a run that died without its trap (power loss, SIGKILL) is taken over when its PID is gone.
 lock=.claude/nightly/lock
 if ! mkdir "$lock" 2>/dev/null; then
-  if kill -0 "$(cat "$lock/pid" 2>/dev/null)" 2>/dev/null; then
+  if ps -p "$(cat "$lock/pid" 2>/dev/null)" -o command= 2>/dev/null | grep -q nightly-milestone-dev; then
     echo "スキップ: $(date '+%Y-%m-%d %H:%M:%S') 前の実行がまだ動いています（${lock}）" >> "$log"
     notify "前の実行がまだ動いているので、今回は何もしません。ログ: $log"
     exit 0
