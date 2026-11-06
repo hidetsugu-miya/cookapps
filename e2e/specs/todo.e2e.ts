@@ -1228,6 +1228,8 @@ describe("todo detail description fold", () => {
 
   it("shows the whole text with the button, which then reads 折りたたむ, and folds it back", async () => {
     await openReport(15);
+    // The fold is drawn once the line count is made, after the first draw.
+    await expect($(fold)).toBeDisplayed();
     const folded = (await heights()).shown;
     await $(fold).click();
     await expect($(fold)).toHaveText("折りたたむ");
