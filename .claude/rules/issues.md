@@ -77,6 +77,18 @@ Good: #50 depends on #42 -> planner puts it after #42 -> #50 v0.41.0, and #33 mo
 Bad:  gh issue create alone, and the issue waits with no milestone
 ```
 
+### Record a design or layout discussion in a Discussion (Ideas) when it starts
+
+When you put options to the owner and a discussion begins (layout options, design choices), create a Discussion in the Ideas category (at the owner's instruction, 2026-11-06).
+Write the body in the form of Discussion #108 (what the record is for, the background, what was investigated, the options), and add the URL of the artifact to the options.
+When the owner decides, comment the decisions on the Discussion, and point to it from the body of the issue.
+The repository is public, so keep personal information out (`publishing.md`).
+
+```text
+Good: two layouts are put to the owner -> a Discussion in Ideas with both and the artifact URL -> the owner picks A -> "decisions" comment -> the issue body points to the Discussion
+Bad:  two layouts are put to the owner in the conversation only, and the reason for the choice cannot be found on GitHub later
+```
+
 ## Pull requests
 
 ### Reach main only through a pull request with `Closes #n`
