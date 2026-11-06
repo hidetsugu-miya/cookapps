@@ -80,7 +80,7 @@ Bad:  gh issue create alone, and the issue waits with no milestone
 ### Record a design or layout discussion in a Discussion (Ideas) when it starts
 
 When you put options to the owner and a discussion begins (layout options, design choices), create a Discussion in the Ideas category (at the owner's instruction, 2026-11-06).
-Write the body in the form of Discussion #108: what the record is for, the background, what was investigated, and the options with the URL of the artifact.
+Write the body in the form of Discussion #108 (what the record is for, the background, what was investigated, the options), and add the URL of the artifact to the options.
 When the owner decides, comment the decisions on the Discussion, and point to it from the body of the issue.
 The repository is public, so keep personal information out (`publishing.md`).
 
