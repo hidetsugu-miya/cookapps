@@ -2,15 +2,16 @@
 
 ## Issues
 
-### Start work only from a Claude Code session
+### Start work only from a Claude Code session or from the owner's nightly job
 
-The owner starts the implementation of an issue from Claude Code; nothing starts one by itself (at the owner's instruction, 2026-11-04).
+The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
+The one exception is the daily 01:00 launchd job that the owner registered: `nightly-milestone-dev.sh` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06).
 Do not start an issue with `needs:owner`: a product decision is still open.
 Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05).
 
 ```text
 Good: the owner says "implement #13" in a session -> the session works on #13
-Bad:  a schedule picks the oldest open issue and implements it
+Bad:  a schedule picks the oldest open issue and implements it, without going through milestone-dev
 ```
 
 ### Trust only the owner's issues and comments
