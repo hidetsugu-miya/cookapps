@@ -5,7 +5,7 @@
 ### Start work only from a Claude Code session or from the owner's nightly job
 
 The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
-The one exception is the launchd job that the owner registered, which runs three times a day, at 01:00, 09:00 and 13:00: `nightly.sh milestone-dev` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06; three times a day since Discussion #136).
+The one exception is the launchd job that the owner registered, which runs once a day, at 01:00: `nightly.sh milestone-dev` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06; once a day at 01:00 since 2026-11-07).
 Do not start an issue with `needs:owner`: a product decision is still open.
 Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05).
 
@@ -137,18 +137,17 @@ Bad:  the proposal agent removes needs:owner from its own proposal, so that mile
 Bad:  a proposal is filed without proposal, and the reminder never lists it
 ```
 
-### Run `milestone-dev` three times a day, within its limits
+### Run `milestone-dev` once a day at 01:00, through to the release
 
-The job runs at 01:00, 09:00 and 13:00 (at the owner's instruction, 2026-11-06; Discussion #136).
+The job runs only at 01:00 (at the owner's instruction, 2026-11-07: the three runs a day of Discussion #136, with a release window, were too complicated).
 A run lasts 3 hours at most and takes any number of issues. `nightly.sh` hands the run the end of its 3 hours as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh` before it starts a new issue or a release; nothing kills the process.
 When the limit stops a run, the issue in hand stays as it is, and the hand-over says where.
-A run releases only from 09:00 up to 15:00, so that a hotfix can follow in the same day; the 01:00 run develops and merges only, and the 13:00 run starts no release after 15:00. A release the owner orders in a session has no such limit.
+The run releases when the release table says so, at any hour within its 3 hours; there is no release window (at the owner's instruction, 2026-11-07).
 A run leaves alone an issue that a session of the owner may hold: an open pull request that closes it, or a worktree named `issue-{n}`, unless the previous hand-over lists it as the run's own (`plan-release.py next --mine`).
 
 ```text
-Good: the 13:00 run merges an issue at 14:50 and the release table says release -> it releases (before 15:00)
-Good: the 01:00 run merges three issues -> it writes the Release PR body and leaves the release to the 09:00 run
-Bad:  the 13:00 run starts a release at 15:20
+Good: the 01:00 run merges two issues at 02:40, and the release table says release -> it releases, then hands over
+Bad:  the 01:00 run merges, the table says release, and it leaves the release to a later run
 ```
 
 ### Hand over from one run to the next through one Discussion
@@ -159,18 +158,18 @@ The runs write with the owner's account, so the author does not tell them apart:
 The repository is public: write no personal information (`publishing.md`).
 
 ```text
-Good: the 09:00 run reads the owner's reply to a question, answers it in its work, and writes it into its own hand-over
+Good: the 01:00 run reads the owner's reply to a question, answers it in its work, and writes it into its own hand-over
 Bad:  a run starts without reading the Discussion, and does again what the owner told it not to
 ```
 
 ### Notify the owner with Pushover from 09:00 to 20:00 only
 
-`notify.sh` sends the notifications (at the owner's instruction, 2026-11-06; Discussion #136). Outside 09:00 to 20:00 it only queues them in `.claude/nightly/pushover-queue`, and the first `nightly.sh` or `notify.sh flush` from 09:00 sends the queue as one message.
+`notify.sh` sends the notifications (at the owner's instruction, 2026-11-06; Discussion #136). Outside 09:00 to 20:00 it only queues them in `.claude/nightly/pushover-queue`, and the launchd job `jp.mysis.cookapps.notify-flush`, which runs `notify.sh flush` at 09:00, sends the queue as one message (so does any `notify.sh send` inside the window).
 The moments are: the end of a run (the summary and the URL of its hand-over), a question to the owner, a failure, and a release.
 The credentials are in the keychain (service `jp.mysis.cookapps.pushover-token` for the application token and `jp.mysis.cookapps.pushover-user` for the user key, account `cookapps`) and reach `curl` through its standard input. Never put them in an argument, a log or an output.
 
 ```text
-Good: a failure at 03:10 is queued -> the 09:00 run sends it with what else happened in the night, as one message
+Good: a failure at 03:10 is queued -> the 09:00 flush sends it with what else happened in the night, as one message
 Bad:  the token is passed as a curl argument and shows in ps
 ```
 
