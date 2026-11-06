@@ -62,13 +62,40 @@ pub struct TerminalTheme {
     pub colors: TerminalColors,
 }
 
-/// The theme of each appearance, by name.
+/// Which theme the terminals draw: the one for the system's appearance, or always the light one or the dark one (A-15).
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// Anything but `"light"` and `"dark"` (a missing, unknown or mistyped value) follows the system.
+impl<'de> Deserialize<'de> for Appearance {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(
+            match serde_json::Value::deserialize(deserializer)?.as_str() {
+                Some("light") => Self::Light,
+                Some("dark") => Self::Dark,
+                _ => Self::System,
+            },
+        )
+    }
+}
+
+/// The theme of each appearance, by name, and which of them the terminals draw.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 pub struct ThemeSelection {
     pub light: String,
     pub dark: String,
+    #[serde(default)]
+    pub appearance: Appearance,
 }
 
 /// The themes to choose from, and the choice.
@@ -85,6 +112,7 @@ fn default_selection() -> ThemeSelection {
     ThemeSelection {
         light: DEFAULT_LIGHT.into(),
         dark: DEFAULT_DARK.into(),
+        appearance: Appearance::System,
     }
 }
 
@@ -132,6 +160,7 @@ fn normalize(selection: ThemeSelection) -> ThemeSelection {
     ThemeSelection {
         light: or_default(selection.light, DEFAULT_LIGHT),
         dark: or_default(selection.dark, DEFAULT_DARK),
+        appearance: selection.appearance,
     }
 }
 
@@ -151,6 +180,7 @@ fn from_orca_settings(payload: &str) -> Option<ThemeSelection> {
     Some(normalize(ThemeSelection {
         light: name("terminalThemeLight", DEFAULT_LIGHT),
         dark: name("terminalThemeDark", DEFAULT_DARK),
+        appearance: Appearance::System,
     }))
 }
 
@@ -263,6 +293,7 @@ mod tests {
         ThemeSelection {
             light: light.into(),
             dark: dark.into(),
+            appearance: Appearance::System,
         }
     }
 
@@ -476,12 +507,82 @@ mod tests {
                 .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"light": "One Light", "dark": "Dracula"})
+            serde_json::json!({"light": "One Light", "dark": "Dracula", "appearance": "system"})
         );
         // A file that cannot be used is as good as none.
         std::fs::write(dir.join(SELECTION_FILE), "{").unwrap();
         assert_eq!(load(&dir), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_appearance_is_saved_and_read_back_for_each_value() {
+        let dir = temp_dir("appearance");
+        for (appearance, text) in [
+            (Appearance::System, "system"),
+            (Appearance::Light, "light"),
+            (Appearance::Dark, "dark"),
+        ] {
+            let chosen = ThemeSelection {
+                appearance,
+                ..selection("One Light", "Dracula")
+            };
+            assert_eq!(set(&dir, chosen.clone()).unwrap(), chosen);
+            assert_eq!(load(&dir), Some(chosen));
+            let json: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(dir.join(SELECTION_FILE)).unwrap())
+                    .unwrap();
+            assert_eq!(json["appearance"], text);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_without_an_appearance_or_with_a_bad_one_follows_the_system() {
+        let dir = temp_dir("appearance-bad");
+        let expected = Some(selection("One Light", "Nord"));
+        for text in [
+            r#"{"light":"One Light","dark":"Nord"}"#,
+            r#"{"light":"One Light","dark":"Nord","appearance":"sepia"}"#,
+            r#"{"light":"One Light","dark":"Nord","appearance":"Dark "}"#,
+            r#"{"light":"One Light","dark":"Nord","appearance":7}"#,
+            r#"{"light":"One Light","dark":"Nord","appearance":null}"#,
+            r#"{"light":"One Light","dark":"Nord","appearance":["dark"]}"#,
+        ] {
+            std::fs::write(dir.join(SELECTION_FILE), text).unwrap();
+            assert_eq!(load(&dir), expected, "{text}");
+        }
+        // A bad name still falls back by slot, and the appearance is kept.
+        std::fs::write(
+            dir.join(SELECTION_FILE),
+            r#"{"light":"Gone","dark":"Nord","appearance":"dark"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load(&dir),
+            Some(ThemeSelection {
+                appearance: Appearance::Dark,
+                ..selection(DEFAULT_LIGHT, "Nord")
+            })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_defaults_and_orcas_choice_follow_the_system() {
+        assert_eq!(default_selection().appearance, Appearance::System);
+        assert_eq!(
+            from_orca_settings(r#"{"theme":"dark","terminalThemeDark":"Nord"}"#)
+                .unwrap()
+                .appearance,
+            Appearance::System
+        );
+        // The appearance chosen in the app is not lost when a name is replaced.
+        let chosen = ThemeSelection {
+            appearance: Appearance::Light,
+            ..selection("custom:a", "Nord")
+        };
+        assert_eq!(normalize(chosen).appearance, Appearance::Light);
     }
 
     #[test]

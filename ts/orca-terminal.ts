@@ -5,7 +5,8 @@
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
 // Ghostty's settings (A-13) set the font and the keys that send a text; Shift+Enter sends a newline for Claude Code's input.
-// The colors are those of the theme chosen in the settings (A-14), the light or the dark one by the system's appearance; the colors of Ghostty's settings are used only while there is no theme.
+// The colors are those of the theme chosen in the settings (A-14), the light or the dark one by the system's appearance, or the one the settings fix (A-15); the colors of Ghostty's settings are used only while there is no theme.
+import type { Appearance } from "./bindings/Appearance";
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
 import type { TerminalColors } from "./bindings/TerminalColors";
 import type { TerminalSettings } from "./bindings/TerminalSettings";
@@ -59,16 +60,17 @@ let unclosed = false;
 let onError: (e: unknown) => void = () => {};
 // Ghostty's settings as imported, null before the first import.
 let settings: TerminalSettings | null = null;
-// The colors of the theme chosen for each appearance (A-14), null before they are read.
-let themeColors: { light: TerminalColors; dark: TerminalColors } | null = null;
+// The colors of the theme chosen for each appearance, and which of them is drawn (A-14, A-15); null before they are read.
+export type ThemeColors = { light: TerminalColors; dark: TerminalColors; appearance: Appearance };
+let themeColors: ThemeColors | null = null;
 const darkScheme = window.matchMedia("(prefers-color-scheme: dark)");
 
 const container = () => $("orca-term");
 const visible = () => (visibleId === null ? undefined : instances.get(visibleId));
 
-// The colors for the system's appearance: those of the chosen theme, else those of the imported settings; null when there are none.
+// The colors for the appearance (the system's, unless the settings fix it to light or dark): those of the chosen theme, else those of the imported settings; null when there are none.
 const termColors = (): TerminalColors | null => {
-  const dark = darkScheme.matches;
+  const dark = themeColors && themeColors.appearance !== "system" ? themeColors.appearance === "dark" : darkScheme.matches;
   return (dark ? themeColors?.dark : themeColors?.light) ?? (dark ? settings?.dark : settings?.light) ?? null;
 };
 
@@ -132,8 +134,8 @@ function drawLook() {
   container().style.background = termColors()?.background ?? "";
 }
 
-// Draws the theme chosen in the settings (A-14) in every terminal (null: the colors of Ghostty's settings, else the app's own).
-export function applyTerminalTheme(next: { light: TerminalColors; dark: TerminalColors } | null) {
+// Draws the theme chosen in the settings (A-14, A-15) in every terminal (null: the colors of Ghostty's settings, else the app's own).
+export function applyTerminalTheme(next: ThemeColors | null) {
   themeColors = next;
   drawLook();
 }
@@ -368,8 +370,11 @@ export function initOrcaTerminal(report: (e: unknown) => void) {
   new ResizeObserver(fitSoon).observe(container());
   // The cell size is measured with the font, so the fit is made again once the fonts are there.
   document.fonts?.ready.then(fitSoon).catch(() => {});
-  // The system's appearance picks the light or the dark colors.
-  darkScheme.addEventListener("change", () => applyTerminalSettings(settings));
+  // The system's appearance picks the light or the dark colors (unless the settings fix it, then a change of it draws nothing new).
+  darkScheme.addEventListener("change", () => {
+    if (themeColors && themeColors.appearance !== "system") return;
+    applyTerminalSettings(settings);
+  });
   // A hidden window stops the reads and the stream; shown again, the terminal that is shown starts again (a stream sends its screen anew).
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return stop();

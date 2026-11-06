@@ -601,14 +601,14 @@ export const terminalTheme = (name: string, background: string, foreground: stri
 });
 
 // A-14: what `terminal_themes` answers: four themes of example colors, and the choice (the defaults unless given).
-export const terminalThemes = (selection: ThemeSelection = { light: "Builtin Tango Light", dark: "Ghostty Default Style Dark" }): TerminalThemes => ({
+export const terminalThemes = (selection: Partial<ThemeSelection> = {}): TerminalThemes => ({
   themes: [
     terminalTheme("Ghostty Default Style Dark", "#10203a", "#e0e0e0", "#cc0000"),
     terminalTheme("Builtin Tango Light", "#fafafa", "#202020", "#aa0000"),
     terminalTheme("Dracula", "#282a36", "#f8f8f2", "#ff5555"),
     terminalTheme("One Light", "#fdf6e3", "#657b83", "#dc322f"),
   ],
-  selection,
+  selection: { light: "Builtin Tango Light", dark: "Ghostty Default Style Dark", appearance: "system", ...selection },
 });
 
 // Chooses a theme in the select of an appearance in the settings, as the user does (value, then change); the real WebView's select popup is not driven.
@@ -623,6 +623,19 @@ export const chooseTheme = (slot: "light" | "dark", name: string) =>
     onceId(),
     slot,
     name,
+  );
+
+// Chooses which appearance the terminals draw (A-15) in the select of the settings, as the user does.
+export const chooseAppearance = (appearance: "system" | "light" | "dark") =>
+  browser.execute(
+    (id, a) => {
+      if (!window.__e2e_once__(id)) return;
+      const select = document.getElementById("terminal-theme-appearance") as HTMLSelectElement;
+      select.value = a;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    onceId(),
+    appearance,
   );
 
 // Sets the system's appearance (see fixtures.js) and tells the app, as the system does.

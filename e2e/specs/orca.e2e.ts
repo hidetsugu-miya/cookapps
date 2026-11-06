@@ -2,6 +2,7 @@ import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import {
   boot,
   callsOf,
+  chooseAppearance,
   chooseTheme,
   count,
   ghosttyImport,
@@ -1389,7 +1390,7 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
   });
 });
 
-describe("orca: the terminal colors (A-14)", () => {
+describe("orca: the terminal colors (A-14, A-15)", () => {
   // The light theme is on a cream ground, the dark one on a dark violet.
   const light = { pane: "rgb(253, 246, 227)", color: "rgb(101, 123, 131)" };
   const dark = { pane: "rgb(40, 42, 54)", color: "rgb(248, 248, 242)" };
@@ -1435,13 +1436,52 @@ describe("orca: the terminal colors (A-14)", () => {
     await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never took the dark theme" });
     await $("#nav-settings").click();
     await $("#settings-tab-orca").click();
-    const set = await mock("terminal_theme_set", { light: "One Light", dark: "Ghostty Default Style Dark" });
+    const set = await mock("terminal_theme_set", { light: "One Light", dark: "Ghostty Default Style Dark", appearance: "system" });
     await chooseTheme("dark", "Ghostty Default Style Dark");
-    expect(await waitForCalls(set)).toEqual([{ selection: { light: "One Light", dark: "Ghostty Default Style Dark" } }]);
+    expect(await waitForCalls(set)).toEqual([{ selection: { light: "One Light", dark: "Ghostty Default Style Dark", appearance: "system" } }]);
     await $("#nav-orca").click();
     await browser.waitUntil(async () => (await look()).pane === "rgb(16, 32, 58)", { timeoutMsg: "the terminal never took the chosen theme" });
     // The theme of the other appearance is unchanged.
     await setDark(false);
     await browser.waitUntil(async () => (await look()).pane === light.pane, { timeoutMsg: "the terminal never took the light theme" });
+  });
+
+  it("draws the light theme whatever the system's appearance is when the appearance is fixed to light", async () => {
+    await openTerminal({ terminal_themes: terminalThemes({ light: "One Light", dark: "Dracula", appearance: "light" }) });
+    await setDark(true);
+    await browser.waitUntil(async () => (await look()).pane === light.pane, { timeoutMsg: "the terminal never took the light theme" });
+    expect(await colorsNow()).toEqual(light);
+    // A change of the system's appearance does not move it, and the pane keeps its ground.
+    await setDark(false);
+    await setDark(true);
+    expect(await colorsNow()).toEqual(light);
+  });
+
+  it("draws the dark theme whatever the system's appearance is when the appearance is fixed to dark", async () => {
+    await openTerminal({ terminal_themes: terminalThemes({ light: "One Light", dark: "Dracula", appearance: "dark" }) });
+    await setDark(false);
+    await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never took the dark theme" });
+    expect(await colorsNow()).toEqual(dark);
+    await setDark(true);
+    await setDark(false);
+    expect(await colorsNow()).toEqual(dark);
+  });
+
+  it("draws the terminals again at once when the appearance is chosen in the settings, and follows the system again with 'system'", async () => {
+    await openTerminal({ terminal_themes: chosen });
+    await setDark(true);
+    await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never took the dark theme" });
+    await $("#nav-settings").click();
+    await $("#settings-tab-orca").click();
+    const set = await mock("terminal_theme_set", { light: "One Light", dark: "Dracula", appearance: "light" });
+    await chooseAppearance("light");
+    expect(await waitForCalls(set)).toEqual([{ selection: { light: "One Light", dark: "Dracula", appearance: "light" } }]);
+    await $("#nav-orca").click();
+    await browser.waitUntil(async () => (await look()).pane === light.pane, { timeoutMsg: "the terminal never took the fixed light theme" });
+    await mock("terminal_theme_set", { light: "One Light", dark: "Dracula", appearance: "system" });
+    await $("#nav-settings").click();
+    await chooseAppearance("system");
+    await $("#nav-orca").click();
+    await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never followed the system again" });
   });
 });
