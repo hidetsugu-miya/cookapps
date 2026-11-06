@@ -185,11 +185,12 @@ function startStream(instance: Instance) {
   });
 }
 
-// Ends the stream of the terminal shown, so Orca gives it back its own size.
-function stopStream() {
+// Ends the stream of the terminal shown, so Orca gives it back its own size. With `close` false another stream follows at once, and its subscription lets this one go:
+// a close is a call of its own, which could reach Rust after that subscription and end it.
+function stopStream(close = true) {
   if (current === null) return;
   current = null;
-  invoke("orca_stream_terminal_close").catch(() => {});
+  if (close) invoke("orca_stream_terminal_close").catch(() => {});
 }
 
 // Starts what the shown terminal needs: its stream, or its mirror's reads.
@@ -198,9 +199,9 @@ function start(instance: Instance) {
   else startMirror(instance);
 }
 
-function stop() {
+function stop(close = true) {
   stopMirrors();
-  stopStream();
+  stopStream(close);
   for (const instance of instances.values()) instance.pending = "";
 }
 
@@ -210,10 +211,11 @@ function stop() {
 export function showTerminal(id: string, source: TermSource) {
   // Already shown: a redraw of the screen must not start it again or take the focus.
   if (visibleId === id && !container().hidden && instances.has(id)) return;
-  stop();
+  let instance = instances.get(id);
+  // A stream that starts next lets the one shown go by itself (`stopStream`).
+  stop(document.hidden || (instance?.source ?? source).kind !== "stream");
   visibleId = id;
   container().hidden = false;
-  let instance = instances.get(id);
   if (!instance) {
     instance = newInstance(source);
     instances.set(id, instance);
@@ -263,7 +265,7 @@ export function setFitMode(next: FitMode) {
   if (!instance || container().hidden) return;
   container().classList.toggle("fixed", fixed(instance));
   if (instance.source.kind !== "stream") return fitVisible();
-  stopStream();
+  stopStream(false);
   startStream(instance);
 }
 

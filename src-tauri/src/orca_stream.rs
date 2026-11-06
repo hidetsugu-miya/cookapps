@@ -353,6 +353,8 @@ struct Connection {
     tabs: HashMap<String, Value>,
     loaded: bool,
     terminal: Option<Subscribed>,
+    /// The terminal the screen shows has ended on this connection (not listed, refused or ended by Orca), so a change of the list does not subscribe it again; a terminal shown anew, or the next connection, does.
+    ended: bool,
     inputs: HashMap<String, oneshot::Sender<Result<(), String>>>,
     last_list: Option<OrcaStreamEvent>,
 }
@@ -373,10 +375,11 @@ impl Connection {
         let Some(watch) = stream.watch.as_mut() else {
             return Ok(());
         };
-        if !self.loaded || self.terminal.is_some() {
+        if !self.loaded || self.terminal.is_some() || self.ended {
             return Ok(());
         }
         if !has_terminal(&self.tabs, &watch.handle) {
+            self.ended = true;
             (watch.sink)(OrcaTermEvent::Ended {
                 message: "このターミナルは一覧にありません".into(),
             });
@@ -476,6 +479,7 @@ impl Connection {
             if let Some(event) = event {
                 if matches!(event, OrcaTermEvent::Ended { .. }) {
                     self.terminal = None;
+                    self.ended = true;
                 }
                 let taken = stream.watch.as_mut().is_some_and(|w| (w.sink)(event));
                 if !taken {
@@ -506,6 +510,7 @@ impl Connection {
             Some(StreamCommand::Terminal(watch)) => {
                 self.unsubscribe(link, &stream.client).await?;
                 stream.watch = watch;
+                self.ended = false;
                 self.subscribe(link, stream).await?;
             }
             Some(StreamCommand::Viewport(viewport)) => {
@@ -569,6 +574,7 @@ async fn serve(
         tabs: HashMap::new(),
         loaded: false,
         terminal: None,
+        ended: false,
         inputs: HashMap::new(),
         last_list: None,
     };
@@ -1108,6 +1114,26 @@ mod tests {
             .await;
     }
 
+    /// Adds a worktree that `worktree.ps` does not list, and answers the read it makes: once the read is asked, the change has been handled.
+    async fn changed_with_new_worktree(
+        server: &mut FakeDesktop,
+        tabs_id: &Value,
+        worktree: &str,
+        handle: &str,
+    ) {
+        streamed(
+            server,
+            tabs_id,
+            json!({"type": "updated", "worktree": worktree, "tabs": [shell_tab("t9", handle, "zsh")]}),
+        )
+        .await;
+        let read = server.request().await;
+        assert_eq!(read["method"], "worktree.ps");
+        server
+            .send(json!({"id": read["id"], "ok": true, "result": ps()}))
+            .await;
+    }
+
     #[tokio::test]
     async fn the_stream_lists_shows_a_terminal_fits_it_types_and_lets_it_go() {
         let (listener, url) = bind().await;
@@ -1320,6 +1346,8 @@ mod tests {
         assert!(
             matches!(&until(&gone_events, 1).await[0], OrcaTermEvent::Ended { message } if message.contains("一覧"))
         );
+        // A list that changes after the end does not say it again (the read of the new worktree is the point to wait for).
+        changed_with_new_worktree(&mut server, &tabs["id"], "r9::/w/z", "term_9").await;
 
         // Orca refuses the subscription: the terminal ends with Orca's code, and no unsubscribe follows.
         let (shown, term) = watch("term_s", None);
@@ -1331,6 +1359,7 @@ mod tests {
         assert_eq!(subscribe["method"], "terminal.subscribe");
         // Fixed: no viewport, Orca's size stays.
         assert!(subscribe["params"].get("viewport").is_none());
+        assert_eq!(gone_events.lock().unwrap().len(), 1);
         server
             .send(json!({"id": subscribe["id"], "ok": false, "error": {"code": "no_connected_pty", "message": "secret"}}))
             .await;
@@ -1338,6 +1367,24 @@ mod tests {
         assert!(
             matches!(&ended[0], OrcaTermEvent::Ended { message } if message.contains("no_connected_pty") && !message.contains("secret"))
         );
+
+        // A list that changes after the end does not subscribe the ended terminal again; showing a terminal anew does.
+        changed_with_new_worktree(&mut server, &tabs["id"], "r8::/w/y", "term_8").await;
+        let (anew, _) = watch(
+            "term_s",
+            Some(OrcaViewport {
+                cols: 100,
+                rows: 30,
+            }),
+        );
+        commands
+            .send(StreamCommand::Terminal(Some(anew)))
+            .ok()
+            .unwrap();
+        let subscribe = server.request().await;
+        assert_eq!(subscribe["method"], "terminal.subscribe");
+        assert!(subscribe["params"].get("viewport").is_some());
+        assert_eq!(term.lock().unwrap().len(), 1);
 
         // The connection is lost: the screen is told, and keys are refused while it is down.
         drop(server);

@@ -486,7 +486,8 @@ const streaming = () => streamTarget !== null && streamTarget === view?.target;
 function syncStream() {
   const want = view !== null && view.state !== "missing" && !switching && view.target !== null && view.environments.includes(view.target) ? view.target : null;
   if (want === streamTarget) return;
-  if (streamTarget !== null) invoke("orca_stream_close").catch(() => {});
+  // A new stream ends the old one by itself: a close is a call of its own, which could reach Rust after the open and end the new stream.
+  if (streamTarget !== null && want === null) invoke("orca_stream_close").catch(() => {});
   streamTarget = want;
   streamChannel = null;
   if (want === null) return;

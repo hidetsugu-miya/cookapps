@@ -1184,25 +1184,25 @@ describe("orca: a saved environment's stream", () => {
     expect(viewportOf(sent)!.rows).toBe(viewportOf(call)!.rows);
   });
 
-  it("ends the stream of the terminal when another tab, another screen or a hidden window shows", async () => {
+  it("subscribes another tab with no close, and ends the stream of the terminal when another screen or a hidden window shows", async () => {
     await openStudio(sample(), [orcaTerminal("example-app", "zsh")]);
     await project("example-app").click();
     await waitForCalls("orca_stream_terminal");
     const close = await mock("orca_stream_terminal_close", null);
     const subscribe = await mock("orca_stream_terminal", null);
-    // Another tab: the old stream ends and the new one starts.
+    // Another tab: the new subscription lets the old one go, with no close that could come after it.
     await tabOf("orca:term_example-app_zsh").$(".orca-tab-btn").click();
-    await waitForCalls(close);
     expect(await waitForCalls(subscribe)).toMatchObject([{ handle: "term_example-app_zsh" }]);
+    expect(await callsOf(close)).toEqual([]);
     // Another screen.
     await $("#nav-mail").click();
-    await waitForCalls(close, 2);
+    await waitForCalls(close);
     // Back on the screen the stream starts again, and a hidden window ends it. Showing the screen reads the list once with the CLI, which holds what the stream sent.
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { ...studioOnly, terminals: [orcaTerminal("example-app", "zsh")] }));
     await $("#nav-orca").click();
     await waitForCalls(subscribe, 2);
     await setWindowHidden(true);
-    await waitForCalls(close, 3);
+    await waitForCalls(close, 2);
     await setWindowHidden(false);
     await waitForCalls(subscribe, 3);
   });
@@ -1219,7 +1219,6 @@ describe("orca: a saved environment's stream", () => {
     await $("#orca-fit").click();
     await expect($("#orca-fit")).toHaveText("固定");
     await expect($("#orca-fit")).toHaveAttribute("aria-label", "表示: 固定（押すと画面に合わせる）");
-    await waitForCalls(close);
     expect(viewportOf((await waitForCalls(subscribe))[0])).toBeNull();
     // Orca's size is drawn as it is, and the pane scrolls.
     await sendTerm({ kind: "snapshot", data: "wide", cols: 300, rows: 24 });
@@ -1229,6 +1228,8 @@ describe("orca: a saved environment's stream", () => {
     await $("#orca-fit").click();
     await expect($("#orca-fit")).toHaveText("合わせる");
     expect(viewportOf((await waitForCalls(subscribe, 2))[1])).not.toBeNull();
+    // The new subscription lets the old one go, with no close that could come after it.
+    expect(await callsOf(close)).toEqual([]);
   });
 
   it("closes a session in Orca and leaves the tab to the next list, with no read", async () => {
