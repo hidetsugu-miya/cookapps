@@ -8,6 +8,8 @@ mise.toml
 .claude/*
 !.claude/agents/
 !.claude/rules/
+!.claude/tools/
+.claude/tools/__pycache__/
 .claude/rules/machines.md
 .claude/rules/google-cloud.md
 src-tauri/.cargo/

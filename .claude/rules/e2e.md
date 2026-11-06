@@ -90,7 +90,7 @@ Run it when the working tree is clean (after a commit).
 
 ```sh
 .claude/tools/run-e2e.sh   # in the main checkout
-"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/run-e2e.sh"   # in a worktree, which has no .claude/tools/
+"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/run-e2e.sh"   # in a worktree: the main checkout's copy, which the gates use
 ```
 
 ### Let runs overlap, because each app takes its own port
