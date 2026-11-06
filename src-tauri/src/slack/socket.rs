@@ -28,7 +28,7 @@ use super::{
     is_bot_token, kept_channel_name, load_hidden, load_thread_seen, load_watched, load_workspaces,
     lookup_users, needing_lookup, own_user_id, people_of, raw_of, refresh_read_marks,
     thread_candidates, token_key, token_of, unread_threads, valid_channel, valid_ts, Channel,
-    Payload, Raw, SlackState, TimelineCache, WatchKey, Watched, Workspace, HISTORY_LIMIT,
+    Hidden, Payload, Raw, SlackState, TimelineCache, WatchKey, Watched, Workspace, HISTORY_LIMIT,
     USER_LOOKUPS,
 };
 use crate::{
@@ -259,6 +259,47 @@ fn merge_refreshes(refreshes: Vec<Refresh>) -> Vec<Refresh> {
         refresh.threads.truncate(THREADS_PER_REFRESH);
     }
     merged
+}
+
+/// The channel's name when a read of it should be made now: it is not kept off the list (S-9), `listed` (its name in the channel list the app holds) says it is a channel the user is in,
+/// and the workspace is not rate-limited by Slack. `None` when no call would be made.
+fn name_to_read(
+    hidden: &[Hidden],
+    team_id: &str,
+    channel: &str,
+    listed: Option<String>,
+    rate_limited: bool,
+) -> Option<String> {
+    let kept_off = hidden
+        .iter()
+        .any(|h| h.team_id == team_id && h.channel == channel);
+    if kept_off || rate_limited {
+        return None;
+    }
+    listed
+}
+
+/// `waiting` without the reads `name_to_read` refuses, so that they use none of the budget (`EventBudget`).
+fn keep_readable(
+    waiting: Vec<Refresh>,
+    hidden: &[Hidden],
+    team_id: &str,
+    listed: impl Fn(&str) -> Option<String>,
+    rate_limited: bool,
+) -> Vec<Refresh> {
+    waiting
+        .into_iter()
+        .filter(|r| {
+            name_to_read(
+                hidden,
+                team_id,
+                &r.channel,
+                listed(&r.channel),
+                rate_limited,
+            )
+            .is_some()
+        })
+        .collect()
 }
 
 /// What the events may read now: `CHANNEL_GAP` between two reads of a channel and `EVENT_CALLS_PER_WINDOW` calls in `BUDGET_WINDOW`.
@@ -713,18 +754,15 @@ async fn refresh_channel(app: &AppHandle, team_id: &str, request: &Refresh) -> b
         }
     };
     let hidden = load_hidden(&dir).await;
-    if hidden
-        .iter()
-        .any(|h| h.team_id == team_id && h.channel == request.channel)
-    {
-        return false;
-    }
-    let Some(name) = kept_channel_name(&state.channels, team_id, &request.channel) else {
+    let Some(name) = name_to_read(
+        &hidden,
+        team_id,
+        &request.channel,
+        kept_channel_name(&state.channels, team_id, &request.channel),
+        cache.rate_limited(team_id),
+    ) else {
         return false;
     };
-    if cache.rate_limited(team_id) {
-        return false;
-    }
     let token = match token_of(team_id).await {
         Ok(token) if !is_bot_token(&token) => token,
         Ok(_) => return false,
@@ -859,6 +897,18 @@ async fn refresh_worker(app: &AppHandle, team_id: &str, mut rx: UnboundedReceive
                 waiting = merge_refreshes(std::mem::take(&mut waiting));
             }
             () = wait_until(wake) => {}
+        }
+        // The reads that would make no call (a channel kept off the list, one not in the list, a limited workspace) must not use the budget.
+        let state = app.state::<SlackState>();
+        if let Ok(dir) = config_dir(app) {
+            let hidden = load_hidden(&dir).await;
+            waiting = keep_readable(
+                std::mem::take(&mut waiting),
+                &hidden,
+                team_id,
+                |channel| kept_channel_name(&state.channels, team_id, channel),
+                state.timeline.rate_limited(team_id),
+            );
         }
         let (ready, rest, next_wake) = budget.admit(std::mem::take(&mut waiting), Instant::now());
         (waiting, wake) = (rest, next_wake);
@@ -1460,6 +1510,61 @@ mod tests {
         assert!(ready.is_empty());
         assert_eq!(rest.len(), 2);
         assert_eq!(wake, Some(at(400) + CHANNEL_GAP));
+    }
+
+    fn hidden(team: &str, channel: &str) -> Hidden {
+        serde_json::from_value(json!({"teamId": team, "channel": channel})).unwrap()
+    }
+
+    #[test]
+    fn a_read_is_made_only_of_a_visible_listed_channel_of_a_workspace_that_is_not_limited() {
+        let hidden = vec![hidden("T1", "C1")];
+        let listed = |name: &str| Some(name.to_owned());
+        assert_eq!(
+            name_to_read(&hidden, "T1", "C2", listed("ops"), false).as_deref(),
+            Some("ops")
+        );
+        // Kept off the list (S-9), but only in its own workspace.
+        assert_eq!(
+            name_to_read(&hidden, "T1", "C1", listed("dev"), false),
+            None
+        );
+        assert_eq!(
+            name_to_read(&hidden, "T2", "C1", listed("dev"), false).as_deref(),
+            Some("dev")
+        );
+        // Not in the channel list, or Slack has rate-limited the workspace.
+        assert_eq!(name_to_read(&hidden, "T1", "C2", None, false), None);
+        assert_eq!(name_to_read(&hidden, "T1", "C2", listed("ops"), true), None);
+    }
+
+    #[test]
+    fn reads_that_would_make_no_call_use_none_of_the_budget() {
+        let hidden = vec![hidden("T1", "C1")];
+        let names = |channel: &str| (channel != "C9").then(|| channel.to_owned());
+        // A noisy hidden channel with threads, a channel that is not in the list, and a visible one.
+        let waiting = vec![
+            refresh("C1", &["1.1", "1.2", "1.3", "1.4", "1.5"]),
+            refresh("C9", &["1.1", "1.2", "1.3", "1.4", "1.5"]),
+            refresh("C2", &["2.1"]),
+        ];
+        let kept = keep_readable(waiting.clone(), &hidden, "T1", names, false);
+        assert_eq!(kept, vec![refresh("C2", &["2.1"])]);
+        let mut budget = EventBudget::default();
+        let (ready, rest, wake) = budget.admit(kept, at(500));
+        assert_eq!(ready, vec![refresh("C2", &["2.1"])]);
+        assert!(rest.is_empty());
+        assert_eq!(wake, None);
+        // The rest of the budget is still there for the visible channels: with the 2 calls above spent, 3 reads of 5 calls fit and the fourth waits.
+        let four = ["1.1", "1.2", "1.3", "1.4"];
+        let mut more = vec![refresh("C1", &four)];
+        more.extend((3..=6).map(|n| refresh(&format!("C{n}"), &four)));
+        let kept = keep_readable(more, &hidden, "T1", names, false);
+        let (ready, rest, _) = budget.admit(kept, at(501));
+        assert_eq!(ready.len(), 3);
+        assert_eq!(rest.len(), 1);
+        // A limited workspace has nothing worth reading.
+        assert!(keep_readable(vec![refresh("C2", &[])], &hidden, "T1", names, true).is_empty());
     }
 
     #[tokio::test]
