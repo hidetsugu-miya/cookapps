@@ -128,7 +128,7 @@ Bad:  gh issue create alone, and the issue waits with no milestone
 
 ### Let the proposal agent file issues, and let only the owner accept them
 
-`improvement-proposal` looks for UI/UX and refactoring improvements and files them as issues; the daily 22:00 launchd job the owner registered runs it as `nightly.sh improvement-proposal` (at the owner's instruction, 2026-11-06).
+`improvement-proposal` looks for UI/UX and refactoring improvements and files them as issues; the owner runs it in a session. It has no scheduled run (at the owner's instruction, 2026-11-07: the daily 22:00 job was removed).
 It only creates issues. It never removes `needs:owner`, implements, or opens a pull request.
 Give every proposal `proposal` and `needs:owner`, because its author is the owner's own account and cannot tell it from an issue the owner wrote.
 File at most 3 in a run, and none while 5 or more proposals are open with `needs:owner`.
@@ -137,7 +137,7 @@ The owner accepts a proposal by removing `needs:owner`, which makes it an ordina
 `proposal-reminder.sh` writes the unanswered proposals into `CLAUDE.local.md` of the main checkout after each nightly run. The first reply of a session talking to the owner (not a subagent) runs it again and tells the owner the proposals still unanswered, until they answer.
 
 ```text
-Good: 2 proposals are open and unanswered -> the 22:00 run files 3 -> the next run files none until the owner answers
+Good: 2 proposals are open and unanswered -> a run files 3 -> the next run files none until the owner answers
 Good: #140 was declined with wontfix -> a later run does not propose the same thing again
 Bad:  the proposal agent removes needs:owner from its own proposal, so that milestone-dev implements it at its next run
 Bad:  a proposal is filed without proposal, and the reminder never lists it
@@ -171,7 +171,7 @@ Bad:  a run starts without reading the Discussion, and does again what the owner
 ### Notify the owner with Pushover from 09:00 to 20:00 only
 
 `notify.sh` sends the notifications (at the owner's instruction, 2026-11-06; Discussion #136). Outside 09:00 to 20:00 it only queues them in `.claude/nightly/pushover-queue`, and the launchd job `jp.mysis.cookapps.notify-flush`, which runs `notify.sh flush` at 09:00, sends the queue as one message (so does any `notify.sh send` inside the window).
-The moments are: the end of a run (the summary and the URL of its hand-over), a question to the owner, a failure, and a release.
+The moments are: the end of a run (the summary and the URL of its hand-over), a question to the owner, and a failure. A release is not one (at the owner's instruction, 2026-11-07).
 The credentials are in the keychain (service `jp.mysis.cookapps.pushover-token` for the application token and `jp.mysis.cookapps.pushover-user` for the user key, account `cookapps`) and reach `curl` through its standard input. Never put them in an argument, a log or an output.
 
 ```text
@@ -264,7 +264,6 @@ Bad:  the issue says enhancement -> minor
 3. Tag the merge commit and push the tag (`versioning.md`), then watch the release (`review.md`).
 4. Run `plan-release.py close {tag}`: it closes the milestone and moves what is left in it to the next tag. Then reorder with `issue-plan` (from its step 4), so that the issues that moved are in the right order for the new tags.
 5. Comment the version on each issue that went out.
-6. Send the owner the version with `notify.sh send` (the release is one of its moments).
 
 ```text
 Good: Release PR merged -> tag -> watch-ci.sh succeeds -> "v0.33.0 で対応しました" on each issue
