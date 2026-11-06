@@ -2,6 +2,7 @@ import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import {
   boot,
   callsOf,
+  chooseTheme,
   count,
   ghosttyImport,
   holds,
@@ -20,7 +21,9 @@ import {
   sendStream,
   sendTerm,
   setClock,
+  setDark,
   streamList,
+  terminalThemes,
   textsOf,
   threadDetail,
   waitForCalls,
@@ -1271,6 +1274,31 @@ describe("orca: a saved environment's stream", () => {
   });
 });
 
+// The terminal of the Claude session of example-app (this machine's mirror), shown with the given fixtures; the answer of the command that takes its keys is the returned name.
+async function openTerminal(fixtures: Record<string, unknown> = {}) {
+  await openOrca(orcaOverview(sample(), worktrees()), fixtures);
+  await mock("orca_terminal_read", ["$ ls"]);
+  const input = await mock("orca_terminal_input", null);
+  await project("example-app").click();
+  await browser.waitUntil(async () => (await screenText()).includes("$ ls"), { timeoutMsg: "the screen never showed" });
+  return input;
+}
+
+// What xterm.js draws the terminal with (the only one made), and the pane around it.
+const look = () =>
+  browser.execute(() => {
+    const rows = document.querySelector(".orca-term-box .xterm-rows")!;
+    const style = getComputedStyle(rows);
+    const span = rows.querySelector("span");
+    return {
+      size: style.fontSize,
+      family: style.fontFamily,
+      color: style.color,
+      weight: span ? getComputedStyle(span).fontWeight : null,
+      pane: getComputedStyle(document.getElementById("orca-term")!).backgroundColor,
+    };
+  });
+
 describe("orca: Ghostty's settings in the terminals (A-13)", () => {
   const colors = { background: "#112233", foreground: "#ddeeff", cursor: null, cursorAccent: null, selectionBackground: null, selectionForeground: null, palette: [{ index: 1, color: "#ff0000" }] };
   // Imported settings with a font, colors for both appearances (so the system's does not matter) and two keys.
@@ -1288,31 +1316,6 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
     },
   });
 
-  // The terminal of the Claude session of example-app (this machine's mirror), shown with the given fixtures; the answer of the command that takes its keys is the returned name.
-  async function openTerminal(fixtures: Record<string, unknown> = {}) {
-    await openOrca(orcaOverview(sample(), worktrees()), fixtures);
-    await mock("orca_terminal_read", ["$ ls"]);
-    const input = await mock("orca_terminal_input", null);
-    await project("example-app").click();
-    await browser.waitUntil(async () => (await screenText()).includes("$ ls"), { timeoutMsg: "the screen never showed" });
-    return input;
-  }
-
-  // What xterm.js draws the terminal with (the only one made), and the pane around it.
-  const look = () =>
-    browser.execute(() => {
-      const rows = document.querySelector(".orca-term-box .xterm-rows")!;
-      const style = getComputedStyle(rows);
-      const span = rows.querySelector("span");
-      return {
-        size: style.fontSize,
-        family: style.fontFamily,
-        color: style.color,
-        weight: span ? getComputedStyle(span).fontWeight : null,
-        pane: getComputedStyle(document.getElementById("orca-term")!).backgroundColor,
-      };
-    });
-
   // A keydown on the terminal shown, as the key event xterm.js listens for.
   const press = (init: KeyboardEventInit) =>
     browser.execute(
@@ -1324,18 +1327,17 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
       init,
     );
 
-  it("keeps the app's own font and colors until something is imported", async () => {
+  it("keeps the app's own font until something is imported", async () => {
     await openTerminal();
     const own = await look();
     expect(own.size).toBe("13px");
     expect(own.family).not.toContain("Example Mono");
     expect(own.weight).toBe("400");
-    expect(own.pane).not.toBe("rgb(17, 34, 51)");
   });
 
-  it("draws the terminal with the font and colors of the import saved before", async () => {
+  it("draws the terminal with the font of the import saved before", async () => {
     await openTerminal({ ghostty_saved: saved });
-    expect(await look()).toMatchObject({ size: "15px", color: "rgb(221, 238, 255)", weight: "500", pane: "rgb(17, 34, 51)" });
+    expect(await look()).toMatchObject({ size: "15px", weight: "500" });
     expect((await look()).family).toContain("Example Mono");
   });
 
@@ -1348,7 +1350,7 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
     await waitForCalls(imported);
     await $("#nav-orca").click();
     await browser.waitUntil(async () => (await look()).size === "15px", { timeoutMsg: "the terminal never took the font" });
-    expect(await look()).toMatchObject({ color: "rgb(221, 238, 255)", pane: "rgb(17, 34, 51)" });
+    expect((await look()).family).toContain("Example Mono");
   });
 
   it("sends the text of a key of the import in place of the key", async () => {
@@ -1382,5 +1384,62 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
     const input = await openTerminal({ ghostty_saved: ghosttyImport({ settings: { ...saved.settings, keybinds: [shiftEnter] } }) });
     await press({ key: "Enter", shiftKey: true });
     expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app", text: "\n" }]);
+  });
+});
+
+describe("orca: the terminal colors (A-14)", () => {
+  // The light theme is on a cream ground, the dark one on a dark violet.
+  const light = { pane: "rgb(253, 246, 227)", color: "rgb(101, 123, 131)" };
+  const dark = { pane: "rgb(40, 42, 54)", color: "rgb(248, 248, 242)" };
+  const chosen = terminalThemes({ light: "One Light", dark: "Dracula" });
+  const colorsNow = async () => {
+    const { pane, color } = await look();
+    return { pane, color };
+  };
+
+  it("draws the terminal with the theme of the system's appearance, and with the other one when it changes", async () => {
+    await openTerminal({ terminal_themes: chosen });
+    await setDark(false);
+    await browser.waitUntil(async () => (await look()).pane === light.pane, { timeoutMsg: "the terminal never took the light theme" });
+    expect(await colorsNow()).toEqual(light);
+    await setDark(true);
+    await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never took the dark theme" });
+    expect(await colorsNow()).toEqual(dark);
+    await setDark(false);
+    await browser.waitUntil(async () => (await look()).pane === light.pane, { timeoutMsg: "the terminal never went back to the light theme" });
+    expect(await colorsNow()).toEqual(light);
+  });
+
+  it("prefers the theme to the colors of the Ghostty import, and keeps the import's font", async () => {
+    const colors = { background: "#112233", foreground: "#ddeeff", cursor: null, cursorAccent: null, selectionBackground: null, selectionForeground: null, palette: [] };
+    const imported = ghosttyImport({ settings: { fontFamilies: ["Example Mono"], fontSize: 15, fontThicken: false, light: colors, dark: colors, keybinds: [] } });
+    await openTerminal({ terminal_themes: chosen, ghostty_saved: imported });
+    await setDark(true);
+    await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never took the dark theme" });
+    expect(await colorsNow()).toEqual(dark);
+    expect((await look()).size).toBe("15px");
+  });
+
+  it("draws the colors of the Ghostty import while no theme could be read", async () => {
+    const colors = { background: "#112233", foreground: "#ddeeff", cursor: null, cursorAccent: null, selectionBackground: null, selectionForeground: null, palette: [] };
+    const imported = ghosttyImport({ settings: { fontFamilies: [], fontSize: null, fontThicken: false, light: colors, dark: colors, keybinds: [] } });
+    await openTerminal({ terminal_themes: rejects("テーマを読めません"), ghostty_saved: imported });
+    expect(await colorsNow()).toEqual({ pane: "rgb(17, 34, 51)", color: "rgb(221, 238, 255)" });
+  });
+
+  it("draws the terminals again with a theme chosen in the settings, with no restart", async () => {
+    await openTerminal({ terminal_themes: chosen });
+    await setDark(true);
+    await browser.waitUntil(async () => (await look()).pane === dark.pane, { timeoutMsg: "the terminal never took the dark theme" });
+    await $("#nav-settings").click();
+    await $("#settings-tab-orca").click();
+    const set = await mock("terminal_theme_set", { light: "One Light", dark: "Ghostty Default Style Dark" });
+    await chooseTheme("dark", "Ghostty Default Style Dark");
+    expect(await waitForCalls(set)).toEqual([{ selection: { light: "One Light", dark: "Ghostty Default Style Dark" } }]);
+    await $("#nav-orca").click();
+    await browser.waitUntil(async () => (await look()).pane === "rgb(16, 32, 58)", { timeoutMsg: "the terminal never took the chosen theme" });
+    // The theme of the other appearance is unchanged.
+    await setDark(false);
+    await browser.waitUntil(async () => (await look()).pane === light.pane, { timeoutMsg: "the terminal never took the light theme" });
   });
 });

@@ -31,6 +31,9 @@ import type { SocketStatus } from "../ts/bindings/SocketStatus";
 import type { Span } from "../ts/bindings/Span";
 import type { Summary } from "../ts/bindings/Summary";
 import type { TaskItem } from "../ts/bindings/TaskItem";
+import type { TerminalTheme } from "../ts/bindings/TerminalTheme";
+import type { TerminalThemes } from "../ts/bindings/TerminalThemes";
+import type { ThemeSelection } from "../ts/bindings/ThemeSelection";
 import type { ThreadAttachment } from "../ts/bindings/ThreadAttachment";
 import type { ThreadDetail } from "../ts/bindings/ThreadDetail";
 import type { ThreadFile } from "../ts/bindings/ThreadFile";
@@ -50,6 +53,7 @@ import type { WorkspaceIcon } from "../ts/bindings/WorkspaceIcon";
 declare global {
   interface Window {
     __e2e_once__(id: string): boolean;
+    __e2e_set_dark__(dark: boolean): void;
   }
 }
 
@@ -581,6 +585,56 @@ export const ghosttyImport = (parts: Partial<GhosttyImport> = {}): GhosttyImport
   files: ["~/.config/ghostty/config"],
   ...parts,
 });
+
+// A-14: a theme of example colors; its red (the palette color 1) is the given one.
+export const terminalTheme = (name: string, background: string, foreground: string, red: string): TerminalTheme => ({
+  name,
+  colors: {
+    background,
+    foreground,
+    cursor: foreground,
+    cursorAccent: background,
+    selectionBackground: "#445566",
+    selectionForeground: foreground,
+    palette: Array.from({ length: 16 }, (_, index) => ({ index, color: index === 1 ? red : "#808080" })),
+  },
+});
+
+// A-14: what `terminal_themes` answers: four themes of example colors, and the choice (the defaults unless given).
+export const terminalThemes = (selection: ThemeSelection = { light: "Builtin Tango Light", dark: "Ghostty Default Style Dark" }): TerminalThemes => ({
+  themes: [
+    terminalTheme("Ghostty Default Style Dark", "#10203a", "#e0e0e0", "#cc0000"),
+    terminalTheme("Builtin Tango Light", "#fafafa", "#202020", "#aa0000"),
+    terminalTheme("Dracula", "#282a36", "#f8f8f2", "#ff5555"),
+    terminalTheme("One Light", "#fdf6e3", "#657b83", "#dc322f"),
+  ],
+  selection,
+});
+
+// Chooses a theme in the select of an appearance in the settings, as the user does (value, then change); the real WebView's select popup is not driven.
+export const chooseTheme = (slot: "light" | "dark", name: string) =>
+  browser.execute(
+    (id, s, n) => {
+      if (!window.__e2e_once__(id)) return;
+      const select = document.getElementById(`terminal-theme-${s}`) as HTMLSelectElement;
+      select.value = n;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    onceId(),
+    slot,
+    name,
+  );
+
+// Sets the system's appearance (see fixtures.js) and tells the app, as the system does.
+export const setDark = (dark: boolean) =>
+  browser.execute(
+    (id, d) => {
+      if (!window.__e2e_once__(id)) return;
+      window.__e2e_set_dark__(d);
+    },
+    onceId(),
+    dark,
+  );
 
 // Gives `event` to the channel of the last call of `command` (or the `nth`, counting from 0), as Rust does.
 const deliver = (command: string, event: unknown, nth: number) =>

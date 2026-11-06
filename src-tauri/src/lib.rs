@@ -14,6 +14,7 @@ pub mod orca_chat;
 pub mod orca_e2ee;
 pub mod orca_handoff;
 pub mod orca_stream;
+pub mod orca_theme;
 pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
@@ -297,6 +298,8 @@ pub fn run() {
             orca_stream::orca_stream_input,
             ghostty::ghostty_saved,
             ghostty::ghostty_import,
+            orca_theme::terminal_themes,
+            orca_theme::terminal_theme_set,
             update::app_info,
             update::update_mode,
             update::set_update_mode,

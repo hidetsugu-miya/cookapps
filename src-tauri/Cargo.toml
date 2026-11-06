@@ -28,6 +28,7 @@ keyring = "4"
 keyring-core = { version = "1", optional = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "query", "multipart"] }
 rmcp = { version = "3.8", features = ["server", "transport-io", "macros"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 salsa20 = "0.10"
 schemars = "1"
