@@ -1194,6 +1194,124 @@ describe("todo detail description copy", () => {
   });
 });
 
+describe("todo detail description fold", () => {
+  const desc = "#todo-detail .desc";
+  const fold = "#todo-detail .desc-fold";
+  // A list of `n` items, one drawn line each.
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `- line ${i + 1}`).join("\n");
+
+  // `n` lines in paragraphs of `size` lines each, separated by blank lines: the margins between paragraphs are not lines.
+  const paragraphs = (n: number, size: number) =>
+    Array.from({ length: Math.ceil(n / size) }, (_, p) =>
+      Array.from({ length: Math.min(size, n - p * size) }, (_, i) => `line ${p * size + i + 1}`).join("\n"),
+    ).join("\n\n");
+
+  async function openReport(n: number, text = lines(n)) {
+    const data = todoData();
+    data.tasks[0].description = text;
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $(ROWS).click();
+    await expect($(desc)).toBeDisplayed();
+  }
+
+  // The height of the description as drawn, and the height of its whole text.
+  const heights = () => browser.execute(() => {
+    const view = document.querySelector<HTMLElement>("#todo-detail .desc")!;
+    return { shown: view.clientHeight, whole: view.scrollHeight };
+  });
+
+  it("folds a description longer than 10 lines, with the button and the lines left", async () => {
+    await openReport(15);
+    await expect($(fold)).toBeDisplayed();
+    await expect($(fold)).toHaveText("… 続きを表示（残り 5 行）");
+    await expect($(desc)).toHaveElementClass("folded");
+    const { shown, whole } = await heights();
+    expect(shown).toBeLessThan(whole);
+    const fade = await browser.execute(() => getComputedStyle(document.querySelector("#todo-detail .desc")!).webkitMaskImage);
+    expect(fade).toContain("linear-gradient");
+  });
+
+  it("shows the whole text with the button, which then reads 折りたたむ, and folds it back", async () => {
+    await openReport(15);
+    // The fold is drawn once the line count is made, after the first draw.
+    await expect($(fold)).toBeDisplayed();
+    const folded = (await heights()).shown;
+    await $(fold).click();
+    await expect($(fold)).toHaveText("折りたたむ");
+    await expect($(desc)).not.toHaveElementClass("folded");
+    const open = await heights();
+    expect(open.shown).toBe(open.whole);
+    expect(open.shown).toBeGreaterThan(folded);
+    await $(fold).click();
+    await expect($(fold)).toHaveText("… 続きを表示（残り 5 行）");
+    expect((await heights()).shown).toBe(folded);
+  });
+
+  it("shows a description of 10 lines in full, with no button", async () => {
+    await openReport(10);
+    expect(await count(fold)).toBe(1);
+    await expect($(fold)).not.toBeDisplayed();
+    await expect($(desc)).not.toHaveElementClass("folded");
+    const { shown, whole } = await heights();
+    expect(shown).toBe(whole);
+  });
+
+  it("shows 10 drawn lines in paragraphs in full, with no button", async () => {
+    await openReport(10, "line 1\nline 2\nline 3\n\nline 4\nline 5\nline 6\n\nline 7\nline 8\n\nline 9\nline 10");
+    // Past the first draw, in which the lines are counted.
+    await browser.pause(300);
+    await expect($(fold)).not.toBeDisplayed();
+    await expect($(desc)).not.toHaveElementClass("folded");
+    const { shown, whole } = await heights();
+    expect(shown).toBe(whole);
+  });
+
+  it("folds 15 drawn lines in paragraphs below the 10th line, which shows whole, and not the 11th", async () => {
+    await openReport(15, paragraphs(15, 3));
+    await expect($(fold)).toBeDisplayed();
+    await expect($(fold)).toHaveText("… 続きを表示（残り 5 行）");
+    const edges = await browser.execute(() => {
+      const view = document.querySelector<HTMLElement>("#todo-detail .desc")!;
+      const walker = document.createTreeWalker(view, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      const at = (text: string) => {
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (node.textContent!.trim() !== text) continue;
+          range.selectNodeContents(node);
+          const r = range.getBoundingClientRect();
+          walker.currentNode = view;
+          return { top: r.top, bottom: r.bottom };
+        }
+        return null;
+      };
+      return { view: view.getBoundingClientRect().bottom, tenth: at("line 10"), eleventh: at("line 11") };
+    });
+    expect(edges.tenth!.bottom).toBeLessThanOrEqual(edges.view + 0.5);
+    expect(edges.eleventh!.top).toBeGreaterThanOrEqual(edges.view - 0.5);
+    await $(fold).click();
+    await expect($(fold)).toHaveText("折りたたむ");
+    const open = await heights();
+    expect(open.shown).toBe(open.whole);
+  });
+
+  it("still opens the editor on a press of the text of a folded description", async () => {
+    await openReport(15);
+    await expect($(desc)).toHaveElementClass("folded");
+    await $(desc).click();
+    await expect($("#todo-detail .desc-edit")).toBeDisplayed();
+    await expect($("#todo-detail .desc-edit")).toHaveValue(lines(15));
+  });
+
+  it("does not open the editor when the fold button is pressed", async () => {
+    await openReport(15);
+    await $(fold).click();
+    await browser.pause(500);
+    expect(await count("#todo-detail .desc-edit")).toBe(0);
+    await expect($(desc)).toBeDisplayed();
+  });
+});
+
 describe("todo completed tasks after an offline answer", () => {
   // Todo data that is the cached one, as the backend answers while Todoist cannot be reached.
   const offlineData = () => ({ ...todoData(), offline: { fetchedAt: new Date().toISOString(), reason: "network" } });

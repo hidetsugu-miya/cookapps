@@ -437,7 +437,13 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .md blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
 #todo-detail .md table { margin: 0 0 8px; border-collapse: collapse; }
 #todo-detail .md th, #todo-detail .md td { padding: 4px 8px; border: 1px solid var(--chip-line); }
-#todo-detail .desc-wrap:hover .desc { background: var(--hover); }
+/* A long description is cut at its 10th line (FOLD_LINES in ts/todo-detail.ts, which sets the max-height); that line fades downward. */
+#todo-detail .desc.folded { overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.6em), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 1.6em), transparent); }
+#todo-detail .desc-fold { height: auto; margin-top: 4px; padding: 4px 8px; border: 0; border-radius: 4px; background: none; color: var(--accent); font: inherit; font-size: 13px; }
+#todo-detail .desc-fold:hover { background: var(--hover); }
+#todo-detail .desc-fold:focus-visible { outline: 2px solid var(--accent); }
+/* Not while the fold button is hovered: the highlight says that a press on the text edits it. */
+#todo-detail .desc-wrap:hover:not(:has(.desc-fold:hover)) .desc { background: var(--hover); }
 #todo-detail .desc:focus-visible { outline: 2px solid var(--accent); }
 #todo-detail .desc.empty { color: #999; }
 #todo-detail .desc-edit { display: block; box-sizing: border-box; width: calc(100% - 66px); margin: 8px 16px 0 46px; min-height: 96px; padding: 8px; border: 0; border-radius: 8px; outline: 2px solid var(--accent); font: inherit; color: #333; line-height: 1.6; resize: none; overflow: hidden; }
