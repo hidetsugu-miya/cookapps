@@ -119,15 +119,30 @@ def parse_stream(text):
 
 def existing_order(free):
     """The light bugs first, then the rest, each in the order of the previous plan.
-    A light bug that waits for a free issue keeps its place, so that it stays behind that issue."""
-    free_numbers = {i.number for i in free}
+    A light bug that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
 
     def key(i):
-        first = 0 if light_bug(i) and not free_numbers & set(i.blocked_by) else 1
         v = parse_version(i.milestone)
-        return (first, 0, v, i.created_at, i.number) if v else (first, 1, (), i.created_at, i.number)
+        return (0, v, i.created_at, i.number) if v else (1, (), i.created_at, i.number)
 
-    return sorted(free, key=key)
+    ordered = sorted(free, key=key)
+    rank = {i.number: k for k, i in enumerate(ordered)}
+    by_number = {i.number: i for i in ordered}
+    lead = []
+    taken = set()
+
+    def take(i):
+        if i.number in taken:
+            return
+        taken.add(i.number)
+        for b in sorted((b for b in i.blocked_by if b in by_number), key=rank.get):
+            take(by_number[b])
+        lead.append(i)
+
+    for i in ordered:
+        if light_bug(i):
+            take(i)
+    return lead + [i for i in ordered if i.number not in taken]
 
 
 def derive_groups(ordered):

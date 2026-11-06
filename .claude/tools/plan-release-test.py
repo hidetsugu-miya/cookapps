@@ -88,11 +88,29 @@ class Ordering(unittest.TestCase):
         f = mk(6, ["bug", "size:light"], created="2026-11-01T00:00:06Z")
         self.assertEqual([i.number for i in pr.existing_order([a, b, c, d, e, f])], [3, 2, 6, 1, 4, 5])
 
-    def test_a_light_bug_blocked_by_a_free_issue_keeps_its_place(self):
+    def test_a_light_bug_takes_its_free_blocker_with_it(self):
         a = mk(1, milestone="v0.40.0")
         b = mk(2, ["bug", "size:light"], milestone="v0.41.0", blocked=[1])
         c = mk(3, ["bug", "size:light"], milestone="v0.42.0", blocked=[99])
-        self.assertEqual([i.number for i in pr.existing_order([a, b, c])], [3, 1, 2])
+        d = mk(4, milestone="v0.40.0")
+        self.assertEqual([i.number for i in pr.existing_order([d, a, b, c])], [1, 2, 3, 4])
+
+    def test_blockers_of_a_light_bug_are_taken_through_the_chain_and_shared_ones_once(self):
+        x = mk(1, milestone="v0.40.0")
+        y = mk(2, milestone="v0.40.0", blocked=[1])
+        z = mk(3, milestone="v0.40.0")
+        b1 = mk(4, ["bug", "size:light"], milestone="v0.41.0", blocked=[2])
+        b2 = mk(5, ["bug", "size:light"], milestone="v0.42.0", blocked=[1, 3])
+        free = [z, y, x, b2, b1]
+        order = [i.number for i in pr.existing_order(free)]
+        self.assertEqual(order, [1, 2, 4, 3, 5])
+        problems = pr.validate_plan(
+            {"order": order, "groups": [], "blocked_by": {"2": [1], "4": [2], "5": [1, 3]}},
+            free,
+            [],
+            {n: "open" for n in range(1, 6)},
+        )
+        self.assertEqual(problems, [])
 
     def test_split_queue(self):
         w2 = mk(1, state="closed", closed="2026-11-02T00:00:00Z", milestone="v0.40.0")
