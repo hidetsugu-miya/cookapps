@@ -226,7 +226,7 @@ Evaluate them after every merge and when a session starts work on an issue, and 
 | Rule | Condition | Result |
 |------|-----------|--------|
 | R0 | The Release PR has `release:hold` | Wait |
-| R1 | A waiting change has `urgency:high` | Release now |
+| R1 | The Release PR or a waiting change has `urgency:high` | Release now |
 | R2 | A waiting change is `size:heavy` | Release now (a heavy change is a version of its own) |
 | R3 | A waiting bug has `importance:high` | Release now |
 | R4 | None of the above | `release-planner` judges |

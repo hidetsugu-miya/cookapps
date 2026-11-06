@@ -60,7 +60,7 @@ JSON だけを返す。
 ## リリースの判定
 
 起動プロンプトは `mode: release` の行と、`plan-release.py release-facts` の出力（`rule` が `R4` のもの）。
-R0 から R3（`release:hold`、緊急、`size:heavy`、重要度が高いバグ）は `plan-release.py` が適用済みで、この役は見ない。R4 だけを決める。
+R0 から R3（Release PR の `release:hold`、Release PR か待ちの変更の `urgency:high`、`size:heavy`、重要度が高いバグ）は `plan-release.py` が適用済みで、この役は見ない。R4 だけを決める。
 
 1. `waiting`（リリース待ちの変更）の各 issue の title と labels を見る。必要なら本文を `gh issue view` で読む。
 2. 目安に照らす。次のどれかに当たれば、リリースする側に傾く。

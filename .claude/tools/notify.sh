@@ -11,7 +11,8 @@
 #   NOTIFY_DRY_RUN=1   the keychain and the network are not touched; it prints what it would send. The queue is still appended to, but never emptied.
 #   NOTIFY_NOW=HH:MM   the time of day to judge by
 #   NOTIFY_QUEUE=path  another queue file
-# Prints one line, result: sent | queued | flushed | empty. Exit 1: the keychain or Pushover refused (the queue is kept); exit 2: wrong usage.
+# A message that joins the queue goes in newest first: when the lines do not fit in one message, the oldest are left out and "ほか n 件" says how many.
+# Prints one line, result: sent | queued | flushed | empty. Exit 1: the keychain or Pushover refused (a failed send is added to the queue, and the queue is kept); exit 2: wrong usage.
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 main="$(cd "$here" && git rev-parse --path-format=absolute --git-common-dir)/.."
@@ -42,6 +43,35 @@ in_window() {
 # curl config strings: escape the backslash and the double quote, and write a newline as \n
 cfg() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
+}
+
+# the line a message becomes in the queue
+queue_line() {
+  printf '%s' "$(date '+%m-%d %H:%M') ${1}: $(printf '%s' "$2" | tr '\n' ' ')${3:+ $3}"
+}
+
+# fit <lines>: the newest lines that fit in one message, then "ほか n 件" for the older ones left out
+fit() {
+  reserve=16
+  total="$(printf '%s\n' "$1" | wc -l | tr -d ' ')"
+  kept=""
+  shown=0
+  used=0
+  while IFS= read -r line; do
+    add=${#line}
+    [ -z "$kept" ] || add=$((add + 1))
+    [ $((used + add)) -le $((limit - reserve)) ] || break
+    kept="${line}${kept:+$'\n'$kept}"
+    used=$((used + add))
+    shown=$((shown + 1))
+  done < <(printf '%s\n' "$1" | tail -r)
+  if [ "$shown" -eq 0 ]; then
+    newest="$(printf '%s\n' "$1" | tail -n 1)"
+    kept="${newest:0:$((limit - reserve - 1))}…"
+    shown=1
+  fi
+  [ "$total" -le "$shown" ] || kept="${kept}"$'\n'"ほか $((total - shown)) 件"
+  printf '%s' "$kept"
 }
 
 # deliver <title> <message> <url>
@@ -82,7 +112,7 @@ deliver() {
 # send_queue: the queued lines as one message; the queue is emptied after it was delivered
 send_queue() {
   n="$(wc -l < "$queue" | tr -d ' ')"
-  deliver "cookapps（${n} 件）" "$(cat "$queue")" "" || return 1
+  deliver "cookapps（${n} 件）" "$(fit "$(cat "$queue")")" "" || return 1
   [ -n "$dry" ] || : > "$queue"
 }
 
@@ -93,6 +123,7 @@ case "$cmd" in
     title="$2"
     message="$3"
     url="${4:-}"
+    line="$(queue_line "$title" "$message" "$url")"
     mkdir -p "$(dirname "$queue")"
     if in_window; then
       if [ -s "$queue" ]; then
@@ -100,14 +131,20 @@ case "$cmd" in
         n=$(($(wc -l < "$queue" | tr -d ' ') + 1))
         body="$(cat "$queue")
 $(date '+%H:%M') ${title}: ${message}"
-        deliver "cookapps（${n} 件）" "$body" "$url" || exit 1
+        deliver "cookapps（${n} 件）" "$(fit "$body")" "$url" || {
+          printf '%s\n' "$line" >> "$queue"
+          exit 1
+        }
         [ -n "$dry" ] || : > "$queue"
       else
-        deliver "$title" "$message" "$url" || exit 1
+        deliver "$title" "$message" "$url" || {
+          printf '%s\n' "$line" >> "$queue"
+          exit 1
+        }
       fi
       echo "result: sent"
     else
-      printf '%s\n' "$(date '+%m-%d %H:%M') ${title}: $(printf '%s' "$message" | tr '\n' ' ')${url:+ $url}" >> "$queue"
+      printf '%s\n' "$line" >> "$queue"
       echo "result: queued"
     fi
     ;;

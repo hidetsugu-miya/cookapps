@@ -93,6 +93,7 @@ format() {
     | ([$d.comments.nodes[] | ., (.replies.nodes // [])[]] | map(del(.replies)) | sort_by(.createdAt)) as $all
     | ($all | map(select(.author.login == $owner))) as $mine
     | (($all | length) - ($mine | length)) as $ignored
+    | ([$d.comments.nodes[] | select((.replies.totalCount // 0) > ((.replies.nodes // []) | length))] | length) as $cut
     | ($mine | map(select(.body | contains($mark)))) as $marked
     | ($marked | last) as $last
     | (if $last == null then "" else (
@@ -104,6 +105,7 @@ format() {
       (if $last == null then "last handover: none yet" else "last handover: \($last.url) (run started \($cutoff))\n---\n\($last.body)\n---" end),
       "owner replies since: \($replies | length)",
       "ignored comments of other authors: \($ignored)",
+      (if $cut > 0 then "replies not read: \($cut) comment(s) have more than 50 replies, and only the first 50 of each were read" else empty end),
       ($replies[] | "\n[\(.createdAt) \(.author.login)] \(.url)\n\(.body)")
   '
 }
@@ -118,7 +120,7 @@ case "$cmd" in
   read)
     [ $# -eq 1 ] || usage
     ensure || exit 1
-    q='query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){discussion(number:$num){url comments(last:100){nodes{url body createdAt author{login} replies(first:50){nodes{url body createdAt author{login}}}}}}}}'
+    q='query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){discussion(number:$num){url comments(last:100){nodes{url body createdAt author{login} replies(first:50){totalCount nodes{url body createdAt author{login}}}}}}}}'
     gh api graphql -f query="$q" -f o="$owner" -f n="$name" -F num="$dnum" | format "$owner"
     ;;
   write)

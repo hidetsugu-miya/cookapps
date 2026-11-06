@@ -386,6 +386,19 @@ class Validation(unittest.TestCase):
         self.assertIn("release:pin", problems[0])
         self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "groups": [[2, 3]], "blocked_by": {}}, free, [], {}), [])
 
+    def test_a_later_pinned_issue_may_not_depend_on_an_issue_after_the_first_pin_of_its_version(self):
+        free = [mk(1, ["release:pin"], milestone="v0.42.0"), mk(2), mk(3, ["release:pin"], milestone="v0.42.0")]
+        plan = {"order": [1, 2, 3], "groups": [], "blocked_by": {"3": [2]}}
+        problems = pr.validate_plan(plan, free, [], {2: "open"})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("#3", problems[0])
+        self.assertIn("#2", problems[0])
+        self.assertIn("v0.42.0", problems[0])
+        ok = {"order": [2, 1, 3], "groups": [], "blocked_by": {"3": [2]}}
+        self.assertEqual(pr.validate_plan(ok, free, [], {2: "open"}), [])
+        same = [mk(1, ["release:pin"], milestone="v0.42.0"), mk(3, ["release:pin"], milestone="v0.42.0")]
+        self.assertEqual(pr.validate_plan({"order": [1, 3], "groups": [], "blocked_by": {"3": [1]}}, same, [], {1: "open"}), [])
+
     def test_cycle(self):
         problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"32": [50], "50": [32]}})
         self.assertTrue(any("cycle" in p for p in problems))

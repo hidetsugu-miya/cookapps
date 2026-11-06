@@ -343,11 +343,28 @@ def validate_plan(plan, free, fixed, states):
         if sum(1 for n in g if counted(free_by[n])) > MAX_COUNTED:
             problems.append(f"{label}: holds more than {MAX_COUNTED} counted issues")
 
+    # The issues pinned to one version share the slot where the first of them stands (allocate).
+    first_pin = {}
+    for n in order:
+        v = pin_version(free_by[n]) if n in free_by else None
+        if v and v not in first_pin:
+            first_pin[v] = position[n]
+
     for n, blockers in sorted(blocked_by.items()):
         if n not in free_by:
             problems.append(f"blocked_by: #{n} is not an issue to plan")
             continue
+        pinned = pin_version(free_by[n])
         for b in blockers:
+            if (
+                pinned
+                and b in free_by
+                and position.get(b, -1) > first_pin[pinned]
+                and pin_version(free_by[b]) != pinned
+            ):
+                problems.append(
+                    f"blocked_by: #{n} is pinned to {format_version(pinned)} and goes out with the first pinned issue, but #{b}, which blocks it, is placed after that"
+                )
             state = states.get(b)
             if state is None:
                 problems.append(f"blocked_by: #{n} names #{b}, which is unknown")
