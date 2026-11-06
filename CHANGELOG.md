@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.45.0
+
+A-12 every tab of the Orca screen is the session's terminal, typed into directly (#89). For a saved server, the list and the terminals are drawn from what Orca streams, with colors and no rereads by the clock. The keys go only to the terminal they were typed in. "合わせる" gives the pane's size to Orca and "固定" keeps Orca's size with a horizontal scroll; the switch is at the bottom of the left pane. This machine's Orca cannot stream to the app, because its WebSocket takes only a paired device, so its terminals stay mirrored. "新規" at the top of the left pane picks a worktree and starts Claude in a terminal.
+
+The history and the composer are no longer on the Orca screen. The history, the answers to Claude's questions and further instructions stay in the "Orca に渡す" pane of a mail, a Slack thread and a Todo. A-10 (images in the Orca composer) and the skill list of the composer are removed with it.
+
 ## v0.44.1
 
 The Orca history no longer shows the tags that Claude Code puts around a long paste (#58). The pasted text and the rest of the message stay.
