@@ -1208,6 +1208,28 @@ describe("orca: a saved environment's stream", () => {
     await waitForCalls(subscribe, 3);
   });
 
+  it("subscribes the next tab with no close when the tab shown leaves the list", async () => {
+    await openStudio();
+    await project("example-app").click();
+    await waitForCalls("orca_stream_terminal");
+    const close = await mock("orca_stream_terminal_close", null);
+    const subscribe = await mock("orca_stream_terminal", null);
+    // The Claude row of the tab shown goes and the project keeps a shell: the tab and its terminal are dropped, and the shell's subscription lets the old one go.
+    await sendStream(streamList(sample().slice(1), worktrees(), [orcaTerminal("example-app", "zsh")]));
+    expect(await waitForCalls(subscribe)).toMatchObject([{ handle: "term_example-app_zsh" }]);
+    await browser.pause(500);
+    expect(await callsOf(close)).toEqual([]);
+  });
+
+  it("ends the stream of the terminal when the tab shown leaves the list and no tab is left to show", async () => {
+    await openStudio();
+    await project("example-app").click();
+    await waitForCalls("orca_stream_terminal");
+    const close = await mock("orca_stream_terminal_close", null);
+    await sendStream(streamList(sample().slice(1), worktrees()));
+    await waitForCalls(close);
+  });
+
   it("keeps Orca's size with 固定, which asks for no size, and fits the pane again with 合わせる", async () => {
     await openStudio();
     await expect($("#orca-fit")).toBeDisplayed();

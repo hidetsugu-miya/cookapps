@@ -180,6 +180,7 @@ fn ms_of(value: &Value) -> f64 {
 /// The tabs as the two documents of the CLI that A-6 and A-8 read (`orca worktree ps` and `orca terminal list`), so that the same pure functions build the list.
 /// A worktree's agents are the agents of its terminal tabs (a tab's agent is its pane's own, so it is top-level), with a live pty while the tab has a terminal;
 /// its own status is left out (the stream does not refresh it), and its last activity is the latest of its own and its agents'. A terminal is each terminal tab that has a handle.
+/// A tab that launched Claude and has a terminal but no `agentStatus` is an idle agent of its pane (`{parentTabId}:{leafId}`), so its row does not come and go with the status.
 fn documents_of(ps: &Value, tabs: &HashMap<String, Value>) -> (Value, Value) {
     let mut terminals = Vec::new();
     let worktrees: Vec<Value> = ps["worktrees"]
@@ -209,6 +210,17 @@ fn documents_of(ps: &Value, tabs: &HashMap<String, Value>) -> (Value, Value) {
                     agent["agentType"] = json!(agent_type);
                     at = at.max(ms_of(&status["updatedAt"]));
                     agents.push(agent);
+                } else if let (Some("claude"), Some(_), Some(tab_id), Some(leaf_id)) = (
+                    agent_type,
+                    handle,
+                    text_of(tab, "parentTabId"),
+                    text_of(tab, "leafId"),
+                ) {
+                    // Orca drops `agentStatus` for a moment while the pane keeps its terminal: the tab stays a row of its pane (idle), so the screen keeps its tab and its terminal.
+                    agents.push(json!({
+                        "paneKey": format!("{tab_id}:{leaf_id}"), "parentPaneKey": null,
+                        "state": "inactive", "agentType": "claude", "hasLivePty": true,
+                    }));
                 }
             }
             if let Some(fields) = worktree.as_object_mut() {
@@ -918,6 +930,60 @@ mod tests {
         // A Claude tab is not a plain terminal.
         assert!(terminals.is_empty());
         assert!(has_terminal(&tabs, "term_c"));
+    }
+
+    #[test]
+    fn a_claude_tab_without_a_status_stays_a_row_of_its_pane() {
+        // Orca drops `agentStatus` for a moment while the pane keeps its terminal: the tab must not leave the list.
+        let mut tab = claude_tab("t1", Some("term_c"), "done", 2_000);
+        tab["agentStatus"] = Value::Null;
+        tab["launchAgent"] = json!("claude");
+        let tabs = held(&snapshots(&[("r1::/w/a", vec![tab.clone()])]));
+        let (worktrees, _) = documents_of(&ps(), &tabs);
+        let agent = &worktrees["worktrees"][0]["agents"][0];
+        assert_eq!(agent["paneKey"], "t1:l1");
+        assert_eq!(agent["hasLivePty"], true);
+        assert_eq!(agent["state"], "inactive");
+        let OrcaStreamEvent::List {
+            rows, terminals, ..
+        } = list_of(&ps(), &tabs)
+        else {
+            panic!()
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].pane_key.as_deref(), Some("t1:l1"));
+        assert_eq!(rows[0].handle.as_deref(), Some("term_c"));
+        assert_eq!(rows[0].group, OrcaGroup::Working);
+        assert_eq!(rows[0].status, OrcaStatus::Idle);
+        assert!(terminals.is_empty());
+        // The row has the pane key it has with a status, so the screen keeps the tab and its terminal.
+        let with_status = held(&snapshots(&[(
+            "r1::/w/a",
+            vec![claude_tab("t1", Some("term_c"), "done", 2_000)],
+        )]));
+        let OrcaStreamEvent::List { rows: after, .. } = list_of(&ps(), &with_status) else {
+            panic!()
+        };
+        assert_eq!(after[0].pane_key, rows[0].pane_key);
+        // A tab with no terminal, one that launched no agent and one of another agent get no such row.
+        for (launch, handle) in [
+            ("claude", None),
+            ("", Some("term_c")),
+            ("codex", Some("term_c")),
+        ] {
+            let mut other = tab.clone();
+            other["launchAgent"] = json!(launch);
+            other["terminal"] = json!(handle);
+            let tabs = held(&snapshots(&[("r1::/w/a", vec![other])]));
+            let (worktrees, _) = documents_of(&ps(), &tabs);
+            assert_eq!(worktrees["worktrees"][0]["agents"], json!([]));
+        }
+        // Without the ids of its pane there is no pane to name.
+        let mut no_leaf = tab;
+        no_leaf["leafId"] = Value::Null;
+        let tabs = held(&snapshots(&[("r1::/w/a", vec![no_leaf])]));
+        let (worktrees, _) = documents_of(&ps(), &tabs);
+        assert_eq!(worktrees["worktrees"][0]["agents"], json!([]));
     }
 
     #[test]
