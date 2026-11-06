@@ -535,7 +535,7 @@ export const orcaRow = (repo: string, branch: string, line: string, extra: Parti
 export const orcaWorktree = (repo: string, branch: string): OrcaWorktree => ({ path: `/work/${repo}`, repo, branch });
 
 // A plain terminal of Orca (a shell) in the project of `repo`.
-export const orcaTerminal = (repo: string, title: string, extra: Partial<OrcaTerminal> = {}): OrcaTerminal => ({ handle: `term_${repo}_${title}`, title, branch: "main", projectKey: `proj_${repo}`, ...extra });
+export const orcaTerminal = (repo: string, title: string, extra: Partial<OrcaTerminal> = {}): OrcaTerminal => ({ handle: `term_${repo}_${title}`, title, branch: "main", projectKey: `proj_${repo}`, path: `/work/${repo}`, ...extra });
 export const orcaSsh = (id: string, label: string): OrcaSshTarget => ({ id, label });
 
 const STATUS_ORDER: OrcaStatus[] = ["question", "failed", "working", "monitoring", "interrupted", "done", "idle"];
@@ -707,3 +707,28 @@ export async function waitForOpens(times = 1) {
   await browser.waitUntil(async () => (await chatOpens()).length >= times, { timeoutMsg: `orca_chat_open was not called ${times} time(s)` });
   return chatOpens();
 }
+
+// ---- files pasted or dropped (A-10) ----
+
+// A one-pixel PNG.
+export const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+export type GivenFile = { name: string; type: string; base64: string };
+export const image = (name = "shot.png"): GivenFile => ({ name, type: "image/png", base64: PNG });
+export const note: GivenFile = { name: "notes.txt", type: "text/plain", base64: btoa("hello") };
+
+// Dispatches `kind` ("paste", "dragover" or "drop") on the element at `selector` ("document" is the page) carrying `files`, as the clipboard or the pointer would (the event objects hold plain stand-ins for the clipboard and the transfer,
+// which WKWebView builds only from a real gesture). Answers whether the page cancelled the event.
+export const fire = (kind: "paste" | "dragover" | "drop", selector: string, files: GivenFile[]) =>
+  browser.execute(
+    (k, sel, given) => {
+      const list = given.map((g) => new File([Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0))], g.name, { type: g.type }));
+      const event = new Event(k, { bubbles: true, cancelable: true });
+      const transfer = { files: list, types: list.length ? ["Files"] : ["text/plain"], dropEffect: "none", getData: () => "" };
+      Object.defineProperty(event, k === "paste" ? "clipboardData" : "dataTransfer", { value: transfer });
+      const target = sel === "document" ? document.body : document.querySelector(sel)!;
+      return !target.dispatchEvent(event);
+    },
+    kind,
+    selector,
+    files,
+  );

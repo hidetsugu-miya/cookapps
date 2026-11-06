@@ -27,6 +27,8 @@ interface XTerm {
   reset(): void;
   resize(cols: number, rows: number): void;
   focus(): void;
+  // Types `data` as a paste: wrapped in the bracketed-paste marks when the program asked for them (A-10).
+  paste(data: string): void;
   dispose(): void;
   loadAddon(addon: unknown): void;
   onData(listener: (data: string) => void): { dispose(): void };

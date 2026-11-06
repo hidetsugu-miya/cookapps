@@ -2,7 +2,7 @@
   "identifier": "jp.mysis.cookapps.e2e",
   "build": { "frontendDist": "../e2e/dist" },
   "app": {
-    "windows": [{ "title": "cookapps", "width": 1200, "height": 820, "visible": false }],
+    "windows": [{ "title": "cookapps", "width": 1200, "height": 820, "visible": false, "dragDropEnabled": false }],
     "security": {
       "capabilities": [
         {
