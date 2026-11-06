@@ -1,6 +1,6 @@
 //! A-12: the Orca screen's stream from a saved environment (a paired server), over the end-to-end encrypted WebSocket of A-7.
 //! The list of sessions comes from `session.tabs.subscribeAll`, named by `worktree.ps`, which is read once when the connection opens and again only when a worktree it did not list appears;
-//! the terminal of the tab shown comes from `terminal.subscribe` (its size from `terminal.updateViewport` while it fits the pane), and the keys go with `terminal.send`.
+//! the terminal of the tab shown comes from `terminal.subscribe` (its size from `terminal.updateViewport`), and the keys go with `terminal.send`.
 //! Nothing is read again by a clock. None of these methods is a public interface of Orca: they were checked on Orca 1.4.249. Nothing is stored here.
 //! What a terminal prints and the keys typed are in no log line, no error text and no event but the terminal's own channel; a token is in none at all.
 
@@ -95,8 +95,8 @@ pub struct OrcaViewport {
 /// The terminal the screen shows.
 pub struct Watch {
     handle: String,
-    /// The pane's size while the terminal fits it ("画面に合わせる"); `None` leaves Orca's size as it is ("固定").
-    viewport: Option<OrcaViewport>,
+    /// The pane's size, which the terminal is fitted to.
+    viewport: OrcaViewport,
     /// Gives an event to the screen; `false` when the screen no longer takes them.
     sink: Box<dyn FnMut(OrcaTermEvent) -> bool + Send>,
 }
@@ -315,13 +315,10 @@ fn client_of(client: &str) -> Value {
     json!({"id": client, "type": "desktop"})
 }
 
-/// `terminal.subscribe` as a desktop viewer named `client`; with a viewport the terminal is sized to the pane while the subscription lasts, and Orca gives it back its own size after it.
-fn subscribe_params(handle: &str, client: &str, viewport: Option<OrcaViewport>) -> Value {
-    let mut params = json!({"terminal": handle, "client": client_of(client)});
-    if let Some(v) = viewport.map(clamp_viewport) {
-        params["viewport"] = json!({"cols": v.cols, "rows": v.rows});
-    }
-    params
+/// `terminal.subscribe` as a desktop viewer named `client`; the terminal is sized to the pane while the subscription lasts, and Orca gives it back its own size after it.
+fn subscribe_params(handle: &str, client: &str, viewport: OrcaViewport) -> Value {
+    let v = clamp_viewport(viewport);
+    json!({"terminal": handle, "client": client_of(client), "viewport": {"cols": v.cols, "rows": v.rows}})
 }
 
 /// `terminal.updateViewport`: the new size of the pane, claimed so that it is the size the terminal takes.
@@ -526,8 +523,8 @@ impl Connection {
                 self.subscribe(link, stream).await?;
             }
             Some(StreamCommand::Viewport(viewport)) => {
-                if let Some(watch) = stream.watch.as_mut().filter(|w| w.viewport.is_some()) {
-                    watch.viewport = Some(viewport);
+                if let Some(watch) = stream.watch.as_mut() {
+                    watch.viewport = viewport;
                     if self.terminal.is_some() {
                         // The answer is of no use: a size Orca does not take leaves the terminal as it was.
                         link.send_request(
@@ -545,8 +542,8 @@ impl Connection {
                     let _ = reply.send(Err(OTHER_TERMINAL.into()));
                 }
                 Some(sub) => {
-                    // A terminal that fits the pane claims the pane's size at every send, as Orca's own screen does.
-                    let viewport = stream.watch.as_ref().and_then(|w| w.viewport);
+                    // The terminal fits the pane, so every send claims the pane's size, as Orca's own screen does.
+                    let viewport = stream.watch.as_ref().map(|w| w.viewport);
                     let id = link
                         .send_request(
                             "terminal.send",
@@ -648,8 +645,8 @@ async fn run_loop<F, Fut>(
                     None | Some(StreamCommand::Close) => return,
                     Some(StreamCommand::Terminal(watch)) => stream.watch = watch,
                     Some(StreamCommand::Viewport(viewport)) => {
-                        if let Some(watch) = stream.watch.as_mut().filter(|w| w.viewport.is_some()) {
-                            watch.viewport = Some(viewport);
+                        if let Some(watch) = stream.watch.as_mut() {
+                            watch.viewport = viewport;
                         }
                     }
                     Some(StreamCommand::Input(_, _, reply)) => {
@@ -724,12 +721,12 @@ pub async fn orca_stream_close(state: tauri::State<'_, OrcaStream>) -> Result<()
     Ok(())
 }
 
-/// Shows the terminal `handle`: its screen and what it prints go through `channel`. With `viewport` the terminal fits the pane; without, Orca's size stays.
+/// Shows the terminal `handle`: its screen and what it prints go through `channel`. The terminal fits the pane's size, `viewport`.
 #[tauri::command]
 pub async fn orca_stream_terminal(
     state: tauri::State<'_, OrcaStream>,
     handle: String,
-    viewport: Option<OrcaViewport>,
+    viewport: OrcaViewport,
     channel: tauri::ipc::Channel<OrcaTermEvent>,
 ) -> Result<(), String> {
     check_handle(&handle)?;
@@ -748,7 +745,7 @@ pub async fn orca_stream_terminal_close(state: tauri::State<'_, OrcaStream>) -> 
     Ok(())
 }
 
-/// The new size of the pane, for the terminal shown while it fits the pane.
+/// The new size of the pane, for the terminal shown.
 #[tauri::command]
 pub async fn orca_stream_viewport(
     state: tauri::State<'_, OrcaStream>,
@@ -1092,15 +1089,12 @@ mod tests {
     #[test]
     fn the_params_name_the_viewer_and_a_size_orca_takes() {
         assert_eq!(
-            subscribe_params("term_1", "cookapps-1", None),
-            json!({"terminal": "term_1", "client": {"id": "cookapps-1", "type": "desktop"}})
+            subscribe_params("term_1", "cookapps-1", OrcaViewport { cols: 80, rows: 24 }),
+            json!({"terminal": "term_1", "client": {"id": "cookapps-1", "type": "desktop"}, "viewport": {"cols": 80, "rows": 24}})
         );
         assert_eq!(
-            subscribe_params(
-                "term_1",
-                "cookapps-1",
-                Some(OrcaViewport { cols: 5, rows: 900 })
-            )["viewport"],
+            subscribe_params("term_1", "cookapps-1", OrcaViewport { cols: 5, rows: 900 })
+                ["viewport"],
             json!({"cols": 20, "rows": 500})
         );
         assert_eq!(
@@ -1162,7 +1156,7 @@ mod tests {
         panic!("only {} events", seen.lock().unwrap().len());
     }
 
-    fn watch(handle: &str, viewport: Option<OrcaViewport>) -> (Watch, Seen<OrcaTermEvent>) {
+    fn watch(handle: &str, viewport: OrcaViewport) -> (Watch, Seen<OrcaTermEvent>) {
         let seen: Seen<OrcaTermEvent> = Arc::default();
         let into = seen.clone();
         let watch = Watch {
@@ -1258,10 +1252,10 @@ mod tests {
         // The terminal shown is subscribed with the pane's size, and its screen and bytes reach the screen.
         let (shown, term) = watch(
             "term_c",
-            Some(OrcaViewport {
+            OrcaViewport {
                 cols: 100,
                 rows: 30,
-            }),
+            },
         );
         commands
             .send(StreamCommand::Terminal(Some(shown)))
@@ -1402,7 +1396,7 @@ mod tests {
             "cookapps-test".into(),
         ));
         // Asked for before the list came: it waits for the list.
-        let (gone, gone_events) = watch("term_gone", None);
+        let (gone, gone_events) = watch("term_gone", OrcaViewport { cols: 80, rows: 24 });
         commands
             .send(StreamCommand::Terminal(Some(gone)))
             .ok()
@@ -1426,15 +1420,17 @@ mod tests {
         changed_with_new_worktree(&mut server, &tabs["id"], "r9::/w/z", "term_9").await;
 
         // Orca refuses the subscription: the terminal ends with Orca's code, and no unsubscribe follows.
-        let (shown, term) = watch("term_s", None);
+        let (shown, term) = watch("term_s", OrcaViewport { cols: 80, rows: 24 });
         commands
             .send(StreamCommand::Terminal(Some(shown)))
             .ok()
             .unwrap();
         let subscribe = server.request().await;
         assert_eq!(subscribe["method"], "terminal.subscribe");
-        // Fixed: no viewport, Orca's size stays.
-        assert!(subscribe["params"].get("viewport").is_none());
+        assert_eq!(
+            subscribe["params"]["viewport"],
+            json!({"cols": 80, "rows": 24})
+        );
         assert_eq!(gone_events.lock().unwrap().len(), 1);
         server
             .send(json!({"id": subscribe["id"], "ok": false, "error": {"code": "no_connected_pty", "message": "secret"}}))
@@ -1448,10 +1444,10 @@ mod tests {
         changed_with_new_worktree(&mut server, &tabs["id"], "r8::/w/y", "term_8").await;
         let (anew, _) = watch(
             "term_s",
-            Some(OrcaViewport {
+            OrcaViewport {
                 cols: 100,
                 rows: 30,
-            }),
+            },
         );
         commands
             .send(StreamCommand::Terminal(Some(anew)))
@@ -1459,7 +1455,10 @@ mod tests {
             .unwrap();
         let subscribe = server.request().await;
         assert_eq!(subscribe["method"], "terminal.subscribe");
-        assert!(subscribe["params"].get("viewport").is_some());
+        assert_eq!(
+            subscribe["params"]["viewport"],
+            json!({"cols": 100, "rows": 30})
+        );
         assert_eq!(term.lock().unwrap().len(), 1);
 
         // The connection is lost: the screen is told, and keys are refused while it is down.

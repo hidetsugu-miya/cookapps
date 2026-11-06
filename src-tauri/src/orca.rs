@@ -1134,7 +1134,7 @@ fn screen(mirror: &OrcaMirror, handle: &str) -> Result<Vec<String>, String> {
         })
 }
 
-/// The params of `terminal.send`, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed. `client` names this app (A-12 gives the id its stream subscribed with). With a `viewport` (the pane's size while the terminal fits it, A-12) the send claims that size again, as Orca's own screen does at every key.
+/// The params of `terminal.send`, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed. `client` names this app (A-12 gives the id its stream subscribed with). With a `viewport` (the pane's size, A-12) the send claims that size again, as Orca's own screen does at every key.
 pub(crate) fn input_params(
     handle: &str,
     text: &str,

@@ -1008,8 +1008,6 @@ describe("orca: projects", () => {
       await mock("orca_terminal_read", ["$ pwd", "/work/example-app"]);
       await browser.waitUntil(async () => (await screenText()).includes("/work/example-app"), { timeoutMsg: "the next frame never showed" });
       expect(await screenText()).not.toContain("file-b");
-      // A mirror is always drawn at the pane's width: no switch of the size.
-      await expect($("#orca-fit")).not.toBeDisplayed();
     });
 
     it("fits the terminal inside the pane, its last row included", async () => {
@@ -1091,7 +1089,7 @@ describe("orca: a saved environment's stream", () => {
     await waitForCalls("orca_stream_open");
     await sendStream(streamList(rows, worktrees(), terminals));
   }
-  const viewportOf = (call: unknown) => (call as { viewport: { cols: number; rows: number } | null }).viewport;
+  const viewportOf = (call: unknown) => (call as { viewport: { cols: number; rows: number } }).viewport;
 
   it("opens the stream of the saved environment, draws each list it sends, and reads nothing by the clock", async () => {
     await openOrca(orcaOverview([], [], studioOnly));
@@ -1126,8 +1124,8 @@ describe("orca: a saved environment's stream", () => {
     await project("example-app").click();
     const [call] = await waitForCalls("orca_stream_terminal");
     expect(call).toMatchObject({ handle: "term_example-app" });
-    expect(viewportOf(call)!.cols).toBeGreaterThan(20);
-    expect(viewportOf(call)!.rows).toBeGreaterThan(8);
+    expect(viewportOf(call).cols).toBeGreaterThan(20);
+    expect(viewportOf(call).rows).toBeGreaterThan(8);
     expect((await channelCalls("orca_stream_terminal"))[0].channel).toBe(true);
     // No mirror for a streamed terminal.
     expect(await callsOf("orca_terminal_read")).toEqual([]);
@@ -1173,14 +1171,13 @@ describe("orca: a saved environment's stream", () => {
     await expect($("#error")).toHaveText("接続先につながっていません");
   });
 
-  it("draws the size Orca sends while it fits the pane, from the snapshot and from each size", async () => {
+  it("draws the size Orca sends, from the snapshot and from each size", async () => {
     await openStudio();
     await project("example-app").click();
     const [call] = await waitForCalls("orca_stream_terminal");
-    const paneRows = viewportOf(call)!.rows;
+    const paneRows = viewportOf(call).rows;
     const rowsDrawn = () => browser.execute(() => document.querySelectorAll("#orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
-    // Fitting the pane is the first state, and Orca's size is drawn all the same: another screen of Orca may have taken it.
-    expect(await $("#orca-fit").getText()).toBe("合わせる");
+    // The terminal fits the pane, and Orca's size is drawn all the same: another screen of Orca may have taken it.
     await sendTerm({ kind: "snapshot", data: "from the snapshot", cols: 80, rows: paneRows + 3 });
     await browser.waitUntil(async () => (await screenText()).includes("from the snapshot"), { timeoutMsg: "the screen never showed" });
     expect(await rowsDrawn()).toBe(paneRows + 3);
@@ -1196,8 +1193,8 @@ describe("orca: a saved environment's stream", () => {
     // The list narrows to 20%, so the terminal widens.
     await dragDivider(0.2);
     const [sent] = await waitForCalls(viewport);
-    expect(viewportOf(sent)!.cols).toBeGreaterThan(viewportOf(call)!.cols);
-    expect(viewportOf(sent)!.rows).toBe(viewportOf(call)!.rows);
+    expect(viewportOf(sent).cols).toBeGreaterThan(viewportOf(call).cols);
+    expect(viewportOf(sent).rows).toBe(viewportOf(call).rows);
   });
 
   it("subscribes another tab with no close, and ends the stream of the terminal when another screen or a hidden window shows", async () => {
@@ -1245,31 +1242,6 @@ describe("orca: a saved environment's stream", () => {
     await waitForCalls(close);
   });
 
-  it("keeps Orca's size with 固定, which asks for no size, and fits the pane again with 合わせる", async () => {
-    await openStudio();
-    await expect($("#orca-fit")).toBeDisplayed();
-    await expect($("#orca-fit")).toHaveText("合わせる");
-    await expect($("#orca-fit")).toHaveAttribute("aria-label", "表示: 画面に合わせる（押すと固定）");
-    await project("example-app").click();
-    await waitForCalls("orca_stream_terminal");
-    const close = await mock("orca_stream_terminal_close", null);
-    const subscribe = await mock("orca_stream_terminal", null);
-    await $("#orca-fit").click();
-    await expect($("#orca-fit")).toHaveText("固定");
-    await expect($("#orca-fit")).toHaveAttribute("aria-label", "表示: 固定（押すと画面に合わせる）");
-    expect(viewportOf((await waitForCalls(subscribe))[0])).toBeNull();
-    // Orca's size is drawn as it is, and the pane scrolls.
-    await sendTerm({ kind: "snapshot", data: "wide", cols: 300, rows: 24 });
-    await browser.waitUntil(async () => (await screenText()).includes("wide"), { timeoutMsg: "the screen never showed" });
-    expect(await browser.execute(() => document.getElementById("orca-term")!.classList.contains("fixed"))).toBe(true);
-    expect(await browser.execute(() => document.getElementById("orca-term")!.scrollWidth > document.getElementById("orca-term")!.clientWidth)).toBe(true);
-    await $("#orca-fit").click();
-    await expect($("#orca-fit")).toHaveText("合わせる");
-    expect(viewportOf((await waitForCalls(subscribe, 2))[1])).not.toBeNull();
-    // The new subscription lets the old one go, with no close that could come after it.
-    expect(await callsOf(close)).toEqual([]);
-  });
-
   it("closes a session in Orca and leaves the tab to the next list, with no read", async () => {
     await openStudio();
     await project("example-app").click();
@@ -1283,7 +1255,7 @@ describe("orca: a saved environment's stream", () => {
     await expect($("#orca-empty")).toHaveText("セッションはありません");
   });
 
-  it("ends the stream of the list when the target becomes this machine, and hides the size switch", async () => {
+  it("ends the stream of the list when the target becomes this machine", async () => {
     await openStudio();
     const close = await mock("orca_stream_close", null);
     await mock("orca_set_target", null);
@@ -1292,7 +1264,6 @@ describe("orca: a saved environment's stream", () => {
     await pickMenu("このマシン");
     await waitForCalls(close);
     await expect($("#orca-target")).toHaveText("このマシン に接続中");
-    await expect($("#orca-fit")).not.toBeDisplayed();
     // An event of the old stream is not drawn.
     await sendStream(streamList([], worktrees()));
     await browser.pause(300);

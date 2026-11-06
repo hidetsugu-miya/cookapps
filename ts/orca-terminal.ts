@@ -1,6 +1,6 @@
 // The terminals of the Orca screen (A-8, A-12): one xterm.js for each tab, in `#orca-term`, of which the selected one is shown. Every tab is a terminal, a Claude session's or a plain one.
-// A saved environment streams the terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. While it fits the pane ("画面に合わせる", the first state) the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
-// the size Orca sends (the snapshot's and each `size`) is drawn in both states, as another screen of Orca may take the size. "固定" sends no size, keeps the font and Orca's size, and the box scrolls when it does not fit. Leaving the tab, the screen or a shown window ends the stream, and Orca gives the terminal back its own size.
+// A saved environment streams the terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. The terminal is fitted to the pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
+// the size Orca sends (the snapshot's and each `size`) is drawn, as another screen of Orca may take the size. Leaving the tab, the screen or a shown window ends the stream, and Orca gives the terminal back its own size.
 // This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminal shown is a mirror: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
@@ -35,9 +35,6 @@ export interface TermSource {
   handle: string;
 }
 
-// How the terminal shown is sized: to the pane (the first state), or as Orca has it. Kept in memory only.
-export type FitMode = "fit" | "fixed";
-
 interface Instance {
   term: XTerm;
   fit: { fit(): void };
@@ -55,7 +52,6 @@ interface Instance {
 const instances = new Map<string, Instance>();
 // The tab whose terminal is shown, null when none is.
 let visibleId: string | null = null;
-let mode: FitMode = "fit";
 // The channel of the stream shown, null when none is: an event of another channel is not drawn.
 let current: { onmessage: (event: OrcaTermEvent) => void } | null = null;
 let unclosed = false;
@@ -66,8 +62,6 @@ const darkScheme = window.matchMedia("(prefers-color-scheme: dark)");
 
 const container = () => $("orca-term");
 const visible = () => (visibleId === null ? undefined : instances.get(visibleId));
-// Only a stream can keep Orca's size: the mirror is always drawn at the pane's width.
-const fixed = (instance: Instance) => instance.source.kind === "stream" && mode === "fixed";
 
 // The colors of the imported settings for the system's appearance, null when there are none.
 const importedColors = (): TerminalColors | null => (darkScheme.matches ? settings?.dark : settings?.light) ?? null;
@@ -171,10 +165,10 @@ function newInstance(source: TermSource): Instance {
   return instance;
 }
 
-// Fits the shown terminal to the pane, and tells the stream the new size. A fixed terminal keeps Orca's size.
+// Fits the shown terminal to the pane, and tells the stream the new size.
 function fitVisible() {
   const instance = visible();
-  if (!instance || container().hidden || fixed(instance)) return;
+  if (!instance || container().hidden) return;
   const { cols, rows } = instance.term;
   instance.fit.fit();
   if (instance.source.kind === "stream" && current !== null && (instance.term.cols !== cols || instance.term.rows !== rows)) {
@@ -262,7 +256,7 @@ function drawEvent(instance: Instance, event: OrcaTermEvent) {
   }
 }
 
-// Subscribes the stream of the shown terminal, with the pane's size while it fits the pane.
+// Subscribes the stream of the shown terminal, with the pane's size.
 function startStream(instance: Instance) {
   if (document.hidden) return;
   const channel = new window.__TAURI__.core.Channel<OrcaTermEvent>();
@@ -271,8 +265,8 @@ function startStream(instance: Instance) {
   channel.onmessage = (event) => {
     if (current === channel) drawEvent(instance, event);
   };
-  if (!fixed(instance)) instance.fit.fit();
-  const viewport = fixed(instance) ? null : { cols: instance.term.cols, rows: instance.term.rows };
+  instance.fit.fit();
+  const viewport = { cols: instance.term.cols, rows: instance.term.rows };
   invoke("orca_stream_terminal", { handle: instance.source.handle, viewport, channel }).catch((e) => {
     if (current === channel) drawEvent(instance, { kind: "ended", message: String(e) });
   });
@@ -317,7 +311,6 @@ export function showTerminal(id: string, source: TermSource) {
     instances.set(id, instance);
   }
   for (const [other, { el }] of instances) el.hidden = other !== id;
-  container().classList.toggle("fixed", fixed(instance));
   fitVisible();
   start(instance);
   instance.term.focus();
@@ -350,20 +343,6 @@ function dropTerminal(id: string) {
 // Forgets every terminal whose id `keep` does not accept (the sessions that left Orca's list, or the target changed).
 export function pruneTerminals(keep: (id: string) => boolean) {
   for (const id of instances.keys()) if (!keep(id)) dropTerminal(id);
-}
-
-export const fitMode = () => mode;
-
-// Switches how the terminal shown is sized. A stream shown is subscribed again: with the pane's size to fit it, without to give Orca its own.
-export function setFitMode(next: FitMode) {
-  if (next === mode) return;
-  mode = next;
-  const instance = visible();
-  if (!instance || container().hidden) return;
-  container().classList.toggle("fixed", fixed(instance));
-  if (instance.source.kind !== "stream") return fitVisible();
-  stopStream(false);
-  startStream(instance);
 }
 
 // What a failed send of typed keys does (the screen shows the message).
