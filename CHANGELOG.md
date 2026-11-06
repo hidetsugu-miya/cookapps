@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.47.0
+
+S-16 the Slack list follows Socket Mode events (#96). In the new "リアルタイム更新" card of the Slack tab of the settings, register an App-Level Token (`xapp-`, scope `connections:write`) for a workspace; it is kept in the keychain. The app then stays connected to Slack, and a message posted, replied, changed or deleted in a channel reaches the list and the badge within about a second. While every workspace is connected, the whole list is read again every 5 minutes instead of every 2. `docs/slack.md` has how to make the token.
+
 ## v0.46.1
 
 A Todo's description longer than 10 lines is folded at the 10th line in the detail (#93). The last line fades out, and "… 続きを表示（残り n 行）" under it shows the whole text; "折りたたむ" folds it again. Pressing the text still starts editing.
