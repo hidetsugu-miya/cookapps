@@ -12,16 +12,21 @@ interface Window {
 declare const marked: { parse(markdown: string, options?: { breaks?: boolean }): string };
 declare const DOMPurify: { sanitize(html: string, config?: Record<string, unknown>): string };
 
-// xterm.js (src/vendor/xterm.js) and its fit addon (src/vendor/addon-fit.js): only what the mirror of a plain terminal uses.
+// xterm.js (src/vendor/xterm.js), its fit addon (src/vendor/addon-fit.js) and its Unicode 11 addon (src/vendor/addon-unicode11.js): only what the terminals of the Orca screen use.
 interface XTerm {
   cols: number;
   rows: number;
+  // The widths of characters (Unicode 11, set when the addon is loaded); a proposed API of xterm.js, so the terminal is made with `allowProposedApi`.
+  unicode: { activeVersion: string };
   open(parent: HTMLElement): void;
   write(data: string): void;
+  reset(): void;
+  resize(cols: number, rows: number): void;
   focus(): void;
   dispose(): void;
   loadAddon(addon: unknown): void;
   onData(listener: (data: string) => void): { dispose(): void };
 }
 declare const Terminal: new (options?: Record<string, unknown>) => XTerm;
-declare const FitAddon: { FitAddon: new () => { fit(): void } };
+declare const FitAddon: { FitAddon: new () => { fit(): void; proposeDimensions(): { cols: number; rows: number } | undefined } };
+declare const Unicode11Addon: { Unicode11Addon: new () => unknown };

@@ -9,10 +9,10 @@ pub mod image_senders;
 pub mod images;
 pub mod orca;
 pub mod orca_answer;
-pub mod orca_attach;
 pub mod orca_chat;
 pub mod orca_e2ee;
 pub mod orca_handoff;
+pub mod orca_stream;
 pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
@@ -186,6 +186,7 @@ pub fn run() {
         .manage(update::Installed::default())
         .manage(orca_chat::OrcaChat::default())
         .manage(orca::OrcaMirror::default())
+        .manage(orca_stream::OrcaStream::default())
         .manage(Mutex::new(Badge::default()))
         .setup(|app| {
             // No Dock icon, and no focus taken from the developer's apps while the E2E run drives the window.
@@ -273,19 +274,22 @@ pub fn run() {
             orca::orca_overview,
             orca::orca_set_target,
             orca::orca_send,
-            orca::orca_launch,
+            orca::orca_start,
             orca::orca_handoff,
-            orca::orca_skills,
             orca::orca_close,
             orca::orca_terminal_read,
             orca::orca_terminal_input,
             orca_answer::orca_answer,
-            orca_attach::orca_attach_image,
-            orca_attach::orca_compose_text,
             orca_chat::orca_chat_open,
             orca_chat::orca_chat_close,
             orca_chat::orca_chat_older,
             orca_chat::orca_chat_pause,
+            orca_stream::orca_stream_open,
+            orca_stream::orca_stream_close,
+            orca_stream::orca_stream_terminal,
+            orca_stream::orca_stream_terminal_close,
+            orca_stream::orca_stream_viewport,
+            orca_stream::orca_stream_input,
             update::app_info,
             update::update_mode,
             update::set_update_mode,

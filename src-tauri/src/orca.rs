@@ -1,9 +1,8 @@
-//! A-6, A-8: the Orca screen. Orca's CLI (`orca`) lists the agents that run in Orca and posts to them; nothing about a session is stored here.
+//! A-6, A-8: the Orca screen. Orca's CLI (`orca`) lists the agents that run in Orca, starts them and posts to them; nothing about a session is stored here.
 //! The CLI is spawned with an argument list, never through a shell, and the prompt text is in no log line.
-//! A-8 adds the project list and the plain terminals of Orca (closed and mirrored through the CLI).
+//! A-8 adds the project list and the terminals of Orca (closed through the CLI, and mirrored for this machine). A saved environment streams them instead (A-12, `orca_stream.rs`).
 
 use std::{
-    cell::OnceCell,
     collections::HashSet,
     io::Read,
     path::{Path, PathBuf},
@@ -169,17 +168,6 @@ pub struct OrcaWorktree {
     pub path: String,
     pub repo: String,
     pub branch: String,
-}
-
-/// A skill of Claude Code the composer offers while a `/` is typed.
-#[derive(Serialize, Clone, Debug, PartialEq)]
-#[cfg_attr(test, derive(TS))]
-#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
-pub struct OrcaSkill {
-    /// What is typed to call it: `/name`, or `/plugin:name` for a plugin's skill.
-    pub command: String,
-    /// One line.
-    pub description: String,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
@@ -447,17 +435,6 @@ pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
         .collect()
 }
 
-/// The `hostId` Orca names for the worktree at `path` in `orca worktree ps` (its `result`); `None` when the worktree or its `hostId` is absent (A-10 sends a file there, and Orca wants this id with it).
-fn host_id_of(ps: &Value, path: &str) -> Option<String> {
-    ps["worktrees"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|w| text_of(w, "path") == Some(path))
-        .and_then(|w| text_of(w, "hostId"))
-        .map(str::to_owned)
-}
-
 /// The names of the saved environments of `orca environment list` (its `result`): an entry is a name, or an object with a `name` (else an `id`).
 pub fn environments_of(result: &Value) -> Vec<String> {
     result["environments"]
@@ -596,126 +573,6 @@ fn is_stale(out: &str) -> bool {
         .is_ok_and(|doc| doc["ok"] == false && doc["error"]["code"] == "terminal_handle_stale")
 }
 
-/// The plugin's name of a skill whose `sourceLabel` is "Claude plugin {plugin}".
-fn plugin_of(label: &str) -> Option<&str> {
-    label
-        .strip_prefix("Claude plugin ")
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-}
-
-/// The skills of `orca skills installed` (its `result`) that Claude Code runs, as the commands to type: a plugin's skill is `/plugin:name` (its `name` has no prefix), any other `/name`.
-/// A command listed twice is kept once; the list is sorted by command.
-/// The skills whose `SKILL.md` says `user-invocable: false` in its front matter are left out (the CLI's output has no such field, so the file is read through `read`).
-/// `home` is the user's home folder. A skill whose file cannot be found or read stays, and so does every skill when there is no home folder.
-pub fn invocable_skills_of(
-    result: &Value,
-    home: Option<&Path>,
-    read: impl Fn(&Path) -> Option<String>,
-) -> Vec<OrcaSkill> {
-    // The list of the installed plugins, read once and only when a plugin's skill needs it.
-    let installed = OnceCell::new();
-    listed_skills(result, |skill, name| {
-        let Some(home) = home.filter(|_| valid_skill_name(name)) else {
-            return false;
-        };
-        skill_files(skill, name, home, || {
-            installed
-                .get_or_init(|| {
-                    let text = read(&home.join(".claude/plugins/installed_plugins.json"))?;
-                    serde_json::from_str::<Value>(&text).ok()
-                })
-                .as_ref()
-        })
-        .iter()
-        .filter_map(|file| read(file))
-        .any(|text| hides_skill(&text))
-    })
-}
-
-fn listed_skills(result: &Value, hidden: impl Fn(&Value, &str) -> bool) -> Vec<OrcaSkill> {
-    let mut skills: Vec<OrcaSkill> = Vec::new();
-    for skill in result["skills"].as_array().into_iter().flatten() {
-        let for_claude = skill["providers"]
-            .as_array()
-            .is_some_and(|p| p.iter().any(|p| p == "claude"));
-        let Some(name) = text_of(skill, "name").filter(|_| for_claude) else {
-            continue;
-        };
-        let plugin = text_of(skill, "sourceLabel")
-            .filter(|_| skill["sourceKind"] == "plugin")
-            .and_then(plugin_of);
-        let command = plugin.map_or_else(|| format!("/{name}"), |p| format!("/{p}:{name}"));
-        if skills.iter().any(|s| s.command == command) || hidden(skill, name) {
-            continue;
-        }
-        skills.push(OrcaSkill {
-            command,
-            description: text_of(skill, "description")
-                .and_then(first_line)
-                .unwrap_or_default(),
-        });
-    }
-    skills.sort_by(|a, b| a.command.cmp(&b.command));
-    skills
-}
-
-/// Whether `name` (from the CLI's output) is one path element, so it can be a folder name under a skills folder.
-fn valid_skill_name(name: &str) -> bool {
-    !matches!(name, "" | "." | "..") && !name.contains(['/', '\\'])
-}
-
-/// Where the `SKILL.md` of a skill can be: `{home}/.claude/skills/{name}` for `sourceKind` `home`, and `{installPath}/skills/{name}` for each place of its plugin in `installed_plugins.json` (`plugins` has the keys `{plugin}@{marketplace}`, each an array of places) for `sourceKind` `plugin`.
-/// Any other kind of source, or a plugin the file does not know, has none.
-fn skill_files<'a>(
-    skill: &Value,
-    name: &str,
-    home: &Path,
-    installed: impl FnOnce() -> Option<&'a Value>,
-) -> Vec<PathBuf> {
-    match skill["sourceKind"].as_str() {
-        Some("home") => vec![home.join(".claude/skills").join(name).join("SKILL.md")],
-        Some("plugin") => {
-            let Some(plugin) = text_of(skill, "sourceLabel").and_then(plugin_of) else {
-                return Vec::new();
-            };
-            let plugins = installed().and_then(|doc| doc["plugins"].as_object());
-            plugins
-                .into_iter()
-                .flatten()
-                .filter(|(key, _)| {
-                    key.strip_prefix(plugin)
-                        .is_some_and(|rest| rest.starts_with('@'))
-                })
-                .flat_map(|(_, places)| places.as_array().into_iter().flatten())
-                .filter_map(|place| text_of(place, "installPath"))
-                .map(|path| Path::new(path).join("skills").join(name).join("SKILL.md"))
-                .collect()
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Whether the front matter of a `SKILL.md` (from its first line `---` to the next `---`, which must exist) has the top-level line `user-invocable: false`.
-/// The same line in the body, a nested key or another value does not count.
-fn hides_skill(text: &str) -> bool {
-    let mut lines = text.lines().map(str::trim_end);
-    if lines.next() != Some("---") {
-        return false;
-    }
-    let mut front_matter = Vec::new();
-    let closed = lines.any(|line| {
-        front_matter.push(line);
-        line == "---"
-    });
-    closed
-        && front_matter.iter().any(|line| {
-            line.split_once(':').is_some_and(|(key, value)| {
-                key.trim_end() == "user-invocable" && value.trim() == "false"
-            })
-        })
-}
-
 /// The session a launch started: `result.outcome` (`{kind: "terminal", handle, paneKey}`).
 fn started_of(result: &Value) -> OrcaStarted {
     let outcome = &result["outcome"];
@@ -827,7 +684,7 @@ fn check_text(text: &str) -> Result<(), String> {
 }
 
 /// A terminal handle is `term_` and an ID, so nothing in it can be read as an option.
-fn check_handle(handle: &str) -> Result<(), String> {
+pub(crate) fn check_handle(handle: &str) -> Result<(), String> {
     let id = handle.strip_prefix("term_").unwrap_or_default();
     if !id.is_empty()
         && id
@@ -857,8 +714,8 @@ fn check_session(rows: &[OrcaRow], handle: &str) -> Result<(), String> {
     }
 }
 
-/// Keys typed into a mirrored terminal: control bytes and blanks are the point, but not a NUL (an argument cannot hold one) or more than `TEXT_LIMIT` characters.
-fn check_keys(text: &str) -> Result<(), String> {
+/// Keys typed into a terminal: control bytes and blanks are the point, but not a NUL (an argument cannot hold one) or more than `TEXT_LIMIT` characters.
+pub(crate) fn check_keys(text: &str) -> Result<(), String> {
     if text.is_empty() {
         return Err("入力がありません".into());
     }
@@ -871,9 +728,15 @@ fn check_keys(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The handle must belong to a plain terminal of the list read just now.
-fn check_plain(terminals: &[OrcaTerminal], handle: &str) -> Result<(), String> {
-    if terminals.iter().any(|t| t.handle == handle) {
+/// The handle must belong to a terminal of the list read just now: a Claude session's or a plain one.
+fn check_terminal(
+    rows: &[OrcaRow],
+    terminals: &[OrcaTerminal],
+    handle: &str,
+) -> Result<(), String> {
+    if rows.iter().any(|r| r.handle.as_deref() == Some(handle))
+        || terminals.iter().any(|t| t.handle == handle)
+    {
         Ok(())
     } else {
         Err("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください".into())
@@ -890,7 +753,7 @@ fn check_worktree(worktrees: &[OrcaWorktree], path: &str) -> Result<(), String> 
 }
 
 /// A send the terminal did not take (`result.send.accepted` false) is a failure although the CLI answered `ok`.
-fn check_accepted(result: &Value) -> Result<(), String> {
+pub(crate) fn check_accepted(result: &Value) -> Result<(), String> {
     if result["send"]["accepted"] == false {
         Err("Orca が指示を受け付けませんでした".into())
     } else {
@@ -968,22 +831,17 @@ fn input_args(handle: &str, text: &str, environment: Option<&str>) -> Vec<String
     with_environment(args, environment)
 }
 
-/// Never with `--environment`: the CLI refuses it (`invalid_environment`), since it lists the skills of the machine it runs on.
-fn skills_args() -> Vec<String> {
-    args_of(&["skills", "installed", "--json"])
-}
-
-/// Always Claude: the history of A-7 reads only Claude's sessions.
-fn launch_args(path: &str, text: &str, environment: Option<&str>) -> Vec<String> {
+/// Always Claude: the history of A-7 reads only Claude's sessions. A session started from the Orca screen (A-12) has no first prompt: the user types it in the terminal.
+fn launch_args(path: &str, prompt: Option<&str>, environment: Option<&str>) -> Vec<String> {
     let mut args = args_of(&["agent", "launch", "--agent", "claude"]);
     args.extend([
         "--worktree".into(),
         format!("path:{path}"),
         "--surface".into(),
         "terminal".into(),
-        format!("--prompt={text}"),
-        "--json".into(),
     ]);
+    args.extend(prompt.map(|text| format!("--prompt={text}")));
+    args.push("--json".into());
     with_environment(args, environment)
 }
 
@@ -1188,23 +1046,20 @@ pub(crate) fn press_key(handle: &str, key: &str, environment: Option<&str>) -> R
     write(&input_args(handle, key, environment)).map(|_| ())
 }
 
-fn launch(path: &str, text: &str, environment: Option<&str>) -> Result<OrcaStarted, String> {
+/// Starts Claude in the worktree at `path`, with `prompt` as its first prompt when there is one (A-9; the Orca screen starts it with none).
+fn launch(
+    path: &str,
+    prompt: Option<&str>,
+    environment: Option<&str>,
+) -> Result<OrcaStarted, String> {
     check_path(path)?;
-    check_text(text)?;
+    if let Some(text) = prompt {
+        check_text(text)?;
+    }
     check_listed(environment)?;
     let (ps, _) = read_lists(environment, false);
     check_worktree(&worktrees_of(&ps.map_err(message_of)?), path)?;
-    write(&launch_args(path, text, environment)).map(|result| started_of(&result))
-}
-
-/// The `hostId` of the worktree at `path` of the target's list read just now (A-10): the path must be in it.
-pub(crate) fn worktree_host(path: &str, environment: Option<&str>) -> Result<String, String> {
-    check_path(path)?;
-    check_listed(environment)?;
-    let (ps, _) = read_lists(environment, false);
-    let ps = ps.map_err(message_of)?;
-    check_worktree(&worktrees_of(&ps), path)?;
-    host_id_of(&ps, path).ok_or_else(|| "Orca が worktree のホストを答えませんでした".into())
+    write(&launch_args(path, prompt, environment)).map(|result| started_of(&result))
 }
 
 /// Hands the content to a new session or a running one (A-9): the prompt is composed here, then the launch or the send of A-6 runs once with its checks.
@@ -1216,7 +1071,7 @@ fn handoff(
 ) -> Result<OrcaStarted, String> {
     let text = compose(instruction, context)?;
     match destination {
-        OrcaDestination::New { path } => launch(path, &text, environment),
+        OrcaDestination::New { path } => launch(path, Some(&text), environment),
         OrcaDestination::Existing { handle } => {
             send(handle, &text, environment)?;
             Ok(OrcaStarted {
@@ -1224,18 +1079,6 @@ fn handoff(
                 handle: Some(handle.clone()),
             })
         }
-    }
-}
-
-fn skills() -> Result<Vec<OrcaSkill>, String> {
-    match call(&skills_args(), READ_TIMEOUT) {
-        Ok(result) => Ok(invocable_skills_of(
-            &result,
-            dirs::home_dir().as_deref(),
-            |path| std::fs::read_to_string(path).ok(),
-        )),
-        Err(RunError::Missing) => Err(not_installed()),
-        Err(RunError::Failed(message)) => Err(message),
     }
 }
 
@@ -1250,69 +1093,58 @@ fn close(handle: &str, environment: Option<&str>) -> Result<(), String> {
     parse_output(&out).map(|_| ())
 }
 
-/// The handles (with their target) that were checked against the plain terminals of the list, so only the first read or input of a terminal reads the list. A key leaves when a read or a send of its terminal fails.
+/// The handles that were checked against the terminals of this machine's list, so only the first read or input of a terminal reads the list. A handle leaves when a read or a send of its terminal fails.
 #[derive(Default, Clone)]
 pub struct OrcaMirror(Arc<Mutex<HashSet<String>>>);
 
 impl OrcaMirror {
-    fn forget(&self, key: &str) {
-        self.0.lock().unwrap().remove(key);
+    fn forget(&self, handle: &str) {
+        self.0.lock().unwrap().remove(handle);
     }
 }
 
-/// Checks that `handle` is a plain terminal of the target's list read just now, unless an earlier read or input of it did. The key to `forget` when it fails.
-fn check_mirrored(
-    mirror: &OrcaMirror,
-    handle: &str,
-    environment: Option<&str>,
-) -> Result<String, String> {
+/// Checks that `handle` is a terminal (a Claude session's or a plain one) of this machine's list read just now, unless an earlier read or input of it did.
+fn check_mirrored(mirror: &OrcaMirror, handle: &str) -> Result<(), String> {
     check_handle(handle)?;
-    let key = format!("{}\0{handle}", environment.unwrap_or_default());
-    if !mirror.0.lock().unwrap().contains(&key) {
-        check_listed(environment)?;
-        let (ps, terminals) = read_lists(environment, true);
-        let plain = plain_terminals_of(&ps.map_err(message_of)?, &terminals.map_err(message_of)?);
-        check_plain(&plain, handle)?;
-        mirror.0.lock().unwrap().insert(key.clone());
+    if !mirror.0.lock().unwrap().contains(handle) {
+        let (ps, terminals) = read_lists(None, true);
+        let (ps, terminals) = (ps.map_err(message_of)?, terminals.map_err(message_of)?);
+        check_terminal(
+            &rows_of(&ps, &terminals),
+            &plain_terminals_of(&ps, &terminals),
+            handle,
+        )?;
+        mirror.0.lock().unwrap().insert(handle.to_owned());
     }
-    Ok(key)
+    Ok(())
 }
 
-/// The lines on the screen of a plain terminal. Read once a second while its tab is shown, so the list is read only the first time.
-fn screen(
-    mirror: &OrcaMirror,
-    handle: &str,
-    environment: Option<&str>,
-) -> Result<Vec<String>, String> {
-    let key = check_mirrored(mirror, handle, environment)?;
-    call(&screen_args(handle, environment), READ_TIMEOUT)
+/// The lines on the screen of a terminal of this machine. Read once a second while its tab is shown, so the list is read only the first time.
+fn screen(mirror: &OrcaMirror, handle: &str) -> Result<Vec<String>, String> {
+    check_mirrored(mirror, handle)?;
+    call(&screen_args(handle, None), READ_TIMEOUT)
         .map(|result| screen_lines_of(&result))
         .map_err(|e| {
-            mirror.forget(&key);
+            mirror.forget(handle);
             message_of(e)
         })
 }
 
-/// The params of `terminal.send` of this machine's Orca, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed.
-fn input_params(handle: &str, text: &str) -> Value {
+/// The params of `terminal.send`, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed. `client` names this app (A-12 gives the id its stream subscribed with).
+pub(crate) fn input_params(handle: &str, text: &str, client: &str) -> Value {
     serde_json::json!({
         "terminal": handle,
         "text": text,
         "enter": false,
-        "client": {"id": "cookapps", "type": "desktop"},
+        "client": {"id": client, "type": "desktop"},
     })
 }
 
-/// Checks the keys and the terminal; the key to `forget` when the send fails.
-fn check_input(
-    mirror: &OrcaMirror,
-    handle: &str,
-    text: &str,
-    environment: Option<&str>,
-) -> Result<String, String> {
+/// Checks the keys and the terminal.
+fn check_input(mirror: &OrcaMirror, handle: &str, text: &str) -> Result<(), String> {
     check_handle(handle)?;
     check_keys(text)?;
-    check_mirrored(mirror, handle, environment)
+    check_mirrored(mirror, handle)
 }
 
 /// The SSH hosts of this machine's Orca, from its runtime (not a public interface: it was written against Orca 1.4.248). A failure is an empty list.
@@ -1369,12 +1201,6 @@ pub async fn orca_set_target(
     blocking(move || set_target(&dir, environment.as_deref())).await?
 }
 
-/// The skills of Claude Code on the machine the app runs on (whatever the target), for the composer's `/` completion.
-#[tauri::command]
-pub async fn orca_skills() -> Result<Vec<OrcaSkill>, String> {
-    blocking(skills).await?
-}
-
 /// Sends `text` and Enter to the terminal `handle`.
 #[tauri::command]
 pub async fn orca_send(
@@ -1385,14 +1211,10 @@ pub async fn orca_send(
     blocking(move || send(&handle, &text, environment.as_deref())).await?
 }
 
-/// Starts Claude in the worktree at `path`, with `text` as its first prompt. The answer is the session as Orca's reply names it.
+/// Starts Claude in the worktree at `path` with no first prompt (the "＋ 新規" of A-12). The answer is the session as Orca's reply names it.
 #[tauri::command]
-pub async fn orca_launch(
-    path: String,
-    text: String,
-    environment: Option<String>,
-) -> Result<OrcaStarted, String> {
-    blocking(move || launch(&path, &text, environment.as_deref())).await?
+pub async fn orca_start(path: String, environment: Option<String>) -> Result<OrcaStarted, String> {
+    blocking(move || launch(&path, None, environment.as_deref())).await?
 }
 
 /// A-9: starts a session in a worktree, or posts to a running one, with the instruction and, when `context` is given, the content quoted as data.
@@ -1420,45 +1242,34 @@ pub async fn orca_close(handle: String, environment: Option<String>) -> Result<(
     blocking(move || close(&handle, environment.as_deref())).await?
 }
 
-/// The lines on the screen of the plain terminal `handle`, for the mirror.
+/// The lines on the screen of the terminal `handle` of this machine, for the mirror.
 #[tauri::command]
 pub async fn orca_terminal_read(
     mirror: tauri::State<'_, OrcaMirror>,
     handle: String,
-    environment: Option<String>,
 ) -> Result<Vec<String>, String> {
     let mirror = mirror.inner().clone();
-    blocking(move || screen(&mirror, &handle, environment.as_deref())).await?
+    blocking(move || screen(&mirror, &handle)).await?
 }
 
-/// Types `text` into the plain terminal `handle` as it is. This machine's Orca takes it over its unix socket (`terminal.send`), so the keys are in no argument of a process; a saved environment has only the CLI, whose argument holds them.
+/// Types `text` into the terminal `handle` of this machine as it is, over its unix socket (`terminal.send`), so the keys are in no argument of a process.
 #[tauri::command]
 pub async fn orca_terminal_input(
     mirror: tauri::State<'_, OrcaMirror>,
     handle: String,
     text: String,
-    environment: Option<String>,
 ) -> Result<(), String> {
     let mirror = mirror.inner().clone();
-    let checked = {
-        let (mirror, handle, text, environment) = (
-            mirror.clone(),
-            handle.clone(),
-            text.clone(),
-            environment.clone(),
-        );
-        blocking(move || check_input(&mirror, &handle, &text, environment.as_deref())).await??
-    };
-    let sent = match environment {
-        None => crate::orca_chat::local_call("terminal.send", input_params(&handle, &text))
+    {
+        let (mirror, handle, text) = (mirror.clone(), handle.clone(), text.clone());
+        blocking(move || check_input(&mirror, &handle, &text)).await??;
+    }
+    let sent =
+        crate::orca_chat::local_call("terminal.send", input_params(&handle, &text, "cookapps"))
             .await
-            .and_then(|result| check_accepted(&result)),
-        Some(name) => {
-            blocking(move || write(&input_args(&handle, &text, Some(&name))).map(|_| ())).await?
-        }
-    };
+            .and_then(|result| check_accepted(&result));
     if sent.is_err() {
-        mirror.forget(&checked);
+        mirror.forget(&handle);
     }
     sent
 }
@@ -1797,259 +1608,6 @@ mod tests {
             .contains("応答がありません"));
     }
 
-    fn skill(name: &str, providers: &[&str], kind: &str, label: &str) -> Value {
-        json!({
-            "id": format!("id-{name}"), "name": name, "description": format!("About {name}\nmore"),
-            "providers": providers, "sourceKind": kind, "sourceLabel": label,
-        })
-    }
-
-    /// The skills with no home folder, so that no `SKILL.md` is read.
-    fn all_skills(doc: &Value) -> Vec<OrcaSkill> {
-        invocable_skills_of(doc, None, |_| None)
-    }
-
-    #[test]
-    fn a_skill_is_a_command_of_claude_code() {
-        let doc = json!({"skills": [
-            skill("review", &["claude", "codex"], "home", "Claude Code home"),
-            skill("only-codex", &["codex", "agent-skills"], "home", "Codex home"),
-            skill("shared", &["claude"], "home", "Codex home"),
-            skill("no-providers", &[], "home", "Claude Code home"),
-        ]});
-        assert_eq!(
-            all_skills(&doc),
-            [
-                OrcaSkill {
-                    command: "/review".into(),
-                    description: "About review".into()
-                },
-                OrcaSkill {
-                    command: "/shared".into(),
-                    description: "About shared".into()
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn a_plugin_skill_is_called_with_its_plugin() {
-        let doc = json!({"skills": [
-            skill("yomiyasu", &["claude"], "plugin", "Claude plugin yomiyasu"),
-            skill("mempalace-recall", &["claude"], "plugin", "Claude plugin mempalace"),
-            // Not a Claude plugin label, or a plugin of another kind of source: no prefix.
-            skill("other", &["claude"], "plugin", "Codex plugin cache"),
-            skill("home", &["claude"], "home", "Claude plugin x"),
-            skill("blank", &["claude"], "plugin", "Claude plugin  "),
-        ]});
-        let commands: Vec<_> = all_skills(&doc).into_iter().map(|s| s.command).collect();
-        assert_eq!(
-            commands,
-            [
-                "/blank",
-                "/home",
-                "/mempalace:mempalace-recall",
-                "/other",
-                "/yomiyasu:yomiyasu"
-            ]
-        );
-    }
-
-    #[test]
-    fn skills_are_deduplicated_and_sorted_by_command() {
-        let doc = json!({"skills": [
-            skill("b", &["claude"], "home", "Claude Code home"),
-            skill("a", &["claude"], "bundled", "Claude Code home"),
-            skill("b", &["claude"], "home", "Claude Code home"),
-            skill("a", &["claude"], "plugin", "Claude plugin p"),
-        ]});
-        let mut first = skill("b", &["claude"], "home", "Claude Code home");
-        first["description"] = json!("second b");
-        let doc_dup = json!({"skills": [doc["skills"][0].clone(), first]});
-        let commands: Vec<_> = all_skills(&doc).into_iter().map(|s| s.command).collect();
-        assert_eq!(commands, ["/a", "/b", "/p:a"]);
-        // The first of two with one command is kept.
-        assert_eq!(all_skills(&doc_dup)[0].description, "About b");
-    }
-
-    #[test]
-    fn skills_tolerate_odd_documents_and_long_descriptions() {
-        for doc in [
-            Value::Null,
-            json!({}),
-            json!({"skills": null}),
-            json!({"skills": [null, 3, {"providers": "claude", "name": "x"}, {"providers": ["claude"]}]}),
-        ] {
-            assert!(all_skills(&doc).is_empty(), "{doc}");
-        }
-        let mut long = skill("long", &["claude"], "home", "Claude Code home");
-        long["description"] = json!("あ".repeat(1_000));
-        let mut none = skill("none", &["claude"], "home", "Claude Code home");
-        none.as_object_mut().unwrap().remove("description");
-        let listed = all_skills(&json!({"skills": [long, none]}));
-        assert_eq!(listed[0].description.chars().count(), LINE_LIMIT);
-        assert_eq!(listed[1].description, "");
-    }
-
-    #[test]
-    fn only_the_front_matter_can_hide_a_skill() {
-        for (text, hidden) in [
-            ("---\nname: x\nuser-invocable: false\n---\nBody", true),
-            (
-                "---\r\nname: x\r\nuser-invocable:   false  \r\n---\r\nBody",
-                true,
-            ),
-            ("---\nuser-invocable : false\n---\n", true),
-            ("---\nuser-invocable: true\n---\n", false),
-            ("---\nname: x\n---\n", false),
-            // The line is in the body, not in the front matter.
-            ("---\nname: x\n---\nuser-invocable: false\n", false),
-            // No front matter at all, or it does not start on the first line, or it never ends.
-            ("user-invocable: false\n", false),
-            ("\n---\nuser-invocable: false\n---\n", false),
-            ("---\nuser-invocable: false\n", false),
-            ("", false),
-            // A nested key or a longer value is another setting.
-            ("---\nmetadata:\n  user-invocable: false\n---\n", false),
-            ("---\nuser-invocable: falsey\n---\n", false),
-            ("---\nxuser-invocable: false\n---\n", false),
-        ] {
-            assert_eq!(hides_skill(text), hidden, "{text:?}");
-        }
-    }
-
-    fn read_from(files: &[(&str, &str)]) -> impl Fn(&Path) -> Option<String> {
-        let files: std::collections::HashMap<PathBuf, String> = files
-            .iter()
-            .map(|(p, t)| (PathBuf::from(p), (*t).to_owned()))
-            .collect();
-        move |p| files.get(p).cloned()
-    }
-
-    const HIDDEN: &str = "---\nuser-invocable: false\n---\n";
-    const SHOWN: &str = "---\nname: x\n---\n";
-
-    fn commands(doc: &Value, home: Option<&str>, files: &[(&str, &str)]) -> Vec<String> {
-        invocable_skills_of(doc, home.map(Path::new), read_from(files))
-            .into_iter()
-            .map(|s| s.command)
-            .collect()
-    }
-
-    #[test]
-    fn a_home_skill_that_is_not_user_invocable_is_left_out() {
-        let doc = json!({"skills": [
-            skill("hidden", &["claude"], "home", "Claude Code home"),
-            skill("shown", &["claude"], "home", "Codex home"),
-            skill("unreadable", &["claude"], "home", "Claude Code home"),
-            skill("body", &["claude"], "home", "Claude Code home"),
-        ]});
-        let files = [
-            ("/h/.claude/skills/hidden/SKILL.md", HIDDEN),
-            ("/h/.claude/skills/shown/SKILL.md", SHOWN),
-            (
-                "/h/.claude/skills/body/SKILL.md",
-                "---\n---\nuser-invocable: false\n",
-            ),
-        ];
-        assert_eq!(
-            commands(&doc, Some("/h"), &files),
-            ["/body", "/shown", "/unreadable"]
-        );
-        // Without a home folder nothing can be read, so everything stays.
-        assert_eq!(commands(&doc, None, &files).len(), 4);
-    }
-
-    #[test]
-    fn a_plugin_skill_is_read_from_every_install_path_of_its_plugin() {
-        let doc = json!({"skills": [
-            skill("one", &["claude"], "plugin", "Claude plugin p"),
-            skill("two", &["claude"], "plugin", "Claude plugin p"),
-            skill("three", &["claude"], "plugin", "Claude plugin q"),
-            skill("four", &["claude"], "plugin", "Claude plugin pp"),
-        ]});
-        let installed = r#"{"version": 2, "plugins": {
-            "p@market": [{"installPath": "/a"}, {"scope": "x"}, {"installPath": "/b"}],
-            "pp@market": [{"installPath": "/c"}],
-            "q@market": [{"installPath": "/d"}],
-            "p": [{"installPath": "/e"}]
-        }}"#;
-        let files = [
-            ("/h/.claude/plugins/installed_plugins.json", installed),
-            // `one` is hidden in the second place only: that is enough.
-            ("/a/skills/one/SKILL.md", SHOWN),
-            ("/b/skills/one/SKILL.md", HIDDEN),
-            // `two` is hidden, but only in a place of the plugin `pp`.
-            ("/c/skills/two/SKILL.md", HIDDEN),
-            ("/d/skills/three/SKILL.md", SHOWN),
-            // `four` is hidden in the place of a key without `@`, which is not the plugin `pp`.
-            ("/e/skills/four/SKILL.md", HIDDEN),
-        ];
-        assert_eq!(
-            commands(&doc, Some("/h"), &files),
-            ["/p:two", "/pp:four", "/q:three"]
-        );
-    }
-
-    #[test]
-    fn skills_stay_when_the_installed_plugins_cannot_be_used() {
-        let doc = json!({"skills": [skill("a", &["claude"], "plugin", "Claude plugin p")]});
-        let place = "/h/.claude/plugins/installed_plugins.json";
-        for installed in [
-            None,
-            Some("not json"),
-            Some("[]"),
-            Some(r#"{"plugins": []}"#),
-            Some(r#"{"plugins": {"p@m": "/a"}}"#),
-            Some(r#"{"plugins": {"p@m": [{"installPath": 3}, null]}}"#),
-        ] {
-            let mut files = vec![("/a/skills/a/SKILL.md", HIDDEN)];
-            files.extend(installed.map(|text| (place, text)));
-            assert_eq!(
-                commands(&doc, Some("/h"), &files),
-                ["/p:a"],
-                "{installed:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_name_that_is_not_one_path_element_is_never_read() {
-        let names = ["../x", "a/b", "a\\b", ".", "..", "/abs"];
-        let skills: Vec<Value> = names
-            .iter()
-            .flat_map(|n| {
-                [
-                    skill(n, &["claude"], "home", "Claude Code home"),
-                    skill(n, &["claude"], "plugin", "Claude plugin p"),
-                ]
-            })
-            .collect();
-        let doc = json!({"skills": skills});
-        let read = std::cell::RefCell::new(Vec::new());
-        let listed = invocable_skills_of(&doc, Some(Path::new("/h")), |p| {
-            read.borrow_mut().push(p.to_path_buf());
-            Some(HIDDEN.to_owned())
-        });
-        // The home and the plugin variant of one name are two commands (`/n` and `/p:n`).
-        assert_eq!(listed.len(), names.len() * 2);
-        // Only the list of the plugins may be read, never a SKILL.md.
-        assert!(
-            read.borrow()
-                .iter()
-                .all(|p| p.ends_with("installed_plugins.json")),
-            "{:?}",
-            read.borrow()
-        );
-    }
-
-    #[test]
-    fn a_skill_of_another_kind_of_source_is_not_read() {
-        let doc = json!({"skills": [skill("a", &["claude"], "bundled", "Claude Code home")]});
-        let files = [("/h/.claude/skills/a/SKILL.md", HIDDEN)];
-        assert_eq!(commands(&doc, Some("/h"), &files), ["/a"]);
-    }
-
     #[test]
     fn the_cli_is_looked_for_at_absolute_places() {
         let places = locations();
@@ -2087,23 +1645,6 @@ mod tests {
         for bad in ["", "work", "./work", "--json", "~/work"] {
             assert!(check_path(bad).is_err(), "{bad}");
         }
-    }
-
-    #[test]
-    fn the_host_of_a_worktree_is_the_host_id_orca_names() {
-        let ps = json!({"worktrees": [
-            {"path": "/work/a", "hostId": "local"},
-            {"path": "/work/b", "hostId": "ssh:lab"},
-            {"path": "/work/c"},
-            {"path": "/work/d", "hostId": "  "},
-        ]});
-        assert_eq!(host_id_of(&ps, "/work/a").as_deref(), Some("local"));
-        assert_eq!(host_id_of(&ps, "/work/b").as_deref(), Some("ssh:lab"));
-        // No `hostId` is not taken for this machine here: the upload fails.
-        for none in ["/work/c", "/work/d", "/work/x", ""] {
-            assert_eq!(host_id_of(&ps, none), None, "{none}");
-        }
-        assert_eq!(host_id_of(&Value::Null, "/work/a"), None);
     }
 
     #[test]
@@ -2252,12 +1793,6 @@ mod tests {
     }
 
     #[test]
-    fn the_skills_arguments() {
-        // Never an environment: the CLI refuses it for this command.
-        assert_eq!(skills_args(), ["skills", "installed", "--json"]);
-    }
-
-    #[test]
     fn the_text_is_joined_to_its_flag() {
         assert_eq!(
             send_args("term_1", "--json", None),
@@ -2285,7 +1820,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            launch_args("/work/a", "--surface chat", None),
+            launch_args("/work/a", Some("--surface chat"), None),
             [
                 "agent",
                 "launch",
@@ -2300,8 +1835,26 @@ mod tests {
             ]
         );
         assert_eq!(
-            launch_args("/work/a", "go", Some("Studio")).last().unwrap(),
+            launch_args("/work/a", Some("go"), Some("Studio"))
+                .last()
+                .unwrap(),
             "--environment=Studio"
+        );
+        // A session started from the Orca screen has no prompt (the CLI takes none then).
+        assert_eq!(
+            launch_args("/work/a", None, Some("Studio")),
+            [
+                "agent",
+                "launch",
+                "--agent",
+                "claude",
+                "--worktree",
+                "path:/work/a",
+                "--surface",
+                "terminal",
+                "--json",
+                "--environment=Studio"
+            ]
         );
     }
 
@@ -2738,46 +2291,48 @@ mod tests {
     }
 
     #[test]
-    fn keys_go_only_to_a_plain_terminal_of_the_list() {
+    fn keys_go_only_to_a_terminal_of_the_list() {
         let plain = plain_terminals_of(&projects_doc(), &plain_doc());
-        assert!(check_plain(&plain, "term_sh").is_ok());
-        for bad in ["term_claude", "term_gone", ""] {
+        let rows = rows_of(&ps(&[agent("tabA:leaf1", "working")]), &terminals());
+        assert!(check_terminal(&rows, &plain, "term_sh").is_ok());
+        // A Claude session's terminal is mirrored too (every tab is a terminal, A-12).
+        assert!(check_terminal(&rows, &plain, "term_1").is_ok());
+        for bad in ["term_claude", "term_2", "term_gone", ""] {
             assert!(
-                check_plain(&plain, bad).unwrap_err().contains("終了"),
+                check_terminal(&rows, &plain, bad)
+                    .unwrap_err()
+                    .contains("終了"),
                 "{bad}"
             );
         }
-        assert!(check_plain(&[], "term_sh").is_err());
+        assert!(check_terminal(&[], &[], "term_sh").is_err());
     }
 
     #[test]
     fn keys_and_closes_with_a_bad_handle_or_text_run_nothing() {
         let mirror = OrcaMirror::default();
-        assert!(check_input(&mirror, "--json", "x", None).is_err());
-        assert!(check_input(&mirror, "term_1", "", None).is_err());
-        assert!(check_input(&mirror, "term_1", "a\0", None).is_err());
+        assert!(check_input(&mirror, "--json", "x").is_err());
+        assert!(check_input(&mirror, "term_1", "").is_err());
+        assert!(check_input(&mirror, "term_1", "a\0").is_err());
         assert!(close("--json", None).is_err());
-        assert!(screen(&mirror, "term_a b", None).is_err());
+        assert!(screen(&mirror, "term_a b").is_err());
         assert!(mirror.0.lock().unwrap().is_empty());
     }
 
     #[test]
     fn a_checked_terminal_is_not_checked_again_until_a_failure_forgets_it() {
         let mirror = OrcaMirror::default();
-        mirror.0.lock().unwrap().insert("\0term_1".into());
+        mirror.0.lock().unwrap().insert("term_1".into());
         // Checked before: no list is read (a list read would fail here, with no Orca).
-        assert_eq!(
-            check_mirrored(&mirror, "term_1", None),
-            Ok("\0term_1".to_owned())
-        );
-        mirror.forget("\0term_1");
+        assert_eq!(check_mirrored(&mirror, "term_1"), Ok(()));
+        mirror.forget("term_1");
         assert!(mirror.0.lock().unwrap().is_empty());
     }
 
     #[test]
     fn the_keys_go_to_the_socket_as_the_cli_sends_them() {
         assert_eq!(
-            input_params("term_1", "\u{3}--json"),
+            input_params("term_1", "\u{3}--json", "cookapps"),
             json!({
                 "terminal": "term_1",
                 "text": "\u{3}--json",

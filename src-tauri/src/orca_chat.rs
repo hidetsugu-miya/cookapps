@@ -834,7 +834,7 @@ fn items_event(
 }
 
 /// How long to wait before connecting again after the `attempt`th failure in a row (counting from 0).
-fn backoff(attempt: usize) -> Duration {
+pub(crate) fn backoff(attempt: usize) -> Duration {
     Duration::from_secs([1, 2, 5, 10, 30][attempt.min(4)])
 }
 
@@ -939,11 +939,11 @@ fn load_pairing(environment: Option<&str>) -> Result<Pairing, String> {
 
 // ---- the connection ----
 
-enum LinkError {
+pub(crate) enum LinkError {
     /// The connection or a frame failed: the session reconnects.
     Broken(String),
-    /// Orca answered `ok: false`: the text to show (the code), and the message of Orca, which is only looked at (A-10 tells a missing file by it) and never shown.
-    Remote(String, String),
+    /// Orca answered `ok: false` with this message.
+    Remote(String),
 }
 
 fn broken(message: &str) -> LinkError {
@@ -951,7 +951,7 @@ fn broken(message: &str) -> LinkError {
 }
 
 /// The `result` of `{id, ok, result, error: {code}}`. The code is shown, never the message: it is the text of another program.
-fn result_of(response: &Value) -> Result<Value, LinkError> {
+pub(crate) fn result_of(response: &Value) -> Result<Value, LinkError> {
     match response["ok"] {
         Value::Bool(true) => Ok(response["result"].clone()),
         Value::Bool(false) => {
@@ -962,20 +962,11 @@ fn result_of(response: &Value) -> Result<Value, LinkError> {
                 .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
                 .take(64)
                 .collect();
-            let message: String = response["error"]["message"]
-                .as_str()
-                .unwrap_or_default()
-                .chars()
-                .take(200)
-                .collect();
-            Err(LinkError::Remote(
-                if code.is_empty() {
-                    "Orca がエラーを返しました".into()
-                } else {
-                    format!("Orca がエラーを返しました（{code}）")
-                },
-                message,
-            ))
+            Err(LinkError::Remote(if code.is_empty() {
+                "Orca がエラーを返しました".into()
+            } else {
+                format!("Orca がエラーを返しました（{code}）")
+            }))
         }
         _ => Err(broken("Orca の応答を読めません")),
     }
@@ -992,7 +983,7 @@ fn session_params(session_id: &str, limit: u32) -> Value {
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// A paired server: a WebSocket whose frames are sealed. Answers are matched by `id`; a streamed answer carries its subscription's.
-struct WsLink {
+pub(crate) struct WsLink {
     write: SplitSink<Socket, Message>,
     read: SplitStream<Socket>,
     sealed: Sealed,
@@ -1012,7 +1003,11 @@ enum Frame {
 
 impl WsLink {
     /// Connects and authenticates within the handshake deadline.
-    async fn connect(url: &str, device_token: &str, public_key_b64: &str) -> Result<Self, String> {
+    pub(crate) async fn connect(
+        url: &str,
+        device_token: &str,
+        public_key_b64: &str,
+    ) -> Result<Self, String> {
         let handshake = Handshake::new(public_key_b64).map_err(str::to_owned)?;
         timeout(HANDSHAKE_DEADLINE, async {
             let config = WebSocketConfig::default()
@@ -1065,12 +1060,16 @@ impl WsLink {
         }
     }
 
-    fn silence_deadline(&self) -> Instant {
+    pub(crate) fn silence_deadline(&self) -> Instant {
         self.last_frame + SILENCE_LIMIT
     }
 
     /// Sends `method` as the sealed request `{id, deviceToken, method, params}` and gives its id.
-    async fn send_request(&mut self, method: &str, params: Value) -> Result<String, LinkError> {
+    pub(crate) async fn send_request(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<String, LinkError> {
         let id = format!("c{}", self.next_id);
         self.next_id += 1;
         let text = json!({
@@ -1121,7 +1120,7 @@ impl WsLink {
     }
 
     /// The next answer: one queued, else one read. `None` is a message that carries none.
-    async fn next_response(&mut self) -> Result<Option<Value>, String> {
+    pub(crate) async fn next_response(&mut self) -> Result<Option<Value>, String> {
         if let Some(value) = self.queued.pop_front() {
             return Ok(Some(value));
         }
@@ -1132,7 +1131,11 @@ impl WsLink {
     }
 
     /// A request and its one answer; answers of other requests that come first are queued.
-    async fn request(&mut self, method: &str, params: Value) -> Result<Value, LinkError> {
+    pub(crate) async fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, LinkError> {
         let id = self.send_request(method, params).await?;
         let wait = async {
             loop {
@@ -1206,6 +1209,21 @@ async fn unix_request(_: &str, _: &str, _: &str, _: Value) -> Result<Value, Link
     ))
 }
 
+/// A WebSocket to the saved environment `environment`, with its pairing read from Orca's files now (A-12 streams the Orca screen over it). No token is in the error.
+pub(crate) async fn connect_environment(environment: String) -> Result<WsLink, String> {
+    let pairing = tokio::task::spawn_blocking(move || load_pairing(Some(&environment)))
+        .await
+        .map_err(|e| e.to_string())??;
+    match pairing {
+        Pairing::WebSocket {
+            url,
+            device_token,
+            public_key_b64,
+        } => WsLink::connect(&url, &device_token, &public_key_b64).await,
+        Pairing::Unix { .. } => Err("接続先の登録（ペアリング）が見つかりません".into()),
+    }
+}
+
 /// A call of this machine's Orca over its unix socket (A-8 asks for the SSH hosts, which the CLI cannot list, and sends the keys of a mirrored terminal, which the CLI would put in its arguments). The `result`, or a Japanese message; no token is in it.
 pub(crate) async fn local_call(method: &str, params: Value) -> Result<Value, String> {
     // The file is read off the async workers.
@@ -1216,38 +1234,9 @@ pub(crate) async fn local_call(method: &str, params: Value) -> Result<Value, Str
         Pairing::Unix { endpoint, token } => unix_request(&endpoint, &token, method, params)
             .await
             .map_err(|e| match e {
-                LinkError::Broken(message) | LinkError::Remote(message, _) => message,
+                LinkError::Broken(message) | LinkError::Remote(message) => message,
             }),
         Pairing::WebSocket { .. } => Err("Orca の接続情報を読めません".into()),
-    }
-}
-
-/// A call that failed: `shown` is for the screen (Japanese, with Orca's code, never its message); `detail` is the message Orca sent (empty when the connection failed), for the caller to look at and not to show.
-pub(crate) struct CallError {
-    pub(crate) shown: String,
-    pub(crate) detail: String,
-}
-
-/// One connection to the Orca of a target, kept for several calls (A-10 sends a file in many): for a paired server one WebSocket, for this machine the unix socket (a connection for each call, as `local_call`).
-/// The pairing is read from Orca's files when it is opened; no token is in a return value or a log.
-pub(crate) struct Connection(Link);
-
-impl Connection {
-    pub(crate) async fn open(environment: Option<String>) -> Result<Self, String> {
-        let pairing = tokio::task::spawn_blocking(move || load_pairing(environment.as_deref()))
-            .await
-            .map_err(|e| e.to_string())??;
-        Link::open(pairing).await.map(Self)
-    }
-
-    pub(crate) async fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
-        self.0.request(method, params).await.map_err(|e| match e {
-            LinkError::Broken(shown) => CallError {
-                shown,
-                detail: String::new(),
-            },
-            LinkError::Remote(shown, detail) => CallError { shown, detail },
-        })
     }
 }
 
@@ -1410,9 +1399,9 @@ fn session_id_of(tabs: &Value, pane_key: &str) -> Option<String> {
     })
 }
 
-fn reason_of(error: LinkError) -> String {
+pub(crate) fn reason_of(error: LinkError) -> String {
     match error {
-        LinkError::Broken(message) | LinkError::Remote(message, _) => message,
+        LinkError::Broken(message) | LinkError::Remote(message) => message,
     }
 }
 
@@ -1511,7 +1500,7 @@ async fn poll(
             Some(page) => chat.apply_snapshot(page, sink),
             None => chat.unavailable(sink),
         },
-        Err(LinkError::Remote(..)) => chat.unavailable(sink),
+        Err(LinkError::Remote(_)) => chat.unavailable(sink),
         Err(LinkError::Broken(message)) => return Err(message),
     }
     Ok(())
@@ -1537,7 +1526,7 @@ async fn older(
             }
         }
         // The button can be pressed again.
-        Err(LinkError::Remote(..)) => {}
+        Err(LinkError::Remote(_)) => {}
         Err(LinkError::Broken(message)) => return Err(message),
     }
     Ok(())
@@ -1816,6 +1805,81 @@ pub async fn orca_chat_older(state: tauri::State<'_, OrcaChat>) -> Result<(), St
         let _ = active.commands.send(OrcaCommand::Older);
     }
     Ok(())
+}
+
+/// Orca's side of a paired connection, for the tests of A-7 and A-12.
+#[cfg(test)]
+pub(crate) mod ws_testing {
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
+
+    use crate::orca_e2ee::testing::Desktop;
+
+    /// Orca's side of a paired connection, over a local socket.
+    pub(crate) struct FakeDesktop {
+        pub(crate) socket: WebSocketStream<tokio::net::TcpStream>,
+        pub(crate) desktop: Desktop,
+    }
+
+    pub(crate) async fn next_text(socket: &mut WebSocketStream<tokio::net::TcpStream>) -> String {
+        loop {
+            match socket.next().await.unwrap().unwrap() {
+                Message::Text(text) => return text.as_str().to_owned(),
+                Message::Ping(_) | Message::Pong(_) => {}
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    impl FakeDesktop {
+        /// Takes a connection, answers the hello, and checks the auth frame before it says the client is authenticated (`reply` unset) or refuses it.
+        pub(crate) async fn accept(
+            listener: &TcpListener,
+            mut desktop: Desktop,
+            token: &str,
+            reply: Option<Value>,
+        ) -> Self {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let hello = next_text(&mut socket).await;
+            socket
+                .send(Message::text(desktop.ready_for(&hello)))
+                .await
+                .unwrap();
+            let auth = desktop.open_text(&next_text(&mut socket).await).unwrap();
+            let auth: Value = serde_json::from_str(&auth).unwrap();
+            assert_eq!(auth["type"], "e2ee_auth");
+            assert_eq!(auth["v"], 2);
+            assert_eq!(auth["deviceToken"], token);
+            assert_eq!(auth["transcriptHashB64"], desktop.transcript_hash_b64());
+            assert_eq!(auth.as_object().unwrap().len(), 4);
+            let reply = reply.unwrap_or_else(|| {
+                json!({"type": "e2ee_authenticated", "v": 2, "transcriptHashB64": desktop.transcript_hash_b64()})
+            });
+            let sealed = desktop.seal_text(&reply.to_string());
+            socket.send(Message::text(sealed)).await.unwrap();
+            Self { socket, desktop }
+        }
+
+        /// The next request of the client, opened.
+        pub(crate) async fn request(&mut self) -> Value {
+            let text = next_text(&mut self.socket).await;
+            serde_json::from_str(&self.desktop.open_text(&text).unwrap()).unwrap()
+        }
+
+        pub(crate) async fn send(&mut self, value: Value) {
+            let sealed = self.desktop.seal_text(&value.to_string());
+            self.socket.send(Message::text(sealed)).await.unwrap();
+        }
+    }
+
+    pub(crate) async fn bind() -> (TcpListener, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        (listener, url)
+    }
 }
 
 #[cfg(test)]
@@ -2899,7 +2963,7 @@ mod tests {
             Some(json!({"a": 1}))
         );
         let remote = |v: Value| match result_of(&v) {
-            Err(LinkError::Remote(m, _)) => m,
+            Err(LinkError::Remote(m)) => m,
             _ => panic!("{v}"),
         };
         assert_eq!(
@@ -2909,20 +2973,6 @@ mod tests {
             "Orca がエラーを返しました（not_found）"
         );
         assert_eq!(remote(json!({"ok": false})), "Orca がエラーを返しました");
-        // The message is held for the caller to look at, cut at 200 characters.
-        let held = |v: Value| match result_of(&v) {
-            Err(LinkError::Remote(_, m)) => m,
-            _ => panic!("{v}"),
-        };
-        assert_eq!(
-            held(json!({"ok": false, "error": {"code": "runtime_error", "message": "ENOENT: x"}})),
-            "ENOENT: x"
-        );
-        assert_eq!(held(json!({"ok": false})), "");
-        assert_eq!(
-            held(json!({"ok": false, "error": {"message": "x".repeat(500)}})).len(),
-            200
-        );
         // Odd characters of a code are dropped and the code is cut.
         let odd =
             remote(json!({"ok": false, "error": {"code": format!("a b\n{}", "x".repeat(100))}}));
@@ -2949,73 +2999,9 @@ mod tests {
 
     use std::sync::{Arc, Mutex};
 
-    use tokio::net::TcpListener;
-
     use crate::orca_e2ee::testing::Desktop;
 
-    /// Orca's side of a paired connection, over a local socket.
-    struct FakeDesktop {
-        socket: WebSocketStream<tokio::net::TcpStream>,
-        desktop: Desktop,
-    }
-
-    async fn next_text(socket: &mut WebSocketStream<tokio::net::TcpStream>) -> String {
-        loop {
-            match socket.next().await.unwrap().unwrap() {
-                Message::Text(text) => return text.as_str().to_owned(),
-                Message::Ping(_) | Message::Pong(_) => {}
-                other => panic!("{other:?}"),
-            }
-        }
-    }
-
-    impl FakeDesktop {
-        /// Takes a connection, answers the hello, and checks the auth frame before it says the client is authenticated (`reply` unset) or refuses it.
-        async fn accept(
-            listener: &TcpListener,
-            mut desktop: Desktop,
-            token: &str,
-            reply: Option<Value>,
-        ) -> Self {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let hello = next_text(&mut socket).await;
-            socket
-                .send(Message::text(desktop.ready_for(&hello)))
-                .await
-                .unwrap();
-            let auth = desktop.open_text(&next_text(&mut socket).await).unwrap();
-            let auth: Value = serde_json::from_str(&auth).unwrap();
-            assert_eq!(auth["type"], "e2ee_auth");
-            assert_eq!(auth["v"], 2);
-            assert_eq!(auth["deviceToken"], token);
-            assert_eq!(auth["transcriptHashB64"], desktop.transcript_hash_b64());
-            assert_eq!(auth.as_object().unwrap().len(), 4);
-            let reply = reply.unwrap_or_else(|| {
-                json!({"type": "e2ee_authenticated", "v": 2, "transcriptHashB64": desktop.transcript_hash_b64()})
-            });
-            let sealed = desktop.seal_text(&reply.to_string());
-            socket.send(Message::text(sealed)).await.unwrap();
-            Self { socket, desktop }
-        }
-
-        /// The next request of the client, opened.
-        async fn request(&mut self) -> Value {
-            let text = next_text(&mut self.socket).await;
-            serde_json::from_str(&self.desktop.open_text(&text).unwrap()).unwrap()
-        }
-
-        async fn send(&mut self, value: Value) {
-            let sealed = self.desktop.seal_text(&value.to_string());
-            self.socket.send(Message::text(sealed)).await.unwrap();
-        }
-    }
-
-    async fn bind() -> (TcpListener, String) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("ws://{}", listener.local_addr().unwrap());
-        (listener, url)
-    }
+    use super::ws_testing::{bind, next_text, FakeDesktop};
 
     #[tokio::test]
     async fn a_websocket_handshakes_authenticates_and_answers_a_request() {
@@ -3058,7 +3044,7 @@ mod tests {
         let queued = link.next_response().await.unwrap().unwrap();
         assert_eq!(queued["id"], "other");
         let failed = link.request("nativeChat.readSession", json!({})).await;
-        assert!(matches!(failed, Err(LinkError::Remote(m, _)) if m.contains("not_found")));
+        assert!(matches!(failed, Err(LinkError::Remote(m)) if m.contains("not_found")));
         server.await.unwrap();
     }
 
@@ -3169,7 +3155,7 @@ mod tests {
             assert_eq!(seen[0].as_object().unwrap().len(), 4);
         }
         let refused = unix_request(&path, "wrong", "x", json!({})).await;
-        assert!(matches!(refused, Err(LinkError::Remote(m, _)) if m.contains("unauthorized")));
+        assert!(matches!(refused, Err(LinkError::Remote(m)) if m.contains("unauthorized")));
         let missing = unix_request("/nonexistent/orca.sock", "t", "x", json!({})).await;
         assert!(matches!(missing, Err(LinkError::Broken(m)) if m.contains("起動")));
     }

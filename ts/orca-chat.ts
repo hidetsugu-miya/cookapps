@@ -1,6 +1,6 @@
 // The history of an Orca session (A-7): the user's messages (a handed-over content folded into one line, A-9), the agent's answers, and the tool runs folded into one line each.
 // Rust reads the session and sends events through a channel (`orca_chat_open`): `items` replace the timeline from an index, `status` says how the read goes. One session is open at a time, and an event of a channel that is no longer the current one is ignored.
-// The read has one owner at a time (A-9): the work pane of the Orca screen, or the side pane of a mail, a Slack thread or a Todo. The history is drawn into the owner's `ChatView`, and an owner closes only its own read.
+// The read has one owner at a time (A-9): the side pane of a mail, a Slack thread or a Todo (the Orca screen shows terminals, A-12). The history is drawn into the owner's `ChatView`, and an owner closes only its own read.
 // A question that waits for an answer is answered here (A-11): the user picks the choices and `orca_answer` types them into the session's terminal.
 // Nothing is kept after the session is closed except what the screen draws.
 import type { OrcaChatEvent } from "./bindings/OrcaChatEvent";

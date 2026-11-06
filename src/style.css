@@ -682,25 +682,31 @@ button.status:hover { filter: brightness(.95); }
 .proofread-row .text-btn:disabled { opacity: .4; cursor: default; }
 .proofread-row .text-btn:disabled:hover { background: #fff; }
 
-/* The Orca screen (A-6, A-7): the list of agents on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the history of the selected agent and the composer pinned under it. */
+/* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }
 #orca-list { flex: none; width: clamp(20%, var(--list-w, 30%), 50%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
 #orca-split { flex: none; }
-#orca-header { gap: 4px; padding: 10px 8px 6px 16px; }
-#orca-heading { flex: 1; margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
-#orca-header .icon-btn { position: relative; color: #444746; flex: none; }
-#orca-header .icon-btn[aria-pressed="true"] { background: var(--soft); }
-#orca-bell { width: 44px; }
-#orca-bell svg { margin-right: 10px; }
-/* At the bell's right shoulder: the question icon (or the working mark) above the number. */
-#orca-bell-badge { position: absolute; top: 3px; right: 4px; display: flex; flex-direction: column; align-items: center; gap: 1px; font-size: 10px; font-weight: 600; line-height: 11px; }
+/* A-12: a header of 32px, level with the tab strip of the work pane: "新規" at the left, the bell (with its number) and the reload at the right, buttons of 24px. */
+#orca-header { flex: none; display: flex; align-items: center; gap: 2px; height: 32px; box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); }
+#orca-new { display: flex; align-items: center; gap: 4px; height: 24px; margin-right: auto; padding: 0 8px 0 6px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; }
+#orca-new:hover:not(:disabled) { background: var(--hover); }
+#orca-new:disabled { opacity: .4; cursor: default; }
+#orca-new svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+#orca-header .icon-btn { flex: none; width: auto; min-width: 24px; height: 24px; gap: 3px; padding: 0 4px; color: var(--ink-soft); }
+#orca-header .icon-btn svg { width: 15px; height: 15px; }
+#orca-header .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+/* Beside the bell: the question icon (or the working mark) and the number. */
+#orca-bell-badge { display: flex; align-items: center; gap: 2px; font-size: 11px; font-weight: 600; }
 #orca-bell-badge .orca-ic { width: 10px; height: 10px; }
 #orca-bell-badge .orca-ic svg { width: 10px; height: 10px; stroke-width: 3; }
 #orca-bell-badge .orca-mark.working { width: 5px; height: 5px; border-width: 1.5px; }
 button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 #orca-notice:not(:empty) { padding: 8px 12px 0; }
-#orca-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px 8px; border-top: 1px solid var(--line); }
-#orca-foot { flex: none; display: flex; align-items: center; min-height: 36px; padding: 0 12px; border-top: 1px solid var(--line); }
+#orca-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px 8px; }
+#orca-foot { flex: none; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border-top: 1px solid var(--line); }
+/* The switch of the terminal's size (A-12), beside the connection: a small text button with round ends. */
+#orca-fit { flex: none; height: 26px; margin-left: auto; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 13px; background: var(--surface); font: inherit; font-size: 12px; color: var(--ink-soft); cursor: pointer; }
+#orca-fit:hover { border-color: var(--accent); color: var(--accent); }
 /* The icons of a status (Orca's): the question mark, a ring that turns, the pulse, and dots. */
 .orca-ic { flex: none; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; }
 .orca-ic svg { width: 13px; height: 13px; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -739,31 +745,29 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-n { margin-left: auto; font-size: 12px; font-weight: normal; color: var(--muted); }
 .orca-sec { margin: 12px 10px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-#orca-work-head { padding: 10px 24px; min-height: 52px; box-sizing: border-box; border-bottom: 1px solid var(--line); }
-#orca-work-head.tabbed { padding: 8px 12px 0; background: var(--bar); }
-#orca-tabs { display: flex; flex-wrap: wrap; gap: 2px; width: 100%; }
-.orca-tab { display: flex; align-items: center; max-width: 280px; min-width: 0; border-radius: 8px 8px 0 0; }
-.orca-tab:has(.orca-tab-btn[aria-selected="true"]) { background: #fff; box-shadow: inset 0 -2px 0 var(--accent); }
-.orca-tab-btn { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 44px; padding: 0 4px 0 12px; border: 0; border-radius: 8px 0 0 0; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+/* A-12: the tab strip (32px) and the terminal of the selected tab under it. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
+#orca-tabs { flex: none; display: flex; align-items: flex-end; gap: 2px; height: 32px; box-sizing: border-box; padding: 0 6px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--line); background: var(--bar); }
+.orca-tab { flex: none; display: flex; align-items: center; height: 28px; max-width: 220px; min-width: 0; box-sizing: border-box; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
+.orca-tab:has(.orca-tab-btn[aria-selected="true"]) { border-color: var(--line); background: var(--surface); color: inherit; }
+.orca-tab-btn { display: flex; align-items: center; gap: 6px; min-width: 0; height: 100%; padding: 0 2px 0 10px; border: 0; border-radius: 8px 0 0 0; background: transparent; font: inherit; font-size: 12px; color: inherit; text-align: left; cursor: pointer; }
 .orca-tab-btn:hover { color: var(--accent); }
 .orca-tab-btn[aria-selected="true"] { font-weight: 600; }
 .orca-tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.orca-tab-text { display: flex; flex-direction: column; min-width: 0; }
-.orca-tab-title, .orca-tab-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.orca-tab-sub { font-size: 11px; font-weight: 400; color: var(--muted); }
-.orca-tab-close { flex: none; width: 28px; height: 28px; margin-right: 6px; }
-.orca-tab-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.orca-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-tab-close { flex: none; width: 20px; height: 20px; margin-right: 4px; color: inherit; }
+.orca-tab-close svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #orca-empty { margin: 0; padding: 48px 24px; }
-/* The terminal fills the pane; xterm.js draws in the box of each tab. */
-#orca-term { flex: 1; min-height: 0; box-sizing: border-box; padding: 8px 8px 8px 12px; background: var(--term-bg); }
-.orca-term-box { width: 100%; height: 100%; }
-.orca-menu-item { display: flex; align-items: center; gap: 10px; min-height: 44px; }
-.orca-menu-item svg { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; color: var(--claude); }
-#orca-chat-status:not(:empty) { padding: 8px 24px 0; background: var(--bar); }
+#orca-started { margin: 16px 24px 0; }
+/* The terminal fills the pane. The box of each tab has a definite size (it is placed in the pane), so that the fit counts the rows that show and the bottom is not cut off. */
+#orca-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+.orca-term-box { position: absolute; inset: 8px 8px 8px 12px; }
+/* "固定": Orca's size, scrolled sideways (and down) when it does not fit. */
+#orca-term.fixed { overflow: auto; }
+#orca-term.fixed .orca-term-box { position: static; width: max-content; height: max-content; margin: 8px 8px 8px 12px; }
 .ho-chat-status:not(:empty) { padding: 8px 16px 0; background: var(--bar); }
-#orca-chat, .ho-chat { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 8px; background: var(--bar); }
-#orca-older, .ho-older { display: block; margin: 0 auto 12px; height: 28px; padding: 0 12px; font: inherit; font-size: 12px; }
-#orca-items, .ho-items { display: flex; flex-direction: column; gap: 12px; }
+.ho-chat { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 8px; background: var(--bar); }
+.ho-older { display: block; margin: 0 auto 12px; height: 28px; padding: 0 12px; font: inherit; font-size: 12px; }
+.ho-items { display: flex; flex-direction: column; gap: 12px; }
 .orca-user { align-self: flex-end; max-width: 80%; padding: 8px 12px; border-radius: 12px; background: var(--soft); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .orca-assistant { padding: 8px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .orca-assistant > :first-child { margin-top: 0; }
@@ -823,10 +827,6 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-pick-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
 .orca-pick-send:disabled { opacity: .4; cursor: default; }
 .orca-pick-send:disabled:hover { background: var(--accent); filter: none; }
-#orca-form { flex: none; padding: 12px 24px 20px; border-top: 1px solid var(--line); background: var(--bar); }
-#orca-error, #orca-started { margin-bottom: 8px; }
-.orca-dest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
-.orca-dest .review-chip { height: 28px; padding: 0 12px; border-radius: 14px; font-size: 12px; }
 .orca-dest-pop { width: 320px; max-height: calc(100vh - 32px); padding: 8px; gap: 8px; }
 .orca-dest-pop input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--chip-line); border-radius: 8px; font: inherit; }
 .orca-dest-pop input:focus { outline: 2px solid var(--accent); border-color: transparent; }
@@ -834,24 +834,6 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-dest-pop button { flex: none; height: auto; flex-direction: column; align-items: flex-start; gap: 0; padding: 6px 10px; }
 .orca-dest-pop button span { font-size: 12px; color: var(--muted); }
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: 12px; }
-#orca-form .composer { position: relative; flex-direction: row; align-items: flex-end; gap: 12px; padding: 10px 12px; }
-/* A-10: the images attached to the post, above the composer; a file dragged over the form outlines the composer. */
-#orca-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-.orca-attachment { position: relative; width: 64px; height: 64px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; overflow: hidden; }
-.orca-attachment img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.orca-attachment .icon-btn { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%; background: rgba(255, 255, 255, .85); }
-.orca-attachment .icon-btn svg { width: 12px; height: 12px; }
-#orca-form.dropping .composer { outline: 2px dashed var(--accent); border-color: transparent; }
-#orca-input { flex: 1; min-width: 0; }
-#orca-send { flex: none; height: 44px; padding: 0 20px; border-radius: 22px; font: inherit; }
-#orca-send:disabled { opacity: .4; cursor: default; }
-#orca-send:disabled:hover { background: var(--accent); filter: none; }
-/* The skill list above the composer: the frame and the shadow of #account-popup, at most 8 rows of 32px before it scrolls. */
-#orca-complete { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 10; box-sizing: border-box; max-height: 272px; overflow-y: auto; padding: 4px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
-.orca-skill { display: flex; align-items: center; gap: 12px; height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; cursor: pointer; }
-.orca-skill[aria-selected="true"] { background: var(--soft); }
-.orca-skill code { flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-.orca-skill span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
 
 /* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail and the Todo have it on the right of the screen (a third to a half, the divider of ts/split.ts); the Slack thread has it as the Orca tab of its right pane. */
 #mail-area { flex: 1; min-height: 0; display: flex; }

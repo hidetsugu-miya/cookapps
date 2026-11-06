@@ -1,26 +1,24 @@
-// The Orca screen (A-6, A-7, A-8): two panes. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
-// the work pane has the sessions of the selected project as tabs: a Claude session shows its history (orca-chat.ts) and a composer that posts to it, a plain terminal of Orca fills the pane as a mirror (orca-terminal.ts).
-// With no project selected the work pane is the start of a new Claude session. Nothing about a session is kept here.
-// The list is read at startup for the sidebar button's count, every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time, and no more once the `orca` command was found missing (the update button reads again).
-// Only the first read, the screen being shown, the update button, a change of the target and a read after a failure ask for the environments (and the SSH hosts); the clock reads the agents (the screen shown) or only their count (another screen).
+// The Orca screen (A-6, A-8, A-12): two panes. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
+// the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). "新規" starts Claude in a worktree, and the session is selected once it is listed. Nothing about a session is kept here.
+// A saved environment streams the list (`orca_stream_open`: Orca sends each change) and nothing reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
+// and no more once the `orca` command was found missing (the reload button reads again). Only the first read, the screen being shown, the reload button, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
-// A read in the background swaps the rows in place: the selection, the text in the composer and the scroll position stay, and `show()` is never called by it.
+// A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
 import type { OrcaRow } from "./bindings/OrcaRow";
-import type { OrcaSkill } from "./bindings/OrcaSkill";
 import type { OrcaSshTarget } from "./bindings/OrcaSshTarget";
 import type { OrcaStatus } from "./bindings/OrcaStatus";
+import type { OrcaStreamEvent } from "./bindings/OrcaStreamEvent";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
-import { $, composing, tag } from "./dom.js";
+import { $, tag } from "./dom.js";
 import { CLAUDE_SVG, svgOf } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
-import { clearAttachments, hasAttachments, initOrcaAttach, isReading, uploadAttachments } from "./orca-attach.js";
-import { closeChat, initOrcaChat, isChatOwner, makeChatView, openChat, setChatWorking } from "./orca-chat.js";
-import { hideTerminals, initOrcaTerminal, pruneMirrors, showTerminal } from "./orca-terminal.js";
+import { initOrcaChat } from "./orca-chat.js";
+import { fitMode, hideTerminals, initOrcaTerminal, pruneTerminals, setFitMode, showTerminal } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
 import { setNavCount, show, showError } from "./view.js";
 
@@ -58,7 +56,7 @@ let loading = false;
 let lastTry = 0;
 // The list pane shows the projects, or (the bell pressed) the working agents; the projects come first and the choice is kept in memory.
 let working = false;
-// The project selected (its key; null: none, and the work pane is the new-session pane), and its tab selected (a tab's id; null when it has no tabs).
+// The project selected (its key; null: none), and its tab selected (a tab's id; null when it has no tabs).
 let projectKey: string | null = null;
 let selectedTab: string | null = null;
 // The tab last selected in each project, which selecting the project goes back to.
@@ -67,24 +65,14 @@ const lastTab = new Map<string, string>();
 const seen = new Map<string, number>();
 // The tabs of Orca whose close was asked for and is not answered.
 const closing = new Set<string>();
-// The worktree (its path) a new launch uses, and a post on its way.
-let newPath: string | null = null;
+// A launch ("新規") on its way.
 let busy = false;
-// The launch of the new-session pane that was answered: its pane key (null when Orca's reply gave none), the target and when to stop waiting for its row. With a pane key, the row is selected as soon as a read holds it, and no other launch is made till then.
+// The launch that was answered: its pane key and handle (null when Orca's reply gave none), the target and when to stop waiting for its row. The row is selected as soon as the list holds it, and no other launch is made till then.
 let started: { paneKey: string | null; handle: string | null; target: string | null; until: number } | null = null;
 const START_WAIT_MS = 30_000;
-// The session whose history is open (target, path and pane key), null when none is.
-let chatKey: string | null = null;
-// The skills of Claude Code on the machine the app runs on, whatever the target; read when the screen is first shown, by the update button, and again after a failure.
-let skills: OrcaSkill[] = [];
-let skillsStale = true;
-let skillsSeq = 0;
-// A read that failed is tried again by the list reads that follow, at most once in this long (the update button reads at once), so a target on another machine does not run a failing command every 10 seconds.
-const SKILLS_RETRY_MS = 60_000;
-let skillsFailedAt = 0;
-// The open skill list: its matches and the one highlighted. `dismissed` keeps Escape's closing until the text changes.
-let completion: { matches: OrcaSkill[]; active: number } | null = null;
-let dismissed = false;
+// The saved environment whose list is streamed (null: none is, and the list is read by the clock), and the channel of the stream: an event of another channel is not taken.
+let streamTarget: string | null = null;
+let streamChannel: { onmessage: (event: OrcaStreamEvent) => void } | null = null;
 // What the feed, the bell, the tabs, the header and the notice show now; they are drawn again only when this changes.
 let feedKey = "";
 let bellKey = "";
@@ -92,13 +80,6 @@ let tabsKey = "";
 let headerKey = "";
 let noticeKey = "";
 
-// The history of the work pane. It owns the read (orca-chat.ts) while the screen shows a selected session, and a side pane (orca-handoff.ts) may take it while the screen is not shown.
-const screenChat = makeChatView($("orca-chat"), $("orca-items"), $("orca-older"), $("orca-chat-status"), () => {
-  const handle = selectedRow()?.handle;
-  return handle ? { handle, environment: view?.target ?? null } : null;
-});
-
-const input = () => $<HTMLTextAreaElement>("orca-input");
 const feed = () => $("orca-feed");
 const shown = () => currentScreen() === "orca";
 
@@ -166,15 +147,14 @@ export function statusIcon(status: OrcaStatus, label = STATUS_LABELS[status]) {
 
 // ---- tabs ----
 
-// A tab of the work pane: a Claude session, or a plain terminal of Orca.
+// A tab of the work pane: a Claude session, or a plain terminal of Orca. Both are terminals.
 interface Tab {
   id: string;
   kind: "claude" | "plain";
   status: OrcaStatus;
   label: string;
   title: string;
-  sub: string;
-  // The Orca terminal's handle (a Claude session may have none: it can be read but not closed).
+  // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
   handle: string | null;
 }
 
@@ -183,23 +163,19 @@ const plainTabId = (handle: string) => `orca:${handle}`;
 
 // The tabs of the project `key`: its Claude sessions and its plain terminals, in the order they were first seen.
 function tabsOf(key: string): Tab[] {
-  const now = Date.now();
   const tabs: Tab[] = [];
   for (const r of view?.rows ?? []) {
     if (r.projectKey !== key || r.paneKey === null) continue;
-    const time = elapsed(r.atMs, now, r.group === "done");
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", sub: time ? `${r.branch} ・ ${time}` : r.branch, handle: r.handle });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", handle: r.handle });
   }
   for (const t of view?.terminals ?? []) {
-    if (t.projectKey === key) tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", sub: t.branch, handle: t.handle });
+    if (t.projectKey === key) tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle });
   }
   for (const t of tabs) if (!seen.has(t.id)) seen.set(t.id, seen.size);
   return tabs.sort((a, b) => seen.get(a.id)! - seen.get(b.id)!);
 }
 
 const selectedTabObj = () => (projectKey === null || selectedTab === null ? null : (tabsOf(projectKey).find((t) => t.id === selectedTab) ?? null));
-const rowOfTab = (id: string) => view?.rows.find((r) => r.paneKey !== null && claudeTabId(r.paneKey) === id) ?? null;
-const selectedRow = () => (selectedTab === null || !selectedTab.startsWith("claude:") ? null : rowOfTab(selectedTab));
 
 // The tab selected is one of the project's: when it is gone (its session left Orca's list) the one last selected there, else the first.
 function ensureSelection() {
@@ -212,8 +188,6 @@ function ensureSelection() {
   const last = lastTab.get(projectKey);
   selectedTab = tabs.find((t) => t.id === last)?.id ?? tabs[0]?.id ?? null;
 }
-
-const projectName = (key: string) => (key.startsWith("ssh:") ? ssh.find((t) => `ssh:${t.id}` === key)?.label : view?.projects.find((p) => p.key === key)?.name) ?? view?.hosts.find((h) => h.key === key)?.name ?? "";
 
 // ---- drawing ----
 
@@ -244,6 +218,15 @@ function drawHeader() {
   }
   $("orca-status").hidden = menu;
   $("orca-target").hidden = !menu;
+}
+
+// The switch of the terminal's size, beside the connection: only a streamed terminal (a saved environment) can keep Orca's size, so it shows only then.
+function drawFit() {
+  const button = $("orca-fit");
+  button.hidden = streamTarget === null || streamTarget !== view?.target;
+  const fit = fitMode() === "fit";
+  button.textContent = fit ? "合わせる" : "固定";
+  button.setAttribute("aria-label", fit ? "表示: 画面に合わせる（押すと固定）" : "表示: 固定（押すと画面に合わせる）");
 }
 
 // What a read that did not work says (the Orca screen and the side pane show it alike), else null.
@@ -380,9 +363,7 @@ function tabNode(t: Tab) {
   select.type = "button";
   select.setAttribute("role", "tab");
   select.setAttribute("aria-selected", String(t.id === selectedTab));
-  const text = tag("span", "orca-tab-text");
-  text.append(tag("span", "orca-tab-title", t.title), tag("span", "orca-tab-sub", t.sub));
-  select.append(statusIcon(t.status, t.label), text);
+  select.append(statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
   select.onclick = () => selectTab(t.id);
   // The close button is beside the tab, not in it, so that pressing it never selects the tab.
   const close = tag("button", "icon-btn orca-tab-close");
@@ -405,70 +386,36 @@ function drawTabs(tabs: Tab[]) {
   if (focused) box.querySelector<HTMLElement>(`[data-tab="${CSS.escape(focused)}"] .orca-tab-btn`)?.focus({ preventScroll: true });
 }
 
-// The work pane follows the selection. No project: the new-session pane. A project with sessions: its tabs (no heading), and the selected tab's content. A project with none says so.
+// The work pane follows the selection: the tab strip (empty with no project), and the terminal of the selected tab, else a line that says why there is none.
 function drawWork() {
-  const newPane = projectKey === null;
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
-  const tab = selectedTabObj();
-  const tabbed = tabs.length > 0;
-  $("orca-work-title").textContent = projectKey === null ? "新しいセッション" : projectName(projectKey);
-  $("orca-work-title").hidden = tabbed;
-  $("orca-tabs").hidden = !tabbed;
-  $("orca-work-head").classList.toggle("tabbed", tabbed);
   drawTabs(tabs);
-  $("orca-empty").hidden = newPane || tabbed;
-  const claude = tab?.kind === "claude";
-  for (const id of ["orca-chat", "orca-chat-status", "orca-form"]) $(id).hidden = !(newPane || claude);
-  $("orca-dest").hidden = !newPane;
-  setChatWorking(screenChat, selectedRow()?.group === "working");
+  const tab = selectedTabObj();
+  const waiting = started !== null && projectKey === null;
+  const empty = waiting ? null : projectKey === null ? "プロジェクトを選んでください" : tabs.length === 0 ? "セッションはありません" : tab?.handle === null ? "このセッションのターミナルはありません" : null;
+  $("orca-empty").hidden = empty === null;
+  $("orca-empty").textContent = empty ?? "";
+  $<HTMLButtonElement>("orca-new").disabled = busy || startWaits() || view === null || view.state === "missing";
+  drawStarted();
 }
 
-// Shows the mirror of the selected tab, if it is a plain terminal, and hides them while another screen or another kind of tab is shown.
+// Shows the terminal of the selected tab while the screen is shown: streamed from a saved environment, mirrored on this machine.
 function syncTerminal() {
   const tab = shown() ? selectedTabObj() : null;
-  if (tab?.kind === "plain") showTerminal(tab.id, { handle: tab.handle!, environment: view?.target ?? null });
-  else hideTerminals();
+  if (!tab?.handle) return hideTerminals();
+  showTerminal(tab.id, { kind: streaming() ? "stream" : "mirror", handle: tab.handle });
 }
 
-// Reads the history of the selected session while the screen is shown, and closes it when there is none, the target or the session changed, or the screen was left.
-function syncChat() {
-  const row = shown() ? selectedRow() : null;
-  const want = row?.paneKey ? JSON.stringify([view?.target ?? null, row.path, row.paneKey]) : null;
-  // A side pane may have taken the read since: then the screen opens it again.
-  if (want === chatKey && (want === null || isChatOwner(screenChat))) return;
-  chatKey = want;
-  if (row?.paneKey && want) openChat(screenChat, view?.target ?? null, row.path, row.paneKey, row.group === "working");
-  else closeChat(screenChat);
-}
-
-// The composer's chip and button follow the selection: a selected session is posted to; in the new-session pane, a worktree is chosen and a new agent is started.
-function drawComposer() {
-  const row = selectedRow();
-  const worktrees = view?.worktrees ?? [];
-  const worktree = worktrees.find((w) => w.path === newPath) ?? null;
-  const pick = $<HTMLButtonElement>("orca-dest-pick");
-  pick.disabled = worktrees.length === 0;
-  pick.textContent = worktree ? worktreeLabel(worktree) : worktrees.length ? "worktree を選ぶ" : "worktree がありません";
-  // The text is the one being posted while a post is on its way.
-  input().disabled = busy;
-  const send = $<HTMLButtonElement>("orca-send");
-  send.textContent = row ? "送る" : "起動する";
-  // A session with no terminal can be read but takes no post.
-  send.disabled = busy || isReading() || view?.state === "missing" || !(input().value.trim() || hasAttachments()) || (row ? row.handle === null : !worktree || startWaits());
-  drawStarted();
-  updateCompletion();
-}
-
-// The note of a launch that was answered: it waits for the row of the session, or (Orca gave no pane key) says that the history is on Orca's screen.
+// The note of a launch that was answered: it waits for the row of the session, or (Orca named neither its pane nor its terminal) says it was started.
 function drawStarted() {
   const box = $("orca-started");
-  box.hidden = started === null || selectedRow() !== null;
+  box.hidden = started === null || projectKey !== null;
   if (box.hidden) return;
   const waiting = startWaits();
   const key = String(waiting);
   if (box.dataset.state === key) return;
   box.dataset.state = key;
-  box.replaceChildren(...(waiting ? [tag("span", "spin"), tag("span", "sp", "セッションを始めました。一覧に現れるのを待っています…")] : [tag("span", "sp", "セッションを始めました。履歴は Orca の画面で見られます。")]));
+  box.replaceChildren(...(waiting ? [tag("span", "spin"), tag("span", "sp", "セッションを始めました。一覧に現れるのを待っています…")] : [tag("span", "sp", "セッションを始めました。Orca の画面で開けます。")]));
 }
 
 // Takes a read as the one shown. A read that did not learn the target and the environments (a poll, or a failed `environment list`) leaves the ones held (and the SSH hosts);
@@ -484,11 +431,10 @@ function adopt(read: OrcaOverview) {
   else if (view.state === "missing") forgetNotices();
   else workingCount = 0;
   switching = false;
-  if (newPath !== null && !view.worktrees.some((w) => w.path === newPath)) newPath = null;
-  // A plain terminal that left Orca's list leaves the tabs, with its screen.
+  // A terminal that left Orca's list leaves the tabs, with its screen.
   if (!keep && view.state === "ready") {
-    const held = new Set(view.terminals.map((t) => plainTabId(t.handle)));
-    pruneMirrors((id) => held.has(id));
+    const held = new Set([...view.rows.flatMap((r) => (r.paneKey === null ? [] : [claudeTabId(r.paneKey)])), ...view.terminals.map((t) => plainTabId(t.handle))]);
+    pruneTerminals((id) => held.has(id));
   }
   if (view.state === "ready") forgetGone();
   claimStarted();
@@ -498,7 +444,7 @@ function adopt(read: OrcaOverview) {
 // A launch that gave a pane key or a handle waits for its row, which is matched by either (as the side pane of A-9 does).
 const startWaits = () => started !== null && (started.paneKey !== null || started.handle !== null);
 
-// A launch whose row the read holds now is selected (its project and its tab, so its history opens); one that waited too long, even if the read failed, or one for another target, is dropped.
+// A launch whose row the read holds now is selected (its project and its tab, so its terminal shows); one that waited too long, even if the read failed, or one for another target, is dropped.
 function claimStarted() {
   if (!startWaits()) return;
   const wait = started!;
@@ -523,19 +469,54 @@ function draw() {
   drawBadge();
   if (!shown()) return;
   drawHeader();
+  drawFit();
   drawNotice();
   drawBell();
   drawFeed();
   drawWork();
-  drawComposer();
-  syncChat();
   syncTerminal();
+}
+
+// ---- the stream of a saved environment ----
+
+// Whether the list of the target held is streamed.
+const streaming = () => streamTarget !== null && streamTarget === view?.target;
+
+// Streams the list while the target is a saved environment that is listed (and the command is there), and ends the stream otherwise. The stream tries a lost connection again by itself.
+function syncStream() {
+  const want = view !== null && view.state !== "missing" && !switching && view.target !== null && view.environments.includes(view.target) ? view.target : null;
+  if (want === streamTarget) return;
+  // A new stream ends the old one by itself: a close is a call of its own, which could reach Rust after the open and end the new stream.
+  if (streamTarget !== null && want === null) invoke("orca_stream_close").catch(() => {});
+  streamTarget = want;
+  streamChannel = null;
+  if (want === null) return;
+  const channel = new window.__TAURI__.core.Channel<OrcaStreamEvent>();
+  streamChannel = channel;
+  channel.onmessage = (event) => {
+    if (streamChannel === channel && view?.target === want) onStream(event);
+  };
+  invoke("orca_stream_open", { environment: want, channel }).catch((e) => {
+    if (streamChannel === channel && view?.target === want) onStream({ kind: "status", live: false, message: String(e) });
+  });
+}
+
+// A list of the stream is taken as a read that worked; a lost connection as one that failed (the rows stay, and the status says so until the list comes again).
+function onStream(event: OrcaStreamEvent) {
+  if (view === null) return;
+  if (event.kind === "status") {
+    if (event.live) return;
+    adopt({ ...view, state: "failed", message: event.message, ssh: [], known: false });
+  } else {
+    adopt({ ...view, state: "ready", message: "", rows: event.rows, worktrees: event.worktrees, projects: event.projects, hosts: event.hosts, terminals: event.terminals, ssh: [], known: false });
+  }
+  draw();
 }
 
 // What a read after a failure, the first one and one with the command missing ask for: everything. A working list is read for its agents (the screen shown) or their count.
 const clockScope = (): Scope => (view?.state !== "ready" ? "full" : shown() ? "screen" : "badge");
 
-// Reads the list. Only the latest request is used; `force` starts one although another is on its way (after a post or a change of the target).
+// Reads the list. Only the latest request is used; `force` starts one although another is on its way (after a launch, a close or a change of the target).
 async function load(scope: Scope, force = false) {
   if (loading && !force) return;
   const seq = ++loadSeq;
@@ -558,40 +539,15 @@ async function load(scope: Scope, force = false) {
     return;
   }
   adopt(next);
+  syncStream();
   draw();
-  fetchSkills();
-}
-
-// Reads the skills when they are due and the screen is shown with the command found (the target may be failing). A failure only means no list for now: it is read again later (`SKILLS_RETRY_MS`).
-async function fetchSkills() {
-  if (!skillsStale || !shown() || view === null || view.state === "missing") return;
-  if (Date.now() - skillsFailedAt < SKILLS_RETRY_MS) return;
-  skillsStale = false;
-  const seq = ++skillsSeq;
-  let list: OrcaSkill[] = [];
-  let failed = false;
-  try {
-    list = await invoke("orca_skills");
-  } catch {
-    // No list, no popup; posting does not depend on it.
-    failed = true;
-  }
-  if (seq !== skillsSeq) return;
-  if (failed) {
-    skillsStale = true;
-    skillsFailedAt = Date.now();
-  }
-  skills = list;
-  updateCompletion();
 }
 
 function refresh() {
-  // The history and the terminals are shown only while the screen is shown.
-  if (!shown()) {
-    syncChat();
-    syncTerminal();
-  }
-  if (document.hidden || loading) return;
+  // The terminals are shown only while the screen is shown.
+  if (!shown()) syncTerminal();
+  // A streamed list is not read by the clock.
+  if (document.hidden || loading || streaming()) return;
   // A missing command is not looked for again by the clock.
   if (view?.state === "missing") return;
   if (Date.now() - lastTry >= (shown() ? SHOWN_MS : HIDDEN_MS)) load(clockScope());
@@ -604,7 +560,8 @@ export const heldOrca = () => view;
 
 // Reads the list for a side pane (the agents with their terminals, and the worktrees), whatever screen is shown, and gives what is held after it. `force` starts the read although another is on its way (the first read of a pane and the read after a send); the poll of a shown session does not. The first read of the app asks for the target too.
 export async function refreshOrca(force: boolean) {
-  await load(view?.state === "ready" ? "screen" : "full", force);
+  // A streamed list is what Orca holds now.
+  if (!streaming()) await load(view?.state === "ready" ? "screen" : "full", force);
   return view;
 }
 
@@ -615,7 +572,6 @@ export function openInOrca(paneKey: string | null) {
     projectKey = row.projectKey;
     selectedTab = claudeTabId(row.paneKey!);
     lastTab.set(row.projectKey, selectedTab);
-    newPath = null;
   }
   setScreen("orca");
 }
@@ -625,7 +581,6 @@ export function showOrca() {
   show("orca");
   headerKey = noticeKey = feedKey = bellKey = tabsKey = "";
   draw();
-  fetchSkills();
   // The environments are read when the screen is shown, whatever read is on its way.
   load("full", true);
 }
@@ -640,15 +595,15 @@ async function chooseTarget(environment: string | null) {
     showError(e);
     return;
   }
-  // The sessions and worktrees belong to the old target, and so do the plain terminals' screens.
+  // The sessions and worktrees belong to the old target, and so do the terminals' screens and the stream.
   projectKey = null;
   selectedTab = null;
-  newPath = null;
   started = null;
-  pruneMirrors(() => false);
+  pruneTerminals(() => false);
   view = { ...view, target: environment, rows: [], worktrees: [], projects: [], hosts: [], terminals: [] };
   forgetNotices();
   switching = true;
+  syncStream();
   draw();
   load("full", true);
 }
@@ -659,13 +614,7 @@ function openTargetMenu(anchor: Element) {
   openMenu(anchor, items);
 }
 
-function pickWorktree(path: string) {
-  newPath = path;
-  drawComposer();
-  input().focus();
-}
-
-// The dialog under the "起動先" chip: the worktrees, narrowed by a filter on `{repo} ・ {branch}`. A pick closes it. The side pane of A-9 opens it too.
+// The dialog of the worktrees, narrowed by a filter on `{repo} ・ {branch}`, under "新規" and under the chip of the side pane of A-9. A pick closes it.
 export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], chosen: string | null, pick: (path: string) => void) {
   const pop = tag("div", "menu orca-dest-pop");
   pop.setAttribute("role", "dialog");
@@ -702,13 +651,6 @@ export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], c
   filter.focus();
 }
 
-const openDestPicker = (anchor: Element) => openWorktreeDialog(anchor, view?.worktrees ?? [], newPath, pickWorktree);
-
-function showPostError(message: string | null) {
-  $("orca-error").hidden = message === null;
-  $("orca-error").textContent = message ?? "";
-}
-
 // ---- selecting and closing ----
 
 // Selects the project and, in it, the tab last selected there, else the first.
@@ -716,19 +658,15 @@ function selectProject(key: string) {
   started = null;
   projectKey = key;
   selectedTab = null;
-  newPath = null;
   ensureSelection();
   draw();
-  if (selectedRow()) input().focus();
 }
 
 function selectTab(id: string) {
   started = null;
   selectedTab = id;
   if (projectKey !== null) lastTab.set(projectKey, id);
-  newPath = null;
   draw();
-  if (selectedRow()) input().focus();
 }
 
 // A row of the working view selects its project and its tab.
@@ -737,7 +675,6 @@ function selectRow(r: OrcaRow) {
   started = null;
   pickRow(r);
   draw();
-  input().focus();
 }
 
 // Makes the row's project and tab the selection (the row has a pane key).
@@ -745,18 +682,6 @@ function pickRow(r: OrcaRow) {
   projectKey = r.projectKey;
   selectedTab = claudeTabId(r.paneKey!);
   lastTab.set(r.projectKey, selectedTab);
-  // A worktree chosen for a launch is chosen again for the next one.
-  newPath = null;
-}
-
-// The new-session pane: no project, no tab.
-function newSession() {
-  // The note of a launch with nothing to wait for goes, and so does a wait that ran out; one that waits for its row stays, so that no second launch is made meanwhile.
-  if (started !== null && (!startWaits() || Date.now() > started.until)) started = null;
-  projectKey = null;
-  selectedTab = null;
-  draw();
-  input().focus();
 }
 
 // Closes a tab. An Orca terminal is closed in Orca, and the list is read at once: it leaves the tabs then, and a failure keeps the tab and shows the message.
@@ -774,164 +699,40 @@ async function closeTab(tab: Tab) {
   }
   closing.delete(tab.id);
   draw();
-  load(clockScope(), true);
+  // A streamed list says the close by itself.
+  if (!streaming()) load(clockScope(), true);
 }
 
-// The plus button's menu: start Claude (the new-session pane).
-function openNewMenu(anchor: Element) {
-  const menu = tag("div", "menu");
-  menu.setAttribute("role", "menu");
-  const b = tag("button", "orca-menu-item");
-  b.type = "button";
-  b.setAttribute("role", "menuitem");
-  b.innerHTML = CLAUDE_SVG;
-  b.append("Claude を起動");
-  b.onclick = () => {
-    closeMenu();
-    newSession();
-  };
-  menu.append(b);
-  showMenu(anchor, menu);
-  b.focus();
+// "新規": the worktrees of the list; picking one starts Claude in it with no first prompt (the user types it in the terminal). The session is then followed: once the list holds it, its project and its tab are selected.
+// A launch is never tried twice; a failure shows its message. No project is selected meanwhile, so the work pane says that the session was started.
+function openNewDialog(anchor: Element) {
+  if (view === null) return;
+  openWorktreeDialog(anchor, view.worktrees, null, (path) => start(path));
 }
 
-// Sends the text to the selected session, or starts an agent with it; the images attached (A-10) are put in the worktree first and their paths are added to the text.
-// The text and the images stay on a failure and go on success, which reads the list at once. A send or a launch is never tried twice; an image that was put in the worktree is not put there again by the next post.
-async function post() {
-  const text = input().value;
-  const row = selectedRow();
-  const target = view?.target ?? null;
-  if (busy || isReading() || !(text.trim() || hasAttachments()) || view === null) return;
-  if (row ? row.handle === null : projectKey !== null || !newPath || startWaits()) return;
-  const path = row ? row.path : newPath!;
-  if (hasAttachments() && !path) {
-    showPostError("画像を置く worktree が分かりません");
-    return;
-  }
+async function start(path: string) {
+  if (busy || startWaits() || view === null) return;
+  const target = view.target;
   busy = true;
   started = null;
-  showPostError(null);
-  drawComposer();
+  projectKey = null;
+  selectedTab = null;
+  draw();
   try {
-    const body = hasAttachments() ? await invoke("orca_compose_text", { text, paths: await uploadAttachments(path, target) }) : text;
-    if (row) await invoke("orca_send", { handle: row.handle!, text: body, environment: target });
-    else {
-      const launched = await invoke("orca_launch", { path: newPath!, text: body, environment: target });
-      // A session picked while the launch was on its way is not left for the new one.
-      if (projectKey === null) started = { paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
-    }
-    input().value = "";
-    clearAttachments();
-    load(clockScope(), true);
+    const launched = await invoke("orca_start", { path, environment: target });
+    // A session picked while the launch was on its way is not left for the new one.
+    if (projectKey === null) started = { paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
+    if (!streaming()) load(clockScope(), true);
   } catch (e) {
-    showPostError(String(e));
+    showError(e);
   } finally {
     busy = false;
-    drawComposer();
-    // A disabled text lost the focus.
-    input().focus();
+    draw();
   }
-}
-
-// ---- the skill list ----
-
-// The first word of the text when it starts with "/" and the caret is still in it (no space yet), without the slash; null otherwise.
-function slashQuery(): string | null {
-  const text = input().value;
-  const word = /^\/\S*/.exec(text)?.[0];
-  if (!word || (input().selectionStart ?? 0) > word.length) return null;
-  return word.slice(1);
-}
-
-// The skills that contain the query, case-insensitively, those that start with it first.
-function matchesOf(query: string) {
-  const q = query.toLowerCase();
-  const found = skills.filter((s) => s.command.slice(1).toLowerCase().includes(q));
-  const starts = (s: OrcaSkill) => s.command.slice(1).toLowerCase().startsWith(q);
-  return [...found.filter(starts), ...found.filter((s) => !starts(s))];
-}
-
-function closeCompletion() {
-  completion = null;
-  $("orca-complete").hidden = true;
-  $("orca-complete").replaceChildren();
-  for (const id of ["orca-complete", "orca-input"]) $(id).removeAttribute("aria-activedescendant");
-}
-
-function markActive() {
-  if (!completion) return;
-  const options = [...$("orca-complete").children] as HTMLElement[];
-  const { active } = completion;
-  for (const [i, option] of options.entries()) option.setAttribute("aria-selected", String(i === active));
-  const id = options[active]?.id ?? "";
-  for (const el of [$("orca-complete"), input()]) el.setAttribute("aria-activedescendant", id);
-  options[active]?.scrollIntoView({ block: "nearest" });
-}
-
-// Opens, narrows or closes the list for the text and the caret as they are. The highlight stays on the same skill while it is still listed; `reset` (typing) puts it on the first.
-function updateCompletion(reset = false) {
-  // Only the text being typed in opens it: a read in the background must not.
-  const query = !dismissed && document.activeElement === input() ? slashQuery() : null;
-  const matches = query === null ? [] : matchesOf(query);
-  if (!matches.length) {
-    if (completion) closeCompletion();
-    return;
-  }
-  const keep = reset ? undefined : completion?.matches[completion.active]?.command;
-  const active = Math.max(0, matches.findIndex((m) => m.command === keep));
-  const same = completion && completion.matches.length === matches.length && completion.matches.every((m, i) => m.command === matches[i].command);
-  completion = { matches, active };
-  if (!same) {
-    const box = $("orca-complete");
-    box.hidden = false;
-    box.replaceChildren(
-      ...matches.map((m, i) => {
-        const option = tag("div", "orca-skill");
-        option.id = `orca-skill-${i}`;
-        option.setAttribute("role", "option");
-        option.append(tag("code", "", m.command), tag("span", "", m.description));
-        // A press keeps the focus in the text.
-        option.onmousedown = (e) => e.preventDefault();
-        option.onclick = () => accept(i);
-        return option;
-      }),
-    );
-    box.scrollTop = 0;
-  }
-  markActive();
-}
-
-// Puts the command in the place of the first word, followed by one space, and does not post.
-function accept(index: number) {
-  const skill = completion?.matches[index];
-  if (!skill) return;
-  const field = input();
-  const rest = field.value.replace(/^\/\S*/, "").trimStart();
-  field.value = `${skill.command} ${rest}`;
-  const caret = skill.command.length + 1;
-  field.setSelectionRange(caret, caret);
-  closeCompletion();
-  drawComposer();
-}
-
-function onKey(e: KeyboardEvent) {
-  if (!completion || composing(e)) return;
-  const n = completion.matches.length;
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-    completion.active = (completion.active + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
-    markActive();
-  } else if (e.key === "Tab" || e.key === "Enter") {
-    accept(completion.active);
-  } else if (e.key === "Escape") {
-    dismissed = true;
-    closeCompletion();
-  } else {
-    return;
-  }
-  e.preventDefault();
 }
 
 export function initOrca() {
+  // The history of A-7 is read only by the side pane of A-9 now; it still pauses with the window.
   initOrcaChat();
   initOrcaTerminal(showError);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.3, property: "--list-w" });
@@ -941,31 +742,16 @@ export function initOrca() {
     drawBadge();
     refresh();
   });
-  $("orca-refresh").onclick = () => {
-    skillsStale = true;
-    skillsFailedAt = 0;
-    load("full", true);
-  };
+  $("orca-refresh").onclick = () => load("full", true);
   $("orca-bell").onclick = () => {
     working = !working;
     draw();
   };
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
-  $("orca-dest-pick").onclick = (e) => openDestPicker(e.currentTarget as Element);
-  $("orca-new").onclick = (e) => openNewMenu(e.currentTarget as Element);
-  initOrcaAttach({ busy: () => busy, changed: drawComposer, fail: showPostError });
-  $("orca-form").onsubmit = (e) => {
-    e.preventDefault();
-    post();
+  $("orca-new").onclick = (e) => openNewDialog(e.currentTarget as Element);
+  $("orca-fit").onclick = () => {
+    setFitMode(fitMode() === "fit" ? "fixed" : "fit");
+    drawFit();
   };
-  input().addEventListener("input", () => {
-    dismissed = false;
-    drawComposer();
-    updateCompletion(true);
-  });
-  input().addEventListener("keydown", onKey);
-  // The caret moving out of the first word closes the list, and moving back in opens it.
-  for (const type of ["keyup", "click", "focus"]) input().addEventListener(type, () => updateCompletion());
-  input().addEventListener("blur", () => closeCompletion());
   load("full");
 }
