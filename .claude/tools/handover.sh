@@ -3,7 +3,7 @@
 # Usage: handover.sh ensure          prints the Discussion's URL; creates the Discussion when it does not exist yet
 #        handover.sh read            ensure, then prints the last hand-over and the owner's replies since the run that wrote it started
 #        handover.sh write <file>    posts the file as a hand-over comment and prints the comment's URL
-#        handover.sh note <file>     posts the file as a comment that is not a hand-over (discussion-judge's result): first line `<!-- ai -->`, prints the comment's URL
+#        handover.sh note <file>     posts the file as a comment that is not a hand-over (the result of discussion-judge or improvement-proposal): first line `<!-- ai -->`, prints the comment's URL
 #        handover.sh format <owner>  reads the JSON of a Discussion (the query of `read`) from stdin and prints what `read` prints; no network
 # The runs write with the owner's account, so a comment is told by its mark `<!-- handover run-start=... -->`, which `write` puts on the first line.
 # A comment without the mark whose author is the owner is the owner's reply, and the next run reads it first and takes it as an instruction.
