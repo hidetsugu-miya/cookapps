@@ -38,4 +38,3 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 - Accepting a proposal: the owner removes `needs:owner`, and `milestone-dev` implements it.
 - Declining one: the owner closes it with `wontfix`.
-- Reminding the owner of the unanswered ones: `.claude/tools/proposal-reminder.sh`, run by `nightly.sh` after each `milestone-dev` run.
