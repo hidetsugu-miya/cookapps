@@ -1299,6 +1299,16 @@ describe("orca: a saved environment's stream", () => {
     expect(await copyEvent()).toEqual({ data: {}, taken: false });
   });
 
+  it("keeps the held text through a mouse mode and the alternate screen, which Claude Code sends often", async () => {
+    await openCopy();
+    await refuseClipboard();
+    await sendTerm({ kind: "output", data: osc52("held text") });
+    await browser.waitUntil(async () => (await refusals()) > 0, { timeoutMsg: "the write was never tried" });
+    await sendTerm({ kind: "output", data: "\x1b[?1003h\x1b[?1049h" });
+    await sendMark("done");
+    expect(await copyEvent()).toEqual({ data: { "text/plain": "held text" }, taken: true });
+  });
+
   it("drops the held text when a snapshot draws the screen again", async () => {
     await openCopy();
     await refuseClipboard();

@@ -255,9 +255,9 @@ function newInstance(source: TermSource): Instance {
     if (text !== null) copyLater(instance, text);
     return true;
   });
-  // A new selection (or none) makes the held text old.
+  // A new selection makes the held text old. xterm.js also says a change when there is none (a mouse mode, the alternate screen and a resize do), which Claude Code sends often: that leaves the held text.
   term.onSelectionChange(() => {
-    instance.copy = null;
+    if (term.hasSelection()) instance.copy = null;
   });
   // The copy of the user (⌘C, Edit > Copy) takes the held text when xterm.js has no selection to copy; xterm.js copies its own selection before this, on the element inside.
   el.addEventListener("copy", (event) => {
