@@ -11,7 +11,7 @@ import { autoFit, fitAfterImages, frameObserver, plainBody, routeLinks, withBody
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
 import { clearSummary, renderSummary, summaryPressed } from "./mail-summary.js";
 import { linkify } from "./mail-text.js";
-import { setScreen } from "./nav.js";
+import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { mailCard } from "./orca-handoff-cards.js";
 import { initSplit } from "./split.js";
@@ -226,7 +226,7 @@ export async function openThread(
     loading.current = null;
     // null: that account must log in again, which the list shows.
     if (t === null) {
-      show("list");
+      if (currentScreen() === "mail") show("list");
       handoff.sync();
       return load();
     }
@@ -246,14 +246,19 @@ export async function openThread(
     $("messages").replaceChildren(
       ...[...t.messages].reverse().map((m, i) => message(m, ctx, account, several && i > 0, several)),
     );
-    for (const button of ACTIONS) $<HTMLButtonElement>(button).disabled = false;
+    // A Todo still being made from the thread opened before keeps its button until it ends.
+    for (const button of ACTIONS) {
+      $<HTMLButtonElement>(button).disabled = button === "thread-todo" && $(button).classList.contains("busy");
+    }
     renderSummary(opened.current);
     if (t.unread) markRead(account, id);
     handoff.sync();
   } catch (e) {
     if (seq !== openCount) return;
     $("thread").removeAttribute("aria-busy");
-    body.replaceChildren(span("msg-fail", String(e)));
+    // The loading body is gone once the messages replaced it: the error then goes where every error does.
+    if (body.isConnected) body.replaceChildren(span("msg-fail", String(e)));
+    else showError(e);
   }
 }
 

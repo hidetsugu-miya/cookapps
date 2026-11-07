@@ -140,6 +140,54 @@ describe("thread loading", () => {
     await release(open, threadDetail("Second unread", "Second body", false));
     await expect($("#messages .plain")).toHaveText("Second body");
   });
+
+  it("keeps the Todo button disabled when the next thread arrives while the task of the earlier one is still being made", async () => {
+    await mock("thread", threadDetail("First unread", "First body", false));
+    const make = await mock("todoist_task_from_mail", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
+    await $("#thread-todo").click();
+    await waitForCalls(make);
+    await $("#back").click();
+    const open = await mock("thread", holds);
+    await rowOf("unread-threads", "Second unread").$(".subject").click();
+    await waitForCalls(open);
+    await release(open, threadDetail("Second unread", "Second body", false));
+    await expect($("#messages .plain")).toHaveText("Second body");
+    await expect($("#thread-todo .spin")).toExist();
+    await expect($("#thread-todo")).toBeDisabled();
+        await release(make, true);
+    await expect($("#thread-todo .spin")).not.toExist();
+    await expect($("#thread-todo")).toBeEnabled();
+  });
+
+  it("stays on the screen the user moved to when the answer says the account must log in again", async () => {
+    const open = await mock("thread", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(open);
+    await $("#nav-todo").click();
+    await expect($("#todo")).toBeDisplayed();
+    await release(open, null);
+    await browser.pause(300);
+    await expect($("#todo")).toBeDisplayed();
+    await expect($("#threads")).not.toBeDisplayed();
+  });
+
+  it("goes back to the list when the account is removed while its thread loads, and does not draw the answer that arrives later", async () => {
+    const open = await mock("thread", holds);
+    await mock("remove_account", null);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(open);
+    await $(`#account-list button[aria-label="${account}"]`).click();
+    await $("button=このアカウントを削除").click();
+    await $("button=削除").click();
+    await expect($("#threads")).toBeDisplayed();
+    await expect($("#thread")).not.toBeDisplayed();
+    await release(open, threadDetail("First unread", "Hello from Alice", false));
+    await browser.pause(300);
+    await expect($("#threads")).toBeDisplayed();
+    expect(await count("#messages .plain")).toBe(0);
+  });
 });
 
 describe("thread AI summary", () => {
