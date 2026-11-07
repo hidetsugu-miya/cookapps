@@ -5,7 +5,7 @@
 # Every skill gets NIGHTLY_DEADLINE_EPOCH, which the skill checks with nightly-limit.sh before it starts something new; nothing kills the process at the deadline.
 # improvement-proposal: 1 hour after the start, 23:00 for the job: no new candidate starts after the judgment's start at 23:00, and the judgment waits for the run in hand (at most 30 minutes).
 # discussion-judge: 50 minutes after the wait for improvement-proposal ends (23:50 when there is no wait). It first waits for the lock of improvement-proposal to go (at most 30 minutes), so that the judgment never runs while Discussions are being made.
-# milestone-dev: the end of its 3 hours (03:30 for the job), and HANDOVER_RUN_START (handover.sh). It first waits for the lock of discussion-judge to go (at most 30 minutes), so that the issues made there are placed in the same night.
+# milestone-dev: the end of its 3 hours (03:30 for the job), NIGHTLY_START_EPOCH (the start of the run, for nightly-limit.sh release), and HANDOVER_RUN_START (handover.sh). It first waits for the lock of discussion-judge to go (at most 30 minutes), so that the issues made there are placed in the same night.
 set -u
 if [ $# -ne 1 ]; then
   echo "使い方: nightly.sh improvement-proposal|discussion-judge|milestone-dev" >&2
@@ -59,7 +59,8 @@ case "$skill" in
   milestone-dev)
     wait_for discussion-judge
     export HANDOVER_RUN_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    export NIGHTLY_DEADLINE_EPOCH=$(($(date +%s) + 3 * 3600))
+    export NIGHTLY_START_EPOCH=$(date +%s)
+    export NIGHTLY_DEADLINE_EPOCH=$((NIGHTLY_START_EPOCH + 3 * 3600))
     ;;
   discussion-judge)
     wait_for improvement-proposal

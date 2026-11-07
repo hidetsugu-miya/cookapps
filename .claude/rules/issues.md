@@ -163,11 +163,14 @@ The job runs only at 00:30 (at the owner's instruction, 2026-11-07: the three ru
 A run lasts 3 hours at most and takes any number of issues. `nightly.sh` hands the run the end of its 3 hours as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh` before it starts a new issue or a release; nothing kills the process.
 When the limit stops a run, the issue in hand stays as it is, and the hand-over says where.
 The run releases when the release table says so, at any hour within its 3 hours; there is no release window (at the owner's instruction, 2026-11-07).
+A run takes any number of issues, but the versions it releases are one minor and its patches: after v0.53.0, the run may release v0.53.1, and v0.54.0 waits for the next run (at the owner's instruction, 2026-11-08). `nightly-limit.sh release {tag}` refuses a tag of another minor than the tags the run has made. A refused release leaves the Release PR for the next run, and a `point:8` issue whose release is refused is not merged, but left reviewed in its worktree and handed over.
 A run leaves alone an issue that a session of the owner may hold: an open pull request that closes it, or a worktree named `issue-{n}`, unless the previous hand-over lists it as the run's own (`plan-release.py next --mine`).
 
 ```text
 Good: the 00:30 run merges two issues at 02:10, and the release table says release -> it releases, then hands over
 Bad:  the 00:30 run merges, the table says release, and it leaves the release to a later run
+Good: the 00:30 run released v0.53.0, and the table says release v0.53.1 -> it releases it; for v0.54.0 it leaves the Release PR and says so in the hand-over
+Bad:  the 00:30 run releases v0.53.0 and then v0.54.0 in one run
 ```
 
 ### Run `discussion-judge` once a day at 23:00, before `milestone-dev`
