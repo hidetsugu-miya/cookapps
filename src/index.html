@@ -362,9 +362,6 @@
     <section id="orca" class="split-main" hidden>
       <aside id="orca-list" aria-label="プロジェクト">
         <header id="orca-header">
-          <button id="orca-new" type="button" aria-label="新しいセッション" aria-haspopup="dialog">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新規
-          </button>
           <button id="orca-bell" class="icon-btn" aria-label="作業中を表示する" aria-pressed="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>
             <span id="orca-bell-badge" aria-hidden="true" hidden></span>
@@ -382,7 +379,12 @@
       </aside>
       <div id="orca-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="一覧の幅" aria-valuemin="20" aria-valuemax="50" aria-valuenow="30" tabindex="0"><span></span></div>
       <div id="orca-work">
-        <div id="orca-tabs" role="tablist" aria-label="セッション"></div>
+        <div id="orca-tabbar">
+          <div id="orca-tabs" role="tablist" aria-label="セッション"></div>
+          <button id="orca-plus" class="icon-btn" type="button" aria-label="セッションを始める" aria-haspopup="menu" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
         <p id="orca-started" class="pending" role="status" hidden></p>
         <p id="orca-empty" class="feed-empty" hidden></p>
         <div id="orca-term" hidden></div>

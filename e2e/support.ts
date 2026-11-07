@@ -539,7 +539,8 @@ export const orcaRow = (repo: string, branch: string, line: string, extra: Parti
   return { group, repo, branch, line, atMs: Date.now() - minutes * 60_000 - 5_000, handle: `term_${repo}`, paneKey: `tab_${repo}:leaf_1`, path: `/work/${repo}`, activity: "", status: GROUP_STATUS[group], projectKey: `proj_${repo}`, ...rest };
 };
 
-export const orcaWorktree = (repo: string, branch: string): OrcaWorktree => ({ path: `/work/${repo}`, repo, branch });
+// A worktree of the project `proj_{repo}`; `extra` gives another path (a second worktree of the same project) or another project (an SSH host's `ssh:{id}`).
+export const orcaWorktree = (repo: string, branch: string, extra: Partial<OrcaWorktree> = {}): OrcaWorktree => ({ path: `/work/${repo}`, repo, branch, projectKey: `proj_${repo}`, ...extra });
 
 // A plain terminal of Orca (a shell) in the project of `repo`.
 export const orcaTerminal = (repo: string, title: string, extra: Partial<OrcaTerminal> = {}): OrcaTerminal => ({ handle: `term_${repo}_${title}`, title, branch: "main", projectKey: `proj_${repo}`, path: `/work/${repo}`, ...extra });
@@ -549,7 +550,7 @@ const STATUS_ORDER: OrcaStatus[] = ["question", "failed", "working", "monitoring
 
 // The project list of what is on the screen: one project for each repository of the rows, the worktrees and the terminals, the highest status of its rows (a terminal is a green dot), and its sessions.
 function projectsOf(rows: OrcaRow[], worktrees: OrcaWorktree[], terminals: OrcaTerminal[]): OrcaProject[] {
-  const keys = [...new Set([...rows.map((r) => r.projectKey), ...worktrees.map((w) => `proj_${w.repo}`), ...terminals.map((t) => t.projectKey)])];
+  const keys = [...new Set([...rows.map((r) => r.projectKey), ...worktrees.map((w) => w.projectKey), ...terminals.map((t) => t.projectKey)])];
   return keys.map((key) => {
     const mine = rows.filter((r) => r.projectKey === key);
     const mineTerminals = terminals.filter((t) => t.projectKey === key);

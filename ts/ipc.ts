@@ -199,8 +199,10 @@ export interface Commands {
   orca_set_target: { args: { environment: string | null }; result: null };
   // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.
   orca_send: { args: { handle: string; text: string; environment: string | null }; result: null };
-  // A-12: starts Claude in the worktree at `path` with no first prompt ("新規"). The answer is the session as Orca's reply names it (`paneKey` and `handle` are null when the reply lacks them). Never run twice.
+  // A-16: starts Claude in the worktree at `path` with no first prompt (the plus of the work pane). The answer is the session as Orca's reply names it (`paneKey` and `handle` are null when the reply lacks them). Never run twice.
   orca_start: { args: { path: string; environment: string | null }; result: OrcaStarted };
+  // A-16: opens a plain terminal in the worktree at `path` (the plus of the work pane). The answer names its `handle` (`paneKey` is always null). Never run twice.
+  orca_terminal_create: { args: { path: string; environment: string | null }; result: OrcaStarted };
   // A-9: starts a session in a worktree, or posts to a running one, with the instruction and, when `context` is not null, the content quoted as data after it. Never run twice.
   // For a running session the answer has only its `handle`.
   orca_handoff: { args: { destination: HandoffDestination; instruction: string; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
