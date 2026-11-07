@@ -1,4 +1,4 @@
-import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, waitForCalls, waitForCount } from "../support";
+import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, threadLoaded, waitForCalls, waitForCount } from "../support";
 import type { ThreadItem } from "../../ts/bindings/ThreadItem";
 
 // Fires the event the app's sync round listens for (the window is shown again), which runs one round at once.
@@ -433,6 +433,7 @@ describe("inbox", () => {
       await $(".arrival").$("button=詳細を開く").click();
       await expect($("#thread")).toBeDisplayed();
       await expect($("#thread-subject")).toHaveText("Lunch plan");
+      await threadLoaded();
       expect(await callsOf(detail)).toEqual([{ account, id: "t9" }]);
       await waitForCount(".arrival", 0);
       await expect($("#nav-mail")).toHaveAttribute("aria-current", "page");
@@ -459,6 +460,7 @@ describe("inbox", () => {
       await mock("set_read", true);
       await rowOf("unread-threads", "Lunch plan").$(".subject").click();
       await expect($("#thread-subject")).toHaveText("Lunch plan");
+      await threadLoaded();
       await waitForCount(".arrival", 0);
     });
 

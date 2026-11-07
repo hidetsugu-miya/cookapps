@@ -1,5 +1,5 @@
 import {
-  account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, waitForCalls, waitForCount, waitForText,
+  account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 describe("thread", () => {
@@ -13,6 +13,7 @@ describe("thread", () => {
     const setRead = await mock("set_read", true);
     await rowOf("unread-threads", "First unread").$(".subject").click();
     await expect($("#thread-subject")).toHaveText("First unread");
+    await threadLoaded();
     await expect($("#messages .plain")).toHaveText("Hello from Alice");
     await waitForCalls(open);
     expect(await callsOf(open)).toContainEqual({ account, id: "t1" });
@@ -26,6 +27,7 @@ describe("thread", () => {
     const setRead = await mock("set_read", true);
     await rowOf("read-threads", "Already read").$(".subject").click();
     await expect($("#thread-subject")).toHaveText("Already read");
+    await threadLoaded();
     await waitForCalls(open);
     expect(await callsOf(open)).toContainEqual({ account, id: "t3" });
     expect(await callsOf(setRead)).toHaveLength(0);
@@ -42,6 +44,7 @@ describe("thread", () => {
     const fetch = await mock("fetch_images", { [url]: shown });
     await rowOf("read-threads", "Already read").$(".subject").click();
     await expect($("#thread-subject")).toHaveText("Already read");
+    await threadLoaded();
     expect(await waitForCalls(fetch)).toEqual([{ urls: [url] }]);
     await browser.waitUntil(
       () => browser.execute(() => document.querySelector<HTMLIFrameElement>("#messages iframe")?.contentDocument?.querySelector("img")?.getAttribute("src")?.startsWith("data:") ?? false),
@@ -55,6 +58,7 @@ describe("thread", () => {
     const make = await mock("todoist_task_from_mail", holds);
     await rowOf("read-threads", "Already read").$(".subject").click();
     await expect($("#thread-subject")).toHaveText("Already read");
+    await threadLoaded();
     await $("#thread-todo").click();
     expect(await waitForCalls(make)).toEqual([{ account, threadId: "t3", subject: "Already read" }]);
     await expect($("#thread-todo .spin")).toExist();
@@ -64,6 +68,77 @@ describe("thread", () => {
     await expect($("#thread-todo .spin")).not.toExist();
     await expect($("#thread-todo svg")).toExist();
     await expect($("#thread-todo")).toBeEnabled();
+  });
+});
+
+describe("thread loading", () => {
+  const headerButtons = ["#thread-slack", "#thread-todo", "#thread-orca", "#trash", "#archive"];
+
+  beforeEach(async () => {
+    await boot({ inbox: inbox() });
+    await waitForCount("#unread-threads li", 2);
+  });
+
+  it("goes to the detail view at once with the subject, the sender and a note, and puts the messages in their place when the thread arrives", async () => {
+    const open = await mock("thread", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(open);
+    await expect($("#thread")).toBeDisplayed();
+    await expect($("#threads")).not.toBeDisplayed();
+    await expect($("#thread-subject")).toHaveText("First unread");
+    await expect($("#messages .msg-head .name")).toHaveText("Alice");
+    await expect($("#messages .msg-loading")).toHaveText("読み込んでいます…");
+    expect(await count("#messages .msg-bars span")).toBe(3);
+    for (const id of headerButtons) await expect($(id)).toBeDisabled();
+    await expect($("#back")).toBeEnabled();
+    await release(open, threadDetail("First unread", "Hello from Alice", false));
+    await expect($("#messages .plain")).toHaveText("Hello from Alice");
+    await threadLoaded();
+    expect(await count("#messages .msg-loading")).toBe(0);
+    expect(await count("#messages .msg-bars")).toBe(0);
+    for (const id of headerButtons) await expect($(id)).toBeEnabled();
+  });
+
+  it("shows the error text in the body's place when the thread cannot be read, and keeps the buttons but the back one disabled", async () => {
+    await mock("thread", rejects("Gmail に届きません"));
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await expect($("#messages .msg-fail")).toHaveText("Gmail に届きません");
+    await expect($("#thread-subject")).toHaveText("First unread");
+    await threadLoaded();
+    expect(await count("#messages .msg-loading")).toBe(0);
+    for (const id of headerButtons) await expect($(id)).toBeDisabled();
+    await expect($("#back")).toBeEnabled();
+    await $("#back").click();
+    await expect($("#threads")).toBeDisplayed();
+  });
+
+  it("goes back to the list while the thread loads, and does not draw the answer that arrives later", async () => {
+    const open = await mock("thread", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(open);
+    await $("#back").click();
+    await expect($("#threads")).toBeDisplayed();
+    await release(open, threadDetail("First unread", "Hello from Alice", false));
+    await browser.pause(300);
+    await expect($("#threads")).toBeDisplayed();
+    await expect($("#thread")).not.toBeDisplayed();
+    expect(await count("#messages .plain")).toBe(0);
+  });
+
+  it("does not draw the answer of an earlier thread over the one opened after it, nor its failure", async () => {
+    const open = await mock("thread", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(open);
+    await $("#back").click();
+    await rowOf("unread-threads", "Second unread").$(".subject").click();
+    await waitForCalls(open, 2);
+    await release(open, rejects("読めません"));
+    await browser.pause(300);
+    await expect($("#thread-subject")).toHaveText("Second unread");
+    await expect($("#messages .msg-loading")).toBeDisplayed();
+    expect(await count("#messages .msg-fail")).toBe(0);
+    await release(open, threadDetail("Second unread", "Second body", false));
+    await expect($("#messages .plain")).toHaveText("Second body");
   });
 });
 
@@ -92,6 +167,7 @@ describe("thread AI summary", () => {
     await rowOf("unread-threads", row).$(".subject").click();
     await expect($("#thread")).toBeDisplayed();
     await expect($("#thread-subject")).toHaveText(detail.subject);
+    await threadLoaded();
   }
 
   beforeEach(async () => {
@@ -113,6 +189,17 @@ describe("thread AI summary", () => {
     await expect(summaryButton()).toHaveAttribute("aria-label", "AI 要約");
     const order = await browser.execute(() => [...document.querySelectorAll("#mail-header > button:not([hidden])")].map((b) => b.id));
     expect(order).toEqual(["back", "thread-summary", "thread-slack", "thread-todo", "thread-orca", "trash", "archive"]);
+  });
+
+  it("disables the icon until the thread arrives", async () => {
+    const open = await mock("thread", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(open);
+    await expect(summaryButton()).toBeDisplayed();
+    await expect(summaryButton()).toBeDisabled();
+    await release(open, quote("Quote"));
+    await expect($("#thread-subject")).toHaveText("Quote");
+    await expect(summaryButton()).toBeEnabled();
   });
 
   it("follows the Claude state while a thread is open", async () => {

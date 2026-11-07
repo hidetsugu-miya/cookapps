@@ -367,5 +367,6 @@ export function renderList() {
 // Opens the thread of a task's mail link in the mail screen.
 export async function openMailFromTodo({ account, threadId }: MailRef) {
   setScreen("mail");
-  await openThread({ id: threadId, account }, rows.get(`${account}/${threadId}`)?.li ?? null, "todo");
+  const row = rows.get(`${account}/${threadId}`);
+  await openThread(row?.t ?? { id: threadId, account }, row?.li ?? null, "todo");
 }

@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, textsOf, threadDetail, waitForCalls, waitForCount, workspace,
+  boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, workspace,
 } from "../support";
 
 const body = () => $("#slack-body");
@@ -19,6 +19,7 @@ async function openMail(subject: string, text: string) {
   await mock("thread", threadDetail(subject, text, false));
   await rowOf("unread-threads", subject).$(".subject").click();
   await expect($("#thread-subject")).toHaveText(subject);
+  await threadLoaded();
 }
 
 // Presses "Slack に貼る"; `slack_preview` answers `preview`. Returns the handle of `slack_preview`.
@@ -114,6 +115,7 @@ describe("slack compose screen", () => {
     await expect($(".toast")).toHaveText("Example Team の #general に貼りました");
     await expect($("#thread")).toBeDisplayed();
     await expect($("#thread-subject")).toHaveText("First unread");
+    await threadLoaded();
     await expect($("#slack-compose")).not.toBeDisplayed();
     // The draft is gone: opening it again starts from the mail's text, with no destination.
     await pressSlack();
@@ -152,6 +154,7 @@ describe("slack compose screen", () => {
     await $("#slack-back").click();
     await expect($("#thread")).toBeDisplayed();
     await expect($("#thread-subject")).toHaveText("First unread");
+    await threadLoaded();
     // The thread was not fetched again, and it is where it was scrolled to.
     expect(await callsOf(thread)).toHaveLength(1);
     await browser.waitUntil(async () => (await scroll()) === scrolled, { timeoutMsg: "the scroll position was not restored" });
@@ -179,6 +182,7 @@ describe("slack compose screen", () => {
     await mock("thread", { ...base, messages: [{ ...first, html: true, authenticated: true, body: lines }] });
     await rowOf("unread-threads", "First unread").$(".subject").click();
     await expect($("#thread-subject")).toHaveText("First unread");
+    await threadLoaded();
     const frameHeight = () => browser.execute(() => document.querySelector<HTMLIFrameElement>("#messages iframe")?.getBoundingClientRect().height ?? 0);
     const scroll = () => browser.execute(() => document.getElementById("main")!.scrollTop);
     await browser.waitUntil(async () => (await frameHeight()) > 2000, { timeoutMsg: "the frame was not sized to the mail" });
@@ -270,6 +274,7 @@ describe("slack compose screen", () => {
     await browser.pause(300);
     await expect($("#thread")).toBeDisplayed();
     await expect($("#thread-subject")).toHaveText("Second unread");
+    await threadLoaded();
     await expect($("#slack-compose")).not.toBeDisplayed();
     expect(await callsOf(preview)).toEqual([]);
     // The second mail then opens its own compose screen.

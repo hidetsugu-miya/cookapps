@@ -186,6 +186,10 @@ export const inbox = (threads = [thread("t1", "First unread", true), thread("t2"
   historyIds: { [account]: "100" },
 });
 
+// Waits until the detail view holds its thread: before that it shows the row's subject and a note in the body's place.
+export const threadLoaded = () =>
+  browser.waitUntil(() => browser.execute(() => !document.getElementById("thread")!.hasAttribute("aria-busy")), { timeoutMsg: "the thread did not arrive" });
+
 // A thread of one plain-text message.
 export const threadDetail = (subject: string, body: string, unread: boolean): ThreadDetail => ({
   subject,

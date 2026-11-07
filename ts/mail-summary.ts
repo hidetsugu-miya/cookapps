@@ -32,6 +32,13 @@ function head(title: string, t: OpenThread) {
   return row;
 }
 
+// Empties the card while a thread is loading, so that no result of the thread before it is drawn there.
+export function clearSummary() {
+  shown = null;
+  $("mail-summary").hidden = true;
+  $("mail-summary").replaceChildren();
+}
+
 // Draws the card of `t`, the thread now open: nothing for a thread with no summary or a closed one.
 export function renderSummary(t: OpenThread) {
   shown = keyOf(t);
