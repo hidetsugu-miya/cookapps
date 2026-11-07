@@ -14,8 +14,10 @@ tools: Read, Grep, Glob, Bash
 ## 見る観点
 
 - OAuth（PKCE、state、ループバックのリダイレクト）とトークンの扱い
-- シークレット（クライアントシークレット、リフレッシュトークン、アクセストークン）が画面・ログ・エラー文・ファイルに出ないか
-- キーチェーンと `accounts.json` の読み書き
+- シークレット（Google のクライアントシークレット・リフレッシュトークン・アクセストークン、Slack のユーザートークンと App-Level Token（`xapp-`）、Todoist のトークン、Anthropic の API キー、Orca の接続の鍵とトークン）が画面・ログ・エラー文・ファイルに出ないか
+- キーチェーンのすべてのサービス（Google、Slack、Slack の App-Level Token、Todoist、Anthropic の API キー）の読み書き、サービス名とユーザー名の決め方（外から来る値が別のシークレットを指せないか）、`accounts.json` の読み書き
+- Orca の実行環境との通信（unix socket と、E2EE の WebSocket の接続・認証・鍵の扱い）
+- 端末に入る外の値（OSC 52 のクリップボード書き込み、A-11 の打鍵、A-10 の画像の書き込み）
 - メール本文の表示（CSP、iframe の sandbox、XSS）
 - Tauri のコマンドと capabilities、MCP サーバー（`cookapps-mcp`）が外から受け取る値の検証
 - 外部への通信の宛先と TLS
