@@ -39,6 +39,20 @@ Good: another branch was merged -> git merge origin/main in the worktree -> run-
 Bad:  merge first, and find on main that the two branches break each other
 ```
 
+### Tell the other cookapps sessions what you touch, and agree the order before a merge
+
+Several Claude Code sessions work in this repository at once (at the owner's instruction, 2026-11-07: work with the other agents so that nothing conflicts).
+When you start, find the other cookapps sessions with `ListAgents` and send each, with `SendMessage`, your issue, branch and the files you will touch.
+When two sessions touch the same file, agree which merges first before going on; the later one takes in main and goes through review again, as above.
+Tell them again before a merge to main, and before you touch the main checkout (its fast-forward, or a file git does not track there).
+When a session tells you its plan, answer whether it overlaps yours.
+A session that has ended cannot be told: check its branch and worktree with `git worktree list` and `gh pr list` instead.
+
+```text
+Good: tell the other session "I touch issues.md lines 214 and 241, and merge first" -> it takes in main after the merge
+Bad:  edit the untracked skills in the main checkout while another session is making them tracked, and tell no one
+```
+
 ## Tools
 
 ### Call `.claude/tools/` by the main checkout's path from a worktree
