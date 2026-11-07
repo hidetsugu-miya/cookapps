@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.49.2
+
+No change to the app. Only the tools used to develop it changed.
+
 ## v0.49.1
 
 A URL in an Orca terminal opens in the default browser on ⌘+click (#147). Only http and https URLs open; a click without ⌘ still selects text. The URL shows while the pointer is over it.
