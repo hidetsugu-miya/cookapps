@@ -4,6 +4,7 @@ import {
   callsOf,
   chooseAppearance,
   chooseTheme,
+  copiedTexts,
   count,
   fire,
   ghosttyImport,
@@ -28,6 +29,7 @@ import {
   setClock,
   setDark,
   streamList,
+  stubClipboard,
   terminalThemes,
   textsOf,
   threadDetail,
@@ -1018,6 +1020,17 @@ describe("orca: projects", () => {
       expect(await screenText()).not.toContain("file-b");
     });
 
+    it("writes no clipboard for an OSC 52 request in a frame", async () => {
+      await openOrca(withTerminals());
+      await project("example-app").click();
+      await stubClipboard();
+      await mock("orca_terminal_read", [`\x1b]52;c;${Buffer.from("from a frame").toString("base64")}\x07$ ls`]);
+      await tabOf(zsh).$(".orca-tab-btn").click();
+      await browser.waitUntil(async () => (await screenText()).includes("$ ls"), { timeoutMsg: "the frame never showed" });
+      await browser.pause(500);
+      expect(await copiedTexts()).toEqual([]);
+    });
+
     it("fits the terminal inside the pane, its last row included", async () => {
       await openOrca(withTerminals());
       await mock("orca_terminal_read", Array.from({ length: 200 }, (_, i) => `line ${i}`));
@@ -1177,6 +1190,123 @@ describe("orca: a saved environment's stream", () => {
     await browser.keys(["y"]);
     await waitForCalls(input);
     await expect($("#error")).toHaveText("接続先につながっていません");
+  });
+
+  // The OSC 52 request of a program (the ESC ] 52 ; target ; base64 BEL), as Claude Code makes it for what its mouse selection covers.
+  const osc52 = (text: string, target = "c") => `\x1b]52;${target};${Buffer.from(text).toString("base64")}\x07`;
+  // The streamed terminal of example-app shown, with the clipboard stubbed.
+  async function openCopy() {
+    await openStudio();
+    await project("example-app").click();
+    await waitForCalls("orca_stream_terminal");
+    await stubClipboard();
+  }
+  // Waits until the output after the requests (the screen draws in order, so the earlier ones have been handled) has been parsed.
+  const sendMark = async (mark: string) => {
+    await sendTerm({ kind: "output", data: `\r\n${mark}` });
+    await browser.waitUntil(async () => (await screenText()).includes(mark), { timeoutMsg: `${mark} never showed` });
+  };
+
+  it("writes the clipboard with the text of an OSC 52 request from the output, for the target c and for none", async () => {
+    await openCopy();
+    await sendTerm({ kind: "output", data: osc52("Cooked for 1m 56s\n二行目") });
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the clipboard was never written" });
+    await sendTerm({ kind: "output", data: osc52("no target", "") });
+    await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the request with no target was never written" });
+    expect(await copiedTexts()).toEqual(["Cooked for 1m 56s\n二行目", "no target"]);
+  });
+
+  it("writes nothing for an OSC 52 request that comes with a snapshot, and writes the next one from the output", async () => {
+    await openCopy();
+    await sendTerm({ kind: "snapshot", data: `${osc52("from the snapshot")}snapshot screen`, cols: 80, rows: 24 });
+    await browser.waitUntil(async () => (await screenText()).includes("snapshot screen"), { timeoutMsg: "the snapshot never showed" });
+    await sendTerm({ kind: "output", data: osc52("from the output") });
+    await browser.waitUntil(async () => (await copiedTexts()).length > 0, { timeoutMsg: "the clipboard was never written" });
+    await sendMark("done");
+    expect(await copiedTexts()).toEqual(["from the output"]);
+  });
+
+  it("writes nothing for a request that is a read, has another target, an empty or a too long text, or text that is not base64", async () => {
+    await openCopy();
+    const limit = 128 * 1024;
+    const requests = [
+      "\x1b]52;c;?\x07",
+      osc52("primary", "p"),
+      "\x1b]52;c;\x07",
+      "\x1b]52;c;!!not base64!!\x07",
+      "\x1b]52;c;QUJD=RA==\x07",
+      "\x1b]52;c\x07",
+      `\x1b]52;c;${"QUJD".repeat(limit / 4 + 1)}\x07`,
+    ];
+    for (const data of requests) await sendTerm({ kind: "output", data });
+    // One that is just inside the limit is written, so the refusals above are not a copy that never works.
+    await sendTerm({ kind: "output", data: `\x1b]52;c;${"QUJD".repeat(limit / 4)}\x07` });
+    await browser.waitUntil(async () => (await copiedTexts()).length > 0, { timeoutMsg: "the clipboard was never written" });
+    await sendMark("done");
+    expect(await copiedTexts()).toEqual(["ABC".repeat(limit / 4)]);
+  });
+
+  // The clipboard refuses every write (as WKWebView may for a write outside a user action); the number of writes tried is `refusals()`.
+  const refuseClipboard = () =>
+    browser.execute(() => {
+      const w = window as unknown as { __e2e_refused__: number };
+      w.__e2e_refused__ = 0;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async () => {
+            w.__e2e_refused__++;
+            throw new Error("denied");
+          },
+        },
+      });
+    });
+  const refusals = () => browser.execute(() => (window as unknown as { __e2e_refused__: number }).__e2e_refused__);
+  // A copy event on the terminal shown, as ⌘C makes it (the event holds a stand-in for the clipboard): what was put in it, and whether the page took the copy.
+  const copyEvent = () =>
+    browser.execute(() => {
+      const data: Record<string, string> = {};
+      const event = new Event("copy", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          setData: (type: string, value: string) => {
+            data[type] = value;
+          },
+        },
+      });
+      document.querySelector(".orca-term-box:not([hidden]) .xterm-helper-textarea")!.dispatchEvent(event);
+      return { data, taken: event.defaultPrevented };
+    });
+
+  it("writes only the last of the OSC 52 requests of one chunk, and leaves the next copy event to xterm.js once the clipboard took it", async () => {
+    await openCopy();
+    await sendTerm({ kind: "output", data: osc52("first") + osc52("last") });
+    await browser.waitUntil(async () => (await copiedTexts()).length > 0, { timeoutMsg: "the clipboard was never written" });
+    await sendMark("done");
+    expect(await copiedTexts()).toEqual(["last"]);
+    expect(await copyEvent()).toEqual({ data: {}, taken: false });
+  });
+
+  it("holds the text of an OSC 52 request that the clipboard refused, with no message, and gives it to the next copy event only", async () => {
+    await openCopy();
+    await refuseClipboard();
+    await sendTerm({ kind: "output", data: osc52("first") + osc52("held text") });
+    await browser.waitUntil(async () => (await refusals()) > 0, { timeoutMsg: "the write was never tried" });
+    await sendMark("done");
+    expect(await refusals()).toBe(1);
+    await expect($("#error")).not.toBeDisplayed();
+    expect(await copyEvent()).toEqual({ data: { "text/plain": "held text" }, taken: true });
+    expect(await copyEvent()).toEqual({ data: {}, taken: false });
+  });
+
+  it("drops the held text when a snapshot draws the screen again", async () => {
+    await openCopy();
+    await refuseClipboard();
+    await sendTerm({ kind: "output", data: osc52("held text") });
+    await browser.waitUntil(async () => (await refusals()) > 0, { timeoutMsg: "the write was never tried" });
+    await sendTerm({ kind: "snapshot", data: "snapshot screen", cols: 80, rows: 24 });
+    await browser.waitUntil(async () => (await screenText()).includes("snapshot screen"), { timeoutMsg: "the snapshot never showed" });
+    expect(await copyEvent()).toEqual({ data: {}, taken: false });
   });
 
   it("draws the size Orca sends, from the snapshot and from each size", async () => {

@@ -7,6 +7,9 @@
 // An image pasted or dropped on the terminal shown is put in its worktree and its path is typed in the terminal (A-10).
 // Ghostty's settings (A-13) set the font and the keys that send a text; Shift+Enter sends a newline for Claude Code's input.
 // A URL in the text, or in an OSC 8 link, opens in the default browser with ⌘+click (the left button, no Ctrl or Alt), as in Orca's own terminal; the click on a URL without ⌘ selects as before.
+// A program that asks for the clipboard with OSC 52 (Claude Code does, for what is selected while it tracks the mouse) gets it, as in Orca's own terminal: a write is made only from what the terminal prints live, not from a snapshot or a mirror frame drawn again, and a read ("?") is never answered.
+// The request comes by the stream, outside a user action, and WKWebView may refuse the write: the latest text is then held, and the next copy event (⌘C or Edit > Copy) puts it in the clipboard when xterm.js has no selection.
+// Option+drag selects in xterm.js while a program tracks the mouse (`macOptionClickForcesSelection`, as Orca sets it).
 // The colors are those of the theme chosen in the settings (A-14), the light or the dark one by the system's appearance, or the one the settings fix (A-15); the colors of Ghostty's settings are used only while there is no theme.
 import type { Appearance } from "./bindings/Appearance";
 import type { OrcaTermEvent } from "./bindings/OrcaTermEvent";
@@ -24,6 +27,9 @@ const FIT_DELAY_MS = 50;
 const SEND_LIMIT = 50_000;
 // The first frame of a mirror clears what the last one drew.
 const CLEAR = "\x1b[2J\x1b[3J\x1b[H";
+// An OSC 52 request holds at most this many base64 characters, as in Orca's own terminal (128 KiB).
+const OSC52_LIMIT = 128 * 1024;
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
 const DEFAULT_FONT = "ui-monospace, Menlo, monospace";
 const DEFAULT_FONT_SIZE = 13;
@@ -58,6 +64,11 @@ interface Instance {
   // The keys typed and not sent yet, and a send on its way.
   pending: string;
   sending: boolean;
+  // The writes on their way that draw a screen again (a snapshot, a mirror frame): an OSC 52 request in them is not made.
+  replaying: number;
+  // The latest text of an OSC 52 request that the clipboard has not taken yet, and whether its write is queued for the end of the parse.
+  copy: string | null;
+  copyQueued: boolean;
 }
 
 const instances = new Map<string, Instance>();
@@ -158,6 +169,53 @@ export function applyTerminalSettings(next: TerminalSettings | null) {
   fitSoon();
 }
 
+// The text an OSC 52 request (the data after `52;`: the target, `;`, base64 of UTF-8) asks to put in the clipboard.
+// null when it is not a write to the clipboard (the target is not `c` or empty, a read, an empty text, too long, not base64).
+function osc52Text(data: string): string | null {
+  const semi = data.indexOf(";");
+  if (semi === -1) return null;
+  const target = data.slice(0, semi);
+  if (target !== "" && target !== "c") return null;
+  const payload = data.slice(semi + 1);
+  if (payload.length > OSC52_LIMIT) return null;
+  const base64 = payload.replace(/\s/g, "");
+  if (!BASE64.test(base64)) return null;
+  try {
+    const binary = atob(base64);
+    const text = new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)));
+    return text === "" ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+// Writes the latest OSC 52 text of the terminal to the clipboard once the parse is over, so requests of one chunk write only the last (as Orca's own terminal does).
+// A refused write says nothing and leaves the text held for the copy event.
+function copyLater(instance: Instance, text: string) {
+  instance.copy = text;
+  if (instance.copyQueued) return;
+  instance.copyQueued = true;
+  queueMicrotask(() => {
+    instance.copyQueued = false;
+    const latest = instance.copy;
+    if (latest === null) return;
+    navigator.clipboard
+      .writeText(latest)
+      .then(() => {
+        if (instance.copy === latest) instance.copy = null;
+      })
+      .catch(() => {});
+  });
+}
+
+// Draws `data` as a screen drawn again: an OSC 52 request in it is not made.
+function writeAgain(instance: Instance, data: string) {
+  instance.replaying++;
+  instance.term.write(data, () => {
+    instance.replaying--;
+  });
+}
+
 function newInstance(source: TermSource): Instance {
   const el = document.createElement("div");
   el.className = "orca-term-box";
@@ -178,6 +236,7 @@ function newInstance(source: TermSource): Instance {
   const term = new Terminal({
     scrollback: SCROLLBACK,
     cursorBlink: true,
+    macOptionClickForcesSelection: true,
     allowProposedApi: true,
     linkHandler: { allowNonHttpProtocols: true, activate: open, hover, leave },
     ...termOptions(),
@@ -189,7 +248,24 @@ function newInstance(source: TermSource): Instance {
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
-  const instance: Instance = { term, fit, el, source, timer: null, last: null, reading: false, pending: "", sending: false };
+  const instance: Instance = { term, fit, el, source, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false };
+  // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
+  term.parser.registerOscHandler(52, (data) => {
+    const text = instance.replaying > 0 ? null : osc52Text(data);
+    if (text !== null) copyLater(instance, text);
+    return true;
+  });
+  // A new selection (or none) makes the held text old.
+  term.onSelectionChange(() => {
+    instance.copy = null;
+  });
+  // The copy of the user (⌘C, Edit > Copy) takes the held text when xterm.js has no selection to copy; xterm.js copies its own selection before this, on the element inside.
+  el.addEventListener("copy", (event) => {
+    if (instance.copy === null || term.hasSelection() || !event.clipboardData) return;
+    event.clipboardData.setData("text/plain", instance.copy);
+    event.preventDefault();
+    instance.copy = null;
+  });
   term.onData((data) => {
     instance.pending += data;
     sendKeys(instance);
@@ -276,7 +352,7 @@ async function readFrame(instance: Instance) {
     const text = lines.join("\r\n");
     if (text !== instance.last) {
       instance.last = text;
-      instance.term.write(CLEAR + text);
+      writeAgain(instance, CLEAR + text);
     }
   } catch {
     // The tab goes when the list says the terminal is gone; a read that fails is tried again.
@@ -306,8 +382,9 @@ function drawEvent(instance: Instance, event: OrcaTermEvent) {
   if (event.kind === "snapshot") {
     // The screen now replaces everything drawn before (a resubscription after a lost connection sends it again).
     term.reset();
+    instance.copy = null;
     if (event.cols && event.rows) term.resize(event.cols, event.rows);
-    term.write(event.data);
+    writeAgain(instance, event.data);
   } else if (event.kind === "output") {
     term.write(event.data);
   } else if (event.kind === "size") {

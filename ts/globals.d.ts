@@ -23,7 +23,8 @@ interface XTerm {
   // The widths of characters (Unicode 11, set when the addon is loaded); a proposed API of xterm.js, so the terminal is made with `allowProposedApi`.
   unicode: { activeVersion: string };
   open(parent: HTMLElement): void;
-  write(data: string): void;
+  // `callback` is called once the data is parsed.
+  write(data: string, callback?: () => void): void;
   reset(): void;
   resize(cols: number, rows: number): void;
   focus(): void;
@@ -31,11 +32,15 @@ interface XTerm {
   paste(data: string): void;
   // Drops the selection (a link that was opened leaves none, as in Orca).
   clearSelection(): void;
+  hasSelection(): boolean;
+  onSelectionChange(listener: () => void): { dispose(): void };
   dispose(): void;
   loadAddon(addon: unknown): void;
   onData(listener: (data: string) => void): { dispose(): void };
   // The options that are set while the terminal lives (A-13): the font of Ghostty's settings and the colors of the theme (A-14).
   options: { fontFamily: string; fontSize: number; fontWeight: string | number; theme: Record<string, unknown> };
+  // `handler` gets the data of each OSC sequence with the number `ident` (OSC 52 asks for the clipboard); true says it was handled.
+  parser: { registerOscHandler(ident: number, handler: (data: string) => boolean): { dispose(): void } };
   // `handler` is asked for each key event first; false keeps xterm.js from handling it.
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void;
 }
