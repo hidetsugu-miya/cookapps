@@ -3,7 +3,7 @@
 # Usage: nightly-limit.sh issue|release|judgment
 # issue:   may a new issue be started? No once the run's deadline has passed.
 # release: may a release be started? No once the deadline has passed. There is no release window (issues.md).
-# judgment: may a new judgment of discussion-judge be started? No once the deadline (00:50) has passed.
+# judgment: may a new judgment of discussion-judge be started? No once the deadline (03:50) has passed.
 # Exit 0: yes. Exit 1: no (stdout says why). Exit 2: wrong usage.
 # nightly.sh sets NIGHTLY_DEADLINE_EPOCH for the runs it starts. A session of the owner has none, so it is never limited (the owner's instruction to release counts).
 # Checking by hand: NIGHTLY_NOW_EPOCH replaces the current time, and NIGHTLY_DEADLINE_EPOCH may be set by hand.

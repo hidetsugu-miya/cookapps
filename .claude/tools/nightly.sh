@@ -1,10 +1,10 @@
 #!/bin/sh
-# Runs a skill headlessly from the main checkout; launchd starts discussion-judge every day at 00:00 and milestone-dev every day at 01:00 (issues.md).
+# Runs a skill headlessly from the main checkout; launchd starts discussion-judge every day at 03:00 and milestone-dev every day at 05:00 (issues.md).
 # Usage: nightly.sh discussion-judge|milestone-dev  (the exit code is claude's)
 # Keeps one run per skill with a lock directory, writes .claude/nightly/{skill}-{date}.log (logs older than 30 days are deleted), and shows a macOS notification at the end.
 # Both set NIGHTLY_DEADLINE_EPOCH, which the skill checks with nightly-limit.sh before it starts something new; nothing kills the process at the deadline.
 # milestone-dev: the end of its 3 hours, and HANDOVER_RUN_START (handover.sh). It first waits for the lock of discussion-judge to go (at most 30 minutes), so that the issues made there are placed in the same night.
-# discussion-judge: 50 minutes after the start, 00:50 for the job.
+# discussion-judge: 50 minutes after the start, 03:50 for the job.
 set -u
 if [ $# -ne 1 ]; then
   echo "使い方: nightly.sh discussion-judge|milestone-dev" >&2
