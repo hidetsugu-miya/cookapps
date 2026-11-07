@@ -1,0 +1,31 @@
+{
+  "identifier": "jp.mysis.cookapps.e2e",
+  "build": {
+    "frontendDist": "../e2e/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "cookapps",
+        "width": 1440,
+        "height": 932,
+        "visible": false
+      }
+    ],
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "e2e",
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "core:default",
+            "wdio:default",
+            "wdio-webdriver:default"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -211,7 +211,7 @@ git -C "$main" merge --ff-only origin/main
 
 ### Keep one Release PR open while changes wait
 
-The first merged pull request that is not only documentation, `.claude/agents/` or `.claude/rules/` opens it, from the branch `release/next`, with a commit that raises the version (`versioning.md`).
+The first merged pull request that is not only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/` opens it, from the branch `release/next`, with a commit that raises the version (`versioning.md`).
 Later merges only edit its body, so they need no E2E; its branch is brought up to date when it is released.
 Its title is `release: v{version}`, and its body holds the decision, the digit and what is waiting.
 Merged Release PRs are the release history, so the reason for each release stays with it.
@@ -238,7 +238,7 @@ Evaluate them after every merge and when a session starts work on an issue, and 
 
 For R4 the guide is to release when 2 or more bugs are waiting, when 3 or more changes are waiting, or when the oldest waiting merge is 24 hours old or more. When the planner departs from the guide, it writes the reason, and the body keeps it.
 Before merging a `point:8` pull request, release what is waiting, so that an 8-point change is a version of its own and a fault in it can be told apart.
-A change that is only documentation, `.claude/agents/` or `.claude/rules/` is not counted; it goes out with the next tag.
+A change that is only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/` is not counted; it goes out with the next tag.
 The guide's figures are first values, not measurements; each release shows the owner a restart prompt (U-2), so correct them from use.
 
 ```text
