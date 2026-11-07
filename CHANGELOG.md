@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.52.0
+
+T-6: a subtask in the detail of a task moves as a row of the task list does (#125). On hover its row shows the grip and the buttons to move it to another project or out of its parent, and the grip drags it onto a project or under another subtask of the same detail.
+
+A thread shows its detail at once when its row is pressed (#140): the subject and the sender, with 「読み込んでいます…」 where the body comes. Until the body arrives only the back button works, and a failure shows where the body would be.
+
 ## v0.51.0
 
 A-16: the Orca work pane has a plus at the right end of its tab strip (#130). It opens a menu of 「Claude を起動」 and 「ターミナルを開く」, which start Claude or a plain terminal in the worktree of the project or SSH host selected on the left, and open its tab; with two worktrees or more, a dialog narrowed to them picks one. The 「新規」 button of the list pane is gone.
