@@ -5,7 +5,7 @@ description: Implements the issues of the first open cookapps milestone, one pul
 
 # milestone-dev
 
-One run covers one milestone. The owner starts it, either in a session or through the job the owner registered, which runs `.claude/tools/nightly.sh milestone-dev` at 05:00 only; nothing else starts it (`.claude/rules/issues.md`).
+One run covers one milestone. The owner starts it, either in a session or through the job the owner registered, which runs `.claude/tools/nightly.sh milestone-dev` at 00:30 only; nothing else starts it (`.claude/rules/issues.md`).
 A run from that job has no one to answer: never wait on the owner, and end with the hand-over and report of step 7.
 `NIGHTLY_DEADLINE_EPOCH` is set in such a run, and in no session. The limits below apply only when it is set; the script `nightly-limit.sh` knows them.
 
@@ -35,7 +35,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    7. Remove the worktree when `worktree.md` says so.
    8. **Decide the release.** After each merge, run `plan-release.py release-facts`. When its `rule` is R0 to R3 the `decision` stands; when it is R4, launch `release-planner` with `mode: release` and that output, and take its decision. Write the rule, the decision and the reason in the Release PR body. The table alone decides: a finished milestone is not a reason to release.
 6. **Release when the decision says so**, by the steps of "Release by merging the Release PR" in `issues.md`, including the check of `README.md` with `readme-product` and `plan-release.py close {tag}`, and the reorder of step 2.
-   In a run from the job, run `nightly-limit.sh release` first: on exit 1 (the run's 3 hours are over) do not release; the Release PR waits for the next run, and the hand-over says so. There is no release window: the 05:00 run releases (at the owner's instruction, 2026-11-07). A release the owner ordered in a session has no such limit.
+   In a run from the job, run `nightly-limit.sh release` first: on exit 1 (the run's 3 hours are over) do not release; the Release PR waits for the next run, and the hand-over says so. There is no release window: the 00:30 run releases (at the owner's instruction, 2026-11-07). A release the owner ordered in a session has no such limit.
 7. **Hand over and report.** Write the hand-over to a file in the scratchpad, and post it with `handover.sh write {file}`. Write: the issues in hand with their branch, worktree and stage; this run's decisions with the reasons (the order, the release, why something waited); the questions to the owner; and what the next run does first. No personal information (`publishing.md`).
    Then report what merged, what is released, what is waiting and why, what was skipped, and the next milestone from `plan-release.py next`.
 

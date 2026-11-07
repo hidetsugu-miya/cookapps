@@ -3,8 +3,8 @@
 # Usage: nightly-limit.sh issue|release|judgment|proposal
 # issue:   may a new issue be started? No once the run's deadline has passed.
 # release: may a release be started? No once the deadline has passed. There is no release window (issues.md).
-# judgment: may a new judgment of discussion-judge be started? No once the deadline (50 minutes after the wait for improvement-proposal ends; 03:50 when there is no wait) has passed.
-# proposal: may a new candidate of improvement-proposal be started? No once the deadline (02:30) has passed.
+# judgment: may a new judgment of discussion-judge be started? No once the deadline (50 minutes after the wait for improvement-proposal ends; 23:50 when there is no wait) has passed.
+# proposal: may a new candidate of improvement-proposal be started? No once the deadline (23:00) has passed.
 # Exit 0: yes. Exit 1: no (stdout says why). Exit 2: wrong usage.
 # nightly.sh sets NIGHTLY_DEADLINE_EPOCH for the runs it starts. A session of the owner has none, so it is never limited (the owner's instruction to release counts).
 # Checking by hand: NIGHTLY_NOW_EPOCH replaces the current time, and NIGHTLY_DEADLINE_EPOCH may be set by hand.
