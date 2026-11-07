@@ -79,6 +79,7 @@ requirements/  the requirements, one file per area
 
 - The frontend is plain TypeScript, HTML and CSS.
   `ts/` is split into one module per screen.
+  The screens show no help text: no placeholder or line of text that explains what to type or what a button does (at the owner's instruction, 2026-11-08). Steps and notes go in the `?` popup (`.claude/rules/frontend.md`).
 - The backend is Rust.
   Each service has its own module: `gmail.rs`, `calendar.rs`, `todoist.rs`, `slack.rs`, `claude.rs`, `orca.rs` (with `orca_chat.rs` and `orca_e2ee.rs` for the session history, `orca_handoff.rs` for the prompt of A-9 and its folding in the history, `orca_attach.rs` for the images of A-10, `orca_answer.rs` for the answers of A-11, and `orca_stream.rs` for the stream of A-12), `ghostty.rs` (Ghostty's settings for the Orca terminals, A-13), `orca_theme.rs` (the colors of the Orca terminals, A-14, with the table `orca_themes.json`).
   The modules are in the library crate (`src-tauri/src/lib.rs`), and `main.rs` only calls `cookapps_lib::run()`.
