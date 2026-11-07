@@ -6,7 +6,7 @@ Show the threads in the inbox, split into unread and read, each sorted newest fi
 
 ## M-2 Read
 
-Open a thread and show its body. The header of the open thread has the icon button "Orca に渡す" (A-9).
+Open a thread and show its body. Pressing a row of the list (or "詳細を開く" of M-9, or a task's mail link) goes to the detail view at once and shows the subject and the sender that the row has (a thread opened from a task with no row shows neither), and in the body's place the note "読み込んでいます…" with gray lines; when the thread arrives they are replaced by the messages. Until it arrives, the buttons of the header other than "戻る" (the AI summary, Slack, Todo, Orca, trash and archive) cannot be pressed, and "戻る" goes back to where the thread was opened from. A press on another row or on "戻る" while it loads leaves the earlier answer ignored: it never draws over the screen then shown. When the call fails, the same error text as before is shown in the body's place (and the buttons stay disabled). When the answer says the account must log in again, the list is shown. The header of the open thread has the icon button "Orca に渡す" (A-9).
 
 ## M-3 Delete
 
@@ -42,5 +42,5 @@ Details the owner left open:
 
 - Several new threads at once: one card each, stacked, the newest at the bottom. At most 3 cards show; a fourth makes the oldest go (its thread stays in the list, unread).
 - A card goes by itself after 10 seconds. The pointer or the focus on it holds it, and the 10 seconds start again when they leave. The close button closes it at once.
-- A thread whose card is on screen gets no second card, and neither does the thread that is open on screen. A card goes when its thread is opened, from the list or with "詳細を開く", so that no button of it acts on a thread the detail view holds.
+- A thread whose card is on screen gets no second card, and neither does the thread that is open on screen (or that the detail view is still loading). A card goes when its thread is opened, from the list or with "詳細を開く", so that no button of it acts on a thread the detail view holds.
 - The cards stack above the toast, which is above the update popup.

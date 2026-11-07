@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, threadLoaded, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -223,6 +223,7 @@ describe("sidebar: the account trays", () => {
     await mock("thread", threadDetail("First unread", "Hello", false));
     await rowOf("unread-threads", "First unread").$(".subject").click();
     await expect($("#thread-subject")).toHaveText("First unread");
+    await threadLoaded();
     expect(await trays()).toEqual([true, false]);
   });
 
@@ -230,6 +231,7 @@ describe("sidebar: the account trays", () => {
     await start();
     await mock("thread", threadDetail("First unread", "Hello", false));
     await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
     await mock("slack_preview", slackPreview);
     await $("#thread-slack").click();
     await expect($("#slack-compose")).toBeDisplayed();

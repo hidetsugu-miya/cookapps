@@ -12,7 +12,7 @@ import { invoke } from "./ipc.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { itemRow } from "./settings.js";
 import { decorateAvatar } from "./slack-view.js";
-import { goBack, opened } from "./thread.js";
+import { goBack, loading, opened } from "./thread.js";
 import { show, showError } from "./view.js";
 
 // Per account, what the last load could not do; the account popup reads it.
@@ -334,8 +334,8 @@ async function removeAccount(account: string, button: HTMLButtonElement) {
   }
   historyIds.delete(account);
   forgetRemoved(account);
-  // An open thread of this account cannot be acted on any more.
-  if (!$("thread").hidden && opened.current?.account === account) goBack();
+  // An open thread of this account, or one still loading, cannot be acted on any more.
+  if (!$("thread").hidden && (opened.current ?? loading.current)?.account === account) goBack();
   resetCalendar(true);
   updateBadge();
   await load();
