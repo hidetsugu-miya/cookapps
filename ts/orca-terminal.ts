@@ -209,8 +209,11 @@ function copyLater(instance: Instance, text: string) {
 }
 
 // Draws `data` as a screen drawn again: an OSC 52 request in it is not made.
+// xterm.js parses the writes in order and calls the callback of each right after its parse, so the count is up only while `data` itself is parsed, and the live output queued before it keeps its requests.
 function writeAgain(instance: Instance, data: string) {
-  instance.replaying++;
+  instance.term.write("", () => {
+    instance.replaying++;
+  });
   instance.term.write(data, () => {
     instance.replaying--;
   });
