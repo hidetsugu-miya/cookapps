@@ -231,6 +231,7 @@ pub fn run() {
             todoist::todoist_add_from_slack,
             todoist::todoist_set_done,
             todoist::todoist_update,
+            todoist::todoist_picked_due,
             todoist::todoist_create_label,
             todoist::todoist_move,
             todoist::todoist_move_under,

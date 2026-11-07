@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, moment, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -158,35 +158,31 @@ describe("sidebar", () => {
 
   it("sets the Dock badge to the unread threads plus the tasks that are due, and sends the moments of those still ahead", async () => {
     const todo = todoData();
-    todo.tasks.push(task("k5", "Late bill", "p0", "overdue"), task("k6", "Someday", "p0", "upcoming"));
+    const someday = task("k6", "Someday", "p0", "upcoming");
+    todo.tasks.push(task("k5", "Late bill", "p0", "overdue"), someday);
     // 2 unread threads, and "Write report" (today, no time) and "Late bill" (yesterday); "Someday" is due tomorrow 00:00.
     await boot({ inbox: inbox(), todoist_load: todo, claude_status: claudeReady });
-    await waitForBadge({ count: 4, upcoming: [moment(1)] });
+    await waitForBadge({ count: 4, upcoming: [someday.dueAt!] });
   });
 
   it("counts a task from its due moment: a time ahead and tomorrow are not counted, a time that has come and a day with no time are, and no due date never is", async () => {
     const todo = todoData();
-    todo.tasks.push(
-      dueToday(task("k5", "Morning", "p0", "today"), "08:00"),
-      dueToday(task("k6", "Noon", "p0", "today"), "12:00"),
-      dueToday(task("k7", "All day", "p0", "today"), null),
-      task("k8", "Yesterday", "p0", "overdue"),
-      task("k9", "Tomorrow", "p0", "upcoming"),
-    );
+    const [morning, noon, tomorrow] = [dueToday(task("k5", "Morning", "p0", "today"), "08:00"), dueToday(task("k6", "Noon", "p0", "today"), "12:00"), task("k9", "Tomorrow", "p0", "upcoming")];
+    todo.tasks.push(morning, noon, dueToday(task("k7", "All day", "p0", "today"), null), task("k8", "Yesterday", "p0", "overdue"), tomorrow);
     await boot({ inbox: inbox(), todoist_load: todo, claude_status: claudeReady });
     // A load that never answers: only the clock can move the count from here.
     const load = await mock("todoist_load", holds);
     await setClock(`${today}T07:59:00`);
     // 2 unread threads; "Write report", "All day" and "Yesterday" (00:00) have come; "Morning", "Noon" and "Tomorrow" are ahead.
-    await waitForBadge({ count: 5, upcoming: [moment(0, "08:00"), moment(0, "12:00"), moment(1)] });
+    await waitForBadge({ count: 5, upcoming: [morning.dueAt!, noon.dueAt!, tomorrow.dueAt!] });
     await expect($("#nav-todo .nav-count")).toHaveText("3");
     await expect($("#nav-todo")).toHaveAttribute("aria-label", "Todo（期限到来 3 件）");
     // 08:00:30 is 08:00 to the minute, and 12:00 comes on the dot.
     await setClock(`${today}T08:00:30`);
-    await waitForBadge({ count: 6, upcoming: [moment(0, "12:00"), moment(1)] });
+    await waitForBadge({ count: 6, upcoming: [noon.dueAt!, tomorrow.dueAt!] });
     await expect($("#nav-todo .nav-count")).toHaveText("4");
     await setClock(`${today}T12:00:00`);
-    await waitForBadge({ count: 7, upcoming: [moment(1)] });
+    await waitForBadge({ count: 7, upcoming: [tomorrow.dueAt!] });
     await expect($("#nav-todo .nav-count")).toHaveText("5");
     // A held load is not an answer: the count came from the remembered tasks.
     expect((await callsOf(load)).length).toBeLessThanOrEqual(1);
