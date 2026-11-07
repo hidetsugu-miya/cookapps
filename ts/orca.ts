@@ -543,6 +543,11 @@ async function load(scope: Scope, force = false) {
 function refresh() {
   // The terminals are shown only while the screen is shown.
   if (!shown()) syncTerminal();
+  // The wait for a new tab ends after its 30 seconds, also while a streamed list is not read by the clock.
+  if (startWaits() && Date.now() > started!.until) {
+    started = null;
+    draw();
+  }
   // A streamed list is not read by the clock.
   if (document.hidden || loading || streaming()) return;
   // A missing command is not looked for again by the clock.
@@ -733,7 +738,11 @@ async function start(kind: StartKind, path: string) {
   try {
     const launched = await invoke(kind === "claude" ? "orca_start" : "orca_terminal_create", { path, environment: target });
     // A selection made while the start was on its way is not left for the new tab.
-    if (projectKey === from && selectedTab === tab) started = { kind, paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
+    if (projectKey === from && selectedTab === tab) {
+      started = { kind, paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
+      // A streamed list that held the new tab before this reply came is matched now; no event is to come for it.
+      claimStarted();
+    }
     if (!streaming()) load(clockScope(), true);
   } catch (e) {
     showError(e);

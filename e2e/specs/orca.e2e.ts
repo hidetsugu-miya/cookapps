@@ -772,6 +772,36 @@ describe("orca", () => {
     await expect($("#orca-started")).not.toBeDisplayed();
   });
 
+  it("selects the terminal of a saved environment that the streamed list held before the reply came", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio));
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList(sample(), worktrees()));
+    const create = await mock("orca_terminal_create", holds);
+    await plus("example-api", TERMINAL);
+    await waitForCalls(create);
+    // The list with the new terminal comes first, and no event comes after the reply.
+    await sendStream(streamList(sample(), worktrees(), [createdTerminal()]));
+    await release(create, created);
+    await expect($('#orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($("#orca-plus")).toBeEnabled();
+  });
+
+  it("drops the wait for a terminal of a saved environment after 30 seconds, with no streamed list", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio));
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList(sample(), worktrees()));
+    const create = await mock("orca_terminal_create", created);
+    await plus("example-api", TERMINAL);
+    await waitForCalls(create);
+    await expect($("#orca-started")).toBeDisplayed();
+    await expect($("#orca-plus")).toBeDisabled();
+    const later = new Date(Date.now() + 31_000);
+    await setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
+    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($("#orca-plus")).toBeEnabled();
+  });
+
   it("drops the wait when the user selects another project", async () => {
     await openOrca();
     const start = await mock("orca_start", reply);
