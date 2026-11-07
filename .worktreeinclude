@@ -1,5 +1,6 @@
 # Gitignored files a new worktree needs; edit the originals in the main checkout only.
 mise.toml
+.claude/hooks/public-words
 .claude/rules/machines.md
 .claude/rules/google-cloud.md
 src-tauri/.cargo/

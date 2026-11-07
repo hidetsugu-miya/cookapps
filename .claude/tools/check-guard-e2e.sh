@@ -2,7 +2,7 @@
 # guard-e2e.sh の自己確認: PreToolUse の入力を流し、止める（exit 2）・通す（exit 0）を確かめる。
 # 検出語は guard-e2e.sh 自身と同じく、このファイルが検査に掛からないよう分けて書いている。
 set -uo pipefail
-# .claude/hooks/ is untracked, so a worktree has none: use the main checkout's
+# The hooks that run are the main checkout's (a worktree's own copy takes effect after the merge): check those
 main="$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)/.."
 guard="$main/.claude/hooks/guard-e2e.sh"
 T="window.__TAU""RI__"

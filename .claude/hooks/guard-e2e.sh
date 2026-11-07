@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# PreToolUse: E2E の記録（.claude/e2e/）を run-e2e.sh 以外が書くのと、E2E（e2e/）の外にモックを作るのを止める。
+# 検出語は、このファイル自身が検査に掛からないよう、わざと分けて書いている。
+set -uo pipefail
+input=$(cat)
+path=$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<< "$input")
+cmd=$(jq -r '.tool_input.command // empty' <<< "$input")
+# 書き込む中身: Bash のコマンド、Write の content、Edit・MultiEdit の new_string、NotebookEdit の new_source。
+text=$(jq -r '[.tool_input.command, .tool_input.content, .tool_input.new_string, .tool_input.new_source, (.tool_input.edits[]?.new_string)] | map(select(. != null)) | join("\n")' <<< "$input")
+
+tauri='__TAURI'
+tauri_g="${tauri}(_INTERNALS)?__"
+# window の Tauri を差し替える・モックする書き方。読むだけの `const { invoke } = window.<tauri>.core` は含めない。
+replace="${tauri_g}(\\.[A-Za-z_.]+)?[[:space:]]*(\\?\\?|\\|\\||&&)?=[^=]|(defineProperty|assign)\\([^)]*${tauri}|mock[I]PC"
+write_cmd='>|tee |[[:space:]](cp|mv|install)[[:space:]]|writeFile|write_text|open\('
+
+block() { echo "$1" >&2; exit 2; }
+mock_msg="画面の確認は E2E（e2e/）で行います。モックは e2e/fixtures.js と e2e/support.ts に置き、使い捨てのモックは作りません"
+
+# 1. E2E の記録（.claude/e2e/）: run-e2e.sh を単独で呼ぶコマンド以外は書けない。
+rec_msg="E2E の記録は .claude/tools/run-e2e.sh だけが書けます（単独のコマンドとして呼んでください）"
+case "$path" in */.claude/e2e|*/.claude/e2e/*) block "$rec_msg" ;; esac
+rec_path='\.claude/e2e([/[:space:]"'"'"']|$)'
+run_alone='run-e2e\.sh'
+chain='[;&|<>`$]'
+if [[ $cmd =~ $rec_path ]] && ! { [[ $cmd =~ $run_alone ]] && ! [[ $cmd =~ $chain ]]; }; then
+  redirect='(>|tee[[:space:]]+(-a[[:space:]]+)?)[[:space:]]*[^[:space:]]*\.claude/e2e'
+  verbs='(^|[^[:alnum:]_-])(rm|mv|cp|touch|mkdir|ln|truncate|install|dd|rsync|chmod|sed[[:space:]]+-i|perl[[:space:]]+-pi)([[:space:]]|$)[^;&|]*\.claude/e2e'
+  grep -q -E "$redirect|$verbs" <<< "$cmd" && block "$rec_msg"
+fi
+
+# 2. src/ の下（src-tauri/ は除く）と ts/ の下（bindings を含む）には、モックも @wdio も書かない。
+if [[ ( $path == */src/* && $path != */src-tauri/* ) || $path == */ts/* ]]; then
+  grep -q -E "${replace}|__e2e|@wdio" <<< "$text" && block "src/ と ts/ に E2E のモックや @wdio は書けません。$mock_msg"
+fi
+
+# 3. e2e/ の外にも、window の Tauri を差し替えるファイルは書かない（/tmp や scratchpad の使い捨てを含む）。
+if ! [[ $path == e2e/* || $path == */e2e/* ]] && grep -q -E "$replace" <<< "$text"; then
+  if [ -n "$path" ]; then
+    block "e2e/ の外に window の Tauri を差し替えるファイルは書けません。$mock_msg"
+  elif [[ $cmd != *e2e/* ]] && grep -q -E "$write_cmd" <<< "$cmd"; then
+    block "e2e/ の外に window の Tauri を差し替えるファイルは書けません。$mock_msg"
+  fi
+fi
+exit 0
