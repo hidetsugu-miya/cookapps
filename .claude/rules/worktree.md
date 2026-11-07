@@ -43,7 +43,7 @@ Bad:  merge first, and find on main that the two branches break each other
 
 Several Claude Code sessions work in this repository at once (at the owner's instruction, 2026-11-07: work with the other agents so that nothing conflicts).
 When you start, find the other cookapps sessions with `ListAgents` and send each, with `SendMessage`, your issue, branch and the files you will touch.
-When two sessions touch the same file, agree which merges first before going on; the later one takes in main and goes through review again, as above.
+When two sessions touch the same file, agree which merges first before going on; the later one takes in main and goes through review again, as above. When the other session does not answer, the one that told first merges first.
 Tell them again before a merge to main, and before you touch the main checkout (its fast-forward, or a file git does not track there).
 When a session tells you its plan, answer whether it overlaps yours.
 A session that has ended cannot be told: check its branch and worktree with `git worktree list` and `gh pr list` instead.
