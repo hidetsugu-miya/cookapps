@@ -1,17 +1,18 @@
 #!/bin/sh
 # Tells a nightly run whether it may start something new (issues.md). The run stops itself with this; nothing kills the process.
-# Usage: nightly-limit.sh issue|release|judgment
+# Usage: nightly-limit.sh issue|release|judgment|proposal
 # issue:   may a new issue be started? No once the run's deadline has passed.
 # release: may a release be started? No once the deadline has passed. There is no release window (issues.md).
 # judgment: may a new judgment of discussion-judge be started? No once the deadline (03:50) has passed.
+# proposal: may a new candidate of improvement-proposal be started? No once the deadline (02:30) has passed.
 # Exit 0: yes. Exit 1: no (stdout says why). Exit 2: wrong usage.
 # nightly.sh sets NIGHTLY_DEADLINE_EPOCH for the runs it starts. A session of the owner has none, so it is never limited (the owner's instruction to release counts).
 # Checking by hand: NIGHTLY_NOW_EPOCH replaces the current time, and NIGHTLY_DEADLINE_EPOCH may be set by hand.
 set -u
 case "${1:-}" in
-  issue | release | judgment) ;;
+  issue | release | judgment | proposal) ;;
   *)
-    echo "使い方: nightly-limit.sh issue|release|judgment" >&2
+    echo "使い方: nightly-limit.sh issue|release|judgment|proposal" >&2
     exit 2
     ;;
 esac

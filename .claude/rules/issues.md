@@ -126,20 +126,35 @@ Good: #50 depends on #42 -> planner puts it after #42 -> #50 v0.41.0, and #33 mo
 Bad:  gh issue create alone, and the issue waits with no milestone
 ```
 
-### Let the proposal agent file issues, and let only the owner accept them
+### Let the proposal agent file issues, and decide what it may decide itself
 
-`improvement-proposal` looks for UI/UX and refactoring improvements and files them as issues; the owner runs it in a session. It has no scheduled run (at the owner's instruction, 2026-11-07: the daily 22:00 job was removed).
-It only creates issues. It never removes `needs:owner`, implements, or opens a pull request.
-Give every proposal `proposal` and `needs:owner`, because its author is the owner's own account and cannot tell it from an issue the owner wrote.
-File at most 3 in a run, and none while 5 or more proposals are open with `needs:owner`.
+`improvement-proposal` looks for improvements and files them as issues, or as a Discussion when it is unsure. It runs every day at 00:00 (at the owner's instruction, 2026-11-07; #164): `nightly.sh improvement-proposal` runs it headlessly, and that job counts as the owner's instruction too. The owner can also run it in a session.
+The job uses `refactor-scout` and `harness-scout`. Its scope is refactoring of `ts/` and `src-tauri/` that keeps behavior (`requirements/`, the E2E expectations and the `cargo test` expectations stay as they are), and the harness: hooks (not the permissions of `settings.local.json`), skills with the tools they run, and agents. UI and UX, new features and requirements, `docs/` and the README, versions and releases, personal settings and launchd are out of scope. `.claude/rules/` changes only to fix a statement that a change in scope made wrong.
+`ux-scout` runs only when the owner runs it in a session, because UI and UX are a product decision.
+It only creates issues and Discussions. It never removes `needs:owner`, implements, or opens a pull request.
+`nightly.sh` hands the run the end of its 2 hours 30 minutes (02:30) as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh proposal` before it starts a new candidate; nothing kills the process. The 03:00 `discussion-judge` waits, up to 30 minutes, until the lock of this job is gone, so that the judgment never runs while Discussions are being made. A Discussion made here is picked up by the rules of `discussions.sh` (the owner commented, or its mark is 3 days old).
+The run ends by commenting its result on the hand-over Discussion, with the mark `<!-- ai -->` and not the hand-over mark, as `discussion-judge` does.
+Give every proposal `proposal`, because its author is the owner's own account and cannot tell it from an issue the owner wrote.
+A candidate that `ux-scout` found goes to the owner: an issue with `needs:owner`.
+A candidate of the job that the AI may decide (a bug fix, a refactoring that keeps behavior, a statement that no longer matches the code or the requirements, a change that strengthens a gate) is an issue through `issue-plan` with no `needs:owner`, and its body has a section `AI が決めたこと` that gives the reason. `milestone-dev` implements it like any issue.
+A candidate that matches any of these goes to a Discussion (Ideas, in the form of "Record a design or layout discussion in a Discussion (Ideas) when it starts", first line `<!-- ai -->`), and `discussion-judge` decides it:
+- It changes what the owner sees or uses into a form `requirements/` does not describe.
+- It changes or removes a rule marked "at the owner's instruction".
+- It loosens what stops a change (hooks, `pre-git.sh`, the guards, the severity of the review, the release table).
+- Two or more options remain that primary sources and a prototype cannot settle.
+
+File at most 3 issues in a run. Make no new Discussion while 5 or more Ideas Discussions are open, and no `needs:owner` issue while 5 or more proposals are open with `needs:owner`.
 Do not file a proposal with the same purpose as a closed proposal or an open issue.
-The owner accepts a proposal by removing `needs:owner`, which makes it an ordinary issue for `milestone-dev`, and declines it by closing it with `wontfix`.
+The owner accepts an issue with `needs:owner` by removing it, which makes it an ordinary issue for `milestone-dev`, and declines a proposal by closing it with `wontfix`.
 
 ```text
-Good: 2 proposals are open and unanswered -> a run files 3 -> the next run files none until the owner answers
+Good: 2 proposals are open with needs:owner -> a session's run files 3 -> the next run files none of that kind until the owner answers
 Good: #140 was declined with wontfix -> a later run does not propose the same thing again
+Good: a hook's message names a command that no longer exists -> the 00:00 run files an issue with no needs:owner and "AI が決めたこと", and the 05:00 run fixes it
+Good: a proposal would lower the severity that stops a push -> the 00:00 run makes a Discussion, and the 03:00 run waits for the owner's comment
 Bad:  the proposal agent removes needs:owner from its own proposal, so that milestone-dev implements it at its next run
 Bad:  a proposal is filed without proposal, and the count of open proposals misses it
+Bad:  the 00:00 run files a UI change as an issue with no needs:owner
 ```
 
 ### Run `milestone-dev` once a day at 05:00, through to the release
@@ -160,7 +175,7 @@ Bad:  the 05:00 run merges, the table says release, and it leaves the release to
 `nightly.sh discussion-judge` runs the skill at 03:00 (at the owner's instruction, 2026-11-07; Discussion #160). It has its own lock and log, like every skill.
 `nightly.sh` hands the run the end of its 50 minutes (03:50) as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh judgment` before it starts new judgments; nothing kills the process.
 The run ends by commenting its result on the hand-over Discussion (what it decided, what waits for the owner, and why), with the mark `<!-- ai -->` and not the hand-over mark, so that the 05:00 run does not read it as a hand-over or as a reply of the owner.
-The 05:00 `milestone-dev` waits, up to 30 minutes, until the lock of this job is gone before it reorders, so that the issues made here are placed in the same night.
+This job waits, up to 30 minutes, until the lock of `improvement-proposal` is gone before it starts. The 05:00 `milestone-dev` waits, up to 30 minutes, until the lock of this job is gone before it reorders, so that the issues made here are placed in the same night.
 
 ```text
 Good: the 03:00 run closes two Discussions as issues, and the 05:00 run orders them and starts on them
