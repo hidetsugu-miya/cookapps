@@ -9,11 +9,6 @@ import type { Week } from "../../ts/bindings/Week";
 import type { Workspace } from "../../ts/bindings/Workspace";
 import {
   boot,
-  chatAssistant,
-  chatItems,
-  chatStatus,
-  chatTools,
-  chatUser,
   claudeReady,
   isoDate,
   mock,
@@ -24,18 +19,20 @@ import {
   para,
   plain,
   rowOf,
-  sendChat,
+  sendStream,
+  sendTerm,
   setClock,
   slackThread,
   span,
+  streamList,
   task,
   threadMessage,
   timeline,
   timelineMessage,
   timelineReply,
   unreadRepliesOf,
+  waitForCalls,
   waitForCount,
-  waitForOpens,
   watchedMessage,
   weekOfToday,
 } from "../support";
@@ -137,35 +134,90 @@ const specs: Spec[] = [
 const rows = () =>
   specs.map(([repo, branch, line, extra], i) => orcaRow(repo, branch, line, { handle: `term_${i}`, paneKey: `tab_${i}:leaf_1`, path: path(repo, branch), atMs: minutesAgo(extra.minutes ?? 2) - 5_000, ...extra }));
 const worktreeList = () => [
-  ...specs.map(([repo, branch]) => ({ path: path(repo, branch), repo, branch })),
-  { path: path("billing-api", "main"), repo: "billing-api", branch: "main" },
-  { path: path("shop-web", "main"), repo: "shop-web", branch: "main" },
-  ...["auth-service", "notify-worker", "data-batch", "ops-scripts", "landing-page"].map((repo) => ({ path: path(repo, "main"), repo, branch: "main" })),
+  ...specs.map(([repo, branch]) => ({ path: path(repo, branch), repo, branch, projectKey: `proj_${repo}` })),
+  { path: path("billing-api", "main"), repo: "billing-api", branch: "main", projectKey: "proj_billing-api" },
+  { path: path("shop-web", "main"), repo: "shop-web", branch: "main", projectKey: "proj_shop-web" },
+  ...["auth-service", "notify-worker", "data-batch", "ops-scripts", "landing-page"].map((repo) => ({ path: path(repo, "main"), repo, branch: "main", projectKey: `proj_${repo}` })),
 ];
-const overview = () => {
-  const terminals = [orcaTerminal("billing-api", "zsh", { branch: "fix/invoice-discount" })];
-  return orcaOverview(rows(), worktreeList(), {
-    terminals,
-    ssh: [orcaSsh("s1", "staging"), orcaSsh("s2", "build-server", false)],
-    hosts: [{ key: "ssh:s1", name: "s1", status: "done", sessions: 1, atMs: 0 }],
-  });
-};
+// The target is a saved environment, so that its list and its terminal are streamed (A-12) and the terminal has colors.
+const ENVIRONMENT = "build-server";
+const streamOverview = () => orcaOverview([], [], { target: ENVIRONMENT, environments: [ENVIRONMENT], ssh: [orcaSsh("s1", "staging"), orcaSsh("s2", "ops-bastion")] });
+const terminals = () => [orcaTerminal("billing-api", "zsh", { branch: "feat/csv-export", path: path("billing-api", "feat/csv-export") })];
+const overview = () => orcaOverview(rows(), worktreeList(), { terminals: [orcaTerminal("billing-api", "zsh", { branch: "fix/invoice-discount" })], ssh: [orcaSsh("s1", "staging"), orcaSsh("s2", "build-server")], hosts: [{ key: "ssh:s1", name: "s1", status: "done", sessions: 1, atMs: 0 }] });
 
-const chat = () => [
-  chatUser("u1", "請求書の金額の差を直して\n10 月に割引クーポンを使ったお客さまだけ、画面より請求書が 1,200 円多くなっています。原因も調べてください。"),
-  chatAssistant("a1", "請求書と画面で、金額の計算を読み比べます。"),
-  chatTools("t1", "ツールを 5 回実行", [["Read", "src/invoice/total.ts"], ["Read", "src/invoice/discount.ts"], ["Grep", "applyDiscount"], ["Read", "test/invoice/total.test.ts"], ["Bash", "npm test -- invoice"]]),
-  chatAssistant(
-    "a2",
-    "原因が分かりました。割引を掛ける順番が、請求書と画面で違います。\n\n- **請求書**: 割引を引く前の金額に税を掛けています\n- **画面**: 割引を引いたあとの金額に税を掛けています\n\n割引が 12,000 円のとき、税の 10% にあたる **1,200 円** の差が出ます。今回のお問い合わせと一致します。\n\n正しいのは画面の計算です。請求書の計算を `applyDiscount` に揃えて、テストを足します。",
-  ),
-  chatUser("u2", "その方針でお願いします。ほかの 14 件も同じ原因か確かめてください。"),
-  chatTools("t2", "ツールを 8 回実行", [["Edit", "src/invoice/total.ts"], ["Edit", "test/invoice/total.test.ts"], ["Bash", "npm test -- invoice"], ["Bash", "npm run lint"], ["Read", "scripts/list-invoices.ts"], ["Bash", "node scripts/list-invoices.ts --month 2026-10"], ["Bash", "git commit"], ["Bash", "git push"]]),
-  chatAssistant(
-    "a3",
-    "直しました。テストを 3 件足し、すべて通っています。\n\n14 件はどれも同じ原因で、差額は 300 円から 2,400 円でした。再発行が必要なお客さまの一覧は `invoices-to-reissue.csv` に書き出してあります。\n\nプルリクエストを開いてよいですか。",
-  ),
-];
+// The screen of Claude Code at work on the session of billing-api, feat/csv-export, as the terminal prints it.
+const SHOT_SESSION = 2;
+const sgr = (code: string, text: string) => `\x1b[${code}m${text}\x1b[0m`;
+const dim = (text: string) => sgr("2", text);
+const bullet = (text: string) => `${sgr("32", "●")} ${text}`;
+const result = (text: string) => `  ${dim("⎿")}  ${dim(text)}`;
+const claudeScreen = (cols: number, rows: number) => {
+  const rule = dim("─".repeat(cols));
+  const inner = 44;
+  const boxRow = (plain: string, styled: string) => `│ ${styled}${" ".repeat(inner - plain.length)} │`;
+  const box = [
+    `╭${"─".repeat(inner + 2)}╮`,
+    boxRow("✻ Welcome to Claude Code", `${sgr("33", "✻")} Welcome to ${sgr("1", "Claude Code")}`),
+    boxRow("", ""),
+    boxRow("cwd: /work/billing-api/feat-csv-export", dim("cwd: /work/billing-api/feat-csv-export")),
+    `╰${"─".repeat(inner + 2)}╯`,
+  ];
+  const lines = [
+    ...box,
+    "",
+    `${sgr("1;36", ">")} ${sgr("1", "請求データを CSV で出力したい")}`,
+    "",
+    bullet("請求データを CSV で出力する機能を作ります。まず、今の集計の形と、金額の持ち方を確認します。"),
+    "",
+    bullet(`${sgr("1", "Read")}(package.json)`),
+    result("Read 38 lines"),
+    bullet(`${sgr("1", "Read")}(src/invoice/summary.ts)`),
+    result("Read 96 lines"),
+    bullet(`${sgr("1", "Read")}(src/invoice/types.ts)`),
+    result("Read 52 lines"),
+    bullet(`${sgr("1", "Search")}(pattern: "toRows")`),
+    result("Found 4 files"),
+    bullet(`${sgr("1", "Search")}(pattern: "Format")`),
+    result("Found 2 files"),
+    bullet(`${sgr("1", "Bash")}(git log --oneline -3)`),
+    result("e4f1a92 請求書の端数の丸めを直す"),
+    result("b7c3d05 集計の行に消費税の欄を足す"),
+    result("9a02e6f 請求の集計を別のファイルに分ける"),
+    "",
+    bullet("集計は行の配列に直したあと、画面に出しています。この行をそのまま CSV にします。"),
+    "",
+    bullet(`${sgr("1", "Update Todos")}`),
+    result("☒ 今の集計の形を確認する"),
+    result("☐ 行を CSV にする関数を作る"),
+    result("☐ 出力するコマンドを足す"),
+    result("☐ テストを書いて実行する"),
+    "",
+    bullet("行を CSV にする関数を足します。金額は桁区切りを付けず、数字だけで書き出します。"),
+    "",
+    bullet(`${sgr("1", "Write")}(src/invoice/csv.ts)`),
+    result("Wrote 38 lines to src/invoice/csv.ts"),
+    bullet(`${sgr("1", "Update")}(src/invoice/summary.ts)`),
+    result("Updated src/invoice/summary.ts with 6 additions and 1 removal"),
+    `       ${dim("41")}  ${sgr("31", "- export function toRows(summary: Summary) {")}`,
+    `       ${dim("41")}  ${sgr("32", '+ export function toRows(summary: Summary, format: Format = "table") {')}`,
+    "",
+    bullet(`${sgr("1", "Write")}(test/invoice/csv.test.ts)`),
+    result("Wrote 54 lines to test/invoice/csv.test.ts"),
+    bullet(`${sgr("1", "Bash")}(npm test -- invoice)`),
+    result("PASS test/invoice/csv.test.ts"),
+    "",
+    `${sgr("33", "✻")} ${sgr("33", "テストを実行しています…")} ${dim("(esc to interrupt · 1m 12s · ↓ 2.3k tokens)")}`,
+    "",
+    rule,
+    "> ",
+    rule,
+    `  ${dim("? for shortcuts")}`,
+  ];
+  // The last lines fill the pane from the bottom.
+  const fit = lines.slice(-rows);
+  // The cursor goes up from the last line to the prompt.
+  return [...Array(Math.max(0, rows - fit.length)).fill(""), ...fit].join("\r\n") + "\x1b[2A\x1b[3G";
+};
 
 // ---- calendar ----
 
@@ -337,8 +389,8 @@ const common = () => ({
   app_info: { version: "0.41.1", updatable: true },
 });
 
-async function start() {
-  await boot(common());
+async function start(extra: Record<string, unknown> = {}) {
+  await boot({ ...common(), ...extra });
   await setClock(CLOCK);
   await waitForCount("#unread-threads li", 6);
   await browser.pause(300);
@@ -361,15 +413,19 @@ describe("readme shots", () => {
   });
 
   it("orca", async () => {
-    await start();
+    await start({ orca_overview: streamOverview() });
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList(rows(), worktreeList(), terminals()));
     await waitForCount("#orca-feed .orca-project", 12);
-    await mock("orca_terminal_read", ["$ git status", "On branch fix/invoice-discount"]);
     await $(`#orca-feed .orca-project[data-key="proj_billing-api"]`).click();
-    await waitForOpens();
-    await sendChat(chatStatus("live"));
-    await sendChat(chatItems(chat()));
+    await $(`#orca-tabs [data-tab="claude:tab_${SHOT_SESSION}:leaf_1"] .orca-tab-btn`).click();
+    const last = async () => ((await waitForCalls("orca_stream_terminal")).at(-1) ?? {}) as { handle?: string; viewport: { cols: number; rows: number } };
+    await browser.waitUntil(async () => (await last()).handle === `term_${SHOT_SESSION}`, { timeoutMsg: "the terminal of the session was never subscribed" });
+    const { cols, rows: termRows } = (await last()).viewport;
+    await sendTerm({ kind: "snapshot", data: claudeScreen(cols, termRows), cols, rows: termRows });
+    await browser.waitUntil(async () => (await $("#orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("テストを実行しています"), { timeoutMsg: "the terminal never showed the screen" });
     await shot("orca");
   });
 
