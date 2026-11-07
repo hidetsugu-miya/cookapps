@@ -1522,6 +1522,26 @@ describe("todo detail: moving a subtask", () => {
     await expect(subRowOf("Pack bag").$(".unparent-row")).toHaveAttribute("aria-label", "親タスクから外す");
   });
 
+  it("has no grip, buttons or row to open on a done subtask", async () => {
+    // "Plan trip" with a done subtask, "Book hotel" (k6), which has no row among the tasks.
+    const data = todoData();
+    data.tasks[1].subtasks.push({ id: "k6", content: "Book hotel", done: true, due: null });
+    data.tasks[1].subTotal++;
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 1);
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 2);
+    await rowOf("Plan trip").click();
+    await waitForCount(SUBS, 2);
+    const done = `${SUBS}.done`;
+    expect(await count(done)).toBe(1);
+    expect(await count(`${done} .grip`)).toBe(0);
+    expect(await count(`${done} .project-row`)).toBe(0);
+    expect(await count(`${done} .unparent-row`)).toBe(0);
+    expect(await count(`${done}[data-id]`)).toBe(0);
+  });
+
   it("moves a subtask to the project picked in the menu, and drops it from the list of subtasks", async () => {
     await openTrip();
     const move = await mock("todoist_move", true);
