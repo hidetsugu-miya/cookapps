@@ -195,6 +195,8 @@ A Discussion is picked up when the owner has commented after the last mark, when
 A decision becomes an issue through `issue-plan` (or links the issue that already exists), and the Discussion gets a comment "決定" and is closed as resolved. A reply of the owner that asks a new question is answered in a comment, and the Discussion stays open.
 `discussion-judge` does not decide, until a comment of the owner decides it, anything that loosens what stops a change (hooks, `pre-git.sh`, the guards, the severity of the review, the release table) or overturns a rule marked "at the owner's instruction".
 It does not take the recommendation of the AI that wrote the Discussion as a reason.
+A Discussion it leaves waiting gets a comment of what it waits for, with `<!-- wait -->` after the mark, so that it is not picked up as stale again; the owner's next comment picks it up.
+One run judges at most 5 Discussions, the lowest numbers first, and the rest wait for the next night.
 
 ```text
 Good: two layouts are put to the owner -> a Discussion in Ideas with both and the artifact URL -> the owner picks A -> "decisions" comment -> the issue body points to the Discussion

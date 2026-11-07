@@ -31,7 +31,7 @@ repo_parts() {
 # find the Discussion: sets did (node id), durl and dnum, or leaves them empty
 find_discussion() {
   repo_parts || return 1
-  q='query($o:String!,$n:String!,$cursor:String){repository(owner:$o,name:$n){discussions(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{id number url title author{login} category{name}}}}}'
+  q='query($o:String!,$n:String!,$endCursor:String){repository(owner:$o,name:$n){discussions(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id number url title author{login} category{name}}}}}'
   found="$(gh api graphql --paginate -f query="$q" -f o="$owner" -f n="$name" \
     --jq ".data.repository.discussions.nodes[] | select(.title == \"$title\" and .category.name == \"Ideas\" and .author.login == \"$owner\") | [.id, .number, .url] | @tsv" | head -n 1)" || return 1
   did="$(printf '%s' "$found" | cut -f1)"

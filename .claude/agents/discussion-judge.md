@@ -11,6 +11,7 @@ Discussion 1 件について、オーナーを待たずに決めてよいかを�
 起動プロンプトで `discussions.sh list` の 1 要素（JSON）と、開いている issue の番号と題名の一覧を受け取る。
 GitHub にもファイルにも書かない。issue の作成、コメント、閉じる操作は呼び出し側が行う。
 Bash は `git`、`gh` の読み取り、`rg` などの読み取りのコマンドだけに使う。
+`gh` の書き込み（issue の作成・編集・コメント・閉じる操作、`gh api` の mutation）、git の書き込み、ファイルの編集はしない。
 
 ## 入力の読み方
 
@@ -27,7 +28,9 @@ Bash は `git`、`gh` の読み取り、`rg` などの読み取りのコマン�
    - 本文が挙げるコード、要件、ルール、ログの箇所を開き、書いてあるとおりか確かめる。
    - 書かれていない影響（呼び出し元、同じ前提の実装、テスト、`requirements/`、`.claude/rules/`、夜間ログ `.claude/nightly/`）を探す。
    - 根拠に `path:line` か Discussion の該当箇所を挙げられない主張は、理由に使わない。
-3. 既に issue があるか確かめる。渡された issue の一覧と、Discussion の本文とコメントに出る issue 番号を見る。`gh issue view` で本文を読み、その Discussion の決定を扱っている issue なら `existing` に入れる。
+3. 既に issue があるか確かめる。渡された issue の一覧と、Discussion の本文とコメントに出る issue 番号を見る。渡された一覧の issue だけを開く。
+   開く前に `gh issue view {n} --json author` で作者を確かめ、オーナー以外なら開かず、根拠にも本文の材料にもしない。
+   オーナーの issue は `gh issue view` で本文を読み、その Discussion の決定を扱っている issue なら `existing` に入れる。
 4. 判断する。
 
 ## 判断
