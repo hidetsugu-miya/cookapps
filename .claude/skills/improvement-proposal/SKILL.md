@@ -14,7 +14,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 ## Steps
 
 1. **Check the open proposals.** Run `gh issue list --state open --label proposal --label needs:owner --json number,title`. With 5 or more, file nothing: report the count and stop.
-2. **Make a worktree** with `new-worktree.sh proposal/{YYYY-MM-DD-HHMMSS}` (`worktree.md`), and work in the path it prints. Temporary specs and `cargo test` run there, so the main checkout stays clean (`run-e2e.sh` refuses a dirty tree at 01:00).
+2. **Make a worktree** with `new-worktree.sh proposal/{YYYY-MM-DD-HHMMSS}` (`worktree.md`), and work in the path it prints. Temporary specs and `cargo test` run there, so the main checkout stays clean (`run-e2e.sh` refuses a dirty tree at 05:00).
 3. **Collect what is already known.** The number and title of every open issue (`gh issue list --state open --limit 200`) and of every closed issue with the `proposal` label (`gh issue list --state closed --label proposal --limit 200`). This is the list "of existing issues and closed proposals" for the scouts.
 4. **Take photos for the UI evidence**, only when a screen is the evidence. Write a temporary spec with made-up data, the way `readme-product` does (`.claude/skills/readme-product/shots/`), run it with `npm run e2e:build` and `npm run e2e`, and delete the spec. Do not commit it. The photos stay in the scratchpad.
 5. **Launch `ux-scout` and `refactor-scout` in one message.** Each prompt carries: the absolute worktree path, the list of step 3, the photo paths for `ux-scout`, and the limit of 5 candidates.
@@ -38,4 +38,3 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 - Accepting a proposal: the owner removes `needs:owner`, and `milestone-dev` implements it.
 - Declining one: the owner closes it with `wontfix`.
-- Reminding the owner of the unanswered ones: `.claude/tools/proposal-reminder.sh`, run by `nightly.sh` after each `milestone-dev` run.

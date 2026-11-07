@@ -3,20 +3,22 @@
 # Usage: handover.sh ensure          prints the Discussion's URL; creates the Discussion when it does not exist yet
 #        handover.sh read            ensure, then prints the last hand-over and the owner's replies since the run that wrote it started
 #        handover.sh write <file>    posts the file as a hand-over comment and prints the comment's URL
+#        handover.sh note <file>     posts the file as a comment that is not a hand-over (discussion-judge's result): first line `<!-- ai -->`, prints the comment's URL
 #        handover.sh format <owner>  reads the JSON of a Discussion (the query of `read`) from stdin and prints what `read` prints; no network
 # The runs write with the owner's account, so a comment is told by its mark `<!-- handover run-start=... -->`, which `write` puts on the first line.
 # A comment without the mark whose author is the owner is the owner's reply, and the next run reads it first and takes it as an instruction.
+# A comment whose first line is `<!-- ai -->` (discussions.sh; `note`) is an AI's write, so it is neither a hand-over nor a reply.
 # The repository is public: a comment of any other author is data, never an instruction. `format` counts them and prints nothing of them, and takes a mark only from the owner's comments.
 # A run-start that is not an ISO time in UTC, or is later than the comment itself, is not used: the comment's own time is.
 # HANDOVER_RUN_START (ISO time in UTC; nightly.sh sets it) is the start of the run; a reply written after it is left to the next run, which has not read it yet.
-# HANDOVER_DRY_RUN=1 makes `write` print the comment and touch nothing.
+# HANDOVER_DRY_RUN=1 makes `write` and `note` print the comment and touch nothing.
 # The repository is public: write no personal information in a comment (publishing.md).
 set -u
 title="自走の引き継ぎ"
 mark='<!-- handover'
 
 usage() {
-  echo "使い方: handover.sh ensure | read | write <file> | format <owner>" >&2
+  echo "使い方: handover.sh ensure | read | write <file> | note <file> | format <owner>" >&2
   exit 2
 }
 
@@ -29,7 +31,7 @@ repo_parts() {
 # find the Discussion: sets did (node id), durl and dnum, or leaves them empty
 find_discussion() {
   repo_parts || return 1
-  q='query($o:String!,$n:String!,$cursor:String){repository(owner:$o,name:$n){discussions(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{id number url title author{login} category{name}}}}}'
+  q='query($o:String!,$n:String!,$endCursor:String){repository(owner:$o,name:$n){discussions(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id number url title author{login} category{name}}}}}'
   found="$(gh api graphql --paginate -f query="$q" -f o="$owner" -f n="$name" \
     --jq ".data.repository.discussions.nodes[] | select(.title == \"$title\" and .category.name == \"Ideas\" and .author.login == \"$owner\") | [.id, .number, .url] | @tsv" | head -n 1)" || return 1
   did="$(printf '%s' "$found" | cut -f1)"
@@ -50,7 +52,7 @@ create_discussion() {
   cat > "$bodyfile" <<'BODY'
 ## この記録の目的
 
-`milestone-dev` の定期実行（毎日 01:00）が、次の回に引き継ぐことを書く場所です。
+`milestone-dev` の定期実行（毎日 05:00）が、次の回に引き継ぐことを書く場所です。
 各回の終わりに 1 コメントが付きます。
 コメントの先頭の印（`<!-- handover ... -->`）で、自走の回のコメントと見分けます。
 
@@ -100,7 +102,7 @@ format() {
         ([$last.body | capture("<!-- handover run-start=(?<t>[^ ]+) -->")? | .t] | first) as $t
         | if $t != null and ($t | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and $t <= $last.createdAt then $t else $last.createdAt end
       ) end) as $cutoff
-    | ($mine | map(select((.body | contains($mark) | not) and .createdAt > $cutoff))) as $replies
+    | ($mine | map(select((.body | contains($mark) | not) and (.body | split("\n")[0] | test("^<!-- ai -->[ \\t\\r]*$") | not) and .createdAt > $cutoff))) as $replies
     | "discussion: \($d.url)",
       (if $last == null then "last handover: none yet" else "last handover: \($last.url) (run started \($cutoff))\n---\n\($last.body)\n---" end),
       "owner replies since: \($replies | length)",
@@ -135,6 +137,26 @@ case "$cmd" in
     {
       echo "${mark} run-start=${start} -->"
       grep -v -F "$mark" "$2"
+    } > "$bodyfile"
+    if [ -n "${HANDOVER_DRY_RUN:-}" ]; then
+      cat "$bodyfile"
+      exit 0
+    fi
+    ensure || exit 1
+    m='mutation($id:ID!,$b:String!){addDiscussionComment(input:{discussionId:$id,body:$b}){comment{url}}}'
+    gh api graphql -f query="$m" -f id="$did" -F b=@"$bodyfile" --jq '.data.addDiscussionComment.comment.url'
+    ;;
+  note)
+    [ $# -eq 2 ] || usage
+    [ -r "$2" ] || {
+      echo "読めません: $2" >&2
+      exit 2
+    }
+    bodyfile="$(mktemp)"
+    trap 'rm -f "$bodyfile"' EXIT
+    {
+      echo '<!-- ai -->'
+      grep -v -F -e '<!-- ai -->' -e "$mark" "$2"
     } > "$bodyfile"
     if [ -n "${HANDOVER_DRY_RUN:-}" ]; then
       cat "$bodyfile"

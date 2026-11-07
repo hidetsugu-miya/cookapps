@@ -20,7 +20,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    - `urgency:high` only when the owner said so ("urgent", "top priority", "as soon as possible"), never on your own judgment; say that it was their word. `release:now` is retired.
    - `release:pin` only when the owner named the version: put the version milestone on the issue by hand (`gh issue edit {n} --milestone {tag}`) and then the label. `plan-release.py` never moves a pinned issue.
    - `documentation` when it changes only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/`
-3. **Record any discussion.** If options were put to the owner (layout, design), create a Discussion in Ideas in the form of `issues.md` and point to it from the issue body.
+3. **Record any discussion.** If options were put to the owner (layout, design), create a Discussion in Ideas in the form of `issues.md`, with `<!-- ai -->` as the first line of its body, and point to it from the issue body.
 4. **Get the order.** Run `plan-release.py snapshot`, and launch `release-planner` with `mode: order` on the first line and the output below it as the prompt.
 5. **Apply it.** Write the returned JSON to a file in the scratchpad and run `plan-release.py apply {file}`.
    On exit 2, relaunch `release-planner` with the stderr added, at most twice. If it still fails, run `plan-release.py sync` so that the issue has a tag, and state the failure in the report.
