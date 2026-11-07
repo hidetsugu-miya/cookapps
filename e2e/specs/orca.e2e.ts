@@ -494,14 +494,13 @@ describe("orca", () => {
     await expect($("#orca-refresh")).toHaveAttribute("aria-label", "読み直す");
     const order = await browser.execute(() => [...document.querySelectorAll("#orca-header button")].map((b) => b.id));
     expect(order).toEqual(["orca-bell", "orca-refresh"]);
-    // The plus is at the right end of the tab bar, after the strip of tabs; it is a menu button, and waits for a project.
+    // The plus is in the tab bar, after the strip of tabs; it is a menu button, and waits for a project.
     await expect($("#orca-plus")).toHaveAttribute("aria-label", "セッションを始める");
     await expect($("#orca-plus")).toHaveAttribute("aria-haspopup", "menu");
     await expect($("#orca-plus")).toBeDisabled();
     expect(box.plusHeight).toBe(24);
     expect(box.plusLeft).toBeGreaterThanOrEqual(box.tabsRight - 1);
     expect(box.plusRight).toBeLessThanOrEqual(box.barRight);
-    expect(box.barRight - box.plusRight).toBeLessThanOrEqual(8);
     const barOrder = await browser.execute(() => [...document.getElementById("orca-tabbar")!.children].map((e) => e.id));
     expect(barOrder).toEqual(["orca-tabs", "orca-plus"]);
     // Nothing selected: no tab, no terminal, and a line that says what to do.
@@ -1152,6 +1151,36 @@ describe("orca: projects", () => {
     await expect(selectedTab()).toHaveText(expect.stringContaining("Fix the parser"));
     await project("example-app").click();
     await expect(selectedTab()).toHaveText(expect.stringContaining("zsh"));
+  });
+
+  // Where the last tab, the plus and the bar end, and whether the strip of tabs scrolls.
+  const edges = () =>
+    browser.execute(() => {
+      const r = (id: string) => document.getElementById(id)!.getBoundingClientRect();
+      const lastTab = [...document.querySelectorAll("#orca-tabs .orca-tab")].pop()!.getBoundingClientRect();
+      const tabs = document.getElementById("orca-tabs")!;
+      return { lastRight: lastTab.right, plusLeft: r("orca-plus").left, plusRight: r("orca-plus").right, barRight: r("orca-tabbar").right, scrolls: tabs.scrollWidth > tabs.clientWidth };
+    });
+
+  it("puts the plus right after the last tab", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] }));
+    await project("example-app").click();
+    await expect(selectedTab()).toBeDisplayed();
+    const one = await edges();
+    expect(one.scrolls).toBe(false);
+    expect(one.plusLeft - one.lastRight).toBeLessThanOrEqual(8);
+    expect(one.plusLeft).toBeGreaterThanOrEqual(one.lastRight);
+  });
+
+  it("keeps the plus in view at the right end of the bar when the tabs overflow", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), { terminals: Array.from({ length: 30 }, (_, i) => orcaTerminal("example-app", `terminal-with-a-long-name-${i}`)) }));
+    await project("example-app").click();
+    await expect(selectedTab()).toBeDisplayed();
+    const many = await edges();
+    expect(many.scrolls).toBe(true);
+    expect(many.plusRight).toBeLessThanOrEqual(many.barRight);
+    expect(many.barRight - many.plusRight).toBeLessThanOrEqual(8);
+    await expect($("#orca-plus")).toBeDisplayed();
   });
 
   it("says a project has no session, with the tab strip empty", async () => {
