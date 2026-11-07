@@ -554,14 +554,14 @@ describe("todo projects and subtasks", () => {
 const showGrips = () =>
   browser.execute(() => {
     for (const a of document.getAnimations()) a.finish();
-    for (const g of document.querySelectorAll<HTMLElement>("#todo-list .grip")) g.style.visibility = "visible";
+    for (const g of document.querySelectorAll<HTMLElement>("#todo-list .grip, #todo-detail .grip")) g.style.visibility = "visible";
   });
 
-// Drags the grip of the row `name` with the pointer (press, move over each of `over`, release).
-async function dragRow(name: string, ...over: ChainablePromiseElement[]) {
+// Drags the grip of the row that `source` finds with the pointer (press, move over each of `over`, release).
+async function dragFrom(source: () => ChainablePromiseElement, ...over: ChainablePromiseElement[]) {
   const drag = async () => {
     await showGrips();
-    let action = browser.action("pointer").move({ origin: rowOf(name).$(".grip") }).down();
+    let action = browser.action("pointer").move({ origin: source().$(".grip") }).down();
     for (const target of over) action = action.move({ origin: target });
     await action.up().perform();
   };
@@ -575,6 +575,9 @@ async function dragRow(name: string, ...over: ChainablePromiseElement[]) {
     await drag();
   }
 }
+
+// Drags the grip of the row `name` in the task list.
+const dragRow = (name: string, ...over: ChainablePromiseElement[]) => dragFrom(() => rowOf(name), ...over);
 
 // Records every row and project that gets the drop mark from now on (a task's ID or a project's view), since the mark is gone when the drag ends.
 const watchDrops = () =>
@@ -1462,6 +1465,187 @@ describe("todo detail of a subtask", () => {
     await openTask();
     await expect($("#todo-detail .name")).toHaveValue("Plan trip");
     expect(await count("#todo-detail .parent-link")).toBe(0);
+  });
+});
+
+// "Plan trip" with a second subtask, "Pack bag" (k5), beside "Book flights" (k3, which holds "Pick seat").
+function tripWithBag() {
+  const data = todoData();
+  const trip = data.tasks[1];
+  const bag = { ...task("k5", "Pack bag", "p1", "none"), parent: { id: trip.id, content: trip.content } };
+  trip.subtasks.push({ id: bag.id, content: bag.content, done: false, due: bag.due });
+  trip.subTotal++;
+  data.tasks.push(bag);
+  return data;
+}
+
+// What Todoist answers once "Pack bag" (k5) has left "Plan trip" for `projectId`, as a top-level task there.
+function bagOut(projectId: string) {
+  const data = tripWithBag();
+  const trip = data.tasks[1];
+  const bag = data.tasks[4];
+  bag.parent = null;
+  bag.projectId = projectId;
+  trip.subtasks = trip.subtasks.filter((x) => x.id !== bag.id);
+  trip.subTotal--;
+  return data;
+}
+
+describe("todo detail: moving a subtask", () => {
+  const SUBS = "#todo-detail .subs li.task";
+  const dragSub = (name: string, ...over: ChainablePromiseElement[]) => dragFrom(() => subRowOf(name), ...over);
+  // The row buttons show on hover, which the driver never does: press one in the page.
+  const pressSub = (name: string, button: string) =>
+    browser.execute(
+      (id, n, b) => window.__e2e_once__(id) && [...document.querySelectorAll<HTMLElement>("#todo-detail .subs li.task")].find((l) => l.textContent!.includes(n))!.querySelector<HTMLElement>(`.${b}`)!.click(),
+      onceId(),
+      name,
+      button,
+    );
+  // The detail of "Plan trip", which has the subtasks "Book flights" and "Pack bag".
+  async function openTrip() {
+    await boot({ inbox: inbox(), todoist_load: tripWithBag(), slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 1);
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 2);
+    await rowOf("Plan trip").click();
+    await waitForCount(SUBS, 2);
+  }
+
+  it("has the grip and the two buttons on each open subtask", async () => {
+    await openTrip();
+    expect(await count(`${SUBS} .grip`)).toBe(2);
+    expect(await count(`${SUBS} .project-row`)).toBe(2);
+    expect(await count(`${SUBS} .unparent-row`)).toBe(2);
+    await expect(subRowOf("Pack bag").$(".project-row")).toHaveAttribute("aria-label", "プロジェクトを移動");
+    await expect(subRowOf("Pack bag").$(".unparent-row")).toHaveAttribute("aria-label", "親タスクから外す");
+  });
+
+  it("has no grip, buttons or row to open on a done subtask", async () => {
+    // "Plan trip" with a done subtask, "Book hotel" (k6), which has no row among the tasks.
+    const data = todoData();
+    data.tasks[1].subtasks.push({ id: "k6", content: "Book hotel", done: true, due: null });
+    data.tasks[1].subTotal++;
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 1);
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 2);
+    await rowOf("Plan trip").click();
+    await waitForCount(SUBS, 2);
+    const done = `${SUBS}.done`;
+    expect(await count(done)).toBe(1);
+    expect(await count(`${done} .grip`)).toBe(0);
+    expect(await count(`${done} .project-row`)).toBe(0);
+    expect(await count(`${done} .unparent-row`)).toBe(0);
+    expect(await count(`${done}[data-id]`)).toBe(0);
+  });
+
+  it("moves a subtask to the project picked in the menu, and drops it from the list of subtasks", async () => {
+    await openTrip();
+    const move = await mock("todoist_move", true);
+    await mock("todoist_load", bagOut("p2"));
+    await pressSub("Pack bag", "project-row");
+    await $('.menu button[role="menuitem"]:nth-child(3)').click();
+    expect(await waitForCalls(move)).toEqual([{ id: "k5", projectId: "p2" }]);
+    await waitForCount(SUBS, 1);
+    await expect($("#todo-detail .subs")).not.toHaveText(expect.stringContaining("Pack bag"));
+    await expect($("#todo-detail .section-title")).toHaveText(expect.stringContaining("サブタスク 0/1"));
+  });
+
+  it("calls nothing when the menu's current project is picked", async () => {
+    await openTrip();
+    const move = await mock("todoist_move", true);
+    await pressSub("Pack bag", "project-row");
+    await $('.menu button[role="menuitem"]:nth-child(2)').click();
+    expect(await callsOf(move)).toEqual([]);
+    expect(await count(SUBS)).toBe(2);
+  });
+
+  it("takes a subtask out of its parent with 親タスクから外す, in its own project", async () => {
+    await openTrip();
+    const move = await mock("todoist_move", true);
+    await mock("todoist_load", bagOut("p1"));
+    await pressSub("Pack bag", "unparent-row");
+    expect(await waitForCalls(move)).toEqual([{ id: "k5", projectId: "p1" }]);
+    await waitForCount(SUBS, 1);
+    await expect($("#todo-detail .subs")).not.toHaveText(expect.stringContaining("Pack bag"));
+  });
+
+  it("moves a subtask to the project it is dropped on in the side list, marking that project", async () => {
+    await openTrip();
+    const move = await mock("todoist_move", true);
+    await mock("todoist_load", bagOut("p2"));
+    await watchDrops();
+    await dragSub("Pack bag", projectOf("p2"));
+    expect(await waitForCalls(move)).toEqual([{ id: "k5", projectId: "p2" }]);
+    expect(await dropsSeen()).toEqual(["p2"]);
+    await waitForCount(SUBS, 1);
+    await expect($(".dragging, .drop")).not.toExist();
+  });
+
+  it("makes a subtask stand alone when it is dropped on the project it is in", async () => {
+    await openTrip();
+    const move = await mock("todoist_move", true);
+    await mock("todoist_load", bagOut("p1"));
+    await dragSub("Pack bag", projectOf("p1"));
+    expect(await waitForCalls(move)).toEqual([{ id: "k5", projectId: "p1" }]);
+    await waitForCount(SUBS, 1);
+  });
+
+  it("makes a subtask the subtask of another subtask it is dropped on, marking that row on the way", async () => {
+    await openTrip();
+    const moveUnder = await mock("todoist_move_under", true);
+    // What Todoist answers once "Pack bag" (k5) is the last subtask of "Book flights" (k3).
+    const after = tripWithBag();
+    const [, trip, flights, , bag] = after.tasks;
+    bag.parent = { id: flights.id, content: flights.content };
+    flights.subtasks.push({ id: bag.id, content: bag.content, done: false, due: bag.due });
+    flights.subTotal++;
+    trip.subtasks = trip.subtasks.filter((x) => x.id !== bag.id);
+    trip.subTotal--;
+    await mock("todoist_load", after);
+    await watchDrops();
+    await dragSub("Pack bag", subRowOf("Book flights"));
+    expect(await waitForCalls(moveUnder)).toEqual([{ id: "k5", parentId: "k3" }]);
+    expect(await dropsSeen()).toEqual(["k3"]);
+    await waitForCount(SUBS, 1);
+    await expect($("#todo-detail .subs")).not.toHaveText(expect.stringContaining("Pack bag"));
+    await expect($(".dragging, .drop")).not.toExist();
+  });
+
+  it("does not mark or accept the subtask's own row", async () => {
+    await openTrip();
+    const moveUnder = await mock("todoist_move_under", true);
+    await watchDrops();
+    await dragSub("Book flights", subRowOf("Book flights"));
+    expect(await dropsSeen()).toEqual([]);
+    expect(await callsOf(moveUnder)).toEqual([]);
+    await expect($(".dragging, .drop")).not.toExist();
+    expect(await count(SUBS)).toBe(2);
+  });
+
+  it("puts the row back and shows the error when the move fails", async () => {
+    await openTrip();
+    const moveUnder = await mock("todoist_move_under", rejects("Todoist に接続できません"));
+    await dragSub("Pack bag", subRowOf("Book flights"));
+    await waitForCalls(moveUnder);
+    // The reload brings back what Todoist has: both subtasks under "Plan trip".
+    await waitForCount(SUBS, 2);
+    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($("#todo-detail .subs")).toHaveText(expect.stringContaining("Pack bag"));
+    await expect($("#todo-detail .subs")).toHaveText(expect.stringContaining("Book flights"));
+  });
+
+  it("puts the row back and shows the error when moving it to a project fails", async () => {
+    await openTrip();
+    const move = await mock("todoist_move", rejects("Todoist に接続できません"));
+    await pressSub("Pack bag", "unparent-row");
+    await waitForCalls(move);
+    await waitForCount(SUBS, 2);
+    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await expect($("#todo-detail .subs")).toHaveText(expect.stringContaining("Pack bag"));
   });
 });
 
