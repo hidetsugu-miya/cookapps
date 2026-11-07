@@ -1,5 +1,5 @@
-// The Orca screen (A-6, A-8, A-12): two panes. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
-// the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). "新規" starts Claude in a worktree, and the session is selected once it is listed. Nothing about a session is kept here.
+// The Orca screen (A-6, A-8, A-12, A-16): two panes. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
+// the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). the plus at the right end of the tab strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change) and nothing reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
 // and no more once the `orca` command was found missing (the reload button reads again). Only the first read, the screen being shown, the reload button, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
@@ -11,6 +11,7 @@ import type { OrcaRow } from "./bindings/OrcaRow";
 import type { OrcaSshTarget } from "./bindings/OrcaSshTarget";
 import type { OrcaStatus } from "./bindings/OrcaStatus";
 import type { OrcaStreamEvent } from "./bindings/OrcaStreamEvent";
+import type { OrcaTerminal } from "./bindings/OrcaTerminal";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import { $, tag } from "./dom.js";
 import { CLAUDE_SVG, svgOf } from "./icons.js";
@@ -65,10 +66,11 @@ const lastTab = new Map<string, string>();
 const seen = new Map<string, number>();
 // The tabs of Orca whose close was asked for and is not answered.
 const closing = new Set<string>();
-// A launch ("新規") on its way.
+// A launch or a new terminal (the plus) on its way.
 let busy = false;
-// The launch that was answered: its pane key and handle (null when Orca's reply gave none), the target and when to stop waiting for its row. The row is selected as soon as the list holds it, and no other launch is made till then.
-let started: { paneKey: string | null; handle: string | null; target: string | null; until: number } | null = null;
+// The launch or the terminal that was answered: what it started, its pane key and handle (null when Orca's reply gave none), the target and when to stop waiting for its tab. The tab is selected as soon as the list holds it, and no other start is made till then.
+let started: { kind: StartKind; paneKey: string | null; handle: string | null; target: string | null; until: number } | null = null;
+type StartKind = "claude" | "terminal";
 const START_WAIT_MS = 30_000;
 // The saved environment whose list is streamed (null: none is, and the list is read by the clock), and the channel of the stream: an event of another channel is not taken.
 let streamTarget: string | null = null;
@@ -384,11 +386,11 @@ function drawWork() {
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
   drawTabs(tabs);
   const tab = selectedTabObj();
-  const waiting = started !== null && projectKey === null;
+  const waiting = started !== null;
   const empty = waiting ? null : projectKey === null ? "プロジェクトを選んでください" : tabs.length === 0 ? "セッションはありません" : tab?.handle === null ? "このセッションのターミナルはありません" : null;
   $("orca-empty").hidden = empty === null;
   $("orca-empty").textContent = empty ?? "";
-  $<HTMLButtonElement>("orca-new").disabled = busy || startWaits() || view === null || view.state === "missing";
+  $<HTMLButtonElement>("orca-plus").disabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
   drawStarted();
 }
 
@@ -399,10 +401,10 @@ function syncTerminal() {
   showTerminal(tab.id, { kind: streaming() ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: view?.target ?? null });
 }
 
-// The note of a launch that was answered: it waits for the row of the session, or (Orca named neither its pane nor its terminal) says it was started.
+// The note of a start that was answered: it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started.
 function drawStarted() {
   const box = $("orca-started");
-  box.hidden = started === null || projectKey !== null;
+  box.hidden = started === null;
   if (box.hidden) return;
   const waiting = startWaits();
   const key = String(waiting);
@@ -434,10 +436,10 @@ function adopt(read: OrcaOverview) {
   ensureSelection();
 }
 
-// A launch that gave a pane key or a handle waits for its row, which is matched by either (as the side pane of A-9 does).
+// A start that gave a pane key or a handle waits for its tab: a Claude session's row is matched by either (as the side pane of A-9 does), a terminal by its handle.
 const startWaits = () => started !== null && (started.paneKey !== null || started.handle !== null);
 
-// A launch whose row the read holds now is selected (its project and its tab, so its terminal shows); one that waited too long, even if the read failed, or one for another target, is dropped.
+// A start whose tab the read holds now is selected (its project and its tab, so its terminal shows); one that waited too long, even if the read failed, or one for another target, is dropped.
 function claimStarted() {
   if (!startWaits()) return;
   const wait = started!;
@@ -446,9 +448,12 @@ function claimStarted() {
     return;
   }
   if (view === null || view.state !== "ready") return;
-  const row = wait.target === view.target ? view.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
+  const same = wait.target === view.target;
+  const row = same && wait.kind === "claude" ? view.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
+  const terminal = same && wait.kind === "terminal" && wait.handle !== null ? view.terminals.find((t) => t.handle === wait.handle) : undefined;
   if (row?.paneKey) pickRow(row);
-  if (row || wait.target !== view.target) started = null;
+  if (terminal) pickTerminal(terminal);
+  if (row || terminal || !same) started = null;
 }
 
 // The order and the last selection of tabs that are no longer anywhere are dropped, so they do not pile up.
@@ -538,6 +543,11 @@ async function load(scope: Scope, force = false) {
 function refresh() {
   // The terminals are shown only while the screen is shown.
   if (!shown()) syncTerminal();
+  // The wait for a new tab ends after its 30 seconds, also while a streamed list is not read by the clock.
+  if (startWaits() && Date.now() > started!.until) {
+    started = null;
+    draw();
+  }
   // A streamed list is not read by the clock.
   if (document.hidden || loading || streaming()) return;
   // A missing command is not looked for again by the clock.
@@ -606,7 +616,7 @@ function openTargetMenu(anchor: Element) {
   openMenu(anchor, items);
 }
 
-// The dialog of the worktrees, narrowed by a filter on `{repo} ・ {branch}`, under "新規" and under the chip of the side pane of A-9. A pick closes it.
+// The dialog of the worktrees, narrowed by a filter on `{repo} ・ {branch}`, under the plus of the work pane and under the chip of the side pane of A-9. A pick closes it.
 export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], chosen: string | null, pick: (path: string) => void) {
   const pop = tag("div", "menu orca-dest-pop");
   pop.setAttribute("role", "dialog");
@@ -676,6 +686,13 @@ function pickRow(r: OrcaRow) {
   lastTab.set(r.projectKey, selectedTab);
 }
 
+// Makes the plain terminal's project and tab the selection.
+function pickTerminal(t: OrcaTerminal) {
+  projectKey = t.projectKey;
+  selectedTab = plainTabId(t.handle);
+  lastTab.set(t.projectKey, selectedTab);
+}
+
 // Closes a tab. An Orca terminal is closed in Orca, and the list is read at once: it leaves the tabs then, and a failure keeps the tab and shows the message.
 async function closeTab(tab: Tab) {
   if (closing.has(tab.id)) return;
@@ -695,25 +712,37 @@ async function closeTab(tab: Tab) {
   if (!streaming()) load(clockScope(), true);
 }
 
-// "新規": the worktrees of the list; picking one starts Claude in it with no first prompt (the user types it in the terminal). The session is then followed: once the list holds it, its project and its tab are selected.
-// A launch is never tried twice; a failure shows its message. No project is selected meanwhile, so the work pane says that the session was started.
-function openNewDialog(anchor: Element) {
-  if (view === null) return;
-  openWorktreeDialog(anchor, view.worktrees, null, (path) => start(path));
+// The plus (A-16): a menu of "Claude を起動" and "ターミナルを開く", which start in a worktree of the project (or SSH host) selected in the list pane.
+function openStartMenu(anchor: Element) {
+  if (view === null || projectKey === null) return;
+  const item = (label: string, kind: StartKind) => ({ label, color: "var(--accent)", current: false, pick: () => chooseWorktree(anchor, kind) });
+  openMenu(anchor, [item("Claude を起動", "claude"), item("ターミナルを開く", "terminal")]);
 }
 
-async function start(path: string) {
+// A project with one worktree starts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there).
+function chooseWorktree(anchor: Element, kind: StartKind) {
+  if (view === null || projectKey === null) return;
+  const mine = view.worktrees.filter((w) => w.projectKey === projectKey);
+  if (mine.length === 1) void start(kind, mine[0].path);
+  else openWorktreeDialog(anchor, mine, null, (path) => start(kind, path));
+}
+
+// Starts Claude (with no first prompt: the user types it in the terminal) or a plain terminal in the worktree, once; a failure shows its message. The project and its tab stay selected, and the new tab is followed: once the list holds it, it is selected.
+async function start(kind: StartKind, path: string) {
   if (busy || startWaits() || view === null) return;
   const target = view.target;
+  const [from, tab] = [projectKey, selectedTab];
   busy = true;
   started = null;
-  projectKey = null;
-  selectedTab = null;
   draw();
   try {
-    const launched = await invoke("orca_start", { path, environment: target });
-    // A session picked while the launch was on its way is not left for the new one.
-    if (projectKey === null) started = { paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
+    const launched = await invoke(kind === "claude" ? "orca_start" : "orca_terminal_create", { path, environment: target });
+    // A selection made while the start was on its way is not left for the new tab.
+    if (projectKey === from && selectedTab === tab) {
+      started = { kind, paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
+      // A streamed list that held the new tab before this reply came is matched now; no event is to come for it.
+      claimStarted();
+    }
     if (!streaming()) load(clockScope(), true);
   } catch (e) {
     showError(e);
@@ -740,6 +769,6 @@ export function initOrca() {
     draw();
   };
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
-  $("orca-new").onclick = (e) => openNewDialog(e.currentTarget as Element);
+  $("orca-plus").onclick = (e) => openStartMenu(e.currentTarget as Element);
   load("full");
 }

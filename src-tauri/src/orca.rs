@@ -163,14 +163,17 @@ pub struct OrcaSshTarget {
     pub label: String,
 }
 
-/// A worktree a launch can start an agent in.
+/// A worktree a launch can start an agent or a terminal in.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
 pub struct OrcaWorktree {
     pub path: String,
     pub repo: String,
     pub branch: String,
+    /// The project the worktree belongs to (`OrcaProject::key`; empty when it has none), which the plus of the work pane narrows the worktrees by (A-16).
+    pub project_key: String,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
@@ -433,6 +436,7 @@ pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
                 path: text_of(w, "path")?.to_owned(),
                 repo: text_of(w, "repo").unwrap_or_default().to_owned(),
                 branch: text_of(w, "displayName").unwrap_or_default().to_owned(),
+                project_key: project_key_of(w).unwrap_or_default(),
             })
         })
         .collect()
@@ -599,6 +603,16 @@ fn started_of(result: &Value) -> OrcaStarted {
             .filter(|k| check_pane_key(k).is_ok())
             .map(str::to_owned),
         handle: text_of(outcome, "handle")
+            .filter(|h| check_handle(h).is_ok())
+            .map(str::to_owned),
+    }
+}
+
+/// The terminal `orca terminal create` made (A-16): `result.terminal.handle`. Orca names no pane for a plain terminal, so `pane_key` is `None`.
+fn created_of(result: &Value) -> OrcaStarted {
+    OrcaStarted {
+        pane_key: None,
+        handle: text_of(&result["terminal"], "handle")
             .filter(|h| check_handle(h).is_ok())
             .map(str::to_owned),
     }
@@ -863,6 +877,13 @@ fn launch_args(path: &str, prompt: Option<&str>, environment: Option<&str>) -> V
     with_environment(args, environment)
 }
 
+/// A plain terminal in the worktree (A-16): `terminal create` makes the tab and runs nothing in it. No `--focus`: the screen selects the tab once the list holds it.
+fn create_args(path: &str, environment: Option<&str>) -> Vec<String> {
+    let mut args = args_of(&["terminal", "create", "--worktree"]);
+    args.extend([format!("path:{path}"), "--json".into()]);
+    with_environment(args, environment)
+}
+
 // ---- running the CLI ----
 
 enum RunError {
@@ -1070,14 +1091,25 @@ fn launch(
     prompt: Option<&str>,
     environment: Option<&str>,
 ) -> Result<OrcaStarted, String> {
-    check_path(path)?;
     if let Some(text) = prompt {
         check_text(text)?;
     }
+    check_start(path, environment)?;
+    write(&launch_args(path, prompt, environment)).map(|result| started_of(&result))
+}
+
+/// Opens a plain terminal in the worktree at `path` (A-16), once, with the checks of a launch.
+fn open_terminal(path: &str, environment: Option<&str>) -> Result<OrcaStarted, String> {
+    check_start(path, environment)?;
+    write(&create_args(path, environment)).map(|result| created_of(&result))
+}
+
+/// What a launch and a new terminal check before they run: the path is absolute, the environment is a saved one, and the path is a worktree of the list read just now.
+fn check_start(path: &str, environment: Option<&str>) -> Result<(), String> {
+    check_path(path)?;
     check_listed(environment)?;
     let (ps, _) = read_lists(environment, false);
-    check_worktree(&worktrees_of(&ps.map_err(message_of)?), path)?;
-    write(&launch_args(path, prompt, environment)).map(|result| started_of(&result))
+    check_worktree(&worktrees_of(&ps.map_err(message_of)?), path)
 }
 
 /// The `hostId` of the worktree at `path` of the target's list read just now (A-10): the path must be in it.
@@ -1269,10 +1301,19 @@ pub async fn orca_send(
     blocking(move || send(&handle, &text, environment.as_deref())).await?
 }
 
-/// Starts Claude in the worktree at `path` with no first prompt (the "＋ 新規" of A-12). The answer is the session as Orca's reply names it.
+/// Starts Claude in the worktree at `path` with no first prompt (the plus of the work pane, A-16). The answer is the session as Orca's reply names it.
 #[tauri::command]
 pub async fn orca_start(path: String, environment: Option<String>) -> Result<OrcaStarted, String> {
     blocking(move || launch(&path, None, environment.as_deref())).await?
+}
+
+/// Opens a plain terminal in the worktree at `path` (the plus of the work pane, A-16). The answer is the terminal as Orca's reply names it (its `handle`; no pane key).
+#[tauri::command]
+pub async fn orca_terminal_create(
+    path: String,
+    environment: Option<String>,
+) -> Result<OrcaStarted, String> {
+    blocking(move || open_terminal(&path, environment.as_deref())).await?
 }
 
 /// A-9: starts a session in a worktree, or posts to a running one, with the instruction and, when `context` is given, the content quoted as data.
@@ -1654,22 +1695,32 @@ mod tests {
     #[test]
     fn every_worktree_with_a_path_is_a_launch_target() {
         let doc = json!({"worktrees": [
-            {"path": "/work/a", "repo": "a", "displayName": "main", "agents": []},
+            {"path": "/work/a", "repo": "a", "repoId": "repo-a", "displayName": "main", "agents": []},
             {"repo": "no-path", "displayName": "x"},
             {"path": "/work/b", "repo": "b"},
+            {"path": "/ssh/c", "repo": "c", "repoId": "repo-c", "hostId": "box", "displayName": "dev"},
         ]});
+        // Each carries the key of its project (A-16): the repository on this machine, `ssh:{hostId}` on a host, empty when a repository has no id.
         assert_eq!(
             worktrees_of(&doc),
             [
                 OrcaWorktree {
                     path: "/work/a".into(),
                     repo: "a".into(),
-                    branch: "main".into()
+                    branch: "main".into(),
+                    project_key: "repo-a".into()
                 },
                 OrcaWorktree {
                     path: "/work/b".into(),
                     repo: "b".into(),
-                    branch: String::new()
+                    branch: String::new(),
+                    project_key: String::new()
+                },
+                OrcaWorktree {
+                    path: "/ssh/c".into(),
+                    repo: "c".into(),
+                    branch: "dev".into(),
+                    project_key: "ssh:box".into()
                 },
             ]
         );
@@ -1829,6 +1880,51 @@ mod tests {
         assert!(check_accepted(&Value::Null).is_ok());
         let out = r#"{"ok": true, "result": {"send": {"accepted": false}}}"#;
         assert!(check_accepted(&parse_output(out).unwrap()).is_err());
+    }
+
+    #[test]
+    fn a_new_terminal_is_made_in_the_worktree_with_no_focus_and_no_shell() {
+        assert_eq!(
+            create_args("/work/a", None),
+            ["terminal", "create", "--worktree", "path:/work/a", "--json"]
+        );
+        assert_eq!(
+            create_args("/work/a", Some("Studio")),
+            [
+                "terminal",
+                "create",
+                "--worktree",
+                "path:/work/a",
+                "--json",
+                "--environment=Studio"
+            ]
+        );
+        // A path that looks like an option stays one argument, joined to its selector.
+        assert_eq!(create_args("/work/--json", None)[3], "path:/work/--json");
+    }
+
+    #[test]
+    fn the_reply_of_a_new_terminal_names_its_handle_and_no_pane() {
+        let out = r#"{"ok": true, "result": {"terminal": {"handle": "term_abc-1", "title": null, "surface": "background"}}}"#;
+        assert_eq!(
+            created_of(&parse_output(out).unwrap()),
+            OrcaStarted {
+                pane_key: None,
+                handle: Some("term_abc-1".into())
+            }
+        );
+        // The reply of a launch has no `terminal`, and an unusable handle is None, never an error.
+        for odd in [
+            Value::Null,
+            json!({}),
+            json!({"outcome": {"handle": "term_1"}}),
+            json!({"terminal": "x"}),
+            json!({"terminal": {"handle": ""}}),
+            json!({"terminal": {"handle": "notterm"}}),
+            json!({"terminal": {"handle": ["term_1"]}}),
+        ] {
+            assert_eq!(created_of(&odd), OrcaStarted::default(), "{odd}");
+        }
     }
 
     #[test]

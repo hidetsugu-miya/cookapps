@@ -705,12 +705,8 @@ button.status:hover { filter: brightness(.95); }
 #orca { flex: 1; min-height: 0; display: flex; }
 #orca-list { flex: none; width: clamp(20%, var(--list-w, 30%), 50%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
 #orca-split { flex: none; }
-/* A-12: a header of 32px, level with the tab strip of the work pane: "新規" at the left, the bell (with its number) and the reload at the right, buttons of 24px. */
-#orca-header { flex: none; display: flex; align-items: center; gap: 2px; height: 32px; box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); }
-#orca-new { display: flex; align-items: center; gap: 4px; height: 24px; margin-right: auto; padding: 0 8px 0 6px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; }
-#orca-new:hover:not(:disabled) { background: var(--hover); }
-#orca-new:disabled { opacity: .4; cursor: default; }
-#orca-new svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+/* A-12: a header of 32px, level with the tab strip of the work pane: the bell (with its number) and the reload at the right, buttons of 24px. */
+#orca-header { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 2px; height: 32px; box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); }
 #orca-header .icon-btn { flex: none; width: auto; min-width: 24px; height: 24px; gap: 3px; padding: 0 4px; color: var(--ink-soft); }
 #orca-header .icon-btn svg { width: 15px; height: 15px; }
 #orca-header .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
@@ -761,8 +757,11 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-n { margin-left: auto; font-size: 12px; font-weight: normal; color: var(--muted); }
 .orca-sec { margin: 12px 10px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-/* A-12: the tab strip (32px) and the terminal of the selected tab under it. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
-#orca-tabs { flex: none; display: flex; align-items: flex-end; gap: 2px; height: 32px; box-sizing: border-box; padding: 0 6px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--line); background: var(--bar); }
+/* A-12, A-16: the bar of 32px has the tab strip, which scrolls, and the plus at its right end; the terminal of the selected tab is under it. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
+#orca-tabbar { flex: none; display: flex; align-items: center; height: 32px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }
+#orca-tabs { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; padding: 0 0 0 6px; overflow-x: auto; overflow-y: hidden; }
+#orca-plus { flex: none; width: 24px; height: 24px; margin: 0 6px 0 2px; color: var(--ink-soft); }
+#orca-plus svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .orca-tab { flex: none; display: flex; align-items: center; height: 28px; max-width: 220px; min-width: 0; box-sizing: border-box; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
 .orca-tab:has(.orca-tab-btn[aria-selected="true"]) { border-color: var(--line); background: var(--surface); color: inherit; }
 .orca-tab-btn { display: flex; align-items: center; gap: 6px; min-width: 0; height: 100%; padding: 0 2px 0 10px; border: 0; border-radius: 8px 0 0 0; background: transparent; font: inherit; font-size: 12px; color: inherit; text-align: left; cursor: pointer; }
