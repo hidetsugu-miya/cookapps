@@ -57,8 +57,8 @@ Bad:  edit the untracked skills in the main checkout while another session is ma
 
 ### Call `.claude/tools/` by the main checkout's path from a worktree
 
-`.claude/hooks/` exists only in the main checkout, and `.worktreeinclude` does not copy it.
-`.claude/tools/` is tracked, so a worktree has the branch's copy, but the hooks and the gates run the main checkout's, and a worktree runs the same ones.
+`.claude/hooks/` and `.claude/tools/` are tracked, so a worktree has the branch's copy of both.
+The hooks (wired in the main checkout's `settings.local.json`) and the gates run the main checkout's copy, and a worktree runs the same ones, so a change to either takes effect after the merge and the fast-forward.
 Run them from the worktree, so that they act on the worktree's HEAD.
 
 ```sh
@@ -93,9 +93,9 @@ Bad:  raise to 0.8.0 inside feat/C-1
 
 ### Edit the private files only in the main checkout
 
-`mise.toml`, `.claude/rules/machines.md`, `.claude/rules/google-cloud.md` and `src-tauri/.cargo/` in a worktree are copies made with `.worktreeinclude` when the worktree was created, and git does not track them. The rest of `.claude/rules/` is tracked: change it on the branch like the code.
+`mise.toml`, `.claude/hooks/public-words`, `.claude/rules/machines.md`, `.claude/rules/google-cloud.md` and `src-tauri/.cargo/` in a worktree are copies made with `.worktreeinclude` when the worktree was created, and git does not track them. The rest of `.claude/rules/` is tracked: change it on the branch like the code.
 A fix made in a worktree does not return to main, and is lost when the worktree is deleted.
-Hooks and `settings.local.json` in a worktree are also taken from the main checkout.
+`settings.local.json` in a worktree is also taken from the main checkout, and so are the hooks it wires.
 
 ```text
 Good: change .claude/rules/machines.md in the main checkout
