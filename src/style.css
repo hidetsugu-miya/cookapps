@@ -766,7 +766,7 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* A-12, A-16: the bar of 32px has the tab strip, which scrolls, and the plus at its right end; the terminal of the selected tab is under it. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
 #orca-tabbar { flex: none; display: flex; align-items: center; height: 32px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }
-#orca-tabs { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; padding: 0 0 0 6px; overflow-x: auto; overflow-y: hidden; }
+#orca-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; padding: 0 0 0 6px; overflow-x: auto; overflow-y: hidden; }
 #orca-plus { flex: none; width: 24px; height: 24px; margin: 0 6px 0 2px; color: var(--ink-soft); }
 #orca-plus svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .orca-tab { flex: none; display: flex; align-items: center; height: 28px; max-width: 220px; min-width: 0; box-sizing: border-box; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
