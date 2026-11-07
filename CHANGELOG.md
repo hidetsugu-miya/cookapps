@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.49.1
+
+A URL in an Orca terminal opens in the default browser on ⌘+click (#147). Only http and https URLs open; a click without ⌘ still selects text. The URL shows while the pointer is over it.
+
+The due moments of Todo are now computed in one place, with no change on the screen (#141).
+
 ## v0.49.0
 
 A-15 the Orca terminals can keep the light or the dark appearance (#128). The "ターミナルの配色" card of the Orca tab has a new "外観" row: "システムに合わせる" (the default, as before), "ライト" or "ダーク". With "ライト" or "ダーク" the terminals draw that appearance's theme whatever the system's appearance is.
