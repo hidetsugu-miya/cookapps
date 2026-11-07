@@ -1,6 +1,7 @@
 #!/bin/sh
 # The Discussions (Ideas) that discussion-judge decides, and the writes it makes (issues.md, "Record a design or layout discussion").
 # Usage: discussions.sh list                     prints, as JSON, the open Discussions that need a judgment
+#        discussions.sh create <title> <file>    makes a Discussion in Ideas with the file as its body, `<!-- ai -->` on the first line; prints its URL
 #        discussions.sh comment <number> <file>  posts the file as a comment with `<!-- ai -->` on the first line; prints the comment's URL
 #        discussions.sh close <number> <file>    posts the file the same way (the decision), then closes the Discussion as resolved
 #        discussions.sh wait <number> <file>     posts the file the same way, with `<!-- wait -->` on the second line (what the judgment waits for)
@@ -14,14 +15,14 @@
 #   - the last write with the mark is 3 days old or more and the owner has not commented since ("stale"; `stale` is true).
 #     A last write that is a waiting comment (`<!-- wait -->` on the second line) is never stale: the owner's next comment picks the Discussion up.
 # The hand-over Discussion and closed ones are never listed. "truncated" is true when the query cut some comments (100) or replies (50).
-# DISCUSSIONS_NOW (ISO time in UTC) replaces the current time for `format` and `list`. DISCUSSIONS_DRY_RUN=1 makes `comment`, `close` and `wait` print the comment and touch nothing.
+# DISCUSSIONS_NOW (ISO time in UTC) replaces the current time for `format` and `list`. DISCUSSIONS_DRY_RUN=1 makes `create`, `comment`, `close` and `wait` print the body and touch nothing.
 # The repository is public: write no personal information in a comment (publishing.md).
 set -u
 handover_title="自走の引き継ぎ"
 mark='<!-- ai -->'
 
 usage() {
-  echo "使い方: discussions.sh list | comment <number> <file> | close <number> <file> | wait <number> <file> | format <owner>" >&2
+  echo "使い方: discussions.sh list | create <title> <file> | comment <number> <file> | close <number> <file> | wait <number> <file> | format <owner>" >&2
   exit 2
 }
 
@@ -113,6 +114,27 @@ case "$cmd" in
     repo_parts || exit 1
     q='query($o:String!,$n:String!,$endCursor:String){repository(owner:$o,name:$n){discussions(first:20,after:$endCursor,states:OPEN){pageInfo{hasNextPage endCursor} nodes{number url title body createdAt closed author{login} category{name} comments(last:100){totalCount nodes{url body createdAt author{login} replies(first:50){totalCount nodes{url body createdAt author{login}}}}}}}}}'
     gh api graphql --paginate -f query="$q" -f o="$owner" -f n="$name" --jq '.data.repository.discussions.nodes[]' | format "$owner"
+    ;;
+  create)
+    [ $# -eq 3 ] || usage
+    [ -n "$2" ] || usage
+    make_body "$3" || exit $?
+    trap 'rm -f "$bodyfile"' EXIT
+    if [ -n "${DISCUSSIONS_DRY_RUN:-}" ]; then
+      cat "$bodyfile"
+      exit 0
+    fi
+    repo_parts || exit 1
+    q='query($o:String!,$n:String!){repository(owner:$o,name:$n){id discussionCategories(first:25){nodes{id name}}}}'
+    info="$(gh api graphql -f query="$q" -f o="$owner" -f n="$name")" || exit 1
+    rid="$(printf '%s' "$info" | jq -r '.data.repository.id')"
+    cid="$(printf '%s' "$info" | jq -r '.data.repository.discussionCategories.nodes[] | select(.name == "Ideas") | .id')"
+    [ -n "$rid" ] && [ -n "$cid" ] || {
+      echo "リポジトリか Ideas カテゴリが見つかりません" >&2
+      exit 1
+    }
+    m='mutation($r:ID!,$c:ID!,$t:String!,$b:String!){createDiscussion(input:{repositoryId:$r,categoryId:$c,title:$t,body:$b}){discussion{url}}}'
+    gh api graphql -f query="$m" -f r="$rid" -f c="$cid" -f t="$2" -F b=@"$bodyfile" --jq '.data.createDiscussion.discussion.url'
     ;;
   comment | close | wait)
     [ $# -eq 3 ] || usage

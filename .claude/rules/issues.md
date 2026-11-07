@@ -173,7 +173,7 @@ Bad:  the 05:00 run merges, the table says release, and it leaves the release to
 ### Run `discussion-judge` once a day at 03:00, before `milestone-dev`
 
 `nightly.sh discussion-judge` runs the skill at 03:00 (at the owner's instruction, 2026-11-07; Discussion #160). It has its own lock and log, like every skill.
-`nightly.sh` hands the run the end of its 50 minutes (03:50) as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh judgment` before it starts new judgments; nothing kills the process.
+`nightly.sh` hands the run the end of its 50 minutes, counted after the wait for `improvement-proposal` ends (03:50 when there is no wait), as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh judgment` before it starts new judgments; nothing kills the process.
 The run ends by commenting its result on the hand-over Discussion (what it decided, what waits for the owner, and why), with the mark `<!-- ai -->` and not the hand-over mark, so that the 05:00 run does not read it as a hand-over or as a reply of the owner.
 This job waits, up to 30 minutes, until the lock of `improvement-proposal` is gone before it starts. The 05:00 `milestone-dev` waits, up to 30 minutes, until the lock of this job is gone before it reorders, so that the issues made here are placed in the same night.
 
