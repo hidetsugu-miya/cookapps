@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.49.4
+
+No change to the app. Only the tools used to develop it changed.
+
 ## v0.49.3
 
 Text selected in an Orca terminal by a program that uses the mouse, such as Claude Code, can now be copied (#150). The terminal puts what the program sends with OSC 52 in the clipboard; when the clipboard refuses it, ⌘C or Edit > Copy puts it there. Option+drag selects text in the terminal itself while such a program runs.
