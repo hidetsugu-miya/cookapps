@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.51.0
+
+A-16: the Orca work pane has a plus at the right end of its tab strip (#130). It opens a menu of 「Claude を起動」 and 「ターミナルを開く」, which start Claude or a plain terminal in the worktree of the project or SSH host selected on the left, and open its tab; with two worktrees or more, a dialog narrowed to them picks one. The 「新規」 button of the list pane is gone.
+
 ## v0.49.4
 
 No change to the app. Only the tools used to develop it changed.
