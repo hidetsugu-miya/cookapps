@@ -3,7 +3,7 @@
 # Usage: nightly.sh improvement-proposal|discussion-judge|milestone-dev  (the exit code is claude's)
 # Keeps one run per skill with a lock directory, writes .claude/nightly/{skill}-{date}.log (logs older than 30 days are deleted), and shows a macOS notification at the end.
 # Every skill gets NIGHTLY_DEADLINE_EPOCH, which the skill checks with nightly-limit.sh before it starts something new; nothing kills the process at the deadline.
-# improvement-proposal: 1 hour after the start, 23:00 for the job, so that it does not overlap the judgment at 23:00.
+# improvement-proposal: 1 hour after the start, 23:00 for the job: no new candidate starts after the judgment's start at 23:00, and the judgment waits for the run in hand (at most 30 minutes).
 # discussion-judge: 50 minutes after the wait for improvement-proposal ends (23:50 when there is no wait). It first waits for the lock of improvement-proposal to go (at most 30 minutes), so that the judgment never runs while Discussions are being made.
 # milestone-dev: the end of its 3 hours (03:30 for the job), and HANDOVER_RUN_START (handover.sh). It first waits for the lock of discussion-judge to go (at most 30 minutes), so that the issues made there are placed in the same night.
 set -u
