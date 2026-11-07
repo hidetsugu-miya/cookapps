@@ -1,5 +1,6 @@
 // The Todo screen's data: the state the Todo modules share, and the functions that read it or change it in place.
 import type { ParentRef } from "./bindings/ParentRef";
+import type { PickedDue } from "./bindings/PickedDue";
 import type { ProjectItem } from "./bindings/ProjectItem";
 import type { TaskItem } from "./bindings/TaskItem";
 import type { Todo } from "./bindings/Todo";
@@ -65,14 +66,6 @@ export interface TaskFields {
 // Open tasks that "今日" lists: overdue or due today.
 export const isDueToday = (t: TaskItem) => t.bucket === "overdue" || t.bucket === "today";
 
-// When a task falls due, in epoch milliseconds: its local date and time (`Due` is already in local time), 00:00 of its date when it has no time. null with no due date.
-export function dueMoment(t: TaskItem) {
-  if (!t.due) return null;
-  const [y, m, d] = t.due.date.split("-").map(Number);
-  const [hh, mm] = (t.due.time ?? "00:00").split(":").map(Number);
-  return new Date(y, m - 1, d, hh, mm).getTime();
-}
-
 // The tasks the sidebar's Todo count is made of, kept so the count can be made again as time passes without a fetch.
 let counted: TaskItem[] = [];
 
@@ -82,7 +75,7 @@ export function recountTodo() {
   let passed = 0;
   const upcoming: number[] = [];
   for (const t of counted) {
-    const at = dueMoment(t);
+    const at = t.dueAt;
     if (at === null) continue;
     if (at <= now) passed++;
     else upcoming.push(at);
@@ -106,7 +99,7 @@ export const subRows = (t: TaskItem) => t.subtasks.flatMap((s) => (s.done ? [] :
 
 export function viewTasks(view: string) {
   const { tasks } = todoState.todo!;
-  if (view === "today") return tasks.filter((t) => t.bucket === "overdue" || t.bucket === "today");
+  if (view === "today") return tasks.filter(isDueToday);
   const id = viewProjectId(view);
   return tasks.filter((t) => t.projectId === id && !t.parent);
 }
@@ -148,10 +141,6 @@ const MARKDOWN_SANITIZE = {
 // The HTML of a description or a comment, which Todoist keeps as Markdown. breaks: a single newline is a line break, as they are written line by line.
 export const markdownHtml = (markdown: string) => DOMPurify.sanitize(marked.parse(markdown, { breaks: true }), MARKDOWN_SANITIZE);
 
-// What the screen shows for a due text the calendar picked (`YYYY-MM-DD`, with ` HH:MM` for a task with a time), or an empty one (no due date).
-// Other text is Todoist's to read, so the task stays as it is until the reload.
-export const PICKED_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
-
 // Puts the label `name`, just created, on the task `id`, and among the labels to pick from if it is not there.
 export function addLabelLocal(id: string, name: string) {
   const t = todoState.taskById.get(id);
@@ -160,22 +149,13 @@ export function addLabelLocal(id: string, name: string) {
   if (!labels.some((l) => l.name === name)) labels.push({ name, color: NEW_LABEL_COLOR });
 }
 
+// `picked` is what Rust made of the due text (`todoist_picked_due`): the due, its bucket and its moment, put on the task as they are. null for other text, which Todoist reads, so the task stays as it is until the reload.
 // shortcut: the list is not re-sorted after a due date change; the next reload fixes it.
-export function patchTask(id: string, { dueString, ...fields }: TaskFields) {
+export function patchTask(id: string, { dueString: _, ...fields }: TaskFields, picked: PickedDue | null = null) {
   const t = todoState.taskById.get(id);
   if (!t) return;
   Object.assign(t, fields);
-  if (dueString === undefined) return;
-  const text = dueString.trim();
-  const m = PICKED_DUE.exec(text);
-  if (m) {
-    const today = isoDate(new Date());
-    t.due = { date: m[1], time: m[2] ?? null, string: text, recurring: false };
-    t.bucket = m[1] < today ? "overdue" : m[1] === today ? "today" : "upcoming";
-  } else if (text === "") {
-    t.due = null;
-    t.bucket = "none";
-  }
+  if (picked) Object.assign(t, picked);
 }
 
 // Whether `t` is below the task `id`, through any number of parents.

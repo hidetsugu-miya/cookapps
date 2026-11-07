@@ -8,7 +8,7 @@ import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { getSlackWorkspaces, loadSlackWorkspaces } from "./slack-workspaces.js";
 import { toast } from "./toast.js";
-import { inboxOf, PICKED_DUE, projectName, projectOf, todoState, viewProjectId } from "./todo-data.js";
+import { inboxOf, projectName, projectOf, todoState, viewProjectId } from "./todo-data.js";
 import { openDueEditor, openProjectPicker } from "./todo-detail.js";
 import { openPrompt } from "./todo-prompt.js";
 import { todoCall } from "./todo-write.js";
@@ -175,6 +175,9 @@ function reviewField(label: string, control: HTMLElement) {
   return field;
 }
 
+// The day and the time in a due text the calendar of the card's popover wrote (`YYYY-MM-DD`, with ` HH:MM`), to open the popover on them again. It reads back the popover's own text and decides nothing about the task.
+const CARD_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
+
 // The card that asks the user to confirm Claude's summary: name, description, due date and project can be changed, the link cannot (it ends the description).
 export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks) {
   const name = tag("input", "review-name");
@@ -192,7 +195,7 @@ export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks)
   };
   showDue();
   dueChip.onclick = () => {
-    const picked = PICKED_DUE.exec(dueText);
+    const picked = CARD_DUE.exec(dueText);
     openDueEditor(dueChip, {
       text: dueText,
       date: picked?.[1] ?? null,

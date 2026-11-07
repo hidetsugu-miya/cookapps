@@ -489,7 +489,7 @@ describe("todo projects and subtasks", () => {
     expect(await browser.execute(() => (document.querySelectorAll<HTMLElement>("#todo-list li.task")[3] as HTMLElement).style.marginLeft)).toBe("56px");
     // A load that brings a new task redraws the list, and the open rows stay open.
     const fresh = todoData();
-    fresh.tasks.push({ ...fresh.tasks[0], id: "k5", content: "Fresh", due: null, bucket: "none" });
+    fresh.tasks.push({ ...fresh.tasks[0], id: "k5", content: "Fresh", due: null, bucket: "none", dueAt: null });
     await mock("todoist_load", fresh);
     // The screen has no reload button: leaving it and coming back loads again.
     await $("#nav-mail").click();
@@ -641,6 +641,7 @@ describe("todo: moving a task by its grip", () => {
     const data = todoData();
     data.tasks[1].due = data.tasks[0].due;
     data.tasks[1].bucket = "today";
+    data.tasks[1].dueAt = data.tasks[0].dueAt;
     await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
     await $("#nav-todo").click();
     await waitForCount(ROWS, 2);
@@ -781,6 +782,32 @@ describe("todo detail", () => {
     await $(".due-pop .chip-input").setValue("明日");
     await browser.keys("Enter");
     expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: "明日" }]);
+  });
+
+  it("puts the due Rust answers for the typed text on the task at once, and leaves the task alone for text Todoist reads", async () => {
+    const data = todoData();
+    data.tasks[0] = dueToday(data.tasks[0], "09:00");
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    // A load that never answers: only the answer of todoist_picked_due can change the row.
+    await mock("todoist_load", holds);
+    const update = await mock("todoist_update", true);
+    const picked = await mock("todoist_picked_due", { due: { date: today, time: "18:00", string: `${today} 18:00`, recurring: false }, bucket: "today", dueAt: 1 });
+    await $(ROWS).click();
+    await expect($("#todo-detail .field:nth-child(2) .field-value")).toHaveText("09:00");
+    await $("#todo-detail .field:nth-child(2) .field-value").click();
+    await $(".due-pop .chip-input").setValue(`${today} 18:00`);
+    await browser.keys("Enter");
+    expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: `${today} 18:00` }]);
+    expect(await callsOf(picked)).toEqual([{ text: `${today} 18:00` }]);
+    await expect($("#todo-detail .field:nth-child(2) .field-value")).toHaveText("18:00");
+    // Rust answers null for other text: the due stays as it is until the reload.
+    await mock("todoist_picked_due", null);
+    await $("#todo-detail .field:nth-child(2) .field-value").click();
+    await $(".due-pop .chip-input").setValue("明日");
+    await browser.keys("Enter");
+    await waitForCalls(update, 2);
+    await expect($("#todo-detail .field:nth-child(2) .field-value")).toHaveText("18:00");
   });
 
   it("saves the due text typed in the side pane when a click elsewhere closes the popover", async () => {
@@ -1541,9 +1568,10 @@ describe("todo detail due date clear button", () => {
   it("hides the button unless the mouse is over the date or the focus is in it, and clears the date at once when it is pressed", async () => {
     await openTodo();
     const update = await mock("todoist_update", true);
+    await mock("todoist_picked_due", { due: null, bucket: "none", dueAt: null });
     // What Todoist answers after it, so the reload that follows keeps the task without a date.
     const cleared = todoData();
-    Object.assign(cleared.tasks[0], { due: null, bucket: "none" });
+    Object.assign(cleared.tasks[0], { due: null, bucket: "none", dueAt: null });
     await mock("todoist_load", cleared);
     await $(ROWS).click();
     await expect($(clear)).toExist();

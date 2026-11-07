@@ -31,7 +31,7 @@ Bad:  build the graph in a worktree and delete the worktree
 
 ### Write the agents and the rules in their own language
 
-`.claude/rules/` is written in English. `.claude/agents/`, `.claude/rules/` and `.claude/tools/` are tracked and edited on a worktree branch, and the rest of `.claude/`, with the two gitignored rules, is edited in the main checkout (`worktree.md`).
+`.claude/rules/` is written in English. `.claude/agents/`, `.claude/rules/`, `.claude/skills/` and `.claude/tools/` are tracked and edited on a worktree branch, and the rest of `.claude/`, with the two gitignored rules, is edited in the main checkout (`worktree.md`).
 The hooks and the gates run the main checkout's copy of `.claude/tools/`, so a change to it takes effect after the merge and the fast-forward of the main checkout.
 
 ```text

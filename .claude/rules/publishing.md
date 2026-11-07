@@ -29,7 +29,7 @@ Bad:  write "runs on the GCP project example-project" in README.md or AGENTS.md
 
 ### Do not commit gitignored files
 
-The targets are `CLAUDE.local.md`, `AGENTS.local.md` (retired, and still ignored so that an old worktree's copy cannot be committed), `mise.toml`, `.claude/` (except `agents/`, `rules/` and `tools/`), `.claude/rules/machines.md`, `.claude/rules/google-cloud.md` and `src-tauri/.cargo/`.
+The targets are `CLAUDE.local.md`, `AGENTS.local.md` (retired, and still ignored so that an old worktree's copy cannot be committed), `mise.toml`, `.claude/` (except `agents/`, `rules/`, `skills/` and `tools/`), `.claude/rules/machines.md`, `.claude/rules/google-cloud.md` and `src-tauri/.cargo/`.
 They hold a personal environment, and there is no point in publishing them.
 
 ```sh

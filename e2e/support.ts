@@ -242,15 +242,16 @@ export function weekOfToday(firstDay = 0): Week {
 
 // ---- Todoist ----
 
-// The epoch milliseconds of `time` (`HH:MM`, midnight by default) `day` days from today, in local time: a due moment as the app counts it.
-export const moment = (day: number, time = "00:00") => {
+// The `dueAt` a fixture task carries: the epoch milliseconds of `time` (`HH:MM`, midnight by default) `day` days from today, in local time.
+// Rust computes it in the app; a fixture only gives it a value that fits the task's due, and a spec reads it back from the task.
+const fixtureDueAt = (day: number, time = "00:00") => {
   const [h, m] = time.split(":").map(Number);
   const d = new Date();
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + day, h, m).getTime();
 };
 
 // The local `YYYY-MM-DD` of `n` days from today.
-const dayFromToday = (n: number) => isoDate(new Date(moment(n)));
+const dayFromToday = (n: number) => isoDate(new Date(fixtureDueAt(n)));
 
 // A task with a due date that fits its bucket: yesterday, today or tomorrow, no time.
 export const task = (id: string, content: string, projectId: string, bucket: "overdue" | "today" | "upcoming" | "none"): TaskItem => ({
@@ -261,6 +262,7 @@ export const task = (id: string, content: string, projectId: string, bucket: "ov
   priority: 4,
   due: bucket === "none" ? null : { date: dayFromToday({ overdue: -1, today: 0, upcoming: 1 }[bucket]), time: null, string: bucket, recurring: false },
   bucket,
+  dueAt: bucket === "none" ? null : fixtureDueAt({ overdue: -1, today: 0, upcoming: 1 }[bucket]),
   subtasks: [],
   subDone: 0,
   subTotal: 0,
@@ -286,7 +288,12 @@ export const setClock = (at: string) =>
   }, at);
 
 // The task `t` due today at `time` (`HH:MM`), or with no time.
-export const dueToday = (t: TaskItem, time: string | null): TaskItem => ({ ...t, bucket: "today", due: { date: today, time, string: "today", recurring: false } });
+export const dueToday = (t: TaskItem, time: string | null): TaskItem => ({
+  ...t,
+  bucket: "today",
+  due: { date: today, time, string: "today", recurring: false },
+  dueAt: fixtureDueAt(0, time ?? "00:00"),
+});
 
 // The task `t` as a row under `parent`, and as an entry of the parent's subtask list.
 const under = (parent: TaskItem, t: TaskItem): TaskItem => {
