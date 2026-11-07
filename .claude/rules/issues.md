@@ -144,7 +144,7 @@ A candidate that matches any of these goes to a Discussion (Ideas, in the form o
 - Two or more options remain that primary sources and a prototype cannot settle.
 
 File at most 3 issues in a run. Make no new Discussion while 5 or more Ideas Discussions are open, and no `needs:owner` issue while 5 or more proposals are open with `needs:owner`.
-Do not file a proposal with the same purpose as a closed proposal or an open issue.
+Do not file a proposal with the same purpose as a closed proposal, an open issue, or an open or closed Discussion.
 The owner accepts an issue with `needs:owner` by removing it, which makes it an ordinary issue for `milestone-dev`, and declines a proposal by closing it with `wontfix`.
 
 ```text
