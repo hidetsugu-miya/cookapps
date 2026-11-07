@@ -4,7 +4,7 @@
 
 ### Look in `.claude/` for what guards a change
 
-Hooks are configured in `.claude/settings.local.json`, and worktrees use the main checkout's.
+Hooks are in `.claude/hooks/`, which is tracked, and they are wired in `.claude/settings.local.json`, which is not; worktrees use the main checkout's settings, so the hooks that run are the main checkout's.
 `guard-public.sh` stops forbidden public words, `post-edit.sh` runs rustfmt and `node --check` after an edit, `guard-e2e.sh` and `guard-review.sh` protect the records, and `pre-git.sh` runs the checks before a push. `session-start.sh` runs `npm ci` when `node_modules` is missing, and `post-gh.sh` keeps the milestones in step after `gh issue create`, the removal of `needs:owner` and `gh pr merge`.
 `.claude/skills/` holds `discussion-judge` (decide the open Discussions and turn the decisions into issues), `improvement-proposal` (file UI/UX and refactoring proposals as issues), `issue-plan` (an issue and its planned tag), `milestone-dev` (implement the first milestone) and `readme-product` (the README as a product page, and its photos).
 `.claude/agents/` holds the reviewers (`code-reviewer`, `performance-reviewer`, `security-reviewer`), `release-verifier`, `release-planner`, `discussion-judge` (decides one Discussion), and the two scouts of `improvement-proposal`, `ux-scout` and `refactor-scout`.
@@ -30,8 +30,8 @@ Bad:  build the graph in a worktree and delete the worktree
 
 ### Write the agents and the rules in their own language
 
-`.claude/rules/` is written in English. `.claude/agents/`, `.claude/rules/`, `.claude/skills/` and `.claude/tools/` are tracked and edited on a worktree branch, and the rest of `.claude/`, with the two gitignored rules, is edited in the main checkout (`worktree.md`).
-The hooks and the gates run the main checkout's copy of `.claude/tools/`, so a change to it takes effect after the merge and the fast-forward of the main checkout.
+`.claude/rules/` is written in English. `.claude/agents/`, `.claude/hooks/`, `.claude/rules/`, `.claude/skills/` and `.claude/tools/` are tracked and edited on a worktree branch, and the rest of `.claude/`, with the two gitignored rules and `.claude/hooks/public-words`, is edited in the main checkout (`worktree.md`).
+The hooks and the gates run the main checkout's copy of `.claude/hooks/` and `.claude/tools/`, so a change to either takes effect after the merge and the fast-forward of the main checkout.
 
 ```text
 Good: change .claude/rules/review.md on the branch, and .claude/rules/machines.md in the main checkout

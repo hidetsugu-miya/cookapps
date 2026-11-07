@@ -7,10 +7,12 @@ AGENTS.local.md
 mise.toml
 .claude/*
 !.claude/agents/
+!.claude/hooks/
 !.claude/rules/
 !.claude/skills/
 !.claude/tools/
 .claude/tools/__pycache__/
+.claude/hooks/public-words
 .claude/rules/machines.md
 .claude/rules/google-cloud.md
 src-tauri/.cargo/

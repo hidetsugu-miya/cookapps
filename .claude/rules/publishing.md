@@ -19,6 +19,8 @@ Bad:  write the description of a feature only in a commit message
 
 Personal information means things like organization names, GCP project names, personal email addresses, host names, and where keys and certificates are kept.
 `.claude/rules/` is public, except `machines.md` and `google-cloud.md`, which are gitignored because they hold this (at the owner's instruction, 2026-11-05).
+`.claude/hooks/` is tracked and so public too, and the list of words that must not be published is itself such a thing: it is the gitignored `.claude/hooks/public-words`, one pattern per line, which `guard-public.sh` reads and without which it stops.
+Never write a personal value (a host name, a personal path, an address) in a hook: read it from that file or from the environment.
 Check a rule for it before you commit the rule.
 Once something enters a public repository and its history, removing it takes a history rewrite.
 
@@ -29,7 +31,7 @@ Bad:  write "runs on the GCP project example-project" in README.md or AGENTS.md
 
 ### Do not commit gitignored files
 
-The targets are `CLAUDE.local.md`, `AGENTS.local.md` (retired, and still ignored so that an old worktree's copy cannot be committed), `mise.toml`, `.claude/` (except `agents/`, `rules/`, `skills/` and `tools/`), `.claude/rules/machines.md`, `.claude/rules/google-cloud.md` and `src-tauri/.cargo/`.
+The targets are `CLAUDE.local.md`, `AGENTS.local.md` (retired, and still ignored so that an old worktree's copy cannot be committed), `mise.toml`, `.claude/` (except `agents/`, `hooks/`, `rules/`, `skills/` and `tools/`), `.claude/hooks/public-words`, `.claude/rules/machines.md`, `.claude/rules/google-cloud.md` and `src-tauri/.cargo/`.
 They hold a personal environment, and there is no point in publishing them.
 
 ```sh

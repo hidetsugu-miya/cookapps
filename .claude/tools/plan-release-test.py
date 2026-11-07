@@ -757,7 +757,7 @@ class DeriveGroups(unittest.TestCase):
         self.assertEqual(slot_view(pr.allocate(ordered, [], "v0.39.2")), [("v0.39.3", [1, 2, 3]), ("v0.39.4", [4, 5])])
 
 
-# .claude/hooks/ is untracked, so a worktree has none: use the main checkout's
+# The hooks that run are the main checkout's (a worktree's own copy takes effect after the merge): test those
 _common = subprocess.run(
     ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=here, check=True, capture_output=True, text=True
 ).stdout.strip()
