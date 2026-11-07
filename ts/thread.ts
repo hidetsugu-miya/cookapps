@@ -9,9 +9,9 @@ import { rowKey, rows, setReadState, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { autoFit, fitAfterImages, frameObserver, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
-import { renderSummary, summaryPressed } from "./mail-summary.js";
+import { clearSummary, renderSummary, summaryPressed } from "./mail-summary.js";
 import { linkify } from "./mail-text.js";
-import { setScreen } from "./nav.js";
+import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { mailCard } from "./orca-handoff-cards.js";
 import { initSplit } from "./split.js";
@@ -27,6 +27,9 @@ export interface OpenThread {
   subject: string;
 }
 export const opened: { current: OpenThread | null } = { current: null };
+
+// The thread the detail view is waiting for, or shows a failure for, in place of `opened` (which is empty until the thread arrives).
+export const loading: { current: { id: string; account: string } | null } = { current: null };
 
 // The pane that hands the open thread to Orca (A-9).
 let handoff: HandoffPane;
@@ -161,17 +164,73 @@ async function markRead(account: string, id: string) {
   }
 }
 
-export async function openThread({ id, account }: { id: string; account: string }, li: HTMLLIElement | null, origin: "mail" | "todo" = "mail") {
+// The buttons of the header that act on the loaded thread. They are disabled until it arrives; "戻る" is not one of them.
+const ACTIONS = ["thread-summary", "thread-slack", "thread-todo", "thread-orca", "trash", "archive"];
+
+// What the detail view holds until the thread arrives: the sender the list row has (none for a thread opened from Todo with no row),
+// and in the body's place a note and gray lines. The body is returned, so a failure can take its place.
+function loadingMessage(from: string | undefined) {
+  const article = document.createElement("article");
+  const head = document.createElement("div");
+  head.className = "msg-head";
+  const avatar = span("msg-avatar", "");
+  avatar.innerHTML = PERSON_SVG;
+  const who = span("who", "");
+  if (from) {
+    const { name, address } = splitAddress(from);
+    who.append(span("name", name || address));
+    if (name) who.append(" ", span("addr", `<${address}>`));
+  }
+  head.append(avatar, who);
+  const body = document.createElement("div");
+  body.className = "msg-body";
+  body.setAttribute("role", "status");
+  const note = document.createElement("div");
+  note.className = "msg-loading";
+  note.append(span("spin", ""), "読み込んでいます…");
+  const bars = document.createElement("div");
+  bars.className = "msg-bars";
+  bars.append(span("", ""), span("", ""), span("", ""));
+  body.append(note, bars);
+  article.append(head, body);
+  return { article, body };
+}
+
+// `thread` is the row's item (or just the ids, for a thread opened from Todo with no row): its subject and sender are shown at once, and the body once Gmail answers.
+export async function openThread(
+  { id, account, subject, from }: { id: string; account: string; subject?: string; from?: string },
+  li: HTMLLIElement | null,
+  origin: "mail" | "todo" = "mail",
+) {
   $("error").hidden = true;
   dismiss(rowKey({ id, account }));
   const seq = ++openCount;
+  // Until the thread arrives nothing is open: no button acts on the thread that was open before.
+  opened.current = null;
+  loading.current = { id, account };
+  threadOrigin = origin;
+  clearSummary();
+  const { article, body } = loadingMessage(from);
+  $("thread-subject").textContent = subject === undefined ? "" : subject || "(件名なし)";
+  $("messages").replaceChildren(article);
+  show("thread");
+  $("thread").setAttribute("aria-busy", "true");
+  for (const button of ACTIONS) $<HTMLButtonElement>(button).disabled = true;
+  // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
+  $("trash").hidden = $("archive").hidden = $("thread-label").hidden = !li;
+  handoff.sync();
   try {
     const t = await invoke("thread", { account, id });
     if (seq !== openCount) return;
+    $("thread").removeAttribute("aria-busy");
+    loading.current = null;
     // null: that account must log in again, which the list shows.
-    if (t === null) return load();
+    if (t === null) {
+      if (currentScreen() === "mail") show("list");
+      handoff.sync();
+      return load();
+    }
     opened.current = { id, account, li, messages: t.messages, subject: t.subject };
-    threadOrigin = origin;
     $("thread-subject").textContent = t.subject || "(件名なし)";
     // The images that had to be fetched come separately, so the body is not held up by them.
     const cids = t.pendingImages?.length
@@ -187,19 +246,27 @@ export async function openThread({ id, account }: { id: string; account: string 
     $("messages").replaceChildren(
       ...[...t.messages].reverse().map((m, i) => message(m, ctx, account, several && i > 0, several)),
     );
-    show("thread");
+    // A Todo still being made from the thread opened before keeps its button until it ends.
+    for (const button of ACTIONS) {
+      $<HTMLButtonElement>(button).disabled = button === "thread-todo" && $(button).classList.contains("busy");
+    }
     renderSummary(opened.current);
-    // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
-    $("trash").hidden = $("archive").hidden = $("thread-label").hidden = !li;
     if (t.unread) markRead(account, id);
     handoff.sync();
   } catch (e) {
-    showError(e);
+    if (seq !== openCount) return;
+    $("thread").removeAttribute("aria-busy");
+    // The loading body is gone once the messages replaced it: the error then goes where every error does.
+    if (body.isConnected) body.replaceChildren(span("msg-fail", String(e)));
+    else showError(e);
   }
 }
 
 export function goBack() {
   $("error").hidden = true;
+  // A thread still loading is left: its answer is ignored.
+  openCount++;
+  loading.current = null;
   if (threadOrigin === "todo") setScreen("todo");
   else show("list");
   handoff.sync();
@@ -231,7 +298,8 @@ export function initThread() {
   initSplit($("mail-area"), $("mail-split"), { initial: 0.37 });
   $("back").onclick = goBack;
   $("thread-todo").onclick = () => {
-    const current = opened.current!;
+    const current = opened.current;
+    if (!current) return;
     makeTodo(current.account, current.id, $("thread-subject").textContent!, $<HTMLButtonElement>("thread-todo"));
   };
   $("thread-summary").onclick = () => summaryPressed(opened.current!);

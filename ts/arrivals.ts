@@ -6,7 +6,7 @@ import { CHECK_SVG, CLOSE_SVG } from "./icons.js";
 import { removeRow } from "./inbox.js";
 import { rowKey, rows } from "./inbox-rows.js";
 import { setScreen } from "./nav.js";
-import { openThread, opened } from "./thread.js";
+import { loading, openThread, opened } from "./thread.js";
 
 // A card goes by itself after this long; the pointer or the focus on it holds it, and it counts again when they leave.
 const SHOW_MS = 10000;
@@ -43,7 +43,7 @@ function action(button: HTMLButtonElement, label: string, key: string, run: () =
 // Shows the card of a new thread. A thread already announced, or the one open on screen, gets none.
 export function announceArrival(t: ThreadItem) {
   const key = rowKey(t);
-  const current = opened.current;
+  const current = opened.current ?? loading.current;
   if (cards.has(key) || (current && !$("thread").hidden && rowKey(current) === key)) return;
   const name = senderName(t.from);
   const card = el("arrival pop");

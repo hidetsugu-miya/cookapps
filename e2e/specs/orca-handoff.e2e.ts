@@ -32,6 +32,7 @@ import {
   slackTs,
   textsOf,
   threadDetail,
+  threadLoaded,
   threadMessage,
   timeline,
   timelineMessage,
@@ -73,6 +74,7 @@ async function openMail(fixtures: Record<string, unknown> = {}) {
   await mock("thread", threadDetail(subject, mailBody, false));
   await rowOf("read-threads", "Already read").$(".subject").click();
   await expect($("#thread-subject")).toHaveText(subject);
+  await threadLoaded();
 }
 
 const rootTs = slackTs(60, 1);
@@ -194,6 +196,7 @@ describe("orca handoff", () => {
     await $("#back").click();
     await mock("thread", threadDetail("Second", "Other mail", false));
     await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
     await $(MAIL.button).click();
     await waitForCount(`${MAIL.pane} .ho-row`, 3);
     expect(await textsOf(`${MAIL.pane} .ho-chip`)).toEqual(["example-api ・ main"]);
@@ -220,6 +223,7 @@ describe("orca handoff", () => {
     await mock("thread", { ...base, messages: [{ ...base.messages[0], html: true, body: html }] });
     await rowOf("read-threads", "Already read").$(".subject").click();
     await expect($("#thread-subject")).toHaveText(subject);
+    await threadLoaded();
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
     const toggle = $(`${MAIL.pane} .ho-card-toggle`);
@@ -410,6 +414,7 @@ describe("orca handoff", () => {
     await browser.waitUntil(async () => (await callsOf("orca_chat_close")).length === 1, { timeoutMsg: "the read was not released" });
     // The same thread again: the pane is open on its session, and its history is read again.
     await rowOf("read-threads", "Already read").$(".subject").click();
+    await threadLoaded();
     await expect($(MAIL.pane)).toBeDisplayed();
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "true");
     await waitForOpens(2);
@@ -418,12 +423,14 @@ describe("orca handoff", () => {
     await $("#back").click();
     await mock("thread", threadDetail("Second", "Other", false));
     await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "false");
     await expect($(MAIL.pane)).not.toBeDisplayed();
     // The close icon of the session forgets it: the next open shows the form.
     await $("#back").click();
     await mock("thread", threadDetail(subject, mailBody, false));
     await rowOf("read-threads", "Already read").$(".subject").click();
+    await threadLoaded();
     await expect($(MAIL.pane)).toBeDisplayed();
     await $(`${MAIL.pane} [aria-label="閉じる"]`).click();
     await expect($(MAIL.pane)).not.toBeDisplayed();
@@ -456,6 +463,7 @@ describe("orca handoff", () => {
     // The thread is open again: the pane reads the history again.
     await $("#nav-mail").click();
     await rowOf("read-threads", "Already read").$(".subject").click();
+    await threadLoaded();
     await expect($(`${MAIL.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
     await waitForOpens(2);
     await sendChat(chatItems([chatAssistant("a9", "戻りました")]));
@@ -565,6 +573,7 @@ describe("orca handoff", () => {
     await mock("thread", threadDetail("Second", "Other mail", false));
     await rowOf("unread-threads", "First unread").$(".subject").click();
     await expect($("#thread-subject")).toHaveText("Second");
+    await threadLoaded();
     await expect($(MAIL.pane)).not.toBeDisplayed();
     await release(handoff, rejects("失敗しました"));
     await browser.pause(300);
@@ -577,6 +586,7 @@ describe("orca handoff", () => {
     // Its own item has the text and the message again.
     await mock("thread", threadDetail(subject, mailBody, false));
     await rowOf("read-threads", "Already read").$(".subject").click();
+    await threadLoaded();
     await $(MAIL.button).click();
     await waitForCount(`${MAIL.pane} .ho-row`, 3);
     await expect(field(MAIL)).toHaveValue("守る指示");

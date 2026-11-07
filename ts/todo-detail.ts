@@ -2,11 +2,12 @@
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, onEnter, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
-import { CLOSE_SVG, COPY_SVG, DATE_SVG, MAIL_SVG, PLUS_SVG, RETURN_SVG } from "./icons.js";
+import { CLOSE_SVG, COPY_SVG, DATE_SVG, FOLDER_SVG, MAIL_SVG, OUTDENT_SVG, PLUS_SVG, RETURN_SVG } from "./icons.js";
+import { rowButton } from "./inbox-rows.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { commentsSection, fitCommentInput } from "./todo-comments.js";
 import { accountSet, dueLabel, linkedMail, markdownHtml, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
-import { checkBox, openMailFromTodo, renderList } from "./todo-list.js";
+import { checkBox, gripOf, openMailFromTodo, renderList } from "./todo-list.js";
 import { createLabel, moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
 import { renderTodo, syncTodoHandoff, todoMode } from "./todo.js";
 import { copyText } from "./view.js";
@@ -326,7 +327,9 @@ function subtaskRow(s: TaskItem["subtasks"][number]) {
     setTaskDone(s.id, box.checked, box);
   };
   // A subtask has a row among the tasks, so it opens like one; a done one has none.
-  if (todoState.taskById.has(s.id)) {
+  const t = todoState.taskById.get(s.id);
+  if (t) {
+    li.dataset.id = s.id;
     li.onclick = () => {
       todoState.open = s.id;
       renderTodo();
@@ -337,7 +340,18 @@ function subtaskRow(s: TaskItem["subtasks"][number]) {
   body.append(tag("div", "t", s.content));
   const trail = tag("div", "trail");
   trail.append(tag("span", "due", s.due ? dueLabel(s.due) : ""));
-  li.append(box, body, trail);
+  li.append(box, body);
+  // An open subtask moves as a row of the list does; a done one stays where it is.
+  if (t && !s.done) {
+    const actions = tag("div", "row-actions");
+    actions.append(
+      rowButton("project-row", "プロジェクトを移動", FOLDER_SVG, (button) => openProjectMenu(button, t)),
+      rowButton("unparent-row", "親タスクから外す", OUTDENT_SVG, () => moveTask(t.id, t.projectId)),
+    );
+    trail.append(actions);
+    li.append(gripOf(li, t));
+  }
+  li.append(trail);
   return li;
 }
 
