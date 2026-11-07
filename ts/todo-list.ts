@@ -234,17 +234,17 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
 }
 
 // What the task `t` may be dropped on at `el`: a project in the side list (not "today"; the project it is in only when it is a subtask, which then stands alone),
-// or the row of another task it may become a subtask of.
+// or the row of another task it may become a subtask of: a row of the list, or a subtask row of the open task's detail.
 function dropTarget(el: Element | null | undefined, t: TaskItem) {
   const proj = el?.closest<HTMLElement>("#projects .proj");
   if (proj) return proj.dataset.view !== "today" && (viewProjectId(proj.dataset.view!) !== t.projectId || t.parent) ? proj : null;
-  const row = el?.closest<HTMLElement>("#todo-list li.task");
+  const row = el?.closest<HTMLElement>("#todo-list li.task, #todo-detail .subs li.task[data-id]");
   return row && canMoveUnder(t, row.dataset.id!) ? row : null;
 }
 
 // The grip at a row's left edge: drag it onto a project in the side list to move the task there, or onto another task's row to make it that task's subtask.
 // Pointer events, not HTML5 drag and drop, which clashes with the window's file drop.
-function gripOf(li: HTMLElement, t: TaskItem) {
+export function gripOf(li: HTMLElement, t: TaskItem) {
   const grip = tag("span", "grip");
   grip.setAttribute("role", "img");
   grip.setAttribute("aria-label", "ドラッグしてプロジェクトまたは親タスクへ移動");
