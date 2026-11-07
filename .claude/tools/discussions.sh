@@ -58,6 +58,7 @@ format() {
             url: $d.url,
             title: $d.title,
             body: $d.body,
+            body_ai: ($d | isai),
             created_at: $d.createdAt,
             why: ([if $replied then "owner_replied" else empty end, if $unmarked then "unmarked" else empty end, if $stale then "stale" else empty end]),
             stale: $stale,
