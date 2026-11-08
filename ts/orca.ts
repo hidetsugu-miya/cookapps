@@ -884,9 +884,15 @@ async function start(kind: StartKind, path: string) {
 }
 
 // The button of the file pane (A-18) is in the top row of the pane while it is shown, and at the right end of the tab strip of the corner pane while it is hidden.
+// The pressed button is hidden by the draw, so the focus goes on to the button that is shown now.
 function toggleFilesAndDraw() {
+  const focused = document.activeElement?.classList.contains("orca-files-toggle") ?? false;
   toggleFiles();
   draw();
+  if (focused) {
+    const shown = [...document.querySelectorAll<HTMLElement>(".orca-files-toggle")].find((b) => b.offsetParent !== null);
+    shown?.focus({ preventScroll: true });
+  }
 }
 
 export function initOrca() {

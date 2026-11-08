@@ -2607,6 +2607,28 @@ describe("orca: files and editor (A-18)", () => {
     expect(corner.toggleRight).toBeGreaterThan(corner.plusRight);
   });
 
+  it("moves the focus to the button that is shown when the focused button is pressed", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_terminal_read: ["$"] });
+    await mock("orca_files_list", root());
+    await project("example-app").click();
+    await $(".orca-tabbar [data-tab]").waitForDisplayed();
+    // A press from the keyboard is a click on the focused button; the shown terminal would take the keys of WebDriver, so the click is made on the focused button itself.
+    const pressFocused = (selector: string) =>
+      browser.execute((s) => {
+        const b = document.querySelector<HTMLElement>(s)!;
+        b.focus();
+        b.click();
+        const a = document.activeElement;
+        return { files: a?.closest("#orca-files") !== null, tabs: a?.closest(".orca-tabbar") !== null, toggle: a?.classList.contains("orca-files-toggle") ?? false };
+      }, selector);
+    const shown = await pressFocused(".orca-tabbar .orca-files-toggle:not([hidden])");
+    await expect($("#orca-files")).toBeDisplayed();
+    expect(shown).toEqual({ files: true, tabs: false, toggle: true });
+    const hidden = await pressFocused("#orca-files-toggle");
+    await expect($("#orca-files")).not.toBeDisplayed();
+    expect(hidden).toEqual({ files: false, tabs: true, toggle: true });
+  });
+
   it("puts the button in the pane in the top right corner only", async () => {
     const two = orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] });
     const side = layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", [zsh])] }, "p1");
