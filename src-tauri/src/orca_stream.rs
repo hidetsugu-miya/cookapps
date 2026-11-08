@@ -95,6 +95,8 @@ pub struct OrcaViewport {
 /// A terminal the screen shows.
 pub struct Watch {
     handle: String,
+    /// The number the screen gave this showing; a close of an earlier showing of the same handle does not end this one.
+    generation: u64,
     /// The pane's size, which the terminal is fitted to.
     viewport: OrcaViewport,
     /// Gives an event to the screen; `false` when the screen no longer takes them.
@@ -105,8 +107,8 @@ pub struct Watch {
 pub enum StreamCommand {
     /// Show this terminal (it is subscribed in place of one shown before with the same handle); the others shown stay.
     Terminal(Watch),
-    /// Show the terminal `handle` no more: it is unsubscribed.
-    TerminalClose(String),
+    /// Show the terminal `handle` no more: it is unsubscribed. It ends only the showing of its generation (the second field), so a close that comes after a later showing of the handle changes nothing.
+    TerminalClose(String, u64),
     /// The pane's size changed (the terminal `handle`, the first field, fits it).
     Viewport(String, OrcaViewport),
     /// Keys typed into the terminal `handle` (the first field); they go only while it is a terminal subscribed, and the answer says whether Orca took them.
@@ -377,6 +379,15 @@ struct Stream {
     attempt: usize,
 }
 
+impl Stream {
+    /// Whether the terminal `handle` is shown by a showing other than that of `generation`: a close of that generation is late and must not end it.
+    fn shows_later(&self, handle: &str, generation: u64) -> bool {
+        self.watches
+            .get(handle)
+            .is_some_and(|w| w.generation != generation)
+    }
+}
+
 const NOT_CONNECTED: &str = "接続先につながっていません";
 const OTHER_TERMINAL: &str = "入力したターミナルは表示されていないため、送りませんでした";
 
@@ -553,7 +564,10 @@ impl Connection {
                 stream.watches.insert(handle, watch);
                 self.subscribe(link, stream).await?;
             }
-            Some(StreamCommand::TerminalClose(handle)) => {
+            Some(StreamCommand::TerminalClose(handle, generation)) => {
+                if stream.shows_later(&handle, generation) {
+                    return Ok(true);
+                }
                 stream.watches.remove(&handle);
                 self.ended.remove(&handle);
                 self.unsubscribe(link, &stream.client, &handle).await?;
@@ -687,8 +701,10 @@ async fn run_loop<F, Fut>(
                     Some(StreamCommand::Terminal(watch)) => {
                         stream.watches.insert(watch.handle.clone(), watch);
                     }
-                    Some(StreamCommand::TerminalClose(handle)) => {
-                        stream.watches.remove(&handle);
+                    Some(StreamCommand::TerminalClose(handle, generation)) => {
+                        if !stream.shows_later(&handle, generation) {
+                            stream.watches.remove(&handle);
+                        }
                     }
                     Some(StreamCommand::Viewport(handle, viewport)) => {
                         if let Some(watch) = stream.watches.get_mut(&handle) {
@@ -772,12 +788,14 @@ pub async fn orca_stream_close(state: tauri::State<'_, OrcaStream>) -> Result<()
 pub async fn orca_stream_terminal(
     state: tauri::State<'_, OrcaStream>,
     handle: String,
+    generation: u64,
     viewport: OrcaViewport,
     channel: tauri::ipc::Channel<OrcaTermEvent>,
 ) -> Result<(), String> {
     check_handle(&handle)?;
     state.send(StreamCommand::Terminal(Watch {
         handle,
+        generation,
         viewport,
         sink: Box::new(move |event| channel.send(event).is_ok()),
     }))
@@ -788,10 +806,11 @@ pub async fn orca_stream_terminal(
 pub async fn orca_stream_terminal_close(
     state: tauri::State<'_, OrcaStream>,
     handle: String,
+    generation: u64,
 ) -> Result<(), String> {
     check_handle(&handle)?;
     // With no stream there is nothing to let go.
-    let _ = state.send(StreamCommand::TerminalClose(handle));
+    let _ = state.send(StreamCommand::TerminalClose(handle, generation));
     Ok(())
 }
 
@@ -1213,6 +1232,7 @@ mod tests {
         let into = seen.clone();
         let watch = Watch {
             handle: handle.into(),
+            generation: 1,
             viewport,
             sink: Box::new(move |event| {
                 into.lock().unwrap().push(event);
@@ -1220,6 +1240,28 @@ mod tests {
             }),
         };
         (watch, seen)
+    }
+
+    #[test]
+    fn a_close_of_an_earlier_showing_does_not_end_a_later_one() {
+        let (mut first, _) = watch("term_s", OrcaViewport { cols: 80, rows: 24 });
+        first.generation = 1;
+        let mut stream = Stream {
+            client: "cookapps-test".into(),
+            watches: HashMap::new(),
+            attempt: 0,
+        };
+        // Nothing is shown: a close has nothing to spare.
+        assert!(!stream.shows_later("term_s", 1));
+        stream.watches.insert("term_s".into(), first);
+        assert!(!stream.shows_later("term_s", 1));
+        // The handle is shown again (generation 2) before the close of generation 1 arrives.
+        let (mut second, _) = watch("term_s", OrcaViewport { cols: 80, rows: 24 });
+        second.generation = 2;
+        stream.watches.insert("term_s".into(), second);
+        assert!(stream.shows_later("term_s", 1));
+        assert!(!stream.shows_later("term_s", 2));
+        assert!(!stream.shows_later("term_other", 1));
     }
 
     async fn streamed(server: &mut FakeDesktop, id: &Value, result: Value) {
@@ -1408,7 +1450,7 @@ mod tests {
 
         // Shown no more: it is let go by the request that subscribed it.
         commands
-            .send(StreamCommand::TerminalClose("term_c".into()))
+            .send(StreamCommand::TerminalClose("term_c".into(), 1))
             .ok()
             .unwrap();
         let unsubscribe = server.request().await;
@@ -1638,7 +1680,7 @@ mod tests {
         assert!(answer.await.unwrap().is_ok());
         // One shown no more is let go and the other stays: its keys still go.
         commands
-            .send(StreamCommand::TerminalClose("term_c".into()))
+            .send(StreamCommand::TerminalClose("term_c".into(), 1))
             .ok()
             .unwrap();
         let unsubscribe = server.request().await;

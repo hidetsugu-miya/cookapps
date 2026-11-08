@@ -1616,11 +1616,11 @@ describe("orca: a saved environment's stream", () => {
     // Another tab: its terminal is subscribed, and the one left is closed by its handle (a close names its terminal, so it ends no other stream).
     await tabOf("orca:term_example-app_zsh").$(".orca-tab-btn").click();
     expect(await waitForCalls(subscribe)).toMatchObject([{ handle: "term_example-app_zsh" }]);
-    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app" }]);
+    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
     // Another screen.
     await $("#nav-mail").click();
     await waitForCalls(close, 2);
-    expect((await callsOf(close))[1]).toEqual({ handle: "term_example-app_zsh" });
+    expect((await callsOf(close))[1]).toEqual({ handle: "term_example-app_zsh", generation: expect.any(Number) });
     // Back on the screen the stream starts again, and a hidden window ends it. Showing the screen reads the list once with the CLI, which holds what the stream sent.
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { ...studioOnly, terminals: [orcaTerminal("example-app", "zsh")] }));
     await $("#nav-orca").click();
@@ -1640,7 +1640,7 @@ describe("orca: a saved environment's stream", () => {
     // The Claude row of the tab shown goes and the project keeps a shell: the tab and its terminal are dropped, with a close of its stream, and the shell is subscribed.
     await sendStream(streamList(sample().slice(1), worktrees(), [orcaTerminal("example-app", "zsh")]));
     expect(await waitForCalls(subscribe)).toMatchObject([{ handle: "term_example-app_zsh" }]);
-    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app" }]);
+    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
   });
 
   it("ends the stream of the terminal when the tab shown leaves the list and no tab is left to show", async () => {
@@ -1649,7 +1649,7 @@ describe("orca: a saved environment's stream", () => {
     await waitForCalls("orca_stream_terminal");
     const close = await mock("orca_stream_terminal_close", null);
     await sendStream(streamList(sample().slice(1), worktrees()));
-    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app" }]);
+    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
   });
 
   it("closes a session in Orca and leaves the tab to the next list, with no read", async () => {
@@ -2404,9 +2404,18 @@ describe("orca: split panes (A-17)", () => {
       await mock("orca_panes", focusedOn("p1", bash));
       // Another tab in the left pane: its terminal is subscribed and the one it replaces is closed by its handle; the right pane's stream stays.
       await tabOf(bash).$(".orca-tab-btn").click();
-      expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app" }]);
+      expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
       await browser.pause(500);
-      expect(await callsOf(close)).toEqual([{ handle: "term_example-app" }]);
+      expect(await callsOf(close)).toEqual([{ handle: "term_example-app", generation: expect.any(Number) }]);
+    });
+
+    it("puts a new tab in one pane with all the tabs when a later call for the layout fails, and shows the message", async () => {
+      await openStudioSplit();
+      await mock("orca_panes", rejects("orca-panes.json を書けません"));
+      await sendStream(streamList(sample(), worktrees(), [orcaTerminal("example-app", "zsh"), orcaTerminal("example-app", "bash"), orcaTerminal("example-app", "fish")]));
+      await expect($("#error")).toHaveText("orca-panes.json を書けません");
+      await waitForCount(".orca-pane", 1);
+      expect(await paneTabs("p1")).toEqual(["Write the docs", "zsh", "bash", "fish"]);
     });
 
     it("sends the new size of the pane whose width changed", async () => {

@@ -69,6 +69,8 @@ interface Instance {
   host: HTMLElement | null;
   // The channel of its stream, null when it has none: an event of another channel is not drawn.
   channel: { onmessage: (event: OrcaTermEvent) => void } | null;
+  // The number of the showing of its stream: Rust ends a showing only by a close of the same number, whatever order the calls arrive in.
+  generation: number;
   // The mirror: its timer, the last frame drawn, and a read on its way.
   timer: number | null;
   last: string | null;
@@ -89,6 +91,8 @@ const shown = new Set<string>();
 let focusedId: string | null = null;
 // The host elements that are watched for their size.
 const watched = new Set<HTMLElement>();
+// The number the last showing of a stream took.
+let streamSeq = 0;
 // The host elements that take images already.
 const listening = new WeakSet<HTMLElement>();
 let onError: (e: unknown) => void = () => {};
@@ -268,7 +272,7 @@ function newInstance(source: TermSource): Instance {
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
-  const instance: Instance = { term, fit, el, source, host: null, channel: null, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false };
+  const instance: Instance = { term, fit, el, source, host: null, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false };
   // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
   term.parser.registerOscHandler(52, (data) => {
     const text = instance.replaying > 0 ? null : osc52Text(data);
@@ -421,16 +425,17 @@ function startStream(instance: Instance) {
   };
   instance.fit.fit();
   const viewport = { cols: instance.term.cols, rows: instance.term.rows };
-  invoke("orca_stream_terminal", { handle: instance.source.handle, viewport, channel }).catch((e) => {
+  instance.generation = ++streamSeq;
+  invoke("orca_stream_terminal", { handle: instance.source.handle, generation: instance.generation, viewport, channel }).catch((e) => {
     if (instance.channel === channel) drawEvent(instance, { kind: "ended", message: String(e) });
   });
 }
 
-// Ends the stream of a terminal, so Orca gives it back its own size. The close names the terminal, so it ends no other stream.
+// Ends the stream of a terminal, so Orca gives it back its own size. The close names the terminal and its showing, so it ends no other stream, and it cannot end a showing made after it.
 function stopStream(instance: Instance) {
   if (instance.channel === null) return;
   instance.channel = null;
-  invoke("orca_stream_terminal_close", { handle: instance.source.handle }).catch(() => {});
+  invoke("orca_stream_terminal_close", { handle: instance.source.handle, generation: instance.generation }).catch(() => {});
 }
 
 // Starts what a shown terminal needs: its stream, or its mirror's reads.
@@ -464,6 +469,7 @@ export function showTerminals(placements: Placement[], focusId: string | null) {
   }
   const fresh: Instance[] = [];
   const hosts = new Set<HTMLElement>();
+  let moved = false;
   for (const { id, source, host } of placements) {
     let instance = instances.get(id);
     if (!instance) {
@@ -474,9 +480,12 @@ export function showTerminals(placements: Placement[], focusId: string | null) {
     shown.add(id);
     instance.host = host;
     // Shown again in a new pane: the keys of the old one are not for the new.
-    if (instance.el.parentElement !== host) host.append(instance.el);
+    if (instance.el.parentElement !== host) {
+      host.append(instance.el);
+      host.style.background = termColors()?.background ?? "";
+      moved = true;
+    }
     instance.el.hidden = false;
-    host.style.background = termColors()?.background ?? "";
     hosts.add(host);
     if (!listening.has(host)) {
       listening.add(host);
@@ -497,7 +506,7 @@ export function showTerminals(placements: Placement[], focusId: string | null) {
     start(instance);
   }
   // A terminal that moved to another pane is fitted to it once the pane has its size.
-  fitSoon();
+  if (moved) fitSoon();
   const focus = focusId === null ? undefined : instances.get(focusId);
   if (focus && shown.has(focusId!) && (focusId !== focusedId || fresh.includes(focus))) focus.term.focus();
   focusedId = focusId;

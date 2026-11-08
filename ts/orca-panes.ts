@@ -74,7 +74,7 @@ export function syncPanes(target: string | null, project: string, tabs: () => st
         done();
       }
     } catch (e) {
-      if (latest.get(key) === mine && !layouts.has(key)) {
+      if (latest.get(key) === mine) {
         const first = ids[0];
         layouts.set(key, { root: first === undefined ? null : { kind: "pane", id: "p1", tabs: ids, selected: first }, focus: first === undefined ? null : "p1" });
         done();

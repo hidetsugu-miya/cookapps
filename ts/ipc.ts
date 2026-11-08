@@ -231,9 +231,9 @@ export interface Commands {
   orca_stream_open: { args: { environment: string; channel: unknown }; result: null };
   orca_stream_close: { args: undefined; result: null };
   // A-12, A-17: shows the terminal `handle` of the stream (the terminals of the other panes stay shown): its screen and its bytes go to `channel` (an `OrcaTermEvent` at a time). The terminal fits the pane's size, `viewport`.
-  orca_stream_terminal: { args: { handle: string; viewport: OrcaViewport; channel: unknown }; result: null };
+  orca_stream_terminal: { args: { handle: string; generation: number; viewport: OrcaViewport; channel: unknown }; result: null };
   // A-12, A-17: shows the terminal `handle` no more; Orca gives it back its own size.
-  orca_stream_terminal_close: { args: { handle: string }; result: null };
+  orca_stream_terminal_close: { args: { handle: string; generation: number }; result: null };
   // A-12, A-17: the new size of the pane of the terminal `handle`.
   orca_stream_viewport: { args: { handle: string; viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it.
