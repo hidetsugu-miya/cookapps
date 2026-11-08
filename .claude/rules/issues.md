@@ -7,7 +7,7 @@
 The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
 The one exception is the launchd job that the owner registered, which runs once a day, at 00:30: `nightly.sh milestone-dev` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06; once a day since 2026-11-07, at 05:00 since 2026-11-07, at 00:30 since 2026-11-08; Discussion #160).
 Do not start an issue with `needs:owner`: a product decision is still open.
-Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05).
+Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05), and it also takes ahead the issues of the later milestones that overlap neither the issues in progress nor one another, at most 3 in hand at once, and only while no `release:pin` issue is open (at the owner's instruction, 2026-11-08; #236).
 
 ```text
 Good: the owner says "implement #13" in a session -> the session works on #13
@@ -118,7 +118,8 @@ The hard rules of the order are checked by `plan-release.py`, which refuses a pl
 
 Everything else is `release-planner`'s judgment, with this as the basis: urgency, then importance, then fewer points first (1 < 2 < 3 < 5 < 8), then the older issue first. Where it moves an issue ahead of an older one, it writes the reason.
 `sync` puts the urgent issues first, then the bugs of 1, 2 or 3 points, each after the open issues that block it, behind the issues in progress and waiting for a release.
-The reorder (`issue-plan`, from its step 4) runs when an issue is created or its `needs:owner` is removed (the hook says so), after `plan-release.py close {tag}` of a release, and at the start of every `milestone-dev` run, which also places the issues made outside a session, such as on the GitHub screen. There is no separate schedule for it.
+The reorder (`issue-plan`, from its step 4) runs when an issue is created or its `needs:owner` is removed (the hook says so), and at the start of every `milestone-dev` run, which also places the issues made outside a session, such as on the GitHub screen. After `plan-release.py close {tag}` of a release, the plan saved by the last `apply` (`.claude/plan.json` of the main checkout, with the files and requirement IDs each issue is expected to touch) is applied again, and the reorder runs when that is refused with exit 2, whatever the reason. There is no separate schedule for it.
+`plan-release.py next` reads the saved plan to say which issues of the open milestones can start now and overlap neither the issues in progress nor an issue another session holds, nor one another (`parallel`); an issue the plan does not know is taken to overlap every issue.
 Plan only the owner's issues.
 
 ```text
@@ -313,7 +314,7 @@ Bad:  the issue says enhancement -> minor
    Read `README.md` against the changes that go out, with `readme-product`: fix a photo or a claim they make out of date in `release/next`, and write in the body that nothing needed it otherwise (at the owner's instruction, 2026-11-07). `README.md` and `docs/` keep the diff release-only.
 2. Run `run-e2e.sh`, push, run `post-checks.sh` (the release-only diff stands for the review), and merge.
 3. Tag the merge commit and push the tag (`versioning.md`), then watch the release (`review.md`).
-4. Run `plan-release.py close {tag}`: it closes the milestone and moves what is left in it to the next tag. Then reorder with `issue-plan` (from its step 4), so that the issues that moved are in the right order for the new tags.
+4. Run `plan-release.py close {tag}`: it closes the milestone and moves what is left in it to the next tag. Then apply the saved plan again (`plan-release.py apply` on `.claude/plan.json` of the main checkout; `apply` leaves out the issues that have closed or been fixed), so that the issues that moved are in the right order for the new tags. When `apply` refuses it with exit 2, whatever the reason, reorder with `issue-plan` (from its step 4).
 5. Comment the version on each issue that went out.
 
 ```text

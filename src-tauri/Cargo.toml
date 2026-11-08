@@ -1,6 +1,6 @@
 [package]
 name = "cookapps"
-version = "0.54.0"
+version = "0.54.1"
 edition = "2021"
 default-run = "cookapps"
 
@@ -54,3 +54,10 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
 ts-rs = "12"
+
+# Debug builds keep line tables for our own crate (backtraces show file:line) and no debug info for dependencies, which makes target/ about a third smaller (#239).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
