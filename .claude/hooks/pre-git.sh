@@ -56,8 +56,9 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   gate "Biome lint" npm run lint
   cd src-tauri || exit 0
   gate "cargo fmt --check" mise exec -- cargo fmt --check
-  gate "cargo clippy" mise exec -- cargo clippy --all-targets --all-features -- -D warnings
-  gate "cargo test --all-features" mise exec -- cargo test --all-features
+  # The checks before a push run once, so they need no data for incremental builds (CARGO_INCREMENTAL=0).
+  gate "cargo clippy" env CARGO_INCREMENTAL=0 mise exec -- cargo clippy --all-targets --all-features -- -D warnings
+  gate "cargo test --all-features" env CARGO_INCREMENTAL=0 mise exec -- cargo test --all-features
   # cargo test writes the types of the Rust structs (ts/bindings/); a copy that differs from the commit is out of date.
   gate "bindings の差分" bash -c 'out=$(git status --porcelain ../ts/bindings) && [ -z "$out" ] || { echo "$out"; exit 1; }'
 fi

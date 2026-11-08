@@ -1,9 +1,9 @@
 #!/bin/sh
 # Deletes the old build output of cookapps itself from src-tauri/target of the main checkout and of every worktree; launchd runs it every day at 21:00 (harness.md).
 # Usage: clean-target.sh  (no arguments; it prints the size of each target before and after)
-# In each profile (target/debug, target/release, ...) it deletes what has nothing modified in the last 24 hours, and nothing while cargo or rustc runs:
+# In each profile (target/debug, target/release, ...) it deletes what has nothing modified in the last 24 hours, or nothing newer than the src-tauri/Cargo.toml of its checkout (the output of an earlier version, which no build uses again), and nothing while cargo or rustc runs:
 # every entry directly under incremental/, and the entries of cookapps itself (cookapps-*, cookapps_lib-*, libcookapps_lib-*, cookapps_mcp-*) directly under deps/, build/ and .fingerprint/.
-# The output of dependency crates stays, because a version bump does not make more of it.
+# The output of dependency crates stays, because a version bump changes only the hash of the output of cookapps itself.
 # It appends to .claude/nightly/clean-target-{date}.log in the main checkout (logs older than 30 days are deleted).
 set -u
 if [ $# -ne 0 ]; then
@@ -17,13 +17,15 @@ mkdir -p .claude/nightly
 log="$(pwd -P)/.claude/nightly/clean-target-$(date +%Y-%m-%d).log"
 find .claude/nightly -name 'clean-target-*.log' -mtime +30 -delete
 
-# True when nothing in $1 (the entry itself or, for a directory, anything inside it) was modified in the last 24 hours.
+# True when nothing in $1 (the entry itself or, for a directory, anything inside it) was modified in the last 24 hours,
+# or is newer than the file $2 (the Cargo.toml of the checkout; a missing file does not count).
 # A directory's own mtime does not change when cargo overwrites a file inside it, so the newest file decides.
 is_stale() {
-  [ -z "$(find "$1" -mmin -1440 -print 2>/dev/null | head -n 1)" ]
+  [ -z "$(find "$1" -mmin -1440 -print 2>/dev/null | head -n 1)" ] && return 0
+  [ -f "$2" ] && [ -z "$(find "$1" -newer "$2" -print 2>/dev/null | head -n 1)" ]
 }
 
-# Deletes the old output inside one target directory ($1).
+# Deletes the old output inside one target directory ($1) of the checkout whose Cargo.toml is $2.
 clean_one() {
   for profile in "$1"/*/; do
     [ -d "$profile" ] || continue
@@ -37,7 +39,7 @@ clean_one() {
             *) continue ;;
           esac
         fi
-        is_stale "$entry" && rm -rf "$entry"
+        is_stale "$entry" "$2" && rm -rf "$entry"
       done
     done
   done
@@ -54,7 +56,7 @@ run() {
     target="$wt/src-tauri/target"
     [ -d "$target" ] || continue
     before="$(du -sh "$target" | cut -f1)"
-    clean_one "$target"
+    clean_one "$target" "$wt/src-tauri/Cargo.toml"
     after="$(du -sh "$target" | cut -f1)"
     echo "${target}: ${before} -> ${after}"
   done
