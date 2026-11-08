@@ -39,6 +39,7 @@ export function show(view: View) {
   $("mail-area").hidden = own;
   $("login").hidden = view !== "login";
   $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
+  $("inbox-state").hidden = view !== "list";
   $("threads").hidden = view !== "list";
   $("thread").hidden = view !== "thread";
   syncSummaryButton();
