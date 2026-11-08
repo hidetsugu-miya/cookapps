@@ -303,7 +303,8 @@ function sessionNode(t: Tab) {
   const row = tag("button", "orca-session");
   row.type = "button";
   row.dataset.key = `tab:${t.id}`;
-  row.dataset.tab = t.id;
+  // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
+  row.dataset.session = t.id;
   row.setAttribute("aria-pressed", String(t.id === selectedTab()));
   row.append(statusIcon(t.status, t.label), tag("span", "orca-session-title", t.title));
   row.onclick = () => selectTab(t.id);

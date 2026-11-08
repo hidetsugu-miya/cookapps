@@ -1221,8 +1221,8 @@ describe("orca: projects", () => {
   describe("the sessions under a project (A-8)", () => {
     const arrow = (repo: string) => $(`#orca-feed .orca-arrow[data-key="arrow:proj_${repo}"]`);
     const sessionTitles = () => textsOf("#orca-feed .orca-session .orca-session-title");
-    const sessionOf = (id: string) => $(`#orca-feed .orca-session[data-tab="${id}"]`);
-    const pressedSessions = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].filter((r) => r.getAttribute("aria-pressed") === "true").map((r) => r.dataset.tab));
+    const sessionOf = (id: string) => $(`#orca-feed .orca-session[data-session="${id}"]`);
+    const pressedSessions = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].filter((r) => r.getAttribute("aria-pressed") === "true").map((r) => r.dataset.session));
 
     it("puts an arrow at the left of each project that has sessions, and none at the others, with every project closed at first", async () => {
       await openOrca(withTerminals());
