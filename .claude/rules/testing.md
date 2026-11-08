@@ -53,10 +53,11 @@ Bad:  call the real Gmail API from a test
 
 ## Before a push and CI
 
-### Run every check on this machine before a push, and keep only the release in GitHub Actions
+### Run every check on this machine before a push, and run no check in GitHub Actions
 
 `.github/workflows/release.yml` runs only on a pushed tag `v*`, and its one job, `release`, checks that the tag is the version of its commit and that the commit is on main, and puts the signed `.app`, its updater files and `latest.json` in a GitHub Release (U-1).
-A push to main or a pull request runs no workflow of ours, only GitHub's Pages build of `docs/` (at the owner's instruction, 2026-11-04: the same checks already ran before the push, and running them again cost time).
+A pull request runs no workflow of ours, and a push to main that changes the dependencies, the Rust version or `docs/` runs none that checks anything (at the owner's instruction, 2026-11-04: the same checks already ran before the push, and running them again cost time).
+The two workflows of such a push are `rust-cache.yml`, which only builds the Rust dependencies to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml`, which builds `docs/` and deploys it to GitHub Pages.
 Before a push, `pre-git.sh` checks the version match, tsc (`ts` and `e2e`), Biome, cargo fmt, clippy, cargo test and the bindings diff.
 If there are new commits, it also checks the E2E record (`e2e.md`) and the review pass record (`review.md`) for HEAD.
 `post-checks.sh` then sends those two results to GitHub as the statuses `e2e` and `review`, which the ruleset on main requires (`issues.md`); no workflow runs for them.
