@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.54.3
+
+No change to the app. Only the way it is built and published changed (#248).
+
 ## v0.54.2
 
 No change to the app's features. Debug builds keep less debug information, and two dependencies were updated: encoding_rs 0.8.44 (#230) and salsa20 0.11.0 (#229).
