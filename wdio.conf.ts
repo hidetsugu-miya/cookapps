@@ -27,10 +27,13 @@ const freePorts = async (count: number) => {
 };
 
 // The service starts one app for each capability, so the specs are split into three capabilities and run in three apps at once.
-// The first two capabilities name their specs, chosen so that all three hold about the same number of tests; every spec not named here (a new one included) runs in the last one.
+// The first two capabilities name their specs, chosen so that all three take about the same time (the per-spec times of a run, in seconds: orca 124, slack-list 92, todo 59, inbox 49, sidebar 37, settings 32, slack-thread 26, orca-handoff 19, todo-prompt 10, thread 9, slack-compose 8, calendar 5; about 155 for each capability); every spec not named here (a new one included) runs in the last one.
 // `--spec` replaces the specs of every capability and keeps only their excludes, so a spec given there runs in each app that does not exclude it (three apps for an unnamed spec, two for a named one).
 // `wdio:maxInstances: 1` keeps two workers out of one app.
-const namedSpecs = [["./e2e/specs/todo.e2e.ts"], ["./e2e/specs/settings.e2e.ts", "./e2e/specs/slack-compose.e2e.ts", "./e2e/specs/sidebar.e2e.ts"]];
+const namedSpecs = [
+  ["./e2e/specs/orca.e2e.ts", "./e2e/specs/slack-thread.e2e.ts", "./e2e/specs/calendar.e2e.ts"],
+  ["./e2e/specs/slack-list.e2e.ts", "./e2e/specs/todo.e2e.ts", "./e2e/specs/slack-compose.e2e.ts"],
+];
 const appCapability = (specs: { "wdio:specs": string[] } | { "wdio:exclude": string[] }) => ({
   browserName: "tauri",
   "tauri:options": { application: binary },
