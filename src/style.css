@@ -761,6 +761,18 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-project:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .orca-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .orca-n { margin-left: auto; font-size: 12px; font-weight: normal; color: var(--muted); }
+/* A-8: the arrow at the left of a project with sessions, and its sessions under it (the status icon and the title). */
+.orca-proj { position: relative; }
+.orca-proj > .orca-project { padding-left: 32px; }
+.orca-arrow { position: absolute; left: 4px; top: 6px; width: 24px; height: 24px; padding: 0; border-radius: 8px; }
+.orca-arrow svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.orca-arrow[aria-expanded="true"] svg { transform: rotate(90deg); }
+.orca-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-session { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 32px; box-sizing: border-box; margin-bottom: 1px; padding: 0 10px 0 32px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: 13px; color: inherit; text-align: left; cursor: pointer; }
+.orca-session:hover { background: var(--hover); }
+.orca-session[aria-pressed="true"] { background: var(--soft); font-weight: 600; }
+.orca-session:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-session-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .orca-sec { margin: 12px 10px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* A-12, A-16, A-17: the work pane is a tree of splits and panes. The bar of 32px of a pane has the tab strip, as wide as its tabs and scrolling when they overflow, with the plus right after it; the terminal of the selected tab is under it. The pane that has the focus shows an accent line on its bar while there are several panes. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
