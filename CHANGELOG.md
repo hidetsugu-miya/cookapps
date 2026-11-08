@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.53.0
+
+A-17: the Orca work pane splits into panes, side by side or one above the other, with no limit on their number (#191). The right-click menu of a tab has 「右に分割」 and 「下に分割」, and a tab dragged to the edge of another pane splits it there, or joins that pane when dropped on its tab bar or middle. Each pane has its own tabs and plus, and a pane left with no tab closes. The split is saved for each project in `orca-panes.json` and comes back when the project is opened again.
+
 ## v0.52.1
 
 The plus of the Orca work pane sits right after the last tab, not at the right end of the tab bar (#190). When the tabs overflow, they scroll and the plus stays in the bar.
