@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.54.1
+
+No change to the app. Only the tools used to develop it changed.
+
 ## v0.54.0
 
 A-18 Orca files and editor (#120).
