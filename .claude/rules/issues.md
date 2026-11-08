@@ -7,7 +7,7 @@
 The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
 The one exception is the launchd job that the owner registered, which runs once a day, at 00:30: `nightly.sh milestone-dev` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06; once a day since 2026-11-07, at 05:00 since 2026-11-07, at 00:30 since 2026-11-08; Discussion #160).
 Do not start an issue with `needs:owner`: a product decision is still open.
-Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05), and it also takes ahead the issues of the later milestones that overlap neither the issues in progress nor one another, at most 3 in hand at once, and only from the versions before the first open `release:pin` issue's version (at the owner's instruction, 2026-11-08; #236).
+Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05), and it also takes ahead the issues of the later milestones that overlap neither the issues in progress nor one another, at most 3 in hand at once, and only while no `release:pin` issue is open (at the owner's instruction, 2026-11-08; #236).
 
 ```text
 Good: the owner says "implement #13" in a session -> the session works on #13

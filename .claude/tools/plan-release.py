@@ -677,9 +677,10 @@ def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=froze
     and that the previous hand-over does not list as this run's own (`mine`). It is neither started nor continued.
     `start` holds the issues that can start in the first milestone that has work and in the milestones after it, by the order of the saved `plan` within a version
     (the issues the plan lacks come last, oldest first). Of the later milestones, nothing is reported but what can start and what is in progress as this run's own:
-    an issue with release:pin or needs:owner, one that is held, and one with an open blocker are left out.
-    Nothing starts from the version of the first open release:pin issue or from any version after it (the pin's version is fixed, so an issue that merged ahead of it could not be given a version before it);
-    when the pin is in the first milestone, nothing starts from the later milestones.
+    an issue with needs:owner, one that is held, and one with an open blocker are left out.
+    While any release:pin issue is open, nothing starts from the later milestones, whatever their versions
+    (a pin's version is fixed, so an issue that merged ahead of it could move the slots onto it and be refused by allocate): only the first milestone's issues start.
+    Without a pin, an issue of a later milestone that merges first moves the slots, and allocate has nothing to refuse.
     `parallel` is the numbers of `start` to begin now (pick_parallel)."""
     held_by_worktree = held_by_worktree or {}
     position, touches = plan_view(plan)
@@ -733,18 +734,13 @@ def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=froze
         else:
             startable.append(i)
     later = sorted((i for i in open_issues if i.milestone != chosen), key=lambda i: (parse_version(i.milestone), *by_created(i)))
-    pin_version_of_first = min((parse_version(i.milestone) for i in open_issues if has(i, "release:pin")), default=None)
+    pinned = any(has(i, "release:pin") for i in open_issues)
     for i in later:
         if i.number in pr_closing:
             if i.number in mine:
                 in_progress.append(i)
-        elif pin_version_of_first is not None and parse_version(i.milestone) >= pin_version_of_first:
-            continue
-        elif not (
-            has(i, "needs:owner")
-            or has(i, "release:pin")
-            or (i.number in held_by_worktree and i.number not in mine)
-            or i.blocked_by
+        elif not pinned and not (
+            has(i, "needs:owner") or (i.number in held_by_worktree and i.number not in mine) or i.blocked_by
         ):
             startable.append(i)
     startable.sort(key=start_key)

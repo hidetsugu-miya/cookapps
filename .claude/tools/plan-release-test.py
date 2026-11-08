@@ -881,10 +881,9 @@ class NextAcrossMilestones(unittest.TestCase):
         out = pr.build_next(issues, self.milestones, set())
         self.assertEqual([i["number"] for i in out["start"]], [11, 12, 10, 14, 13])
 
-    def test_pinned_needs_owner_held_and_blocked_issues_of_a_later_milestone_are_left_out_and_not_reported(self):
+    def test_needs_owner_held_and_blocked_issues_of_a_later_milestone_are_left_out_and_not_reported(self):
         issues = [
             mk(10, milestone="v0.40.0"),
-            mk(20, ["release:pin"], milestone="v0.42.0"),
             mk(21, ["needs:owner"], milestone="v0.41.0"),
             mk(22, milestone="v0.41.0"),
             mk(23, milestone="v0.41.0"),
@@ -905,17 +904,33 @@ class NextAcrossMilestones(unittest.TestCase):
         self.assertEqual([i["number"] for i in out["start"]], [10])
         self.assertEqual(out["parallel"], [10])
 
-    def test_nothing_starts_from_a_pinned_version_or_from_the_versions_after_it(self):
+    def test_with_an_open_pin_anywhere_nothing_starts_from_the_later_milestones_even_before_its_version(self):
         issues = [
-            mk(10, milestone="v0.40.0"),
-            mk(11, milestone="v0.41.0"),
-            mk(12, ["release:pin"], milestone="v0.42.0"),
-            mk(13, milestone="v0.42.0"),
-            mk(14, milestone="v0.43.0"),
+            mk(10, ["point:8", "adds:requirement"], milestone="v0.40.0"),
+            mk(11, ["adds:requirement"], milestone="v0.41.0"),
+            mk(12, ["adds:requirement"], milestone="v0.41.0"),
+            mk(13, ["release:pin"], milestone="v0.42.0"),
         ]
-        milestones = self.milestones + [ms(8, "v0.43.0")]
-        out = pr.build_next(issues, milestones, set())
-        self.assertEqual([i["number"] for i in out["start"]], [10, 11])
+        plan = {"order": [10, 11, 12, 13], "touches": {"10": ["ts/a.ts"], "11": ["ts/b.ts"], "12": ["ts/c.ts"], "13": ["ts/d.ts"]}}
+        out = pr.build_next(issues, self.milestones, set(), plan=plan)
+        self.assertEqual([i["number"] for i in out["start"]], [10])
+        self.assertEqual(out["parallel"], [10])
+
+    def test_without_a_pin_the_later_milestones_are_taken_and_an_issue_that_merges_first_breaks_no_allocation(self):
+        issues = [
+            mk(10, ["point:8", "adds:requirement"], milestone="v0.40.0"),
+            mk(11, ["adds:requirement"], milestone="v0.41.0"),
+            mk(12, ["adds:requirement"], milestone="v0.41.0"),
+        ]
+        plan = {"order": [10, 11, 12], "touches": {"10": ["ts/a.ts"], "11": ["ts/b.ts"], "12": ["ts/c.ts"]}}
+        out = pr.build_next(issues, self.milestones, set(), plan=plan)
+        self.assertEqual(out["parallel"], [10, 11, 12])
+        done = mk(11, ["adds:requirement"], milestone="v0.41.0", state="closed")
+        queue = [done, issues[0], issues[2]]
+        self.assertEqual(
+            slot_view(pr.allocate(queue, [], "v0.39.0")),
+            [("v0.40.0", [11]), ("v0.41.0", [10]), ("v0.42.0", [12])],
+        )
 
     def test_an_issue_in_progress_after_a_pinned_version_stays_in_progress(self):
         issues = [mk(10, milestone="v0.40.0"), mk(12, ["release:pin"], milestone="v0.41.0"), mk(13, milestone="v0.42.0")]
