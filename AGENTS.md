@@ -149,18 +149,19 @@ scripts/check-version.sh   # the version in Cargo.toml, tauri.conf.json and Carg
 
 The release is `.github/workflows/release.yml`, and only a pushed tag `v*` starts it.
 Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions, so a pull request runs no workflow of this repository.
-A push to main runs two workflows, and neither checks anything: `rust-cache.yml` builds the Rust dependencies of the release to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml` builds `docs/` with Jekyll and deploys it to GitHub Pages.
+A push to main that changes the dependencies, the Rust version or `docs/` runs two workflows, and neither checks anything: `rust-cache.yml` builds the Rust dependencies of the release to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml` builds `docs/` with Jekyll and deploys it to GitHub Pages.
 A change reaches main through a pull request, and the machine that ran the checks sends their results as the commit statuses `e2e` and `review`.
 A release is the merge of the pull request that raises the version, followed by its tag.
 
 | Job | Environment | What it does |
 |-----|-------------|--------------|
-| `release` | macos-latest | restores the Rust cache (`Swatinem/rust-cache`, `shared-key: release`, never saves), checks that the tag is the version of its commit and that the commit is on main, then puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
-| `cache` (`rust-cache.yml`) | macos-latest | on a push to main that changes `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `rust-toolchain.toml` or one of the two workflow files, on a schedule (Monday and Thursday) and by hand, runs `npx tauri build --no-bundle` with the same toolchain and `rust-cache` settings as `release`, and saves the cache. It holds no secret |
+| `release` | macos-latest | restores the Rust cache (`Swatinem/rust-cache`, `shared-key: release`, `prefix-key: v1-rust`, never saves), checks that the tag is the version of its commit and that the commit is on main, then puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| `cache` (`rust-cache.yml`) | macos-latest | on a push to main that changes `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `rust-toolchain.toml` or one of the two workflow files, on a schedule (Monday and Thursday 18:17 UTC) and by hand, restores the cache with the same toolchain, toolchain clean-up and `rust-cache` settings as `release`; unless that is an exact hit it runs `npx tauri build --no-bundle` and saves the cache. It holds no secret |
 | `build` and `deploy` (`pages.yml`) | ubuntu-24.04 | on a push to main that changes `docs/`, builds it with `actions/jekyll-build-pages` and deploys it with `actions/deploy-pages`. It needs the Pages source set to "GitHub Actions" (`build_type: workflow`) |
 
 A tag run reads only the caches of its own ref and of the default branch, and a tag's own cache cannot be read by the next tag, so the cache is made on main and `release` only restores it.
-GitHub evicts a cache that no run has used for 7 days, so `rust-cache.yml` also runs on a schedule.
+GitHub evicts a cache that no run has used for 7 days, so `rust-cache.yml` also runs on a schedule; it restores the cache for real (not `lookup-only`), because GitHub's documentation does not say that a lookup counts as use.
+The cache is restored into the signed release, so when a dependency or action that ran on main is found compromised and reverted, delete the caches of main (`gh cache delete --all`) and raise `prefix-key` in both workflows, because a restored cache would carry its output into the build.
 
 ## Known limitations
 

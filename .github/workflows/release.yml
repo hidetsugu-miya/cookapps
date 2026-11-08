@@ -33,11 +33,20 @@ jobs:
           test "$status" = identical || test "$status" = behind
       # The version is in the ref (1.99.1), so the action takes no toolchain input.
       - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      # The same clean-up as rust-cache.yml: rust-cache hashes `rustc -vV` of every installed toolchain, so one that the runner image brings would split the key.
+      - name: Uninstall the toolchains other than the pinned one
+        run: |
+          active=$(rustup show active-toolchain | cut -d' ' -f1)
+          test -n "$active"
+          for toolchain in $(rustup toolchain list --quiet | grep -vxF "$active"); do
+            rustup toolchain uninstall "$toolchain"
+          done
       # Only restores the cache that rust-cache.yml made on main: a tag's own cache cannot be read by the next tag.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
           shared-key: release
+          prefix-key: v1-rust
           save-if: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

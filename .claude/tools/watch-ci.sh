@@ -1,7 +1,7 @@
 #!/bin/sh
 # Waits for a release run of GitHub Actions and exits non-zero if it failed, printing the failed log.
 # Usage: watch-ci.sh [run ID | commit]  (default: the release run of HEAD)
-# Pages builds of the same commit are not waited for. A run may take a while to appear after the push.
+# Workflows other than release.yml (Pages, Rust cache) are not waited for. A run may take a while to appear after the push.
 set -u
 arg="${1:-HEAD}"
 case "$arg" in
