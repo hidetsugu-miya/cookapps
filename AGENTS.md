@@ -86,7 +86,7 @@ requirements/  the requirements, one file per area
   Each service has its own module: `gmail.rs`, `calendar.rs`, `todoist.rs`, `slack.rs`, `claude.rs`, `orca.rs` (with `orca_chat.rs` and `orca_e2ee.rs` for the session history, `orca_handoff.rs` for the prompt of A-9 and its folding in the history, `orca_attach.rs` for the images of A-10, `orca_answer.rs` for the answers of A-11, and `orca_stream.rs` for the stream of A-12, `orca_panes.rs` for the split panes of A-17, `orca_files.rs` for the file pane and the editor of A-18), `ghostty.rs` (Ghostty's settings for the Orca terminals, A-13), `orca_theme.rs` (the colors of the Orca terminals, A-14, with the table `orca_themes.json`).
   The modules are in the library crate (`src-tauri/src/lib.rs`), and `main.rs` only calls `cookapps_lib::run()`.
 - Internal functions take the config directory (`&Path`), not an `AppHandle`, so `cookapps-mcp` can share them.
-- The Rust version is pinned in `rust-toolchain.toml` and in the CI workflow. Keep them equal.
+- The Rust version is pinned in `rust-toolchain.toml` and in the CI workflows (`release.yml` and `rust-cache.yml`, by the ref of `dtolnay/rust-toolchain`). Keep them equal.
 
 ## Run
 
@@ -147,14 +147,20 @@ scripts/check-version.sh   # the version in Cargo.toml, tauri.conf.json and Carg
 
 ## CI
 
-CI is `.github/workflows/release.yml`, and only a pushed tag `v*` starts it.
-Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions, so a push to main or a pull request runs no workflow of this repository (GitHub Pages still builds `docs/` on a push to main).
+The release is `.github/workflows/release.yml`, and only a pushed tag `v*` starts it.
+Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions, so a pull request runs no workflow of this repository.
+A push to main runs two workflows, and neither checks anything: `rust-cache.yml` builds the Rust dependencies of the release to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml` builds `docs/` with Jekyll and deploys it to GitHub Pages.
 A change reaches main through a pull request, and the machine that ran the checks sends their results as the commit statuses `e2e` and `review`.
 A release is the merge of the pull request that raises the version, followed by its tag.
 
 | Job | Environment | What it does |
 |-----|-------------|--------------|
-| `release` | macos-latest | checks that the tag is the version of its commit and that the commit is on main, then puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| `release` | macos-latest | restores the Rust cache (`Swatinem/rust-cache`, `shared-key: release`, never saves), checks that the tag is the version of its commit and that the commit is on main, then puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| `cache` (`rust-cache.yml`) | macos-latest | on a push to main that changes `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `rust-toolchain.toml` or one of the two workflow files, on a schedule (Monday and Thursday) and by hand, runs `npx tauri build --no-bundle` with the same toolchain and `rust-cache` settings as `release`, and saves the cache. It holds no secret |
+| `build` and `deploy` (`pages.yml`) | ubuntu-24.04 | on a push to main that changes `docs/`, builds it with `actions/jekyll-build-pages` and deploys it with `actions/deploy-pages`. It needs the Pages source set to "GitHub Actions" (`build_type: workflow`) |
+
+A tag run reads only the caches of its own ref and of the default branch, and a tag's own cache cannot be read by the next tag, so the cache is made on main and `release` only restores it.
+GitHub evicts a cache that no run has used for 7 days, so `rust-cache.yml` also runs on a schedule.
 
 ## Known limitations
 

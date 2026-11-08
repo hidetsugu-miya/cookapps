@@ -210,7 +210,7 @@ Bad:  the main agent creates a file in .claude/reviews/
 
 Confirm that the `release` run of the tag succeeded and that the GitHub Release has its files.
 If it failed, find the cause with `--log-failed`, fix it with the next patch version, and report that result too.
-A merge with no tag starts no release, so there is nothing to watch (GitHub's Pages build of `docs/` still runs).
+A merge with no tag starts no release, so there is nothing to watch (the workflows of a push to main, `rust-cache.yml` and `pages.yml`, still run).
 
 ```sh
 .claude/tools/watch-ci.sh             # waits for the release run of HEAD to appear and to end; on failure prints the cause log and exits non-zero
