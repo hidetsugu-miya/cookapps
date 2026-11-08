@@ -3,6 +3,11 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.53.1
+
+The inbox shows its state above the rows: 「読み込んでいます…」 until the first load answers, 「受信トレイにスレッドはありません」 when there is no thread, and, when a load fails, one line with the error and the button 「再読み込み」, which is there only then (#139). The rows already drawn stay under the line, and the failure stays when another screen is shown, until a load succeeds.
+In the Todo screen, Todoist's inbox comes first in the list on the left, above 「今日」, and is named 「インボックス」 (#196).
+
 ## v0.53.0
 
 A-17: the Orca work pane splits into panes, side by side or one above the other, with no limit on their number (#191). The right-click menu of a tab has 「右に分割」 and 「下に分割」, and a tab dragged to the edge of another pane splits it there, or joins that pane when dropped on its tab bar or middle. Each pane has its own tabs and plus, and a pane left with no tab closes. The split is saved for each project in `orca-panes.json` and comes back when the project is opened again.
