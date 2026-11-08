@@ -11,7 +11,7 @@ Every branch reaches main through a pull request (`issues.md`), so several sessi
 
 `.claude/tools/new-worktree.sh {branch}` makes the branch from `origin/main`, puts the worktree in `.claude/worktrees/{branch with / as -}`, copies the files and directories of `.worktreeinclude` from the main checkout to the same places, clones the main checkout's `src-tauri/target` into the worktree (`cp -cpR`, an APFS clone that keeps the modification times; the `incremental/` of each profile is deleted from the copy), and runs `npm ci`.
 The clone gives the worktree the build output of the dependency crates, so its first build compiles only cookapps itself.
-When the clone fails (a volume that is not APFS, for example), the script deletes the half-made copy, warns on stderr, and the worktree starts from an empty target as before.
+Where cloning is not possible (a volume that is not APFS), `cp` falls back to a plain copy (`man cp`); when the copy itself fails (a full disk, for example), the script deletes the half-made copy, warns on stderr, and the worktree starts from an empty target as before.
 A worktree made by hand has no `node_modules`, no clone of `src-tauri/target` and none of the private files (`run-e2e.sh` runs `npm ci` itself when `node_modules` is missing, but nothing copies the private files).
 Call it by the main checkout's path, from any checkout.
 
