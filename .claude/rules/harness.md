@@ -11,7 +11,12 @@ Hooks are in `.claude/hooks/`, which is tracked, and they are wired in `.claude/
 The nightly runs (`issues.md`) are `.claude/tools/nightly.sh improvement-proposal` at 22:00, `.claude/tools/nightly.sh discussion-judge` at 23:00 and `.claude/tools/nightly.sh milestone-dev` at 00:30, each with its own lock (`.claude/nightly/{skill}.lock`) and log (`.claude/nightly/{skill}-{date}.log`, deleted after 30 days).
 Around a run it uses three more tools. `nightly-limit.sh` answers whether a run may start a new issue, a judgment or a proposal candidate, or the release of a given tag (`release {tag}`, which also refuses another minor than the run has already released), `handover.sh` reads and writes the hand-over Discussion, and `discussions.sh` lists the Discussions to decide, comments on them with the mark `<!-- ai -->`, writes the waiting comment and closes them.
 `plan-release.py` also prints `release-facts` (the release table's R0 to R3 and the figures of R4) and `next --mine` (the issues another session holds are left out).
-The launchd plists are `~/Library/LaunchAgents/jp.mysis.cookapps.improvement-proposal.plist`, `jp.mysis.cookapps.discussion-judge.plist` and `jp.mysis.cookapps.milestone-dev.plist`, outside the repository. After a change to a plist, `launchctl bootout gui/$(id -u)/{label}` and `launchctl bootstrap gui/$(id -u) {plist}` load it again.
+`clean-target.sh` keeps `src-tauri/target` from growing with every version bump.
+It runs every day at 21:00 and needs no argument.
+In the main checkout and in every worktree, it deletes what has nothing modified in the last 24 hours, and nothing while cargo or rustc runs: the entries of `incremental/` in each profile, and the entries of cookapps itself (`cookapps-*`, `cookapps_lib-*`, `libcookapps_lib-*`, `cookapps_mcp-*`) in `deps/`, `build/` and `.fingerprint/`.
+The output of dependency crates stays.
+It prints the size of each target before and after, and appends it to `.claude/nightly/clean-target-{date}.log` (deleted after 30 days).
+The launchd plists are `~/Library/LaunchAgents/jp.mysis.cookapps.improvement-proposal.plist`, `jp.mysis.cookapps.discussion-judge.plist`, `jp.mysis.cookapps.milestone-dev.plist` and `jp.mysis.cookapps.clean-target.plist` (21:00, running `clean-target.sh`), outside the repository. After a change to a plist, `launchctl bootout gui/$(id -u)/{label}` and `launchctl bootstrap gui/$(id -u) {plist}` load it again.
 A gate that stops a command is a finding about the change, not an obstacle to route around.
 
 ```text
