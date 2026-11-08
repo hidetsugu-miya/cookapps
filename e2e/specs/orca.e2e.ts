@@ -2623,6 +2623,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf(list)).toHaveLength(1);
     await row("src").click();
     await waitForCalls(list, 2);
+    await waitForCount("#orca-files-tree .orca-file", 6);
     expect(await names()).toEqual(["src", "lib", "main.rs", "target", "a.rs", "b.log"]);
   });
 
