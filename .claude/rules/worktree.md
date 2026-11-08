@@ -43,6 +43,7 @@ Bad:  merge first, and find on main that the two branches break each other
 
 Several Claude Code sessions work in this repository at once (at the owner's instruction, 2026-11-07: work with the other agents so that nothing conflicts).
 When you start, run `.claude/tools/cookapps-sessions.sh` and send each destination it prints, with `SendMessage`, your issue, branch and the files you will touch.
+When it exits non-zero or warns on stderr, say so in your report (the hand-over, in a nightly run), because the sessions it could not find were not told; it does not find a session started outside this repository.
 Do not send to a session of another repository.
 `ListAgents` does not show a session's working folder, so a message sent to every session of its list also reached sessions of other repositories (at the owner's instruction, 2026-11-08; #225).
 When two sessions touch the same file, agree which merges first before going on; the later one takes in main and goes through review again, as above. When the other session does not answer, the one that told first merges first.
