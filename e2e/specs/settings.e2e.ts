@@ -1216,7 +1216,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
 
   it("puts the card of the colors above the card of Ghostty, with a row for the light and one for the dark appearance", async () => {
     await openOrcaTab({ terminal_themes: terminalThemes() });
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "Ghostty の設定"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定"]);
     expect(await textsOf("#terminal-theme-items .item-name")).toEqual(["外観", "ライト", "ダーク"]);
     expect(await textsOf("#terminal-theme-items .item-meta")).toEqual(["ターミナルが使うテーマ", "ライトの外観で使うテーマ", "ダークの外観で使うテーマ"]);
   });
@@ -1303,6 +1303,87 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
     await openOrcaTab({ terminal_themes: rejects("テーマを読めません") });
     await expect($("#error")).toHaveText("テーマを読めません");
     expect(await count("#terminal-theme-items .item")).toBe(0);
+  });
+});
+
+// A-18: the editor card, between the card of the colors and the card of Ghostty. Rust brings the value into 100 to 3000 ms in steps of 100 (unit tests); here the field shows what Rust answers, and sends what was typed.
+describe("settings: editor (the Orca tab, A-18)", () => {
+  async function openOrcaTab(fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await expect($("#settings-panel-orca")).toBeDisplayed();
+  }
+
+  // Types `text` into the field and commits it, as the user does (value, then change).
+  const typeMs = (text: string) =>
+    browser.execute(
+      (id, t) => {
+        if (!window.__e2e_once__(id)) return;
+        const input = document.getElementById("editor-autosave") as HTMLInputElement;
+        input.value = t;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      onceId(),
+      text,
+    );
+
+  it("has a card above Ghostty's with the time before the automatic save, 1000 ms to start with", async () => {
+    await openOrcaTab();
+    expect(await textsOf("#editor-items .item-name")).toEqual(["自動保存までの時間"]);
+    await expect($("#editor-autosave")).toHaveValue("1000");
+    await expect($("#editor-autosave")).toHaveAttribute("min", "100");
+    await expect($("#editor-autosave")).toHaveAttribute("max", "3000");
+    await expect($("#editor-autosave")).toHaveAttribute("step", "100");
+    expect(await textsOf("#editor-items .item-meta")).toEqual(["ms"]);
+    expect(await callsOf("editor_settings")).toEqual([null]);
+    expect(await callsOf("editor_settings_set")).toEqual([]);
+  });
+
+  it("shows the time that was saved", async () => {
+    await openOrcaTab({ editor_settings: { autosaveMs: 2500 } });
+    await expect($("#editor-autosave")).toHaveValue("2500");
+  });
+
+  it("sends the number typed and shows the value Rust answers", async () => {
+    await openOrcaTab();
+    const set = await mock("editor_settings_set", { autosaveMs: 100 });
+    await typeMs("50");
+    expect(await waitForCalls(set)).toEqual([{ autosaveMs: 50 }]);
+    await expect($("#editor-autosave")).toHaveValue("100");
+    await expect($("#editor-autosave")).toBeEnabled();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("sends nothing for what is not a number, and shows the time held", async () => {
+    await openOrcaTab();
+    const set = await mock("editor_settings_set", { autosaveMs: 100 });
+    await typeMs("");
+    await expect($("#editor-autosave")).toHaveValue("1000");
+    expect(await callsOf(set)).toEqual([]);
+  });
+
+  it("shows the message of a failed save and puts the time held back", async () => {
+    await openOrcaTab();
+    await mock("editor_settings_set", rejects("editor-settings.json を書けません"));
+    await typeMs("300");
+    await expect($("#error")).toHaveText("editor-settings.json を書けません");
+    await expect($("#editor-autosave")).toHaveValue("1000");
+    await expect($("#editor-autosave")).toBeEnabled();
+  });
+
+  it("opens a hint with the range from the ? of the card", async () => {
+    await openOrcaTab();
+    await $("#editor-help").click();
+    await expect($('.pop[aria-label="エディタ"]')).toBeDisplayed();
+    await expect($("#editor-help")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("shows the message of a failed read and leaves the field empty", async () => {
+    await openOrcaTab({ editor_settings: rejects("editor-settings.json を読めません") });
+    await expect($("#error")).toHaveText("editor-settings.json を読めません");
+    await expect($("#editor-autosave")).toHaveValue("");
+    await expect($("#editor-autosave")).toBeDisabled();
   });
 });
 

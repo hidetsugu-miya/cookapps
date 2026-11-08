@@ -73,6 +73,8 @@ const answers = {
   orca_terminal_input: null,
   orca_open_url: null,
   orca_attach_image: "/work/example/.orca/drops/image.png",
+  // A-18: the files and the editor are answered by the spec that opens them; the settings are read at the start.
+  editor_settings: { autosaveMs: 1000 },
   orca_stream_open: null,
   orca_stream_close: null,
   orca_stream_terminal: null,

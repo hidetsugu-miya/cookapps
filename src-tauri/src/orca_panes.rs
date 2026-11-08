@@ -2,7 +2,7 @@
 //!
 //! The layout of a project is a tree: a pane (its tabs, in order, and the one selected) or a split of two or more nodes, side by side (`Row`) or one above the other (`Column`).
 //! It is saved for each project of each target (this machine, or a saved environment) in `orca-panes.json` in the app config directory.
-//! The file holds only tab ids that the screen made up (`claude:{pane key}`, `orca:{handle}`) and project keys of Orca, no token and no screen content.
+//! The file holds only tab ids that the screen made up (`claude:{pane key}`, `orca:{handle}`, `file:{n}` for a file open in the editor of A-18) and project keys of Orca, no token and no screen content or path of a file.
 //! A terminal whose kind changes (a plain terminal where Claude starts, or Claude's where the shell is back) has a new tab id but the same Orca handle, so it keeps its place in its pane and its selection.
 //! A tab that Orca no longer lists leaves the layout, a tab it lists that the layout lacks joins the pane that has the focus, and a pane left with no tab is closed, so a layout of an older Orca or a broken file is mended at each read.
 //! A file that cannot be read as it was written is taken as empty and replaced by the next save.

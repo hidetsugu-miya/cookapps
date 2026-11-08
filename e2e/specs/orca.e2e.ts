@@ -1,3 +1,6 @@
+import type { OrcaDir } from "../../ts/bindings/OrcaDir";
+import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
+import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
@@ -508,7 +511,7 @@ describe("orca", () => {
     expect(box.plusLeft).toBeGreaterThanOrEqual(box.tabsRight - 1);
     expect(box.plusRight).toBeLessThanOrEqual(box.barRight);
     const barOrder = await browser.execute(() => [...document.querySelector(".orca-tabbar")!.children].map((e) => e.className));
-    expect(barOrder).toEqual(["orca-tabs", "icon-btn orca-plus"]);
+    expect(barOrder).toEqual(["orca-tabs", "icon-btn orca-plus", "icon-btn orca-files-toggle"]);
     // Nothing selected: no tab, no terminal, and a line that says what to do.
     expect(await count(".orca-tabs .orca-tab")).toBe(0);
     await expect($(".orca-term")).not.toBeDisplayed();
@@ -1165,7 +1168,9 @@ describe("orca: projects", () => {
       const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
       const lastTab = [...document.querySelectorAll(".orca-tabs .orca-tab")].pop()!.getBoundingClientRect();
       const tabs = document.querySelector(".orca-tabs")!;
-      return { lastRight: lastTab.right, plusLeft: r(".orca-plus").left, plusRight: r(".orca-plus").right, barRight: r(".orca-tabbar").right, scrolls: tabs.scrollWidth > tabs.clientWidth };
+      // The right end of the room of the strip and the plus: the button of the file pane (A-18) when the bar has it, else the bar's edge.
+      const toggle = document.querySelector(".orca-files-toggle:not([hidden])");
+      return { lastRight: lastTab.right, plusLeft: r(".orca-plus").left, plusRight: r(".orca-plus").right, barRight: toggle ? toggle.getBoundingClientRect().left : r(".orca-tabbar").right, scrolls: tabs.scrollWidth > tabs.clientWidth };
     });
 
   it("puts the plus right after the last tab", async () => {
@@ -2475,5 +2480,464 @@ describe("orca: split panes (A-17)", () => {
       expect(sent.map((c) => (c as { handle: string }).handle).sort()).toEqual(["term_example-app", "term_example-app_zsh"]);
       expect(viewportOf(sent[0]).cols).toBeGreaterThan(viewportOf(calls[0]).cols);
     });
+  });
+});
+
+// A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
+describe("orca: files and editor (A-18)", () => {
+  const claude = claudeTab("example-app");
+  const zsh = "orca:term_example-app_zsh";
+  const pane = (id: string, tabs: string[], selected = tabs[0]): PaneNode => ({ kind: "pane", id, tabs, selected });
+  const layout = (root: PaneNode, focus: string): PaneLayout => ({ root, focus });
+  // The entries of the folder `dir`: [name, is a folder, ignored by git].
+  const dirOf = (dir: string, entries: [string, boolean, boolean?][]): OrcaDir => ({
+    entries: entries.map(([name, isDirectory, ignored = false]) => ({ name, path: dir === "" ? name : `${dir}/${name}`, isDirectory, ignored })),
+    total: entries.length,
+  });
+  const root = () =>
+    dirOf("", [
+      ["src", true],
+      ["target", true, true],
+      ["a.rs", false],
+      ["b.log", false, true],
+    ]);
+  const text = (content: string, signature = "sig-1"): OrcaFileText => ({ content, crlf: false, signature });
+  const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
+  const names = () => textsOf("#orca-files-tree .orca-file-name");
+  const row = (path: string) => $(`#orca-files-tree .orca-file[data-path="${path}"]`);
+  const stateText = () => $(".orca-edit-state");
+  const dirtyMarks = () => count(".orca-tab-dirty");
+
+  // The app with the example-app project selected, its Claude session the selected tab, the file pane open and its root read.
+  async function openFiles(fixtures: Record<string, unknown> = {}, value = orcaOverview(sample(), worktrees())) {
+    await openOrca(value, { orca_terminal_read: ["$"], orca_files_list: root(), editor_settings: { autosaveMs: 100 }, ...fixtures });
+    await project("example-app").click();
+    await expect(selectedTab()).toBeDisplayed();
+    await $(".orca-files-toggle").click();
+    await expect($("#orca-files")).toBeDisplayed();
+  }
+
+  // The page's own double press on a file of the tree, and typing in the editor shown (value, then input).
+  const doublePress = (path: string) =>
+    browser.execute(
+      (p, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`.orca-file[data-path="${p}"]`)!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+      },
+      path,
+      onceId(),
+    );
+  const type = (add: string) =>
+    browser.execute(
+      (t, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+        area.value += t;
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+      add,
+      onceId(),
+    );
+  // Opens a.rs with `content` and waits for its text (`rows` is how many rows the tree has).
+  async function openA(content = "fn main() {}\n", signature = "sig-1", rows = 4) {
+    await mock("orca_file_read", text(content, signature));
+    await waitForCount("#orca-files-tree .orca-file", rows);
+    await doublePress("a.rs");
+    await expect($(".orca-edit-area")).toHaveValue(content, { trim: false });
+  }
+
+  it("has a button at the right end of the tab strip that shows and hides the file pane, hidden at the start", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_terminal_read: ["$"] });
+    await expect($("#orca-files")).not.toBeDisplayed();
+    await expect($("#orca-files-split")).not.toBeDisplayed();
+    await expect($(".orca-files-toggle")).toHaveAttribute("aria-pressed", "false");
+    await expect($(".orca-files-toggle")).toHaveAttribute("aria-label", "ファイル欄");
+    await mock("orca_files_list", root());
+    await project("example-app").click();
+    await $(".orca-files-toggle").click();
+    await expect($("#orca-files")).toBeDisplayed();
+    await expect($("#orca-files-split")).toBeDisplayed();
+    await expect($(".orca-files-toggle")).toHaveAttribute("aria-pressed", "true");
+    const box = await browser.execute(() => {
+      const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      return { workRight: r("#orca-work").right, splitLeft: r("#orca-files-split").left, splitRight: r("#orca-files-split").right, filesLeft: r("#orca-files").left, share: r("#orca-files").width / r("#orca").width, head: r("#orca-files-head").height, tabs: r(".orca-tabbar").height, barRight: r(".orca-tabbar").right, toggleRight: r(".orca-files-toggle").right, plusRight: r(".orca-plus").right };
+    });
+    expect(box.workRight).toBeLessThanOrEqual(box.splitLeft + 1);
+    expect(box.splitRight).toBeLessThanOrEqual(box.filesLeft + 1);
+    expect(box.share).toBeCloseTo(0.22, 2);
+    expect(box.head).toBe(box.tabs);
+    expect(box.toggleRight).toBeLessThanOrEqual(box.barRight);
+    expect(box.toggleRight).toBeGreaterThan(box.plusRight);
+    await $(".orca-files-toggle").click();
+    await expect($("#orca-files")).not.toBeDisplayed();
+    await expect($("#orca-files-split")).not.toBeDisplayed();
+    await expect($(".orca-files-toggle")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("puts the button in the pane in the top right corner only", async () => {
+    const two = orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] });
+    const side = layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", [zsh])] }, "p1");
+    await openOrca(two, { orca_terminal_read: ["$"], orca_panes: side });
+    await project("example-app").click();
+    await waitForCount(".orca-pane", 2);
+    await expect($('.orca-pane[data-pane="p1"] .orca-files-toggle')).not.toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p2"] .orca-files-toggle')).toBeDisplayed();
+    const stacked = layout({ kind: "split", direction: "column", children: [pane("p1", [claude]), pane("p2", [zsh])] }, "p1");
+    await openOrca(two, { orca_terminal_read: ["$"], orca_panes: stacked });
+    await project("example-app").click();
+    await waitForCount(".orca-pane", 2);
+    await expect($('.orca-pane[data-pane="p1"] .orca-files-toggle')).toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p2"] .orca-files-toggle')).not.toBeDisplayed();
+  });
+
+  it("shows the heading of the selected session's worktree, reads its root, and draws the folders first with the ignored ones in italics", async () => {
+    await openFiles();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    expect(await callsOf("orca_files_list")).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+    const kinds = await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-file")].map((e) => [e.dataset.kind, e.dataset.ignored]));
+    expect(kinds).toEqual([["dir", "false"], ["dir", "true"], ["file", "false"], ["file", "true"]]);
+    const look = await browser.execute(() => {
+      const style = (path: string) => getComputedStyle(document.querySelector(`.orca-file[data-path="${path}"] .orca-file-name`)!);
+      const row = (path: string) => getComputedStyle(document.querySelector(`.orca-file[data-path="${path}"]`)!);
+      return { plain: style("a.rs").fontStyle, ignored: style("b.log").fontStyle, plainOpacity: row("a.rs").opacity, ignoredOpacity: row("b.log").opacity };
+    });
+    expect(look).toEqual({ plain: "normal", ignored: "italic", plainOpacity: "1", ignoredOpacity: "0.55" });
+  });
+
+  it("reads a folder when it is pressed, shows its entries under it, and reads it again each time it is opened", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const list = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "src", ignored: false, environment: null }]);
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+    expect(await names()).toEqual(["src", "lib", "main.rs", "target", "a.rs", "b.log"]);
+    // A child is one level in.
+    const depths = await browser.execute(() => ["src", "src/lib"].map((p) => document.querySelector<HTMLElement>(`.orca-file[data-path="${p}"]`)!.style.getPropertyValue("--depth")));
+    expect(depths).toEqual(["0", "1"]);
+    await row("src").click();
+    await expect(row("src")).toHaveAttribute("aria-expanded", "false");
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+    expect(await callsOf(list)).toHaveLength(1);
+    await row("src").click();
+    await waitForCalls(list, 2);
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    expect(await names()).toEqual(["src", "lib", "main.rs", "target", "a.rs", "b.log"]);
+  });
+
+  it("reads the root and the open folders again with the reload button", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 5);
+    const list = await mock("orca_files_list", dirOf("", [["src", true], ["new.rs", false]]));
+    await expect($("#orca-files-reload")).toHaveAttribute("aria-label", "ファイルを読み直す");
+    await $("#orca-files-reload").click();
+    const calls = await waitForCalls(list, 2);
+    expect(calls).toEqual([
+      { path: "/work/example-app", dir: "", ignored: false, environment: null },
+      { path: "/work/example-app", dir: "src", ignored: false, environment: null },
+    ]);
+  });
+
+  it("reads the root and the open folders again one at a time", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 5);
+    const list = await mock("orca_files_list", holds);
+    await $("#orca-files-reload").click();
+    await waitForCalls(list, 1);
+    await browser.pause(300);
+    expect(await callsOf(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await release(list, dirOf("", [["src", true], ["target", true, true]]));
+    expect(await waitForCalls(list, 2)).toEqual([
+      { path: "/work/example-app", dir: "", ignored: false, environment: null },
+      { path: "/work/example-app", dir: "src", ignored: false, environment: null },
+    ]);
+    await release(list, dirOf("src", [["lib", true]]));
+  });
+
+  it("does not ask for the ignore marks of a folder that the list marked as ignored", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const list = await mock("orca_files_list", dirOf("target", [["debug", true, true]]));
+    await row("target").click();
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "target", ignored: true, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 5);
+    // A folder in it is ignored as well, and is read as one.
+    const inner = await mock("orca_files_list", dirOf("target/debug", [["x", false, true]]));
+    await row("target/debug").click();
+    expect(await waitForCalls(inner)).toEqual([{ path: "/work/example-app", dir: "target/debug", ignored: true, environment: null }]);
+  });
+
+  it("shows another worktree's tree, and its name, when another tab is selected", async () => {
+    const value = orcaOverview(sample(), [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" })], {
+      terminals: [orcaTerminal("example-app", "zsh", { path: "/work/example-app-b", branch: "feat/b" })],
+    });
+    await openFiles({}, value);
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const list = await mock("orca_files_list", dirOf("", [["only-b.rs", false]]));
+    await tabOf(zsh).$(".orca-tab-btn").click();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/b");
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app-b", dir: "", ignored: false, environment: null }]);
+    await browser.waitUntil(async () => (await names()).join() === "only-b.rs", { timeoutMsg: "the tree of the other worktree never showed" });
+  });
+
+  it("reads a saved environment's files with its name", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio), { orca_terminal_read: ["$"], orca_files_list: root() });
+    await project("example-app").click();
+    await $(".orca-files-toggle").click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    expect(await callsOf("orca_files_list")).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: "Studio" }]);
+  });
+
+  it("shows the message of a root that cannot be read, and of a folder that cannot", async () => {
+    await openFiles({ orca_files_list: rejects("Orca に接続できません") });
+    await expect($("#orca-files-tree .orca-file-note.fail")).toHaveText("Orca に接続できません");
+    await mock("orca_files_list", root());
+    await $("#orca-files-reload").click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", rejects("ファイルが見つかりません"));
+    await row("src").click();
+    await expect($("#orca-files-tree .orca-file-note.fail")).toHaveText("ファイルが見つかりません");
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+  });
+
+  it("says how many more entries a folder holds than were listed", async () => {
+    await openFiles({ orca_files_list: { ...dirOf("", [["a.rs", false]]), total: 5001 } });
+    await expect($("#orca-files-tree .orca-file-note")).toHaveText("ほか 5000 件");
+  });
+
+  it("opens a file in a tab with a file mark on a double press, selects it, and colors the file in the tree", async () => {
+    await openFiles();
+    const read = await mock("orca_file_read", text("fn main() {}\n"));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    // A single press only selects: nothing is read.
+    await row("a.rs").click();
+    expect(await callsOf(read)).toEqual([]);
+    await expect(row("a.rs")).toHaveAttribute("data-open", "false");
+    await doublePress("a.rs");
+    expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: "a.rs", environment: null }]);
+    await expect(tabOf("file:1")).toBeExisting();
+    await expect(selectedTab().$(".orca-tab-title")).toHaveText("a.rs");
+    expect(await count('.orca-tabs [data-tab="file:1"] .orca-file-tab-ic')).toBe(1);
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    await expect($(".orca-edit-path")).toHaveText("a.rs");
+    await expect($(".orca-term")).not.toBeDisplayed();
+    await expect(row("a.rs")).toHaveAttribute("data-open", "true");
+    // The tab was asked for as one of the project's tabs.
+    const asked = (await callsOf("orca_panes")).map((c) => (c as { tabs: string[] }).tabs);
+    expect(asked[asked.length - 1]).toEqual([claude, "file:1"]);
+    // The heading still names the worktree, with the file selected.
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
+    expect(await browser.execute(() => document.activeElement?.classList.contains("orca-edit-area"))).toBe(true);
+  });
+
+  it("opens a file that is open already by selecting its tab, without reading it again", async () => {
+    await openFiles();
+    await openA();
+    await tabOf(claude).$(".orca-tab-btn").click();
+    await expect($(".orca-edit-area")).not.toBeExisting();
+    await doublePress("a.rs");
+    await expect(selectedTab().$(".orca-tab-title")).toHaveText("a.rs");
+    expect(await count(".orca-tabs [data-file]")).toBe(1);
+    expect(await callsOf("orca_file_read")).toHaveLength(1);
+  });
+
+  it("keeps the typing of a file when another tab is shown and the file again", async () => {
+    await openFiles({ editor_settings: { autosaveMs: 3000 } });
+    await openA();
+    await type("// more\n");
+    await tabOf(claude).$(".orca-tab-btn").click();
+    await tabOf("file:1").$(".orca-tab-btn").click();
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// more\n", { trim: false });
+    expect(await callsOf("orca_file_read")).toHaveLength(1);
+  });
+
+  it("shows the message of a file that cannot be read in the tab, with no editor", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_file_read", rejects("バイナリのファイルは開けません"));
+    await doublePress("a.rs");
+    await expect($(".orca-edit .orca-empty")).toHaveText("バイナリのファイルは開けません");
+    await expect($(".orca-edit-area")).not.toBeDisplayed();
+    expect(await dirtyMarks()).toBe(0);
+  });
+
+  it("saves by itself once the typing has stopped: waiting, saving, saved, and the mark of the tab goes", async () => {
+    await openFiles({ editor_settings: { autosaveMs: 500 } });
+    await openA();
+    await expect(stateText()).toHaveText("");
+    const write = await mock("orca_file_write", holds);
+    await type("// x\n");
+    expect(await dirtyMarks()).toBe(1);
+    await expect(stateText()).toHaveText("保存待ち");
+    expect(await callsOf(write)).toEqual([]);
+    expect(await waitForCalls(write)).toEqual([{ path: "/work/example-app", relative: "a.rs", content: "fn main() {}\n// x\n", crlf: false, signature: "sig-1", environment: null }]);
+    await expect(stateText()).toHaveText("保存中");
+    expect(await dirtyMarks()).toBe(1);
+    await release(write, saved("sig-2"));
+    await expect(stateText()).toHaveText("保存しました");
+    await browser.waitUntil(async () => (await dirtyMarks()) === 0, { timeoutMsg: "the mark of the tab stayed" });
+  });
+
+  it("saves the typing that waits for its timer when the page is hidden for good", async () => {
+    await openFiles({ editor_settings: { autosaveMs: 3000 } });
+    await openA();
+    const write = await mock("orca_file_write", saved("sig-2"));
+    await type("// x\n");
+    await expect(stateText()).toHaveText("保存待ち");
+    expect(await callsOf(write)).toEqual([]);
+    await browser.execute((once) => {
+      if (!window.__e2e_once__(once)) return;
+      window.dispatchEvent(new Event("pagehide"));
+    }, onceId());
+    expect(await waitForCalls(write)).toEqual([{ path: "/work/example-app", relative: "a.rs", content: "fn main() {}\n// x\n", crlf: false, signature: "sig-1", environment: null }]);
+    await expect(stateText()).toHaveText("保存しました");
+  });
+
+  it("restarts the wait with each key, and saves the whole text once", async () => {
+    await openFiles({ editor_settings: { autosaveMs: 600 } });
+    await openA();
+    const write = await mock("orca_file_write", saved("sig-2"));
+    await type("1");
+    await browser.pause(300);
+    await type("2");
+    await browser.pause(300);
+    await type("3");
+    expect(await callsOf(write)).toEqual([]);
+    const calls = await waitForCalls(write);
+    expect((calls[0] as { content: string }).content).toBe("fn main() {}\n123");
+    await browser.pause(800);
+    expect(await callsOf(write)).toHaveLength(1);
+  });
+
+  it("sends the signature of the last save with the next one", async () => {
+    await openFiles();
+    await openA();
+    const write = await mock("orca_file_write", saved("sig-2"));
+    await type("a");
+    await waitForCalls(write);
+    await expect(stateText()).toHaveText("保存しました");
+    await mock("orca_file_write", saved("sig-3"));
+    await type("b");
+    const calls = await waitForCalls("orca_file_write");
+    expect(calls).toEqual([{ path: "/work/example-app", relative: "a.rs", content: "fn main() {}\nab", crlf: false, signature: "sig-2", environment: null }]);
+  });
+
+  it("sends what was typed while a save was on its way as the next save, once the first is done", async () => {
+    await openFiles();
+    await openA();
+    const write = await mock("orca_file_write", holds);
+    await type("a");
+    await waitForCalls(write);
+    await type("b");
+    await release(write, saved("sig-2"));
+    await expect(stateText()).not.toHaveText("保存しました");
+    await mock("orca_file_write", saved("sig-3"));
+    const calls = await waitForCalls("orca_file_write");
+    expect(calls).toEqual([{ path: "/work/example-app", relative: "a.rs", content: "fn main() {}\nab", crlf: false, signature: "sig-2", environment: null }]);
+    await expect(stateText()).toHaveText("保存しました");
+    await browser.waitUntil(async () => (await dirtyMarks()) === 0, { timeoutMsg: "the mark of the tab stayed" });
+  });
+
+  it("does not save a file that the disk changed, says so in the heading, keeps the mark, and does not try again", async () => {
+    await openFiles();
+    await openA();
+    const write = await mock("orca_file_write", { state: "changed", signature: "sig-1" } satisfies OrcaSaved);
+    await type("a");
+    await waitForCalls(write);
+    await expect(stateText()).toHaveText("ディスクのファイルが変わっています");
+    expect(await dirtyMarks()).toBe(1);
+    await type("b");
+    await browser.pause(600);
+    expect(await callsOf(write)).toHaveLength(1);
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\nab", { trim: false });
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("says when the file is gone or is no longer text", async () => {
+    await openFiles();
+    await openA();
+    await mock("orca_file_write", { state: "missing", signature: "sig-1" } satisfies OrcaSaved);
+    await type("a");
+    await expect(stateText()).toHaveText("ファイルが見つかりません");
+    await tabOf(claude).$(".orca-tab-btn").click();
+    await mock("orca_file_read", text("x\n", "sig-x"));
+    await mock("orca_files_list", dirOf("", [["a.rs", false], ["c.rs", false]]));
+    await $("#orca-files-reload").click();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    await doublePress("c.rs");
+    await mock("orca_file_write", { state: "not-utf8", signature: "sig-x" } satisfies OrcaSaved);
+    await type("b");
+    await expect(stateText()).toHaveText("ディスクのファイルが UTF-8 ではなくなっています");
+  });
+
+  it("shows the message of a save that failed, and saves again with the next typing", async () => {
+    await openFiles();
+    await openA();
+    await mock("orca_file_write", rejects("Orca に接続できません"));
+    await type("a");
+    await expect($("#error")).toHaveText("Orca に接続できません");
+    await expect(stateText()).toHaveText("保存できません");
+    expect(await dirtyMarks()).toBe(1);
+    const again = await mock("orca_file_write", saved("sig-2"));
+    await type("b");
+    expect(await waitForCalls(again)).toEqual([{ path: "/work/example-app", relative: "a.rs", content: "fn main() {}\nab", crlf: false, signature: "sig-1", environment: null }]);
+    await expect(stateText()).toHaveText("保存しました");
+  });
+
+  it("saves the typing of a file when its tab is closed, then closes it", async () => {
+    await openFiles({ editor_settings: { autosaveMs: 3000 } });
+    await openA();
+    const write = await mock("orca_file_write", saved("sig-2"));
+    await type("a");
+    await tabOf("file:1").$(".orca-tab-close").click();
+    expect(await waitForCalls(write)).toEqual([{ path: "/work/example-app", relative: "a.rs", content: "fn main() {}\na", crlf: false, signature: "sig-1", environment: null }]);
+    await expect(tabOf("file:1")).not.toBeExisting();
+    expect(await tabTitles()).toEqual(["Write the docs"]);
+    await expect(row("a.rs")).toHaveAttribute("data-open", "false");
+    await expect($(".orca-term")).toBeDisplayed();
+  });
+
+  it("closes a file with nothing to save without a save", async () => {
+    await openFiles();
+    await openA();
+    const write = await mock("orca_file_write", saved("sig-2"));
+    await tabOf("file:1").$(".orca-tab-close").click();
+    await expect(tabOf("file:1")).not.toBeExisting();
+    expect(await callsOf(write)).toEqual([]);
+  });
+
+  it("keeps the tab of a file whose save failed, and closes one whose save was refused", async () => {
+    await openFiles({ editor_settings: { autosaveMs: 3000 } });
+    await openA();
+    await mock("orca_file_write", rejects("Orca に接続できません"));
+    await type("a");
+    await tabOf("file:1").$(".orca-tab-close").click();
+    await expect($("#error")).toHaveText("Orca に接続できません");
+    await expect(tabOf("file:1")).toBeExisting();
+    expect(await dirtyMarks()).toBe(1);
+    await mock("orca_file_write", { state: "changed", signature: "sig-1" } satisfies OrcaSaved);
+    await tabOf("file:1").$(".orca-tab-close").click();
+    await expect(tabOf("file:1")).not.toBeExisting();
+  });
+
+  it("opens a second file as a second tab, each with its own text", async () => {
+    await openFiles({ orca_files_list: dirOf("", [["a.rs", false], ["b.rs", false]]) });
+    await openA("fn main() {}\n", "sig-1", 2);
+    await mock("orca_file_read", text("pub fn b() {}\n", "sig-b"));
+    await doublePress("b.rs");
+    await expect($(".orca-edit-area")).toHaveValue("pub fn b() {}\n", { trim: false });
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs", "b.rs"]);
+    await tabOf("file:1").$(".orca-tab-btn").click();
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    expect(await callsOf("orca_file_read")).toHaveLength(1);
   });
 });
