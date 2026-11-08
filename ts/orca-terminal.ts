@@ -53,7 +53,7 @@ export interface TermSource {
   environment: string | null;
 }
 
-// A terminal to show: its tab, where it comes from, and the host element of the pane that holds it.
+// A terminal to show: its handle (the id of its screen, which a change of the tab's kind, plain to Claude or back, does not change), where it comes from, and the host element of the pane that holds it.
 export interface Placement {
   id: string;
   source: TermSource;
@@ -86,7 +86,7 @@ interface Instance {
 }
 
 const instances = new Map<string, Instance>();
-// The tabs whose terminals are shown (one for each pane), and the one that last took the focus.
+// The handles of the terminals shown (one for each pane), and the one that last took the focus.
 const shown = new Set<string>();
 let focusedId: string | null = null;
 // The host elements that are watched for their size.
@@ -453,8 +453,8 @@ function stop(instance: Instance) {
 
 // ---- showing ----
 
-// Shows the terminals of `placements` (the tab, where it comes from, and the host element of its pane) and hides the others. A terminal is made when its tab is first shown.
-// `focusId` is the tab of the pane that has the focus: its terminal takes the keyboard when it is new or when it just became the focused one.
+// Shows the terminals of `placements` (the handle, where it comes from, and the host element of its pane) and hides the others. A terminal is made when it is first shown.
+// `focusId` is the handle of the terminal of the pane that has the focus: its terminal takes the keyboard when it is new or when it just became the focused one.
 export function showTerminals(placements: Placement[], focusId: string | null) {
   const next = new Set(placements.map((p) => p.id));
   for (const id of [...shown]) {
@@ -518,7 +518,7 @@ export function hideTerminals() {
   showTerminals([], null);
 }
 
-// Forgets the terminal of the tab `id` (its tab is gone).
+// Forgets the terminal of the handle `id` (its tab is gone).
 function dropTerminal(id: string) {
   const instance = instances.get(id);
   if (!instance) return;
@@ -529,7 +529,7 @@ function dropTerminal(id: string) {
   instances.delete(id);
 }
 
-// Forgets every terminal whose id `keep` does not accept (the sessions that left Orca's list, or the target changed).
+// Forgets every terminal whose handle `keep` does not accept (the sessions that left Orca's list, or the target changed).
 export function pruneTerminals(keep: (id: string) => boolean) {
   for (const id of instances.keys()) if (!keep(id)) dropTerminal(id);
 }

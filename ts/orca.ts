@@ -23,7 +23,7 @@ import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { initOrcaChat } from "./orca-chat.js";
 import { type PaneModel, drawTree, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
-import { applyLocal, focusedTab, forgetPanes, layoutOf, needsSync, panesOf, syncPanes } from "./orca-panes.js";
+import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
 import { setNavCount, show, showError } from "./view.js";
@@ -66,7 +66,7 @@ let working = false;
 let projectKey: string | null = null;
 // The host element of each pane drawn, by pane id: the terminals are placed in them.
 let paneHosts = new Map<string, HTMLElement>();
-// The order tabs were first seen in, so that a read that reorders the sessions does not move the tabs.
+// The order tabs were first seen in, so that a read that reorders the sessions does not move the tabs. A tab with a terminal is known by its handle, so a terminal that changes kind (a plain one where Claude starts, or the other way round) keeps its place.
 const seen = new Map<string, number>();
 // The tabs of Orca whose close was asked for and is not answered.
 const closing = new Set<string>();
@@ -171,6 +171,12 @@ interface Tab {
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
 const plainTabId = (handle: string) => `orca:${handle}`;
 
+// What a tab is known by in `seen`: its handle, else its id. The id changes with the kind of the terminal; the handle does not.
+const keyOfTab = (t: Tab) => t.handle ?? t.id;
+
+// The handles of the terminals of the tabs the read holds: the terminals on the screen are known by them.
+const liveHandles = () => new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null || r.handle === null ? [] : [r.handle])), ...(view?.terminals ?? []).map((t) => t.handle)]);
+
 // The tabs of the project `key`: its Claude sessions and its plain terminals, in the order they were first seen.
 function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
@@ -181,8 +187,9 @@ function tabsOf(key: string): Tab[] {
   for (const t of view?.terminals ?? []) {
     if (t.projectKey === key) tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle, path: t.path });
   }
-  for (const t of tabs) if (!seen.has(t.id)) seen.set(t.id, seen.size);
-  return tabs.sort((a, b) => seen.get(a.id)! - seen.get(b.id)!);
+  // A Claude row that got its handle after it was first seen keeps the place it had under its id.
+  for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
+  return tabs.sort((a, b) => seen.get(keyOfTab(a))! - seen.get(keyOfTab(b))!);
 }
 
 // The layout of the selected project's work pane, as Rust answered it (null: no project, or no answer yet).
@@ -378,14 +385,16 @@ function emptyText(tabs: Tab[], tab: Tab | undefined) {
 }
 
 // The tree of the layout for drawing: each pane with the tabs it holds that the list still has (a tab that left shows no more before Rust's next answer), and the one it shows.
-function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled: boolean): TreeModel {
-  if (node.kind === "split") return { kind: "split", direction: node.direction, children: node.children.map((c) => treeOf(c, tabs, focus, plusDisabled)) };
-  const mine = node.tabs.flatMap((id) => tabs.find((t) => t.id === id) ?? []);
-  const tab = mine.find((t) => t.id === node.selected);
+// A tab id the layout holds from before a terminal changed kind is taken as the tab with the same handle (`find`) until Rust's answer.
+function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled: boolean, find: (id: string) => Tab | undefined): TreeModel {
+  if (node.kind === "split") return { kind: "split", direction: node.direction, children: node.children.map((c) => treeOf(c, tabs, focus, plusDisabled, find)) };
+  const mine = [...new Set(node.tabs.flatMap((id) => find(id) ?? []))];
+  const selected = find(node.selected);
+  const tab = mine.find((t) => t.id === selected?.id);
   const pane: PaneModel = {
     id: node.id,
     key: JSON.stringify([mine, node.selected, [...closing]]),
-    tabs: () => mine.map((t) => tabNode(t, t.id === node.selected)),
+    tabs: () => mine.map((t) => tabNode(t, t.id === tab?.id)),
     focused: node.id === focus,
     empty: emptyText(tabs, tab),
     terminal: !!tab?.handle,
@@ -401,7 +410,7 @@ function drawWork() {
   const layout = currentLayout();
   const plusDisabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
   const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, plusDisabled } };
-  paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled) : empty);
+  paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled, (id) => findTab(view?.target ?? null, projectKey!, tabs, id)) : empty);
   drawStarted();
 }
 
@@ -411,12 +420,12 @@ function syncTerminal() {
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
   const placements: Placement[] = [];
   for (const pane of panesOf(layout?.root ?? null)) {
-    const tab = tabs.find((t) => t.id === pane.selected);
+    const tab = findTab(view?.target ?? null, projectKey!, tabs, pane.selected);
     const host = paneHosts.get(pane.id);
-    if (tab?.handle && host) placements.push({ id: tab.id, source: { kind: streaming() ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: view?.target ?? null }, host });
+    if (tab?.handle && host) placements.push({ id: tab.handle, source: { kind: streaming() ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: view?.target ?? null }, host });
   }
   if (placements.length === 0) return hideTerminals();
-  showTerminals(placements, selectedTab());
+  showTerminals(placements, findTab(view?.target ?? null, projectKey!, tabs, selectedTab() ?? "")?.handle ?? null);
 }
 
 // The note of a start that was answered: it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started.
@@ -446,8 +455,8 @@ function adopt(read: OrcaOverview) {
   switching = false;
   // A terminal that left Orca's list leaves the tabs, with its screen.
   if (!keep && view.state === "ready") {
-    const held = new Set([...view.rows.flatMap((r) => (r.paneKey === null ? [] : [claudeTabId(r.paneKey)])), ...view.terminals.map((t) => plainTabId(t.handle))]);
-    pruneTerminals((id) => held.has(id));
+    const held = liveHandles();
+    pruneTerminals((handle) => held.has(handle));
   }
   if (view.state === "ready") forgetGone();
   claimStarted();
@@ -475,8 +484,8 @@ function claimStarted() {
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => plainTabId(t.handle))]);
-  for (const id of seen.keys()) if (!live.has(id)) seen.delete(id);
+  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => t.handle)]);
+  for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
 }
 
 function draw() {
@@ -688,8 +697,12 @@ function runPaneOp(op: PaneOp | null) {
   const key = projectKey;
   if (key === null || view === null) return;
   const target = view.target;
-  const ids = () => (view !== null && view.target === target && view.state !== "missing" && !switching ? tabsOf(key).map((t) => t.id) : null);
-  syncPanes(target, key, ids, op, () => draw(), showError);
+  const tabs = (): PaneTabs | null => {
+    if (view === null || view.target !== target || view.state === "missing" || switching) return null;
+    const now = tabsOf(key);
+    return { ids: now.map((t) => t.id), handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
+  };
+  syncPanes(target, key, tabs, op, () => draw(), showError);
 }
 
 // Asks for the layout when the project's tabs are not the ones it was asked for with (the first time, and each time a tab came or went); only a read that worked says what the tabs are.
