@@ -1455,6 +1455,21 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     expect(await rootVar("--fs-calendar")).toBe("1.5");
   });
 
+  it("draws a plain button of the screen with the family and size chosen too", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, font_settings: fontSettings({ calendar: { family: "Menlo", size: 21, ghostty: false } }) });
+    // 11px of its own, times 21 / 14.
+    await browser.waitUntil(async () => (await fontOf("#cal-today")).size === "16.5px", { timeoutMsg: "the button never took the size" });
+    expect((await fontOf("#cal-today")).family).toContain("Menlo");
+  });
+
+  it("saves the size of a place whose family this Mac has lost, with the family it holds", async () => {
+    await openFontTab({ font_settings: fontSettings({ slack: { family: "Gone Sans", size: 14, ghostty: false } }) });
+    const set = await mock("font_settings_set", fontSettings({ slack: { family: "Gone Sans", size: 18, ghostty: false } }));
+    await chooseOption("font-slack-size", "18");
+    expect(await waitForCalls(set)).toEqual([{ area: "slack", family: "Gone Sans", size: 18, ghostty: false }]);
+    expect(await selectedText("font-slack-family")).toBe("Gone Sans（この Mac にありません）");
+  });
+
   it("sends the family chosen and draws the screen with it at once", async () => {
     await openFontTab();
     const set = await mock("font_settings_set", fontSettings({ mail: { family: "Hiragino Sans", size: 14, ghostty: false } }));

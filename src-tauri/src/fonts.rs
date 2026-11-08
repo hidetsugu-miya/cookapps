@@ -175,7 +175,7 @@ fn save_settings(dir: &Path, settings: &FontSettings) -> Result<(), String> {
         .map_err(|e| format!("{} を書けません: {e}", path.display()))
 }
 
-/// The settings with the pick of `area` changed. The family must be one of `installed`; the size is brought into its range; only the work space of Orca may follow Ghostty.
+/// The settings with the pick of `area` changed. The family must be one of `installed`, or the one the place holds; the size is brought into its range; only the work space of Orca may follow Ghostty.
 fn set_pick(
     settings: &FontSettings,
     area: FontArea,
@@ -190,15 +190,17 @@ fn set_pick(
     if size.is_nan() {
         return Err("大きさが正しくありません".into());
     }
+    let mut next = settings.clone();
+    // The family this place holds already is kept, even if this Mac has lost it since: the size of the place can still change.
+    let held = next.pick_mut(area).family.clone();
     let family = match family {
         None => None,
         Some(raw) => Some(
             valid_family(raw)
-                .filter(|name| installed.contains(name))
+                .filter(|name| installed.contains(name) || held.as_ref() == Some(name))
                 .ok_or_else(|| format!("書体「{}」はこの Mac にありません", raw.trim()))?,
         ),
     };
-    let mut next = settings.clone();
     *next.pick_mut(area) = FontPick {
         family,
         size: clamp_size(size),
@@ -267,6 +269,12 @@ pub async fn font_settings_set(
 ) -> Result<FontSettings, String> {
     let dir = config_dir(&app)?;
     tokio::task::spawn_blocking(move || {
+        // The list is read only for a family, and outside the lock.
+        let installed = if family.is_some() {
+            installed_families()
+        } else {
+            Vec::new()
+        };
         let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
         let settings = set_pick(
             &load_settings(&dir),
@@ -274,7 +282,7 @@ pub async fn font_settings_set(
             family.as_deref(),
             size,
             ghostty,
-            &installed_families(),
+            &installed,
         )?;
         save_settings(&dir, &settings)?;
         Ok(settings)
@@ -626,6 +634,62 @@ mod tests {
             &FontSettings::default(),
             FontArea::Mail,
             Some("menlo"),
+            14.0,
+            false,
+            &installed
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn the_family_a_place_holds_is_kept_after_the_mac_lost_it() {
+        let installed = names(&["Menlo"]);
+        let mut held = FontSettings::default();
+        held.todo_work.family = Some("Gone Sans".into());
+        held.orca_work.family = Some("Gone Sans".into());
+        // The size of that place can still change, and the work space of Orca can still follow Ghostty.
+        let got = set_pick(
+            &held,
+            FontArea::TodoWork,
+            Some("Gone Sans"),
+            18.0,
+            false,
+            &installed,
+        )
+        .unwrap();
+        assert_eq!(
+            got.todo_work,
+            FontPick {
+                family: Some("Gone Sans".into()),
+                size: 18.0,
+                ghostty: false
+            }
+        );
+        let got = set_pick(
+            &held,
+            FontArea::OrcaWork,
+            Some("Gone Sans"),
+            13.0,
+            true,
+            &installed,
+        )
+        .unwrap();
+        assert!(got.orca_work.ghostty);
+        assert_eq!(got.orca_work.family.as_deref(), Some("Gone Sans"));
+        // Only that place: another place, or another name, is still refused.
+        assert!(set_pick(
+            &held,
+            FontArea::Mail,
+            Some("Gone Sans"),
+            14.0,
+            false,
+            &installed
+        )
+        .is_err());
+        assert!(set_pick(
+            &held,
+            FontArea::TodoWork,
+            Some("Gone Serif"),
             14.0,
             false,
             &installed

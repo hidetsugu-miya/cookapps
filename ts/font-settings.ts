@@ -43,7 +43,10 @@ let saving = false;
 const kebab = (area: FontArea) => area.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
 const idOf = (area: FontArea, part: "family" | "size") => `font-${kebab(area)}-${part}`;
 
-// Applies the choice: the variables of the places, those of the editor, and the font of the terminals.
+// What the terminals were last given: "ghostty", or the family and size. They start with Ghostty's font, so the first choice that follows it gives them nothing.
+let terminalKey = "ghostty";
+
+// Applies the choice: the variables of the places, those of the editor, and the font of the terminals (only when theirs changed, as it draws and fits every terminal).
 function apply(next: FontSettings) {
   const root = document.documentElement.style;
   const set = (name: string, value: string | null) => (value === null ? root.removeProperty(name) : root.setProperty(name, value));
@@ -53,7 +56,11 @@ function apply(next: FontSettings) {
       set("--editor-family", pick.family && `${JSON.stringify(pick.family)}, ${EDITOR_FALLBACK}`);
       set("--editor-size", `${pick.size}px`);
     } else if (area === "orcaWork") {
-      applyTerminalFont(pick.ghostty ? null : { family: pick.family, size: pick.size });
+      const key = pick.ghostty ? "ghostty" : JSON.stringify([pick.family, pick.size]);
+      if (key !== terminalKey) {
+        terminalKey = key;
+        applyTerminalFont(pick.ghostty ? null : { family: pick.family, size: pick.size });
+      }
     } else {
       const name = kebab(area);
       set(`--ff-${name}`, pick.family && `${JSON.stringify(pick.family)}, var(--ff-base)`);
@@ -117,7 +124,8 @@ async function choose(area: FontArea, familyChoice: string, size: number) {
   const focusId = idOf(area, familyChoice === familyValue(area, held) ? "size" : "family");
   saving = true;
   $("error").hidden = true;
-  render();
+  // The selects wait; they are drawn again once, when the save has ended.
+  for (const select of document.querySelectorAll<HTMLSelectElement>("#font-items select")) select.disabled = true;
   try {
     settings = await invoke("font_settings_set", { area, family, size, ghostty });
     apply(settings);
