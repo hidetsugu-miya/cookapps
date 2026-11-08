@@ -91,7 +91,7 @@ export function setTodoCount(tasks: TaskItem[]) {
 
 export const inboxOf = () => todoState.todo!.projects.find((p) => p.inbox);
 export const projectOf = (id: string) => todoState.projectById.get(id);
-export const projectName = (p: ProjectItem | undefined) => (p?.inbox ? "受信箱" : p?.name ?? "");
+export const projectName = (p: ProjectItem | undefined) => (p?.inbox ? "インボックス" : p?.name ?? "");
 export const viewProjectId = (view: string) => (view === "inbox" ? inboxOf()?.id : view);
 
 // The rows of `t`'s subtasks that are not done (a done one has no row), in Todoist's order.
