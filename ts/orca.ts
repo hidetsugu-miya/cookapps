@@ -6,6 +6,7 @@
 // and no more once the `orca` command was found missing (the reload button reads again). Only the first read, the screen being shown, the reload button, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
+// A search field above the projects (A-19) narrows them by name; ⌘J moves to it.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
@@ -17,7 +18,7 @@ import type { OrcaTerminal } from "./bindings/OrcaTerminal";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
-import { $, tag } from "./dom.js";
+import { $, composing, isMac, tag } from "./dom.js";
 import { CHEVRON_SVG, CLAUDE_SVG, FILE_SVG, svgOf } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
@@ -65,6 +66,9 @@ let loading = false;
 let lastTry = 0;
 // The list pane shows the projects, or (the bell pressed) the working agents; the projects come first and the choice is kept in memory.
 let working = false;
+// The text of the search field (A-19): the list shows the projects and SSH hosts whose name holds it (blank: all of them), and the row the keys are on is `cursor` (a key; one the list does not show leaves the first).
+let query = "";
+let cursor: string | null = null;
 // The project selected (its key; null: none). Its tab selected is the one shown in the pane of its layout that has the focus (`selectedTab`).
 let projectKey: string | null = null;
 // The selected project is open in the list (its sessions under it) unless the user closed it with its arrow; selecting a project opens it again. Only the selected project is ever open.
@@ -276,6 +280,12 @@ function drawBell() {
   note.replaceChildren(statusIcon(waiting ? "question" : "working"), String(waiting || running));
 }
 
+// The search field belongs to the list of projects: it is hidden in the working view, and its clear button shows while something is typed.
+function drawSearch() {
+  $("orca-search").hidden = working;
+  $("orca-search-clear").hidden = query === "";
+}
+
 function heading(group: OrcaRow["group"], n: number) {
   const h = tag("h2", `orca-group ${group}`);
   h.append(statusIcon(GROUP_STATUS[group], GROUP_LABELS[group]), GROUP_LABELS[group], tag("span", "orca-count", String(n)));
@@ -312,13 +322,16 @@ function sessionNode(t: Tab) {
 }
 
 // A project, or an SSH host: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs.
-function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, tabs: Tab[]) {
+function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, tabs: Tab[], onCursor: boolean) {
   const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
   row.dataset.key = key;
   row.setAttribute("aria-pressed", String(key === projectKey));
-  row.append(statusIcon(status), tag("span", "orca-project-name", name));
+  if (onCursor) row.dataset.cursor = "true";
+  const label = tag("span", "orca-project-name");
+  label.append(...nameNodes(name));
+  row.append(statusIcon(status), label);
   if (sessions > 0) row.append(tag("span", "orca-n", String(sessions)));
   row.onclick = () => selectProject(key);
   wrap.append(row);
@@ -364,12 +377,45 @@ function projectRows(): { local: ProjectRow[]; hosts: ProjectRow[] } {
   return { local, hosts };
 }
 
-function projectNodes(tabs: Tab[]): HTMLElement[] {
+// The search text (A-19), trimmed, and as a regular expression source with its special characters escaped, so that a "." or a "(" matches itself. A match is a case-folded part of a name.
+const needle = () => query.trim();
+const escaped = () => needle().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// A name with the letters that match the search text in bold (`split` with a capture group puts the matches at the odd places).
+function nameNodes(name: string): (string | HTMLElement)[] {
+  if (needle() === "") return [name];
+  return name
+    .split(new RegExp(`(${escaped()})`, "gi"))
+    .map((part, i) => (i % 2 ? tag("b", "", part) : part))
+    .filter((part) => part !== "");
+}
+
+// The rows the list shows: all of them, or those whose name holds the search text. Only the name is searched (not the sessions under a project), so the sessions of an open project that the search leaves out go with its row.
+function visibleRows() {
   const { local, hosts } = projectRows();
-  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, tabs);
+  if (needle() === "") return { local, hosts };
+  const re = new RegExp(escaped(), "i");
+  return { local: local.filter((r) => re.test(r.name)), hosts: hosts.filter((r) => re.test(r.name)) };
+}
+
+// The keys of the rows the keys of the search field can reach, in the order of the list (none while nothing is typed), and the one they are on.
+function reachable() {
+  if (needle() === "") return [];
+  const { local, hosts } = visibleRows();
+  return [...local, ...hosts].map((r) => r.key);
+}
+function cursorKey() {
+  const keys = reachable();
+  return cursor !== null && keys.includes(cursor) ? cursor : (keys[0] ?? null);
+}
+
+function projectNodes(tabs: Tab[]): HTMLElement[] {
+  const { local, hosts } = visibleRows();
+  const on = cursorKey();
+  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, tabs, r.key === on);
   const nodes: HTMLElement[] = local.map(node);
   if (hosts.length) nodes.push(tag("h3", "orca-sec", "SSH"), ...hosts.map(node));
-  return nodes.length ? nodes : [emptyNode("プロジェクトがありません")];
+  return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
 }
 
 function workingNodes(now: number): HTMLElement[] {
@@ -390,7 +436,7 @@ function drawFeed(tabs: Tab[]) {
   const sessions = projectKey === null || collapsed ? [] : tabs.filter((t) => t.kind !== "file").map((t) => [t.id, t.status, t.label, t.title]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
-  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh], projectKey, collapsed, sessions, selectedTab(), switching, Math.floor(now / 60_000)]);
+  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), cursorKey()], projectKey, collapsed, sessions, selectedTab(), switching, Math.floor(now / 60_000)]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -587,6 +633,7 @@ function draw() {
   drawHeader();
   drawNotice();
   drawBell();
+  drawSearch();
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
   drawFeed(tabs);
   drawWork(tabs);
@@ -943,6 +990,73 @@ function toggleFilesAndDraw() {
   }
 }
 
+// ---- the search field (A-19) ----
+
+const searchInput = () => $<HTMLInputElement>("orca-search-input");
+
+// Ends the search: the list is the whole list again.
+function clearSearch() {
+  query = "";
+  cursor = null;
+  searchInput().value = "";
+  draw();
+}
+
+// ⌘J: the field takes the focus with its text selected. The working view has no field, so it gives way to the projects.
+function focusSearch() {
+  working = false;
+  draw();
+  searchInput().focus();
+  searchInput().select();
+}
+
+// ↑ and ↓ move the row the keys are on along the rows the search leaves, and stop at the first and the last.
+function moveCursor(step: number) {
+  const keys = reachable();
+  const at = cursorKey();
+  if (at === null) return;
+  cursor = keys[Math.min(keys.length - 1, Math.max(0, keys.indexOf(at) + step))];
+  draw();
+  feed().querySelector('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
+}
+
+function initSearch() {
+  const input = searchInput();
+  input.oninput = () => {
+    query = input.value;
+    cursor = null;
+    draw();
+  };
+  input.onkeydown = (e) => {
+    if (composing(e)) return;
+    if (e.key === "Escape") {
+      clearSearch();
+      input.blur();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      moveCursor(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "Enter") {
+      const key = cursorKey();
+      if (key !== null) selectProject(key);
+    }
+  };
+  $("orca-search-clear").onclick = () => {
+    clearSearch();
+    input.focus();
+  };
+  // Capture phase, so that a terminal or the editor with the focus does not take the key first.
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (!shown() || e.key !== "j" || !(isMac ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey || composing(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      focusSearch();
+    },
+    true,
+  );
+}
+
 export function initOrca() {
   // The history of A-7 is read only by the side pane of A-9 now; it still pauses with the window.
   initOrcaChat();
@@ -957,6 +1071,7 @@ export function initOrca() {
     drawBadge();
     refresh();
   });
+  initSearch();
   $("orca-refresh").onclick = () => load("full", true);
   $("orca-bell").onclick = () => {
     working = !working;
