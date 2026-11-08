@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.53.4
+
+No change to the app. Only the tools used to develop it changed.
+
 ## v0.53.3
 
 No change to the app. Only the tools used to develop it changed.
