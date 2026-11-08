@@ -11,6 +11,7 @@ on:
       - src-tauri/Cargo.toml
       - src-tauri/Cargo.lock
       - rust-toolchain.toml
+      - .cargo/config.toml
       - .github/workflows/rust-cache.yml
       - .github/workflows/release.yml
   schedule:

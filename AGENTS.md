@@ -87,6 +87,7 @@ requirements/  the requirements, one file per area
   The modules are in the library crate (`src-tauri/src/lib.rs`), and `main.rs` only calls `cookapps_lib::run()`.
 - Internal functions take the config directory (`&Path`), not an `AppHandle`, so `cookapps-mcp` can share them.
 - The Rust version is pinned in `rust-toolchain.toml` and in the CI workflows (`release.yml` and `rust-cache.yml`, by the ref of `dtolnay/rust-toolchain`). Keep them equal.
+- `.cargo/config.toml` sets `MACOSX_DEPLOYMENT_TARGET` to the value `tauri build` takes from `bundle.macOS.minimumSystemVersion` (default 10.13), so `tauri dev`, clippy and `cargo test` share the dependency builds of the E2E and release builds instead of rebuilding them. Keep the two equal.
 
 ## Run
 
@@ -156,7 +157,7 @@ A release is the merge of the pull request that raises the version, followed by 
 | Job | Environment | What it does |
 |-----|-------------|--------------|
 | `release` | macos-latest | restores the Rust cache (`Swatinem/rust-cache`, `shared-key: release`, `prefix-key: v1-rust`, never saves), checks that the tag is the version of its commit and that the commit is on main, then puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
-| `cache` (`rust-cache.yml`) | macos-latest | on a push to main that changes `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `rust-toolchain.toml` or one of the two workflow files, on a schedule (Monday and Thursday 18:17 UTC) and by hand, restores the cache with the same toolchain, toolchain clean-up and `rust-cache` settings as `release`; unless that is an exact hit it runs `npx tauri build --no-bundle` and saves the cache. It holds no secret |
+| `cache` (`rust-cache.yml`) | macos-latest | on a push to main that changes `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `rust-toolchain.toml`, `.cargo/config.toml` (part of the cache key) or one of the two workflow files, on a schedule (Monday and Thursday 18:17 UTC) and by hand, restores the cache with the same toolchain, toolchain clean-up and `rust-cache` settings as `release`; unless that is an exact hit it runs `npx tauri build --no-bundle` and saves the cache. It holds no secret |
 | `build` and `deploy` (`pages.yml`) | ubuntu-24.04 | on a push to main that changes `docs/`, builds it with `actions/jekyll-build-pages` and deploys it with `actions/deploy-pages`. It needs the Pages source set to "GitHub Actions" (`build_type: workflow`) |
 
 A tag run reads only the caches of its own ref and of the default branch, and a tag's own cache cannot be read by the next tag, so the cache is made on main and `release` only restores it.
