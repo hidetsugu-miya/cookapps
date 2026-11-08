@@ -4,7 +4,7 @@ import type { Sync } from "./bindings/Sync";
 import type { ThreadItem } from "./bindings/ThreadItem";
 import { renderAccounts } from "./accounts.js";
 import { announceArrival } from "./arrivals.js";
-import { $, composing, isMac } from "./dom.js";
+import { $, composing, isMac, tag } from "./dom.js";
 import { markAllRead, place, pending, row, rowKey, rows, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { currentScreen } from "./nav.js";
@@ -85,7 +85,7 @@ export const historyIds = new Map<string, string>();
 // Set when a load answers; the kept list of the last run, which is drawn first at startup, must not come after it.
 let inboxLoaded = false;
 
-// There is no reload button: a load that failed (the call, or an account in its answer) is repeated by the sync round at `nextReload`.
+// A load that failed (the call, or an account in its answer) is repeated by the sync round at `nextReload`, and at once by the button of the failure display.
 // The wait doubles after each failure, from 60 seconds up to 5 minutes, and a load that works clears it.
 const RELOAD_FIRST_MS = 60000;
 const RELOAD_MAX_MS = 300000;
@@ -102,7 +102,7 @@ function scheduleReload(failed: boolean) {
   }
 }
 
-// The text the inbox itself put in `#error` (a failed load or the sync notice), so a later load or sync clears only that and not an error shown for something else.
+// The text the inbox itself put in `#error` (the sync notice), so a later load or sync clears only that and not an error shown for something else.
 let inboxError: string | null = null;
 
 function showInboxError(e: unknown) {
@@ -113,6 +113,39 @@ function showInboxError(e: unknown) {
 function clearInboxError() {
   if (inboxError !== null && !$("error").hidden && $("error").textContent === inboxError) $("error").hidden = true;
   inboxError = null;
+}
+
+// Why the last load failed, drawn in `#inbox-state` (above the rows, which stay) until a load works; null when it worked.
+// It belongs to the list, not to `#error`, so it stays when another screen is shown.
+let loadFailure: string | null = null;
+
+// What `#inbox-state` shows now, so that a redraw with nothing changed leaves the button (and its focus) alone.
+let stateKey = "";
+
+// The state of the list: loading before the first answer, the failure of the last load with its button, or the note that there is nothing to show.
+function drawInboxState() {
+  const hasRows = $("threads").querySelector("li") !== null;
+  const key = JSON.stringify([loadFailure, hasRows, inboxLoaded, loading > 0]);
+  if (key === stateKey) return;
+  stateKey = key;
+  const box = $("inbox-state");
+  if (loadFailure !== null) {
+    const row = tag("div", "pending fail");
+    const retry = tag("button", "text-btn", "再読み込み");
+    retry.type = "button";
+    retry.disabled = loading > 0;
+    retry.onclick = () => load();
+    row.append(tag("span", "sp", `読み込めませんでした: ${loadFailure}。自動でも読み直します`), retry);
+    box.replaceChildren(row);
+  } else if (hasRows) {
+    box.replaceChildren();
+  } else if (!inboxLoaded) {
+    const row = tag("div", "pending");
+    row.append(tag("span", "spin"), tag("span", "sp", "読み込んでいます…"));
+    box.replaceChildren(row);
+  } else {
+    box.replaceChildren(tag("div", "feed-empty", "受信トレイにスレッドはありません"));
+  }
 }
 
 function drawThreads(inbox: Inbox) {
@@ -138,19 +171,22 @@ function drawThreads(inbox: Inbox) {
   if (focus) rows.get(focus.key)?.li.querySelector<HTMLElement>(focus.selector)?.focus();
 }
 
-// Draws the list the last run kept while the first load is still on its way; a missing or failed read leaves the screen to the load. Its rows work like the loaded ones.
+// Draws the list the last run kept while the first load is still on its way, or the loading note when there is none; a failed read leaves the rows to the load. Its rows work like the loaded ones.
 export async function showKeptInbox() {
   let kept: Inbox | null = null;
   try {
     kept = await invoke("inbox_cached");
   } catch {}
-  if (!kept || inboxLoaded) return;
-  renderAccounts(kept);
-  drawThreads(kept);
+  if (inboxLoaded) return;
+  if (kept) {
+    renderAccounts(kept);
+    drawThreads(kept);
+  }
   if (currentScreen() === "mail") show("list");
 }
 
-// `background` is a retry of the sync round: it clears only the error of the last load, and shows its own failure only while the mail screen is shown.
+// `background` is a retry of the sync round: it clears only the notice the inbox showed in `#error` itself.
+// The failure of the latest load is kept in `loadFailure` for the list, whichever screen is shown.
 export async function load(background = false) {
   const seq = ++loadSeq;
   loading++;
@@ -158,10 +194,12 @@ export async function load(background = false) {
   let failed: boolean | null = null;
   if (background) clearInboxError();
   else $("error").hidden = true;
+  drawInboxState();
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
     failed = Object.keys(inbox.failed).length > 0;
+    loadFailure = failed ? Object.entries(inbox.failed).map(([a, m]) => `${a}: ${m}`).join("、") : null;
     inboxLoaded = true;
     renderAccounts(inbox);
     if (inbox.accounts.length === 0) return show("login");
@@ -169,11 +207,14 @@ export async function load(background = false) {
     for (const [account, id] of Object.entries(inbox.historyIds)) historyIds.set(account, id);
     drawThreads(inbox);
   } catch (e) {
-    if (seq === loadSeq) failed = true;
-    if (!background || currentScreen() === "mail") showInboxError(e);
+    if (seq === loadSeq) {
+      failed = true;
+      loadFailure = String(e);
+    }
   } finally {
     loading--;
     if (failed !== null) scheduleReload(failed);
+    drawInboxState();
   }
   // A load that ends while the calendar is shown (e.g. after a re-login there) must not switch the screen; nor must it close an open thread.
   if (currentScreen() === "mail" && $("thread").hidden) show("list");
@@ -280,6 +321,11 @@ async function syncAll() {
 
 export function initInbox() {
   $("mail-mark-all").onclick = markAllRead;
+  // Whether there are rows changes with every load, sync, removal and read toggle.
+  const watch = new MutationObserver(drawInboxState);
+  watch.observe($("unread-threads"), { childList: true });
+  watch.observe($("read-threads"), { childList: true });
+  drawInboxState();
   setInterval(syncAll, SYNC_MS);
   document.addEventListener("visibilitychange", syncAll);
   // Cmd+Z (Ctrl+Z off macOS) undoes the last removal; in a text field it stays that field's own undo.
