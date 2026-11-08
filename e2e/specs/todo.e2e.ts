@@ -17,7 +17,7 @@ describe("todo", () => {
     await openTodo();
     await expect($("#todo-title")).toHaveText("今日");
     await waitForText("#projects .proj .name", "Work");
-    await expect($("#projects")).toHaveText(expect.stringContaining("受信箱"));
+    await expect($("#projects")).toHaveText(expect.stringContaining("インボックス"));
     await expect($("#todo-list")).toHaveText(expect.stringContaining("Write report"));
     await expect($("#todo-list")).not.toHaveText(expect.stringContaining("Plan trip"));
     await $('#projects .proj[data-view="p1"]').click();
@@ -84,7 +84,7 @@ describe("todo", () => {
     await expect($(".review .review-name")).toHaveValue("Reply to the vendor");
     await expect($(".review .review-desc")).toHaveValue(slackSummary.description);
     await expect($(".review .review-due")).toHaveText("2026-11-06");
-    await expect($(".review .review-project")).toHaveText("受信箱");
+    await expect($(".review .review-project")).toHaveText("インボックス");
     await expect($(".review .review-src")).toHaveText(expect.stringContaining("Example Team"));
     // Nothing is created until the user confirms.
     expect(await callsOf(addFromSlack)).toEqual([]);
@@ -327,7 +327,7 @@ describe("todo", () => {
 
   it("ignores a recommendation that is not a project in the list, and the card starts where it would", async () => {
     await openRecommendedCard("p9");
-    await expect($(".review .review-project")).toHaveText("受信箱");
+    await expect($(".review .review-project")).toHaveText("インボックス");
     await expect($(".review .review-project .tag")).not.toExist();
   });
 
@@ -451,7 +451,7 @@ describe("todo projects and subtasks", () => {
   it("nests the projects by their parents and closes the children of one", async () => {
     await openTodo();
     await waitForText("#projects .proj .name", "Sketch");
-    expect(await textsOf("#projects .proj .name")).toEqual(["今日", "受信箱", "Work", "Design", "Sketch", "Home"]);
+    expect(await textsOf("#projects .proj .name")).toEqual(["インボックス", "今日", "Work", "Design", "Sketch", "Home"]);
     // A child is indented further right than its parent.
     const [work, design, sketch, home] = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#projects .proj-line")].map((l) => parseInt(l.style.paddingLeft || "0", 10)));
     expect(design).toBeGreaterThan(work);
@@ -766,7 +766,7 @@ describe("todo detail", () => {
     await mock("todoist_load", moved);
     await $(ROWS).click();
     await $("#todo-detail .field-value").click();
-    expect(await textsOf(".menu button")).toEqual(["受信箱", "Work", "Design", "Sketch", "Home"]);
+    expect(await textsOf(".menu button")).toEqual(["インボックス", "Work", "Design", "Sketch", "Home"]);
     const [, work, design, sketch, home] = await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".menu button")].map((b) => parseInt(b.style.paddingLeft || "0", 10)));
     expect(design).toBeGreaterThan(work);
     expect(sketch).toBeGreaterThan(design);

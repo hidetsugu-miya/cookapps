@@ -25,7 +25,7 @@ export async function makeTodo(account: string, id: string, subject: string, but
   try {
     const done = await invoke("todoist_task_from_mail", { account, threadId: id, subject });
     if (done === null) return showError("Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください");
-    toast(`受信箱に「${subject || "(件名なし)"}」を追加しました`);
+    toast(`インボックスに「${subject || "(件名なし)"}」を追加しました`);
   } catch (e) {
     showError(e);
   } finally {
@@ -363,7 +363,7 @@ export function initTodoAdd() {
           ? "タスクを追加しました"
           : inToday
             ? "タスクを追加しましたが、期限を今日にできませんでした"
-            : "タスクを追加しましたが、プロジェクトへ移せませんでした。受信箱にあります",
+            : "タスクを追加しましたが、プロジェクトへ移せませんでした。インボックスにあります",
       );
     }
     updateAddMode();
