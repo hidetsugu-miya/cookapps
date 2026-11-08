@@ -13,7 +13,7 @@ Around a run it uses three more tools. `nightly-limit.sh` answers whether a run 
 `plan-release.py` also prints `release-facts` (the release table's R0 to R3 and the figures of R4) and `next --mine` (the issues another session holds are left out).
 `clean-target.sh` keeps `src-tauri/target` from growing with every version bump.
 It runs every day at 21:00 and needs no argument.
-In the main checkout and in every worktree, it deletes what has not been modified for more than 1 day: the entries of `incremental/` in each profile, and the entries of cookapps itself (`cookapps-*`, `cookapps_lib-*`, `libcookapps_lib-*`, `cookapps_mcp-*`) in `deps/`, `build/` and `.fingerprint/`.
+In the main checkout and in every worktree, it deletes what has nothing modified in the last 24 hours, and nothing while cargo or rustc runs: the entries of `incremental/` in each profile, and the entries of cookapps itself (`cookapps-*`, `cookapps_lib-*`, `libcookapps_lib-*`, `cookapps_mcp-*`) in `deps/`, `build/` and `.fingerprint/`.
 The output of dependency crates stays.
 It prints the size of each target before and after, and appends it to `.claude/nightly/clean-target-{date}.log` (deleted after 30 days).
 The launchd plists are `~/Library/LaunchAgents/jp.mysis.cookapps.improvement-proposal.plist`, `jp.mysis.cookapps.discussion-judge.plist`, `jp.mysis.cookapps.milestone-dev.plist` and `jp.mysis.cookapps.clean-target.plist` (21:00, running `clean-target.sh`), outside the repository. After a change to a plist, `launchctl bootout gui/$(id -u)/{label}` and `launchctl bootstrap gui/$(id -u) {plist}` load it again.
