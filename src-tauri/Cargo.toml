@@ -45,10 +45,12 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 url = "2"
 x25519-dalek = "3"
 
-# External images on macOS are fetched through NSURLSession (see `images/macos.rs`).
+# External images on macOS are fetched through NSURLSession (see `images/macos.rs`). The families of the fonts on the Mac come from CoreText (`fonts.rs`).
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFArray", "CFString"] }
+objc2-core-text = { version = "0.3", default-features = false, features = ["std", "CTFontManager"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSData", "NSDate", "NSDictionary", "NSError", "NSHTTPCookieStorage", "NSObject", "NSOperation", "NSString", "NSURL", "NSURLCache", "NSURLCredentialStorage", "NSURLRequest", "NSURLResponse", "NSURLSession"] }
 
 [dev-dependencies]

@@ -7,6 +7,8 @@ import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
 import type { Effort } from "./bindings/Effort";
 import type { EditorSettings } from "./bindings/EditorSettings";
+import type { FontArea } from "./bindings/FontArea";
+import type { FontSettings } from "./bindings/FontSettings";
 import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
@@ -254,6 +256,12 @@ export interface Commands {
   editor_settings: { args: undefined; result: EditorSettings };
   // A-18: saves the time of the automatic save, brought into 100 to 3000 ms in steps of 100, and answers the settings saved.
   editor_settings_set: { args: { autosaveMs: number }; result: EditorSettings };
+  // A-20: the font (family and size) of each place of the screens, as saved. A file that is missing or broken gives the first values.
+  font_settings: { args: undefined; result: FontSettings };
+  // A-20: the families of the fonts on this Mac, in alphabetical order.
+  font_families: { args: undefined; result: string[] };
+  // A-20: saves the font of one place (`family` null is the app's own; `ghostty` only for orcaWork) and answers the settings saved. A family this Mac lacks is an error; a size is brought into 8 to 32 px in steps of 0.5.
+  font_settings_set: { args: { area: FontArea; family: string | null; size: number; ghostty: boolean }; result: FontSettings };
   // A-13: the import of Ghostty's settings saved last, null before the first one.
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.

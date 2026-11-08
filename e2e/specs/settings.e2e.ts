@@ -1,6 +1,6 @@
-import { account, boot, checked, chooseAppearance, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, checked, chooseAppearance, chooseOption, fontSettings, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "orca" | "update";
+type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "orca" | "font" | "update";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -13,7 +13,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["orca", "Orca"], ["update", "アップデート"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["orca", "Orca"], ["font", "フォント"], ["update", "アップデート"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -1387,6 +1387,205 @@ describe("settings: editor (the Orca tab, A-18)", () => {
   });
 });
 
+// A-20: the Font tab. Rust brings every value into its range and checks the family against the Mac's (unit tests); here the selects show what Rust answers, send what was chosen, and the screens take the choice at once.
+describe("settings: fonts (the Font tab, A-20)", () => {
+  async function openFontTab(fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("font");
+    await expect($("#settings-panel-font")).toBeDisplayed();
+  }
+
+  // The computed font of the root of a screen: the size and the first family.
+  const fontOf = (selector: string) =>
+    browser.execute((s) => {
+      const style = getComputedStyle(document.querySelector(s)!);
+      return { size: style.fontSize, family: style.fontFamily };
+    }, selector);
+  const rootVar = (name: string) => browser.execute((n) => document.documentElement.style.getPropertyValue(n), name);
+  const options = (id: string) => browser.execute((i) => [...(document.getElementById(i) as HTMLSelectElement).options].map((o) => o.textContent), id);
+  const selectedText = (id: string) => browser.execute((i) => (document.getElementById(i) as HTMLSelectElement).selectedOptions[0]!.textContent, id);
+
+  it("has a card with a row for each place, in the order of the screens", async () => {
+    await openFontTab();
+    expect(await textsOf("#font-items .item-name")).toEqual(["メール", "カレンダー", "Todo", "Todo", "Slack", "Orca", "Orca", "Orca"]);
+    expect(await textsOf("#font-items .item-meta")).toEqual(["画面全体", "画面全体", "プロジェクト一覧", "作業スペース", "画面全体", "プロジェクト一覧", "作業スペース（ターミナル）", "エディタ"]);
+    expect(await count("#font-items select")).toBe(16);
+    expect(await callsOf("font_settings")).toEqual([null]);
+    expect(await callsOf("font_families")).toEqual([null]);
+    expect(await callsOf("font_settings_set")).toEqual([]);
+  });
+
+  it("offers the families of this Mac after the system's, and Ghostty's only for the work space of Orca", async () => {
+    await openFontTab();
+    expect(await options("font-mail-family")).toEqual(["システム標準", "Hiragino Sans", "Menlo", "Times New Roman"]);
+    expect(await options("font-orca-work-family")).toEqual(["システム標準", "Ghostty の設定に従う", "Hiragino Sans", "Menlo", "Times New Roman"]);
+    expect(await options("font-editor-family")).toEqual(["システム標準", "Hiragino Sans", "Menlo", "Times New Roman"]);
+  });
+
+  it("offers the sizes 8 to 32 px, and the half size the editor has", async () => {
+    await openFontTab();
+    const sizes = await options("font-mail-size");
+    expect(sizes.length).toBe(25);
+    expect([sizes[0], sizes[6], sizes[24]]).toEqual(["8 px", "14 px", "32 px"]);
+    expect(await options("font-editor-size")).toContain("12.5 px");
+    expect(await selectedText("font-editor-size")).toBe("12.5 px");
+    expect(await selectedText("font-mail-size")).toBe("14 px");
+  });
+
+  it("shows the saved choice: the families, the sizes, and the terminals following Ghostty with no size to choose", async () => {
+    await openFontTab({ font_settings: fontSettings({ mail: { family: "Menlo", size: 16, ghostty: false } }) });
+    expect(await selectedText("font-mail-family")).toBe("Menlo");
+    expect(await selectedText("font-mail-size")).toBe("16 px");
+    expect(await selectedText("font-orca-work-family")).toBe("Ghostty の設定に従う");
+    await expect($("#font-orca-work-size")).toBeDisabled();
+    await expect($("#font-mail-size")).toBeEnabled();
+  });
+
+  it("keeps a saved family this Mac lacks in the select, and says so", async () => {
+    await openFontTab({ font_settings: fontSettings({ slack: { family: "Gone Sans", size: 14, ghostty: false } }) });
+    expect(await selectedText("font-slack-family")).toBe("Gone Sans（この Mac にありません）");
+  });
+
+  it("applies the saved choice at the start, before the settings are opened", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, font_settings: fontSettings({ calendar: { family: "Menlo", size: 21, ghostty: false } }) });
+    await browser.waitUntil(async () => (await fontOf("#calendar")).size === "21px", { timeoutMsg: "the calendar never took the size" });
+    expect((await fontOf("#calendar")).family).toContain("Menlo");
+    expect(await rootVar("--ff-calendar")).toBe('"Menlo", var(--ff-base)');
+    expect(await rootVar("--fs-calendar")).toBe("1.5");
+  });
+
+  it("draws a plain button of the screen with the family and size chosen too", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, font_settings: fontSettings({ calendar: { family: "Menlo", size: 21, ghostty: false } }) });
+    // 11px of its own, times 21 / 14.
+    await browser.waitUntil(async () => (await fontOf("#cal-today")).size === "16.5px", { timeoutMsg: "the button never took the size" });
+    expect((await fontOf("#cal-today")).family).toContain("Menlo");
+  });
+
+  it("saves the size of a place whose family this Mac has lost, with the family it holds", async () => {
+    await openFontTab({ font_settings: fontSettings({ slack: { family: "Gone Sans", size: 14, ghostty: false } }) });
+    const set = await mock("font_settings_set", fontSettings({ slack: { family: "Gone Sans", size: 18, ghostty: false } }));
+    await chooseOption("font-slack-size", "18");
+    expect(await waitForCalls(set)).toEqual([{ area: "slack", family: "Gone Sans", size: 18, ghostty: false }]);
+    expect(await selectedText("font-slack-family")).toBe("Gone Sans（この Mac にありません）");
+  });
+
+  it("sends the family chosen and draws the screen with it at once", async () => {
+    await openFontTab();
+    const set = await mock("font_settings_set", fontSettings({ mail: { family: "Hiragino Sans", size: 14, ghostty: false } }));
+    await chooseOption("font-mail-family", "family:Hiragino Sans");
+    expect(await waitForCalls(set)).toEqual([{ area: "mail", family: "Hiragino Sans", size: 14, ghostty: false }]);
+    await browser.waitUntil(async () => (await fontOf("#mail-area")).family.includes("Hiragino Sans"), { timeoutMsg: "the mail never took the family" });
+    expect((await fontOf("#inbox-header")).family).toContain("Hiragino Sans");
+    // The other screens keep the system's.
+    expect((await fontOf("#calendar")).family).not.toContain("Hiragino Sans");
+    expect(await selectedText("font-mail-family")).toBe("Hiragino Sans");
+    await expect($("#error")).not.toBeDisplayed();
+    await expect($("#font-mail-family")).toBeEnabled();
+  });
+
+  it("sends the size chosen and draws the screen with it at once, text that sets its own size in the same ratio", async () => {
+    await openFontTab();
+    const set = await mock("font_settings_set", fontSettings({ calendar: { family: null, size: 21, ghostty: false } }));
+    const before = await browser.execute(() => parseFloat(getComputedStyle(document.getElementById("cal-title")!).fontSize));
+    await chooseOption("font-calendar-size", "21");
+    expect(await waitForCalls(set)).toEqual([{ area: "calendar", family: null, size: 21, ghostty: false }]);
+    await browser.waitUntil(async () => (await fontOf("#calendar")).size === "21px", { timeoutMsg: "the calendar never took the size" });
+    // #cal-title is 20px of its own: 20 * 21 / 14.
+    expect(before).toBe(20);
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("cal-title")!).fontSize)).toBe("30px");
+    expect((await fontOf("#mail-area")).size).toBe("14px");
+  });
+
+  it("chooses the list and the work space of Todo apart", async () => {
+    await openFontTab();
+    const set = await mock("font_settings_set", fontSettings({ todoList: { family: "Menlo", size: 18, ghostty: false } }));
+    await chooseOption("font-todo-list-size", "18");
+    expect(await waitForCalls(set)).toEqual([{ area: "todoList", family: null, size: 18, ghostty: false }]);
+    await browser.waitUntil(async () => (await fontOf("#projects")).size === "18px", { timeoutMsg: "the list never took the size" });
+    expect((await fontOf("#todo-body")).size).toBe("14px");
+    expect(await rootVar("--fs-todo-work")).toBe("");
+  });
+
+  it("gives the screens of Todo, Slack and Orca their own variables", async () => {
+    await openFontTab();
+    const answers = [
+      ["todoWork", { family: "Menlo", size: 16, ghostty: false }, "#todo-body", "font-todo-work-size", "16"],
+      ["slack", { family: "Menlo", size: 15, ghostty: false }, "#slack-list", "font-slack-size", "15"],
+      ["orcaList", { family: "Menlo", size: 17, ghostty: false }, "#orca-list", "font-orca-list-size", "17"],
+    ] as const;
+    for (const [area, pick, selector, id, size] of answers) {
+      const set = await mock("font_settings_set", fontSettings({ [area]: pick }));
+      await chooseOption(id, size);
+      await waitForCalls(set);
+      await browser.waitUntil(async () => (await fontOf(selector)).size === `${size}px`, { timeoutMsg: `${selector} never took the size` });
+    }
+  });
+
+  it("goes back to the system's font and size", async () => {
+    await openFontTab({ font_settings: fontSettings({ mail: { family: "Menlo", size: 20, ghostty: false } }) });
+    await browser.waitUntil(async () => (await fontOf("#mail-area")).size === "20px");
+    const set = await mock("font_settings_set", fontSettings());
+    await chooseOption("font-mail-family", "own");
+    expect(await waitForCalls(set)).toEqual([{ area: "mail", family: null, size: 20, ghostty: false }]);
+    await browser.waitUntil(async () => (await fontOf("#mail-area")).family.includes("Menlo") === false);
+    expect(await rootVar("--ff-mail")).toBe("");
+    expect(await rootVar("--fs-mail")).toBe("");
+    expect((await fontOf("#mail-area")).size).toBe("14px");
+  });
+
+  it("stops following Ghostty when a family is chosen for the terminals, and follows again when Ghostty is chosen", async () => {
+    await openFontTab();
+    const set = await mock("font_settings_set", fontSettings({ orcaWork: { family: "Menlo", size: 13, ghostty: false } }));
+    await chooseOption("font-orca-work-family", "family:Menlo");
+    expect(await waitForCalls(set)).toEqual([{ area: "orcaWork", family: "Menlo", size: 13, ghostty: false }]);
+    await expect($("#font-orca-work-size")).toBeEnabled();
+    const again = await mock("font_settings_set", fontSettings({ orcaWork: { family: "Menlo", size: 13, ghostty: true } }));
+    await chooseOption("font-orca-work-family", "ghostty");
+    expect(await waitForCalls(again)).toEqual([{ area: "orcaWork", family: "Menlo", size: 13, ghostty: true }]);
+    await expect($("#font-orca-work-size")).toBeDisabled();
+    expect(await selectedText("font-orca-work-family")).toBe("Ghostty の設定に従う");
+  });
+
+  it("gives the editor its variables, apart from the terminals", async () => {
+    await openFontTab();
+    const set = await mock("font_settings_set", fontSettings({ editor: { family: "Menlo", size: 16, ghostty: false } }));
+    await chooseOption("font-editor-size", "16");
+    expect(await waitForCalls(set)).toEqual([{ area: "editor", family: null, size: 16, ghostty: false }]);
+    await browser.waitUntil(async () => (await rootVar("--editor-size")) === "16px");
+    expect(await rootVar("--editor-family")).toBe('"Menlo", ui-monospace, Menlo, monospace');
+  });
+
+  it("shows the message of a failed save and puts the choice held back", async () => {
+    await openFontTab();
+    await mock("font_settings_set", rejects("font-settings.json を書けません"));
+    await chooseOption("font-slack-size", "20");
+    await expect($("#error")).toHaveText("font-settings.json を書けません");
+    expect(await selectedText("font-slack-size")).toBe("14 px");
+    await expect($("#font-slack-size")).toBeEnabled();
+    expect((await fontOf("#slack-list")).size).toBe("14px");
+  });
+
+  it("shows the message of a failed read and draws no row", async () => {
+    await openFontTab({ font_settings: rejects("font-settings.json を読めません") });
+    await expect($("#error")).toHaveText("font-settings.json を読めません");
+    expect(await count("#font-items .item")).toBe(0);
+  });
+
+  it("shows the message of a failed list of families, with the system's alone to choose", async () => {
+    await openFontTab({ font_families: rejects("書体の一覧を読めません") });
+    await expect($("#error")).toHaveText("書体の一覧を読めません");
+    expect(await options("font-mail-family")).toEqual(["システム標準"]);
+  });
+
+  it("opens a hint from the ? of the card", async () => {
+    await openFontTab();
+    await $("#font-help").click();
+    await expect($('.pop[aria-label="フォント"]')).toBeDisplayed();
+    await expect($("#font-help")).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
 describe("settings: tabs", () => {
   const tab = (name: Tab) => $(`#settings-tab-${name}`);
   const panel = (name: Tab) => $(`#settings-panel-${name}`);
@@ -1403,7 +1602,7 @@ describe("settings: tabs", () => {
       key,
     );
 
-  it("has the seven tabs in order, in a tablist, each controlling the card it names", async () => {
+  it("has the eight tabs in order, in a tablist, each controlling the card it names", async () => {
     await openSettings([]);
     await expect($("#settings-tabs")).toHaveAttribute("role", "tablist");
     expect(await textsOf('#settings-tabs [role="tab"]')).toEqual(TABS.map(([, label]) => label));

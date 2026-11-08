@@ -8,10 +8,12 @@ import {
   boot,
   callsOf,
   chooseAppearance,
+  chooseOption,
   chooseTheme,
   copiedTexts,
   count,
   fire,
+  fontSettings,
   ghosttyImport,
   holds,
   image,
@@ -1218,6 +1220,99 @@ describe("orca: projects", () => {
     await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
   });
 
+  describe("the sessions under a project (A-8)", () => {
+    const arrow = (repo: string) => $(`#orca-feed .orca-arrow[data-key="arrow:proj_${repo}"]`);
+    const sessionTitles = () => textsOf("#orca-feed .orca-session .orca-session-title");
+    const sessionOf = (id: string) => $(`#orca-feed .orca-session[data-session="${id}"]`);
+    const pressedSessions = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].filter((r) => r.getAttribute("aria-pressed") === "true").map((r) => r.dataset.session));
+
+    it("puts an arrow at the left of each project that has a session tab, and none at the others (example-web's one session has no pane, and the host's number comes with no row of it), with every project closed at first", async () => {
+      await openOrca(withTerminals());
+      expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-arrow")].map((a) => [a.dataset.key, a.getAttribute("aria-expanded")]))).toEqual([
+        ["arrow:proj_example-app", "false"],
+        ["arrow:proj_example-api", "false"],
+        ["arrow:proj_example-lib", "false"],
+      ]);
+      await expect($("#orca-feed .orca-session")).not.toExist();
+      // The arrow is at the left of the row, before the status icon.
+      const left = await browser.execute(() => {
+        const r = (e: Element) => e.getBoundingClientRect();
+        return [r(document.querySelector('.orca-arrow[data-key="arrow:proj_example-app"]')!).right, r(document.querySelector('.orca-project[data-key="proj_example-app"] .orca-ic')!).left];
+      });
+      expect(left[0]).toBeLessThanOrEqual(left[1]);
+    });
+
+    it("opens the selected project with its sessions under it and closes the others, one at a time", async () => {
+      await openOrca(withTerminals());
+      await project("example-app").click();
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+      // A session row has the status icon and the title.
+      expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session .orca-ic")].map((i) => [i.dataset.status, i.getAttribute("aria-label")]))).toEqual([
+        ["working", "作業中"],
+        ["done", "起動中"],
+      ]);
+      await project("example-api").click();
+      await expect(arrow("example-api")).toHaveAttribute("aria-expanded", "true");
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "false");
+      expect(await sessionTitles()).toEqual(["Fix the parser"]);
+      expect(await count("#orca-feed .orca-sessions")).toBe(1);
+      // The arrow of a project that is not selected selects it, which opens it.
+      await arrow("example-app").click();
+      await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+    });
+
+    it("closes with the arrow of the selected project and opens again with it, keeping the tabs, the work pane and the number", async () => {
+      await openOrca(withTerminals());
+      await mock("orca_terminal_read", ["$ ls"]);
+      await project("example-app").click();
+      await expect($(".orca-term")).toBeDisplayed();
+      const numbers = await textsOf("#orca-feed .orca-n");
+      await arrow("example-app").click();
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "false");
+      await expect($("#orca-feed .orca-session")).not.toExist();
+      await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh"]);
+      await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
+      await expect($(".orca-term")).toBeDisplayed();
+      // The number stays a number.
+      expect(await textsOf("#orca-feed .orca-n")).toEqual(numbers);
+      await arrow("example-app").click();
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+      // Pressing the closed project's row opens it too.
+      await arrow("example-app").click();
+      await expect($("#orca-feed .orca-session")).not.toExist();
+      await project("example-app").click();
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+    });
+
+    it("lists the sessions in the order of the tabs, through a read that reorders them", async () => {
+      await openOrca(withTerminals());
+      await project("example-app").click();
+      await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash"), orcaTerminal("example-app", "zsh")] }));
+      await $("#orca-refresh").click();
+      await browser.waitUntil(async () => (await sessionTitles()).length === 3, { timeoutMsg: "the new terminal never became a session row" });
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+      expect(await tabTitles()).toEqual(await sessionTitles());
+    });
+
+    it("selects the tab of a session row, and moves the selected row when a tab is pressed", async () => {
+      await openOrca(withTerminals());
+      await mock("orca_terminal_read", ["$ ls"]);
+      await project("example-app").click();
+      expect(await pressedSessions()).toEqual([claudeTab("example-app")]);
+      await sessionOf("orca:term_example-app_zsh").click();
+      await expect(selectedTab()).toHaveText(expect.stringContaining("zsh"));
+      expect(await pressedSessions()).toEqual(["orca:term_example-app_zsh"]);
+      await tabOf(claudeTab("example-app")).$(".orca-tab-btn").click();
+      await browser.waitUntil(async () => (await pressedSessions()).join() === claudeTab("example-app"), { timeoutMsg: "the selected row did not follow the tab" });
+      await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
+    });
+  });
+
   it("closes a session in Orca with its handle and the target, reads the list, and keeps the selection when another tab is closed", async () => {
     await openOrca(withTerminals());
     await project("example-app").click();
@@ -1796,6 +1891,55 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
     const input = await openTerminal({ ghostty_saved: ghosttyImport({ settings: { ...saved.settings, keybinds: [shiftEnter] } }) });
     await press({ key: "Enter", shiftKey: true });
     expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app", text: "\n" }]);
+  });
+});
+
+// A-20: the fonts chosen in the settings. The terminals take the family and the size of the choice in place of Ghostty's, until the choice follows Ghostty again.
+describe("orca: the fonts of the screens (A-20)", () => {
+  const imported = ghosttyImport({ settings: { fontFamilies: ["Example Mono"], fontSize: 15, fontThicken: true, light: null, dark: null, keybinds: [] } });
+  const menlo = fontSettings({ orcaWork: { family: "Menlo", size: 18, ghostty: false } });
+
+  it("draws the terminal with the family and size chosen, with the app's own after them and no thickening", async () => {
+    await openTerminal({ ghostty_saved: imported, font_settings: menlo });
+    await browser.waitUntil(async () => (await look()).size === "18px", { timeoutMsg: "the terminal never took the size" });
+    const chosen = await look();
+    expect(chosen.family).toContain("Menlo");
+    expect(chosen.family).not.toContain("Example Mono");
+    expect(chosen.weight).toBe("400");
+  });
+
+  it("keeps Ghostty's font while the choice follows it, whatever family and size the choice holds", async () => {
+    await openTerminal({ ghostty_saved: imported, font_settings: fontSettings({ orcaWork: { family: "Menlo", size: 18, ghostty: true } }) });
+    expect(await look()).toMatchObject({ size: "15px", weight: "500" });
+    expect((await look()).family).toContain("Example Mono");
+  });
+
+  it("draws the terminals again with a font chosen in the settings, with no restart, and with Ghostty's again when it is chosen", async () => {
+    await openTerminal({ ghostty_saved: imported });
+    expect((await look()).size).toBe("15px");
+    await $("#nav-settings").click();
+    await $("#settings-tab-font").click();
+    const set = await mock("font_settings_set", menlo);
+    await chooseOption("font-orca-work-family", "family:Menlo");
+    await waitForCalls(set);
+    await $("#nav-orca").click();
+    await browser.waitUntil(async () => (await look()).size === "18px", { timeoutMsg: "the terminal never took the font" });
+    expect((await look()).family).toContain("Menlo");
+    await $("#nav-settings").click();
+    const back = await mock("font_settings_set", fontSettings({ orcaWork: { family: "Menlo", size: 18, ghostty: true } }));
+    await chooseOption("font-orca-work-family", "ghostty");
+    await waitForCalls(back);
+    await $("#nav-orca").click();
+    await browser.waitUntil(async () => (await look()).size === "15px", { timeoutMsg: "the terminal never took Ghostty's font again" });
+    expect((await look()).family).toContain("Example Mono");
+  });
+
+  it("draws the project list with its own family and size, and the work space of the terminals apart", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { font_settings: fontSettings({ orcaList: { family: "Menlo", size: 21, ghostty: false } }) });
+    const listSize = () => browser.execute(() => getComputedStyle(document.getElementById("orca-list")!).fontSize);
+    await browser.waitUntil(async () => (await listSize()) === "21px", { timeoutMsg: "the list never took the size" });
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("orca-work")!).fontSize)).toBe("14px");
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("orca-list")!).fontFamily)).toContain("Menlo");
   });
 });
 
@@ -2557,6 +2701,20 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-edit-area")).toHaveValue(content, { trim: false });
   }
 
+  it("draws the text of the editor with the family and size chosen in the settings (A-20), apart from the terminals", async () => {
+    await openFiles({ font_settings: fontSettings({ editor: { family: "Menlo", size: 18, ghostty: false }, orcaWork: { family: null, size: 13, ghostty: false } }) });
+    await openA();
+    const area = () => browser.execute(() => ({ size: getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize, family: getComputedStyle(document.querySelector(".orca-edit-area")!).fontFamily }));
+    await browser.waitUntil(async () => (await area()).size === "18px", { timeoutMsg: "the editor never took the size" });
+    expect((await area()).family).toContain("Menlo");
+  });
+
+  it("draws the text of the editor with the first font while none is chosen", async () => {
+    await openFiles();
+    await openA();
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize)).toBe("12.5px");
+  });
+
   it("has one button that shows and hides the file pane: in the upper row of the pane while it is shown, at the right end of the tab strip while it is hidden", async () => {
     await openOrca(orcaOverview(sample(), worktrees()), { orca_terminal_read: ["$"] });
     await expect($("#orca-files")).not.toBeDisplayed();
@@ -2996,5 +3154,250 @@ describe("orca: files and editor (A-18)", () => {
     await tabOf("file:1").$(".orca-tab-btn").click();
     await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
     expect(await callsOf("orca_file_read")).toHaveLength(1);
+  });
+});
+
+describe("orca: search the list (A-19)", () => {
+  // example-app, example-api, example-web, example-lib and example-idle as projects, then the SSH hosts example-host and other-host.
+  const overview = () =>
+    orcaOverview(sample(), [...worktrees(), orcaWorktree("example-idle", "main")], {
+      terminals: [orcaTerminal("example-app", "zsh")],
+      ssh: [orcaSsh("s1", "example-host"), orcaSsh("s2", "other-host")],
+      hosts: [{ key: "ssh:s1", name: "s1", status: "working" as const, sessions: 2, atMs: 0 }],
+    });
+  const ALL = ["example-app", "example-api", "example-web", "example-lib", "example-idle", "example-host", "other-host"];
+  const input = () => $("#orca-search-input");
+  const names = () => textsOf("#orca-feed .orca-project-name");
+  const secs = () => textsOf("#orca-feed .orca-sec");
+  const focusedId = () => browser.execute(() => document.activeElement?.id ?? "");
+  // The name of each row and the letters of it in bold.
+  const bolds = () =>
+    browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-project")].map((r) => [r.querySelector(".orca-project-name")!.textContent, [...r.querySelectorAll("b")].map((b) => b.textContent)]));
+  const cursorOn = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project")].filter((r) => r.dataset.cursor === "true").map((r) => r.dataset.key));
+  const search = async (text: string) => {
+    await input().setValue(text);
+    await browser.waitUntil(async () => (await names()).length !== ALL.length || text.trim() === "", { timeoutMsg: "the list never changed with the search" });
+  };
+  // Cmd+J as the page gets it, from the element that has the focus.
+  const cmdJ = (init: KeyboardEventInit = { metaKey: true }) =>
+    browser.execute((i) => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true, ...i })), init);
+
+  it("has a field between the header and the list, and the clear button only while something is typed", async () => {
+    await openOrca(overview());
+    await expect($("#orca-search")).toBeDisplayed();
+    await expect(input()).toHaveAttribute("aria-label", "プロジェクトを検索");
+    await expect(input()).toHaveAttribute("placeholder", "検索");
+    await expect($("#orca-search-clear")).not.toBeDisplayed();
+    const place = await browser.execute(() => {
+      const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      return { headerBottom: r("#orca-header").bottom, searchTop: r("#orca-search").top, searchBottom: r("#orca-search").bottom, feedTop: r("#orca-feed").top };
+    });
+    expect(place.searchTop).toBeGreaterThanOrEqual(place.headerBottom - 1);
+    expect(place.feedTop).toBeGreaterThanOrEqual(place.searchBottom - 1);
+    await search("app");
+    await expect($("#orca-search-clear")).toBeDisplayed();
+    expect(await names()).toEqual(["example-app"]);
+  });
+
+  it("narrows the list to the rows whose name holds the text, case ignored, in the order of the list", async () => {
+    await openOrca(overview());
+    expect(await names()).toEqual(ALL);
+    await search("E-A");
+    expect(await names()).toEqual(["example-app", "example-api"]);
+    expect(await secs()).toEqual([]);
+    // The text is trimmed, and a blank text is no search.
+    await search("  app ");
+    expect(await names()).toEqual(["example-app"]);
+    await search("   ");
+    expect(await names()).toEqual(ALL);
+  });
+
+  it("makes the letters that match bold, at every place in the name", async () => {
+    await openOrca(overview());
+    await search("AP");
+    expect(await bolds()).toEqual([
+      ["example-app", ["ap"]],
+      ["example-api", ["ap"]],
+    ]);
+    await search("p");
+    expect((await bolds())[0]).toEqual(["example-app", ["p", "p", "p"]]);
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#orca-feed .orca-project-name b")!).fontWeight)).toBe("800");
+  });
+
+  it("shows the SSH heading only when an SSH host matches", async () => {
+    await openOrca(overview());
+    await search("app");
+    expect(await secs()).toEqual([]);
+    await search("other");
+    expect(await names()).toEqual(["other-host"]);
+    expect(await secs()).toEqual(["SSH"]);
+    await search("host");
+    expect(await names()).toEqual(["example-host", "other-host"]);
+    expect(await secs()).toEqual(["SSH"]);
+  });
+
+  it("matches a character that a regular expression takes as its own as itself, and says so when nothing matches", async () => {
+    await openOrca(overview());
+    for (const text of [".", "(", "zzz"]) {
+      await search(text);
+      await expect($("#orca-feed")).toHaveText("一致するプロジェクトがありません");
+      expect(await count("#orca-feed .orca-project")).toBe(0);
+      expect(await secs()).toEqual([]);
+    }
+    await $("#orca-search-clear").click();
+    expect(await names()).toEqual(ALL);
+  });
+
+  it("does not say the projects are missing while the search finds none of those there are", async () => {
+    await openOrca(orcaOverview([]));
+    await expect($("#orca-feed")).toHaveText(expect.stringContaining("プロジェクトがありません"));
+    await search("zzz");
+    await expect($("#orca-feed")).toHaveText("一致するプロジェクトがありません");
+  });
+
+  it("drops the row of a selected project that does not match with its sessions, and keeps the tabs", async () => {
+    await openOrca(overview());
+    await mock("orca_terminal_read", ["$ ls"]);
+    await project("example-app").click();
+    await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
+    expect(await textsOf("#orca-feed .orca-session .orca-session-title")).toEqual(["Write the docs", "zsh"]);
+    await search("api");
+    expect(await names()).toEqual(["example-api"]);
+    await expect($("#orca-feed .orca-session")).not.toExist();
+    expect(await tabTitles()).toEqual(["Write the docs", "zsh"]);
+    // The sessions are not searched: "zsh" finds no row.
+    await search("zsh");
+    await expect($("#orca-feed")).toHaveText("一致するプロジェクトがありません");
+    await $("#orca-search-clear").click();
+    await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
+    expect(await textsOf("#orca-feed .orca-session .orca-session-title")).toEqual(["Write the docs", "zsh"]);
+  });
+
+  it("puts the line on the first row, moves it with Down and Up to the ends, and goes on to the SSH hosts", async () => {
+    await openOrca(overview());
+    await search("e-a");
+    expect(await cursorOn()).toEqual(["proj_example-app"]);
+    await browser.keys("ArrowDown");
+    expect(await cursorOn()).toEqual(["proj_example-api"]);
+    await browser.keys("ArrowDown");
+    expect(await cursorOn()).toEqual(["proj_example-api"]);
+    await browser.keys("ArrowUp");
+    expect(await cursorOn()).toEqual(["proj_example-app"]);
+    await browser.keys("ArrowUp");
+    expect(await cursorOn()).toEqual(["proj_example-app"]);
+    // A change of the text puts it on the first row again.
+    await browser.keys("ArrowDown");
+    await search("ex");
+    expect(await cursorOn()).toEqual(["proj_example-app"]);
+    await search("host");
+    expect(await cursorOn()).toEqual(["ssh:s1"]);
+    await browser.keys("ArrowDown");
+    expect(await cursorOn()).toEqual(["ssh:s2"]);
+  });
+
+  it("has no line while nothing is typed, and Down does nothing", async () => {
+    await openOrca(overview());
+    await input().click();
+    await browser.keys("ArrowDown");
+    expect(await cursorOn()).toEqual([]);
+  });
+
+  it("selects the row with Enter as pressing it does, and keeps the text and the narrowed list", async () => {
+    await openOrca(overview());
+    await mock("orca_terminal_read", ["$ ls"]);
+    await search("e-a");
+    await browser.keys(["ArrowDown", "Enter"]);
+    await expect(project("example-api")).toHaveAttribute("aria-pressed", "true");
+    await expect(selectedTab()).toHaveText(expect.stringContaining("Fix the parser"));
+    await expect(input()).toHaveValue("e-a");
+    expect(await names()).toEqual(["example-app", "example-api"]);
+  });
+
+  it("selects nothing with Enter when no row matches", async () => {
+    await openOrca(overview());
+    await search("zzz");
+    await browser.keys("Enter");
+    expect(await count('#orca-feed .orca-project[aria-pressed="true"]')).toBe(0);
+  });
+
+  it("clears the text and leaves the field with Escape", async () => {
+    await openOrca(overview());
+    await search("app");
+    await browser.keys("Escape");
+    await expect(input()).toHaveValue("");
+    expect(await names()).toEqual(ALL);
+    expect(await focusedId()).not.toBe("orca-search-input");
+    await expect($("#orca-search-clear")).not.toBeDisplayed();
+  });
+
+  it("clears the text with the clear button and keeps the focus in the field", async () => {
+    await openOrca(overview());
+    await search("app");
+    // The page's own press (the driver's click focuses the button after the page's handler ran, which no real press does).
+    await browser.execute(() => document.getElementById("orca-search-clear")!.click());
+    await expect(input()).toHaveValue("");
+    expect(await names()).toEqual(ALL);
+    expect(await focusedId()).toBe("orca-search-input");
+  });
+
+  it("moves the focus to the field with Cmd+J, with the text selected", async () => {
+    await openOrca(overview());
+    await search("app");
+    await $("#orca-refresh").click();
+    expect(await focusedId()).not.toBe("orca-search-input");
+    await cmdJ();
+    expect(await focusedId()).toBe("orca-search-input");
+    expect(await browser.execute(() => [(document.activeElement as HTMLInputElement).selectionStart, (document.activeElement as HTMLInputElement).selectionEnd])).toEqual([0, 3]);
+  });
+
+  it("takes Cmd+J from a terminal that has the focus, and from the working view, which gives way to the projects", async () => {
+    await openOrca(overview());
+    await mock("orca_terminal_read", ["$ ls"]);
+    await project("example-app").click();
+    await expect($(".orca-term")).toBeDisplayed();
+    await browser.execute(() => document.querySelector<HTMLElement>(".orca-term-box:not([hidden]) .xterm-helper-textarea")!.focus());
+    await cmdJ();
+    expect(await focusedId()).toBe("orca-search-input");
+    await $("#orca-bell").click();
+    await expect($("#orca-bell")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await cmdJ();
+    await expect($("#orca-bell")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#orca-search")).toBeDisplayed();
+    expect(await focusedId()).toBe("orca-search-input");
+    expect(await names()).toEqual(ALL);
+  });
+
+  it("does not take J without Cmd, with Shift or with Alt, nor Cmd+J on another screen", async () => {
+    await openOrca(overview());
+    await cmdJ({ ctrlKey: true });
+    await cmdJ({ metaKey: true, shiftKey: true });
+    await cmdJ({ metaKey: true, altKey: true });
+    expect(await focusedId()).not.toBe("orca-search-input");
+    await $("#nav-mail").click();
+    await cmdJ();
+    expect(await focusedId()).not.toBe("orca-search-input");
+  });
+
+  it("hides the field in the working view, which is not narrowed, and has the text again when the bell is pressed again", async () => {
+    await openOrca(overview());
+    await search("app");
+    await $("#orca-bell").click();
+    await expect($("#orca-search")).not.toBeDisplayed();
+    await waitForCount("#orca-feed .orca-row", 4);
+    await $("#orca-bell").click();
+    await expect($("#orca-search")).toBeDisplayed();
+    await expect(input()).toHaveValue("app");
+    expect(await names()).toEqual(["example-app"]);
+  });
+
+  it("keeps the text through a read in the background, and narrows the rows that came", async () => {
+    await openOrca(overview());
+    await search("app");
+    await mock("orca_overview", orcaOverview(sample(), [...worktrees(), orcaWorktree("example-apple", "main")]));
+    await $("#orca-refresh").click();
+    await browser.waitUntil(async () => (await names()).length === 2, { timeoutMsg: "the new project never matched" });
+    expect(await names()).toEqual(["example-app", "example-apple"]);
+    await expect(input()).toHaveValue("app");
   });
 });
