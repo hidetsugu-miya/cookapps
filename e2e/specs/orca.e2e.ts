@@ -2594,7 +2594,7 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles();
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
     await waitForCount("#orca-files-tree .orca-file", 4);
-    expect(await callsOf("orca_files_list")).toEqual([{ path: "/work/example-app", dir: "", environment: null }]);
+    expect(await callsOf("orca_files_list")).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
     const kinds = await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-file")].map((e) => [e.dataset.kind, e.dataset.ignored]));
     expect(kinds).toEqual([["dir", "false"], ["dir", "true"], ["file", "false"], ["file", "true"]]);
@@ -2611,7 +2611,7 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-files-tree .orca-file", 4);
     const list = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
     await row("src").click();
-    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "src", environment: null }]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "src", ignored: false, environment: null }]);
     await expect(row("src")).toHaveAttribute("aria-expanded", "true");
     expect(await names()).toEqual(["src", "lib", "main.rs", "target", "a.rs", "b.log"]);
     // A child is one level in.
@@ -2637,9 +2637,41 @@ describe("orca: files and editor (A-18)", () => {
     await $("#orca-files-reload").click();
     const calls = await waitForCalls(list, 2);
     expect(calls).toEqual([
-      { path: "/work/example-app", dir: "", environment: null },
-      { path: "/work/example-app", dir: "src", environment: null },
+      { path: "/work/example-app", dir: "", ignored: false, environment: null },
+      { path: "/work/example-app", dir: "src", ignored: false, environment: null },
     ]);
+  });
+
+  it("reads the root and the open folders again one at a time", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 5);
+    const list = await mock("orca_files_list", holds);
+    await $("#orca-files-reload").click();
+    await waitForCalls(list, 1);
+    await browser.pause(300);
+    expect(await callsOf(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await release(list, dirOf("", [["src", true], ["target", true, true]]));
+    expect(await waitForCalls(list, 2)).toEqual([
+      { path: "/work/example-app", dir: "", ignored: false, environment: null },
+      { path: "/work/example-app", dir: "src", ignored: false, environment: null },
+    ]);
+    await release(list, dirOf("src", [["lib", true]]));
+  });
+
+  it("does not ask for the ignore marks of a folder that the list marked as ignored", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const list = await mock("orca_files_list", dirOf("target", [["debug", true, true]]));
+    await row("target").click();
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "target", ignored: true, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 5);
+    // A folder in it is ignored as well, and is read as one.
+    const inner = await mock("orca_files_list", dirOf("target/debug", [["x", false, true]]));
+    await row("target/debug").click();
+    expect(await waitForCalls(inner)).toEqual([{ path: "/work/example-app", dir: "target/debug", ignored: true, environment: null }]);
   });
 
   it("shows another worktree's tree, and its name, when another tab is selected", async () => {
@@ -2651,7 +2683,7 @@ describe("orca: files and editor (A-18)", () => {
     const list = await mock("orca_files_list", dirOf("", [["only-b.rs", false]]));
     await tabOf(zsh).$(".orca-tab-btn").click();
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/b");
-    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app-b", dir: "", environment: null }]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app-b", dir: "", ignored: false, environment: null }]);
     await browser.waitUntil(async () => (await names()).join() === "only-b.rs", { timeoutMsg: "the tree of the other worktree never showed" });
   });
 
@@ -2660,7 +2692,7 @@ describe("orca: files and editor (A-18)", () => {
     await project("example-app").click();
     await $(".orca-files-toggle").click();
     await waitForCount("#orca-files-tree .orca-file", 4);
-    expect(await callsOf("orca_files_list")).toEqual([{ path: "/work/example-app", dir: "", environment: "Studio" }]);
+    expect(await callsOf("orca_files_list")).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: "Studio" }]);
   });
 
   it("shows the message of a root that cannot be read, and of a folder that cannot", async () => {
@@ -2752,6 +2784,21 @@ describe("orca: files and editor (A-18)", () => {
     await release(write, saved("sig-2"));
     await expect(stateText()).toHaveText("保存しました");
     await browser.waitUntil(async () => (await dirtyMarks()) === 0, { timeoutMsg: "the mark of the tab stayed" });
+  });
+
+  it("saves the typing that waits for its timer when the page is hidden for good", async () => {
+    await openFiles({ editor_settings: { autosaveMs: 3000 } });
+    await openA();
+    const write = await mock("orca_file_write", saved("sig-2"));
+    await type("// x\n");
+    await expect(stateText()).toHaveText("保存待ち");
+    expect(await callsOf(write)).toEqual([]);
+    await browser.execute((once) => {
+      if (!window.__e2e_once__(once)) return;
+      window.dispatchEvent(new Event("pagehide"));
+    }, onceId());
+    expect(await waitForCalls(write)).toEqual([{ path: "/work/example-app", relative: "a.rs", content: "fn main() {}\n// x\n", crlf: false, signature: "sig-1", environment: null }]);
+    await expect(stateText()).toHaveText("保存しました");
   });
 
   it("restarts the wait with each key, and saves the whole text once", async () => {

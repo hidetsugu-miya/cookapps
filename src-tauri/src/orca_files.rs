@@ -255,7 +255,8 @@ fn reason(error: CallError) -> String {
     }
 }
 
-async fn list(rpc: &mut impl Rpc, path: &str, dir: &str) -> Result<OrcaDir, String> {
+/// `ignored` is whether git ignores the folder `dir` itself: what it holds is then ignored too, and `git.checkIgnored` is not asked.
+async fn list(rpc: &mut impl Rpc, path: &str, dir: &str, ignored: bool) -> Result<OrcaDir, String> {
     let answer = rpc
         .call(
             "files.readDir",
@@ -269,8 +270,12 @@ async fn list(rpc: &mut impl Rpc, path: &str, dir: &str) -> Result<OrcaDir, Stri
         .map_err(reason)?;
     let (mut entries, total) = parse_dir(&answer, dir)?;
     sort_entries(&mut entries);
-    let ignored = ignored_of(rpc, path, &entries).await;
-    mark_ignored(&mut entries, &ignored);
+    if ignored {
+        entries.iter_mut().for_each(|e| e.ignored = true);
+    } else {
+        let ignored = ignored_of(rpc, path, &entries).await;
+        mark_ignored(&mut entries, &ignored);
+    }
     Ok(OrcaDir { entries, total })
 }
 
@@ -434,17 +439,18 @@ async fn host_of(path: &str, environment: Option<&str>) -> Result<String, String
     Ok(host_id)
 }
 
-/// The entries of the folder `dir` of the worktree at `path` (A-18). The worktree's own folder is the empty `dir`.
+/// The entries of the folder `dir` of the worktree at `path` (A-18). The worktree's own folder is the empty `dir`. `ignored` is whether the list marked `dir` as ignored.
 #[tauri::command]
 pub async fn orca_files_list(
     path: String,
     dir: String,
+    ignored: bool,
     environment: Option<String>,
 ) -> Result<OrcaDir, String> {
     check_relative(&dir, true)?;
     host_of(&path, environment.as_deref()).await?;
     let mut connection = Connection::open(environment).await?;
-    list(&mut connection, &path, &dir).await
+    list(&mut connection, &path, &dir, ignored).await
 }
 
 /// The text of the file `relative` of the worktree at `path`, for the editor (A-18).
@@ -717,7 +723,7 @@ mod tests {
             // Git echoes a folder with or without its slash.
             ("git.checkIgnored", Ok(json!(["lib/target/", "lib/b.log"]))),
         ]);
-        let dir = list(&mut orca, "/work/a", "lib").await.unwrap();
+        let dir = list(&mut orca, "/work/a", "lib", false).await.unwrap();
         assert_eq!(names(&dir.entries), ["src", "target", "b.log"]);
         assert_eq!(
             dir.entries.iter().map(|e| e.ignored).collect::<Vec<_>>(),
@@ -738,6 +744,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn what_an_ignored_folder_holds_is_ignored_without_a_check() {
+        let mut orca = fake(vec![(
+            "files.readDir",
+            Ok(json!({"entries": [
+                {"name": "a.o", "isDirectory": false},
+                {"name": "deps", "isDirectory": true},
+            ], "total": 2})),
+        )]);
+        let dir = list(&mut orca, "/work/a", "target", true).await.unwrap();
+        assert_eq!(names(&dir.entries), ["deps", "a.o"]);
+        assert!(dir.entries.iter().all(|e| e.ignored));
+        assert_eq!(orca.calls.len(), 1);
+        assert_eq!(orca.calls[0].0, "files.readDir");
+    }
+
+    #[tokio::test]
     async fn a_failed_ignore_check_still_gives_the_list() {
         let mut orca = fake(vec![
             (
@@ -749,7 +771,7 @@ mod tests {
                 Err(("Orca がエラーを返しました", "not a git repository")),
             ),
         ]);
-        let dir = list(&mut orca, "/work/a", "").await.unwrap();
+        let dir = list(&mut orca, "/work/a", "", false).await.unwrap();
         assert_eq!(dir.entries, vec![entry("a", false)]);
     }
 
@@ -765,7 +787,7 @@ mod tests {
             ),
             ("git.checkIgnored", Ok(json!(["f0"]))),
         ]);
-        let dir = list(&mut orca, "/work/a", "").await.unwrap();
+        let dir = list(&mut orca, "/work/a", "", false).await.unwrap();
         let checks: Vec<&Value> = orca
             .calls
             .iter()
@@ -788,12 +810,12 @@ mod tests {
             )),
         )]);
         assert_eq!(
-            list(&mut orca, "/work/a", "gone").await.unwrap_err(),
+            list(&mut orca, "/work/a", "gone", false).await.unwrap_err(),
             "ファイルが見つかりません"
         );
         let mut orca = fake(vec![("files.readDir", Ok(json!({"entries": 1})))]);
         assert_eq!(
-            list(&mut orca, "/work/a", "").await.unwrap_err(),
+            list(&mut orca, "/work/a", "", false).await.unwrap_err(),
             NOT_LISTED
         );
     }

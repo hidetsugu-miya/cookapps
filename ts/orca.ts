@@ -434,8 +434,7 @@ function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled:
 }
 
 // The work pane follows the layout: the panes with their tab strips (a project with no layout yet, or with no tab, has one empty pane), and the terminal of the tab selected in each pane, else a line that says why there is none.
-function drawWork() {
-  const tabs = projectKey === null ? [] : tabsOf(projectKey);
+function drawWork(tabs: Tab[]) {
   syncLayout(tabs);
   const layout = currentLayout();
   const plusDisabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
@@ -445,9 +444,8 @@ function drawWork() {
 }
 
 // Shows the terminal of the tab selected in each pane while the screen is shown: streamed from a saved environment, mirrored on this machine.
-function syncTerminal() {
+function syncTerminal(tabs: Tab[] = projectKey === null ? [] : tabsOf(projectKey)) {
   const layout = shown() ? currentLayout() : null;
-  const tabs = projectKey === null ? [] : tabsOf(projectKey);
   const placements: Placement[] = [];
   for (const pane of panesOf(layout?.root ?? null)) {
     const tab = findTab(view?.target ?? null, projectKey!, tabs, pane.selected);
@@ -459,9 +457,8 @@ function syncTerminal() {
 }
 
 // Shows the editor of the file tab selected in each pane while the screen is shown.
-function syncEditor() {
+function syncEditor(tabs: Tab[]) {
   const layout = shown() ? currentLayout() : null;
-  const tabs = projectKey === null ? [] : tabsOf(projectKey);
   const placements: { id: string; host: HTMLElement }[] = [];
   for (const pane of panesOf(layout?.root ?? null)) {
     const tab = findTab(view?.target ?? null, projectKey!, tabs, pane.selected);
@@ -472,8 +469,7 @@ function syncEditor() {
 }
 
 // The file pane follows the selected tab: its worktree, and the files open in it.
-function drawFiles() {
-  const tabs = projectKey === null ? [] : tabsOf(projectKey);
+function drawFiles(tabs: Tab[]) {
   const tab = findTab(view?.target ?? null, projectKey ?? "", tabs, selectedTab() ?? "");
   const target = view?.target ?? null;
   syncFiles(tab === undefined ? null : { target, path: tab.path, label: tab.where }, tab === undefined || projectKey === null ? new Set() : openedIn(target, projectKey, tab.path));
@@ -485,8 +481,7 @@ function openFile(relative: string) {
   if (tab === undefined || projectKey === null || view === null) return;
   started = null;
   const id = openEditorFile(view.target, projectKey, tab.path, relative);
-  // The tab is listed (draw asks Rust for the layout with it), then selected.
-  draw();
+  // The select asks Rust for the layout with the new tab in it (`runPaneOp` reads the tabs when it asks).
   chooseTab(id);
   draw();
 }
@@ -558,10 +553,11 @@ function draw() {
   drawNotice();
   drawBell();
   drawFeed();
-  drawWork();
-  drawFiles();
-  syncTerminal();
-  syncEditor();
+  const tabs = projectKey === null ? [] : tabsOf(projectKey);
+  drawWork(tabs);
+  drawFiles(tabs);
+  syncTerminal(tabs);
+  syncEditor(tabs);
 }
 
 // ---- the stream of a saved environment ----

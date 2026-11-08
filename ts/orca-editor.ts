@@ -1,6 +1,7 @@
 // The editor of the Orca screen (A-18): a file of a worktree opened as a tab of the work pane, in a textarea. Rust reads and saves the text (`orca_file_read`, `orca_file_write`) and decides whether a save went through; this module draws and takes the typing.
 // A file is saved by itself: once the typing has stopped for the time of the settings, the text goes to Rust with the signature of the text that was read, and Orca writes only if the disk still holds it.
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
+// Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
 import { tag } from "./dom.js";
 import { invoke } from "./ipc.js";
@@ -210,4 +211,8 @@ export function showEditors(placements: { id: string; host: HTMLElement }[]) {
 export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) => void }) {
   changed = on.changed;
   fail = on.error;
+  // The page is going away (the window is closed): the typing that waits for its timer is sent now, for every file that can be saved.
+  window.addEventListener("pagehide", () => {
+    for (const f of files.values()) void flush(f);
+  });
 }

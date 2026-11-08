@@ -1,5 +1,5 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab, as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted, with what git ignores marked); this module draws it and takes the presses.
-// A folder is read when it is opened (each time), and the reload button reads the root and the open folders again. A file opens in the editor on a double press. The pane is shown or hidden by the button at the right end of the tab strip.
+// A folder is read when it is opened (each time), and the reload button reads the root and the open folders again, one after the other. A file opens in the editor on a double press. The pane is shown or hidden by the button at the right end of the tab strip.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one).
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
@@ -30,6 +30,8 @@ const expanded = new Set<string>();
 // What the pane draws now; it is drawn again only when this changes.
 let drawn = "";
 let version = 0;
+// Whether a drawing is waiting for the next frame (the reads that end in it are drawn once).
+let waiting = false;
 let openFile: (relative: string) => void = () => {};
 // The files open in the worktree, which the last drawing colored.
 let opened = new Set<string>();
@@ -42,6 +44,22 @@ export function toggleFiles() {
   $("orca-files-split").hidden = !shown;
 }
 
+// Whether the list marked the folder `dir` as ignored (what it holds is ignored then, and Rust does not ask git).
+function ignoredDir(dir: string) {
+  const parent = dir.slice(0, Math.max(0, dir.lastIndexOf("/")));
+  return listings.get(parent)?.dir?.entries.find((e) => e.path === dir)?.ignored ?? false;
+}
+
+// Draws at the next frame, once for the reads that end before it.
+function drawSoon() {
+  if (waiting) return;
+  waiting = true;
+  requestAnimationFrame(() => {
+    waiting = false;
+    draw();
+  });
+}
+
 async function readDir(dir: string) {
   const here = context;
   if (here === null) return;
@@ -50,19 +68,23 @@ async function readDir(dir: string) {
   listings.set(dir, { dir: held?.dir ?? null, error: null, busy: true });
   let next: Listing;
   try {
-    next = { dir: await invoke("orca_files_list", { path: here.path, dir, environment: here.target }), error: null, busy: false };
+    next = { dir: await invoke("orca_files_list", { path: here.path, dir, ignored: ignoredDir(dir), environment: here.target }), error: null, busy: false };
   } catch (e) {
     next = { dir: held?.dir ?? null, error: String(e), busy: false };
   }
   if (mine !== generation) return;
   listings.set(dir, next);
   version++;
-  draw();
+  drawSoon();
 }
 
-// Reads the root and the folders that are open again.
-function reload() {
-  for (const dir of ["", ...expanded]) void readDir(dir);
+// Reads the root and the folders that are open again, one at a time (each read is a connection of its own); another worktree's tree ends it.
+async function reload() {
+  const mine = generation;
+  for (const dir of ["", ...expanded]) {
+    if (mine !== generation) return;
+    await readDir(dir);
+  }
 }
 
 function toggleDir(path: string) {
@@ -170,5 +192,5 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
 
 export function initOrcaFiles(on: { open: (relative: string) => void }) {
   openFile = on.open;
-  $("orca-files-reload").onclick = reload;
+  $("orca-files-reload").onclick = () => void reload();
 }
