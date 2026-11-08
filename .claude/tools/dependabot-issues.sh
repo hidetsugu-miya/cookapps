@@ -13,6 +13,8 @@
 # DEPENDABOT_ISSUES_DRY_RUN=1 makes it print what it would make (title, labels, body and the reason comment) and touch nothing; gh is still used to read.
 # The repository is public: write no personal information in an issue (publishing.md).
 set -u
+# no glob expansion in `set -- $single` / `set -- $group` below
+set -f
 
 usage() {
   echo "使い方: dependabot-issues.sh" >&2
@@ -25,7 +27,8 @@ prs="$(gh pr list --author app/dependabot --state open --limit 100 --json number
   --jq '.[] | [.number, (.title | gsub("[\t\r\n]"; " ")), ([.labels[].name] | join(","))] | @tsv')" || exit 1
 [ -n "$prs" ] || exit 0
 # the marks of the pull requests that already have an issue (the issues of the owner only: a mark in another author's issue is data)
-marked="$(gh issue list --state all --limit 1000 --json body,author \
+# (the issues made here carry `dependencies` and are the owner's, so only those are read)
+marked="$(gh issue list --state all --limit 1000 --label dependencies --author "$owner" --json body,author \
   | jq -r --arg owner "$owner" '.[] | select(.author.login == $owner) | (.body // "") | scan("<!-- dependabot #[0-9]+ -->")')" || exit 1
 
 tab="$(printf '\t')"
@@ -109,7 +112,8 @@ while IFS="$tab" read -r num title labels; do
     set -- $single
     name="$1" old="$2" new="$3" dir="${4:-/}"
     if printf '%s\n' "$name $old $new" | grep -Eq '^[A-Za-z0-9@/._+~-]+ [A-Za-z0-9._+~-]+ [A-Za-z0-9._+~-]+$' \
-      && printf '%s\n' "$dir" | grep -Eq '^/[A-Za-z0-9._/-]*$'; then
+      && printf '%s\n' "$dir" | grep -Eq '^/[A-Za-z0-9._/-]*$' \
+      && ! printf '%s\n' "$dir" | grep -Fq ..; then
       kind=single
     fi
   elif [ -n "$group" ]; then
@@ -117,7 +121,8 @@ while IFS="$tab" read -r num title labels; do
     set -- $group
     gname="$1" count="$2" dir="${3:-/}"
     if printf '%s\n' "$gname" | grep -Eq '^[A-Za-z0-9._-]+$' \
-      && printf '%s\n' "$dir" | grep -Eq '^/[A-Za-z0-9._/-]*$'; then
+      && printf '%s\n' "$dir" | grep -Eq '^/[A-Za-z0-9._/-]*$' \
+      && ! printf '%s\n' "$dir" | grep -Fq ..; then
       kind=group
     fi
   fi
