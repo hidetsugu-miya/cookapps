@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.54.0
+
+A-18 Orca files and editor (#120).
+The Orca screen has a file pane on the right, opened and closed by a button at the right end of the tab bar. It shows the files of the worktree of the selected tab as a tree, under the heading 「{repo} ・ {branch}」 with a reload button; a folder is read when it is opened, and what git ignores is drawn in pale italics.
+A double press on a file opens it in a tab of the work pane, next to the terminals. What is typed is saved by itself once the typing stops for the time set in the 「エディタ」 card of the Orca tab of the settings (1000 ms at first, 100 to 3000 ms). The heading shows 「保存待ち」「保存中」「保存しました」. A file that changed on the disk after it was opened is not overwritten, and the heading says so. Text files of up to 384 KiB in UTF-8 can be opened.
+
 ## v0.53.4
 
 No change to the app. Only the tools used to develop it changed.
