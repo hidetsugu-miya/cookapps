@@ -2377,6 +2377,21 @@ describe("orca: split panes (A-17)", () => {
     await expect($('.orca-pane[data-pane="p2"] .orca-term .orca-term-box[data-mark="same"]')).toBeDisplayed();
   });
 
+  it("keeps the terminal of a pane shown, and its screen, while Rust's answer to a read where the terminal changed kind has not come", async () => {
+    await openSplit();
+    await browser.waitUntil(async () => (await count(".orca-pane[data-pane='p2'] .orca-term .orca-term-box:not([hidden])")) === 1, { timeoutMsg: "the right pane showed no terminal" });
+    await browser.execute(() => document.querySelector(".orca-pane[data-pane='p2'] .orca-term .orca-term-box")!.setAttribute("data-mark", "same"));
+    // `claude` runs in the shell, and the answer still holds the old tab id (the layout of the read before).
+    const old = await mock("orca_panes", saved());
+    const sessions = [...sample(), orcaRow("example-app", "feat/a", "Run the tests", { paneKey: "tab_example-app_zsh:leaf_1", handle: "term_example-app_zsh" })];
+    await mock("orca_overview", orcaOverview(sessions, worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
+    await $("#orca-refresh").click();
+    await waitForCalls(old);
+    await browser.waitUntil(async () => (await paneTabs("p2")).join() === "Run the tests", { timeoutMsg: "the right pane did not draw the Claude tab" });
+    await expect($('.orca-pane[data-pane="p2"] [aria-selected="true"]')).toHaveText(expect.stringContaining("Run the tests"));
+    await expect($('.orca-pane[data-pane="p2"] .orca-term .orca-term-box[data-mark="same"]')).toBeDisplayed();
+  });
+
   it("gives the plus of a pane the focus first and starts the session in the project", async () => {
     await openSplit();
     const panes = await mock("orca_panes", saved());

@@ -23,7 +23,7 @@ import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { initOrcaChat } from "./orca-chat.js";
 import { type PaneModel, drawTree, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
-import { applyLocal, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
+import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
 import { setNavCount, show, showError } from "./view.js";
@@ -187,7 +187,8 @@ function tabsOf(key: string): Tab[] {
   for (const t of view?.terminals ?? []) {
     if (t.projectKey === key) tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle, path: t.path });
   }
-  for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.size);
+  // A Claude row that got its handle after it was first seen keeps the place it had under its id.
+  for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
   return tabs.sort((a, b) => seen.get(keyOfTab(a))! - seen.get(keyOfTab(b))!);
 }
 
@@ -384,14 +385,16 @@ function emptyText(tabs: Tab[], tab: Tab | undefined) {
 }
 
 // The tree of the layout for drawing: each pane with the tabs it holds that the list still has (a tab that left shows no more before Rust's next answer), and the one it shows.
-function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled: boolean): TreeModel {
-  if (node.kind === "split") return { kind: "split", direction: node.direction, children: node.children.map((c) => treeOf(c, tabs, focus, plusDisabled)) };
-  const mine = node.tabs.flatMap((id) => tabs.find((t) => t.id === id) ?? []);
-  const tab = mine.find((t) => t.id === node.selected);
+// A tab id the layout holds from before a terminal changed kind is taken as the tab with the same handle (`find`) until Rust's answer.
+function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled: boolean, find: (id: string) => Tab | undefined): TreeModel {
+  if (node.kind === "split") return { kind: "split", direction: node.direction, children: node.children.map((c) => treeOf(c, tabs, focus, plusDisabled, find)) };
+  const mine = [...new Set(node.tabs.flatMap((id) => find(id) ?? []))];
+  const selected = find(node.selected);
+  const tab = mine.find((t) => t.id === selected?.id);
   const pane: PaneModel = {
     id: node.id,
     key: JSON.stringify([mine, node.selected, [...closing]]),
-    tabs: () => mine.map((t) => tabNode(t, t.id === node.selected)),
+    tabs: () => mine.map((t) => tabNode(t, t.id === tab?.id)),
     focused: node.id === focus,
     empty: emptyText(tabs, tab),
     terminal: !!tab?.handle,
@@ -407,7 +410,7 @@ function drawWork() {
   const layout = currentLayout();
   const plusDisabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
   const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, plusDisabled } };
-  paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled) : empty);
+  paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled, (id) => findTab(view?.target ?? null, projectKey!, tabs, id)) : empty);
   drawStarted();
 }
 
@@ -417,12 +420,12 @@ function syncTerminal() {
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
   const placements: Placement[] = [];
   for (const pane of panesOf(layout?.root ?? null)) {
-    const tab = tabs.find((t) => t.id === pane.selected);
+    const tab = findTab(view?.target ?? null, projectKey!, tabs, pane.selected);
     const host = paneHosts.get(pane.id);
     if (tab?.handle && host) placements.push({ id: tab.handle, source: { kind: streaming() ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: view?.target ?? null }, host });
   }
   if (placements.length === 0) return hideTerminals();
-  showTerminals(placements, tabs.find((t) => t.id === selectedTab())?.handle ?? null);
+  showTerminals(placements, findTab(view?.target ?? null, projectKey!, tabs, selectedTab() ?? "")?.handle ?? null);
 }
 
 // The note of a start that was answered: it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started.

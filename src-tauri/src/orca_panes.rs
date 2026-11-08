@@ -285,7 +285,15 @@ pub fn follow_kind_switches(
         .collect();
     let mut taken: HashSet<&str> = held.iter().map(String::as_str).collect();
     let mut renames: Vec<(&str, &str)> = Vec::new();
-    for old in held.iter().filter(|t| !live.contains(t)) {
+    let live_set: HashSet<&str> = live.iter().map(String::as_str).collect();
+    // The tabs listed now by their handle, in the order of `live`.
+    let mut by_handle: HashMap<&str, Vec<&str>> = HashMap::new();
+    for tab in live {
+        if let Some(handle) = handles.now.get(tab) {
+            by_handle.entry(handle).or_default().push(tab);
+        }
+    }
+    for old in held.iter().filter(|t| !live_set.contains(t.as_str())) {
         let Some(handle) = handles
             .was
             .get(old)
@@ -294,10 +302,10 @@ pub fn follow_kind_switches(
         else {
             continue;
         };
-        let new = live.iter().find(|t| {
-            !taken.contains(t.as_str()) && handles.now.get(*t).map(String::as_str) == Some(handle)
-        });
-        if let Some(new) = new {
+        let new = by_handle
+            .get(handle)
+            .and_then(|tabs| tabs.iter().find(|t| !taken.contains(**t)));
+        if let Some(&new) = new {
             taken.insert(new);
             renames.push((old, new));
         }

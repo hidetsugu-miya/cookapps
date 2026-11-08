@@ -42,6 +42,14 @@ export function focusedTab(layout: PaneLayout | null) {
   return (panes.find((p) => p.id === layout?.focus) ?? panes[0])?.selected ?? null;
 }
 
+// The tab among `tabs` that a tab id of the layout means: the one with that id, else (a terminal that changed kind has a new tab id and the same handle, and Rust's answer with the new id has not come yet) the one with the handle the id had in the last call that worked, or the one a plain tab id carries (`orca:{handle}`).
+export function findTab<T extends { id: string; handle: string | null }>(target: string | null, project: string, tabs: T[], id: string): T | undefined {
+  const exact = tabs.find((t) => t.id === id);
+  if (exact) return exact;
+  const handle = known.get(keyOf(target, project))?.[id] ?? (id.startsWith("orca:") ? id.slice("orca:".length) : undefined);
+  return handle === undefined ? undefined : tabs.find((t) => t.handle === handle);
+}
+
 // Whether the layout of the project was not asked for with exactly these tabs yet.
 export const needsSync = (target: string | null, project: string, tabs: string[]) => asked.get(keyOf(target, project)) !== tabs.join("\n");
 
