@@ -1,10 +1,11 @@
-// The terminals of the Orca screen (A-8, A-12): one xterm.js for each tab, in `#orca-term`, of which the selected one is shown. Every tab is a terminal, a Claude session's or a plain one.
-// A saved environment streams the terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. The terminal is fitted to the pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
-// the size Orca sends (the snapshot's and each `size`) is drawn, as another screen of Orca may take the size. Leaving the tab, the screen or a shown window ends the stream, and Orca gives the terminal back its own size.
-// This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminal shown is a mirror: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
+// The terminals of the Orca screen (A-8, A-12, A-17): one xterm.js for each tab. The work pane is split into panes (A-17), and the tab selected in each pane is shown, in the host element of its pane; the others wait in `#orca-stash`.
+// Every tab is a terminal, a Claude session's or a plain one.
+// A saved environment streams each terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. A terminal is fitted to its pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
+// the size Orca sends (the snapshot's and each `size`) is drawn, as another screen of Orca may take the size. Leaving the tab, the screen or a shown window ends the stream of that terminal (`orca_stream_terminal_close`), and Orca gives it back its own size.
+// This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminals shown are mirrors: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
-// An image pasted or dropped on the terminal shown is put in its worktree and its path is typed in the terminal (A-10).
+// An image pasted or dropped on a terminal shown is put in its worktree and its path is typed in that terminal (A-10).
 // Ghostty's settings (A-13) set the font and the keys that send a text; Shift+Enter sends a newline for Claude Code's input.
 // A URL in the text, or in an OSC 8 link, opens in the default browser with ⌘+click (the left button, no Ctrl or Alt), as in Orca's own terminal; the click on a URL without ⌘ selects as before.
 // A program that asks for the clipboard with OSC 52 (Claude Code does, for what is selected while it tracks the mouse) gets it, as in Orca's own terminal: a write is made only from what the terminal prints live, not from a snapshot or a mirror frame drawn again, and a read ("?") is never answered.
@@ -52,11 +53,24 @@ export interface TermSource {
   environment: string | null;
 }
 
+// A terminal to show: its tab, where it comes from, and the host element of the pane that holds it.
+export interface Placement {
+  id: string;
+  source: TermSource;
+  host: HTMLElement;
+}
+
 interface Instance {
   term: XTerm;
   fit: { fit(): void };
   el: HTMLElement;
   source: TermSource;
+  // The host element of its pane while it is shown, else null (its box waits in the stash).
+  host: HTMLElement | null;
+  // The channel of its stream, null when it has none: an event of another channel is not drawn.
+  channel: { onmessage: (event: OrcaTermEvent) => void } | null;
+  // The number of the showing of its stream: Rust ends a showing only by a close of the same number, whatever order the calls arrive in.
+  generation: number;
   // The mirror: its timer, the last frame drawn, and a read on its way.
   timer: number | null;
   last: string | null;
@@ -72,11 +86,15 @@ interface Instance {
 }
 
 const instances = new Map<string, Instance>();
-// The tab whose terminal is shown, null when none is.
-let visibleId: string | null = null;
-// The channel of the stream shown, null when none is: an event of another channel is not drawn.
-let current: { onmessage: (event: OrcaTermEvent) => void } | null = null;
-let unclosed = false;
+// The tabs whose terminals are shown (one for each pane), and the one that last took the focus.
+const shown = new Set<string>();
+let focusedId: string | null = null;
+// The host elements that are watched for their size.
+const watched = new Set<HTMLElement>();
+// The number the last showing of a stream took.
+let streamSeq = 0;
+// The host elements that take images already.
+const listening = new WeakSet<HTMLElement>();
 let onError: (e: unknown) => void = () => {};
 // Ghostty's settings as imported, null before the first import.
 let settings: TerminalSettings | null = null;
@@ -85,8 +103,10 @@ export type ThemeColors = { light: TerminalColors; dark: TerminalColors; appeara
 let themeColors: ThemeColors | null = null;
 const darkScheme = window.matchMedia("(prefers-color-scheme: dark)");
 
-const container = () => $("orca-term");
-const visible = () => (visibleId === null ? undefined : instances.get(visibleId));
+// The size of a host element is the size of its pane: a change fits its terminal (the cell size is measured with the font, so the fit is made again once the fonts are there).
+const resizes = new ResizeObserver(() => fitSoon());
+const stash = () => $("orca-stash");
+const shownInstances = () => [...shown].flatMap((id) => instances.get(id) ?? []);
 
 // The colors for the appearance (the system's, unless the settings fix it to light or dark): those of the chosen theme, else those of the imported settings; null when there are none.
 const termColors = (): TerminalColors | null => {
@@ -147,11 +167,11 @@ function keybindOf(event: KeyboardEvent) {
   );
 }
 
-// Draws the font and colors in every terminal and in the pane around them.
+// Draws the font and colors in every terminal and in the panes around them.
 function drawLook() {
   const options = termOptions();
   for (const { term } of instances.values()) Object.assign(term.options, options);
-  container().style.background = termColors()?.background ?? "";
+  for (const { host } of shownInstances()) if (host) host.style.background = termColors()?.background ?? "";
 }
 
 // Draws the theme chosen in the settings (A-14, A-15) in every terminal (null: the colors of Ghostty's settings, else the app's own).
@@ -165,7 +185,7 @@ export function applyTerminalSettings(next: TerminalSettings | null) {
   settings = next;
   keybinds = [...(next?.keybinds ?? []), SHIFT_ENTER];
   drawLook();
-  // The size of a cell changed with the font: the terminal shown fits the pane again.
+  // The size of a cell changed with the font: the terminals shown fit their panes again.
   fitSoon();
 }
 
@@ -222,7 +242,8 @@ function writeAgain(instance: Instance, data: string) {
 function newInstance(source: TermSource): Instance {
   const el = document.createElement("div");
   el.className = "orca-term-box";
-  container().append(el);
+  el.hidden = true;
+  stash().append(el);
   // The click on a link: only ⌘ with the left button opens it, and the selection goes. Rust opens http and https URLs and refuses the others (an OSC 8 link may name any: xterm.js drops a non-http one before this unless `allowNonHttpProtocols` is set, as Orca sets it).
   const open = (event: MouseEvent, uri: string) => {
     if (!event.metaKey || event.ctrlKey || event.altKey || event.button !== 0) return;
@@ -251,7 +272,7 @@ function newInstance(source: TermSource): Instance {
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
-  const instance: Instance = { term, fit, el, source, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false };
+  const instance: Instance = { term, fit, el, source, host: null, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false };
   // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
   term.parser.registerOscHandler(52, (data) => {
     const text = instance.replaying > 0 ? null : osc52Text(data);
@@ -287,14 +308,13 @@ function newInstance(source: TermSource): Instance {
   return instance;
 }
 
-// Fits the shown terminal to the pane, and tells the stream the new size.
-function fitVisible() {
-  const instance = visible();
-  if (!instance || container().hidden) return;
+// Fits a shown terminal to its pane, and tells the stream the new size.
+function fitInstance(instance: Instance) {
+  if (!instance.host || instance.host.hidden) return;
   const { cols, rows } = instance.term;
   instance.fit.fit();
-  if (instance.source.kind === "stream" && current !== null && (instance.term.cols !== cols || instance.term.rows !== rows)) {
-    invoke("orca_stream_viewport", { viewport: { cols: instance.term.cols, rows: instance.term.rows } }).catch(() => {});
+  if (instance.source.kind === "stream" && instance.channel !== null && (instance.term.cols !== cols || instance.term.rows !== rows)) {
+    invoke("orca_stream_viewport", { handle: instance.source.handle, viewport: { cols: instance.term.cols, rows: instance.term.rows } }).catch(() => {});
   }
 }
 
@@ -304,7 +324,7 @@ function fitSoon() {
   if (fitTimer !== null) clearTimeout(fitTimer);
   fitTimer = window.setTimeout(() => {
     fitTimer = null;
-    fitVisible();
+    for (const instance of shownInstances()) fitInstance(instance);
   }, FIT_DELAY_MS);
 }
 
@@ -330,8 +350,8 @@ async function sendKeys(instance: Instance) {
 // ---- images (A-10) ----
 
 // Puts the images pasted or dropped on the terminal shown in its worktree and types their paths in it, as Orca's own terminal does. A file that is not an image is refused with the message.
-async function attach(files: File[]) {
-  const instance = visible();
+async function attach(host: HTMLElement, files: File[]) {
+  const instance = shownInstances().find((i) => i.host === host);
   if (!instance) return;
   const { images, message } = await readImages(files);
   if (message !== null) onError(message);
@@ -339,7 +359,7 @@ async function attach(files: File[]) {
   try {
     const lines = await uploadAttachments(images, instance.source.path, instance.source.environment);
     // The paths go only to the terminal the images were put on.
-    if (visible() === instance) instance.term.paste(`${lines.join(" ")} `);
+    if (instance.host === host) instance.term.paste(`${lines.join(" ")} `);
   } catch (e) {
     onError(e);
   }
@@ -371,11 +391,9 @@ function startMirror(instance: Instance) {
   instance.timer = window.setInterval(() => readFrame(instance), MIRROR_MS);
 }
 
-function stopMirrors() {
-  for (const instance of instances.values()) {
-    if (instance.timer !== null) clearInterval(instance.timer);
-    instance.timer = null;
-  }
+function stopMirror(instance: Instance) {
+  if (instance.timer !== null) clearInterval(instance.timer);
+  instance.timer = null;
 }
 
 // ---- the stream (a saved environment) ----
@@ -397,85 +415,115 @@ function drawEvent(instance: Instance, event: OrcaTermEvent) {
   }
 }
 
-// Subscribes the stream of the shown terminal, with the pane's size.
+// Subscribes the stream of a shown terminal, with its pane's size.
 function startStream(instance: Instance) {
-  if (document.hidden) return;
+  if (document.hidden || instance.channel !== null) return;
   const channel = new window.__TAURI__.core.Channel<OrcaTermEvent>();
-  current = channel;
-  unclosed = false;
+  instance.channel = channel;
   channel.onmessage = (event) => {
-    if (current === channel) drawEvent(instance, event);
+    if (instance.channel === channel) drawEvent(instance, event);
   };
   instance.fit.fit();
   const viewport = { cols: instance.term.cols, rows: instance.term.rows };
-  invoke("orca_stream_terminal", { handle: instance.source.handle, viewport, channel }).catch((e) => {
-    if (current === channel) drawEvent(instance, { kind: "ended", message: String(e) });
+  instance.generation = ++streamSeq;
+  invoke("orca_stream_terminal", { handle: instance.source.handle, generation: instance.generation, viewport, channel }).catch((e) => {
+    if (instance.channel === channel) drawEvent(instance, { kind: "ended", message: String(e) });
   });
 }
 
-// Ends the stream of the terminal shown, so Orca gives it back its own size. With `close` false another stream follows at once, and its subscription lets this one go:
-// a close is a call of its own, which could reach Rust after that subscription and end it.
-// A stream let go without a close is still subscribed in Rust until the next subscription or close: `unclosed` keeps that for the next close.
-function stopStream(close = true) {
-  if (current === null && !unclosed) return;
-  const subscribed = current !== null;
-  current = null;
-  unclosed = !close && (subscribed || unclosed);
-  if (close) invoke("orca_stream_terminal_close").catch(() => {});
+// Ends the stream of a terminal, so Orca gives it back its own size. The close names the terminal and its showing, so it ends no other stream, and it cannot end a showing made after it.
+function stopStream(instance: Instance) {
+  if (instance.channel === null) return;
+  instance.channel = null;
+  invoke("orca_stream_terminal_close", { handle: instance.source.handle, generation: instance.generation }).catch(() => {});
 }
 
-// Starts what the shown terminal needs: its stream, or its mirror's reads.
+// Starts what a shown terminal needs: its stream, or its mirror's reads.
 function start(instance: Instance) {
   if (instance.source.kind === "stream") startStream(instance);
   else startMirror(instance);
 }
 
-function stop(close = true) {
-  stopMirrors();
-  stopStream(close);
-  for (const instance of instances.values()) instance.pending = "";
+// Stops the reads or the stream of a terminal, and drops the keys not sent yet.
+function stop(instance: Instance) {
+  stopMirror(instance);
+  stopStream(instance);
+  instance.pending = "";
 }
 
 // ---- showing ----
 
-// Shows the terminal of the tab `id` (`source`: where it comes from) and hides the others. It is made when its tab is first shown.
-export function showTerminal(id: string, source: TermSource) {
-  // Already shown: a redraw of the screen must not start it again or take the focus.
-  if (visibleId === id && !container().hidden && instances.has(id)) return;
-  let instance = instances.get(id);
-  // A stream that starts next lets the one shown go by itself (`stopStream`).
-  stop(document.hidden || (instance?.source ?? source).kind !== "stream");
-  visibleId = id;
-  container().hidden = false;
-  if (!instance) {
-    instance = newInstance(source);
-    instances.set(id, instance);
+// Shows the terminals of `placements` (the tab, where it comes from, and the host element of its pane) and hides the others. A terminal is made when its tab is first shown.
+// `focusId` is the tab of the pane that has the focus: its terminal takes the keyboard when it is new or when it just became the focused one.
+export function showTerminals(placements: Placement[], focusId: string | null) {
+  const next = new Set(placements.map((p) => p.id));
+  for (const id of [...shown]) {
+    if (next.has(id)) continue;
+    const gone = instances.get(id);
+    shown.delete(id);
+    if (!gone) continue;
+    stop(gone);
+    gone.host = null;
+    gone.el.hidden = true;
+    stash().append(gone.el);
   }
-  for (const [other, { el }] of instances) el.hidden = other !== id;
-  fitVisible();
-  start(instance);
-  instance.term.focus();
+  const fresh: Instance[] = [];
+  const hosts = new Set<HTMLElement>();
+  let moved = false;
+  for (const { id, source, host } of placements) {
+    let instance = instances.get(id);
+    if (!instance) {
+      instance = newInstance(source);
+      instances.set(id, instance);
+    }
+    if (!shown.has(id)) fresh.push(instance);
+    shown.add(id);
+    instance.host = host;
+    // Shown again in a new pane: the keys of the old one are not for the new.
+    if (instance.el.parentElement !== host) {
+      host.append(instance.el);
+      host.style.background = termColors()?.background ?? "";
+      moved = true;
+    }
+    instance.el.hidden = false;
+    hosts.add(host);
+    if (!listening.has(host)) {
+      listening.add(host);
+      listenForImages(host, (files) => attach(host, files));
+    }
+    if (!watched.has(host)) {
+      watched.add(host);
+      resizes.observe(host);
+    }
+  }
+  for (const host of watched) {
+    if (hosts.has(host)) continue;
+    watched.delete(host);
+    resizes.unobserve(host);
+  }
+  for (const instance of fresh) {
+    fitInstance(instance);
+    start(instance);
+  }
+  // A terminal that moved to another pane is fitted to it once the pane has its size.
+  if (moved) fitSoon();
+  const focus = focusId === null ? undefined : instances.get(focusId);
+  if (focus && shown.has(focusId!) && (focusId !== focusedId || fresh.includes(focus))) focus.term.focus();
+  focusedId = focusId;
 }
 
-// Hides every terminal and stops their reads and streams (another screen, a tab with no terminal, or no tab shows).
+// Hides every terminal and stops their reads and streams (another screen, or no tab shows).
 export function hideTerminals() {
-  if (visibleId === null && container().hidden) return;
-  visibleId = null;
-  stop();
-  container().hidden = true;
+  if (shown.size === 0) return;
+  showTerminals([], null);
 }
 
 // Forgets the terminal of the tab `id` (its tab is gone).
 function dropTerminal(id: string) {
   const instance = instances.get(id);
   if (!instance) return;
-  if (visibleId === id) {
-    // The tab shown next lets this stream go by its own subscription; with none (`hideTerminals`) the close is sent then.
-    stop(false);
-    visibleId = null;
-  }
-  if (instance.timer !== null) clearInterval(instance.timer);
-  instance.pending = "";
+  stop(instance);
+  shown.delete(id);
   instance.term.dispose();
   instance.el.remove();
   instances.delete(id);
@@ -489,19 +537,17 @@ export function pruneTerminals(keep: (id: string) => boolean) {
 // What a failed send of typed keys does (the screen shows the message).
 export function initOrcaTerminal(report: (e: unknown) => void) {
   onError = report;
-  listenForImages(container(), attach);
-  new ResizeObserver(fitSoon).observe(container());
-  // The cell size is measured with the font, so the fit is made again once the fonts are there.
   document.fonts?.ready.then(fitSoon).catch(() => {});
   // The system's appearance picks the light or the dark colors (unless the settings fix it, then a change of it draws nothing new).
   darkScheme.addEventListener("change", () => {
     if (themeColors && themeColors.appearance !== "system") return;
     applyTerminalSettings(settings);
   });
-  // A hidden window stops the reads and the stream; shown again, the terminal that is shown starts again (a stream sends its screen anew).
+  // A hidden window stops the reads and the streams; shown again, the terminals that are shown start again (a stream sends its screen anew).
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) return stop();
-    const instance = visible();
-    if (instance && !container().hidden) start(instance);
+    for (const instance of shownInstances()) {
+      if (document.hidden) stop(instance);
+      else if (instance.host && !instance.host.hidden) start(instance);
+    }
   });
 }

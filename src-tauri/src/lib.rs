@@ -14,6 +14,7 @@ pub mod orca_attach;
 pub mod orca_chat;
 pub mod orca_e2ee;
 pub mod orca_handoff;
+pub mod orca_panes;
 pub mod orca_stream;
 pub mod orca_theme;
 pub mod slack;
@@ -301,6 +302,7 @@ pub fn run() {
             orca_stream::orca_stream_terminal_close,
             orca_stream::orca_stream_viewport,
             orca_stream::orca_stream_input,
+            orca_panes::orca_panes,
             ghostty::ghostty_saved,
             ghostty::ghostty_import,
             orca_theme::terminal_themes,

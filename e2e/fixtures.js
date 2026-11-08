@@ -110,6 +110,20 @@ answers.claude_connection ??= { method: "subscription", subscription: answers.cl
 window.__e2e_mocks__ = {};
 window.__e2e_calls__ = {};
 
+// Commands whose base answer follows their arguments. `orca_panes` (A-17) answers as Rust does for a project that was never split: one pane with every tab, the tab last selected shown (kept between calls, as the saved layout is, else the first), and nothing else changed;
+// a spec that splits mocks it with the layout it wants.
+const selectedIn = {};
+const computed = {
+  orca_panes: ({ environment, project, tabs, op }) => {
+    const key = JSON.stringify([environment, project]);
+    if (op?.kind === "select" && tabs.includes(op.tab)) selectedIn[key] = op.tab;
+    const first = tabs[0] ?? null;
+    const selected = tabs.includes(selectedIn[key]) ? selectedIn[key] : first;
+    return { root: first === null ? null : { kind: "pane", id: "p1", tabs, selected }, focus: first === null ? null : "p1" };
+  },
+};
+const answerOf = (cmd, args) => computed[cmd](args);
+
 const invoke = async (cmd, args, options) => {
   // Plugin and event traffic (wdio's own, listen/emit) is not an app command.
   if (cmd.startsWith("plugin:")) return real(cmd, args, options);
@@ -117,12 +131,12 @@ const invoke = async (cmd, args, options) => {
   // A raw body (a file's bytes, with its name in the headers) is recorded as {bytes, headers}, the bytes as numbers: the record is read through the driver, which cannot carry bytes.
   const raw = args instanceof Uint8Array || args instanceof ArrayBuffer;
   window.__e2e_calls__[cmd].push(raw ? { bytes: Array.from(new Uint8Array(args)), headers: options?.headers ?? {} } : (args ?? null));
-  if (!(cmd in window.__e2e_mocks__) && !(cmd in answers)) {
+  if (!(cmd in window.__e2e_mocks__) && !(cmd in answers) && !(cmd in computed)) {
     window.__e2e_unmocked__ ??= [];
     window.__e2e_unmocked__.push(cmd);
     throw new Error(`e2e: unmocked command "${cmd}" (args ${JSON.stringify(args)})`);
   }
-  const value = structuredClone(cmd in window.__e2e_mocks__ ? window.__e2e_mocks__[cmd] : answers[cmd]);
+  const value = structuredClone(cmd in window.__e2e_mocks__ ? window.__e2e_mocks__[cmd] : cmd in answers ? answers[cmd] : answerOf(cmd, args));
   // A fixture can make a command fail or wait from the start too (a mock does the same, once the page is loaded).
   if (value?.__e2e_reject__ !== undefined) throw value.__e2e_reject__;
   if (value?.__e2e_hold__) {

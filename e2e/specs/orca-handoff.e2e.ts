@@ -454,7 +454,7 @@ describe("orca handoff", () => {
     const read = await mock("orca_terminal_read", ["$ claude"]);
     await $(`${MAIL.pane} [aria-label="Orca の画面で開く"]`).click();
     await expect($("#orca")).toBeDisplayed();
-    await expect($('#orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new" });
     // The screen reads no history: the pane, out of view, lets its read go.
     await waitForCalls(close);

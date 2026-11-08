@@ -1,5 +1,6 @@
-// The Orca screen (A-6, A-8, A-12, A-16): two panes. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
-// the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). the plus right after the tabs of the tab strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
+// The Orca screen (A-6, A-8, A-12, A-16, A-17): two panes. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
+// the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
+// The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change) and nothing reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
 // and no more once the `orca` command was found missing (the reload button reads again). Only the first read, the screen being shown, the reload button, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
@@ -13,13 +14,17 @@ import type { OrcaStatus } from "./bindings/OrcaStatus";
 import type { OrcaStreamEvent } from "./bindings/OrcaStreamEvent";
 import type { OrcaTerminal } from "./bindings/OrcaTerminal";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
+import type { PaneNode } from "./bindings/PaneNode";
+import type { PaneOp } from "./bindings/PaneOp";
 import { $, tag } from "./dom.js";
 import { CLAUDE_SVG, svgOf } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { initOrcaChat } from "./orca-chat.js";
-import { hideTerminals, initOrcaTerminal, pruneTerminals, showTerminal } from "./orca-terminal.js";
+import { type PaneModel, drawTree, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
+import { applyLocal, focusedTab, forgetPanes, layoutOf, needsSync, panesOf, syncPanes } from "./orca-panes.js";
+import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
 import { setNavCount, show, showError } from "./view.js";
 
@@ -57,11 +62,10 @@ let loading = false;
 let lastTry = 0;
 // The list pane shows the projects, or (the bell pressed) the working agents; the projects come first and the choice is kept in memory.
 let working = false;
-// The project selected (its key; null: none), and its tab selected (a tab's id; null when it has no tabs).
+// The project selected (its key; null: none). Its tab selected is the one shown in the pane of its layout that has the focus (`selectedTab`).
 let projectKey: string | null = null;
-let selectedTab: string | null = null;
-// The tab last selected in each project, which selecting the project goes back to.
-const lastTab = new Map<string, string>();
+// The host element of each pane drawn, by pane id: the terminals are placed in them.
+let paneHosts = new Map<string, HTMLElement>();
 // The order tabs were first seen in, so that a read that reorders the sessions does not move the tabs.
 const seen = new Map<string, number>();
 // The tabs of Orca whose close was asked for and is not answered.
@@ -78,7 +82,6 @@ let streamChannel: { onmessage: (event: OrcaStreamEvent) => void } | null = null
 // What the feed, the bell, the tabs, the header and the notice show now; they are drawn again only when this changes.
 let feedKey = "";
 let bellKey = "";
-let tabsKey = "";
 let headerKey = "";
 let noticeKey = "";
 
@@ -101,7 +104,10 @@ export function elapsed(ms: number, now: number, done: boolean) {
 const isStopped = (r: OrcaRow) => r.group === "done" || r.status === "failed" || r.status === "interrupted";
 
 // The pane of the session this screen shows now: the screen is shown, the window is not hidden, and the session is the selected tab (the side pane of A-9 does not count).
-const viewedPane = () => (shown() && !document.hidden && selectedTab?.startsWith("claude:") ? selectedTab.slice("claude:".length) : null);
+const viewedPane = () => {
+  const tab = selectedTab();
+  return shown() && !document.hidden && tab?.startsWith("claude:") ? tab.slice("claude:".length) : null;
+};
 
 // Takes the rows of a read as the one the count follows (the rows of one read, whatever its scope). The first read of a target is only the base: a notice is made for a row that went from not stopped to stopped,
 // or that first appeared in a later read already stopped (a pane seen stopped before is never new, even after it left the list and came back). A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
@@ -179,19 +185,11 @@ function tabsOf(key: string): Tab[] {
   return tabs.sort((a, b) => seen.get(a.id)! - seen.get(b.id)!);
 }
 
-const selectedTabObj = () => (projectKey === null || selectedTab === null ? null : (tabsOf(projectKey).find((t) => t.id === selectedTab) ?? null));
+// The layout of the selected project's work pane, as Rust answered it (null: no project, or no answer yet).
+const currentLayout = () => (projectKey === null ? null : layoutOf(view?.target ?? null, projectKey));
 
-// The tab selected is one of the project's: when it is gone (its session left Orca's list) the one last selected there, else the first.
-function ensureSelection() {
-  if (projectKey === null) {
-    selectedTab = null;
-    return;
-  }
-  const tabs = tabsOf(projectKey);
-  if (selectedTab !== null && tabs.some((t) => t.id === selectedTab)) return;
-  const last = lastTab.get(projectKey);
-  selectedTab = tabs.find((t) => t.id === last)?.id ?? tabs[0]?.id ?? null;
-}
+// The tab selected: the one shown in the pane that has the focus (null: no project, no answer yet, or no tab).
+const selectedTab = () => focusedTab(currentLayout());
 
 // ---- drawing ----
 
@@ -271,7 +269,7 @@ function rowNode(r: OrcaRow, key: string, now: number) {
   row.dataset.key = key;
   // A row with no pane has no session to read.
   row.disabled = r.paneKey === null;
-  row.setAttribute("aria-pressed", String(r.paneKey !== null && claudeTabId(r.paneKey) === selectedTab && r.projectKey === projectKey));
+  row.setAttribute("aria-pressed", String(r.paneKey !== null && claudeTabId(r.paneKey) === selectedTab() && r.projectKey === projectKey));
   const where = tag("span", "orca-where");
   where.innerHTML = CLAUDE_SVG;
   where.append(worktreeLabel(r));
@@ -339,7 +337,7 @@ function drawFeed() {
   const now = Date.now();
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
-  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh], projectKey, selectedTab, switching, Math.floor(now / 60_000)]);
+  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh], projectKey, selectedTab(), switching, Math.floor(now / 60_000)]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -350,14 +348,14 @@ function drawFeed() {
   if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
 
-function tabNode(t: Tab) {
+function tabNode(t: Tab, selected: boolean) {
   const wrap = tag("div", "orca-tab");
   wrap.dataset.tab = t.id;
   wrap.setAttribute("role", "presentation");
   const select = tag("button", "orca-tab-btn");
   select.type = "button";
   select.setAttribute("role", "tab");
-  select.setAttribute("aria-selected", String(t.id === selectedTab));
+  select.setAttribute("aria-selected", String(selected));
   select.append(statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
   select.onclick = () => selectTab(t.id);
   // The close button is beside the tab, not in it, so that pressing it never selects the tab.
@@ -371,34 +369,54 @@ function tabNode(t: Tab) {
   return wrap;
 }
 
-function drawTabs(tabs: Tab[]) {
-  const key = JSON.stringify([tabs, selectedTab, [...closing]]);
-  if (key === tabsKey) return;
-  tabsKey = key;
-  const box = $("orca-tabs");
-  const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-tab]")?.dataset.tab;
-  box.replaceChildren(...tabs.map(tabNode));
-  if (focused) box.querySelector<HTMLElement>(`[data-tab="${CSS.escape(focused)}"] .orca-tab-btn`)?.focus({ preventScroll: true });
+// The line under a pane's strip that says why it shows no terminal, else null.
+function emptyText(tabs: Tab[], tab: Tab | undefined) {
+  if (started !== null) return null;
+  if (projectKey === null) return "プロジェクトを選んでください";
+  if (tabs.length === 0) return "セッションはありません";
+  return tab?.handle === null ? "このセッションのターミナルはありません" : null;
 }
 
-// The work pane follows the selection: the tab strip (empty with no project), and the terminal of the selected tab, else a line that says why there is none.
+// The tree of the layout for drawing: each pane with the tabs it holds that the list still has (a tab that left shows no more before Rust's next answer), and the one it shows.
+function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled: boolean): TreeModel {
+  if (node.kind === "split") return { kind: "split", direction: node.direction, children: node.children.map((c) => treeOf(c, tabs, focus, plusDisabled)) };
+  const mine = node.tabs.flatMap((id) => tabs.find((t) => t.id === id) ?? []);
+  const tab = mine.find((t) => t.id === node.selected);
+  const pane: PaneModel = {
+    id: node.id,
+    key: JSON.stringify([mine, node.selected, [...closing]]),
+    tabs: () => mine.map((t) => tabNode(t, t.id === node.selected)),
+    focused: node.id === focus,
+    empty: emptyText(tabs, tab),
+    terminal: !!tab?.handle,
+    plusDisabled,
+  };
+  return { kind: "pane", pane };
+}
+
+// The work pane follows the layout: the panes with their tab strips (a project with no layout yet, or with no tab, has one empty pane), and the terminal of the tab selected in each pane, else a line that says why there is none.
 function drawWork() {
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
-  drawTabs(tabs);
-  const tab = selectedTabObj();
-  const waiting = started !== null;
-  const empty = waiting ? null : projectKey === null ? "プロジェクトを選んでください" : tabs.length === 0 ? "セッションはありません" : tab?.handle === null ? "このセッションのターミナルはありません" : null;
-  $("orca-empty").hidden = empty === null;
-  $("orca-empty").textContent = empty ?? "";
-  $<HTMLButtonElement>("orca-plus").disabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
+  syncLayout(tabs);
+  const layout = currentLayout();
+  const plusDisabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
+  const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, plusDisabled } };
+  paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled) : empty);
   drawStarted();
 }
 
-// Shows the terminal of the selected tab while the screen is shown: streamed from a saved environment, mirrored on this machine.
+// Shows the terminal of the tab selected in each pane while the screen is shown: streamed from a saved environment, mirrored on this machine.
 function syncTerminal() {
-  const tab = shown() ? selectedTabObj() : null;
-  if (!tab?.handle) return hideTerminals();
-  showTerminal(tab.id, { kind: streaming() ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: view?.target ?? null });
+  const layout = shown() ? currentLayout() : null;
+  const tabs = projectKey === null ? [] : tabsOf(projectKey);
+  const placements: Placement[] = [];
+  for (const pane of panesOf(layout?.root ?? null)) {
+    const tab = tabs.find((t) => t.id === pane.selected);
+    const host = paneHosts.get(pane.id);
+    if (tab?.handle && host) placements.push({ id: tab.id, source: { kind: streaming() ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: view?.target ?? null }, host });
+  }
+  if (placements.length === 0) return hideTerminals();
+  showTerminals(placements, selectedTab());
 }
 
 // The note of a start that was answered: it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started.
@@ -433,7 +451,6 @@ function adopt(read: OrcaOverview) {
   }
   if (view.state === "ready") forgetGone();
   claimStarted();
-  ensureSelection();
 }
 
 // A start that gave a pane key or a handle waits for its tab: a Claude session's row is matched by either (as the side pane of A-9 does), a terminal by its handle.
@@ -456,11 +473,10 @@ function claimStarted() {
   if (row || terminal || !same) started = null;
 }
 
-// The order and the last selection of tabs that are no longer anywhere are dropped, so they do not pile up.
+// The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
   const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => plainTabId(t.handle))]);
   for (const id of seen.keys()) if (!live.has(id)) seen.delete(id);
-  for (const [key, id] of lastTab) if (!live.has(id)) lastTab.delete(key);
 }
 
 function draw() {
@@ -572,8 +588,7 @@ export function openInOrca(paneKey: string | null) {
   const row = paneKey === null ? null : (view?.rows.find((r) => r.paneKey === paneKey) ?? null);
   if (row) {
     projectKey = row.projectKey;
-    selectedTab = claudeTabId(row.paneKey!);
-    lastTab.set(row.projectKey, selectedTab);
+    chooseTab(claudeTabId(row.paneKey!));
   }
   setScreen("orca");
 }
@@ -581,7 +596,7 @@ export function openInOrca(paneKey: string | null) {
 // The Orca screen is shown: what was read stays on screen while a new read is on its way.
 export function showOrca() {
   show("orca");
-  headerKey = noticeKey = feedKey = bellKey = tabsKey = "";
+  headerKey = noticeKey = feedKey = bellKey = "";
   draw();
   // The environments are read when the screen is shown, whatever read is on its way.
   load("full", true);
@@ -599,8 +614,8 @@ async function chooseTarget(environment: string | null) {
   }
   // The sessions and worktrees belong to the old target, and so do the terminals' screens and the stream.
   projectKey = null;
-  selectedTab = null;
   started = null;
+  forgetPanes();
   pruneTerminals(() => false);
   view = { ...view, target: environment, rows: [], worktrees: [], projects: [], hosts: [], terminals: [] };
   forgetNotices();
@@ -659,15 +674,45 @@ export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], c
 function selectProject(key: string) {
   started = null;
   projectKey = key;
-  selectedTab = null;
-  ensureSelection();
   draw();
 }
 
 function selectTab(id: string) {
   started = null;
-  selectedTab = id;
-  if (projectKey !== null) lastTab.set(projectKey, id);
+  chooseTab(id);
+  draw();
+}
+
+// Asks Rust for the layout of the selected project, with `op` when the user did something to it; the screen is drawn again once it answers. A failure shows its message.
+function runPaneOp(op: PaneOp | null) {
+  const key = projectKey;
+  if (key === null || view === null) return;
+  const target = view.target;
+  const ids = () => (view !== null && view.target === target && view.state !== "missing" && !switching ? tabsOf(key).map((t) => t.id) : null);
+  syncPanes(target, key, ids, op, () => draw(), showError);
+}
+
+// Asks for the layout when the project's tabs are not the ones it was asked for with (the first time, and each time a tab came or went); only a read that worked says what the tabs are.
+function syncLayout(tabs: Tab[]) {
+  if (projectKey === null || view === null || view.state !== "ready" || switching) return;
+  if (needsSync(view.target, projectKey, tabs.map((t) => t.id))) runPaneOp(null);
+}
+
+// Selects the tab in its pane and gives the pane the focus, at once and then in Rust (nothing is asked when it is the selected tab already).
+function chooseTab(id: string) {
+  if (projectKey === null || view === null || selectedTab() === id) return;
+  const op: PaneOp = { kind: "select", tab: id };
+  applyLocal(view.target, projectKey, op);
+  runPaneOp(op);
+}
+
+// The pane was pressed: it takes the focus.
+function focusPane(pane: string) {
+  const layout = currentLayout();
+  if (projectKey === null || view === null || layout === null || layout.focus === pane || !panesOf(layout.root).some((p) => p.id === pane)) return;
+  const op: PaneOp = { kind: "focus", pane };
+  applyLocal(view.target, projectKey, op);
+  runPaneOp(op);
   draw();
 }
 
@@ -682,15 +727,13 @@ function selectRow(r: OrcaRow) {
 // Makes the row's project and tab the selection (the row has a pane key).
 function pickRow(r: OrcaRow) {
   projectKey = r.projectKey;
-  selectedTab = claudeTabId(r.paneKey!);
-  lastTab.set(r.projectKey, selectedTab);
+  chooseTab(claudeTabId(r.paneKey!));
 }
 
 // Makes the plain terminal's project and tab the selection.
 function pickTerminal(t: OrcaTerminal) {
   projectKey = t.projectKey;
-  selectedTab = plainTabId(t.handle);
-  lastTab.set(t.projectKey, selectedTab);
+  chooseTab(plainTabId(t.handle));
 }
 
 // Closes a tab. An Orca terminal is closed in Orca, and the list is read at once: it leaves the tabs then, and a failure keeps the tab and shows the message.
@@ -712,6 +755,13 @@ async function closeTab(tab: Tab) {
   if (!streaming()) load(clockScope(), true);
 }
 
+// The menu of a tab (the right button): it splits its pane, which takes the tab to a new pane at its right or below it. A pane with one tab cannot be split, so it has no menu.
+function openTabMenu(anchor: Element, tab: string, pane: string) {
+  if ((panesOf(currentLayout()?.root ?? null).find((p) => p.id === pane)?.tabs.length ?? 0) < 2) return;
+  const item = (label: string, edge: "right" | "bottom") => ({ label, color: "var(--accent)", current: false, pick: () => runPaneOp({ kind: "move", tab, pane, edge }) });
+  openMenu(anchor, [item("右に分割", "right"), item("下に分割", "bottom")]);
+}
+
 // The plus (A-16): a menu of "Claude を起動" and "ターミナルを開く", which start in a worktree of the project (or SSH host) selected in the list pane.
 function openStartMenu(anchor: Element) {
   if (view === null || projectKey === null) return;
@@ -731,14 +781,14 @@ function chooseWorktree(anchor: Element, kind: StartKind) {
 async function start(kind: StartKind, path: string) {
   if (busy || startWaits() || view === null) return;
   const target = view.target;
-  const [from, tab] = [projectKey, selectedTab];
+  const [from, tab] = [projectKey, selectedTab()];
   busy = true;
   started = null;
   draw();
   try {
     const launched = await invoke(kind === "claude" ? "orca_start" : "orca_terminal_create", { path, environment: target });
     // A selection made while the start was on its way is not left for the new tab.
-    if (projectKey === from && selectedTab === tab) {
+    if (projectKey === from && selectedTab() === tab) {
       started = { kind, paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
       // A streamed list that held the new tab before this reply came is matched now; no event is to come for it.
       claimStarted();
@@ -769,6 +819,14 @@ export function initOrca() {
     draw();
   };
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
-  $("orca-plus").onclick = (e) => openStartMenu(e.currentTarget as Element);
+  initPaneTree($("orca-panes"), {
+    plus: (anchor, pane) => {
+      focusPane(pane);
+      openStartMenu(anchor);
+    },
+    focus: focusPane,
+    move: (tab, pane, edge) => runPaneOp({ kind: "move", tab, pane, edge }),
+    menu: openTabMenu,
+  });
   load("full");
 }
