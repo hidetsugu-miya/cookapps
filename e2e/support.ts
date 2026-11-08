@@ -7,6 +7,7 @@ import type { Claude } from "../ts/bindings/Claude";
 import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
+import type { FontSettings } from "../ts/bindings/FontSettings";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
@@ -635,6 +636,33 @@ export const chooseTheme = (slot: "light" | "dark", name: string) =>
     onceId(),
     slot,
     name,
+  );
+
+// A-20: what `font_settings` and `font_settings_set` answer: the first values, with the given places changed.
+export const fontSettings = (parts: Partial<FontSettings> = {}): FontSettings => ({
+  mail: { family: null, size: 14, ghostty: false },
+  calendar: { family: null, size: 14, ghostty: false },
+  todoList: { family: null, size: 14, ghostty: false },
+  todoWork: { family: null, size: 14, ghostty: false },
+  slack: { family: null, size: 14, ghostty: false },
+  orcaList: { family: null, size: 14, ghostty: false },
+  orcaWork: { family: null, size: 13, ghostty: true },
+  editor: { family: null, size: 12.5, ghostty: false },
+  ...parts,
+});
+
+// Chooses `value` in the select `id`, as the user does (value, then change); the real WebView's select popup is not driven.
+export const chooseOption = (id: string, value: string) =>
+  browser.execute(
+    (once, i, v) => {
+      if (!window.__e2e_once__(once)) return;
+      const select = document.getElementById(i) as HTMLSelectElement;
+      select.value = v;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    onceId(),
+    id,
+    value,
   );
 
 // Chooses which appearance the terminals draw (A-15) in the select of the settings, as the user does.

@@ -6,7 +6,7 @@
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
 // An image pasted or dropped on a terminal shown is put in its worktree and its path is typed in that terminal (A-10).
-// Ghostty's settings (A-13) set the font and the keys that send a text; Shift+Enter sends a newline for Claude Code's input.
+// Ghostty's settings (A-13) set the font and the keys that send a text, and the font chosen in the settings (A-20) takes the place of their font; Shift+Enter sends a newline for Claude Code's input.
 // A URL in the text, or in an OSC 8 link, opens in the default browser with ⌘+click (the left button, no Ctrl or Alt), as in Orca's own terminal; the click on a URL without ⌘ selects as before.
 // A program that asks for the clipboard with OSC 52 (Claude Code does, for what is selected while it tracks the mouse) gets it, as in Orca's own terminal: a write is made only from what the terminal prints live, not from a snapshot or a mirror frame drawn again, and a read ("?") is never answered.
 // The request comes by the stream, outside a user action, and WKWebView may refuse the write: the latest text is then held, and the next copy event (⌘C or Edit > Copy) puts it in the clipboard when xterm.js has no selection.
@@ -98,6 +98,8 @@ const listening = new WeakSet<HTMLElement>();
 let onError: (e: unknown) => void = () => {};
 // Ghostty's settings as imported, null before the first import.
 let settings: TerminalSettings | null = null;
+// The font chosen in the settings for the terminals (A-20): the family (null is the app's own) and the size; null follows Ghostty's settings.
+let chosenFont: { family: string | null; size: number } | null = null;
 // The colors of the theme chosen for each appearance, and which of them is drawn (A-14, A-15); null before they are read.
 export type ThemeColors = { light: TerminalColors; dark: TerminalColors; appearance: Appearance };
 let themeColors: ThemeColors | null = null;
@@ -139,8 +141,9 @@ function xtermTheme(): Record<string, unknown> {
   return theme;
 }
 
-// The font and colors of the terminals: Ghostty's families come first, then the app's own.
+// The font and colors of the terminals. A font chosen in the settings (A-20) is the family and the size, with the app's own after it; without one, Ghostty's families come first, then the app's own.
 function termOptions() {
+  if (chosenFont) return { fontFamily: [...(chosenFont.family ? [JSON.stringify(chosenFont.family)] : []), DEFAULT_FONT].join(", "), fontSize: chosenFont.size, fontWeight: "normal", theme: xtermTheme() };
   const families = [...(settings?.fontFamilies ?? []).map((name) => JSON.stringify(name)), DEFAULT_FONT];
   return { fontFamily: families.join(", "), fontSize: settings?.fontSize ?? DEFAULT_FONT_SIZE, fontWeight: settings?.fontThicken ? THICK_WEIGHT : "normal", theme: xtermTheme() };
 }
@@ -172,6 +175,14 @@ function drawLook() {
   const options = termOptions();
   for (const { term } of instances.values()) Object.assign(term.options, options);
   for (const { host } of shownInstances()) if (host) host.style.background = termColors()?.background ?? "";
+}
+
+// Draws the font chosen in the settings in every terminal (null: Ghostty's family and size, A-13).
+export function applyTerminalFont(next: { family: string | null; size: number } | null) {
+  chosenFont = next;
+  drawLook();
+  // The size of a cell changed with the font: the terminals shown fit their panes again.
+  fitSoon();
 }
 
 // Draws the theme chosen in the settings (A-14, A-15) in every terminal (null: the colors of Ghostty's settings, else the app's own).

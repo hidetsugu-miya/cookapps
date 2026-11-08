@@ -4,6 +4,7 @@ pub mod calendar;
 pub mod claude;
 pub mod claude_auth;
 mod disk_cache;
+pub mod fonts;
 pub mod ghostty;
 pub mod gmail;
 pub mod image_senders;
@@ -309,6 +310,9 @@ pub fn run() {
             orca_files::orca_file_write,
             orca_files::editor_settings,
             orca_files::editor_settings_set,
+            fonts::font_settings,
+            fonts::font_families,
+            fonts::font_settings_set,
             ghostty::ghostty_saved,
             ghostty::ghostty_import,
             orca_theme::terminal_themes,

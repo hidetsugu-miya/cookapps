@@ -73,6 +73,18 @@ const answers = {
   orca_terminal_input: null,
   orca_open_url: null,
   orca_attach_image: "/work/example/.orca/drops/image.png",
+  // A-20: the fonts of the screens are read at the start (the first values), and this Mac has three families; a spec that presses a select mocks `font_settings_set`.
+  font_settings: {
+    mail: { family: null, size: 14, ghostty: false },
+    calendar: { family: null, size: 14, ghostty: false },
+    todoList: { family: null, size: 14, ghostty: false },
+    todoWork: { family: null, size: 14, ghostty: false },
+    slack: { family: null, size: 14, ghostty: false },
+    orcaList: { family: null, size: 14, ghostty: false },
+    orcaWork: { family: null, size: 13, ghostty: true },
+    editor: { family: null, size: 12.5, ghostty: false },
+  },
+  font_families: ["Hiragino Sans", "Menlo", "Times New Roman"],
   // A-18: the files and the editor are answered by the spec that opens them; the settings are read at the start.
   editor_settings: { autosaveMs: 1000 },
   orca_stream_open: null,
