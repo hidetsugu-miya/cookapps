@@ -4,6 +4,9 @@ updates:
     directory: /src-tauri
     schedule:
       interval: weekly
+    # A release only a few days old can still be yanked or fixed; the nightly run implements the update with nobody watching, so wait 7 days.
+    cooldown:
+      default-days: 7
     # The Rust side of the wdio Tauri plugin; keep it at the same version as @wdio/tauri-* of npm by hand (Dependabot cannot group across ecosystems).
     groups:
       wdio:
@@ -13,6 +16,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # A release only a few days old can still be yanked or fixed; the nightly run implements the update with nobody watching, so wait 7 days.
+    cooldown:
+      default-days: 7
     # The npm wdio packages must move together: a PR that mixes v9 and v10 breaks the types and the E2E.
     groups:
       wdio:
@@ -23,6 +29,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # A release only a few days old can still be yanked or fixed; the nightly run implements the update with nobody watching, so wait 7 days.
+    cooldown:
+      default-days: 7
     ignore:
       # The Rust version is pinned by hand in rust-toolchain.toml, mise.toml and CI.
       - dependency-name: dtolnay/rust-toolchain
