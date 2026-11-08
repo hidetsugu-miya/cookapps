@@ -1224,14 +1224,12 @@ describe("orca: projects", () => {
     const sessionOf = (id: string) => $(`#orca-feed .orca-session[data-session="${id}"]`);
     const pressedSessions = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].filter((r) => r.getAttribute("aria-pressed") === "true").map((r) => r.dataset.session));
 
-    it("puts an arrow at the left of each project that has sessions, and none at the others, with every project closed at first", async () => {
+    it("puts an arrow at the left of each project that has a session tab, and none at the others (example-web's one session has no pane, and the host's number comes with no row of it), with every project closed at first", async () => {
       await openOrca(withTerminals());
       expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-arrow")].map((a) => [a.dataset.key, a.getAttribute("aria-expanded")]))).toEqual([
         ["arrow:proj_example-app", "false"],
         ["arrow:proj_example-api", "false"],
-        ["arrow:proj_example-web", "false"],
         ["arrow:proj_example-lib", "false"],
-        ["arrow:ssh:s1", "false"],
       ]);
       await expect($("#orca-feed .orca-session")).not.toExist();
       // The arrow is at the left of the row, before the status icon.

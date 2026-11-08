@@ -322,7 +322,8 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   if (sessions > 0) row.append(tag("span", "orca-n", String(sessions)));
   row.onclick = () => selectProject(key);
   wrap.append(row);
-  if (sessions === 0) return wrap;
+  // A row of Orca with no pane gives no tab, so the arrow follows the tabs and not the number.
+  if (!tabsOf(key).some((t) => t.kind !== "file")) return wrap;
   const open = key === projectKey && !collapsed;
   const arrow = tag("button", "icon-btn orca-arrow");
   arrow.type = "button";
