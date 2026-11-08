@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.52.1
+
+The plus of the Orca work pane sits right after the last tab, not at the right end of the tab bar (#190). When the tabs overflow, they scroll and the plus stays in the bar.
+
 ## v0.52.0
 
 T-6: a subtask in the detail of a task moves as a row of the task list does (#125). On hover its row shows the grip and the buttons to move it to another project or out of its parent, and the grip drags it onto a project or under another subtask of the same detail.
