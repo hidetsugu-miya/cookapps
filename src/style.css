@@ -764,11 +764,21 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-n { margin-left: auto; font-size: 12px; font-weight: normal; color: var(--muted); }
 .orca-sec { margin: 12px 10px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-/* A-12, A-16: the bar of 32px has the tab strip, as wide as its tabs and scrolling when they overflow, with the plus right after it; the terminal of the selected tab is under it. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
-#orca-tabbar { flex: none; display: flex; align-items: center; height: 32px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }
-#orca-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; padding: 0 0 0 6px; overflow-x: auto; overflow-y: hidden; }
-#orca-plus { flex: none; width: 24px; height: 24px; margin: 0 6px 0 2px; color: var(--ink-soft); }
-#orca-plus svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+/* A-12, A-16, A-17: the work pane is a tree of splits and panes. The bar of 32px of a pane has the tab strip, as wide as its tabs and scrolling when they overflow, with the plus right after it; the terminal of the selected tab is under it. The pane that has the focus shows an accent line on its bar while there are several panes. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
+#orca-panes { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
+#orca-panes > * { flex: 1; min-width: 0; min-height: 0; }
+.orca-split-node { display: flex; min-width: 0; min-height: 0; }
+.orca-split-node[data-direction="row"] { flex-direction: row; }
+.orca-split-node[data-direction="column"] { flex-direction: column; }
+.orca-split-node > * { flex: 1 1 0; min-width: 0; min-height: 0; }
+.orca-split-node[data-direction="row"] > * + * { border-left: 1px solid var(--line); }
+.orca-split-node[data-direction="column"] > * + * { border-top: 1px solid var(--line); }
+.orca-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#orca-panes[data-multi="true"] .orca-pane[data-focused="true"] .orca-tabbar { box-shadow: inset 0 2px 0 var(--accent); }
+.orca-tabbar { flex: none; display: flex; align-items: center; height: 32px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }
+.orca-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; padding: 0 0 0 6px; overflow-x: auto; overflow-y: hidden; }
+.orca-plus { flex: none; width: 24px; height: 24px; margin: 0 6px 0 2px; color: var(--ink-soft); }
+.orca-plus svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .orca-tab { flex: none; display: flex; align-items: center; height: 28px; max-width: 220px; min-width: 0; box-sizing: border-box; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
 .orca-tab:has(.orca-tab-btn[aria-selected="true"]) { border-color: var(--line); background: var(--surface); color: inherit; }
 .orca-tab-btn { display: flex; align-items: center; gap: 6px; min-width: 0; height: 100%; padding: 0 2px 0 10px; border: 0; border-radius: 8px 0 0 0; background: transparent; font: inherit; font-size: 12px; color: inherit; text-align: left; cursor: pointer; }
@@ -778,11 +788,13 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 .orca-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .orca-tab-close { flex: none; width: 20px; height: 20px; margin-right: 4px; color: inherit; }
 .orca-tab-close svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-#orca-empty { margin: 0; padding: 48px 24px; }
+#orca-panes .orca-empty { margin: 0; padding: 48px 24px; }
 #orca-started { margin: 16px 24px 0; }
 /* The terminal fills the pane. The box of each tab has a definite size (it is placed in the pane), so that the fit counts the rows that show and the bottom is not cut off. */
-#orca-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+#orca-panes .orca-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .orca-term-box { position: absolute; inset: 8px 8px 8px 12px; }
+.orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }
+body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
 .ho-chat-status:not(:empty) { padding: 8px 16px 0; background: var(--bar); }
 .ho-chat { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 8px; background: var(--bar); }
 .ho-older { display: block; margin: 0 auto 12px; height: 28px; padding: 0 12px; font: inherit; font-size: 12px; }

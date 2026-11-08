@@ -1,6 +1,6 @@
 //! A-12: the Orca screen's stream from a saved environment (a paired server), over the end-to-end encrypted WebSocket of A-7.
 //! The list of sessions comes from `session.tabs.subscribeAll`, named by `worktree.ps`, which is read once when the connection opens and again only when a worktree it did not list appears;
-//! the terminal of the tab shown comes from `terminal.subscribe` (its size from `terminal.updateViewport`), and the keys go with `terminal.send`.
+//! each terminal shown (one for each pane of the work pane, A-17) comes from its own `terminal.subscribe` (its size from `terminal.updateViewport`), and the keys go with `terminal.send`.
 //! Nothing is read again by a clock. None of these methods is a public interface of Orca: they were checked on Orca 1.4.249. Nothing is stored here.
 //! What a terminal prints and the keys typed are in no log line, no error text and no event but the terminal's own channel; a token is in none at all.
 
@@ -59,7 +59,7 @@ pub enum OrcaStreamEvent {
     Status { live: bool, message: String },
 }
 
-/// What the stream tells the screen about the terminal shown.
+/// What the stream tells the screen about a terminal shown.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -92,7 +92,7 @@ pub struct OrcaViewport {
     pub rows: u16,
 }
 
-/// The terminal the screen shows.
+/// A terminal the screen shows.
 pub struct Watch {
     handle: String,
     /// The pane's size, which the terminal is fitted to.
@@ -103,11 +103,13 @@ pub struct Watch {
 
 /// What the screen asks of the stream that runs.
 pub enum StreamCommand {
-    /// Show this terminal (it is subscribed in place of the one before), or none.
-    Terminal(Option<Watch>),
-    /// The pane's size changed while the terminal fits it.
-    Viewport(OrcaViewport),
-    /// Keys typed into the terminal `handle` (the first field); they go only while it is the terminal subscribed, and the answer says whether Orca took them.
+    /// Show this terminal (it is subscribed in place of one shown before with the same handle); the others shown stay.
+    Terminal(Watch),
+    /// Show the terminal `handle` no more: it is unsubscribed.
+    TerminalClose(String),
+    /// The pane's size changed (the terminal `handle`, the first field, fits it).
+    Viewport(String, OrcaViewport),
+    /// Keys typed into the terminal `handle` (the first field); they go only while it is a terminal subscribed, and the answer says whether Orca took them.
     Input(String, String, oneshot::Sender<Result<(), String>>),
     Close,
 }
@@ -346,10 +348,9 @@ fn new_client() -> String {
 
 // ---- the stream ----
 
-/// The terminal subscribed on the connection, by the request that subscribed it.
+/// The request that subscribed a terminal on the connection.
 struct Subscribed {
     request_id: String,
-    handle: String,
 }
 
 /// What one connection holds.
@@ -361,17 +362,18 @@ struct Connection {
     tabs_request: String,
     tabs: HashMap<String, Value>,
     loaded: bool,
-    terminal: Option<Subscribed>,
-    /// The terminal the screen shows has ended on this connection (not listed, refused or ended by Orca), so a change of the list does not subscribe it again; a terminal shown anew, or the next connection, does.
-    ended: bool,
+    /// The terminals subscribed on the connection, by handle.
+    terminals: HashMap<String, Subscribed>,
+    /// The terminals the screen shows that have ended on this connection (not listed, refused or ended by Orca), so a change of the list does not subscribe them again; a terminal shown anew, or the next connection, does.
+    ended: HashSet<String>,
     inputs: HashMap<String, oneshot::Sender<Result<(), String>>>,
     last_list: Option<OrcaStreamEvent>,
 }
 
-/// What lasts over the connections: the name of the viewer and the terminal the screen shows.
+/// What lasts over the connections: the name of the viewer and the terminals the screen shows, by handle.
 struct Stream {
     client: String,
-    watch: Option<Watch>,
+    watches: HashMap<String, Watch>,
     attempt: usize,
 }
 
@@ -379,44 +381,64 @@ const NOT_CONNECTED: &str = "接続先につながっていません";
 const OTHER_TERMINAL: &str = "入力したターミナルは表示されていないため、送りませんでした";
 
 impl Connection {
-    /// Subscribes the terminal the screen shows, once the list is held (it must be a terminal of it).
+    /// Subscribes the terminals the screen shows that are not subscribed, once the list is held (each must be a terminal of it).
     async fn subscribe(&mut self, link: &mut WsLink, stream: &mut Stream) -> Result<(), String> {
-        let Some(watch) = stream.watch.as_mut() else {
-            return Ok(());
-        };
-        if !self.loaded || self.terminal.is_some() || self.ended {
+        if !self.loaded {
             return Ok(());
         }
-        if !has_terminal(&self.tabs, &watch.handle) {
-            self.ended = true;
-            (watch.sink)(OrcaTermEvent::Ended {
-                message: "このターミナルは一覧にありません".into(),
-            });
-            return Ok(());
+        let mut handles: Vec<String> = stream.watches.keys().cloned().collect();
+        handles.sort();
+        for handle in handles {
+            if self.terminals.contains_key(&handle) || self.ended.contains(&handle) {
+                continue;
+            }
+            let watch = stream
+                .watches
+                .get_mut(&handle)
+                .expect("a handle just listed");
+            if !has_terminal(&self.tabs, &handle) {
+                self.ended.insert(handle);
+                (watch.sink)(OrcaTermEvent::Ended {
+                    message: "このターミナルは一覧にありません".into(),
+                });
+                continue;
+            }
+            let request_id = link
+                .send_request(
+                    "terminal.subscribe",
+                    subscribe_params(&handle, &stream.client, watch.viewport),
+                )
+                .await
+                .map_err(reason_of)?;
+            self.terminals.insert(handle, Subscribed { request_id });
         }
-        let request_id = link
-            .send_request(
-                "terminal.subscribe",
-                subscribe_params(&watch.handle, &stream.client, watch.viewport),
-            )
-            .await
-            .map_err(reason_of)?;
-        self.terminal = Some(Subscribed {
-            request_id,
-            handle: watch.handle.clone(),
-        });
         Ok(())
     }
 
-    /// Ends the subscription of the terminal, so Orca gives the terminal back its own size. The answer is not waited for.
-    async fn unsubscribe(&mut self, link: &mut WsLink, client: &str) -> Result<(), String> {
-        if let Some(sub) = self.terminal.take() {
+    /// Ends the subscription of the terminal `handle`, so Orca gives the terminal back its own size. The answer is not waited for.
+    async fn unsubscribe(
+        &mut self,
+        link: &mut WsLink,
+        client: &str,
+        handle: &str,
+    ) -> Result<(), String> {
+        if let Some(sub) = self.terminals.remove(handle) {
             link.send_request(
                 "terminal.unsubscribe",
-                unsubscribe_params(&sub.handle, client, &sub.request_id),
+                unsubscribe_params(handle, client, &sub.request_id),
             )
             .await
             .map_err(reason_of)?;
+        }
+        Ok(())
+    }
+
+    /// Ends every subscription.
+    async fn unsubscribe_all(&mut self, link: &mut WsLink, client: &str) -> Result<(), String> {
+        let mut handles: Vec<String> = self.terminals.keys().cloned().collect();
+        handles.sort();
+        for handle in handles {
+            self.unsubscribe(link, client, &handle).await?;
         }
         Ok(())
     }
@@ -478,7 +500,12 @@ impl Connection {
                 self.ps = ps;
                 self.publish(link, sink).await?;
             }
-        } else if self.terminal.as_ref().is_some_and(|t| t.request_id == id) {
+        } else if let Some(handle) = self
+            .terminals
+            .iter()
+            .find(|(_, t)| t.request_id == id)
+            .map(|(handle, _)| handle.clone())
+        {
             let event = match result_of(response) {
                 Ok(result) => term_event_of(&result),
                 Err(e) => Some(OrcaTermEvent::Ended {
@@ -487,14 +514,17 @@ impl Connection {
             };
             if let Some(event) = event {
                 if matches!(event, OrcaTermEvent::Ended { .. }) {
-                    self.terminal = None;
-                    self.ended = true;
+                    self.terminals.remove(&handle);
+                    self.ended.insert(handle.clone());
                 }
-                let taken = stream.watch.as_mut().is_some_and(|w| (w.sink)(event));
+                let taken = stream
+                    .watches
+                    .get_mut(&handle)
+                    .is_some_and(|w| (w.sink)(event));
                 if !taken {
                     // The screen is gone: the terminal is let go.
-                    stream.watch = None;
-                    self.unsubscribe(link, &stream.client).await?;
+                    stream.watches.remove(&handle);
+                    self.unsubscribe(link, &stream.client, &handle).await?;
                 }
             }
         } else if let Some(reply) = self.inputs.remove(id) {
@@ -517,46 +547,57 @@ impl Connection {
         match command {
             None | Some(StreamCommand::Close) => return Ok(false),
             Some(StreamCommand::Terminal(watch)) => {
-                self.unsubscribe(link, &stream.client).await?;
-                stream.watch = watch;
-                self.ended = false;
+                let handle = watch.handle.clone();
+                self.unsubscribe(link, &stream.client, &handle).await?;
+                self.ended.remove(&handle);
+                stream.watches.insert(handle, watch);
                 self.subscribe(link, stream).await?;
             }
-            Some(StreamCommand::Viewport(viewport)) => {
-                if let Some(watch) = stream.watch.as_mut() {
+            Some(StreamCommand::TerminalClose(handle)) => {
+                stream.watches.remove(&handle);
+                self.ended.remove(&handle);
+                self.unsubscribe(link, &stream.client, &handle).await?;
+            }
+            Some(StreamCommand::Viewport(handle, viewport)) => {
+                if let Some(watch) = stream.watches.get_mut(&handle) {
                     watch.viewport = viewport;
-                    if self.terminal.is_some() {
+                    if self.terminals.contains_key(&handle) {
                         // The answer is of no use: a size Orca does not take leaves the terminal as it was.
                         link.send_request(
                             "terminal.updateViewport",
-                            viewport_params(&watch.handle, &stream.client, viewport),
+                            viewport_params(&handle, &stream.client, viewport),
                         )
                         .await
                         .map_err(reason_of)?;
                     }
                 }
             }
-            Some(StreamCommand::Input(handle, text, reply)) => match &self.terminal {
-                // Keys typed into another terminal (the screen showed another tab meanwhile) never reach this one.
-                Some(sub) if sub.handle != handle => {
-                    let _ = reply.send(Err(OTHER_TERMINAL.into()));
+            Some(StreamCommand::Input(handle, text, reply)) => {
+                match (
+                    self.terminals.contains_key(&handle),
+                    stream.watches.get(&handle),
+                ) {
+                    (true, watch) => {
+                        // The terminal fits its pane, so every send claims the pane's size, as Orca's own screen does.
+                        let viewport = watch.map(|w| w.viewport);
+                        let id = link
+                            .send_request(
+                                "terminal.send",
+                                input_params(&handle, &text, &stream.client, viewport),
+                            )
+                            .await
+                            .map_err(reason_of)?;
+                        self.inputs.insert(id, reply);
+                    }
+                    // Keys typed into a terminal that is no longer shown (the screen showed another meanwhile) never reach it.
+                    (false, None) => {
+                        let _ = reply.send(Err(OTHER_TERMINAL.into()));
+                    }
+                    (false, Some(_)) => {
+                        let _ = reply.send(Err(NOT_CONNECTED.into()));
+                    }
                 }
-                Some(sub) => {
-                    // The terminal fits the pane, so every send claims the pane's size, as Orca's own screen does.
-                    let viewport = stream.watch.as_ref().map(|w| w.viewport);
-                    let id = link
-                        .send_request(
-                            "terminal.send",
-                            input_params(&sub.handle, &text, &stream.client, viewport),
-                        )
-                        .await
-                        .map_err(reason_of)?;
-                    self.inputs.insert(id, reply);
-                }
-                None => {
-                    let _ = reply.send(Err(NOT_CONNECTED.into()));
-                }
-            },
+            }
         }
         Ok(true)
     }
@@ -584,8 +625,8 @@ async fn serve(
         tabs_request,
         tabs: HashMap::new(),
         loaded: false,
-        terminal: None,
-        ended: false,
+        terminals: HashMap::new(),
+        ended: HashSet::new(),
         inputs: HashMap::new(),
         last_list: None,
     };
@@ -595,7 +636,7 @@ async fn serve(
             command = commands.recv() => {
                 if !connection.on_command(command, link, stream).await? {
                     // Best effort: closing the socket ends the subscriptions anyway.
-                    let _ = connection.unsubscribe(link, &stream.client).await;
+                    let _ = connection.unsubscribe_all(link, &stream.client).await;
                     return Ok(());
                 }
             }
@@ -621,7 +662,7 @@ async fn run_loop<F, Fut>(
 {
     let mut stream = Stream {
         client,
-        watch: None,
+        watches: HashMap::new(),
         attempt: 0,
     };
     loop {
@@ -643,9 +684,14 @@ async fn run_loop<F, Fut>(
                 () = sleep_until(until) => break,
                 command = commands.recv() => match command {
                     None | Some(StreamCommand::Close) => return,
-                    Some(StreamCommand::Terminal(watch)) => stream.watch = watch,
-                    Some(StreamCommand::Viewport(viewport)) => {
-                        if let Some(watch) = stream.watch.as_mut() {
+                    Some(StreamCommand::Terminal(watch)) => {
+                        stream.watches.insert(watch.handle.clone(), watch);
+                    }
+                    Some(StreamCommand::TerminalClose(handle)) => {
+                        stream.watches.remove(&handle);
+                    }
+                    Some(StreamCommand::Viewport(handle, viewport)) => {
+                        if let Some(watch) = stream.watches.get_mut(&handle) {
                             watch.viewport = viewport;
                         }
                     }
@@ -721,7 +767,7 @@ pub async fn orca_stream_close(state: tauri::State<'_, OrcaStream>) -> Result<()
     Ok(())
 }
 
-/// Shows the terminal `handle`: its screen and what it prints go through `channel`. The terminal fits the pane's size, `viewport`.
+/// Shows the terminal `handle` (as another pane's terminal may be shown too): its screen and what it prints go through `channel`. The terminal fits the pane's size, `viewport`.
 #[tauri::command]
 pub async fn orca_stream_terminal(
     state: tauri::State<'_, OrcaStream>,
@@ -730,31 +776,37 @@ pub async fn orca_stream_terminal(
     channel: tauri::ipc::Channel<OrcaTermEvent>,
 ) -> Result<(), String> {
     check_handle(&handle)?;
-    state.send(StreamCommand::Terminal(Some(Watch {
+    state.send(StreamCommand::Terminal(Watch {
         handle,
         viewport,
         sink: Box::new(move |event| channel.send(event).is_ok()),
-    })))
+    }))
 }
 
-/// Shows no terminal: the one shown is unsubscribed, and Orca gives it back its own size.
+/// Shows the terminal `handle` no more: it is unsubscribed, and Orca gives it back its own size.
 #[tauri::command]
-pub async fn orca_stream_terminal_close(state: tauri::State<'_, OrcaStream>) -> Result<(), String> {
+pub async fn orca_stream_terminal_close(
+    state: tauri::State<'_, OrcaStream>,
+    handle: String,
+) -> Result<(), String> {
+    check_handle(&handle)?;
     // With no stream there is nothing to let go.
-    let _ = state.send(StreamCommand::Terminal(None));
+    let _ = state.send(StreamCommand::TerminalClose(handle));
     Ok(())
 }
 
-/// The new size of the pane, for the terminal shown.
+/// The new size of the pane of the terminal `handle`.
 #[tauri::command]
 pub async fn orca_stream_viewport(
     state: tauri::State<'_, OrcaStream>,
+    handle: String,
     viewport: OrcaViewport,
 ) -> Result<(), String> {
-    state.send(StreamCommand::Viewport(viewport))
+    check_handle(&handle)?;
+    state.send(StreamCommand::Viewport(handle, viewport))
 }
 
-/// Types `text` into the terminal `handle`, as it is (no Enter is added), only while it is the terminal shown.
+/// Types `text` into the terminal `handle`, as it is (no Enter is added), only while it is a terminal shown.
 #[tauri::command]
 pub async fn orca_stream_input(
     state: tauri::State<'_, OrcaStream>,
@@ -1257,10 +1309,7 @@ mod tests {
                 rows: 30,
             },
         );
-        commands
-            .send(StreamCommand::Terminal(Some(shown)))
-            .ok()
-            .unwrap();
+        commands.send(StreamCommand::Terminal(shown)).ok().unwrap();
         let subscribe = server.request().await;
         assert_eq!(subscribe["method"], "terminal.subscribe");
         assert_eq!(
@@ -1289,10 +1338,13 @@ mod tests {
 
         // A new size of the pane.
         commands
-            .send(StreamCommand::Viewport(OrcaViewport {
-                cols: 120,
-                rows: 40,
-            }))
+            .send(StreamCommand::Viewport(
+                "term_c".into(),
+                OrcaViewport {
+                    cols: 120,
+                    rows: 40,
+                },
+            ))
             .ok()
             .unwrap();
         let resize = server.request().await;
@@ -1336,7 +1388,7 @@ mod tests {
             assert_eq!(answer.await.unwrap().is_ok(), ok);
         }
 
-        // Keys typed into another terminal than the one shown are refused without a request (the next request is the read below).
+        // Keys typed into a terminal that is not shown are refused without a request (the next request is the read below).
         let (reply, answer) = oneshot::channel();
         commands
             .send(StreamCommand::Input("term_s".into(), "\r".into(), reply))
@@ -1354,8 +1406,11 @@ mod tests {
             .await;
         streamed(&mut server, &tabs_id, update).await;
 
-        // No terminal shown: it is let go by the request that subscribed it.
-        commands.send(StreamCommand::Terminal(None)).ok().unwrap();
+        // Shown no more: it is let go by the request that subscribed it.
+        commands
+            .send(StreamCommand::TerminalClose("term_c".into()))
+            .ok()
+            .unwrap();
         let unsubscribe = server.request().await;
         assert_eq!(unsubscribe["method"], "terminal.unsubscribe");
         assert_eq!(
@@ -1363,13 +1418,13 @@ mod tests {
             unsubscribe_params("term_c", "cookapps-test", sub_id.as_str().unwrap())
         );
 
-        // Keys with no terminal shown are refused without a request.
+        // Keys into a terminal shown no more are refused without a request.
         let (reply, answer) = oneshot::channel();
         commands
             .send(StreamCommand::Input("term_c".into(), "x".into(), reply))
             .ok()
             .unwrap();
-        assert_eq!(answer.await.unwrap(), Err(NOT_CONNECTED.to_owned()));
+        assert_eq!(answer.await.unwrap(), Err(OTHER_TERMINAL.to_owned()));
 
         commands.send(StreamCommand::Close).ok().unwrap();
         tokio::time::timeout(Duration::from_secs(5), task)
@@ -1397,10 +1452,7 @@ mod tests {
         ));
         // Asked for before the list came: it waits for the list.
         let (gone, gone_events) = watch("term_gone", OrcaViewport { cols: 80, rows: 24 });
-        commands
-            .send(StreamCommand::Terminal(Some(gone)))
-            .ok()
-            .unwrap();
+        commands.send(StreamCommand::Terminal(gone)).ok().unwrap();
         let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
         let request = server.request().await;
         server
@@ -1421,10 +1473,7 @@ mod tests {
 
         // Orca refuses the subscription: the terminal ends with Orca's code, and no unsubscribe follows.
         let (shown, term) = watch("term_s", OrcaViewport { cols: 80, rows: 24 });
-        commands
-            .send(StreamCommand::Terminal(Some(shown)))
-            .ok()
-            .unwrap();
+        commands.send(StreamCommand::Terminal(shown)).ok().unwrap();
         let subscribe = server.request().await;
         assert_eq!(subscribe["method"], "terminal.subscribe");
         assert_eq!(
@@ -1449,10 +1498,7 @@ mod tests {
                 rows: 30,
             },
         );
-        commands
-            .send(StreamCommand::Terminal(Some(anew)))
-            .ok()
-            .unwrap();
+        commands.send(StreamCommand::Terminal(anew)).ok().unwrap();
         let subscribe = server.request().await;
         assert_eq!(subscribe["method"], "terminal.subscribe");
         assert_eq!(
@@ -1474,6 +1520,152 @@ mod tests {
             .unwrap();
         assert_eq!(answer.await.unwrap(), Err(NOT_CONNECTED.to_owned()));
         commands.send(StreamCommand::Close).ok().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn several_terminals_are_shown_at_once_each_with_its_own_size_and_keys() {
+        let (listener, url) = bind().await;
+        let desktop = Desktop::new([43; 32]);
+        let key = desktop.public_key_b64();
+        let (commands, receiver) = unbounded_channel();
+        let task = tokio::spawn(run_loop(
+            move || {
+                let (url, key) = (url.clone(), key.clone());
+                async move { WsLink::connect(&url, "device-token", &key).await }
+            },
+            receiver,
+            |_| {},
+            "cookapps-test".into(),
+        ));
+        let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
+        let request = server.request().await;
+        server
+            .send(json!({"id": request["id"], "ok": true, "result": ps()}))
+            .await;
+        let tabs = server.request().await;
+        streamed(
+            &mut server,
+            &tabs["id"],
+            snapshots(&[(
+                "r1::/w/a",
+                vec![
+                    claude_tab("t1", Some("term_c"), "working", 2_000),
+                    shell_tab("t2", "term_s", "zsh"),
+                ],
+            )]),
+        )
+        .await;
+        // Two terminals shown: each is subscribed with its own size, and neither lets the other go.
+        let (first, first_events) = watch(
+            "term_c",
+            OrcaViewport {
+                cols: 100,
+                rows: 30,
+            },
+        );
+        let (second, second_events) = watch("term_s", OrcaViewport { cols: 60, rows: 20 });
+        commands.send(StreamCommand::Terminal(first)).ok().unwrap();
+        let one = server.request().await;
+        assert_eq!(one["method"], "terminal.subscribe");
+        assert_eq!(one["params"]["terminal"], "term_c");
+        commands.send(StreamCommand::Terminal(second)).ok().unwrap();
+        let two = server.request().await;
+        assert_eq!(two["method"], "terminal.subscribe");
+        assert_eq!(two["params"]["terminal"], "term_s");
+        assert_eq!(two["params"]["viewport"], json!({"cols": 60, "rows": 20}));
+        // What each prints goes to its own screen.
+        streamed(
+            &mut server,
+            &one["id"],
+            json!({"type": "data", "chunk": "c"}),
+        )
+        .await;
+        streamed(
+            &mut server,
+            &two["id"],
+            json!({"type": "data", "chunk": "s"}),
+        )
+        .await;
+        assert_eq!(
+            until(&first_events, 1).await,
+            [OrcaTermEvent::Output { data: "c".into() }]
+        );
+        assert_eq!(
+            until(&second_events, 1).await,
+            [OrcaTermEvent::Output { data: "s".into() }]
+        );
+        // A size is for one terminal.
+        commands
+            .send(StreamCommand::Viewport(
+                "term_s".into(),
+                OrcaViewport { cols: 70, rows: 25 },
+            ))
+            .ok()
+            .unwrap();
+        let resize = server.request().await;
+        assert_eq!(resize["method"], "terminal.updateViewport");
+        assert_eq!(resize["params"]["terminal"], "term_s");
+        assert_eq!(
+            resize["params"]["viewport"],
+            json!({"cols": 70, "rows": 25})
+        );
+        // Keys go to the terminal they were typed in, with its own size.
+        let (reply, answer) = oneshot::channel();
+        commands
+            .send(StreamCommand::Input("term_c".into(), "a".into(), reply))
+            .ok()
+            .unwrap();
+        let send = server.request().await;
+        assert_eq!(
+            send["params"],
+            input_params(
+                "term_c",
+                "a",
+                "cookapps-test",
+                Some(OrcaViewport {
+                    cols: 100,
+                    rows: 30
+                })
+            )
+        );
+        server
+            .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": true}}}))
+            .await;
+        assert!(answer.await.unwrap().is_ok());
+        // One shown no more is let go and the other stays: its keys still go.
+        commands
+            .send(StreamCommand::TerminalClose("term_c".into()))
+            .ok()
+            .unwrap();
+        let unsubscribe = server.request().await;
+        assert_eq!(unsubscribe["method"], "terminal.unsubscribe");
+        assert_eq!(
+            unsubscribe["params"],
+            unsubscribe_params("term_c", "cookapps-test", one["id"].as_str().unwrap())
+        );
+        let (reply, answer) = oneshot::channel();
+        commands
+            .send(StreamCommand::Input("term_s".into(), "b".into(), reply))
+            .ok()
+            .unwrap();
+        let send = server.request().await;
+        assert_eq!(send["method"], "terminal.send");
+        server
+            .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": true}}}))
+            .await;
+        assert!(answer.await.unwrap().is_ok());
+        // Closing the stream lets the terminal still shown go.
+        commands.send(StreamCommand::Close).ok().unwrap();
+        let last = server.request().await;
+        assert_eq!(last["method"], "terminal.unsubscribe");
+        assert_eq!(
+            last["params"],
+            unsubscribe_params("term_s", "cookapps-test", two["id"].as_str().unwrap())
+        );
         tokio::time::timeout(Duration::from_secs(5), task)
             .await
             .unwrap()

@@ -19,6 +19,8 @@ import type { HandoffKind } from "./bindings/HandoffKind";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaViewport } from "./bindings/OrcaViewport";
+import type { PaneLayout } from "./bindings/PaneLayout";
+import type { PaneOp } from "./bindings/PaneOp";
 import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
@@ -228,14 +230,16 @@ export interface Commands {
   // A-12: the stream of the saved environment `environment`: the list goes to `channel` (an `OrcaStreamEvent` at a time) until it is closed or another is opened; only one runs.
   orca_stream_open: { args: { environment: string; channel: unknown }; result: null };
   orca_stream_close: { args: undefined; result: null };
-  // A-12: shows the terminal `handle` of the stream: its screen and its bytes go to `channel` (an `OrcaTermEvent` at a time). The terminal fits the pane's size, `viewport`.
+  // A-12, A-17: shows the terminal `handle` of the stream (the terminals of the other panes stay shown): its screen and its bytes go to `channel` (an `OrcaTermEvent` at a time). The terminal fits the pane's size, `viewport`.
   orca_stream_terminal: { args: { handle: string; viewport: OrcaViewport; channel: unknown }; result: null };
-  // A-12: shows no terminal; Orca gives the one shown back its own size.
-  orca_stream_terminal_close: { args: undefined; result: null };
-  // A-12: the new size of the pane, for the terminal shown.
-  orca_stream_viewport: { args: { viewport: OrcaViewport }; result: null };
-  // A-12: types `text` into the terminal shown as it is (no Enter is added); the answer says whether Orca took it.
+  // A-12, A-17: shows the terminal `handle` no more; Orca gives it back its own size.
+  orca_stream_terminal_close: { args: { handle: string }; result: null };
+  // A-12, A-17: the new size of the pane of the terminal `handle`.
+  orca_stream_viewport: { args: { handle: string; viewport: OrcaViewport }; result: null };
+  // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it.
   orca_stream_input: { args: { handle: string; text: string }; result: null };
+  // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
+  orca_panes: { args: { environment: string | null; project: string; tabs: string[]; op: PaneOp | null }; result: PaneLayout };
   // A-13: the import of Ghostty's settings saved last, null before the first one.
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.

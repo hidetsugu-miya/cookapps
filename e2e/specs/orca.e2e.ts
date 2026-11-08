@@ -1,4 +1,6 @@
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
+import type { PaneLayout } from "../../ts/bindings/PaneLayout";
+import type { PaneNode } from "../../ts/bindings/PaneNode";
 import {
   boot,
   callsOf,
@@ -83,12 +85,12 @@ const classOf = (selector: string) => browser.execute((s) => document.querySelec
 // Whether the sidebar icon of Orca is marked as working (the yellow icon that fades; the fade itself is not tested).
 const marked = () => browser.execute(() => document.getElementById("nav-orca")!.classList.contains("working"));
 const pressed = (repo: string) => rowOf(repo).getAttribute("aria-pressed");
-const selectedTab = () => $('#orca-tabs [role="tab"][aria-selected="true"]');
-const tabTitles = () => textsOf("#orca-tabs .orca-tab-title");
-const tabOf = (id: string) => $(`#orca-tabs [data-tab="${id}"]`);
+const selectedTab = () => $('.orca-tabs [role="tab"][aria-selected="true"]');
+const tabTitles = () => textsOf(".orca-tabs .orca-tab-title");
+const tabOf = (id: string) => $(`.orca-tabs [data-tab="${id}"]`);
 const claudeTab = (repo: string) => `claude:tab_${repo}:leaf_1`;
 // The text of the terminal shown (the terminals of the other tabs stay, hidden).
-const screenText = () => $("#orca-term .orca-term-box:not([hidden]) .xterm-rows").getText();
+const screenText = () => $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText();
 
 async function pickMenu(label: string) {
   for (const item of await $$(".menu button")) {
@@ -104,10 +106,14 @@ async function pickProject(repo: string) {
 }
 
 // The page's own press of the plus and of an item of its menu (the driver's click focuses the button after the page's handler ran, which no real press does).
-async function pressPlus() {
-  await browser.execute((id) => {
-    if (window.__e2e_once__(id)) document.getElementById("orca-plus")!.click();
-  }, onceId());
+async function pressPlus(selector = ".orca-plus") {
+  await browser.execute(
+    (id, plus) => {
+      if (window.__e2e_once__(id)) document.querySelector<HTMLElement>(plus)!.click();
+    },
+    onceId(),
+    selector,
+  );
   await expect($('.menu[role="menu"]')).toBeDisplayed();
 }
 async function pickItem(label: string) {
@@ -462,22 +468,22 @@ describe("orca", () => {
   it("has the list on the left with a header of 32px level with the tab bar, the divider, and an empty work pane at the start", async () => {
     await openOrca();
     const box = await browser.execute(() => {
-      const r = (id: string) => document.getElementById(id)!.getBoundingClientRect();
+      const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
       return {
-        listRight: r("orca-list").right,
-        splitLeft: r("orca-split").left,
-        splitRight: r("orca-split").right,
-        workLeft: r("orca-work").left,
-        share: r("orca-list").width / r("orca").width,
-        header: r("orca-header").height,
-        tabs: r("orca-tabbar").height,
-        tabsRight: r("orca-tabs").right,
-        barRight: r("orca-tabbar").right,
-        plusLeft: r("orca-plus").left,
-        plusRight: r("orca-plus").right,
-        plusHeight: r("orca-plus").height,
-        headerTop: r("orca-header").top,
-        tabsTop: r("orca-tabbar").top,
+        listRight: r("#orca-list").right,
+        splitLeft: r("#orca-split").left,
+        splitRight: r("#orca-split").right,
+        workLeft: r("#orca-work").left,
+        share: r("#orca-list").width / r("#orca").width,
+        header: r("#orca-header").height,
+        tabs: r(".orca-tabbar").height,
+        tabsRight: r(".orca-tabs").right,
+        barRight: r(".orca-tabbar").right,
+        plusLeft: r(".orca-plus").left,
+        plusRight: r(".orca-plus").right,
+        plusHeight: r(".orca-plus").height,
+        headerTop: r("#orca-header").top,
+        tabsTop: r(".orca-tabbar").top,
         buttons: [...document.querySelectorAll("#orca-header button")].map((b) => b.getBoundingClientRect().height),
       };
     });
@@ -495,18 +501,18 @@ describe("orca", () => {
     const order = await browser.execute(() => [...document.querySelectorAll("#orca-header button")].map((b) => b.id));
     expect(order).toEqual(["orca-bell", "orca-refresh"]);
     // The plus is in the tab bar, after the strip of tabs; it is a menu button, and waits for a project.
-    await expect($("#orca-plus")).toHaveAttribute("aria-label", "セッションを始める");
-    await expect($("#orca-plus")).toHaveAttribute("aria-haspopup", "menu");
-    await expect($("#orca-plus")).toBeDisabled();
+    await expect($(".orca-plus")).toHaveAttribute("aria-label", "セッションを始める");
+    await expect($(".orca-plus")).toHaveAttribute("aria-haspopup", "menu");
+    await expect($(".orca-plus")).toBeDisabled();
     expect(box.plusHeight).toBe(24);
     expect(box.plusLeft).toBeGreaterThanOrEqual(box.tabsRight - 1);
     expect(box.plusRight).toBeLessThanOrEqual(box.barRight);
-    const barOrder = await browser.execute(() => [...document.getElementById("orca-tabbar")!.children].map((e) => e.id));
-    expect(barOrder).toEqual(["orca-tabs", "orca-plus"]);
+    const barOrder = await browser.execute(() => [...document.querySelector(".orca-tabbar")!.children].map((e) => e.className));
+    expect(barOrder).toEqual(["orca-tabs", "icon-btn orca-plus"]);
     // Nothing selected: no tab, no terminal, and a line that says what to do.
-    expect(await count("#orca-tabs .orca-tab")).toBe(0);
-    await expect($("#orca-term")).not.toBeDisplayed();
-    await expect($("#orca-empty")).toHaveText("プロジェクトを選んでください");
+    expect(await count(".orca-tabs .orca-tab")).toBe(0);
+    await expect($(".orca-term")).not.toBeDisplayed();
+    await expect($(".orca-empty")).toHaveText("プロジェクトを選んでください");
     // No composer and no history on this screen.
     expect(await count("#orca-input")).toBe(0);
     expect(await count("#orca-chat")).toBe(0);
@@ -519,7 +525,7 @@ describe("orca", () => {
     await select("example-app");
     expect(await pressed("example-app")).toBe("true");
     await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
-    await expect($("#orca-term")).toBeDisplayed();
+    await expect($(".orca-term")).toBeDisplayed();
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_example-app" });
     await browser.waitUntil(async () => (await screenText()).includes("Write the docs"), { timeoutMsg: "the screen of the session never showed" });
     // This machine has no stream, and no history is read.
@@ -541,20 +547,20 @@ describe("orca", () => {
   it("says a session with no terminal has none, and reads nothing for it", async () => {
     await openWorking(orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { handle: null })], worktrees()));
     await select("example-app");
-    await expect($("#orca-empty")).toHaveText("このセッションのターミナルはありません");
-    await expect($("#orca-term")).not.toBeDisplayed();
+    await expect($(".orca-empty")).toHaveText("このセッションのターミナルはありません");
+    await expect($(".orca-term")).not.toBeDisplayed();
     await browser.pause(1500);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
   });
 
   it("is enabled by a selected project, and opens a menu of 「Claude を起動」 and 「ターミナルを開く」", async () => {
     await openOrca();
-    await expect($("#orca-plus")).toBeDisabled();
+    await expect($(".orca-plus")).toBeDisabled();
     await pickProject("example-api");
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
     await pressPlus();
     expect(await textsOf('.menu[role="menu"] button')).toEqual([CLAUDE, TERMINAL]);
-    await expect($("#orca-plus")).toHaveAttribute("aria-expanded", "true");
+    await expect($(".orca-plus")).toHaveAttribute("aria-expanded", "true");
     // Escape closes it, and nothing was started.
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
@@ -573,7 +579,7 @@ describe("orca", () => {
     expect(await callsOf(create)).toHaveLength(0);
     // Orca named neither its pane nor its terminal: nothing can be followed, and the plus starts another.
     await expect($("#orca-started")).toHaveText("セッションを始めました。Orca の画面で開けます。");
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
     await plus("example-app", CLAUDE);
     expect(await waitForCalls(start, 2)).toEqual([
       { path: "/work/example-api", environment: null },
@@ -657,7 +663,7 @@ describe("orca", () => {
     expect(await waitForCalls(create)).toEqual([{ path: "/home/dev/b", environment: null }]);
     // A host with no worktree: the dialog says there is none, and nothing starts.
     await $('#orca-feed .orca-project[data-key="ssh:s2"]').click();
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
     await pressPlus();
     await pickItem(CLAUDE);
     await expect($(".orca-dest-pop")).toHaveText(expect.stringContaining("該当する worktree がありません"));
@@ -672,7 +678,7 @@ describe("orca", () => {
     await waitForCalls(start);
     await expect($("#error")).toHaveText("Worktree not found");
     await expect($("#orca-started")).not.toBeDisplayed();
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
     await expect($('#orca-feed .orca-project[data-key="proj_example-app"]')).toHaveAttribute("aria-pressed", "true");
     const create = await mock("orca_terminal_create", rejects("起動先の worktree が見つかりません。一覧を読み直してください"));
     await pressPlus();
@@ -680,7 +686,7 @@ describe("orca", () => {
     await waitForCalls(create);
     await expect($("#error")).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
     await expect($("#orca-started")).not.toBeDisplayed();
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
   });
 
   it("disables the plus while a launch or a new terminal is on its way", async () => {
@@ -688,17 +694,17 @@ describe("orca", () => {
     const start = await mock("orca_start", holds);
     await plus("example-app", CLAUDE);
     await waitForCalls(start);
-    await expect($("#orca-plus")).toBeDisabled();
+    await expect($(".orca-plus")).toBeDisabled();
     await release(start, noPane);
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
     expect(await callsOf(start)).toHaveLength(1);
     const create = await mock("orca_terminal_create", holds);
     await pressPlus();
     await pickItem(TERMINAL);
     await waitForCalls(create);
-    await expect($("#orca-plus")).toBeDisabled();
+    await expect($(".orca-plus")).toBeDisabled();
     await release(create, noPane);
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
     expect(await callsOf(create)).toHaveLength(1);
   });
 
@@ -710,7 +716,7 @@ describe("orca", () => {
     await plus("example-api", CLAUDE);
     await waitForCalls(start);
     await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
-    await expect($("#orca-plus")).toBeDisabled();
+    await expect($(".orca-plus")).toBeDisabled();
     // The project stays selected while the session is waited for.
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     // The row appears in a later read: its project and tab are selected, and its terminal shows.
@@ -720,8 +726,8 @@ describe("orca", () => {
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new" });
     await expect($("#orca-started")).not.toBeDisplayed();
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
-    await expect($('#orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($(".orca-plus")).toBeEnabled();
     expect(await callsOf(start)).toHaveLength(1);
   });
 
@@ -734,7 +740,7 @@ describe("orca", () => {
     await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
     await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
     await $("#orca-refresh").click();
-    await expect($('#orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     await expect($("#orca-started")).not.toBeDisplayed();
   });
 
@@ -745,7 +751,7 @@ describe("orca", () => {
     await plus("example-api", TERMINAL);
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: null }]);
     await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
-    await expect($("#orca-plus")).toBeDisabled();
+    await expect($(".orca-plus")).toBeDisabled();
     // The terminal appears in a later read: it is a plain terminal, so its tab is selected and its screen shows.
     const read = await mock("orca_terminal_read", ["$ pwd"]);
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [createdTerminal()] }));
@@ -753,8 +759,8 @@ describe("orca", () => {
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new_sh" });
     await expect($("#orca-started")).not.toBeDisplayed();
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
-    await expect($('#orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($(".orca-plus")).toBeEnabled();
     expect(await callsOf(create)).toHaveLength(1);
   });
 
@@ -767,7 +773,7 @@ describe("orca", () => {
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: "Studio" }]);
     await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
     await sendStream(streamList(sample(), worktrees(), [createdTerminal()]));
-    await expect($('#orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     await expect($("#orca-started")).not.toBeDisplayed();
   });
 
@@ -781,9 +787,9 @@ describe("orca", () => {
     // The list with the new terminal comes first, and no event comes after the reply.
     await sendStream(streamList(sample(), worktrees(), [createdTerminal()]));
     await release(create, created);
-    await expect($('#orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     await expect($("#orca-started")).not.toBeDisplayed();
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
   });
 
   it("drops the wait for a terminal of a saved environment after 30 seconds, with no streamed list", async () => {
@@ -794,11 +800,11 @@ describe("orca", () => {
     await plus("example-api", TERMINAL);
     await waitForCalls(create);
     await expect($("#orca-started")).toBeDisplayed();
-    await expect($("#orca-plus")).toBeDisabled();
+    await expect($(".orca-plus")).toBeDisabled();
     const later = new Date(Date.now() + 31_000);
     await setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
     await expect($("#orca-started")).not.toBeDisplayed();
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
   });
 
   it("drops the wait when the user selects another project", async () => {
@@ -811,7 +817,7 @@ describe("orca", () => {
     // Choosing a project drops the wait, and a row that appears later does not take the selection.
     await $('#orca-feed .orca-project[data-key="proj_example-app"]').click();
     await expect($("#orca-started")).not.toBeDisplayed();
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
     await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
     await $("#orca-refresh").click();
     await waitForCalls("orca_overview");
@@ -826,7 +832,7 @@ describe("orca", () => {
     await waitForCalls(create);
     await $('#orca-feed .orca-project[data-key="proj_example-app"]').click();
     await release(create, created);
-    await expect($("#orca-plus")).toBeEnabled();
+    await expect($(".orca-plus")).toBeEnabled();
     await expect($("#orca-started")).not.toBeDisplayed();
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [createdTerminal()] }));
     await $("#orca-refresh").click();
@@ -841,7 +847,7 @@ describe("orca", () => {
     await expect($("#orca-status")).toHaveText("未インストール");
     expect(await classOf("#orca-status")).toContain("off");
     await expect($("#orca-notice")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
-    await expect($("#orca-plus")).toBeDisabled();
+    await expect($(".orca-plus")).toBeDisabled();
     // The start and showing the screen read; the clock (every 10 seconds on this screen) reads no more.
     const before = (await callsOf("orca_overview")).length;
     await browser.pause(12_000);
@@ -882,7 +888,7 @@ describe("orca", () => {
     await expect($("#orca-target")).toHaveText("このマシン に接続中");
     // The sessions of the old target are gone, with the selection, and the stream of the old target ends.
     await waitForCount("#orca-feed .orca-row", 1);
-    await expect($("#orca-empty")).toHaveText("プロジェクトを選んでください");
+    await expect($(".orca-empty")).toHaveText("プロジェクトを選んでください");
     await waitForCalls("orca_stream_close");
   });
 
@@ -891,7 +897,7 @@ describe("orca", () => {
     await mock("orca_terminal_read", ["$ first frame"]);
     await select("example-app");
     await browser.waitUntil(async () => (await screenText()).includes("first frame"), { timeoutMsg: "the first frame never showed" });
-    await browser.execute(() => document.querySelector("#orca-term .orca-term-box:not([hidden])")!.setAttribute("data-mark", "same"));
+    await browser.execute(() => document.querySelector(".orca-term .orca-term-box:not([hidden])")!.setAttribute("data-mark", "same"));
     // The clock reads again within 10 seconds (the first read of this screen was at its opening).
     const overview = await mock("orca_overview", orcaOverview([...sample(), orcaRow("example-new", "main", "Fresh", { minutes: 1 })], worktrees()));
     await waitForCalls(overview);
@@ -899,21 +905,21 @@ describe("orca", () => {
     expect(await pressed("example-app")).toBe("true");
     await expect($("#orca")).toBeDisplayed();
     await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
-    await expect($('#orca-term .orca-term-box[data-mark="same"]')).toBeDisplayed();
+    await expect($('.orca-term .orca-term-box[data-mark="same"]')).toBeDisplayed();
   });
 
   it("drops the tab of a session that is gone, with its terminal", async () => {
     await openWorking();
     await select("example-app");
-    await expect($("#orca-term")).toBeDisplayed();
+    await expect($(".orca-term")).toBeDisplayed();
     await mock("orca_overview", orcaOverview([orcaRow("example-api", "main", "Fix the parser")], worktrees()));
     await $("#orca-refresh").click();
     await waitForCount("#orca-feed .orca-row", 1);
     // The project is still selected, with no session left in it.
-    await expect($("#orca-empty")).toHaveText("セッションはありません");
-    expect(await count("#orca-tabs .orca-tab")).toBe(0);
-    await expect($("#orca-term")).not.toBeDisplayed();
-    expect(await count("#orca-term .orca-term-box")).toBe(0);
+    await expect($(".orca-empty")).toHaveText("セッションはありません");
+    expect(await count(".orca-tabs .orca-tab")).toBe(0);
+    await expect($(".orca-term")).not.toBeDisplayed();
+    expect(await count(".orca-term .orca-term-box")).toBe(0);
   });
 
   it("reads everything when the screen is shown or reloaded, and the clock only the agents of this machine", async () => {
@@ -1051,8 +1057,8 @@ describe("orca: projects", () => {
     await expect($("#orca-feed .orca-row")).not.toExist();
     // The status label is at the bottom of the list pane, under the list.
     const place = await browser.execute(() => {
-      const r = (id: string) => document.getElementById(id)!.getBoundingClientRect();
-      return { listBottom: r("orca-list").bottom, feedBottom: r("orca-feed").bottom, statusTop: r("orca-status").top, statusBottom: r("orca-status").bottom };
+      const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      return { listBottom: r("#orca-list").bottom, feedBottom: r("#orca-feed").bottom, statusTop: r("#orca-status").top, statusBottom: r("#orca-status").bottom };
     });
     expect(place.statusTop).toBeGreaterThanOrEqual(place.feedBottom - 1);
     expect(place.statusBottom).toBeLessThanOrEqual(place.listBottom + 1);
@@ -1066,7 +1072,7 @@ describe("orca: projects", () => {
     // Its row is a project like the others: it can be selected.
     await project("lost-host").click();
     await expect(project("lost-host")).toHaveAttribute("aria-pressed", "true");
-    await expect($("#orca-empty")).toHaveText("セッションはありません");
+    await expect($(".orca-empty")).toHaveText("セッションはありません");
   });
 
   it("does not draw the list again when only the time of activity of a project moved", async () => {
@@ -1136,17 +1142,17 @@ describe("orca: projects", () => {
     await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
     // The Claude session first, then the shell of Orca; a tab has its title only.
     expect(await tabTitles()).toEqual(["Write the docs", "zsh"]);
-    expect(await count("#orca-tabs .orca-tab-sub")).toBe(0);
+    expect(await count(".orca-tabs .orca-tab-sub")).toBe(0);
     await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
-    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-tabs .orca-ic")].map((i) => [i.dataset.status, i.getAttribute("aria-label")]))).toEqual([
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-tabs .orca-ic")].map((i) => [i.dataset.status, i.getAttribute("aria-label")]))).toEqual([
       ["working", "作業中"],
       ["done", "起動中"],
     ]);
     // A Claude session is a terminal too.
-    await expect($("#orca-term")).toBeDisplayed();
+    await expect($(".orca-term")).toBeDisplayed();
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_example-app" });
     await tabOf("orca:term_example-app_zsh").$(".orca-tab-btn").click();
-    await expect($("#orca-term")).toBeDisplayed();
+    await expect($(".orca-term")).toBeDisplayed();
     await project("example-api").click();
     await expect(selectedTab()).toHaveText(expect.stringContaining("Fix the parser"));
     await project("example-app").click();
@@ -1156,10 +1162,10 @@ describe("orca: projects", () => {
   // Where the last tab, the plus and the bar end, and whether the strip of tabs scrolls.
   const edges = () =>
     browser.execute(() => {
-      const r = (id: string) => document.getElementById(id)!.getBoundingClientRect();
-      const lastTab = [...document.querySelectorAll("#orca-tabs .orca-tab")].pop()!.getBoundingClientRect();
-      const tabs = document.getElementById("orca-tabs")!;
-      return { lastRight: lastTab.right, plusLeft: r("orca-plus").left, plusRight: r("orca-plus").right, barRight: r("orca-tabbar").right, scrolls: tabs.scrollWidth > tabs.clientWidth };
+      const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      const lastTab = [...document.querySelectorAll(".orca-tabs .orca-tab")].pop()!.getBoundingClientRect();
+      const tabs = document.querySelector(".orca-tabs")!;
+      return { lastRight: lastTab.right, plusLeft: r(".orca-plus").left, plusRight: r(".orca-plus").right, barRight: r(".orca-tabbar").right, scrolls: tabs.scrollWidth > tabs.clientWidth };
     });
 
   it("puts the plus right after the last tab", async () => {
@@ -1180,17 +1186,17 @@ describe("orca: projects", () => {
     expect(many.scrolls).toBe(true);
     expect(many.plusRight).toBeLessThanOrEqual(many.barRight);
     expect(many.barRight - many.plusRight).toBeLessThanOrEqual(8);
-    await expect($("#orca-plus")).toBeDisplayed();
+    await expect($(".orca-plus")).toBeDisplayed();
   });
 
   it("says a project has no session, with the tab strip empty", async () => {
     await openOrca(withTerminals());
     await project("example-idle").click();
-    await expect($("#orca-empty")).toBeDisplayed();
-    await expect($("#orca-empty")).toHaveText("セッションはありません");
-    await expect($("#orca-tabs")).toBeDisplayed();
-    expect(await count("#orca-tabs .orca-tab")).toBe(0);
-    await expect($("#orca-term")).not.toBeDisplayed();
+    await expect($(".orca-empty")).toBeDisplayed();
+    await expect($(".orca-empty")).toHaveText("セッションはありません");
+    await expect($(".orca-tabs")).toBeDisplayed();
+    expect(await count(".orca-tabs .orca-tab")).toBe(0);
+    await expect($(".orca-term")).not.toBeDisplayed();
   });
 
   it("selects the project and the tab of a row of the working view, and keeps the order of the tabs through a read", async () => {
@@ -1225,7 +1231,7 @@ describe("orca: projects", () => {
     ]);
     await mock("orca_overview", orcaOverview(sample().slice(1), worktrees()));
     await $("#orca-refresh").click();
-    await expect($("#orca-empty")).toHaveText("セッションはありません");
+    await expect($(".orca-empty")).toHaveText("セッションはありません");
     expect(await tabTitles()).toEqual([]);
   });
 
@@ -1293,8 +1299,8 @@ describe("orca: projects", () => {
       await browser.waitUntil(async () => (await screenText()).includes("line 199"), { timeoutMsg: "the last line never showed" });
       const box = await browser.execute(() => {
         const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
-        const rows = [...document.querySelectorAll("#orca-term .orca-term-box:not([hidden]) .xterm-rows > div")];
-        return { pane: r("#orca-term").bottom, screen: r("#orca-term .orca-term-box:not([hidden]) .xterm-screen").bottom, last: rows.at(-1)!.getBoundingClientRect().bottom };
+        const rows = [...document.querySelectorAll(".orca-term .orca-term-box:not([hidden]) .xterm-rows > div")];
+        return { pane: r(".orca-term").bottom, screen: r(".orca-term .orca-term-box:not([hidden]) .xterm-screen").bottom, last: rows.at(-1)!.getBoundingClientRect().bottom };
       });
       expect(box.screen).toBeLessThanOrEqual(box.pane + 1);
       expect(box.last).toBeLessThanOrEqual(box.pane + 1);
@@ -1333,7 +1339,7 @@ describe("orca: projects", () => {
       const input = await mock("orca_terminal_input", null);
       await project("example-app").click();
       await tabOf(zsh).$(".orca-tab-btn").click();
-      await $("#orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+      await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
       await browser.keys(["c", "d"]);
       await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "cd", { timeoutMsg: "the keys were not sent" });
       expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_example-app_zsh")).toBe(true);
@@ -1345,7 +1351,7 @@ describe("orca: projects", () => {
       const input = await mock("orca_terminal_input", rejects("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください"));
       await project("example-app").click();
       await tabOf(zsh).$(".orca-tab-btn").click();
-      await $("#orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+      await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
       await browser.keys(["l"]);
       await waitForCalls(input);
       await expect($("#error")).toHaveText("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください");
@@ -1409,7 +1415,7 @@ describe("orca: a saved environment's stream", () => {
     await sendTerm({ kind: "output", data: "\r\nDone." });
     await browser.waitUntil(async () => (await screenText()).includes("Done."), { timeoutMsg: "the output never showed" });
     const input = await mock("orca_stream_input", null);
-    await $("#orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+    await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
     // A digit: the driver gives a letter the keyCode of its character, and xterm.js reads the keyCode of p to z as a function key (y is F10).
     await browser.keys(["1", "Enter"]);
     await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "1\r", { timeoutMsg: "the keys were not sent" });
@@ -1421,7 +1427,7 @@ describe("orca: a saved environment's stream", () => {
     await project("example-app").click();
     await waitForCalls("orca_stream_terminal");
     const input = await mock("orca_stream_input", holds);
-    await $("#orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+    await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
     await browser.keys(["1"]);
     await waitForCalls(input);
     // Typed while the first send is on its way: they wait for it.
@@ -1440,7 +1446,7 @@ describe("orca: a saved environment's stream", () => {
     await project("example-app").click();
     await waitForCalls("orca_stream_terminal");
     const input = await mock("orca_stream_input", rejects("接続先につながっていません"));
-    await $("#orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
+    await $(".orca-term .orca-term-box:not([hidden]) .xterm-screen").click();
     await browser.keys(["y"]);
     await waitForCalls(input);
     await expect($("#error")).toHaveText("接続先につながっていません");
@@ -1578,7 +1584,7 @@ describe("orca: a saved environment's stream", () => {
     await project("example-app").click();
     const [call] = await waitForCalls("orca_stream_terminal");
     const paneRows = viewportOf(call).rows;
-    const rowsDrawn = () => browser.execute(() => document.querySelectorAll("#orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
+    const rowsDrawn = () => browser.execute(() => document.querySelectorAll(".orca-term .orca-term-box:not([hidden]) .xterm-rows > div").length);
     // Showing the pane makes the terminal fit it once more: the ResizeObserver tells (a frame later), and the fit waits FIT_DELAY_MS (50 ms) of ts/orca-terminal.ts. Let that fit pass, or it shrinks the size the snapshot draws.
     await browser.pause(300);
     // The terminal fits the pane, and Orca's size is drawn all the same: another screen of Orca may have taken it.
@@ -1601,40 +1607,40 @@ describe("orca: a saved environment's stream", () => {
     expect(viewportOf(sent).rows).toBe(viewportOf(call).rows);
   });
 
-  it("subscribes another tab with no close, and ends the stream of the terminal when another screen or a hidden window shows", async () => {
+  it("ends the stream of the tab left and subscribes the other, and ends the stream of the terminal when another screen or a hidden window shows", async () => {
     await openStudio(sample(), [orcaTerminal("example-app", "zsh")]);
     await project("example-app").click();
     await waitForCalls("orca_stream_terminal");
     const close = await mock("orca_stream_terminal_close", null);
     const subscribe = await mock("orca_stream_terminal", null);
-    // Another tab: the new subscription lets the old one go, with no close that could come after it.
+    // Another tab: its terminal is subscribed, and the one left is closed by its handle (a close names its terminal, so it ends no other stream).
     await tabOf("orca:term_example-app_zsh").$(".orca-tab-btn").click();
     expect(await waitForCalls(subscribe)).toMatchObject([{ handle: "term_example-app_zsh" }]);
-    expect(await callsOf(close)).toEqual([]);
+    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app" }]);
     // Another screen.
     await $("#nav-mail").click();
-    await waitForCalls(close);
+    await waitForCalls(close, 2);
+    expect((await callsOf(close))[1]).toEqual({ handle: "term_example-app_zsh" });
     // Back on the screen the stream starts again, and a hidden window ends it. Showing the screen reads the list once with the CLI, which holds what the stream sent.
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { ...studioOnly, terminals: [orcaTerminal("example-app", "zsh")] }));
     await $("#nav-orca").click();
     await waitForCalls(subscribe, 2);
     await setWindowHidden(true);
-    await waitForCalls(close, 2);
+    await waitForCalls(close, 3);
     await setWindowHidden(false);
     await waitForCalls(subscribe, 3);
   });
 
-  it("subscribes the next tab with no close when the tab shown leaves the list", async () => {
+  it("ends the stream of the tab that leaves the list and subscribes the next tab", async () => {
     await openStudio();
     await project("example-app").click();
     await waitForCalls("orca_stream_terminal");
     const close = await mock("orca_stream_terminal_close", null);
     const subscribe = await mock("orca_stream_terminal", null);
-    // The Claude row of the tab shown goes and the project keeps a shell: the tab and its terminal are dropped, and the shell's subscription lets the old one go.
+    // The Claude row of the tab shown goes and the project keeps a shell: the tab and its terminal are dropped, with a close of its stream, and the shell is subscribed.
     await sendStream(streamList(sample().slice(1), worktrees(), [orcaTerminal("example-app", "zsh")]));
     expect(await waitForCalls(subscribe)).toMatchObject([{ handle: "term_example-app_zsh" }]);
-    await browser.pause(500);
-    expect(await callsOf(close)).toEqual([]);
+    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app" }]);
   });
 
   it("ends the stream of the terminal when the tab shown leaves the list and no tab is left to show", async () => {
@@ -1643,7 +1649,7 @@ describe("orca: a saved environment's stream", () => {
     await waitForCalls("orca_stream_terminal");
     const close = await mock("orca_stream_terminal_close", null);
     await sendStream(streamList(sample().slice(1), worktrees()));
-    await waitForCalls(close);
+    expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app" }]);
   });
 
   it("closes a session in Orca and leaves the tab to the next list, with no read", async () => {
@@ -1656,7 +1662,7 @@ describe("orca: a saved environment's stream", () => {
     await browser.pause(1500);
     expect(await callsOf(overview)).toEqual([]);
     await sendStream(streamList(sample().slice(1), worktrees()));
-    await expect($("#orca-empty")).toHaveText("セッションはありません");
+    await expect($(".orca-empty")).toHaveText("セッションはありません");
   });
 
   it("ends the stream of the list when the target becomes this machine", async () => {
@@ -1696,7 +1702,7 @@ const look = () =>
       family: style.fontFamily,
       color: style.color,
       weight: span ? getComputedStyle(span).fontWeight : null,
-      pane: getComputedStyle(document.getElementById("orca-term")!).backgroundColor,
+      pane: getComputedStyle(document.querySelector(".orca-term")!).backgroundColor,
     };
   });
 
@@ -1887,7 +1893,7 @@ describe("orca: the terminal colors (A-14, A-15)", () => {
 describe("orca: images on a terminal (A-10)", () => {
   const dropped = (repo: string, name = "shot.png") => `/work/${repo}/.orca/drops/${name}`;
   const shown = ".orca-term-box:not([hidden]) .xterm-helper-textarea";
-  const area = "#orca-term";
+  const area = ".orca-term";
   const inputs = (command: string) => callsOf(command).then((calls) => calls.map((c) => (c as { text: string }).text));
 
   // The screen with the terminal of the project example-app shown: the mirror of this machine, else the stream of Studio.
@@ -2008,7 +2014,7 @@ describe("orca: images on a terminal (A-10)", () => {
 
 describe("orca: links in a terminal (A-8, A-12)", () => {
   const lines = ["$ open", "docs: https://example.com/docs。続きを読む", "see (https://example.org/a)."];
-  const shownBox = "#orca-term .orca-term-box:not([hidden])";
+  const shownBox = ".orca-term .orca-term-box:not([hidden])";
 
   // The centre of `needle` on the screen of the terminal shown (the text of a row is drawn in the DOM).
   const aim = (needle: string) =>
@@ -2116,5 +2122,301 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
     await clickOn("hosts", { metaKey: true });
     expect(await waitForCalls(open)).toEqual([{ url: "file:///etc/hosts" }]);
     await expect($("#error")).toHaveText("開けるのは http か https の URL だけです");
+  });
+});
+
+// A-17: the work pane split into panes. Rust decides what an operation does to the layout (unit tests); here the screen is checked: what it asks of `orca_panes`, and how it draws the layout the answer holds.
+describe("orca: split panes (A-17)", () => {
+  const claude = claudeTab("example-app");
+  const zsh = "orca:term_example-app_zsh";
+  const bash = "orca:term_example-app_bash";
+  const apiTab = claudeTab("example-api");
+  const pane = (id: string, tabs: string[], selected = tabs[0]): PaneNode => ({ kind: "pane", id, tabs, selected });
+  const row = (...children: PaneNode[]): PaneNode => ({ kind: "split", direction: "row", children });
+  const column = (...children: PaneNode[]): PaneNode => ({ kind: "split", direction: "column", children });
+  const layout = (root: PaneNode, focus: string): PaneLayout => ({ root, focus });
+  // example-app has its Claude session and two shells, in that order.
+  const overview = () => orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh"), orcaTerminal("example-app", "bash")] });
+  // Claude and bash on the left, zsh on the right.
+  const saved = () => layout(row(pane("p1", [claude, bash]), pane("p2", [zsh])), "p1");
+  const paneTabs = (id: string) => textsOf(`.orca-pane[data-pane="${id}"] .orca-tab-title`);
+  const moves = async () => (await callsOf("orca_panes")).filter((c) => (c as { op: { kind: string } | null }).op?.kind === "move");
+
+  // The right button on the tab, as the page gets it.
+  const rightClick = (tab: string) =>
+    browser.execute(
+      (id, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`[data-tab="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+      },
+      tab,
+      onceId(),
+    );
+
+  // The pointer's press on the terminal of a pane, as the page gets it (the driver's click on a terminal sends no pointer event).
+  const pressPane = (id: string) =>
+    browser.execute(
+      (paneId, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`.orca-pane[data-pane="${paneId}"] .orca-term .xterm-screen`)!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true }));
+      },
+      id,
+      onceId(),
+    );
+
+  // The pointer's press on a tab, its move to a point of the pane `to`, and (unless `hold`) its release. `at` is the share of the pane's body from its left and from its top; a negative top is its tab strip.
+  const drag = (tab: string, to: string, at: [number, number], hold = false) =>
+    browser.execute(
+      (id, once, paneId, [fx, fy], stay) => {
+        if (!window.__e2e_once__(once)) return;
+        const fire = (target: EventTarget, type: string, x: number, y: number) =>
+          target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 3, isPrimary: true }));
+        const button = document.querySelector(`[data-tab="${id}"] .orca-tab-btn`)!.getBoundingClientRect();
+        const target = document.querySelector(`.orca-pane[data-pane="${paneId}"]`)!;
+        const box = target.getBoundingClientRect();
+        const bar = target.querySelector(".orca-tabbar")!.getBoundingClientRect();
+        const x = box.left + box.width * fx;
+        const y = fy < 0 ? bar.top + bar.height / 2 : bar.bottom + (box.bottom - bar.bottom) * fy;
+        fire(document.querySelector(`[data-tab="${id}"] .orca-tab-btn`)!, "pointerdown", button.left + 5, button.top + 5);
+        fire(document, "pointermove", x, y);
+        if (!stay) fire(document, "pointerup", x, y);
+      },
+      tab,
+      onceId(),
+      to,
+      at,
+      hold,
+    );
+
+  // The project of example-app selected, with the layout that `orca_panes` answers from the start.
+  const leaves = (node: PaneNode | null): number => (node === null ? 0 : node.kind === "pane" ? 1 : node.children.reduce((n, c) => n + leaves(c), 0));
+  async function openSplit(value = overview(), answer: PaneLayout = saved(), fixtures: Record<string, unknown> = {}) {
+    await openOrca(value, { orca_panes: answer, orca_terminal_read: ["$"], ...fixtures });
+    await project("example-app").click();
+    await waitForCount(".orca-pane", leaves(answer.root));
+  }
+  // The layout Rust answers once `focus` is pressed, or `selected` is chosen in the left pane (the answer of a press agrees with the screen, which showed it at once).
+  const focusedOn = (focus: string, selected = claude) => layout(row(pane("p1", [claude, bash], selected), pane("p2", [zsh])), focus);
+
+  it("asks Rust for the layout of the project with its tabs, and draws the panes it answers, each with its tab strip and its plus", async () => {
+    await openSplit();
+    const [first] = await callsOf("orca_panes");
+    expect(first).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], op: null });
+    expect(await paneTabs("p1")).toEqual(["Write the docs", "bash"]);
+    expect(await paneTabs("p2")).toEqual(["zsh"]);
+    expect(await count(".orca-plus")).toBe(2);
+    expect(await count(".orca-tabs")).toBe(2);
+    expect(await browser.execute(() => document.querySelector(".orca-split-node")!.getAttribute("data-direction"))).toBe("row");
+    // The two panes lie side by side, with the first on the left.
+    const [left, right] = await browser.execute(() => [...document.querySelectorAll(".orca-pane")].map((e) => e.getBoundingClientRect().left));
+    expect(left).toBeLessThan(right);
+    await expect($('.orca-pane[data-pane="p1"] [aria-selected="true"]')).toHaveText(expect.stringContaining("Write the docs"));
+  });
+
+  it("draws a column split with its panes one above the other, and a split in a split", async () => {
+    await openSplit(overview(), layout(column(pane("p1", [claude, bash]), row(pane("p2", [zsh]), pane("p3", [apiTab]))), "p1"));
+    expect(await browser.execute(() => [...document.querySelectorAll(".orca-split-node")].map((e) => e.getAttribute("data-direction")))).toEqual(["column", "row"]);
+    const [top, bottom] = await browser.execute(() => ["p1", "p2"].map((id) => document.querySelector(`.orca-pane[data-pane="${id}"]`)!.getBoundingClientRect().top));
+    expect(top).toBeLessThan(bottom);
+  });
+
+  it("splits by the right-click menu of a tab: 「右に分割」 and 「下に分割」 ask for the tab at the right and at the bottom of its pane", async () => {
+    await openOrca(overview(), { orca_terminal_read: ["$"] });
+    await project("example-app").click();
+    await waitForCalls("orca_panes");
+    const panes = await mock("orca_panes", layout(row(pane("p1", [claude, bash]), pane("p2", [zsh])), "p2"));
+    await rightClick(zsh);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["右に分割", "下に分割"]);
+    await pickItem("右に分割");
+    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], op: { kind: "move", tab: zsh, pane: "p1", edge: "right" } }]);
+    await waitForCount(".orca-pane", 2);
+    expect(await paneTabs("p2")).toEqual(["zsh"]);
+    // Below: the next answer is a column.
+    const below = await mock("orca_panes", layout(column(pane("p1", [claude, zsh]), pane("p2", [bash])), "p2"));
+    await rightClick(bash);
+    await pickItem("下に分割");
+    expect(await waitForCalls(below)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], op: { kind: "move", tab: bash, pane: "p1", edge: "bottom" } }]);
+    await browser.waitUntil(async () => (await browser.execute(() => document.querySelector(".orca-split-node")?.getAttribute("data-direction"))) === "column", { timeoutMsg: "the column never drew" });
+  });
+
+  it("has no menu on a tab that is alone in its pane", async () => {
+    await openSplit();
+    await rightClick(zsh);
+    await browser.pause(300);
+    expect(await count(".menu")).toBe(0);
+  });
+
+  it("splits by dragging a tab to an edge of another pane, joins it by dragging it to the strip or the middle, and asks nothing for a drop that changes nothing", async () => {
+    await openSplit();
+    // The hint shows while the tab is over a place that takes it, and goes with Escape, which leaves the tab where it was.
+    await drag(bash, "p2", [0.5, 0.95], true);
+    await expect($(".orca-drop")).toBeDisplayed();
+    await browser.execute(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await waitForCount(".orca-drop", 0);
+    expect(await moves()).toEqual([]);
+    // The bottom edge of the other pane, its left edge, its strip, and its middle.
+    for (const [at, edge] of [[[0.5, 0.95], "bottom"], [[0.03, 0.5], "left"], [[0.5, 0.5], "center"], [[0.5, -1], "center"], [[0.97, 0.5], "right"], [[0.5, 0.03], "top"]] as [[number, number], string][]) {
+      const before = (await moves()).length;
+      await drag(bash, "p2", at);
+      await browser.waitUntil(async () => (await moves()).length === before + 1, { timeoutMsg: `no move for ${edge}` });
+      expect((await moves()).at(-1)).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], op: { kind: "move", tab: bash, pane: "p2", edge } });
+    }
+    expect(await count(".orca-drop")).toBe(0);
+    // The edge of its own pane, which has another tab, splits it; its own strip or middle, and the edge of a pane it is alone in, change nothing.
+    const before = (await moves()).length;
+    await drag(bash, "p1", [0.97, 0.5]);
+    await browser.waitUntil(async () => (await moves()).length === before + 1, { timeoutMsg: "no move on its own pane" });
+    expect((await moves()).at(-1)).toMatchObject({ op: { tab: bash, pane: "p1", edge: "right" } });
+    await drag(bash, "p1", [0.5, 0.5]);
+    await drag(bash, "p1", [0.5, -1]);
+    await drag(zsh, "p2", [0.97, 0.5]);
+    await drag(zsh, "p2", [0.5, 0.5]);
+    await browser.pause(300);
+    expect((await moves()).length).toBe(before + 1);
+    // A press that does not move selects the tab as a click does, and a drag does not.
+    expect(await count(".orca-drop")).toBe(0);
+  });
+
+  it("does not select the tab that was dragged", async () => {
+    await openSplit();
+    const panes = await mock("orca_panes", saved());
+    await drag(bash, "p2", [0.5, 0.5]);
+    await browser.pause(300);
+    expect((await callsOf(panes)).filter((c) => (c as { op: { kind: string } | null }).op?.kind === "select")).toEqual([]);
+  });
+
+  it("selects a tab of a pane by pressing it, and gives a pane the focus by pressing it", async () => {
+    await openSplit();
+    const panes = await mock("orca_panes", focusedOn("p1", bash));
+    await tabOf(bash).$(".orca-tab-btn").click();
+    expect(await waitForCalls(panes)).toMatchObject([{ op: { kind: "select", tab: bash } }]);
+    // The terminal of the other pane: pressing it gives its pane the focus.
+    await mock("orca_panes", focusedOn("p2", bash));
+    await pressPane("p2");
+    await browser.waitUntil(async () => (await callsOf("orca_panes")).some((c) => (c as { op: { kind: string } | null }).op?.kind === "focus"), { timeoutMsg: "no focus" });
+    expect((await callsOf("orca_panes")).at(-1)).toMatchObject({ op: { kind: "focus", pane: "p2" } });
+  });
+
+  it("draws the focused pane's bar marked, and the selected tab of each pane", async () => {
+    await openSplit(overview(), layout(row(pane("p1", [claude, bash], bash), pane("p2", [zsh])), "p2"));
+    expect(await browser.execute(() => document.querySelector(".orca-pane[data-focused='true']")!.getAttribute("data-pane"))).toBe("p2");
+    await expect($('.orca-pane[data-pane="p1"] [aria-selected="true"]')).toHaveText(expect.stringContaining("bash"));
+    await expect($('.orca-pane[data-pane="p2"] [aria-selected="true"]')).toHaveText(expect.stringContaining("zsh"));
+  });
+
+  it("mirrors the terminal selected in each pane, each in its own pane", async () => {
+    await openSplit();
+    await browser.waitUntil(async () => new Set((await callsOf("orca_terminal_read")).map((c) => (c as { handle: string }).handle)).size === 2, { timeoutMsg: "the two terminals were not both read" });
+    expect(new Set((await callsOf("orca_terminal_read")).map((c) => (c as { handle: string }).handle))).toEqual(new Set(["term_example-app", "term_example-app_zsh"]));
+    expect(await count(".orca-term:not([hidden])")).toBe(2);
+    expect(await count(".orca-pane[data-pane='p1'] .orca-term .orca-term-box:not([hidden])")).toBe(1);
+    expect(await count(".orca-pane[data-pane='p2'] .orca-term .orca-term-box:not([hidden])")).toBe(1);
+    // The terminal of a tab that is not selected waits, and another tab of the pane shows its own.
+    await mock("orca_panes", focusedOn("p1", bash));
+    await tabOf(bash).$(".orca-tab-btn").click();
+    await browser.waitUntil(async () => (await callsOf("orca_terminal_read")).some((c) => (c as { handle: string }).handle === "term_example-app_bash"), { timeoutMsg: "bash was never read" });
+  });
+
+  it("sends the keys typed in a pane to the terminal of that pane", async () => {
+    await openSplit();
+    const input = await mock("orca_terminal_input", null);
+    await mock("orca_panes", focusedOn("p2"));
+    await pressPane("p2");
+    await browser.keys(["c", "d"]);
+    await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "cd", { timeoutMsg: "the keys were not sent" });
+    expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_example-app_zsh")).toBe(true);
+  });
+
+  it("asks again, with the tabs now listed, when a tab leaves, and draws the layout without its pane", async () => {
+    await openSplit();
+    // The shell of the second pane is closed in Orca: the list no longer has it, and Rust answers a layout of one pane.
+    const panes = await mock("orca_panes", layout(pane("p1", [claude, bash]), "p1"));
+    await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
+    await $("#orca-refresh").click();
+    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, bash], op: null }]);
+    await waitForCount(".orca-pane", 1);
+    expect(await count(".orca-split-node")).toBe(0);
+    expect(await paneTabs("p1")).toEqual(["Write the docs", "bash"]);
+    // The terminal of the pane that closed is no longer read.
+    await mock("orca_terminal_read", ["$"]);
+    await browser.pause(2500);
+    expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle !== "term_example-app_zsh")).toBe(true);
+  });
+
+  it("gives the plus of a pane the focus first and starts the session in the project", async () => {
+    await openSplit();
+    const panes = await mock("orca_panes", saved());
+    const create = await mock("orca_terminal_create", { paneKey: null, handle: "term_new" });
+    await pressPlus('.orca-pane[data-pane="p2"] .orca-plus');
+    await pickItem("ターミナルを開く");
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", environment: null }]);
+    expect(await callsOf(panes)).toMatchObject([{ op: { kind: "focus", pane: "p2" } }]);
+  });
+
+  it("keeps working with one pane of all the tabs when Rust cannot answer, and shows the message", async () => {
+    await openOrca(overview(), { orca_panes: rejects("orca-panes.json を書けません"), orca_terminal_read: ["$"] });
+    await project("example-app").click();
+    await expect($("#error")).toHaveText("orca-panes.json を書けません");
+    await waitForCount(".orca-pane", 1);
+    expect(await paneTabs("p1")).toEqual(["Write the docs", "zsh", "bash"]);
+  });
+
+  describe("on a saved environment", () => {
+    const studioOnly = { target: "Studio", environments: ["Studio"] };
+    const viewportOf = (call: unknown) => (call as { viewport: { cols: number; rows: number } }).viewport;
+    async function openStudioSplit() {
+      await openOrca(orcaOverview([], [], studioOnly));
+      await waitForCalls("orca_stream_open");
+      await mock("orca_panes", saved());
+      await sendStream(streamList(sample(), worktrees(), [orcaTerminal("example-app", "zsh"), orcaTerminal("example-app", "bash")]));
+      await project("example-app").click();
+      await waitForCount(".orca-pane", 2);
+    }
+
+    it("streams the terminal of each pane at its pane's size, and draws each one's events in its own pane", async () => {
+      await openStudioSplit();
+      const calls = await waitForCalls("orca_stream_terminal", 2);
+      expect(calls.map((c) => (c as { handle: string }).handle).sort()).toEqual(["term_example-app", "term_example-app_zsh"]);
+      for (const call of calls) {
+        expect(viewportOf(call).cols).toBeGreaterThan(20);
+        expect(viewportOf(call).rows).toBeGreaterThan(8);
+      }
+      const nth = (handle: string) => calls.findIndex((c) => (c as { handle: string }).handle === handle);
+      await sendTerm({ kind: "snapshot", data: "left screen", cols: 80, rows: 24 }, nth("term_example-app"));
+      await sendTerm({ kind: "snapshot", data: "right screen", cols: 80, rows: 24 }, nth("term_example-app_zsh"));
+      await browser.waitUntil(async () => (await $('.orca-pane[data-pane="p1"] .xterm-rows').getText()).includes("left screen"), { timeoutMsg: "the left screen never showed" });
+      await browser.waitUntil(async () => (await $('.orca-pane[data-pane="p2"] .xterm-rows').getText()).includes("right screen"), { timeoutMsg: "the right screen never showed" });
+      expect(await $('.orca-pane[data-pane="p1"] .xterm-rows').getText()).not.toContain("right screen");
+      // The keys go to the terminal of the pane they were typed in.
+      const input = await mock("orca_stream_input", null);
+      await mock("orca_panes", focusedOn("p2"));
+      await pressPane("p2");
+      await browser.keys(["1"]);
+      await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "1", { timeoutMsg: "the keys were not sent" });
+      expect(await callsOf(input)).toEqual([{ handle: "term_example-app_zsh", text: "1" }]);
+    });
+
+    it("ends the stream of a terminal that leaves its pane's view, and no other", async () => {
+      await openStudioSplit();
+      await waitForCalls("orca_stream_terminal", 2);
+      const close = await mock("orca_stream_terminal_close", null);
+      await mock("orca_panes", focusedOn("p1", bash));
+      // Another tab in the left pane: its terminal is subscribed and the one it replaces is closed by its handle; the right pane's stream stays.
+      await tabOf(bash).$(".orca-tab-btn").click();
+      expect(await waitForCalls(close)).toEqual([{ handle: "term_example-app" }]);
+      await browser.pause(500);
+      expect(await callsOf(close)).toEqual([{ handle: "term_example-app" }]);
+    });
+
+    it("sends the new size of the pane whose width changed", async () => {
+      await openStudioSplit();
+      const calls = await waitForCalls("orca_stream_terminal", 2);
+      const viewport = await mock("orca_stream_viewport", null);
+      await dragDivider(0.2);
+      const sent = await waitForCalls(viewport, 2);
+      expect(sent.map((c) => (c as { handle: string }).handle).sort()).toEqual(["term_example-app", "term_example-app_zsh"]);
+      expect(viewportOf(sent[0]).cols).toBeGreaterThan(viewportOf(calls[0]).cols);
+    });
   });
 });
