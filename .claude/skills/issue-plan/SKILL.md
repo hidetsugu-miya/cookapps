@@ -39,5 +39,5 @@ To only reorder, start at step 4.
 ## When it runs
 
 - An issue is created, or its `needs:owner` is removed: from step 1 (the hook says so).
-- A release has been tagged and `plan-release.py close {tag}` has run: apply the saved plan again (`plan-release.py apply` on `.claude/plan.json` of the main checkout), and only when that is refused with exit 2 (an issue is not in the plan) from step 4.
+- A release has been tagged and `plan-release.py close {tag}` has run: apply the saved plan again (`plan-release.py apply` on `.claude/plan.json` of the main checkout), and when that is refused with exit 2, whatever the reason, from step 4.
 - A `milestone-dev` run starts: from step 4, so that issues made outside a session, such as on the GitHub screen, are placed too.

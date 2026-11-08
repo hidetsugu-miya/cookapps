@@ -11,7 +11,7 @@ Usage:
 
 `apply` leaves out of the plan the closed issues and the fixed ones (stderr says which), and, unless --dry-run, saves the plan it accepted
 as `.claude/plan.json` of the main checkout. `next` reads that plan: `start` lists the issues of every open milestone that can start, in the order of the plan,
-and `parallel` the ones among them to start at once: they touch (`touches` of the plan) none of the files and requirements of the issues in progress or of one another.
+and `parallel` the ones among them to start at once: they touch (`touches` of the plan) none of the files and requirements of the issues in progress, of the issues another session holds, or of one another.
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
 """
 import argparse
@@ -506,10 +506,11 @@ def overlaps(a, b):
     return any(touch_overlap(x, y) for x in a for y in b)
 
 
-def pick_parallel(candidates, in_progress, touches):
+def pick_parallel(candidates, in_progress, touches, held=()):
     """-> the numbers among `candidates` (in order) to start at once: until the issues in progress and the picked ones reach PARALLEL,
-    each one that overlaps none of the issues in progress and none of those picked before it. One that overlaps is skipped, and the next is looked at."""
-    busy = [touches.get(n) for n in in_progress]
+    each one that overlaps none of the issues in progress, none of the issues another session holds (`held`, of any milestone) and none of those picked before it.
+    One that overlaps is skipped, and the next is looked at. The held issues are not counted in PARALLEL, and one the plan does not know overlaps every issue."""
+    busy = [touches.get(n) for n in [*in_progress, *held]]
     picked = []
     for n in candidates:
         if len(in_progress) + len(picked) >= PARALLEL:
@@ -681,7 +682,7 @@ def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=froze
     While any release:pin issue is open, nothing starts from the later milestones, whatever their versions
     (a pin's version is fixed, so an issue that merged ahead of it could move the slots onto it and be refused by allocate): only the first milestone's issues start.
     Without a pin, an issue of a later milestone that merges first moves the slots, and allocate has nothing to refuse.
-    `parallel` is the numbers of `start` to begin now (pick_parallel)."""
+    `parallel` is the numbers of `start` to begin now (pick_parallel): it avoids the issues in progress and every issue another session holds, in any open milestone."""
     held_by_worktree = held_by_worktree or {}
     position, touches = plan_view(plan)
     open_versions = sorted(
@@ -746,7 +747,8 @@ def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=froze
     startable.sort(key=start_key)
     out["start"] = [with_milestone(i) for i in startable]
     out["in_progress"] = [with_milestone(i) for i in in_progress]
-    out["parallel"] = pick_parallel([i.number for i in startable], [i.number for i in in_progress], touches)
+    held = [i.number for i in open_issues if i.number not in mine and (i.number in pr_closing or i.number in held_by_worktree)]
+    out["parallel"] = pick_parallel([i.number for i in startable], [i.number for i in in_progress], touches, held)
     out["later_needs_owner_only"] = bool(later) and all(has(i, "needs:owner") for i in later)
     return out
 
@@ -1034,10 +1036,33 @@ def read_plan(path):
     return plan
 
 
-def closed_states(repo, numbers):
-    """-> {number: "closed"} for the numbers GitHub says are closed. The closed issues of a released milestone are not in the state, and a plan made before the release may still name them."""
+def closed_milestone_numbers(milestones):
+    """-> the numbers of the closed milestones that hold closed issues, newest version first: a plan made before a release may still name those issues."""
+    found = [(parse_version(m["title"]), m["number"]) for m in milestones if m["state"] == "closed" and m["closed_issues"] > 0]
+    return [n for v, n in sorted(((v, n) for v, n in found if v), reverse=True)]
+
+
+def closed_in(raw_issues, numbers):
+    """-> {number: "closed"} for the issues among `raw_issues` (the answer of the issues API) that are in `numbers` and closed. A pull request is not an issue."""
+    return {r["number"]: "closed" for r in raw_issues if r["number"] in numbers and r["state"] == "closed" and "pull_request" not in r}
+
+
+def closed_states(repo, numbers, milestones):
+    """-> {number: "closed"} for the numbers GitHub says are closed. The closed issues of a released milestone are not in the state, and a plan made before the release may still name them.
+    The closed milestones are read in bulk, newest first, until every number is found; the numbers still unknown are read one by one."""
+    left = set(numbers)
     out = {}
-    for n in numbers:
+    for m in closed_milestone_numbers(milestones):
+        if not left:
+            break
+        try:
+            raw = api(f"repos/{repo}/issues?state=closed&milestone={m}&per_page=100", paginate=True)
+        except GhError:
+            continue
+        found = closed_in(raw, left)
+        out.update(found)
+        left -= set(found)
+    for n in sorted(left):
         try:
             raw = api(f"repos/{repo}/issues/{n}")
         except GhError:
@@ -1056,7 +1081,7 @@ def cmd_apply(args):
     state = load_state()
     refuse_missing_points(state)
     states = dict(state.states)
-    states.update(closed_states(state.repo, [n for n in mentioned(plan) if n not in states]))
+    states.update(closed_states(state.repo, [n for n in mentioned(plan) if n not in states], state.milestones))
     plan, dropped = prune_plan(plan, states, {i.number for i in state.fixed})
     for n, why in dropped:
         print(f"dropped #{n} ({why})", file=sys.stderr)

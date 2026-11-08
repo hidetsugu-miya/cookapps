@@ -703,6 +703,27 @@ class Next(unittest.TestCase):
         )
         self.assertEqual([i["number"] for i in out["needs_owner"]], [5])
 
+    def test_parallel_leaves_out_what_overlaps_an_issue_another_session_holds_in_any_milestone(self):
+        milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0")]
+        issues = [
+            mk(1, milestone="v0.40.0"),
+            mk(2, milestone="v0.40.0"),
+            mk(3, milestone="v0.40.0"),
+            mk(4, milestone="v0.41.0"),
+            mk(5, milestone="v0.41.0"),
+        ]
+        plan = {
+            "order": [1, 2, 3, 4, 5],
+            "touches": {"1": ["ts/a.ts"], "2": ["ts/b.ts"], "3": ["ts/c.ts"], "4": ["ts/d.ts"], "5": ["ts/e.ts"]},
+        }
+        out = pr.build_next(issues, milestones, {3}, {4: "fix/issue-4-x"}, plan=plan)
+        self.assertEqual([i["number"] for i in out["start"]], [1, 2, 5])
+        self.assertEqual(out["parallel"], [1, 2, 5])
+        plan["touches"]["1"] = ["ts/c.ts"]
+        plan["touches"]["5"] = ["ts/d.ts"]
+        out = pr.build_next(issues, milestones, {3}, {4: "fix/issue-4-x"}, plan=plan)
+        self.assertEqual(out["parallel"], [2])
+
     def test_worktree_issues(self):
         porcelain = (
             "worktree /w/cookapps\nHEAD aaa\nbranch refs/heads/issue-9-main\n\n"
@@ -821,6 +842,29 @@ class Overlap(unittest.TestCase):
         self.assertFalse(pr.overlaps([], ["a"]))
 
 
+class ClosedStates(unittest.TestCase):
+    def test_the_milestones_to_read_are_the_closed_ones_with_closed_issues_newest_first(self):
+        milestones = [
+            ms(1, "v0.38.0", "closed", 0, 4),
+            ms(2, "v0.40.0", "closed", 0, 2),
+            ms(3, "v0.39.0", "closed", 0, 0),
+            ms(4, "v0.41.0", "open", 1, 1),
+            ms(5, "backlog", "closed", 0, 3),
+            ms(6, "v0.39.1", "closed", 0, 1),
+        ]
+        self.assertEqual(pr.closed_milestone_numbers(milestones), [2, 6, 1])
+
+    def test_the_issues_read_in_bulk_are_the_closed_numbers_asked_for(self):
+        raw = [
+            {"number": 5, "state": "closed"},
+            {"number": 6, "state": "closed", "pull_request": {}},
+            {"number": 7, "state": "closed"},
+            {"number": 8, "state": "open"},
+        ]
+        self.assertEqual(pr.closed_in(raw, {5, 6, 8, 9}), {5: "closed"})
+        self.assertEqual(pr.closed_in([], {5}), {})
+
+
 class Parallel(unittest.TestCase):
     def test_overlapping_issues_are_skipped_and_the_next_is_looked_at(self):
         touches = {1: ["ts/a.ts"], 2: ["ts/a.ts"], 3: ["ts/b.ts"], 4: ["ts/c.ts"], 5: ["ts/d.ts"]}
@@ -849,6 +893,18 @@ class Parallel(unittest.TestCase):
     def test_nothing_to_start(self):
         self.assertEqual(pr.pick_parallel([], [], {}), [])
         self.assertEqual(pr.PARALLEL, 3)
+
+    def test_an_issue_overlapping_one_another_session_holds_is_skipped(self):
+        touches = {1: ["ts/a.ts"], 2: ["ts/b.ts"], 9: ["ts/a.ts"]}
+        self.assertEqual(pr.pick_parallel([1, 2], [], touches, [9]), [2])
+
+    def test_the_issues_held_by_other_sessions_are_not_counted_in_the_cap(self):
+        touches = {n: [f"ts/{n}.ts"] for n in range(1, 10)}
+        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [], touches, [7, 8, 9]), [1, 2, 3])
+        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [5], touches, [7, 8, 9]), [1, 2])
+
+    def test_a_held_issue_the_plan_does_not_know_overlaps_all(self):
+        self.assertEqual(pr.pick_parallel([1, 2], [], {1: ["ts/a.ts"], 2: ["ts/b.ts"]}, [9]), [])
 
 
 class NextAcrossMilestones(unittest.TestCase):
