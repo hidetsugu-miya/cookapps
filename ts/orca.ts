@@ -322,7 +322,7 @@ function sessionNode(t: Tab) {
 }
 
 // A project, or an SSH host: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs.
-function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, tabs: Tab[], onCursor: boolean) {
+function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
   const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
@@ -330,7 +330,7 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   row.setAttribute("aria-pressed", String(key === projectKey));
   if (onCursor) row.dataset.cursor = "true";
   const label = tag("span", "orca-project-name");
-  label.append(...nameNodes(name));
+  label.append(...nameNodes(name, re));
   row.append(statusIcon(status), label);
   if (sessions > 0) row.append(tag("span", "orca-n", String(sessions)));
   row.onclick = () => selectProject(key);
@@ -377,42 +377,39 @@ function projectRows(): { local: ProjectRow[]; hosts: ProjectRow[] } {
   return { local, hosts };
 }
 
-// The search text (A-19), trimmed, and as a regular expression source with its special characters escaped, so that a "." or a "(" matches itself. A match is a case-folded part of a name.
+// The search text (A-19), trimmed, and as a regular expression with its special characters escaped, so that a "." or a "(" matches itself. A match is a case-folded part of a name. The expression is made once for each drawing (null while nothing is typed); its capture group serves `split` below.
 const needle = () => query.trim();
-const escaped = () => needle().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const matcher = () => (needle() === "" ? null : new RegExp(`(${needle().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "i"));
 
 // A name with the letters that match the search text in bold (`split` with a capture group puts the matches at the odd places).
-function nameNodes(name: string): (string | HTMLElement)[] {
-  if (needle() === "") return [name];
+function nameNodes(name: string, re: RegExp | null): (string | HTMLElement)[] {
+  if (re === null) return [name];
   return name
-    .split(new RegExp(`(${escaped()})`, "gi"))
+    .split(re)
     .map((part, i) => (i % 2 ? tag("b", "", part) : part))
     .filter((part) => part !== "");
 }
 
 // The rows the list shows: all of them, or those whose name holds the search text. Only the name is searched (not the sessions under a project), so the sessions of an open project that the search leaves out go with its row.
-function visibleRows() {
+function visibleRows(re: RegExp | null) {
   const { local, hosts } = projectRows();
-  if (needle() === "") return { local, hosts };
-  const re = new RegExp(escaped(), "i");
+  if (re === null) return { local, hosts };
   return { local: local.filter((r) => re.test(r.name)), hosts: hosts.filter((r) => re.test(r.name)) };
 }
 
 // The keys of the rows the keys of the search field can reach, in the order of the list (none while nothing is typed), and the one they are on.
-function reachable() {
+function reachable(rows = visibleRows(matcher())) {
   if (needle() === "") return [];
-  const { local, hosts } = visibleRows();
-  return [...local, ...hosts].map((r) => r.key);
+  return [...rows.local, ...rows.hosts].map((r) => r.key);
 }
-function cursorKey() {
-  const keys = reachable();
+function cursorKey(rows = visibleRows(matcher())) {
+  const keys = reachable(rows);
   return cursor !== null && keys.includes(cursor) ? cursor : (keys[0] ?? null);
 }
 
-function projectNodes(tabs: Tab[]): HTMLElement[] {
-  const { local, hosts } = visibleRows();
-  const on = cursorKey();
-  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, tabs, r.key === on);
+function projectNodes(tabs: Tab[], re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null): HTMLElement[] {
+  const { local, hosts } = rows;
+  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, tabs, r.key === on, re);
   const nodes: HTMLElement[] = local.map(node);
   if (hosts.length) nodes.push(tag("h3", "orca-sec", "SSH"), ...hosts.map(node));
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
@@ -436,13 +433,17 @@ function drawFeed(tabs: Tab[]) {
   const sessions = projectKey === null || collapsed ? [] : tabs.filter((t) => t.kind !== "file").map((t) => [t.id, t.status, t.label, t.title]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
-  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), cursorKey()], projectKey, collapsed, sessions, selectedTab(), switching, Math.floor(now / 60_000)]);
+  // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
+  const re = working ? null : matcher();
+  const rows = visibleRows(re);
+  const on = working ? null : cursorKey(rows);
+  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), on], projectKey, collapsed, sessions, selectedTab(), switching, Math.floor(now / 60_000)]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...(working ? workingNodes(now) : projectNodes(tabs)));
+  box.replaceChildren(...(working ? workingNodes(now) : projectNodes(tabs, re, rows, on)));
   box.scrollTop = top;
   if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
@@ -994,12 +995,18 @@ function toggleFilesAndDraw() {
 
 const searchInput = () => $<HTMLInputElement>("orca-search-input");
 
+// What a change of the text or of the row the keys are on redraws: the field and the list. The work pane does not change with it.
+function drawSearchList() {
+  drawSearch();
+  drawFeed(projectKey === null ? [] : tabsOf(projectKey));
+}
+
 // Ends the search: the list is the whole list again.
 function clearSearch() {
   query = "";
   cursor = null;
   searchInput().value = "";
-  draw();
+  drawSearchList();
 }
 
 // ⌘J: the field takes the focus with its text selected. The working view has no field, so it gives way to the projects.
@@ -1016,7 +1023,7 @@ function moveCursor(step: number) {
   const at = cursorKey();
   if (at === null) return;
   cursor = keys[Math.min(keys.length - 1, Math.max(0, keys.indexOf(at) + step))];
-  draw();
+  drawSearchList();
   feed().querySelector('[data-cursor="true"]')?.scrollIntoView({ block: "nearest" });
 }
 
@@ -1025,7 +1032,7 @@ function initSearch() {
   input.oninput = () => {
     query = input.value;
     cursor = null;
-    draw();
+    drawSearchList();
   };
   input.onkeydown = (e) => {
     if (composing(e)) return;
