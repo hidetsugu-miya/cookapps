@@ -119,7 +119,8 @@ function drawPane(p: PaneEl, m: PaneModel, corner: boolean) {
   p.host.hidden = !m.terminal;
   p.editor.hidden = !m.editor;
   p.plus.disabled = m.plusDisabled;
-  p.files.hidden = !corner;
+  // While the file pane is shown, its own top row has the button (A-18), so the corner pane has none.
+  p.files.hidden = !corner || m.filesShown;
   p.files.setAttribute("aria-pressed", String(m.filesShown));
 }
 

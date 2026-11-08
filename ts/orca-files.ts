@@ -1,5 +1,5 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab, as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted, with what git ignores marked); this module draws it and takes the presses.
-// A folder is read when it is opened (each time), and the reload button reads the root and the open folders again, one after the other. A file opens in the editor on a double press. The pane is shown or hidden by the button at the right end of the tab strip.
+// A folder is read when it is opened (each time), and the reload button reads the root and the open folders again, one after the other. A file opens in the editor on a double press. The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one).
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
@@ -190,7 +190,9 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   draw();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; toggle: () => void }) {
   openFile = on.open;
+  $("orca-files-toggle").innerHTML = FOLDER_SVG;
+  $("orca-files-toggle").onclick = on.toggle;
   $("orca-files-reload").onclick = () => void reload();
 }
