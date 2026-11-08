@@ -883,6 +883,12 @@ async function start(kind: StartKind, path: string) {
   }
 }
 
+// The button of the file pane (A-18) is in the top row of the pane while it is shown, and at the right end of the tab strip of the corner pane while it is hidden.
+function toggleFilesAndDraw() {
+  toggleFiles();
+  draw();
+}
+
 export function initOrca() {
   // The history of A-7 is read only by the side pane of A-9 now; it still pauses with the window.
   initOrcaChat();
@@ -890,7 +896,7 @@ export function initOrca() {
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.3, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError });
-  initOrcaFiles({ open: openFile });
+  initOrcaFiles({ open: openFile, toggle: toggleFilesAndDraw });
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", () => {
     // A session shown again after the window was hidden is seen.
@@ -908,10 +914,7 @@ export function initOrca() {
       focusPane(pane);
       openStartMenu(anchor);
     },
-    files: () => {
-      toggleFiles();
-      draw();
-    },
+    files: toggleFilesAndDraw,
     focus: focusPane,
     move: (tab, pane, edge) => runPaneOp({ kind: "move", tab, pane, edge }),
     menu: openTabMenu,

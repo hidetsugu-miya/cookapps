@@ -793,6 +793,7 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 #orca-panes .orca-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* The file pane (A-18) on the right of the work pane: the tree of the selected tab's worktree (`--files-w` is where the divider put it, 15% to 40% of the screen), and the editor of a file in the place of a terminal. */
 #orca-files { flex: none; width: clamp(15%, var(--files-w, 22%), 40%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
+#orca-files-bar { flex: none; display: flex; align-items: center; height: 32px; box-sizing: border-box; border-bottom: 1px solid var(--line); }
 #orca-files-head { flex: none; display: flex; align-items: center; gap: 4px; height: 32px; box-sizing: border-box; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); }
 #orca-files-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
 #orca-files-head .icon-btn { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
