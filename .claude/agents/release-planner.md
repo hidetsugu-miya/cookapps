@@ -19,7 +19,7 @@ GitHub にもファイルにも書かない。
 
 ## 並べる
 
-issue どうしの関連を読み、どの順で実装するかを決める。
+issue どうしの関連を読み、どの順で実装するかと、各 issue が何を触るかを決める。
 起動プロンプトで `snapshot` の JSON を受け取る。
 `fixed` は順番が決まっていて動かせない issue で、`free` がこの役の並べる issue。
 各 issue の `urgency`（`high` か `normal`）、`importance`（`high`・`normal`・`low`）、`pin`（オーナーが版を指定した issue なら true）が付いている。
@@ -36,6 +36,7 @@ issue どうしの関連を読み、どの順で実装するかを決める。
    - 関連なし: 緊急度、重要度（`high` が先、`low` が後）、ポイントの少ない順（`point:1`、`point:2`、`point:3`、`point:5`、`point:8`）、古い順の順に、基本を決める。
 4. 迷うときは依存にも同梱にもしない。根拠に `path:line` か issue の本文の該当箇所を挙げられない関連は書かない。
 5. 基本の並び（緊急度 → 重要度 → ポイントの少ない順 → 古い順）から外した issue、とくに古い順の issue より前に動かした issue には、`reasons` に理由を書く。
+6. `fixed` と `free` の開いている各 issue が触る見込みのものを、`touches` に書く（次の「規則」を見る）。手順 2 で読んだ箇所から決める。
 
 ### 規則
 
@@ -48,13 +49,19 @@ issue どうしの関連を読み、どの順で実装するかを決める。
 - `fixed` の issue は、依存先にだけ書ける。
 - `needs:owner` の issue も並べる。未決定の中身は推測せず、本文から分かる関連だけで置く。
 - 古い順から動かす issue と、関連を付けた issue には、`reasons` に一行の理由を書く。
+- `touches` は、`fixed` と `free` の開いている各 issue の番号から、触る見込みの一覧への対応。`plan-release.py next` が、着手中の issue とも互いとも重ならない issue を並列に進めるために使う。
+  - 一覧の要素は 3 種類。リポジトリから見たファイルのパス（`ts/orca.ts`）、末尾が `/` のディレクトリ（`src-tauri/src/`）、要件 ID（`req:A-18`）。
+  - 重なりは、要素が等しいか、一方が `/` で終わるディレクトリで他方がその下にあるときに成り立つ。ディレクトリは、本当にその下の多くを触るときだけ書く。広く書くほど、並列にできる issue が減る。
+  - どの変更も触る `AGENTS.md`、`docs/`、`CHANGELOG.md`、`README.md` は書かない。
+  - 根拠（本文の該当箇所か `path:line`）を読めない issue は書かない。`needs:owner` の未決定の issue がそうである。書かない issue は、`plan-release.py` に、どの issue とも重なるものとして扱われ、並列にならない。
+  - `fixed` の issue の分も書く。着手中の issue が何を触るかが、並列にできる issue を決める。
 
 ### 返す形式
 
 JSON だけを返す。
 
 ```json
-{"order":[32,50,42,33],"groups":[[32,50]],"blocked_by":{"33":[42]},"reasons":{"32":"#50 と同じ箇所を直す（ts/foo.ts:10）","50":"#32 と同じ箇所を直すので、続けて出す（ts/foo.ts:10）","33":"#42 が Orca の左ペインを作り直す（ts/orca.ts:1）ので、その後に置く"}}
+{"order":[32,50,42,33],"groups":[[32,50]],"blocked_by":{"33":[42]},"reasons":{"32":"#50 と同じ箇所を直す（ts/foo.ts:10）","50":"#32 と同じ箇所を直すので、続けて出す（ts/foo.ts:10）","33":"#42 が Orca の左ペインを作り直す（ts/orca.ts:1）ので、その後に置く"},"touches":{"32":["ts/foo.ts","req:S-5"],"50":["ts/foo.ts"],"42":["ts/orca.ts","src-tauri/src/orca.rs","req:A-18"],"33":["ts/orca.ts"],"7":["src-tauri/src/slack.rs"]}}
 ```
 
 ## リリースの判定

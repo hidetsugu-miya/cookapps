@@ -23,6 +23,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 3. **Record any discussion.** If options were put to the owner (layout, design), create a Discussion in Ideas in the form of `issues.md`, with `<!-- ai -->` as the first line of its body, and point to it from the issue body.
 4. **Get the order.** Run `plan-release.py snapshot`, and launch `release-planner` with `mode: order` on the first line and the output below it as the prompt.
 5. **Apply it.** Write the returned JSON to a file in the scratchpad and run `plan-release.py apply {file}`.
+   `apply` leaves out of the plan the issues that have closed and the ones that are fixed (it prints `dropped #{n} (closed)` or `(fixed)`), and refuses a number it does not know. When it accepts the plan (not with `--dry-run`), it saves it, with the `touches` of the planner, as `.claude/plan.json` of the main checkout: `plan-release.py next` reads it to find the issues that can run in parallel.
    On exit 2, relaunch `release-planner` with the stderr added, at most twice. If it still fails, run `plan-release.py sync` so that the issue has a tag, and state the failure in the report.
 6. **Report** each new issue and each moved one, as the tool prints them: `#42 v0.40.0 (was v0.39.2)` and the reason.
 
@@ -38,5 +39,5 @@ To only reorder, start at step 4.
 ## When it runs
 
 - An issue is created, or its `needs:owner` is removed: from step 1 (the hook says so).
-- A release has been tagged and `plan-release.py close {tag}` has run: from step 4.
+- A release has been tagged and `plan-release.py close {tag}` has run: apply the saved plan again (`plan-release.py apply` on `.claude/plan.json` of the main checkout), and only when that is refused with exit 2 (an issue is not in the plan) from step 4.
 - A `milestone-dev` run starts: from step 4, so that issues made outside a session, such as on the GitHub screen, are placed too.

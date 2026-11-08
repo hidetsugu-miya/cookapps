@@ -309,6 +309,17 @@ class Validation(unittest.TestCase):
         plan = {"order": [42, 32, 50, 33], "groups": [[32, 50]], "blocked_by": {"33": [42, 7, 9]}, "reasons": {}}
         self.assertEqual(self.check(plan), [])
 
+    def test_touches_may_be_left_out_and_may_name_a_fixed_issue(self):
+        plan = {"order": [42, 32, 50, 33], "touches": {"32": ["ts/a.ts", "req:A-18"], "7": ["src-tauri/src/"]}}
+        self.assertEqual(self.check(plan), [])
+
+    def test_touches_must_map_a_number_to_strings(self):
+        base = {"order": [42, 32, 50, 33]}
+        for touches in (["ts/a.ts"], {"32": "ts/a.ts"}, {"32": [1]}, {"x": ["ts/a.ts"]}):
+            problems = self.check(dict(base, touches=touches))
+            self.assertEqual(len(problems), 1, touches)
+            self.assertIn("plan.touches", problems[0])
+
     def test_order_must_hold_each_free_issue_once(self):
         problems = self.check({"order": [42, 32, 32, 7, 99], "groups": [], "blocked_by": {}})
         text = "\n".join(problems)
@@ -671,14 +682,15 @@ class Next(unittest.TestCase):
         ]
         out = pr.build_next(issues, milestones, {37}, mine={37})
         self.assertEqual(out["milestone"], "v0.40.0")
-        self.assertEqual([i["number"] for i in out["start"]], [41, 42])
+        self.assertEqual([i["number"] for i in out["start"]], [41, 42, 33])
+        self.assertEqual([i["milestone"] for i in out["start"]], ["v0.40.0", "v0.40.0", "v0.41.0"])
         self.assertEqual([i["number"] for i in out["in_progress"]], [37])
         self.assertEqual(out["held"], [])
         self.assertEqual([i["number"] for i in out["needs_owner"]], [38, 39])
         self.assertEqual(out["blocked"], [{"number": 40, "title": "issue 40", "blocked_by": [42]}])
         self.assertEqual([i["number"] for i in out["waiting"]], [43])
         self.assertFalse(out["later_needs_owner_only"])
-        self.assertEqual(set(out["start"][0]), {"number", "title", "labels"})
+        self.assertEqual(set(out["start"][0]), {"number", "title", "labels", "milestone"})
 
     def test_an_issue_another_session_has_is_held(self):
         milestones = [ms(4, "v0.40.0")]
@@ -719,6 +731,245 @@ class Next(unittest.TestCase):
         self.assertIsNone(out["milestone"])
         self.assertEqual(out["start"], [])
         self.assertFalse(out["later_needs_owner_only"])
+
+
+class Prune(unittest.TestCase):
+    states = {1: "open", 2: "open", 3: "open", 4: "closed", 5: "open", 6: "closed"}
+
+    def prune(self, plan, fixed=(5,)):
+        return pr.prune_plan(plan, self.states, set(fixed))
+
+    def test_closed_and_fixed_issues_leave_every_part_of_the_plan(self):
+        plan = {
+            "order": [4, 1, 5, 2, 3],
+            "groups": [[1, 2], [4, 3]],
+            "blocked_by": {"4": [1], "2": [5, 4], "3": [4]},
+            "reasons": {"4": "r4", "1": "r1", "5": "r5"},
+            "touches": {"4": ["a"], "1": ["b"], "5": ["c"]},
+        }
+        pruned, dropped = self.prune(plan)
+        self.assertEqual(pruned["order"], [1, 2, 3])
+        self.assertEqual(pruned["groups"], [[1, 2]])
+        self.assertEqual(pruned["blocked_by"], {"2": [5, 4], "3": [4]})
+        self.assertEqual(pruned["reasons"], {"1": "r1"})
+        self.assertEqual(pruned["touches"], plan["touches"])
+        self.assertEqual(dropped, [(4, "closed"), (5, "fixed")])
+
+    def test_a_group_left_with_fewer_than_two_is_dropped_and_one_that_lost_nothing_stays(self):
+        pruned, _ = self.prune({"order": [1, 2, 3, 4, 5], "groups": [[1, 4], [2, 3], [5]]})
+        self.assertEqual(pruned["groups"], [[2, 3]])
+        pruned, _ = self.prune({"order": [1, 2, 3], "groups": [[3]]})
+        self.assertEqual(pruned["groups"], [[3]])
+
+    def test_a_group_member_not_in_order_is_still_dropped(self):
+        pruned, dropped = self.prune({"order": [1, 2], "groups": [[2, 4]]})
+        self.assertEqual(pruned["groups"], [])
+        self.assertEqual(dropped, [(4, "closed")])
+
+    def test_a_number_nobody_knows_stays_for_the_validation_to_refuse(self):
+        pruned, dropped = self.prune({"order": [1, 99, 4]})
+        self.assertEqual(pruned["order"], [1, 99])
+        self.assertEqual(dropped, [(4, "closed")])
+        free = [mk(1)]
+        problems = pr.validate_plan(pruned, free, [], {1: "open"})
+        self.assertTrue(any("#99" in p for p in problems))
+
+    def test_fixed_wins_over_closed_and_each_number_is_reported_once(self):
+        pruned, dropped = pr.prune_plan({"order": [6, 1], "reasons": {"6": "x"}, "blocked_by": {"6": [1]}}, self.states, {6})
+        self.assertEqual(dropped, [(6, "fixed")])
+        self.assertEqual(pruned, {"order": [1], "groups": [], "blocked_by": {}, "reasons": {}})
+
+    def test_a_plan_of_the_wrong_shape_is_returned_as_it_is(self):
+        for plan in ({"order": "x"}, [1, 2], {"order": [1], "touches": {"1": "a"}}):
+            self.assertEqual(pr.prune_plan(plan, self.states, set()), (plan, []))
+
+    def test_a_pruned_plan_passes_the_validation_that_the_full_one_fails(self):
+        free = [mk(1), mk(2)]
+        fixed = [mk(5)]
+        states = {1: "open", 2: "open", 5: "open", 4: "closed"}
+        plan = {"order": [4, 1, 5, 2], "blocked_by": {"2": [1]}}
+        self.assertTrue(pr.validate_plan(plan, free, fixed, states))
+        pruned, _ = pr.prune_plan(plan, states, {5})
+        self.assertEqual(pr.validate_plan(pruned, free, fixed, states), [])
+
+    def test_mentioned(self):
+        plan = {"order": [3, 1], "groups": [[1, 2]], "blocked_by": {"4": [9]}, "reasons": {"5": "x", "3": "y"}}
+        self.assertEqual(pr.mentioned(plan), [3, 1, 2, 4, 5])
+        self.assertEqual(pr.mentioned({"order": "x"}), [])
+
+
+class Overlap(unittest.TestCase):
+    def test_equal_entries_overlap(self):
+        self.assertTrue(pr.overlaps(["ts/a.ts"], ["ts/b.ts", "ts/a.ts"]))
+        self.assertTrue(pr.overlaps(["req:A-18"], ["req:A-18"]))
+        self.assertFalse(pr.overlaps(["ts/a.ts", "req:A-1"], ["ts/b.ts", "req:A-18"]))
+
+    def test_a_directory_overlaps_what_lies_under_it(self):
+        self.assertTrue(pr.overlaps(["src-tauri/src/"], ["src-tauri/src/orca.rs"]))
+        self.assertTrue(pr.overlaps(["src-tauri/src/orca.rs"], ["src-tauri/src/"]))
+        self.assertTrue(pr.overlaps(["src-tauri/"], ["src-tauri/src/"]))
+        self.assertFalse(pr.overlaps(["src-tauri/src/"], ["src-tauri/srcs/a.rs"]))
+        self.assertFalse(pr.overlaps(["src-tauri/src"], ["src-tauri/src/orca.rs"]))
+
+    def test_an_unknown_issue_overlaps_every_issue(self):
+        self.assertTrue(pr.overlaps(None, ["a"]))
+        self.assertTrue(pr.overlaps(["a"], None))
+        self.assertTrue(pr.overlaps(None, None))
+        self.assertTrue(pr.overlaps(None, []))
+
+    def test_an_issue_that_touches_nothing_overlaps_no_known_issue(self):
+        self.assertFalse(pr.overlaps([], ["a"]))
+
+
+class Parallel(unittest.TestCase):
+    def test_overlapping_issues_are_skipped_and_the_next_is_looked_at(self):
+        touches = {1: ["ts/a.ts"], 2: ["ts/a.ts"], 3: ["ts/b.ts"], 4: ["ts/c.ts"], 5: ["ts/d.ts"]}
+        self.assertEqual(pr.pick_parallel([1, 2, 3, 4, 5], [], touches), [1, 3, 4])
+
+    def test_the_cap_counts_the_issues_in_progress(self):
+        touches = {n: [f"ts/{n}.ts"] for n in range(1, 8)}
+        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [], touches), [1, 2, 3])
+        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [5], touches), [1, 2])
+        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [5, 6], touches), [1])
+        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [5, 6, 7], touches), [])
+
+    def test_an_issue_overlapping_one_in_progress_is_skipped(self):
+        touches = {1: ["ts/a.ts"], 2: ["ts/b.ts"], 9: ["ts/a.ts"]}
+        self.assertEqual(pr.pick_parallel([1, 2], [9], touches), [2])
+
+    def test_an_issue_the_plan_does_not_know_overlaps_all(self):
+        touches = {1: ["ts/a.ts"], 3: ["ts/c.ts"]}
+        self.assertEqual(pr.pick_parallel([2, 1, 3], [], touches), [2])
+        self.assertEqual(pr.pick_parallel([1, 2, 3], [], touches), [1, 3])
+        self.assertEqual(pr.pick_parallel([1, 3], [9], touches), [])
+
+    def test_the_first_unknown_candidate_alone_when_nothing_is_in_progress(self):
+        self.assertEqual(pr.pick_parallel([1, 2, 3], [], {}), [1])
+
+    def test_nothing_to_start(self):
+        self.assertEqual(pr.pick_parallel([], [], {}), [])
+        self.assertEqual(pr.PARALLEL, 3)
+
+
+class NextAcrossMilestones(unittest.TestCase):
+    milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0"), ms(6, "v0.42.0")]
+
+    def test_start_runs_through_the_later_milestones_in_the_order_of_the_plan(self):
+        issues = [
+            mk(10, milestone="v0.40.0"),
+            mk(11, milestone="v0.40.0"),
+            mk(12, milestone="v0.41.0"),
+            mk(13, milestone="v0.41.0"),
+            mk(14, milestone="v0.42.0"),
+            mk(15, milestone="v0.42.0"),
+        ]
+        plan = {"order": [11, 10, 13, 12, 15, 14], "touches": {}}
+        out = pr.build_next(issues, self.milestones, set(), plan=plan)
+        self.assertEqual([i["number"] for i in out["start"]], [11, 10, 13, 12, 15, 14])
+        self.assertEqual(out["milestone"], "v0.40.0")
+
+    def test_the_issues_the_plan_lacks_come_last_in_their_version_oldest_first(self):
+        issues = [
+            mk(10, milestone="v0.40.0", created="2026-11-01T00:00:05Z"),
+            mk(11, milestone="v0.40.0", created="2026-11-01T00:00:01Z"),
+            mk(12, milestone="v0.40.0", created="2026-11-01T00:00:03Z"),
+            mk(13, milestone="v0.41.0", created="2026-11-01T00:00:02Z"),
+            mk(14, milestone="v0.41.0", created="2026-11-01T00:00:01Z"),
+        ]
+        out = pr.build_next(issues, self.milestones, set(), plan={"order": [12, 13]})
+        self.assertEqual([i["number"] for i in out["start"]], [12, 11, 10, 13, 14])
+        out = pr.build_next(issues, self.milestones, set())
+        self.assertEqual([i["number"] for i in out["start"]], [11, 12, 10, 14, 13])
+
+    def test_pinned_needs_owner_held_and_blocked_issues_of_a_later_milestone_are_left_out_and_not_reported(self):
+        issues = [
+            mk(10, milestone="v0.40.0"),
+            mk(20, ["release:pin"], milestone="v0.41.0"),
+            mk(21, ["needs:owner"], milestone="v0.41.0"),
+            mk(22, milestone="v0.41.0"),
+            mk(23, milestone="v0.41.0"),
+            mk(24, milestone="v0.41.0", blocked=[10]),
+            mk(25, milestone="v0.41.0"),
+            mk(26, milestone="v0.41.0"),
+        ]
+        out = pr.build_next(issues, self.milestones, {22}, {23: "fix/issue-23-x"}, mine={26})
+        self.assertEqual([i["number"] for i in out["start"]], [10, 25, 26])
+        self.assertEqual(out["held"], [])
+        self.assertEqual(out["needs_owner"], [])
+        self.assertEqual(out["blocked"], [])
+
+    def test_a_pinned_issue_of_the_first_milestone_still_starts(self):
+        issues = [mk(10, ["release:pin"], milestone="v0.40.0"), mk(11, milestone="v0.41.0")]
+        out = pr.build_next(issues, self.milestones, set())
+        self.assertEqual([i["number"] for i in out["start"]], [10, 11])
+
+    def test_an_issue_of_this_run_in_progress_in_a_later_milestone_is_in_progress(self):
+        issues = [mk(10, milestone="v0.40.0"), mk(12, milestone="v0.41.0"), mk(13, milestone="v0.41.0")]
+        out = pr.build_next(issues, self.milestones, {12, 13}, mine={12})
+        self.assertEqual([(i["number"], i["milestone"]) for i in out["in_progress"]], [(12, "v0.41.0")])
+        self.assertEqual([i["number"] for i in out["start"]], [10])
+        self.assertEqual(out["held"], [])
+
+    def test_parallel_picks_the_issues_that_do_not_overlap(self):
+        issues = [mk(10, milestone="v0.40.0"), mk(11, milestone="v0.40.0"), mk(12, milestone="v0.41.0"), mk(13, milestone="v0.42.0")]
+        plan = {
+            "order": [10, 11, 12, 13],
+            "touches": {"10": ["ts/a.ts"], "11": ["ts/a.ts"], "12": ["ts/b.ts"], "13": ["req:A-18"]},
+        }
+        out = pr.build_next(issues, self.milestones, set(), plan=plan)
+        self.assertEqual(out["parallel"], [10, 12, 13])
+
+    def test_parallel_leaves_room_for_the_issues_in_progress_and_avoids_their_files(self):
+        issues = [mk(9, milestone="v0.40.0"), mk(10, milestone="v0.40.0"), mk(11, milestone="v0.40.0"), mk(12, milestone="v0.41.0")]
+        plan = {"order": [10, 11, 12], "touches": {"9": ["ts/a.ts"], "10": ["ts/a.ts"], "11": ["ts/b.ts"], "12": ["ts/c.ts"]}}
+        out = pr.build_next(issues, self.milestones, {9}, mine={9}, plan=plan)
+        self.assertEqual(out["parallel"], [11, 12])
+
+    def test_without_a_plan_one_issue_is_picked(self):
+        issues = [mk(10, milestone="v0.40.0"), mk(11, milestone="v0.41.0")]
+        out = pr.build_next(issues, self.milestones, set())
+        self.assertEqual(out["parallel"], [10])
+        self.assertEqual([i["number"] for i in out["start"]], [10, 11])
+
+    def test_a_broken_plan_is_taken_as_no_plan(self):
+        issues = [mk(10, milestone="v0.40.0"), mk(11, milestone="v0.41.0")]
+        out = pr.build_next(issues, self.milestones, set(), plan={"order": "x"})
+        self.assertEqual(out["parallel"], [10])
+
+    def test_nothing_planned_has_no_parallel(self):
+        self.assertEqual(pr.build_next([], [ms(4, "v0.40.0")], set())["parallel"], [])
+
+
+class SavedPlan(unittest.TestCase):
+    def test_the_plan_lives_in_the_main_checkout(self):
+        self.assertEqual(pr.plan_file("/w/cookapps/.git"), "/w/cookapps/.claude/plan.json")
+        self.assertEqual(pr.plan_file("/w/cookapps/.git/"), "/w/cookapps/.claude/plan.json")
+
+    def test_save_and_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "plan.json")
+            self.assertIsNone(pr.read_plan(path))
+            plan = {"order": [1, 2], "groups": [], "blocked_by": {}, "touches": {"1": ["ts/a.ts"]}}
+            pr.save_plan(path, plan)
+            self.assertEqual(pr.read_plan(path), plan)
+            self.assertEqual(os.listdir(d), ["plan.json"])
+            pr.save_plan(path, {"order": [3]})
+            self.assertEqual(pr.read_plan(path), {"order": [3]})
+
+    def test_a_broken_plan_is_ignored_with_one_line(self):
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "plan.json")
+            for text in ("{", '{"order": "x"}', "[1]"):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertIsNone(pr.read_plan(path), text)
+                self.assertEqual(len(err.getvalue().strip().splitlines()), 1, text)
+                self.assertIn("ignored", err.getvalue())
 
 
 class DeriveGroups(unittest.TestCase):
