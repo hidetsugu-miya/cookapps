@@ -57,7 +57,7 @@ function apply(next: FontSettings) {
     } else {
       const name = kebab(area);
       set(`--ff-${name}`, pick.family && `${JSON.stringify(pick.family)}, var(--ff-base)`);
-      set(`--fs-${name}`, pick.size === TEXT_SIZE ? null : String(Math.round((pick.size / TEXT_SIZE) * 10000) / 10000));
+      set(`--fs-${name}`, pick.size === TEXT_SIZE ? null : String(pick.size / TEXT_SIZE));
     }
   }
 }
