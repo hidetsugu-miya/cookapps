@@ -79,8 +79,8 @@ export function renderProjects() {
     lines.push(line);
   }
   $("projects").replaceChildren(
+    projectButton("inbox", INBOX_SVG, "インボックス", counts.get(inbox?.id as string) ?? 0),
     projectButton("today", DAY_SVG, "今日", today),
-    projectButton("inbox", INBOX_SVG, "受信箱", counts.get(inbox?.id as string) ?? 0),
     tag("h3", "", "プロジェクト"),
     ...lines,
   );
@@ -350,7 +350,7 @@ export function renderList() {
   const view = todoState.view;
   const showProject = view === "today";
   const tasks = viewTasks(view);
-  $("todo-title").textContent = view === "today" ? "今日" : view === "inbox" ? "受信箱" : projectOf(view)!.name;
+  $("todo-title").textContent = view === "today" ? "今日" : view === "inbox" ? "インボックス" : projectOf(view)!.name;
   updateAddMode();
   const accounts = accountSet();
   const parts: HTMLElement[] = [];
