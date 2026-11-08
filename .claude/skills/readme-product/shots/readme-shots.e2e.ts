@@ -420,12 +420,12 @@ describe("readme shots", () => {
     await sendStream(streamList(rows(), worktreeList(), terminals()));
     await waitForCount("#orca-feed .orca-project", 12);
     await $(`#orca-feed .orca-project[data-key="proj_billing-api"]`).click();
-    await $(`#orca-tabs [data-tab="claude:tab_${SHOT_SESSION}:leaf_1"] .orca-tab-btn`).click();
+    await $(`.orca-tabs [data-tab="claude:tab_${SHOT_SESSION}:leaf_1"] .orca-tab-btn`).click();
     const last = async () => ((await waitForCalls("orca_stream_terminal")).at(-1) ?? {}) as { handle?: string; viewport: { cols: number; rows: number } };
     await browser.waitUntil(async () => (await last()).handle === `term_${SHOT_SESSION}`, { timeoutMsg: "the terminal of the session was never subscribed" });
     const { cols, rows: termRows } = (await last()).viewport;
     await sendTerm({ kind: "snapshot", data: claudeScreen(cols, termRows), cols, rows: termRows });
-    await browser.waitUntil(async () => (await $("#orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("テストを実行しています"), { timeoutMsg: "the terminal never showed the screen" });
+    await browser.waitUntil(async () => (await $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("テストを実行しています"), { timeoutMsg: "the terminal never showed the screen" });
     await shot("orca");
   });
 
