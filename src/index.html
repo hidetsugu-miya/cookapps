@@ -273,6 +273,17 @@
       <section class="card">
         <div class="card-head">
           <h2>
+            <span class="logo orca"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>エディタ
+          </h2>
+          <button id="editor-help" class="icon-btn" data-hint aria-label="エディタの説明" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4"/><path d="M12 17h.01"/></svg>
+          </button>
+        </div>
+        <div id="editor-items"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>
             <span class="logo orca"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8l5 4-5 4M13 17h6"/></svg></span>Ghostty の設定
           </h2>
           <button id="ghostty-help" class="icon-btn" data-hint aria-label="Ghostty の設定の取り込み方" aria-expanded="false">
@@ -384,6 +395,16 @@
         <div id="orca-panes"></div>
         <div id="orca-stash" hidden></div>
       </div>
+      <div id="orca-files-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="ファイル欄の幅" aria-valuemin="15" aria-valuemax="40" aria-valuenow="22" tabindex="0" hidden><span></span></div>
+      <aside id="orca-files" aria-label="ファイル" hidden>
+        <header id="orca-files-head">
+          <h2 id="orca-files-title"></h2>
+          <button id="orca-files-reload" class="icon-btn" aria-label="ファイルを読み直す">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+          </button>
+        </header>
+        <div id="orca-files-tree"></div>
+      </aside>
     </section>
     <section id="slack-thread" class="split-main" hidden>
       <div id="st-detail">

@@ -791,6 +791,48 @@ button.status { border: 0; font: inherit; font-size: 12px; cursor: pointer; }
 #orca-started { margin: 16px 24px 0; }
 /* The terminal fills the pane. The box of each tab has a definite size (it is placed in the pane), so that the fit counts the rows that show and the bottom is not cut off. */
 #orca-panes .orca-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+/* The file pane (A-18) on the right of the work pane: the tree of the selected tab's worktree (`--files-w` is where the divider put it, 15% to 40% of the screen), and the editor of a file in the place of a terminal. */
+#orca-files { flex: none; width: clamp(15%, var(--files-w, 22%), 40%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
+#orca-files-head { flex: none; display: flex; align-items: center; gap: 4px; height: 32px; box-sizing: border-box; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); }
+#orca-files-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+#orca-files-head .icon-btn { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
+#orca-files-head .icon-btn svg { width: 15px; height: 15px; }
+#orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
+#orca-files-tree .pending { margin: 4px; }
+.orca-file { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: 12.5px; color: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
+.orca-file:hover { background: var(--hover); }
+.orca-file:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-file-mark { flex: none; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; }
+.orca-file-mark svg { width: 12px; height: 12px; stroke-width: 2; transition: transform .1s; }
+.orca-file[data-kind="file"] .orca-file-mark svg { display: none; }
+.orca-file[aria-expanded="true"] .orca-file-mark svg { transform: rotate(90deg); }
+.orca-file-ic { flex: none; display: inline-flex; color: var(--muted); }
+.orca-file-ic svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.orca-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.orca-file[data-ignored="true"] { opacity: .55; }
+.orca-file[data-ignored="true"] .orca-file-name { font-style: italic; }
+.orca-file[data-open="true"] { background: var(--soft); color: var(--accent); }
+.orca-file[data-open="true"] .orca-file-ic { color: var(--accent); }
+.orca-file-note { margin: 0; padding: 2px 8px 2px calc(24px + var(--depth, 0) * 14px); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.orca-file-note.fail { color: var(--warn); }
+.orca-files-toggle { flex: none; margin: 0 6px 0 auto; width: 24px; height: 24px; color: var(--ink-soft); }
+.orca-files-toggle svg { width: 15px; height: 15px; }
+.orca-files-toggle[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+.orca-file-tab-ic { color: var(--muted); }
+.orca-file-tab-ic svg { width: 13px; height: 13px; stroke-width: 1.8; }
+.orca-tab-dirty { flex: none; width: 7px; height: 7px; margin-left: 2px; border-radius: 50%; background: var(--accent); }
+#orca-panes .orca-edit-host { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
+.orca-edit { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.orca-edit-head { flex: none; display: flex; align-items: center; gap: 12px; height: 28px; box-sizing: border-box; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.orca-edit-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.orca-edit-state { flex: none; color: var(--muted); }
+.orca-edit-state[data-state="saved"] { color: var(--accent); }
+.orca-edit-state[data-state="changed"], .orca-edit-state[data-state="missing"], .orca-edit-state[data-state="not-utf8"], .orca-edit-state[data-state="error"] { color: var(--warn); }
+.orca-edit .orca-empty { margin: 0; padding: 48px 24px; }
+.orca-edit-area { flex: 1; min-height: 0; box-sizing: border-box; width: 100%; margin: 0; padding: 8px 12px; border: 0; border-radius: 0; background: var(--surface); color: inherit; font: 12.5px/1.6 ui-monospace, Menlo, monospace; tab-size: 2; white-space: pre; overflow: auto; resize: none; outline: none; }
+.orca-edit-area:disabled { opacity: .6; }
+.item input.editor-ms { width: 90px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: #fff; }
+.item input.editor-ms:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .orca-term-box { position: absolute; inset: 8px 8px 8px 12px; }
 .orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }
 body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }

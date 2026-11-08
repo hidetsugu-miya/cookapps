@@ -13,6 +13,7 @@ pub mod orca_answer;
 pub mod orca_attach;
 pub mod orca_chat;
 pub mod orca_e2ee;
+pub mod orca_files;
 pub mod orca_handoff;
 pub mod orca_panes;
 pub mod orca_stream;
@@ -303,6 +304,11 @@ pub fn run() {
             orca_stream::orca_stream_viewport,
             orca_stream::orca_stream_input,
             orca_panes::orca_panes,
+            orca_files::orca_files_list,
+            orca_files::orca_file_read,
+            orca_files::orca_file_write,
+            orca_files::editor_settings,
+            orca_files::editor_settings_set,
             ghostty::ghostty_saved,
             ghostty::ghostty_import,
             orca_theme::terminal_themes,

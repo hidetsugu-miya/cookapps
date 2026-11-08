@@ -6,6 +6,7 @@ import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
 import type { Effort } from "./bindings/Effort";
+import type { EditorSettings } from "./bindings/EditorSettings";
 import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
@@ -16,7 +17,10 @@ import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
 import type { HandoffKind } from "./bindings/HandoffKind";
+import type { OrcaDir } from "./bindings/OrcaDir";
+import type { OrcaFileText } from "./bindings/OrcaFileText";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
+import type { OrcaSaved } from "./bindings/OrcaSaved";
 import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaViewport } from "./bindings/OrcaViewport";
 import type { PaneLayout } from "./bindings/PaneLayout";
@@ -240,6 +244,16 @@ export interface Commands {
   orca_stream_input: { args: { handle: string; text: string }; result: null };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
   orca_panes: { args: { environment: string | null; project: string; tabs: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
+  // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.
+  orca_files_list: { args: { path: string; dir: string; environment: string | null }; result: OrcaDir };
+  // A-18: the text of the file `relative` of the worktree, for the editor, with LF line ends (`crlf`: the file has CRLF) and the signature of what the disk holds. A binary file, one over 384 KiB and one that is not UTF-8 are errors.
+  orca_file_read: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileText };
+  // A-18: saves `content` over the file only if the disk still holds the text with `signature` (`crlf`: write CRLF). `state` says whether it was written (`saved`, with the new signature) or the disk had changed (`changed`, `missing`, `not-utf8`: nothing written).
+  orca_file_write: { args: { path: string; relative: string; content: string; crlf: boolean; signature: string; environment: string | null }; result: OrcaSaved };
+  // A-18: the settings of the editor: how long after the typing stops the file is saved.
+  editor_settings: { args: undefined; result: EditorSettings };
+  // A-18: saves the time of the automatic save, brought into 100 to 3000 ms in steps of 100, and answers the settings saved.
+  editor_settings_set: { args: { autosaveMs: number }; result: EditorSettings };
   // A-13: the import of Ghostty's settings saved last, null before the first one.
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.

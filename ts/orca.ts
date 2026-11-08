@@ -1,5 +1,6 @@
-// The Orca screen (A-6, A-8, A-12, A-16, A-17): two panes. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
+// The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18): two panes, and the file pane on the right (orca-files.ts) when it is shown. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
+// A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be.
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change) and nothing reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
 // and no more once the `orca` command was found missing (the reload button reads again). Only the first read, the screen being shown, the reload button, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
@@ -17,12 +18,14 @@ import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, tag } from "./dom.js";
-import { CLAUDE_SVG, svgOf } from "./icons.js";
+import { CLAUDE_SVG, FILE_SVG, svgOf } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { initOrcaChat } from "./orca-chat.js";
-import { type PaneModel, drawTree, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
+import { closeFile, dirtyIds, filesOf, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
+import { filesShown, initOrcaFiles, syncFiles, toggleFiles } from "./orca-files.js";
+import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
@@ -155,17 +158,19 @@ export function statusIcon(status: OrcaStatus, label = STATUS_LABELS[status]) {
 
 // ---- tabs ----
 
-// A tab of the work pane: a Claude session, or a plain terminal of Orca. Both are terminals.
+// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18).
 interface Tab {
   id: string;
-  kind: "claude" | "plain";
+  kind: "claude" | "plain" | "file";
   status: OrcaStatus;
   label: string;
   title: string;
   // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
   handle: string | null;
-  // The worktree it runs in.
+  // The worktree it runs in (a file's: where the file is).
   path: string;
+  // The worktree's name, "{repo} ・ {branch}", which the heading of the file pane shows.
+  where: string;
 }
 
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
@@ -182,10 +187,16 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of view?.rows ?? []) {
     if (r.projectKey !== key || r.paneKey === null) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", handle: r.handle, path: r.path });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", handle: r.handle, path: r.path, where: worktreeLabel(r) });
   }
   for (const t of view?.terminals ?? []) {
-    if (t.projectKey === key) tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle, path: t.path });
+    if (t.projectKey !== key) continue;
+    const repo = view?.worktrees.find((w) => w.path === t.path)?.repo ?? view?.projects.find((p) => p.key === t.projectKey)?.name ?? "";
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }) });
+  }
+  for (const f of filesOf(view?.target ?? null, key)) {
+    const where = tabs.find((t) => t.path === f.path)?.where ?? view?.worktrees.find((w) => w.path === f.path);
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where) });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -363,7 +374,16 @@ function tabNode(t: Tab, selected: boolean) {
   select.type = "button";
   select.setAttribute("role", "tab");
   select.setAttribute("aria-selected", String(selected));
-  select.append(statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
+  select.append(t.kind === "file" ? fileIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
+  if (t.kind === "file") {
+    wrap.dataset.file = "true";
+    if (dirtyIds().has(t.id)) {
+      const unsaved = tag("span", "orca-tab-dirty");
+      unsaved.setAttribute("role", "img");
+      unsaved.setAttribute("aria-label", "未保存");
+      select.append(unsaved);
+    }
+  }
   select.onclick = () => selectTab(t.id);
   // The close button is beside the tab, not in it, so that pressing it never selects the tab.
   const close = tag("button", "icon-btn orca-tab-close");
@@ -376,12 +396,19 @@ function tabNode(t: Tab, selected: boolean) {
   return wrap;
 }
 
+// The mark of a file's tab (the status icon of a terminal's).
+function fileIcon() {
+  const icon = tag("span", "orca-ic orca-file-tab-ic");
+  icon.innerHTML = FILE_SVG;
+  return icon;
+}
+
 // The line under a pane's strip that says why it shows no terminal, else null.
 function emptyText(tabs: Tab[], tab: Tab | undefined) {
   if (started !== null) return null;
   if (projectKey === null) return "プロジェクトを選んでください";
   if (tabs.length === 0) return "セッションはありません";
-  return tab?.handle === null ? "このセッションのターミナルはありません" : null;
+  return tab !== undefined && tab.kind !== "file" && tab.handle === null ? "このセッションのターミナルはありません" : null;
 }
 
 // The tree of the layout for drawing: each pane with the tabs it holds that the list still has (a tab that left shows no more before Rust's next answer), and the one it shows.
@@ -389,16 +416,19 @@ function emptyText(tabs: Tab[], tab: Tab | undefined) {
 function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled: boolean, find: (id: string) => Tab | undefined): TreeModel {
   if (node.kind === "split") return { kind: "split", direction: node.direction, children: node.children.map((c) => treeOf(c, tabs, focus, plusDisabled, find)) };
   const mine = [...new Set(node.tabs.flatMap((id) => find(id) ?? []))];
+  const dirty = dirtyIds();
   const selected = find(node.selected);
   const tab = mine.find((t) => t.id === selected?.id);
   const pane: PaneModel = {
     id: node.id,
-    key: JSON.stringify([mine, node.selected, [...closing]]),
+    key: JSON.stringify([mine, node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
     tabs: () => mine.map((t) => tabNode(t, t.id === tab?.id)),
     focused: node.id === focus,
     empty: emptyText(tabs, tab),
     terminal: !!tab?.handle,
+    editor: tab?.kind === "file",
     plusDisabled,
+    filesShown: filesShown(),
   };
   return { kind: "pane", pane };
 }
@@ -409,7 +439,7 @@ function drawWork() {
   syncLayout(tabs);
   const layout = currentLayout();
   const plusDisabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
-  const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, plusDisabled } };
+  const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, editor: false, plusDisabled, filesShown: filesShown() } };
   paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled, (id) => findTab(view?.target ?? null, projectKey!, tabs, id)) : empty);
   drawStarted();
 }
@@ -426,6 +456,39 @@ function syncTerminal() {
   }
   if (placements.length === 0) return hideTerminals();
   showTerminals(placements, findTab(view?.target ?? null, projectKey!, tabs, selectedTab() ?? "")?.handle ?? null);
+}
+
+// Shows the editor of the file tab selected in each pane while the screen is shown.
+function syncEditor() {
+  const layout = shown() ? currentLayout() : null;
+  const tabs = projectKey === null ? [] : tabsOf(projectKey);
+  const placements: { id: string; host: HTMLElement }[] = [];
+  for (const pane of panesOf(layout?.root ?? null)) {
+    const tab = findTab(view?.target ?? null, projectKey!, tabs, pane.selected);
+    const host = editorHostOf(pane.id);
+    if (tab?.kind === "file" && host) placements.push({ id: tab.id, host });
+  }
+  showEditors(placements);
+}
+
+// The file pane follows the selected tab: its worktree, and the files open in it.
+function drawFiles() {
+  const tabs = projectKey === null ? [] : tabsOf(projectKey);
+  const tab = findTab(view?.target ?? null, projectKey ?? "", tabs, selectedTab() ?? "");
+  const target = view?.target ?? null;
+  syncFiles(tab === undefined ? null : { target, path: tab.path, label: tab.where }, tab === undefined || projectKey === null ? new Set() : openedIn(target, projectKey, tab.path));
+}
+
+// A file of the file pane was pressed twice: it opens as a tab in the focused pane and is selected, and the editor takes the typing.
+function openFile(relative: string) {
+  const tab = projectKey === null ? undefined : findTab(view?.target ?? null, projectKey, tabsOf(projectKey), selectedTab() ?? "");
+  if (tab === undefined || projectKey === null || view === null) return;
+  started = null;
+  const id = openEditorFile(view.target, projectKey, tab.path, relative);
+  // The tab is listed (draw asks Rust for the layout with it), then selected.
+  draw();
+  chooseTab(id);
+  draw();
 }
 
 // The note of a start that was answered: it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started.
@@ -484,7 +547,7 @@ function claimStarted() {
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => t.handle)]);
+  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => t.handle), ...filesOf(view?.target ?? null, projectKey ?? "").map((f) => f.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
 }
 
@@ -496,7 +559,9 @@ function draw() {
   drawBell();
   drawFeed();
   drawWork();
+  drawFiles();
   syncTerminal();
+  syncEditor();
 }
 
 // ---- the stream of a saved environment ----
@@ -754,6 +819,13 @@ async function closeTab(tab: Tab) {
   if (closing.has(tab.id)) return;
   closing.add(tab.id);
   draw();
+  if (tab.kind === "file") {
+    // A file is closed here once its typing is saved (a save that cannot be made keeps the tab, and its message was shown).
+    await closeFile(tab.id);
+    closing.delete(tab.id);
+    draw();
+    return;
+  }
   try {
     await invoke("orca_close", { handle: tab.handle!, environment: view?.target ?? null });
   } catch (e) {
@@ -820,6 +892,9 @@ export function initOrca() {
   initOrcaChat();
   initOrcaTerminal(showError);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.3, property: "--list-w" });
+  initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
+  initOrcaEditor({ changed: draw, error: showError });
+  initOrcaFiles({ open: openFile });
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", () => {
     // A session shown again after the window was hidden is seen.
@@ -836,6 +911,10 @@ export function initOrca() {
     plus: (anchor, pane) => {
       focusPane(pane);
       openStartMenu(anchor);
+    },
+    files: () => {
+      toggleFiles();
+      draw();
     },
     focus: focusPane,
     move: (tab, pane, edge) => runPaneOp({ kind: "move", tab, pane, edge }),

@@ -22,8 +22,8 @@ const STEM_LIMIT: usize = 40;
 const SHELL_SPECIAL: &str = " \"'`$;&|<>(){}[]*?!#\\";
 const NOT_AN_IMAGE: &str = "画像（PNG、JPEG、GIF、WebP）だけを添付できます";
 
-/// The call of one Orca, so that the upload is the same code for a unit test and for the real connection.
-trait Rpc {
+/// The call of one Orca, so that the upload is the same code for a unit test and for the real connection (A-18's files and editor use it too).
+pub(crate) trait Rpc {
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError>;
 }
 
@@ -136,7 +136,7 @@ fn is_missing(error: &CallError) -> bool {
 }
 
 /// The parameters every call takes: the worktree by its path, and for a change the host Orca runs it on.
-fn worktree_params(path: &str, host_id: Option<&str>, mut params: Value) -> Value {
+pub(crate) fn worktree_params(path: &str, host_id: Option<&str>, mut params: Value) -> Value {
     params["worktree"] = json!(format!("path:{path}"));
     if let Some(host_id) = host_id {
         params["expectedExecutionHostId"] = json!(host_id);

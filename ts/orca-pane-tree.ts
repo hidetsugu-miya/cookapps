@@ -1,16 +1,18 @@
-// The panes of the work pane of the Orca screen (A-17), drawn in `#orca-panes` from a tree: a pane (its tab strip, its plus, a line that says why it shows no terminal, and the host element of its terminal), or a split of panes side by side or one above the other.
+// The panes of the work pane of the Orca screen (A-17), drawn in `#orca-panes` from a tree: a pane (its tab strip, its plus, a line that says why it shows no terminal, and the host elements of its terminal and of its editor), or a split of panes side by side or one above the other.
+// The button of the file pane (A-18) is at the right end of the strip of the pane in the top right corner of the work pane.
 // This module only draws and takes the user's operations: a tab dragged by the pointer (an edge of a pane splits it, its tab strip or its middle joins its tabs), and the pane that was pressed. What an operation does to the layout is decided in Rust (`orca_panes`).
 // The pane elements are kept from one drawing to the next while their pane stays, so a terminal in a pane is not made again when the tree changes elsewhere; the structure is built again only when the tree's shape changes.
 import type { Direction } from "./bindings/Direction";
 import type { Edge } from "./bindings/Edge";
 import { tag } from "./dom.js";
+import { FOLDER_SVG } from "./icons.js";
 
 const PLUS_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
 // How far from an edge of a pane's body a tab dropped there splits the pane (a share of the body's size), and how far the pointer goes before a press is a drag (px).
 const EDGE_SHARE = 0.25;
 const DRAG_PX = 5;
 
-// A pane to draw: its strip's tabs (made only when `key` changed since the last drawing), whether it has the focus, the line under the strip (null: none), whether its terminal shows, and whether its plus is off.
+// A pane to draw: its strip's tabs (made only when `key` changed since the last drawing), whether it has the focus, the line under the strip (null: none), whether its terminal shows, whether its editor shows, whether its plus is off, and whether the file pane is shown (the button of the pane in the corner is pressed).
 export interface PaneModel {
   id: string;
   key: string;
@@ -18,7 +20,9 @@ export interface PaneModel {
   focused: boolean;
   empty: string | null;
   terminal: boolean;
+  editor: boolean;
   plusDisabled: boolean;
+  filesShown: boolean;
 }
 export type TreeModel = { kind: "pane"; pane: PaneModel } | { kind: "split"; direction: Direction; children: TreeModel[] };
 
@@ -26,6 +30,8 @@ export type TreeModel = { kind: "pane"; pane: PaneModel } | { kind: "split"; dir
 export interface TreeHandlers {
   // The plus of the pane was pressed (the pane takes the focus first).
   plus: (anchor: Element, pane: string) => void;
+  // The button of the file pane was pressed.
+  files: () => void;
   // The pane was pressed, or one of its tabs was.
   focus: (pane: string) => void;
   // The tab was dropped on the pane at the edge.
@@ -39,8 +45,10 @@ interface PaneEl {
   tabbar: HTMLElement;
   strip: HTMLElement;
   plus: HTMLButtonElement;
+  files: HTMLButtonElement;
   empty: HTMLElement;
   host: HTMLElement;
+  editor: HTMLElement;
   key: string | null;
   tabCount: number;
 }
@@ -68,12 +76,19 @@ function newPane(id: string): PaneEl {
   plus.setAttribute("aria-haspopup", "menu");
   plus.innerHTML = PLUS_SVG;
   plus.onclick = () => handlers.plus(plus, id);
-  tabbar.append(strip, plus);
+  const files = tag("button", "icon-btn orca-files-toggle");
+  files.type = "button";
+  files.setAttribute("aria-label", "ファイル欄");
+  files.innerHTML = FOLDER_SVG;
+  files.onclick = () => handlers.files();
+  tabbar.append(strip, plus, files);
   const empty = tag("p", "orca-empty feed-empty");
   empty.hidden = true;
   const host = tag("div", "orca-term");
   host.hidden = true;
-  el.append(tabbar, empty, host);
+  const editor = tag("div", "orca-edit-host");
+  editor.hidden = true;
+  el.append(tabbar, empty, host, editor);
   // Pressing anywhere in a pane gives it the focus (capturing: the terminal and the tabs take the press themselves).
   el.addEventListener("pointerdown", () => handlers.focus(id), true);
   // Focus that moves into a pane by the keyboard gives it the focus too (the terminal that is shown takes the keyboard after a press, which is the same pane).
@@ -85,11 +100,11 @@ function newPane(id: string): PaneEl {
     e.preventDefault();
     handlers.menu(tab, tab.dataset.tab!, id);
   });
-  return { el, tabbar, strip, plus, empty, host, key: null, tabCount: 0 };
+  return { el, tabbar, strip, plus, files, empty, host, editor, key: null, tabCount: 0 };
 }
 
 // Updates a pane's own parts from its model.
-function drawPane(p: PaneEl, m: PaneModel) {
+function drawPane(p: PaneEl, m: PaneModel, corner: boolean) {
   p.el.dataset.focused = String(m.focused);
   if (p.key !== m.key) {
     p.key = m.key;
@@ -102,7 +117,10 @@ function drawPane(p: PaneEl, m: PaneModel) {
   p.empty.hidden = m.empty === null;
   p.empty.textContent = m.empty ?? "";
   p.host.hidden = !m.terminal;
+  p.editor.hidden = !m.editor;
   p.plus.disabled = m.plusDisabled;
+  p.files.hidden = !corner;
+  p.files.setAttribute("aria-pressed", String(m.filesShown));
 }
 
 function build(tree: TreeModel): HTMLElement {
@@ -117,6 +135,12 @@ function paneModels(tree: TreeModel): PaneModel[] {
   return tree.kind === "pane" ? [tree.pane] : tree.children.flatMap(paneModels);
 }
 
+// The pane in the top right corner: the last one of a row of panes, the first of a column, down to a pane.
+function corner(tree: TreeModel): PaneModel {
+  if (tree.kind === "pane") return tree.pane;
+  return corner(tree.direction === "row" ? tree.children[tree.children.length - 1] : tree.children[0]);
+}
+
 // Draws the tree, and gives the host elements of the panes by pane id (the terminals are placed in them).
 export function drawTree(tree: TreeModel): Map<string, HTMLElement> {
   const models = paneModels(tree);
@@ -129,9 +153,13 @@ export function drawTree(tree: TreeModel): Map<string, HTMLElement> {
     root.replaceChildren(build(tree));
     root.dataset.multi = String(models.length > 1);
   }
-  for (const m of models) drawPane(paneEls.get(m.id)!, m);
+  const top = corner(tree);
+  for (const m of models) drawPane(paneEls.get(m.id)!, m, m === top);
   return new Map(models.map((m) => [m.id, paneEls.get(m.id)!.host]));
 }
+
+// The host element of the editor of a pane drawn (null: no such pane).
+export const editorHostOf = (id: string) => paneEls.get(id)?.editor ?? null;
 
 // ---- dragging a tab ----
 
