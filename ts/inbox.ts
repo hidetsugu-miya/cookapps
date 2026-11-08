@@ -125,10 +125,15 @@ let stateKey = "";
 // The state of the list: loading before the first answer, the failure of the last load with its button, or the note that there is nothing to show.
 function drawInboxState() {
   const hasRows = $("threads").querySelector("li") !== null;
-  const key = JSON.stringify([loadFailure, hasRows, inboxLoaded, loading > 0]);
-  if (key === stateKey) return;
-  stateKey = key;
+  const key = JSON.stringify([loadFailure, hasRows, inboxLoaded]);
   const box = $("inbox-state");
+  if (key === stateKey) {
+    // A load that starts or ends only enables or disables the button of the failure: it is not made again, so it keeps the focus.
+    const button = box.querySelector("button");
+    if (button) button.disabled = loading > 0;
+    return;
+  }
+  stateKey = key;
   if (loadFailure !== null) {
     const row = tag("div", "pending fail");
     const retry = tag("button", "text-btn", "再読み込み");

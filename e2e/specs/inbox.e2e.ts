@@ -570,6 +570,21 @@ describe("inbox", () => {
       await expect($("#inbox-state button")).toBeEnabled();
     });
 
+    it("keeps the focus on the same button while the button's load runs and fails with the same error", async () => {
+      await boot({ inbox: rejects("boom") });
+      await expect($("#inbox-state button")).toBeDisplayed();
+      await browser.execute(() => {
+        const b = document.querySelector<HTMLElement>("#inbox-state button")!;
+        b.setAttribute("data-old", "");
+        b.focus();
+      });
+      await browser.keys("Enter");
+      expect(await waitForCalls("inbox")).toHaveLength(1);
+      await browser.pause(300);
+      await expect($("#inbox-state button[data-old]")).toBeFocused();
+      await expect($("#inbox-state button")).toBeEnabled();
+    });
+
     it("keeps the rows and puts the failure line and the button above them when a load fails", async () => {
       await failWithRows("boom");
       await expect($("#inbox-state")).toHaveText(expect.stringContaining("自動でも読み直します"));
