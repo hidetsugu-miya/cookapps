@@ -884,7 +884,7 @@ class NextAcrossMilestones(unittest.TestCase):
     def test_pinned_needs_owner_held_and_blocked_issues_of_a_later_milestone_are_left_out_and_not_reported(self):
         issues = [
             mk(10, milestone="v0.40.0"),
-            mk(20, ["release:pin"], milestone="v0.41.0"),
+            mk(20, ["release:pin"], milestone="v0.42.0"),
             mk(21, ["needs:owner"], milestone="v0.41.0"),
             mk(22, milestone="v0.41.0"),
             mk(23, milestone="v0.41.0"),
@@ -898,10 +898,30 @@ class NextAcrossMilestones(unittest.TestCase):
         self.assertEqual(out["needs_owner"], [])
         self.assertEqual(out["blocked"], [])
 
-    def test_a_pinned_issue_of_the_first_milestone_still_starts(self):
+    def test_a_pinned_issue_of_the_first_milestone_still_starts_and_nothing_starts_from_the_later_milestones(self):
         issues = [mk(10, ["release:pin"], milestone="v0.40.0"), mk(11, milestone="v0.41.0")]
-        out = pr.build_next(issues, self.milestones, set())
+        plan = {"order": [10, 11], "touches": {"10": ["ts/a.ts"], "11": ["ts/b.ts"]}}
+        out = pr.build_next(issues, self.milestones, set(), plan=plan)
+        self.assertEqual([i["number"] for i in out["start"]], [10])
+        self.assertEqual(out["parallel"], [10])
+
+    def test_nothing_starts_from_a_pinned_version_or_from_the_versions_after_it(self):
+        issues = [
+            mk(10, milestone="v0.40.0"),
+            mk(11, milestone="v0.41.0"),
+            mk(12, ["release:pin"], milestone="v0.42.0"),
+            mk(13, milestone="v0.42.0"),
+            mk(14, milestone="v0.43.0"),
+        ]
+        milestones = self.milestones + [ms(8, "v0.43.0")]
+        out = pr.build_next(issues, milestones, set())
         self.assertEqual([i["number"] for i in out["start"]], [10, 11])
+
+    def test_an_issue_in_progress_after_a_pinned_version_stays_in_progress(self):
+        issues = [mk(10, milestone="v0.40.0"), mk(12, ["release:pin"], milestone="v0.41.0"), mk(13, milestone="v0.42.0")]
+        out = pr.build_next(issues, self.milestones + [ms(8, "v0.43.0")], {13}, mine={13})
+        self.assertEqual([i["number"] for i in out["in_progress"]], [13])
+        self.assertEqual([i["number"] for i in out["start"]], [10])
 
     def test_an_issue_of_this_run_in_progress_in_a_later_milestone_is_in_progress(self):
         issues = [mk(10, milestone="v0.40.0"), mk(12, milestone="v0.41.0"), mk(13, milestone="v0.41.0")]

@@ -678,6 +678,8 @@ def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=froze
     `start` holds the issues that can start in the first milestone that has work and in the milestones after it, by the order of the saved `plan` within a version
     (the issues the plan lacks come last, oldest first). Of the later milestones, nothing is reported but what can start and what is in progress as this run's own:
     an issue with release:pin or needs:owner, one that is held, and one with an open blocker are left out.
+    Nothing starts from the version of the first open release:pin issue or from any version after it (the pin's version is fixed, so an issue that merged ahead of it could not be given a version before it);
+    when the pin is in the first milestone, nothing starts from the later milestones.
     `parallel` is the numbers of `start` to begin now (pick_parallel)."""
     held_by_worktree = held_by_worktree or {}
     position, touches = plan_view(plan)
@@ -731,10 +733,13 @@ def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=froze
         else:
             startable.append(i)
     later = sorted((i for i in open_issues if i.milestone != chosen), key=lambda i: (parse_version(i.milestone), *by_created(i)))
+    pin_version_of_first = min((parse_version(i.milestone) for i in open_issues if has(i, "release:pin")), default=None)
     for i in later:
         if i.number in pr_closing:
             if i.number in mine:
                 in_progress.append(i)
+        elif pin_version_of_first is not None and parse_version(i.milestone) >= pin_version_of_first:
+            continue
         elif not (
             has(i, "needs:owner")
             or has(i, "release:pin")
