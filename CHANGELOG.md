@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.53.3
+
+No change to the app. Only the tools used to develop it changed.
+
 ## v0.53.2
 
 A terminal opened from the plus of the Orca work pane keeps its pane when Claude is started in it (#213). Before, the tab of that terminal was taken for a new one, so its pane closed and the split folded back. A terminal whose kind changes, from plain to Claude or back, now stays in the same pane at the same place, selected if it was, and its screen is kept.
