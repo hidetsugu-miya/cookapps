@@ -7,12 +7,12 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use crypto_secretbox::{
-    aead::{AeadInPlace, KeyInit},
+    aead::{generic_array::GenericArray, AeadInPlace, KeyInit},
     Key, Nonce, XSalsa20Poly1305,
 };
 use hkdf::Hkdf;
 use salsa20::{
-    cipher::{consts::U10, generic_array::GenericArray},
+    cipher::{array::Array, consts::U10},
     hsalsa,
 };
 use serde_json::{json, Value};
@@ -54,8 +54,8 @@ fn canonical_32(value: &str) -> Option<[u8; 32]> {
 /// NaCl `box.before`: HSalsa20 over the X25519 secret with a zero input.
 fn box_before(secret_key: [u8; 32], public_key: [u8; 32]) -> [u8; 32] {
     let shared = x25519(secret_key, public_key);
-    let key = GenericArray::from(shared);
-    let zero = GenericArray::from([0u8; 16]);
+    let key = Array::from(shared);
+    let zero = Array::from([0u8; 16]);
     hsalsa::<U10>(&key, &zero).into()
 }
 
