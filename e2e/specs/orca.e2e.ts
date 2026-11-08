@@ -1218,6 +1218,99 @@ describe("orca: projects", () => {
     await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
   });
 
+  describe("the sessions under a project (A-8)", () => {
+    const arrow = (repo: string) => $(`#orca-feed .orca-arrow[data-key="arrow:proj_${repo}"]`);
+    const sessionTitles = () => textsOf("#orca-feed .orca-session .orca-session-title");
+    const sessionOf = (id: string) => $(`#orca-feed .orca-session[data-session="${id}"]`);
+    const pressedSessions = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].filter((r) => r.getAttribute("aria-pressed") === "true").map((r) => r.dataset.session));
+
+    it("puts an arrow at the left of each project that has a session tab, and none at the others (example-web's one session has no pane, and the host's number comes with no row of it), with every project closed at first", async () => {
+      await openOrca(withTerminals());
+      expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-arrow")].map((a) => [a.dataset.key, a.getAttribute("aria-expanded")]))).toEqual([
+        ["arrow:proj_example-app", "false"],
+        ["arrow:proj_example-api", "false"],
+        ["arrow:proj_example-lib", "false"],
+      ]);
+      await expect($("#orca-feed .orca-session")).not.toExist();
+      // The arrow is at the left of the row, before the status icon.
+      const left = await browser.execute(() => {
+        const r = (e: Element) => e.getBoundingClientRect();
+        return [r(document.querySelector('.orca-arrow[data-key="arrow:proj_example-app"]')!).right, r(document.querySelector('.orca-project[data-key="proj_example-app"] .orca-ic')!).left];
+      });
+      expect(left[0]).toBeLessThanOrEqual(left[1]);
+    });
+
+    it("opens the selected project with its sessions under it and closes the others, one at a time", async () => {
+      await openOrca(withTerminals());
+      await project("example-app").click();
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+      // A session row has the status icon and the title.
+      expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session .orca-ic")].map((i) => [i.dataset.status, i.getAttribute("aria-label")]))).toEqual([
+        ["working", "作業中"],
+        ["done", "起動中"],
+      ]);
+      await project("example-api").click();
+      await expect(arrow("example-api")).toHaveAttribute("aria-expanded", "true");
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "false");
+      expect(await sessionTitles()).toEqual(["Fix the parser"]);
+      expect(await count("#orca-feed .orca-sessions")).toBe(1);
+      // The arrow of a project that is not selected selects it, which opens it.
+      await arrow("example-app").click();
+      await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+    });
+
+    it("closes with the arrow of the selected project and opens again with it, keeping the tabs, the work pane and the number", async () => {
+      await openOrca(withTerminals());
+      await mock("orca_terminal_read", ["$ ls"]);
+      await project("example-app").click();
+      await expect($(".orca-term")).toBeDisplayed();
+      const numbers = await textsOf("#orca-feed .orca-n");
+      await arrow("example-app").click();
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "false");
+      await expect($("#orca-feed .orca-session")).not.toExist();
+      await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh"]);
+      await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
+      await expect($(".orca-term")).toBeDisplayed();
+      // The number stays a number.
+      expect(await textsOf("#orca-feed .orca-n")).toEqual(numbers);
+      await arrow("example-app").click();
+      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+      // Pressing the closed project's row opens it too.
+      await arrow("example-app").click();
+      await expect($("#orca-feed .orca-session")).not.toExist();
+      await project("example-app").click();
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+    });
+
+    it("lists the sessions in the order of the tabs, through a read that reorders them", async () => {
+      await openOrca(withTerminals());
+      await project("example-app").click();
+      await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash"), orcaTerminal("example-app", "zsh")] }));
+      await $("#orca-refresh").click();
+      await browser.waitUntil(async () => (await sessionTitles()).length === 3, { timeoutMsg: "the new terminal never became a session row" });
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+      expect(await tabTitles()).toEqual(await sessionTitles());
+    });
+
+    it("selects the tab of a session row, and moves the selected row when a tab is pressed", async () => {
+      await openOrca(withTerminals());
+      await mock("orca_terminal_read", ["$ ls"]);
+      await project("example-app").click();
+      expect(await pressedSessions()).toEqual([claudeTab("example-app")]);
+      await sessionOf("orca:term_example-app_zsh").click();
+      await expect(selectedTab()).toHaveText(expect.stringContaining("zsh"));
+      expect(await pressedSessions()).toEqual(["orca:term_example-app_zsh"]);
+      await tabOf(claudeTab("example-app")).$(".orca-tab-btn").click();
+      await browser.waitUntil(async () => (await pressedSessions()).join() === claudeTab("example-app"), { timeoutMsg: "the selected row did not follow the tab" });
+      await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
+    });
+  });
+
   it("closes a session in Orca with its handle and the target, reads the list, and keeps the selection when another tab is closed", async () => {
     await openOrca(withTerminals());
     await project("example-app").click();

@@ -18,7 +18,7 @@ import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, tag } from "./dom.js";
-import { CLAUDE_SVG, FILE_SVG, svgOf } from "./icons.js";
+import { CHEVRON_SVG, CLAUDE_SVG, FILE_SVG, svgOf } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
@@ -67,6 +67,8 @@ let lastTry = 0;
 let working = false;
 // The project selected (its key; null: none). Its tab selected is the one shown in the pane of its layout that has the focus (`selectedTab`).
 let projectKey: string | null = null;
+// The selected project is open in the list (its sessions under it) unless the user closed it with its arrow; selecting a project opens it again. Only the selected project is ever open.
+let collapsed = false;
 // The host element of each pane drawn, by pane id: the terminals are placed in them.
 let paneHosts = new Map<string, HTMLElement>();
 // The order tabs were first seen in, so that a read that reorders the sessions does not move the tabs. A tab with a terminal is known by its handle, so a terminal that changes kind (a plain one where Claude starts, or the other way round) keeps its place.
@@ -296,8 +298,22 @@ function rowNode(r: OrcaRow, key: string, now: number) {
   return row;
 }
 
-// A project, or an SSH host: its status icon, its name and the number of its sessions (none drawn when there are none).
-function projectNode(key: string, name: string, status: OrcaStatus, sessions: number) {
+// A session of the open project: its status icon and title, selected when it is the tab selected.
+function sessionNode(t: Tab) {
+  const row = tag("button", "orca-session");
+  row.type = "button";
+  row.dataset.key = `tab:${t.id}`;
+  // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
+  row.dataset.session = t.id;
+  row.setAttribute("aria-pressed", String(t.id === selectedTab()));
+  row.append(statusIcon(t.status, t.label), tag("span", "orca-session-title", t.title));
+  row.onclick = () => selectTab(t.id);
+  return row;
+}
+
+// A project, or an SSH host: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs.
+function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, tabs: Tab[]) {
+  const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
   row.dataset.key = key;
@@ -305,7 +321,24 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   row.append(statusIcon(status), tag("span", "orca-project-name", name));
   if (sessions > 0) row.append(tag("span", "orca-n", String(sessions)));
   row.onclick = () => selectProject(key);
-  return row;
+  wrap.append(row);
+  // A row of Orca with no pane gives no tab, so the arrow follows the tabs and not the number.
+  if (!tabsOf(key).some((t) => t.kind !== "file")) return wrap;
+  const open = key === projectKey && !collapsed;
+  const arrow = tag("button", "icon-btn orca-arrow");
+  arrow.type = "button";
+  arrow.dataset.key = `arrow:${key}`;
+  arrow.setAttribute("aria-expanded", String(open));
+  arrow.setAttribute("aria-label", open ? "セッションを閉じる" : "セッションを開く");
+  arrow.innerHTML = CHEVRON_SVG;
+  arrow.onclick = () => toggleProject(key);
+  wrap.append(arrow);
+  if (open) {
+    const list = tag("div", "orca-sessions");
+    list.append(...tabs.filter((t) => t.kind !== "file").map(sessionNode));
+    wrap.append(list);
+  }
+  return wrap;
 }
 
 function emptyNode(text: string) {
@@ -331,9 +364,9 @@ function projectRows(): { local: ProjectRow[]; hosts: ProjectRow[] } {
   return { local, hosts };
 }
 
-function projectNodes(): HTMLElement[] {
+function projectNodes(tabs: Tab[]): HTMLElement[] {
   const { local, hosts } = projectRows();
-  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions);
+  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, tabs);
   const nodes: HTMLElement[] = local.map(node);
   if (hosts.length) nodes.push(tag("h3", "orca-sec", "SSH"), ...hosts.map(node));
   return nodes.length ? nodes : [emptyNode("プロジェクトがありません")];
@@ -350,18 +383,20 @@ function workingNodes(now: number): HTMLElement[] {
   return nodes.length ? nodes : [emptyNode("動いているエージェントはありません")];
 }
 
-// Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
-function drawFeed() {
+// Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed. `tabs` are the selected project's.
+function drawFeed(tabs: Tab[]) {
   const now = Date.now();
+  // The sessions under the open project: what is drawn of them.
+  const sessions = projectKey === null || collapsed ? [] : tabs.filter((t) => t.kind !== "file").map((t) => [t.id, t.status, t.label, t.title]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
-  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh], projectKey, selectedTab(), switching, Math.floor(now / 60_000)]);
+  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh], projectKey, collapsed, sessions, selectedTab(), switching, Math.floor(now / 60_000)]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...(working ? workingNodes(now) : projectNodes()));
+  box.replaceChildren(...(working ? workingNodes(now) : projectNodes(tabs)));
   box.scrollTop = top;
   if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
@@ -552,8 +587,8 @@ function draw() {
   drawHeader();
   drawNotice();
   drawBell();
-  drawFeed();
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
+  drawFeed(tabs);
   drawWork(tabs);
   drawFiles(tabs);
   syncTerminal(tabs);
@@ -657,7 +692,7 @@ export async function refreshOrca(force: boolean) {
 export function openInOrca(paneKey: string | null) {
   const row = paneKey === null ? null : (view?.rows.find((r) => r.paneKey === paneKey) ?? null);
   if (row) {
-    projectKey = row.projectKey;
+    setProject(row.projectKey);
     chooseTab(claudeTabId(row.paneKey!));
   }
   setScreen("orca");
@@ -683,7 +718,7 @@ async function chooseTarget(environment: string | null) {
     return;
   }
   // The sessions and worktrees belong to the old target, and so do the terminals' screens and the stream.
-  projectKey = null;
+  setProject(null);
   started = null;
   forgetPanes();
   pruneTerminals(() => false);
@@ -740,10 +775,23 @@ export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], c
 
 // ---- selecting and closing ----
 
-// Selects the project and, in it, the tab last selected there, else the first.
+// Makes `key` the selected project, open in the list.
+function setProject(key: string | null) {
+  projectKey = key;
+  collapsed = false;
+}
+
+// Selects the project and, in it, the tab last selected there, else the first. The project opens and the others close.
 function selectProject(key: string) {
   started = null;
-  projectKey = key;
+  setProject(key);
+  draw();
+}
+
+// The arrow of a project: the selected one closes or opens its sessions in the list (the tabs and the work pane stay as they are); the arrow of another project selects it, which opens it.
+function toggleProject(key: string) {
+  if (key !== projectKey) return selectProject(key);
+  collapsed = !collapsed;
   draw();
 }
 
@@ -800,13 +848,13 @@ function selectRow(r: OrcaRow) {
 
 // Makes the row's project and tab the selection (the row has a pane key).
 function pickRow(r: OrcaRow) {
-  projectKey = r.projectKey;
+  setProject(r.projectKey);
   chooseTab(claudeTabId(r.paneKey!));
 }
 
 // Makes the plain terminal's project and tab the selection.
 function pickTerminal(t: OrcaTerminal) {
-  projectKey = t.projectKey;
+  setProject(t.projectKey);
   chooseTab(plainTabId(t.handle));
 }
 
