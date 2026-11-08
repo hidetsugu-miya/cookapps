@@ -1,0 +1,5 @@
+# tauri build (E2E and the release) sets MACOSX_DEPLOYMENT_TARGET from bundle.macOS.minimumSystemVersion of tauri.conf.json (default 10.13), and tauri dev, clippy and cargo test do not.
+# Build scripts (ring, aws-lc-sys, libsqlite3-sys, objc2-exception-helper) and objc2 read it, so without the same value here every switch between the two rebuilt 44 crates (#257).
+# Keep it equal to minimumSystemVersion. [env] does not override a value already set, so tauri build keeps its own.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "10.13"
