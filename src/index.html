@@ -159,6 +159,7 @@
           <button id="settings-tab-slack" class="tab" role="tab" aria-controls="settings-panel-slack" aria-selected="false" tabindex="-1">Slack</button>
           <button id="settings-tab-claude" class="tab" role="tab" aria-controls="settings-panel-claude" aria-selected="false" tabindex="-1">Claude</button>
           <button id="settings-tab-orca" class="tab" role="tab" aria-controls="settings-panel-orca" aria-selected="false" tabindex="-1">Orca</button>
+          <button id="settings-tab-font" class="tab" role="tab" aria-controls="settings-panel-font" aria-selected="false" tabindex="-1">フォント</button>
           <button id="settings-tab-update" class="tab" role="tab" aria-controls="settings-panel-update" aria-selected="false" tabindex="-1">アップデート<span class="tab-dot" hidden></span></button>
         </div>
       </div>
@@ -296,6 +297,17 @@
         </div>
       </section>
       </div>
+      <section id="settings-panel-font" class="card" role="tabpanel" aria-labelledby="settings-tab-font" hidden>
+        <div class="card-head">
+          <h2>
+            <span class="logo orca"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19L12 5l7 14M8 14h8"/></svg></span>画面ごとのフォント
+          </h2>
+          <button id="font-help" class="icon-btn" data-hint aria-label="フォントの説明" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4"/><path d="M12 17h.01"/></svg>
+          </button>
+        </div>
+        <div id="font-items"></div>
+      </section>
       <section id="settings-panel-update" class="card" role="tabpanel" aria-labelledby="settings-tab-update" hidden>
         <div class="card-head">
           <h2>

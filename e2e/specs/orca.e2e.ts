@@ -8,10 +8,12 @@ import {
   boot,
   callsOf,
   chooseAppearance,
+  chooseOption,
   chooseTheme,
   copiedTexts,
   count,
   fire,
+  fontSettings,
   ghosttyImport,
   holds,
   image,
@@ -1892,6 +1894,55 @@ describe("orca: Ghostty's settings in the terminals (A-13)", () => {
   });
 });
 
+// A-20: the fonts chosen in the settings. The terminals take the family and the size of the choice in place of Ghostty's, until the choice follows Ghostty again.
+describe("orca: the fonts of the screens (A-20)", () => {
+  const imported = ghosttyImport({ settings: { fontFamilies: ["Example Mono"], fontSize: 15, fontThicken: true, light: null, dark: null, keybinds: [] } });
+  const menlo = fontSettings({ orcaWork: { family: "Menlo", size: 18, ghostty: false } });
+
+  it("draws the terminal with the family and size chosen, with the app's own after them and no thickening", async () => {
+    await openTerminal({ ghostty_saved: imported, font_settings: menlo });
+    await browser.waitUntil(async () => (await look()).size === "18px", { timeoutMsg: "the terminal never took the size" });
+    const chosen = await look();
+    expect(chosen.family).toContain("Menlo");
+    expect(chosen.family).not.toContain("Example Mono");
+    expect(chosen.weight).toBe("400");
+  });
+
+  it("keeps Ghostty's font while the choice follows it, whatever family and size the choice holds", async () => {
+    await openTerminal({ ghostty_saved: imported, font_settings: fontSettings({ orcaWork: { family: "Menlo", size: 18, ghostty: true } }) });
+    expect(await look()).toMatchObject({ size: "15px", weight: "500" });
+    expect((await look()).family).toContain("Example Mono");
+  });
+
+  it("draws the terminals again with a font chosen in the settings, with no restart, and with Ghostty's again when it is chosen", async () => {
+    await openTerminal({ ghostty_saved: imported });
+    expect((await look()).size).toBe("15px");
+    await $("#nav-settings").click();
+    await $("#settings-tab-font").click();
+    const set = await mock("font_settings_set", menlo);
+    await chooseOption("font-orca-work-family", "family:Menlo");
+    await waitForCalls(set);
+    await $("#nav-orca").click();
+    await browser.waitUntil(async () => (await look()).size === "18px", { timeoutMsg: "the terminal never took the font" });
+    expect((await look()).family).toContain("Menlo");
+    await $("#nav-settings").click();
+    const back = await mock("font_settings_set", fontSettings({ orcaWork: { family: "Menlo", size: 18, ghostty: true } }));
+    await chooseOption("font-orca-work-family", "ghostty");
+    await waitForCalls(back);
+    await $("#nav-orca").click();
+    await browser.waitUntil(async () => (await look()).size === "15px", { timeoutMsg: "the terminal never took Ghostty's font again" });
+    expect((await look()).family).toContain("Example Mono");
+  });
+
+  it("draws the project list with its own family and size, and the work space of the terminals apart", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { font_settings: fontSettings({ orcaList: { family: "Menlo", size: 21, ghostty: false } }) });
+    const listSize = () => browser.execute(() => getComputedStyle(document.getElementById("orca-list")!).fontSize);
+    await browser.waitUntil(async () => (await listSize()) === "21px", { timeoutMsg: "the list never took the size" });
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("orca-work")!).fontSize)).toBe("14px");
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("orca-list")!).fontFamily)).toContain("Menlo");
+  });
+});
+
 describe("orca: the terminal colors (A-14, A-15)", () => {
   // The light theme is on a cream ground, the dark one on a dark violet.
   const light = { pane: "rgb(253, 246, 227)", color: "rgb(101, 123, 131)" };
@@ -2649,6 +2700,20 @@ describe("orca: files and editor (A-18)", () => {
     await doublePress("a.rs");
     await expect($(".orca-edit-area")).toHaveValue(content, { trim: false });
   }
+
+  it("draws the text of the editor with the family and size chosen in the settings (A-20), apart from the terminals", async () => {
+    await openFiles({ font_settings: fontSettings({ editor: { family: "Menlo", size: 18, ghostty: false }, orcaWork: { family: null, size: 13, ghostty: false } }) });
+    await openA();
+    const area = () => browser.execute(() => ({ size: getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize, family: getComputedStyle(document.querySelector(".orca-edit-area")!).fontFamily }));
+    await browser.waitUntil(async () => (await area()).size === "18px", { timeoutMsg: "the editor never took the size" });
+    expect((await area()).family).toContain("Menlo");
+  });
+
+  it("draws the text of the editor with the first font while none is chosen", async () => {
+    await openFiles();
+    await openA();
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize)).toBe("12.5px");
+  });
 
   it("has one button that shows and hides the file pane: in the upper row of the pane while it is shown, at the right end of the tab strip while it is hidden", async () => {
     await openOrca(orcaOverview(sample(), worktrees()), { orca_terminal_read: ["$"] });
