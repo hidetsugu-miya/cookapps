@@ -1168,7 +1168,9 @@ describe("orca: projects", () => {
       const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
       const lastTab = [...document.querySelectorAll(".orca-tabs .orca-tab")].pop()!.getBoundingClientRect();
       const tabs = document.querySelector(".orca-tabs")!;
-      return { lastRight: lastTab.right, plusLeft: r(".orca-plus").left, plusRight: r(".orca-plus").right, barRight: r(".orca-tabbar").right, scrolls: tabs.scrollWidth > tabs.clientWidth };
+      // The right end of the room of the strip and the plus: the button of the file pane (A-18) when the bar has it, else the bar's edge.
+      const toggle = document.querySelector(".orca-files-toggle:not([hidden])");
+      return { lastRight: lastTab.right, plusLeft: r(".orca-plus").left, plusRight: r(".orca-plus").right, barRight: toggle ? toggle.getBoundingClientRect().left : r(".orca-tabbar").right, scrolls: tabs.scrollWidth > tabs.clientWidth };
     });
 
   it("puts the plus right after the last tab", async () => {
@@ -2536,12 +2538,12 @@ describe("orca: files and editor (A-18)", () => {
       add,
       onceId(),
     );
-  // Opens a.rs with `content` and waits for its text.
-  async function openA(content = "fn main() {}\n", signature = "sig-1") {
+  // Opens a.rs with `content` and waits for its text (`rows` is how many rows the tree has).
+  async function openA(content = "fn main() {}\n", signature = "sig-1", rows = 4) {
     await mock("orca_file_read", text(content, signature));
-    await waitForCount("#orca-files-tree .orca-file", 4);
+    await waitForCount("#orca-files-tree .orca-file", rows);
     await doublePress("a.rs");
-    await expect($(".orca-edit-area")).toHaveValue(content);
+    await expect($(".orca-edit-area")).toHaveValue(content, { trim: false });
   }
 
   it("has a button at the right end of the tab strip that shows and hides the file pane, hidden at the start", async () => {
@@ -2692,7 +2694,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect(selectedTab().$(".orca-tab-title")).toHaveText("a.rs");
     expect(await count('.orca-tabs [data-tab="file:1"] .orca-file-tab-ic')).toBe(1);
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n");
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
     await expect($(".orca-edit-path")).toHaveText("a.rs");
     await expect($(".orca-term")).not.toBeDisplayed();
     await expect(row("a.rs")).toHaveAttribute("data-open", "true");
@@ -2721,7 +2723,7 @@ describe("orca: files and editor (A-18)", () => {
     await type("// more\n");
     await tabOf(claude).$(".orca-tab-btn").click();
     await tabOf("file:1").$(".orca-tab-btn").click();
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// more\n");
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// more\n", { trim: false });
     expect(await callsOf("orca_file_read")).toHaveLength(1);
   });
 
@@ -2808,7 +2810,7 @@ describe("orca: files and editor (A-18)", () => {
     await type("b");
     await browser.pause(600);
     expect(await callsOf(write)).toHaveLength(1);
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\nab");
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\nab", { trim: false });
     await expect($("#error")).not.toBeDisplayed();
   });
 
@@ -2881,13 +2883,13 @@ describe("orca: files and editor (A-18)", () => {
 
   it("opens a second file as a second tab, each with its own text", async () => {
     await openFiles({ orca_files_list: dirOf("", [["a.rs", false], ["b.rs", false]]) });
-    await openA();
+    await openA("fn main() {}\n", "sig-1", 2);
     await mock("orca_file_read", text("pub fn b() {}\n", "sig-b"));
     await doublePress("b.rs");
-    await expect($(".orca-edit-area")).toHaveValue("pub fn b() {}\n");
+    await expect($(".orca-edit-area")).toHaveValue("pub fn b() {}\n", { trim: false });
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs", "b.rs"]);
     await tabOf("file:1").$(".orca-tab-btn").click();
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n");
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
     expect(await callsOf("orca_file_read")).toHaveLength(1);
   });
 });

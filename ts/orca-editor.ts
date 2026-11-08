@@ -182,6 +182,8 @@ export const openedIn = (target: string | null, project: string, path: string) =
 export async function closeFile(id: string) {
   const f = files.get(id);
   if (!f) return true;
+  // A save that failed before is tried again by this close (one try: a failure ends the loop below).
+  if (f.save === "error") setSave(f, "pending");
   while (canSave(f)) await flush(f);
   if (f.dirty && !f.blocked) return false;
   clearTimer(f);
