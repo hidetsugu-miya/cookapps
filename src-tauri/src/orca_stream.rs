@@ -246,7 +246,7 @@ fn documents_of(ps: &Value, tabs: &HashMap<String, Value>) -> (Value, Value) {
 fn list_of(ps: &Value, tabs: &HashMap<String, Value>) -> OrcaStreamEvent {
     let (worktrees_doc, terminals_doc) = documents_of(ps, tabs);
     let rows = rows_of(&worktrees_doc, &terminals_doc);
-    let terminals = plain_terminals_of(&worktrees_doc, &terminals_doc);
+    let terminals = plain_terminals_of(&worktrees_doc, &terminals_doc, &rows);
     let (projects, hosts) = projects_of(&worktrees_doc, &rows, &terminals);
     OrcaStreamEvent::List {
         rows,
@@ -1054,6 +1054,87 @@ mod tests {
         let tabs = held(&snapshots(&[("r1::/w/a", vec![no_leaf])]));
         let (worktrees, _) = documents_of(&ps(), &tabs);
         assert_eq!(worktrees["worktrees"][0]["agents"], json!([]));
+    }
+
+    #[test]
+    fn a_terminal_tab_is_in_exactly_one_kind_whatever_its_status_and_launch() {
+        // The kind comes from the row that holds the handle, so a tab whose `agentStatus` or `launchAgent` says Claude but that makes no row is still a plain terminal.
+        let with = |status: Value, launch: Value, leaf: Value| {
+            let mut tab = shell_tab("t1", "term_c", "x");
+            tab["agentStatus"] = status;
+            tab["launchAgent"] = launch;
+            tab["leafId"] = leaf;
+            tab
+        };
+        let status = |agent: Value| json!({"paneKey": "t1:l2", "state": "working", "agentType": agent, "updatedAt": 2_000});
+        // (the tab, the result: (rows holding the handle, plain terminals of it))
+        let cases = [
+            (
+                "a Claude status",
+                with(status(json!("claude")), Value::Null, json!("l2")),
+                (1, 0),
+            ),
+            (
+                "a Claude status of another pane",
+                with(
+                    json!({"paneKey": "x:y", "state": "working", "agentType": "claude"}),
+                    Value::Null,
+                    json!("l2"),
+                ),
+                (0, 1),
+            ),
+            (
+                "a status of another agent",
+                with(status(json!("codex")), Value::Null, json!("l2")),
+                (0, 1),
+            ),
+            (
+                "a status of no agent",
+                with(status(Value::Null), Value::Null, json!("l2")),
+                (0, 1),
+            ),
+            (
+                "a status of no agent, Claude launched",
+                with(status(Value::Null), json!("claude"), json!("l2")),
+                (1, 0),
+            ),
+            (
+                "no status, Claude launched",
+                with(Value::Null, json!("claude"), json!("l2")),
+                (1, 0),
+            ),
+            (
+                "no status, Claude launched, no leaf",
+                with(Value::Null, json!("claude"), Value::Null),
+                (0, 1),
+            ),
+            (
+                "no status, another agent launched",
+                with(Value::Null, json!("codex"), json!("l2")),
+                (0, 1),
+            ),
+            (
+                "no status, nothing launched",
+                with(Value::Null, Value::Null, json!("l2")),
+                (0, 1),
+            ),
+        ];
+        for (name, tab, want) in cases {
+            let tabs = held(&snapshots(&[("r1::/w/a", vec![tab])]));
+            let OrcaStreamEvent::List {
+                rows, terminals, ..
+            } = list_of(&ps(), &tabs)
+            else {
+                panic!()
+            };
+            let got = (
+                rows.iter()
+                    .filter(|r| r.handle.as_deref() == Some("term_c"))
+                    .count(),
+                terminals.iter().filter(|t| t.handle == "term_c").count(),
+            );
+            assert_eq!(got, want, "{name}");
+        }
     }
 
     #[test]

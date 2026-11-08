@@ -2135,6 +2135,8 @@ describe("orca: split panes (A-17)", () => {
   const row = (...children: PaneNode[]): PaneNode => ({ kind: "split", direction: "row", children });
   const column = (...children: PaneNode[]): PaneNode => ({ kind: "split", direction: "column", children });
   const layout = (root: PaneNode, focus: string): PaneLayout => ({ root, focus });
+  // The Orca handle of each tab that has a terminal.
+  const handles = { [claude]: "term_example-app", [zsh]: "term_example-app_zsh", [bash]: "term_example-app_bash" };
   // example-app has its Claude session and two shells, in that order.
   const overview = () => orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh"), orcaTerminal("example-app", "bash")] });
   // Claude and bash on the left, zsh on the right.
@@ -2201,7 +2203,7 @@ describe("orca: split panes (A-17)", () => {
   it("asks Rust for the layout of the project with its tabs, and draws the panes it answers, each with its tab strip and its plus", async () => {
     await openSplit();
     const [first] = await callsOf("orca_panes");
-    expect(first).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], op: null });
+    expect(first).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: {}, op: null });
     expect(await paneTabs("p1")).toEqual(["Write the docs", "bash"]);
     expect(await paneTabs("p2")).toEqual(["zsh"]);
     expect(await count(".orca-plus")).toBe(2);
@@ -2229,14 +2231,14 @@ describe("orca: split panes (A-17)", () => {
     await expect($('.menu[role="menu"]')).toBeDisplayed();
     expect(await textsOf('.menu[role="menu"] button')).toEqual(["右に分割", "下に分割"]);
     await pickItem("右に分割");
-    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], op: { kind: "move", tab: zsh, pane: "p1", edge: "right" } }]);
+    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "move", tab: zsh, pane: "p1", edge: "right" } }]);
     await waitForCount(".orca-pane", 2);
     expect(await paneTabs("p2")).toEqual(["zsh"]);
     // Below: the next answer is a column.
     const below = await mock("orca_panes", layout(column(pane("p1", [claude, zsh]), pane("p2", [bash])), "p2"));
     await rightClick(bash);
     await pickItem("下に分割");
-    expect(await waitForCalls(below)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], op: { kind: "move", tab: bash, pane: "p1", edge: "bottom" } }]);
+    expect(await waitForCalls(below)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "move", tab: bash, pane: "p1", edge: "bottom" } }]);
     await browser.waitUntil(async () => (await browser.execute(() => document.querySelector(".orca-split-node")?.getAttribute("data-direction"))) === "column", { timeoutMsg: "the column never drew" });
   });
 
@@ -2260,7 +2262,7 @@ describe("orca: split panes (A-17)", () => {
       const before = (await moves()).length;
       await drag(bash, "p2", at);
       await browser.waitUntil(async () => (await moves()).length === before + 1, { timeoutMsg: `no move for ${edge}` });
-      expect((await moves()).at(-1)).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], op: { kind: "move", tab: bash, pane: "p2", edge } });
+      expect((await moves()).at(-1)).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "move", tab: bash, pane: "p2", edge } });
     }
     expect(await count(".orca-drop")).toBe(0);
     // The edge of its own pane, which has another tab, splits it; its own strip or middle, and the edge of a pane it is alone in, change nothing.
@@ -2334,7 +2336,7 @@ describe("orca: split panes (A-17)", () => {
     const panes = await mock("orca_panes", layout(pane("p1", [claude, bash]), "p1"));
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
     await $("#orca-refresh").click();
-    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, bash], op: null }]);
+    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, bash], handles: { [claude]: handles[claude], [bash]: handles[bash] }, was: handles, op: null }]);
     await waitForCount(".orca-pane", 1);
     expect(await count(".orca-split-node")).toBe(0);
     expect(await paneTabs("p1")).toEqual(["Write the docs", "bash"]);
@@ -2342,6 +2344,52 @@ describe("orca: split panes (A-17)", () => {
     await mock("orca_terminal_read", ["$"]);
     await browser.pause(2500);
     expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle !== "term_example-app_zsh")).toBe(true);
+  });
+
+  it("keeps the split, the place and the selection of a terminal, and its screen, when Claude starts in a plain terminal and when it ends there again", async () => {
+    await openSplit();
+    // The shell of the right pane is mirrored; its screen is marked, to tell it from one made again.
+    await browser.waitUntil(async () => (await count(".orca-pane[data-pane='p2'] .orca-term .orca-term-box:not([hidden])")) === 1, { timeoutMsg: "the right pane showed no terminal" });
+    await browser.execute(() => document.querySelector(".orca-pane[data-pane='p2'] .orca-term .orca-term-box")!.setAttribute("data-mark", "same"));
+    // `claude` runs in it: Orca lists the terminal as a Claude session under the same handle, and Rust answers the layout with the tab of the pane replaced.
+    const zshClaude = "claude:tab_example-app_zsh:leaf_1";
+    const started = await mock("orca_panes", layout(row(pane("p1", [claude, bash]), pane("p2", [zshClaude])), "p2"));
+    const sessions = [...sample(), orcaRow("example-app", "feat/a", "Run the tests", { paneKey: "tab_example-app_zsh:leaf_1", handle: "term_example-app_zsh" })];
+    await mock("orca_overview", orcaOverview(sessions, worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
+    await $("#orca-refresh").click();
+    expect(await waitForCalls(started)).toEqual([
+      { environment: null, project: "proj_example-app", tabs: [claude, zshClaude, bash], handles: { [claude]: handles[claude], [zshClaude]: handles[zsh], [bash]: handles[bash] }, was: handles, op: null },
+    ]);
+    await browser.waitUntil(async () => (await paneTabs("p2")).join() === "Run the tests", { timeoutMsg: "the right pane did not draw the Claude tab" });
+    expect(await count(".orca-pane")).toBe(2);
+    expect(await paneTabs("p1")).toEqual(["Write the docs", "bash"]);
+    await expect($('.orca-pane[data-pane="p2"] [aria-selected="true"]')).toHaveText(expect.stringContaining("Run the tests"));
+    await expect($('.orca-pane[data-pane="p2"] .orca-term .orca-term-box[data-mark="same"]')).toBeDisplayed();
+    // Claude ends and the shell is back: the terminal is a plain one again, in the same pane.
+    const ended = await mock("orca_panes", saved());
+    await mock("orca_overview", overview());
+    await $("#orca-refresh").click();
+    expect(await waitForCalls(ended)).toEqual([
+      { environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: { [claude]: handles[claude], [zshClaude]: handles[zsh], [bash]: handles[bash] }, op: null },
+    ]);
+    await browser.waitUntil(async () => (await paneTabs("p2")).join() === "zsh", { timeoutMsg: "the right pane did not draw the plain tab" });
+    expect(await count(".orca-pane")).toBe(2);
+    await expect($('.orca-pane[data-pane="p2"] .orca-term .orca-term-box[data-mark="same"]')).toBeDisplayed();
+  });
+
+  it("keeps the terminal of a pane shown, and its screen, while Rust's answer to a read where the terminal changed kind has not come", async () => {
+    await openSplit();
+    await browser.waitUntil(async () => (await count(".orca-pane[data-pane='p2'] .orca-term .orca-term-box:not([hidden])")) === 1, { timeoutMsg: "the right pane showed no terminal" });
+    await browser.execute(() => document.querySelector(".orca-pane[data-pane='p2'] .orca-term .orca-term-box")!.setAttribute("data-mark", "same"));
+    // `claude` runs in the shell, and the answer still holds the old tab id (the layout of the read before).
+    const old = await mock("orca_panes", saved());
+    const sessions = [...sample(), orcaRow("example-app", "feat/a", "Run the tests", { paneKey: "tab_example-app_zsh:leaf_1", handle: "term_example-app_zsh" })];
+    await mock("orca_overview", orcaOverview(sessions, worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
+    await $("#orca-refresh").click();
+    await waitForCalls(old);
+    await browser.waitUntil(async () => (await paneTabs("p2")).join() === "Run the tests", { timeoutMsg: "the right pane did not draw the Claude tab" });
+    await expect($('.orca-pane[data-pane="p2"] [aria-selected="true"]')).toHaveText(expect.stringContaining("Run the tests"));
+    await expect($('.orca-pane[data-pane="p2"] .orca-term .orca-term-box[data-mark="same"]')).toBeDisplayed();
   });
 
   it("gives the plus of a pane the focus first and starts the session in the project", async () => {

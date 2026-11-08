@@ -479,15 +479,20 @@ fn live_worktrees(ps: &Value) -> impl Iterator<Item = (&Value, String)> {
         .filter_map(|w| Some((w, project_key_of(w)?)))
 }
 
-/// The plain terminals of `orca terminal list` (`terminals`, its `result`): every terminal that is not Claude's (`agentIdentity` is not `claude`; a shell, or another agent), still attached to its tab,
+/// The plain terminals of `orca terminal list` (`terminals`, its `result`): every terminal that no Claude row of the same read holds (`rows`, from `rows_of` of the same two documents; a shell, or another agent), still attached to its tab,
 /// in a worktree of `ps` that is listed. The floating terminal has no worktree path and is left out.
-pub fn plain_terminals_of(ps: &Value, terminals: &Value) -> Vec<OrcaTerminal> {
+/// The kind is the one `rows_of` gives, never `agentIdentity`: Orca takes that from the process or the title before `worktree ps` has the agent, so a terminal would be in neither list for a moment.
+pub fn plain_terminals_of(ps: &Value, terminals: &Value, rows: &[OrcaRow]) -> Vec<OrcaTerminal> {
     let worktrees: Vec<(&Value, String)> = live_worktrees(ps).collect();
     terminals["terminals"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|t| t["orphaned"] != true && t["agentIdentity"] != "claude")
+        .filter(|t| t["orphaned"] != true)
+        .filter(|t| {
+            !text_of(t, "handle")
+                .is_some_and(|h| rows.iter().any(|r| r.handle.as_deref() == Some(h)))
+        })
         .filter_map(|t| {
             let path = text_of(t, "worktreePath")?;
             let (worktree, key) = worktrees
@@ -1000,7 +1005,7 @@ fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview 
             let (plain, projects, hosts) = if scope == OrcaScope::Badge {
                 (Vec::new(), Vec::new(), Vec::new())
             } else {
-                let plain = plain_terminals_of(&ps, &terminals);
+                let plain = plain_terminals_of(&ps, &terminals, &rows);
                 let (projects, hosts) = projects_of(&ps, &rows, &plain);
                 (plain, projects, hosts)
             };
@@ -1169,11 +1174,8 @@ fn check_mirrored(mirror: &OrcaMirror, handle: &str) -> Result<(), String> {
     if !mirror.0.lock().unwrap().contains(handle) {
         let (ps, terminals) = read_lists(None, true);
         let (ps, terminals) = (ps.map_err(message_of)?, terminals.map_err(message_of)?);
-        check_terminal(
-            &rows_of(&ps, &terminals),
-            &plain_terminals_of(&ps, &terminals),
-            handle,
-        )?;
+        let rows = rows_of(&ps, &terminals);
+        check_terminal(&rows, &plain_terminals_of(&ps, &terminals, &rows), handle)?;
         mirror.0.lock().unwrap().insert(handle.to_owned());
     }
     Ok(())
@@ -2279,11 +2281,22 @@ mod tests {
         ]})
     }
 
+    /// The Claude row of the pane `tc:lc` (`/work/a2`), holding the handle of the terminal of that pane in `terminals`.
+    fn claude_rows(terminals: &Value) -> Vec<OrcaRow> {
+        rows_of(
+            &json!({"worktrees": [{
+                "path": "/work/a2", "repo": "alpha", "repoId": "ra", "displayName": "feat/x",
+                "agents": [{"paneKey": "tc:lc", "parentPaneKey": null, "hasLivePty": true, "state": "waiting", "agentType": "claude"}],
+            }]}),
+            terminals,
+        )
+    }
+
     fn plain_doc() -> Value {
         json!({"terminals": [
             {"handle": "term_sh", "worktreePath": "/work/b", "title": "zsh", "orphaned": false},
             {"handle": "term_codex", "worktreePath": "/work/a", "title": "codex", "agentIdentity": "codex"},
-            {"handle": "term_claude", "worktreePath": "/work/a2", "agentIdentity": "claude"},
+            {"handle": "term_claude", "tabId": "tc", "leafId": "lc", "worktreePath": "/work/a2", "agentIdentity": "claude"},
             {"handle": "term_orphan", "worktreePath": "/work/a", "orphaned": true},
             {"handle": "term_float", "worktreeId": "global-floating-terminal", "worktreePath": ""},
             {"handle": "term_unlisted", "worktreePath": "/work/elsewhere"},
@@ -2296,9 +2309,10 @@ mod tests {
 
     #[test]
     fn a_plain_terminal_is_one_that_is_not_claudes_in_a_listed_worktree() {
-        let plain = plain_terminals_of(&projects_doc(), &plain_doc());
+        let rows = claude_rows(&plain_doc());
+        let plain = plain_terminals_of(&projects_doc(), &plain_doc(), &rows);
         let handles: Vec<_> = plain.iter().map(|t| t.handle.as_str()).collect();
-        // Claude's, an orphaned one, the floating one, one outside a listed worktree, one with no handle, and one in an archived worktree are left out.
+        // The one a Claude row holds, an orphaned one, the floating one, one outside a listed worktree, one with no handle, and one in an archived worktree are left out.
         assert_eq!(
             handles,
             ["term_sh", "term_codex", "term_remote", "term_notitle"]
@@ -2318,19 +2332,101 @@ mod tests {
         assert_eq!(plain[2].path, "/home/e");
         assert_eq!(plain[2].project_key, "ssh:ssh-1");
         assert_eq!(plain[3].title, "");
-        assert!(plain_terminals_of(&projects_doc(), &Value::Null).is_empty());
-        assert!(plain_terminals_of(&Value::Null, &plain_doc()).is_empty());
+        assert!(plain_terminals_of(&projects_doc(), &Value::Null, &[]).is_empty());
+        assert!(plain_terminals_of(&Value::Null, &plain_doc(), &rows).is_empty());
+        // With no row, the terminal that Orca calls Claude's is a plain one: the kind is the row's.
+        let all = plain_terminals_of(&projects_doc(), &plain_doc(), &[]);
+        assert!(all.iter().any(|t| t.handle == "term_claude"));
+    }
+
+    /// Where the terminal `handle` shows in one read: how many Claude rows hold it, and how many plain terminals are it.
+    fn appearances(ps: &Value, terminals: &Value, handle: &str) -> (usize, usize) {
+        let rows = rows_of(ps, terminals);
+        let plain = plain_terminals_of(ps, terminals, &rows);
+        (
+            rows.iter()
+                .filter(|r| r.handle.as_deref() == Some(handle))
+                .count(),
+            plain.iter().filter(|t| t.handle == handle).count(),
+        )
+    }
+
+    #[test]
+    fn a_terminal_is_in_exactly_one_kind_in_every_state_between_the_lists() {
+        // `orca terminal list` takes the kind from the process or the title; `worktree ps` has the agent only after a hook of Claude came.
+        let ps_of = |agent: Option<Value>| {
+            json!({"worktrees": [{
+                "path": "/work/a", "repo": "alpha", "repoId": "ra", "displayName": "main",
+                "agents": agent.into_iter().collect::<Vec<_>>(),
+            }]})
+        };
+        let live = |pane_key: &str, live: bool, parent: Value| {
+            json!({"paneKey": pane_key, "parentPaneKey": parent, "hasLivePty": live,
+                   "state": "working", "agentType": "claude"})
+        };
+        let terminal = |identity: Value| {
+            json!({"terminals": [{"handle": "term_x", "tabId": "t", "leafId": "l",
+                   "worktreePath": "/work/a", "agentIdentity": identity}]})
+        };
+        // (the agent of ps, the agentIdentity of the terminal list, the result: (rows, plain))
+        let cases = [
+            (
+                "both say Claude",
+                Some(live("t:l", true, Value::Null)),
+                json!("claude"),
+                (1, 0),
+            ),
+            (
+                "the list says Claude, ps has no agent yet",
+                None,
+                json!("claude"),
+                (0, 1),
+            ),
+            (
+                "ps has the agent, the list does not say Claude yet",
+                Some(live("t:l", true, Value::Null)),
+                Value::Null,
+                (1, 0),
+            ),
+            (
+                "ps has the agent, the list says another agent",
+                Some(live("t:l", true, Value::Null)),
+                json!("codex"),
+                (1, 0),
+            ),
+            (
+                "the agent has no live pty any more",
+                Some(live("t:l", false, Value::Null)),
+                json!("claude"),
+                (0, 1),
+            ),
+            (
+                "the agent is of another pane",
+                Some(live("u:m", true, Value::Null)),
+                json!("claude"),
+                (0, 1),
+            ),
+            (
+                "the agent is a sub-agent",
+                Some(live("t:l", true, json!("p:q"))),
+                json!("claude"),
+                (0, 1),
+            ),
+            ("a shell, no agent", None, Value::Null, (0, 1)),
+            ("another agent, no Claude row", None, json!("codex"), (0, 1)),
+        ];
+        for (name, agent, identity, want) in cases {
+            assert_eq!(
+                appearances(&ps_of(agent), &terminal(identity), "term_x"),
+                want,
+                "{name}"
+            );
+        }
     }
 
     fn project_lists(doc: &Value, plain: &Value) -> (Vec<OrcaProject>, Vec<OrcaProject>) {
-        let plain = plain_terminals_of(doc, plain);
-        let rows = rows_of(
-            &json!({"worktrees": [{
-                "path": "/work/a2", "repo": "alpha", "repoId": "ra", "displayName": "feat/x",
-                "agents": [{"paneKey": "t:l", "parentPaneKey": null, "hasLivePty": true, "state": "waiting", "agentType": "claude"}],
-            }]}),
-            &Value::Null,
-        );
+        let rows = claude_rows(plain);
+        let plain = plain_terminals_of(doc, plain, &rows);
         projects_of(doc, &rows, &plain)
     }
 
@@ -2537,12 +2633,14 @@ mod tests {
 
     #[test]
     fn keys_go_only_to_a_terminal_of_the_list() {
-        let plain = plain_terminals_of(&projects_doc(), &plain_doc());
         let rows = rows_of(&ps(&[agent("tabA:leaf1", "working")]), &terminals());
+        let plain = plain_terminals_of(&projects_doc(), &plain_doc(), &rows);
         assert!(check_terminal(&rows, &plain, "term_sh").is_ok());
+        // Orca's `agentIdentity` does not matter: no row holds it, so it is a plain terminal.
+        assert!(check_terminal(&rows, &plain, "term_claude").is_ok());
         // A Claude session's terminal is mirrored too (every tab is a terminal, A-12).
         assert!(check_terminal(&rows, &plain, "term_1").is_ok());
-        for bad in ["term_claude", "term_2", "term_gone", ""] {
+        for bad in ["term_2", "term_gone", ""] {
             assert!(
                 check_terminal(&rows, &plain, bad)
                     .unwrap_err()

@@ -1,5 +1,6 @@
 // The layouts of the work pane of the Orca screen (A-17): for each project of each target, the panes with their tabs, as Rust holds and saves them (`orca_panes`).
 // This module keeps what Rust answered, so the screen draws at once; it sends the tabs the screen shows with every call (Rust mends the saved layout against them), and an operation of the user.
+// With the tabs it sends the Orca handle of each tab that has a terminal, and the handles of the tabs of the call before that worked: a terminal that changed kind (a plain one where Claude starts, or the other way round) has a new tab id and the same handle, and Rust keeps its place.
 // The calls go one at a time, in the order they were made, and only the latest answer of a project is taken, so an older answer never replaces a newer one.
 // Selecting a tab or pressing a pane is also made here at once, before Rust's answer, so the screen follows the press.
 import type { PaneLayout } from "./bindings/PaneLayout";
@@ -10,9 +11,17 @@ import { invoke } from "./ipc.js";
 // A pane with its tabs in order and the one selected, as the layout holds it.
 export type PaneInfo = Extract<PaneNode, { kind: "pane" }>;
 
+// The tabs a project shows: their ids, and the Orca handle of each one that has a terminal.
+export interface PaneTabs {
+  ids: string[];
+  handles: Record<string, string>;
+}
+
 // The layouts answered, by target and project; the tabs each project's layout was last asked for; the number of the latest call of each project.
 const layouts = new Map<string, PaneLayout>();
 const asked = new Map<string, string>();
+// The handles of the tabs of each project's last call that worked.
+const known = new Map<string, Record<string, string>>();
 const latest = new Map<string, number>();
 let issued = 0;
 let chain: Promise<void> = Promise.resolve();
@@ -33,6 +42,14 @@ export function focusedTab(layout: PaneLayout | null) {
   return (panes.find((p) => p.id === layout?.focus) ?? panes[0])?.selected ?? null;
 }
 
+// The tab among `tabs` that a tab id of the layout means: the one with that id, else (a terminal that changed kind has a new tab id and the same handle, and Rust's answer with the new id has not come yet) the one with the handle the id had in the last call that worked, or the one a plain tab id carries (`orca:{handle}`).
+export function findTab<T extends { id: string; handle: string | null }>(target: string | null, project: string, tabs: T[], id: string): T | undefined {
+  const exact = tabs.find((t) => t.id === id);
+  if (exact) return exact;
+  const handle = known.get(keyOf(target, project))?.[id] ?? (id.startsWith("orca:") ? id.slice("orca:".length) : undefined);
+  return handle === undefined ? undefined : tabs.find((t) => t.handle === handle);
+}
+
 // Whether the layout of the project was not asked for with exactly these tabs yet.
 export const needsSync = (target: string | null, project: string, tabs: string[]) => asked.get(keyOf(target, project)) !== tabs.join("\n");
 
@@ -40,6 +57,7 @@ export const needsSync = (target: string | null, project: string, tabs: string[]
 export function forgetPanes() {
   layouts.clear();
   asked.clear();
+  known.clear();
   latest.clear();
 }
 
@@ -56,19 +74,21 @@ export function applyLocal(target: string | null, project: string, op: PaneOp) {
 
 // Asks Rust for the layout of the project with the tabs that `tabs` gives when the call is made (null: the screen no longer shows that project's tabs, so nothing is asked), after `op` when there is one.
 // `done` runs once the layout held changed, and `fail` with the message of a call that failed (the project then has a layout of one pane until the next call that works).
-export function syncPanes(target: string | null, project: string, tabs: () => string[] | null, op: PaneOp | null, done: () => void, fail: (e: unknown) => void) {
+export function syncPanes(target: string | null, project: string, tabs: () => PaneTabs | null, op: PaneOp | null, done: () => void, fail: (e: unknown) => void) {
   const key = keyOf(target, project);
   const now = tabs();
   if (now === null) return;
   const mine = ++issued;
   latest.set(key, mine);
-  asked.set(key, now.join("\n"));
+  asked.set(key, now.ids.join("\n"));
   chain = chain.then(async () => {
-    const ids = tabs();
-    if (ids === null) return;
+    const next = tabs();
+    if (next === null) return;
+    const { ids, handles } = next;
     asked.set(key, ids.join("\n"));
     try {
-      const layout = await invoke("orca_panes", { environment: target, project, tabs: ids, op });
+      const layout = await invoke("orca_panes", { environment: target, project, tabs: ids, handles, was: known.get(key) ?? {}, op });
+      known.set(key, handles);
       if (latest.get(key) === mine) {
         layouts.set(key, layout);
         done();

@@ -3,10 +3,15 @@
 //! The layout of a project is a tree: a pane (its tabs, in order, and the one selected) or a split of two or more nodes, side by side (`Row`) or one above the other (`Column`).
 //! It is saved for each project of each target (this machine, or a saved environment) in `orca-panes.json` in the app config directory.
 //! The file holds only tab ids that the screen made up (`claude:{pane key}`, `orca:{handle}`) and project keys of Orca, no token and no screen content.
+//! A terminal whose kind changes (a plain terminal where Claude starts, or Claude's where the shell is back) has a new tab id but the same Orca handle, so it keeps its place in its pane and its selection.
 //! A tab that Orca no longer lists leaves the layout, a tab it lists that the layout lacks joins the pane that has the focus, and a pane left with no tab is closed, so a layout of an older Orca or a broken file is mended at each read.
 //! A file that cannot be read as it was written is taken as empty and replaced by the next save.
 
-use std::{collections::HashSet, path::Path, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Mutex,
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -256,6 +261,68 @@ fn normalize(node: PaneNode) -> Option<PaneNode> {
     }
 }
 
+/// The handles of the Orca terminals behind the tab ids: of the tabs listed now (`now`), and of the tabs of the read before (`was`, by the call that last worked), as the screen knows them.
+/// A tab with no terminal has no entry.
+#[derive(Default, Debug)]
+pub struct Handles {
+    pub now: HashMap<String, String>,
+    pub was: HashMap<String, String>,
+}
+
+/// A terminal whose kind changed (a plain terminal where Claude started, or the other way round) is listed under a new tab id and the same handle. Its old tab id is replaced by the new one, in the same pane at the same place, and it stays the pane's selected tab if it was.
+/// The old tab's handle is the one `handles.was` gives, else the one a plain tab id carries (`orca:{handle}`). A tab id that is still listed, or a new one the layout already has, is not touched.
+pub fn follow_kind_switches(
+    mut layout: PaneLayout,
+    live: &[String],
+    handles: &Handles,
+) -> PaneLayout {
+    let Some(root) = layout.root.as_mut() else {
+        return layout;
+    };
+    let held: Vec<String> = panes(root)
+        .into_iter()
+        .flat_map(|(_, tabs)| tabs.iter().cloned())
+        .collect();
+    let mut taken: HashSet<&str> = held.iter().map(String::as_str).collect();
+    let mut renames: Vec<(&str, &str)> = Vec::new();
+    let live_set: HashSet<&str> = live.iter().map(String::as_str).collect();
+    // The tabs listed now by their handle, in the order of `live`.
+    let mut by_handle: HashMap<&str, Vec<&str>> = HashMap::new();
+    for tab in live {
+        if let Some(handle) = handles.now.get(tab) {
+            by_handle.entry(handle).or_default().push(tab);
+        }
+    }
+    for old in held.iter().filter(|t| !live_set.contains(t.as_str())) {
+        let Some(handle) = handles
+            .was
+            .get(old)
+            .map(String::as_str)
+            .or_else(|| old.strip_prefix("orca:"))
+        else {
+            continue;
+        };
+        let new = by_handle
+            .get(handle)
+            .and_then(|tabs| tabs.iter().find(|t| !taken.contains(**t)));
+        if let Some(&new) = new {
+            taken.insert(new);
+            renames.push((old, new));
+        }
+    }
+    each_pane_mut(root, &mut |_, tabs, selected| {
+        for (old, new) in &renames {
+            for tab in tabs.iter_mut().filter(|t| t == old) {
+                *tab = (*new).to_owned();
+            }
+            if selected == old {
+                *selected = (*new).to_owned();
+            }
+        }
+    });
+    layout
+}
+
 // ---- the layout ----
 
 /// Mends the layout against the tabs Orca lists now (`live`, in the order the screen shows them) and returns it normalized.
@@ -437,12 +504,13 @@ fn save(dir: &Path, store: &Store) -> Result<(), String> {
         .map_err(|e| format!("{} を書けません: {e}", path.display()))
 }
 
-/// The layout of the project `project` of `environment`, mended against `live` and changed by `op`, saved when it differs from the saved one (a project with no tab leaves no entry).
+/// The layout of the project `project` of `environment`, with the terminals that changed kind followed, mended against `live` and changed by `op`, saved when it differs from the saved one (a project with no tab leaves no entry).
 fn update(
     dir: &Path,
     environment: Option<&str>,
     project: &str,
     live: &[String],
+    handles: &Handles,
     op: Option<&PaneOp>,
 ) -> Result<PaneLayout, String> {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -452,7 +520,8 @@ fn update(
         .iter()
         .position(|e| e.environment.as_deref() == environment && e.project == project);
     let held = at.map(|i| store.entries[i].layout.clone());
-    let mut layout = reconcile(held.clone().unwrap_or_default(), live);
+    let followed = follow_kind_switches(held.clone().unwrap_or_default(), live, handles);
+    let mut layout = reconcile(followed, live);
     if let Some(op) = op {
         layout = apply(layout, op);
     }
@@ -487,6 +556,7 @@ fn check(
     environment: Option<&str>,
     project: &str,
     live: &[String],
+    handles: &Handles,
     op: Option<&PaneOp>,
 ) -> Result<(), String> {
     if let Some(environment) = environment {
@@ -497,6 +567,17 @@ fn check(
         return Err("タブが多すぎます".into());
     }
     live.iter().try_for_each(|t| check_text("タブ", t))?;
+    if handles.now.len() > MAX_TABS || handles.was.len() > MAX_TABS {
+        return Err("タブが多すぎます".into());
+    }
+    handles
+        .now
+        .iter()
+        .chain(&handles.was)
+        .try_for_each(|(tab, handle)| {
+            check_text("タブ", tab)?;
+            check_text("ハンドル", handle)
+        })?;
     match op {
         Some(PaneOp::Focus { pane }) => check_text("ペイン", pane),
         Some(PaneOp::Select { tab }) => check_text("タブ", tab),
@@ -509,18 +590,35 @@ fn check(
 }
 
 /// The layout of the work pane of a project (A-17): the one saved, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. It is saved when it changed.
+/// `handles` is the Orca handle of each of those tabs that has a terminal, and `was` that of the tabs of the read before: a terminal that changed kind keeps its place.
 #[tauri::command]
 pub async fn orca_panes(
     app: AppHandle,
     environment: Option<String>,
     project: String,
     tabs: Vec<String>,
+    handles: HashMap<String, String>,
+    was: HashMap<String, String>,
     op: Option<PaneOp>,
 ) -> Result<PaneLayout, String> {
-    check(environment.as_deref(), &project, &tabs, op.as_ref())?;
+    let handles = Handles { now: handles, was };
+    check(
+        environment.as_deref(),
+        &project,
+        &tabs,
+        &handles,
+        op.as_ref(),
+    )?;
     let dir = config_dir(&app)?;
     tokio::task::spawn_blocking(move || {
-        update(&dir, environment.as_deref(), &project, &tabs, op.as_ref())
+        update(
+            &dir,
+            environment.as_deref(),
+            &project,
+            &tabs,
+            &handles,
+            op.as_ref(),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -562,6 +660,19 @@ mod tests {
             tab: tab.into(),
             pane: pane.into(),
             edge,
+        }
+    }
+
+    fn handles(now: &[(&str, &str)], was: &[(&str, &str)]) -> Handles {
+        let map = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(tab, handle)| ((*tab).to_owned(), (*handle).to_owned()))
+                .collect()
+        };
+        Handles {
+            now: map(now),
+            was: map(was),
         }
     }
 
@@ -879,18 +990,27 @@ mod tests {
 
     #[test]
     fn the_layout_is_saved_for_each_project_and_target_and_comes_back() {
+        let no = Handles::default();
         let dir = temp_dir("roundtrip");
         let live = ids(&["a", "b"]);
-        let first = update(&dir, None, "proj", &live, None).unwrap();
+        let first = update(&dir, None, "proj", &live, &no, None).unwrap();
         assert_eq!(first, layout(pane("p1", &["a", "b"], "a"), "p1"));
-        let split = update(&dir, None, "proj", &live, Some(&mv("b", "p1", Edge::Right))).unwrap();
+        let split = update(
+            &dir,
+            None,
+            "proj",
+            &live,
+            &no,
+            Some(&mv("b", "p1", Edge::Right)),
+        )
+        .unwrap();
         // The same project of another target and another project are separate.
-        let other = update(&dir, Some("Studio"), "proj", &live, None).unwrap();
+        let other = update(&dir, Some("Studio"), "proj", &live, &no, None).unwrap();
         assert_eq!(other, first);
-        let other = update(&dir, None, "other", &ids(&["x"]), None).unwrap();
+        let other = update(&dir, None, "other", &ids(&["x"]), &no, None).unwrap();
         assert_eq!(other, layout(pane("p1", &["x"], "x"), "p1"));
         // Read again with no operation: what was saved.
-        assert_eq!(update(&dir, None, "proj", &live, None).unwrap(), split);
+        assert_eq!(update(&dir, None, "proj", &live, &no, None).unwrap(), split);
         let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
         assert!(text.contains("\"version\": 1"), "{text}");
         assert!(!dir.join(TMP_FILE).exists());
@@ -899,21 +1019,23 @@ mod tests {
 
     #[test]
     fn tabs_that_left_are_taken_out_of_the_saved_layout_and_a_project_with_none_leaves_no_entry() {
+        let no = Handles::default();
         let dir = temp_dir("gone");
-        let got = update(&dir, None, "proj", &ids(&["a", "b"]), None).unwrap();
+        let got = update(&dir, None, "proj", &ids(&["a", "b"]), &no, None).unwrap();
         assert!(matches!(got.root, Some(PaneNode::Pane { .. })));
         let got = update(
             &dir,
             None,
             "proj",
             &ids(&["a", "b"]),
+            &no,
             Some(&mv("b", "p1", Edge::Right)),
         )
         .unwrap();
         assert!(matches!(got.root, Some(PaneNode::Split { .. })));
-        let got = update(&dir, None, "proj", &ids(&["a"]), None).unwrap();
+        let got = update(&dir, None, "proj", &ids(&["a"]), &no, None).unwrap();
         assert_eq!(got, layout(pane("p1", &["a"], "a"), "p1"));
-        let got = update(&dir, None, "proj", &[], None).unwrap();
+        let got = update(&dir, None, "proj", &[], &no, None).unwrap();
         assert_eq!(got, PaneLayout::default());
         assert!(load(&dir).entries.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
@@ -921,9 +1043,10 @@ mod tests {
 
     #[test]
     fn a_broken_file_or_one_of_another_version_is_taken_as_empty_and_replaced() {
+        let no = Handles::default();
         let dir = temp_dir("broken");
         std::fs::write(dir.join(FILE), "{ not json").unwrap();
-        let got = update(&dir, None, "proj", &ids(&["a"]), None).unwrap();
+        let got = update(&dir, None, "proj", &ids(&["a"]), &no, None).unwrap();
         assert_eq!(got, layout(pane("p1", &["a"], "a"), "p1"));
         assert_eq!(load(&dir).entries.len(), 1);
         std::fs::write(dir.join(FILE), r#"{"version":99,"entries":[]}"#).unwrap();
@@ -933,32 +1056,171 @@ mod tests {
             r#"{"version":1,"entries":[{"environment":null,"project":"proj","layout":{"root":{"kind":"pane","id":"p1","tabs":["gone"],"selected":"gone"},"focus":"p1"}}]}"#,
         )
         .unwrap();
-        let got = update(&dir, None, "proj", &ids(&["a"]), None).unwrap();
+        let got = update(&dir, None, "proj", &ids(&["a"]), &no, None).unwrap();
         assert_eq!(got, layout(pane("p1", &["a"], "a"), "p1"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Claude and bash on the left, zsh alone on the right, with the right pane's tab shown and the focus.
+    fn split_saved(right: &str) -> PaneLayout {
+        layout(
+            split(
+                Direction::Row,
+                vec![
+                    pane("p1", &["claude:K", "orca:bash"], "claude:K"),
+                    pane("p2", &[right], right),
+                ],
+            ),
+            "p2",
+        )
+    }
+
+    #[test]
+    fn a_plain_terminal_where_claude_starts_keeps_its_pane_and_its_selection() {
+        let live = ids(&["claude:K", "orca:bash", "claude:Z"]);
+        let h = handles(
+            &[
+                ("claude:K", "term_k"),
+                ("orca:bash", "bash"),
+                ("claude:Z", "zsh"),
+            ],
+            &[],
+        );
+        let got = reconcile(
+            follow_kind_switches(split_saved("orca:zsh"), &live, &h),
+            &live,
+        );
+        assert_eq!(got, split_saved("claude:Z"));
+    }
+
+    #[test]
+    fn claude_that_ends_in_its_terminal_keeps_its_pane_and_place_among_the_tabs() {
+        let saved = layout(
+            split(
+                Direction::Row,
+                vec![
+                    pane("p1", &["orca:a", "claude:Z", "orca:b"], "claude:Z"),
+                    pane("p2", &["orca:c"], "orca:c"),
+                ],
+            ),
+            "p1",
+        );
+        let live = ids(&["orca:a", "orca:b", "orca:c", "orca:zsh"]);
+        let h = handles(&[("orca:zsh", "zsh")], &[("claude:Z", "zsh")]);
+        let got = reconcile(follow_kind_switches(saved, &live, &h), &live);
+        let want = layout(
+            split(
+                Direction::Row,
+                vec![
+                    pane("p1", &["orca:a", "orca:zsh", "orca:b"], "orca:zsh"),
+                    pane("p2", &["orca:c"], "orca:c"),
+                ],
+            ),
+            "p1",
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn a_claude_tab_with_no_known_handle_and_a_tab_still_listed_are_not_followed() {
+        let live = ids(&["claude:K", "orca:bash", "orca:zsh"]);
+        let h = handles(&[("orca:zsh", "zsh")], &[]);
+        // `claude:Z` was never seen with a handle, so it is only a tab that is gone.
+        let saved = split_saved("claude:Z");
+        let got = follow_kind_switches(saved.clone(), &live, &h);
+        assert_eq!(got, saved);
+        // The tab is still listed, so another one with its handle is not a successor.
+        let live = ids(&["claude:K", "orca:bash", "claude:Z", "orca:zsh"]);
+        let h = handles(
+            &[("claude:Z", "zsh"), ("orca:zsh", "zsh")],
+            &[("claude:Z", "zsh")],
+        );
+        let saved = split_saved("claude:Z");
+        assert_eq!(follow_kind_switches(saved.clone(), &live, &h), saved);
+    }
+
+    #[test]
+    fn a_tab_with_another_handle_or_one_the_layout_already_has_is_not_a_successor() {
+        let live = ids(&["claude:K", "orca:bash", "claude:Z"]);
+        let h = handles(&[("claude:Z", "other")], &[]);
+        let saved = split_saved("orca:zsh");
+        assert_eq!(follow_kind_switches(saved.clone(), &live, &h), saved);
+        // `claude:K` is in the layout: it does not take the place of `orca:zsh`.
+        let h = handles(&[("claude:K", "zsh")], &[]);
+        assert_eq!(follow_kind_switches(saved.clone(), &live, &h), saved);
+        assert_eq!(
+            follow_kind_switches(PaneLayout::default(), &live, &h),
+            PaneLayout::default()
+        );
+    }
+
+    #[test]
+    fn two_terminals_that_changed_kind_each_take_their_own_successor() {
+        let saved = layout(pane("p1", &["orca:a", "orca:b"], "orca:b"), "p1");
+        let live = ids(&["claude:B", "claude:A"]);
+        let h = handles(&[("claude:A", "a"), ("claude:B", "b")], &[]);
+        let got = reconcile(follow_kind_switches(saved, &live, &h), &live);
+        assert_eq!(
+            got,
+            layout(pane("p1", &["claude:A", "claude:B"], "claude:B"), "p1")
+        );
+    }
+
+    #[test]
+    fn a_saved_layout_follows_the_terminal_that_changed_kind() {
+        let dir = temp_dir("kind");
+        let before = ids(&["claude:K", "orca:zsh"]);
+        let h = handles(&[("claude:K", "term_k"), ("orca:zsh", "zsh")], &[]);
+        update(&dir, None, "proj", &before, &h, None).unwrap();
+        let split = update(
+            &dir,
+            None,
+            "proj",
+            &before,
+            &h,
+            Some(&mv("orca:zsh", "p1", Edge::Right)),
+        )
+        .unwrap();
+        let now = ids(&["claude:K", "claude:Z"]);
+        let h = handles(
+            &[("claude:K", "term_k"), ("claude:Z", "zsh")],
+            &[("claude:K", "term_k"), ("orca:zsh", "zsh")],
+        );
+        let got = update(&dir, None, "proj", &now, &h, None).unwrap();
+        let PaneNode::Split { children, .. } = got.root.clone().unwrap() else {
+            panic!("the split was folded: {got:?}");
+        };
+        assert_eq!(children.len(), 2);
+        assert_eq!(got.focus, split.focus);
+        assert_eq!(children[1], pane("p2", &["claude:Z"], "claude:Z"));
+        assert_eq!(load(&dir).entries[0].layout, got);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn the_arguments_are_checked() {
+        let no = Handles::default();
         let ok = ids(&["a"]);
-        assert!(check(None, "proj", &ok, None).is_ok());
+        assert!(check(None, "proj", &ok, &no, None).is_ok());
         assert!(check(
             Some("Studio"),
             "proj",
             &ok,
+            &no,
             Some(&mv("a", "p1", Edge::Left))
         )
         .is_ok());
-        assert!(check(Some(""), "proj", &ok, None).is_err());
-        assert!(check(None, "", &ok, None).is_err());
-        assert!(check(None, "proj", &ids(&[""]), None).is_err());
-        assert!(check(None, "proj", &ids(&["a\nb"]), None).is_err());
-        assert!(check(None, &"x".repeat(MAX_TEXT + 1), &ok, None).is_err());
-        assert!(check(None, "proj", &vec!["t".to_owned(); MAX_TABS + 1], None).is_err());
+        assert!(check(Some(""), "proj", &ok, &no, None).is_err());
+        assert!(check(None, "", &ok, &no, None).is_err());
+        assert!(check(None, "proj", &ids(&[""]), &no, None).is_err());
+        assert!(check(None, "proj", &ids(&["a\nb"]), &no, None).is_err());
+        assert!(check(None, &"x".repeat(MAX_TEXT + 1), &ok, &no, None).is_err());
+        assert!(check(None, "proj", &vec!["t".to_owned(); MAX_TABS + 1], &no, None).is_err());
         assert!(check(
             None,
             "proj",
             &ok,
+            &no,
             Some(&PaneOp::Select { tab: String::new() })
         )
         .is_err());
@@ -966,12 +1228,37 @@ mod tests {
             None,
             "proj",
             &ok,
+            &no,
             Some(&PaneOp::Focus {
                 pane: String::new()
             })
         )
         .is_err());
-        assert!(check(None, "proj", &ok, Some(&mv("a", "", Edge::Left))).is_err());
+        assert!(check(None, "proj", &ok, &no, Some(&mv("a", "", Edge::Left))).is_err());
+        assert!(check(
+            None,
+            "proj",
+            &ok,
+            &handles(&[("a", "h")], &[("b", "h")]),
+            None
+        )
+        .is_ok());
+        assert!(check(None, "proj", &ok, &handles(&[("a", "")], &[]), None).is_err());
+        assert!(check(None, "proj", &ok, &handles(&[], &[("\n", "h")]), None).is_err());
+        let many = (0..=MAX_TABS)
+            .map(|n| (format!("t{n}"), "h".to_owned()))
+            .collect();
+        assert!(check(
+            None,
+            "proj",
+            &ok,
+            &Handles {
+                now: many,
+                was: HashMap::new()
+            },
+            None
+        )
+        .is_err());
     }
 
     #[test]
