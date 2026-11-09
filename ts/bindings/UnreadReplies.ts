@@ -6,6 +6,10 @@ import type { TimelineReply } from "./TimelineReply";
  */
 export type UnreadReplies = { count: number, uncounted: boolean, 
 /**
+ * What the thread adds to the badge (`ThreadUnread::share`): the screen sums it and counts nothing itself.
+ */
+share: number, 
+/**
  * The newest unread reply, where opening the row moves the position to; it may be past `replies` when `uncounted`.
  */
 latestTs: string, 

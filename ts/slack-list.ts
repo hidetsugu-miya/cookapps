@@ -141,8 +141,8 @@ function drawBadge() {
   setNavCount("nav-slack", unreadCount, "Slack", "未読", undefined, BADGE_CAP);
 }
 
-// What a row's unread replies add to the badge: a thread that could not be counted counts 1.
-const replyShare = (m: TimelineMessage) => (m.unreadReplies ? (m.unreadReplies.uncounted ? 1 : m.unreadReplies.count) : 0);
+// What a row's unread replies add to the badge (Rust's `share`).
+const replyShare = (m: TimelineMessage) => m.unreadReplies?.share ?? 0;
 const threadKeyOf = (m: TimelineMessage) => `${m.teamId}/${m.channel}/${m.ts}`;
 
 // Takes rows that went from the list out of what is held for the badge and for "すべて既読にする".

@@ -252,6 +252,8 @@ export interface Commands {
   orca_file_read: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileText };
   // A-18: saves `content` over the file only if the disk still holds the text with `signature` (`crlf`: write CRLF). `state` says whether it was written (`saved`, with the new signature) or the disk had changed (`changed`, `missing`, `not-utf8`: nothing written).
   orca_file_write: { args: { path: string; relative: string; content: string; crlf: boolean; signature: string; environment: string | null }; result: OrcaSaved };
+  // A-22: copies the file `relative` of the worktree to this PC, to the place picked in the save dialog that Rust opens (the page gives none). The name of the file saved, or null when the dialog was cancelled.
+  orca_file_download: { args: { path: string; relative: string; environment: string | null }; result: string | null };
   // A-18: the settings of the editor: how long after the typing stops the file is saved.
   editor_settings: { args: undefined; result: EditorSettings };
   // A-18: saves the time of the automatic save, brought into 100 to 3000 ms in steps of 100, and answers the settings saved.

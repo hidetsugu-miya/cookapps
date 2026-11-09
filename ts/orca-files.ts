@@ -1,5 +1,5 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted, with what git ignores marked); this module draws it and takes the presses.
-// A folder is read when it is opened (each time), and the reload button reads the root and the open folders again, one after the other. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path. The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read when it is opened (each time), and the reload button reads the root and the open folders again, one after the other. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one).
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
@@ -7,7 +7,8 @@ import { $, tag } from "./dom.js";
 import { CHEVRON_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
-import { copyText } from "./view.js";
+import { toast } from "./toast.js";
+import { copyText, showError } from "./view.js";
 
 // The worktree shown (the selected tab's, else the selected project's main one), with the name its heading shows ("{repo} ・ {branch}").
 export interface FilesContext {
@@ -100,12 +101,25 @@ function toggleDir(path: string) {
   }
 }
 
-// The menu of a row (the right button): the path of the entry on the machine of the worktree, and its path from the worktree. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
-function openRowMenu(anchor: Element, relative: string) {
+// Saves the file to this PC (A-22): Rust opens the save dialog and writes where it says, so the page names no place. Nothing is shown when the dialog is cancelled.
+async function download(here: FilesContext, relative: string) {
+  try {
+    const name = await invoke("orca_file_download", { path: here.path, relative, environment: here.target });
+    if (name !== null) toast(`${name} をダウンロードしました`);
+  } catch (e) {
+    showError(e);
+  }
+}
+
+// The menu of a row (the right button): the path of the entry on the machine of the worktree, its path from the worktree, and, on a file, the download. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
+function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
   if (here === null) return;
-  const item = (label: string, text: string, done: string) => ({ label, color: "var(--accent)", current: false, pick: () => void copyText(text, done) });
-  openMenu(anchor, [item("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), item("相対パスをコピー", relative, "相対パスをコピーしました")]);
+  const item = (label: string, pick: () => unknown) => ({ label, color: "var(--accent)", current: false, pick });
+  const copy = (label: string, text: string, done: string) => item(label, () => void copyText(text, done));
+  const items = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
+  if (!isDirectory) items.push(item("ダウンロード", () => void download(here, relative)));
+  openMenu(anchor, items);
 }
 
 function row(entry: OrcaFileEntry, depth: number) {
@@ -118,7 +132,7 @@ function row(entry: OrcaFileEntry, depth: number) {
   const name = tag("span", "orca-file-name", entry.name);
   button.oncontextmenu = (e) => {
     e.preventDefault();
-    openRowMenu(name, entry.path);
+    openRowMenu(name, entry.path, entry.isDirectory);
   };
   const mark = tag("span", "orca-file-mark");
   if (entry.isDirectory) {

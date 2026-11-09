@@ -1173,7 +1173,7 @@ describe("slack list", () => {
   });
 
   it("says 未読の返信あり with no number for replies that could not be counted, and that the others are in the thread", async () => {
-    const message = withReplies({ unreadReplies: unreadRepliesOf([], { count: 0, uncounted: true, latestTs: slackTs(1) }) });
+    const message = withReplies({ unreadReplies: unreadRepliesOf([], { count: 0, uncounted: true, share: 1, latestTs: slackTs(1) }) });
     await openList(timeline([message]));
     await waitForCount("#slack-feed .feed-row", 1);
     expect(await textsOf("#slack-feed .feed-thread-toggle")).toEqual(["未読の返信あり"]);
@@ -1183,7 +1183,7 @@ describe("slack list", () => {
 
   it("says that the others are in the thread above the 20 replies a row draws", async () => {
     const replies = Array.from({ length: 20 }, (_, i) => timelineReply(slackTs(100 - i, i), `Person ${i}`, `reply ${i}`));
-    await openList(timeline([withReplies({ unreadReplies: unreadRepliesOf(replies, { count: 31 }) })]));
+    await openList(timeline([withReplies({ unreadReplies: unreadRepliesOf(replies, { count: 31, share: 31 }) })]));
     await waitForCount("#slack-feed .feed-reply", 20);
     expect(await textsOf("#slack-feed .feed-thread-toggle")).toEqual(["未読の返信 31 件"]);
     expect(await textsOf("#slack-feed .feed-reply-rest")).toEqual(["ほかの返信はスレッドで見られます"]);
