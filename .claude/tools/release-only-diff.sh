@@ -2,6 +2,7 @@
 # 使い方: release-only-diff.sh A B
 # A..B の差分がリリース作業だけ（版の更新、README、CHANGELOG、docs）なら exit 0。そうでなければ、外れたパスを標準エラーに出して exit 1。
 # pre-git.sh が、合格記録のあるコミットから HEAD までが版の更新だけかを確かめるのに使う（.claude/rules/review.md）。
+# 免除するのはレビューの合格記録だけ。版の行が変わると cargo と tsc の結果も変わるので、CI（run-ci.sh）と E2E の記録は Release PR の HEAD にも要る。
 # カレントのリポジトリで動く。
 set -uo pipefail
 [ $# -eq 2 ] || { echo "使い方: release-only-diff.sh A B" >&2; exit 2; }

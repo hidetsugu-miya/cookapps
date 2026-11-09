@@ -18,7 +18,7 @@ Bad:  update stuff
 Only a pushed tag starts the release (`testing.md`), so a merge with no tag is not a release.
 When to release is decided in `issues.md`.
 Tag only after the merge, so that the tag never points at a commit main does not have.
-Make the tag in the same command as the push: `pre-git.sh` runs before the command, so a stopped push leaves no tag behind.
+Make the tag in the same command as the push: `pre-git.sh` runs before the command, so a stopped push (a missing record, a forbidden word) leaves no tag behind.
 Do not use the major version yet; keep it fixed at 0.
 The owner decides when to treat the project as 1.0.
 

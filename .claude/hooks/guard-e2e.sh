@@ -17,17 +17,20 @@ write_cmd='>|tee |[[:space:]](cp|mv|install)[[:space:]]|writeFile|write_text|ope
 block() { echo "$1" >&2; exit 2; }
 mock_msg="画面の確認は E2E（e2e/）で行います。モックは e2e/fixtures.js と e2e/support.ts に置き、使い捨てのモックは作りません"
 
-# 1. E2E の記録（.claude/e2e/）: run-e2e.sh を単独で呼ぶコマンド以外は書けない。
-rec_msg="E2E の記録は .claude/tools/run-e2e.sh だけが書けます（単独のコマンドとして呼んでください）"
-case "$path" in */.claude/e2e|*/.claude/e2e/*) block "$rec_msg" ;; esac
-rec_path='\.claude/e2e([/[:space:]"'"'"']|$)'
-run_alone='run-e2e\.sh'
+# 1. E2E の記録（.claude/e2e/）と CI の記録（.claude/ci/）: それぞれ run-e2e.sh、run-ci.sh を単独で呼ぶコマンド以外は書けない。
 chain='[;&|<>`$]'
-if [[ $cmd =~ $rec_path ]] && ! { [[ $cmd =~ $run_alone ]] && ! [[ $cmd =~ $chain ]]; }; then
-  redirect='(>|tee[[:space:]]+(-a[[:space:]]+)?)[[:space:]]*[^[:space:]]*\.claude/e2e'
-  verbs='(^|[^[:alnum:]_-])(rm|mv|cp|touch|mkdir|ln|truncate|install|dd|rsync|chmod|sed[[:space:]]+-i|perl[[:space:]]+-pi)([[:space:]]|$)[^;&|]*\.claude/e2e'
-  grep -q -E "$redirect|$verbs" <<< "$cmd" && block "$rec_msg"
-fi
+for pair in "e2e:run-e2e" "ci:run-ci"; do
+  kind=${pair%%:*}
+  rec_msg="記録(.claude/$kind/)は .claude/tools/${pair#*:}.sh だけが書けます（単独のコマンドとして呼んでください）"
+  case "$path" in */.claude/$kind|*/.claude/$kind/*) block "$rec_msg" ;; esac
+  rec_path="\\.claude/$kind"'([/[:space:]"'"'"']|$)'
+  run_alone="${pair#*:}\\.sh"
+  if [[ $cmd =~ $rec_path ]] && ! { [[ $cmd =~ $run_alone ]] && ! [[ $cmd =~ $chain ]]; }; then
+    redirect="(>|tee[[:space:]]+(-a[[:space:]]+)?)[[:space:]]*[^[:space:]]*\\.claude/$kind"
+    verbs="(^|[^[:alnum:]_-])(rm|mv|cp|touch|mkdir|ln|truncate|install|dd|rsync|chmod|sed[[:space:]]+-i|perl[[:space:]]+-pi)([[:space:]]|\$)[^;&|]*\\.claude/$kind"
+    grep -q -E "$redirect|$verbs" <<< "$cmd" && block "$rec_msg"
+  fi
+done
 
 # 2. src/ の下（src-tauri/ は除く）と ts/ の下（bindings を含む）には、モックも @wdio も書かない。
 if [[ ( $path == */src/* && $path != */src-tauri/* ) || $path == */ts/* ]]; then
