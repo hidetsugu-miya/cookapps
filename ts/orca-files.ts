@@ -100,7 +100,7 @@ function toggleDir(path: string) {
   }
 }
 
-// The menu of a row (the right button): the path of the entry on the machine of the worktree, and its path from the worktree.
+// The menu of a row (the right button): the path of the entry on the machine of the worktree, and its path from the worktree. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
 function openRowMenu(anchor: Element, relative: string) {
   const here = context;
   if (here === null) return;
@@ -115,9 +115,10 @@ function row(entry: OrcaFileEntry, depth: number) {
   button.dataset.kind = entry.isDirectory ? "dir" : "file";
   button.dataset.ignored = String(entry.ignored);
   button.style.setProperty("--depth", String(depth));
+  const name = tag("span", "orca-file-name", entry.name);
   button.oncontextmenu = (e) => {
     e.preventDefault();
-    openRowMenu(button, entry.path);
+    openRowMenu(name, entry.path);
   };
   const mark = tag("span", "orca-file-mark");
   if (entry.isDirectory) {
@@ -135,7 +136,7 @@ function row(entry: OrcaFileEntry, depth: number) {
       if (e.key === "Enter") openFile(entry.path);
     };
   }
-  button.append(tag("span", "orca-file-name", entry.name));
+  button.append(name);
   return button;
 }
 
