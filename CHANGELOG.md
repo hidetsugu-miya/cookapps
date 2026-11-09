@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.57.0
+
+A-22 (new): a file in the file pane of the Orca screen (A-18) can be downloaded to this Mac. Right-click the file, choose 「ダウンロード」 and pick the place in the save dialog (#317, #320). It works for a file of a saved environment too.
+
+A-8: in the list of the Orca screen, the projects that have a session but are not working now come right under the working ones, above the projects with no session (#356).
+
+M-1: the 「すべて既読にする」 button of the mail list has a little room under it (#307).
+
+No change in what the app does: the rule that counts the unread replies of a Slack thread for the badge is now in one place (#312), and the tools used to develop the app test how the hand-over between nightly runs is read (#313).
+
 ## v0.56.1
 
 M-9: a card of new mail goes as soon as its thread becomes read, whether it is marked read in the list or in the thread, or read on another device (#304).
