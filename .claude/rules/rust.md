@@ -18,7 +18,7 @@ cd src-tauri && mise exec -- cargo test --all-features
 
 ### Pass fmt, clippy and test before you commit
 
-`pre-git.sh` checks the same three before a push, and clippy turns warnings into errors (`testing.md`).
+`run-ci.sh` runs the same three before a push (`pre-git.sh` then checks its record), and clippy turns warnings into errors (`testing.md`).
 `cargo test` writes the ts-rs types to `ts/bindings/`, so when a type changes, commit the generated files with it.
 
 ```sh

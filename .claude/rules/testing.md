@@ -58,12 +58,13 @@ Bad:  call the real Gmail API from a test
 `.github/workflows/release.yml` runs only on a pushed tag `v*`, and its one job, `release`, checks that the tag is the version of its commit and that the commit is on main, and puts the signed `.app`, its updater files and `latest.json` in a GitHub Release (U-1).
 A pull request runs no workflow of ours, and a push to main that changes the dependencies, the Rust version or `docs/` runs none that checks anything (at the owner's instruction, 2026-11-04: the same checks already ran before the push, and running them again cost time).
 The two workflows of such a push are `rust-cache.yml`, which only builds the Rust dependencies to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml`, which builds `docs/` and deploys it to GitHub Pages.
-Before a push, `pre-git.sh` checks the version match, tsc (`ts` and `e2e`), Biome, cargo fmt, clippy, cargo test and the bindings diff.
-If there are new commits, it also checks the E2E record (`e2e.md`) and the review pass record (`review.md`) for HEAD.
-`post-checks.sh` then sends those two results to GitHub as the statuses `e2e` and `review`, which the ruleset on main requires (`issues.md`); no workflow runs for them.
+Before a push, `.claude/tools/run-ci.sh` runs the version match, tsc (`ts` and `e2e`), Biome, cargo fmt, clippy, cargo test and the bindings diff, and writes a record for HEAD to `.claude/ci/{HEAD SHA}` in the main checkout. It runs on a clean working tree only, and only it can write the record (`guard-e2e.sh`).
+`pre-git.sh` runs none of these checks. If there are new commits, it checks the CI record, the E2E record (`e2e.md`) and the review pass record (`review.md`) for HEAD, through `check-ci.sh`, `check-e2e.sh` and the pass file; a push with no new commit (a tag on a commit already on the remote) needs none of them. The record is needed on a Release PR's HEAD too, because its version lines change what cargo and tsc check.
+`post-checks.sh` checks the same records and then sends the E2E and review results to GitHub as the statuses `e2e` and `review`, which the ruleset on main requires (`issues.md`); no workflow runs for them.
 These checks run only on macOS; nothing checks Windows.
 
 ```text
-Good: commit -> run-e2e.sh -> review -> push (pre-git.sh checks everything) -> post-checks.sh -> merge
+Good: commit -> run-ci.sh -> run-e2e.sh -> review -> push (pre-git.sh checks the records) -> post-checks.sh -> merge
 Bad:  add a static, test or e2e job to the workflow
+Bad:  write a CI record by hand, or run the checks inside pre-git.sh again
 ```

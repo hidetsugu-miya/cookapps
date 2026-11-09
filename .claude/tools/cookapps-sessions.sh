@@ -13,7 +13,7 @@ set -u
 socks=/tmp/cc-socks
 # A missing folder more likely means that Claude Code moved it than that no session runs, so it is an error, not "no other session".
 if [ ! -d "$socks" ]; then
-  echo "セッションのソケットのフォルダがありません: $socks（Claude Code の更新で場所が変わった可能性があります）" >&2
+  echo "セッションのソケットのフォルダがありません: ${socks}（Claude Code の更新で場所が変わった可能性があります）" >&2
   exit 1
 fi
 
