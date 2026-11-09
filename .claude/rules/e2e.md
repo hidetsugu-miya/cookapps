@@ -97,11 +97,11 @@ Run it when the working tree is clean (after a commit).
 
 One run starts three apps, one per capability, and `onPrepare` in `wdio.conf.ts` gives each app a free WebDriver port.
 Each checkout has its own E2E binary and `e2e/dist`.
-So runs from several worktrees can overlap, and there is no need to wait for another session.
+So runs from the main checkout and from the worktree can overlap, and there is no need to wait for the other.
 Do not set a fixed port: the service waits for any WebDriver server on its port, so a second run on the same port drives the first run's app and reports on the wrong code.
 
 ```text
-Good: two sessions run run-e2e.sh at the same time, each in its own worktree
+Good: the main checkout and the worktree run run-e2e.sh at the same time
 Bad:  set embeddedPort to the fixed value 4445 in wdio.conf.ts
 ```
 
