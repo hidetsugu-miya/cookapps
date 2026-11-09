@@ -381,14 +381,20 @@ class Prune(unittest.TestCase):
         }
         pruned, dropped = pr.prune_plan(plan, {1: "closed", 3: "open"}, {2})
         self.assertEqual(pruned["order"], [3, 4])
-        self.assertEqual(pruned["blocked_by"], {})  # the key of a dropped issue goes, and so does a dropped issue as a blocker
+        self.assertEqual(pruned["blocked_by"], {"3": [2]})  # a blocker that is fixed stays: only the keys of dropped issues go, and a closed blocker
         self.assertEqual(pruned["reasons"], {"3": "c"})
         self.assertEqual(dropped, [(1, "closed"), (2, "fixed")])
 
     def test_a_dependency_on_a_closed_or_fixed_issue_goes_and_an_emptied_key_goes_with_it(self):
         plan = {"order": [2, 3, 4], "blocked_by": {"3": [1, 4], "2": [1, 5], "4": [5]}}
         pruned, _ = pr.prune_plan(plan, {1: "closed", 2: "open", 3: "open", 4: "open", 5: "open"}, {5})
-        self.assertEqual(pruned["blocked_by"], {"3": [4]})
+        self.assertEqual(pruned["blocked_by"], {"3": [4], "2": [5], "4": [5]})  # #5 is fixed and open: its dependency stays
+
+    def test_a_fixed_open_blocker_is_not_removed_from_github_by_the_pruning(self):
+        plan = {"order": [50], "blocked_by": {"50": [42]}}
+        pruned, _ = pr.prune_plan(plan, {50: "open", 42: "open"}, {42})
+        wanted = {int(k): v for k, v in pruned["blocked_by"].items()}
+        self.assertEqual(pr.diff_relations([50], {50: [42]}, wanted), ([], []))
 
     def test_a_number_nobody_knows_stays_for_the_validation_to_refuse(self):
         pruned, dropped = pr.prune_plan({"order": [1, 99]}, {1: "open"}, set())

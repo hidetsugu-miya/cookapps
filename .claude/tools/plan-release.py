@@ -323,7 +323,8 @@ def blockers(plan):
 
 def prune_plan(plan, states, fixed_numbers):
     """-> (the plan without the fixed issues and the closed ones, [(number, "fixed" | "closed")]).
-    They leave order, the keys of blocked_by, the blockers in its lists (a key left with no blocker goes too) and the keys of reasons.
+    They leave order, the keys of blocked_by and the keys of reasons.
+    Only a closed issue also leaves the blockers in the lists of blocked_by (a key left with no blocker goes too): a fixed issue is still open, and its dependency is real.
     A number nobody knows stays, for the validation to refuse. A plan of the wrong shape is returned as it is."""
     problem, order, blocked_by = parse_plan(plan)
     if problem:
@@ -337,7 +338,7 @@ def prune_plan(plan, states, fixed_numbers):
     pruned = dict(
         plan,
         order=[n for n in order if n not in gone],
-        blocked_by={str(k): left for k, v in blocked_by.items() if k not in gone and (left := [b for b in v if not why(b)])},
+        blocked_by={str(k): left for k, v in blocked_by.items() if k not in gone and (left := [b for b in v if states.get(b) != "closed"])},
     )
     if isinstance(plan.get("reasons"), dict):
         pruned["reasons"] = {k: v for k, v in plan["reasons"].items() if _int(k) not in gone}
