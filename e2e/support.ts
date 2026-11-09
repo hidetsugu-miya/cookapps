@@ -457,8 +457,8 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
 // An unread reply under a row of the Slack list (S-14); its `rich` is its text with no style unless `extra` sets it.
 export const timelineReply = (ts: string, name: string, text: string, extra: Partial<TimelineReply> = {}): TimelineReply => ({ ts, name, iconUrl: null, text, rich: plain(text), blocks: [], showText: true, attachments: [], hasFiles: false, ...extra });
 
-// What a row's thread has unread (`TimelineMessage.unreadReplies`): the replies given, counted, the last one the newest, unless `extra` says another.
-export const unreadRepliesOf = (replies: TimelineReply[], extra: Partial<UnreadReplies> = {}): UnreadReplies => ({ count: replies.length, uncounted: false, latestTs: replies[replies.length - 1]?.ts ?? "", replies, ...extra });
+// What a row's thread has unread (`TimelineMessage.unreadReplies`): the replies given, counted (`share` too, what Rust adds to the badge), the last one the newest, unless `extra` says another.
+export const unreadRepliesOf = (replies: TimelineReply[], extra: Partial<UnreadReplies> = {}): UnreadReplies => ({ count: replies.length, uncounted: false, share: replies.length, latestTs: replies[replies.length - 1]?.ts ?? "", replies, ...extra });
 
 // A row of the watch section (`Timeline.watched`): the thread's own message, with `newReplies` new replies (and `status`, "ok" unless `extra` says another).
 // `unreadTo` (the message opening the row moves the read position to) is the message itself when it is unread, unless `extra.watch` says another.
@@ -476,7 +476,7 @@ export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> =
   missing: [],
   refreshSecs: 120,
   pendingChannels: 0,
-  unreadTotal: messages.filter((m) => m.unread).length + messages.reduce((n, m) => n + (m.unreadReplies ? (m.unreadReplies.uncounted ? 1 : m.unreadReplies.count) : 0), 0),
+  unreadTotal: messages.filter((m) => m.unread).length + messages.reduce((n, m) => n + (m.unreadReplies?.share ?? 0), 0),
   markableChannels: new Set(messages.filter((m) => m.unread).map((m) => `${m.teamId}/${m.channel}`)).size,
   unreadThreads: messages.filter((m) => m.unreadReplies).length,
   ...extra,

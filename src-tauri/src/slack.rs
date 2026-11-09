@@ -1468,6 +1468,8 @@ pub struct TimelineMessage {
 pub struct UnreadReplies {
     count: u32,
     uncounted: bool,
+    /// What the thread adds to the badge (`ThreadUnread::share`): the screen sums it and counts nothing itself.
+    share: u32,
     /// The newest unread reply, where opening the row moves the position to; it may be past `replies` when `uncounted`.
     latest_ts: String,
     /// The newest `UNREPLIED_MAX` that were read, oldest first.
@@ -4221,6 +4223,7 @@ fn unread_replies_of(cache: &TimelineCache, unread: &ThreadUnread) -> UnreadRepl
     UnreadReplies {
         count: unread.count,
         uncounted: unread.uncounted,
+        share: unread.share(),
         latest_ts: unread.newest.clone(),
         replies: unread
             .replies
@@ -7951,6 +7954,21 @@ mod tests {
         // The replies read are still there to draw.
         assert_eq!(found.replies.len(), 1);
         assert_eq!(thread_unread(&read, Some("14.000001")), None);
+    }
+
+    #[test]
+    fn the_unread_replies_of_a_row_carry_the_share_of_the_badge() {
+        let cache = TimelineCache::default();
+        let counted = read_of(&thread_page(
+            subscribed("9.000001"),
+            json!([reply("10.000002", "U1"), reply("11.000002", "U2")]),
+        ));
+        let counted = thread_unread(&counted, None).unwrap();
+        assert_eq!(unread_replies_of(&cache, &counted).share, 2);
+        let mut page = thread_page(subscribed("11.000001"), json!([reply("12.000001", "U2")]));
+        page["has_more"] = json!(true);
+        let uncounted = thread_unread(&read_of(&page), None).unwrap();
+        assert_eq!(unread_replies_of(&cache, &uncounted).share, 1);
     }
 
     fn candidate(
