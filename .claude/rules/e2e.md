@@ -85,8 +85,8 @@ npm run e2e
 Run it when the working tree is clean (after a commit).
 `run-e2e.sh [checkout path]` runs `e2e:build` and `e2e`, then writes JSON (sha, version, clean, passed, tests, script_timeouts, finished_at) to `.claude/e2e/{HEAD SHA}` in the main checkout, and the full output to `.claude/e2e/{HEAD SHA}.log`.
 `script_timeouts` counts the WebDriver commands whose result never came back. A passing run can hide them behind webdriver's retry, so read this count and the log before saying anything about E2E speed or stability.
-`pre-git.sh` and release-verifier use this record, through `.claude/tools/check-e2e.sh`, to confirm that E2E passed for HEAD.
-`guard-e2e.sh` blocks every write to the record except a direct call of `run-e2e.sh`. Never write it by hand.
+`pre-git.sh`, `post-checks.sh` and release-verifier use this record, through `.claude/tools/check-e2e.sh`, to confirm that E2E passed for HEAD. The record of the static checks and unit tests has the same shape in `.claude/ci/{HEAD SHA}` (`run-ci.sh`, `check-ci.sh`; `testing.md`).
+`guard-e2e.sh` blocks every write to either record except a direct call of its own command (`run-e2e.sh`, `run-ci.sh`). Never write them by hand.
 
 ```sh
 .claude/tools/run-e2e.sh   # in the main checkout

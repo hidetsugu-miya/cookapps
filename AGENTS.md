@@ -147,10 +147,13 @@ npm run e2e         # WebdriverIO
 scripts/check-version.sh   # the version in Cargo.toml, tauri.conf.json and Cargo.lock matches
 ```
 
+`.claude/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.claude/tools/run-e2e.sh` does the same for E2E.
+Before a push, `pre-git.sh` only checks that both records exist for HEAD.
+
 ## CI
 
 The release is `.github/workflows/release.yml`, and only a pushed tag `v*` starts it.
-Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions, so a pull request runs no workflow of this repository.
+Static, unit and E2E checks run on the developer's machine before a push (`run-ci.sh` and `run-e2e.sh`, with a record for each HEAD that `pre-git.sh` checks), not in GitHub Actions, so a pull request runs no workflow of this repository.
 A push to main that changes the dependencies, the Rust version or `docs/` runs two workflows, and neither checks anything: `rust-cache.yml` builds the Rust dependencies of the release to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml` builds `docs/` with Jekyll and deploys it to GitHub Pages.
 A change reaches main through a pull request, and the machine that ran the checks sends their results as the commit statuses `e2e` and `review`.
 A release is the merge of the pull request that raises the version, followed by its tag.
