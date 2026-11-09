@@ -18,7 +18,6 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    - `needs:owner` while a product decision is open; remove it when settled, and update the body with the decision
    - `importance:high` or `importance:low` (none means normal), with the reason as a one-line comment. A bug that stops use or loses data is `importance:high`. Do not change one the owner set.
    - `urgency:high` only when the owner said so ("urgent", "top priority", "as soon as possible"), never on your own judgment; say that it was their word. `release:now` is retired.
-   - `release:pin` only when the owner named the version: put the version milestone on the issue by hand (`gh issue edit {n} --milestone {tag}`) and then the label. `plan-release.py` never moves a pinned issue.
    - `documentation` when it changes only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/`
 3. **Record any discussion.** If options were put to the owner (layout, design), create a Discussion in Ideas in the form of `issues.md`, with `<!-- ai -->` as the first line of its body, and point to it from the issue body.
 4. **Get the order.** Run `plan-release.py snapshot`, and launch `release-planner` with `mode: order` on the first line and the output below it as the prompt.

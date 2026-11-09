@@ -111,13 +111,13 @@ def importance(issue):
     return "high" if has(issue, "importance:high") else "low" if has(issue, "importance:low") else "normal"
 
 
-def pin_version(issue):
-    """The version the owner pinned the issue to (its milestone), or None. A pin without a version milestone means nothing."""
-    return parse_version(issue.milestone) if has(issue, "release:pin") else None
-
-
 def counted(issue):
     return not has(issue, "documentation")
+
+
+def capped(issues):
+    """A version that adds a requirement ID holds at most MAX_COUNTED counted issues; a patch version (no `adds:requirement`) has no cap."""
+    return any(has(i, "adds:requirement") for i in issues)
 
 
 def eligible_title(title):
@@ -179,17 +179,17 @@ def existing_order(free):
 
 def derive_groups(ordered):
     """Groups of a previous plan: consecutive issues that share a version milestone, so that a sync keeps them together.
-    An 8-point issue ends a run, a pinned issue is never in a run (it has its own slot), and a run over the cap is left to the allocation."""
+    An 8-point issue ends a run, and a run that adds a requirement ID and holds more than MAX_COUNTED counted issues is left to the allocation."""
     groups = []
     run = []
 
     def flush():
-        if len(run) > 1 and sum(1 for i in run if counted(i)) <= MAX_COUNTED:
+        if len(run) > 1 and (not capped(run) or sum(1 for i in run if counted(i)) <= MAX_COUNTED):
             groups.append([i.number for i in run])
         run.clear()
 
     for i in ordered:
-        alone = solo(i) or pin_version(i) is not None
+        alone = solo(i)
         if alone or parse_version(i.milestone) is None or (run and run[-1].milestone != i.milestone):
             flush()
         if not alone and parse_version(i.milestone) is not None:
@@ -214,20 +214,14 @@ def split_issues(issues, pr_closing):
 
 def allocate(queue, groups, base):
     """Walks the queue and returns [{"version", "issues": [numbers]}].
-    The issues pinned to one version (release:pin) share one slot of that version, placed where the first of them stands; nothing else joins it, and an 8-point one needs no slot of its own.
-    A pinned version that earlier slots have reached already is refused: the pin is never moved."""
+    A version that adds a requirement ID holds at most MAX_COUNTED counted issues; a patch version has no cap, so consecutive patch issues share one version (at the owner's instruction, 2026-11-09).
+    An 8-point issue is a version of its own, and an urgent issue ends the version it is in."""
     pos = {i.number: k for k, i in enumerate(queue)}
     group_len = {}
     for g in groups:
         positions = sorted(pos[n] for n in g if n in pos)
         if positions:
             group_len[positions[0]] = len(positions)
-    pins = {}
-    for i in queue:
-        v = pin_version(i)
-        if v:
-            pins.setdefault(v, []).append(i)
-    placed = set()
 
     slots = []
     cur = []
@@ -243,14 +237,6 @@ def allocate(queue, groups, base):
 
     k = 0
     while k < len(queue):
-        v = pin_version(queue[k])
-        if v:
-            k += 1
-            if v not in placed:
-                placed.add(v)
-                close()
-                slots.append(pins[v])
-            continue
         n = group_len.get(k, 1)
         unit = queue[k : k + n]
         k += n
@@ -258,21 +244,18 @@ def allocate(queue, groups, base):
             close()
             slots.append(unit)
             continue
-        if n > 1 and count(cur) + count(unit) > MAX_COUNTED:
+        if capped(cur + unit) and count(cur) + count(unit) > MAX_COUNTED:
             close()
         cur = cur + unit
-        if any(urgent(i) for i in unit) or count(cur) >= MAX_COUNTED:
+        if any(urgent(i) for i in unit) or (capped(cur) and count(cur) >= MAX_COUNTED):
             close()
     close()
-
-    def slot_pin(slot):
-        return next((pin_version(i) for i in slot if pin_version(i)), None)
 
     merged = []
     carry = []
     for idx, slot in enumerate(slots):
         slot = carry + slot
-        if idx < len(slots) - 1 and not any(counted(i) for i in slot) and not slot_pin(slot):
+        if idx < len(slots) - 1 and not any(counted(i) for i in slot):
             carry = slot
             continue
         carry = []
@@ -281,16 +264,7 @@ def allocate(queue, groups, base):
     out = []
     version = parse_version(base) or (0, 0, 0)
     for slot in merged:
-        pinned = slot_pin(slot)
-        if pinned:
-            if pinned <= version:
-                held = ", ".join(f"#{i.number}" for i in slot if pin_version(i))
-                raise PlanError(
-                    [f"{format_version(pinned)} is pinned ({held}) but the slots before it already reach {format_version(version)}"]
-                )
-            version = pinned
-        else:
-            version = bump(version, any(has(i, "adds:requirement") for i in slot))
+        version = bump(version, capped(slot))
         out.append({"version": format_version(version), "issues": [i.number for i in slot]})
     return out
 
@@ -369,35 +343,16 @@ def validate_plan(plan, free, fixed, states):
         ps = sorted(position[n] for n in g if n in position)
         if ps != list(range(ps[0], ps[0] + len(ps))):
             problems.append(f"{label}: members are not adjacent in order")
-        if any(pin_version(free_by[n]) for n in g):
-            problems.append(f"{label}: holds an issue with release:pin (pinned issues share their version without a group)")
         if len(g) > 1 and any(solo(free_by[n]) for n in g):
             problems.append(f"{label}: holds a point:8 issue with another issue")
-        if sum(1 for n in g if counted(free_by[n])) > MAX_COUNTED:
-            problems.append(f"{label}: holds more than {MAX_COUNTED} counted issues")
-
-    # The issues pinned to one version share the slot where the first of them stands (allocate).
-    first_pin = {}
-    for n in order:
-        v = pin_version(free_by[n]) if n in free_by else None
-        if v and v not in first_pin:
-            first_pin[v] = position[n]
+        if capped([free_by[n] for n in g]) and sum(1 for n in g if counted(free_by[n])) > MAX_COUNTED:
+            problems.append(f"{label}: adds a requirement ID and holds more than {MAX_COUNTED} counted issues")
 
     for n, blockers in sorted(blocked_by.items()):
         if n not in free_by:
             problems.append(f"blocked_by: #{n} is not an issue to plan")
             continue
-        pinned = pin_version(free_by[n])
         for b in blockers:
-            if (
-                pinned
-                and b in free_by
-                and position.get(b, -1) > first_pin[pinned]
-                and pin_version(free_by[b]) != pinned
-            ):
-                problems.append(
-                    f"blocked_by: #{n} is pinned to {format_version(pinned)} and goes out with the first pinned issue, but #{b}, which blocks it, is placed after that"
-                )
             state = states.get(b)
             if state is None:
                 problems.append(f"blocked_by: #{n} names #{b}, which is unknown")
@@ -679,9 +634,7 @@ def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=froze
     `start` holds the issues that can start in the first milestone that has work and in the milestones after it, by the order of the saved `plan` within a version
     (the issues the plan lacks come last, oldest first). Of the later milestones, nothing is reported but what can start and what is in progress as this run's own:
     an issue with needs:owner, one that is held, and one with an open blocker are left out.
-    While any release:pin issue is open, nothing starts from the later milestones, whatever their versions
-    (a pin's version is fixed, so an issue that merged ahead of it could move the slots onto it and be refused by allocate): only the first milestone's issues start.
-    Without a pin, an issue of a later milestone that merges first moves the slots, and allocate has nothing to refuse.
+    An issue of a later milestone that merges first moves the slots, and allocate has nothing to refuse.
     `parallel` is the numbers of `start` to begin now (pick_parallel): it avoids the issues in progress and every issue another session holds, in any open milestone."""
     held_by_worktree = held_by_worktree or {}
     position, touches = plan_view(plan)
@@ -735,14 +688,11 @@ def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=froze
         else:
             startable.append(i)
     later = sorted((i for i in open_issues if i.milestone != chosen), key=lambda i: (parse_version(i.milestone), *by_created(i)))
-    pinned = any(has(i, "release:pin") for i in open_issues)
     for i in later:
         if i.number in pr_closing:
             if i.number in mine:
                 in_progress.append(i)
-        elif not pinned and not (
-            has(i, "needs:owner") or (i.number in held_by_worktree and i.number not in mine) or i.blocked_by
-        ):
+        elif not (has(i, "needs:owner") or (i.number in held_by_worktree and i.number not in mine) or i.blocked_by):
             startable.append(i)
     startable.sort(key=start_key)
     out["start"] = [with_milestone(i) for i in startable]
@@ -760,9 +710,15 @@ def parse_time(s):
     return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
 
 
-def release_facts(waiting, pr_labels, now):
+def open_in_milestone(issues, title):
+    """The number of open issues of the milestone `title` that the release waits for: not `needs:owner`, not blocked by an open issue, and counted (not `documentation`)."""
+    return sum(1 for i in issues if i.state == "open" and i.milestone == title and not has(i, "needs:owner") and not i.blocked_by and counted(i))
+
+
+def release_facts(waiting, pr_labels, now, milestone=None, milestone_open=None):
     """Applies R0 to R3 of issues.md and gathers the figures of R4, which the release-planner judges.
-    `waiting` are the merged changes not released yet, `pr_labels` the labels of the Release PR (None when there is none).
+    `waiting` are the merged changes not released yet, `pr_labels` the labels of the Release PR (None when there is none),
+    `milestone` the planned version (the lowest open milestone, which `close` releases) and `milestone_open` the number of its issues that are still open and can start (open_in_milestone).
     -> {"rule": "R0".."R3" | "R4", "decision": "wait" | "release" | None, ...}"""
     pr_labels = pr_labels or []
     changes = sorted((i for i in waiting if is_waiting(i) and counted(i)), key=lambda i: (i.closed_at or "", i.number))
@@ -790,6 +746,8 @@ def release_facts(waiting, pr_labels, now):
         "changes": len(changes),
         "bugs": sum(1 for i in changes if has(i, "bug")),
         "oldest_hours": max(ages) if ages else None,
+        "milestone": milestone,
+        "milestone_open": milestone_open,
         "waiting": rows,
     }
 
@@ -975,7 +933,6 @@ def issue_json(i):
         "labels": i.labels,
         "urgency": "high" if urgent(i) else "normal",
         "importance": importance(i),
-        "pin": has(i, "release:pin"),
         "milestone": i.milestone,
         "createdAt": i.created_at,
         "blocked_by": sorted(i.blocked_by),
@@ -1166,7 +1123,10 @@ def cmd_release_facts(args):
     except ValueError as e:
         raise PlanError([f"--now: {e}"])
     waiting = [i for i in state.issues.values() if is_waiting(i)]
-    print(json.dumps(release_facts(waiting, labels, now), ensure_ascii=False, indent=2))
+    planned = min((parse_version(m["title"]) for m in state.milestones if m["state"] == "open" and parse_version(m["title"])), default=None)
+    title = format_version(planned) if planned else None
+    still_open = open_in_milestone(state.issues.values(), title) if title else None
+    print(json.dumps(release_facts(waiting, labels, now, title, still_open), ensure_ascii=False, indent=2))
 
 
 def main(argv=None):
