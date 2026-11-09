@@ -5,13 +5,14 @@
 //! A file is saved with `files.writeIfUnchanged`: Orca writes only when the disk still holds the text that was read, by a signature of it (`disk_signature`, the one of Orca's `disk-baseline-signature.js`), and answers `diskConflict` when it does not, so a file changed elsewhere is never overwritten.
 //! The text goes through a textarea, which turns CRLF into LF and cannot hold a lone CR, so only a file with no CR or with a CRLF at every line end is opened (`line_ending`), and a CRLF file is written back with CRLF.
 //! The time of the automatic save is saved in `editor-settings.json` in the app config directory.
-//! A file is also copied to this PC (`download`): `files.readChunk` is called until `eof`, or `files.readPreview` once on a host that lacks it, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
+//! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
 
 use std::{
     cmp::Ordering,
     collections::HashSet,
     io::Write,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError},
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -48,6 +49,12 @@ const MAX_TEXT: usize = 384 * 1024;
 const MAX_PATH: usize = 4096;
 /// The bytes one `files.readChunk` asks for (the size Orca's own client reads at a time; Orca refuses more than 512 KiB).
 const CHUNK: usize = 384 * 1024;
+/// The longest name of a file on the file systems of this PC, in bytes.
+const MAX_NAME: usize = 255;
+/// What the name of the temporary file adds to the name of the destination: the `.` before, the `.{n}` of a retry (n below `TEMP_TRIES`) and the `.part` after.
+const TEMP_AFFIX: usize = 1 + 4 + 5;
+/// How many names of a temporary file are tried before the download gives up.
+const TEMP_TRIES: u32 = 1000;
 const NOT_LISTED: &str = "ファイルの一覧を読めません";
 
 // ---- what the screen gets ----
@@ -450,32 +457,95 @@ fn parse_chunk(result: &Value, length: usize) -> Result<(Vec<u8>, bool), String>
     Ok((bytes, eof))
 }
 
-/// The whole file from an answer of `files.readPreview` (`{content, isBinary}`; a binary file's `content` is base64): a preview Orca cut short is refused.
-fn parse_preview(result: &Value) -> Result<Vec<u8>, String> {
+/// The whole file from an answer of `files.readPreview` (`{content, isBinary}`; a binary file's `content` is base64): a preview Orca cut short is refused, and so is one longer than `size` allows (a text that is not UTF-8 comes back with U+FFFD for each bad byte, which is 3 bytes for 1).
+fn parse_preview(result: &Value, size: Option<u64>) -> Result<Vec<u8>, String> {
     if result["truncated"].as_bool() == Some(true) {
         return Err("ファイルが大きすぎて読めません".into());
     }
     let content = result["content"].as_str().ok_or("ファイルを読めません")?;
-    if result["isBinary"].as_bool() == Some(true) {
+    let binary = result["isBinary"].as_bool() == Some(true);
+    let bytes = if binary {
         STANDARD
             .decode(content)
-            .map_err(|_| "ファイルを読めません".to_owned())
+            .map_err(|_| "ファイルを読めません".to_owned())?
     } else {
-        Ok(content.as_bytes().to_vec())
+        content.as_bytes().to_vec()
+    };
+    let ceiling = size.map(|s| if binary { s } else { s.saturating_mul(3) });
+    if ceiling.is_some_and(|c| bytes.len() as u64 > c) {
+        return Err("ファイルを読めません".into());
     }
+    Ok(bytes)
 }
 
 fn write_error(error: &std::io::Error) -> String {
     format!("この PC にファイルを書けません: {error}")
 }
 
-/// Reads the file `relative` of the worktree at `path` with `files.readChunk`, `CHUNK` bytes at a time until `eof`, and writes it to `out`. A host that lacks `files.readChunk` answers `method_not_found` to the first call, and the file is read whole with `files.readPreview` then. Answers the size.
+/// Runs `work`, which uses the disk, on a thread made for blocking, so that a large file does not hold a worker of the async runtime.
+async fn on_disk<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| "この PC にファイルを書けません".to_owned())?
+}
+
+/// The temporary file being written, shared with the threads that write it.
+type Out = Arc<Mutex<std::fs::File>>;
+
+async fn put(out: &Out, bytes: Vec<u8>) -> Result<(), String> {
+    let out = Arc::clone(out);
+    on_disk(move || {
+        out.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .write_all(&bytes)
+            .map_err(|e| write_error(&e))
+    })
+    .await
+}
+
+/// The whole file by one `files.readPreview`, written to `out`. Answers the size.
+async fn fetch_preview(
+    rpc: &mut impl Rpc,
+    path: &str,
+    relative: &str,
+    size: Option<u64>,
+    out: &Out,
+) -> Result<u64, String> {
+    let answer = rpc
+        .call(
+            "files.readPreview",
+            worktree_params(path, None, json!({"relativePath": relative})),
+        )
+        .await
+        .map_err(reason)?;
+    let bytes = parse_preview(&answer, size)?;
+    let length = bytes.len() as u64;
+    put(out, bytes).await?;
+    Ok(length)
+}
+
+/// Reads the file `relative` of the worktree at `path` and writes it to `out`. `files.stat` gives the size first, and the reading stops with an error when Orca sends more than that, so an Orca that never says `eof` cannot fill the disk. Then `files.readChunk` is called, `CHUNK` bytes at a time until `eof`. A host that lacks `files.stat`, or answers `method_not_found` to the first `files.readChunk`, has the file read whole with `files.readPreview` (a host that lacks `files.stat` has no size to hold the preview to). Answers the size.
 async fn fetch_into(
     rpc: &mut impl Rpc,
     path: &str,
     relative: &str,
-    out: &mut std::fs::File,
+    out: &Out,
 ) -> Result<u64, String> {
+    let size = match rpc
+        .call(
+            "files.stat",
+            worktree_params(path, None, json!({"relativePath": relative})),
+        )
+        .await
+    {
+        Ok(answer) => answer["size"].as_u64().ok_or("ファイルを読めません")?,
+        Err(e) if e.shown.contains("method_not_found") => {
+            return fetch_preview(rpc, path, relative, None, out).await;
+        }
+        Err(e) => return Err(reason(e)),
+    };
     let mut offset = 0_u64;
     loop {
         let answer = rpc
@@ -491,42 +561,70 @@ async fn fetch_into(
         let answer = match answer {
             Ok(answer) => answer,
             Err(e) if offset == 0 && e.shown.contains("method_not_found") => {
-                let answer = rpc
-                    .call(
-                        "files.readPreview",
-                        worktree_params(path, None, json!({"relativePath": relative})),
-                    )
-                    .await
-                    .map_err(reason)?;
-                let bytes = parse_preview(&answer)?;
-                out.write_all(&bytes).map_err(|e| write_error(&e))?;
-                return Ok(bytes.len() as u64);
+                return fetch_preview(rpc, path, relative, Some(size), out).await;
             }
             Err(e) => return Err(reason(e)),
         };
         let (bytes, eof) = parse_chunk(&answer, CHUNK)?;
-        out.write_all(&bytes).map_err(|e| write_error(&e))?;
+        // More than the size said: the file grew, or Orca does not stop.
+        if offset + bytes.len() as u64 > size {
+            return Err("ファイルを読めません".into());
+        }
         offset += bytes.len() as u64;
+        let empty = bytes.is_empty();
+        put(out, bytes).await?;
         if eof {
             return Ok(offset);
         }
         // An answer with no bytes and no end would be asked for again for ever.
-        if bytes.is_empty() {
+        if empty {
             return Err("ファイルを読めません".into());
         }
     }
 }
 
-/// The temporary file beside `dest`, in the same folder so that the move onto `dest` is a rename.
-fn temp_path(dest: &Path) -> Result<PathBuf, String> {
+/// `text` cut to at most `max` bytes, at the boundary of a character.
+fn cut(text: &str, max: usize) -> &str {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// The `attempt`th name of the temporary file beside `dest`, in the same folder so that the move onto `dest` is a rename: `.{name}.part`, then `.{name}.{attempt}.part`, with `name` cut so that the whole name fits `MAX_NAME`.
+fn temp_path(dest: &Path, attempt: u32) -> Result<PathBuf, String> {
     let name = dest
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or("保存先の場所が正しくありません")?;
-    Ok(dest.with_file_name(format!(".{name}.part")))
+    let name = cut(name, MAX_NAME - TEMP_AFFIX);
+    let retry = if attempt == 0 {
+        String::new()
+    } else {
+        format!(".{attempt}")
+    };
+    Ok(dest.with_file_name(format!(".{name}{retry}.part")))
 }
 
-/// Copies the file `relative` of the worktree at `path` to `dest` on this PC, and answers its size in bytes. `dest` is written whole or not at all: the bytes go to a temporary file in its folder, which is moved onto `dest` when every chunk has come, and is deleted when anything fails (an old `dest` stays as it was). `dest` is not checked here: the caller gives it, never the page.
+/// Makes the temporary file beside `dest` under a name nobody has: `create_new`, so a file or a link of that name (a `.part` of the owner's) is never opened, and the next name is tried.
+fn create_temp(dest: &Path) -> Result<(std::fs::File, PathBuf), String> {
+    for attempt in 0..TEMP_TRIES {
+        let temp = temp_path(dest, attempt)?;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => return Ok((file, temp)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(write_error(&e)),
+        }
+    }
+    Err("保存先に一時ファイルを作れません".into())
+}
+
+/// Copies the file `relative` of the worktree at `path` to `dest` on this PC, and answers its size in bytes. `dest` is written whole or not at all: the bytes go to a temporary file in its folder (a new file, never one that was there), which is moved onto `dest` when every chunk has come, and is deleted when anything fails (an old `dest` stays as it was). `dest` is not checked here: the caller gives it, never the page.
 pub(crate) async fn download(
     rpc: &mut impl Rpc,
     path: &str,
@@ -534,19 +632,30 @@ pub(crate) async fn download(
     dest: &Path,
 ) -> Result<u64, String> {
     check_relative(relative, false)?;
-    let temp = temp_path(dest)?;
-    let mut out = std::fs::File::create(&temp).map_err(|e| write_error(&e))?;
-    let done = match fetch_into(rpc, path, relative, &mut out).await {
-        Ok(size) => out
-            .sync_all()
-            .and_then(|()| std::fs::rename(&temp, dest))
-            .map(|()| size)
-            .map_err(|e| write_error(&e)),
+    let wanted = dest.to_path_buf();
+    let (file, temp) = on_disk(move || create_temp(&wanted)).await?;
+    let out: Out = Arc::new(Mutex::new(file));
+    let done = match fetch_into(rpc, path, relative, &out).await {
+        Ok(size) => {
+            let (out, temp, dest) = (Arc::clone(&out), temp.clone(), dest.to_path_buf());
+            on_disk(move || {
+                out.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .sync_all()
+                    .and_then(|()| std::fs::rename(&temp, &dest))
+                    .map(|()| size)
+                    .map_err(|e| write_error(&e))
+            })
+            .await
+        }
         Err(message) => Err(message),
     };
-    drop(out);
     if done.is_err() {
-        let _ = std::fs::remove_file(&temp);
+        let _ = on_disk(move || {
+            let _ = std::fs::remove_file(&temp);
+            Ok(())
+        })
+        .await;
     }
     done
 }
@@ -1242,11 +1351,13 @@ mod tests {
         assert!(orca.calls.is_empty());
     }
 
-    /// A file on Orca's side that answers `files.readChunk` as Orca does (`eof` when the read reaches the end; `exact_eof` only on a read that finds nothing left), can fail on one call, can lack the method, and answers `files.readPreview` with `preview`.
+    /// A file on Orca's side that answers `files.stat` with its size (or with `stat`), and `files.readChunk` as Orca does (`eof` when the read reaches the end; `exact_eof` only on a read that finds nothing left; `never_eof` is an Orca that sends full chunks for ever), can fail on one call, can lack the method, and answers `files.readPreview` with `preview`.
     struct Remote {
         file: Vec<u8>,
+        stat: Option<Answer>,
         has_chunks: bool,
         exact_eof: bool,
+        never_eof: bool,
         fail_on_chunk: Option<usize>,
         preview: Option<Value>,
         calls: Vec<(String, Value)>,
@@ -1256,8 +1367,10 @@ mod tests {
         fn new(file: Vec<u8>) -> Self {
             Remote {
                 file,
+                stat: None,
                 has_chunks: true,
                 exact_eof: false,
+                never_eof: false,
                 fail_on_chunk: None,
                 preview: None,
                 calls: Vec::new(),
@@ -1281,6 +1394,11 @@ mod tests {
                 detail: detail.into(),
             };
             match method {
+                "files.stat" => match self.stat.clone() {
+                    Some(Ok(value)) => Ok(value),
+                    Some(Err((shown, detail))) => Err(failed(shown, detail)),
+                    None => Ok(json!({"size": self.file.len()})),
+                },
                 "files.readChunk" if !self.has_chunks => Err(failed(
                     "Orca がエラーを返しました（method_not_found）",
                     "Unknown method: files.readChunk",
@@ -1291,6 +1409,13 @@ mod tests {
                     }
                     let offset = usize::try_from(params["offset"].as_u64().unwrap()).unwrap();
                     let length = usize::try_from(params["length"].as_u64().unwrap()).unwrap();
+                    if self.never_eof {
+                        return Ok(json!({
+                            "contentBase64": STANDARD.encode(vec![7_u8; length]),
+                            "bytesRead": length,
+                            "eof": false,
+                        }));
+                    }
                     let start = offset.min(self.file.len());
                     let end = (offset + length).min(self.file.len());
                     let bytes = &self.file[start..end];
@@ -1353,20 +1478,33 @@ mod tests {
     #[test]
     fn a_preview_is_the_whole_file() {
         assert_eq!(
-            parse_preview(&json!({"content": "héllo\n", "isBinary": false})).unwrap(),
+            parse_preview(&json!({"content": "héllo\n", "isBinary": false}), None).unwrap(),
             "héllo\n".as_bytes()
         );
         assert_eq!(
-            parse_preview(&json!({"content": STANDARD.encode([0_u8, 255, 7]), "isBinary": true}))
-                .unwrap(),
+            parse_preview(
+                &json!({"content": STANDARD.encode([0_u8, 255, 7]), "isBinary": true}),
+                Some(3)
+            )
+            .unwrap(),
             vec![0_u8, 255, 7]
         );
+        // a text may be up to 3 times the size (U+FFFD for each bad byte), a binary file is the size
+        assert!(parse_preview(&json!({"content": "\u{fffd}", "isBinary": false}), Some(1)).is_ok());
+        assert!(
+            parse_preview(&json!({"content": "\u{fffd}a", "isBinary": false}), Some(1)).is_err()
+        );
+        assert!(parse_preview(
+            &json!({"content": STANDARD.encode([0_u8; 4]), "isBinary": true}),
+            Some(3)
+        )
+        .is_err());
         for bad in [
             json!({"content": "x", "isBinary": false, "truncated": true}),
             json!({"content": "***", "isBinary": true}),
             json!({"isBinary": false}),
         ] {
-            assert!(parse_preview(&bad).is_err());
+            assert!(parse_preview(&bad, None).is_err());
         }
     }
 
@@ -1388,6 +1526,13 @@ mod tests {
         );
         assert_eq!(
             orca.calls[0],
+            (
+                "files.stat".to_owned(),
+                json!({"worktree": "path:/work/a", "relativePath": "src/a.bin"})
+            )
+        );
+        assert_eq!(
+            orca.calls[1],
             (
                 "files.readChunk".to_owned(),
                 json!({"worktree": "path:/work/a", "relativePath": "src/a.bin", "offset": 0, "length": CHUNK})
@@ -1453,13 +1598,16 @@ mod tests {
             json!({"contentBase64": "", "bytesRead": 0, "eof": false}),
             json!({"contentBase64": "***", "bytesRead": 0, "eof": true}),
         ] {
-            let mut orca = fake(vec![("files.readChunk", Ok(answer))]);
+            let mut orca = fake(vec![
+                ("files.stat", Ok(json!({"size": 100}))),
+                ("files.readChunk", Ok(answer)),
+            ]);
             let message = download(&mut orca, "/work/a", "a", &dest)
                 .await
                 .unwrap_err();
             assert_eq!(message, "ファイルを読めません");
             assert!(!message.contains("secret"));
-            assert_eq!(orca.calls.len(), 1);
+            assert_eq!(orca.calls.len(), 2);
             assert!(left_in(&dir).is_empty());
         }
     }
@@ -1468,7 +1616,7 @@ mod tests {
     async fn a_host_without_read_chunk_is_read_with_the_preview() {
         let dir = temp_dir("download-preview");
         let dest = dir.join("out.txt");
-        let mut orca = Remote::new(Vec::new());
+        let mut orca = Remote::new(vec![0; 6]);
         orca.has_chunks = false;
         orca.preview = Some(json!({"content": "hello\n", "isBinary": false}));
         let size = download(&mut orca, "/work/a", "a.txt", &dest)
@@ -1481,10 +1629,10 @@ mod tests {
                 .iter()
                 .map(|(m, _)| m.as_str())
                 .collect::<Vec<_>>(),
-            ["files.readChunk", "files.readPreview"]
+            ["files.stat", "files.readChunk", "files.readPreview"]
         );
         assert_eq!(
-            orca.calls[1].1,
+            orca.calls[2].1,
             json!({"worktree": "path:/work/a", "relativePath": "a.txt"})
         );
         // a binary file comes in base64
@@ -1509,29 +1657,209 @@ mod tests {
     async fn the_preview_is_used_only_for_a_first_call_without_the_method() {
         let dir = temp_dir("download-late-mnf");
         let dest = dir.join("out.bin");
-        let mut orca = fake(vec![(
-            "files.readChunk",
-            Err(("Orca がエラーを返しました（method_not_found）", "")),
-        )]);
+        let mut orca = fake(vec![
+            ("files.stat", Ok(json!({"size": 5}))),
+            (
+                "files.readChunk",
+                Err(("Orca がエラーを返しました（method_not_found）", "")),
+            ),
+        ]);
         // the first call lacks the method and the preview is not there either: its failure is the answer
         assert!(download(&mut orca, "/work/a", "a", &dest).await.is_err());
-        assert_eq!(orca.calls.len(), 2);
+        assert_eq!(orca.calls.len(), 3);
         assert!(left_in(&dir).is_empty());
         // a missing file is not a missing method
-        let mut orca = fake(vec![(
-            "files.readChunk",
-            Err((
-                "Orca がエラーを返しました（runtime_error）",
-                "ENOENT: no such file",
-            )),
-        )]);
+        let mut orca = fake(vec![
+            ("files.stat", Ok(json!({"size": 5}))),
+            (
+                "files.readChunk",
+                Err((
+                    "Orca がエラーを返しました（runtime_error）",
+                    "ENOENT: no such file",
+                )),
+            ),
+        ]);
         assert_eq!(
             download(&mut orca, "/work/a", "a", &dest)
                 .await
                 .unwrap_err(),
             "ファイルが見つかりません"
         );
-        assert_eq!(orca.calls.len(), 1);
+        assert_eq!(orca.calls.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_orca_that_never_says_eof_is_stopped_at_the_size() {
+        let dir = temp_dir("download-never-eof");
+        let dest = dir.join("out.bin");
+        let mut orca = Remote::new(pattern(CHUNK + 5));
+        orca.never_eof = true;
+        assert_eq!(
+            download(&mut orca, "/work/a", "a", &dest)
+                .await
+                .unwrap_err(),
+            "ファイルを読めません"
+        );
+        // the chunk that goes past the size is not written, and nothing is left
+        assert_eq!(orca.chunk_calls().len(), 2);
+        assert!(left_in(&dir).is_empty());
+        // a file that is exactly its size is read
+        let mut orca = Remote::new(pattern(CHUNK));
+        assert_eq!(
+            download(&mut orca, "/work/a", "a", &dest).await.unwrap(),
+            CHUNK as u64
+        );
+    }
+
+    #[tokio::test]
+    async fn the_size_comes_from_stat_and_a_stat_that_fails_is_reported() {
+        let dir = temp_dir("download-stat");
+        let dest = dir.join("out.bin");
+        // a size smaller than the bytes the file gives
+        let mut orca = Remote::new(pattern(10));
+        orca.stat = Some(Ok(json!({"size": 4})));
+        assert!(download(&mut orca, "/work/a", "a", &dest).await.is_err());
+        // no usable size
+        for answer in [json!({}), json!({"size": "5"}), json!({"size": -1})] {
+            let mut orca = Remote::new(pattern(5));
+            orca.stat = Some(Ok(answer));
+            assert_eq!(
+                download(&mut orca, "/work/a", "a", &dest)
+                    .await
+                    .unwrap_err(),
+                "ファイルを読めません"
+            );
+            assert!(orca.chunk_calls().is_empty());
+        }
+        // a missing file, and any other failure, are the stat's
+        let mut orca = Remote::new(pattern(5));
+        orca.stat = Some(Err((
+            "Orca がエラーを返しました（runtime_error）",
+            "ENOENT: no such file",
+        )));
+        assert_eq!(
+            download(&mut orca, "/work/a", "a", &dest)
+                .await
+                .unwrap_err(),
+            "ファイルが見つかりません"
+        );
+        orca.stat = Some(Err(("Orca に接続できません", "")));
+        assert_eq!(
+            download(&mut orca, "/work/a", "a", &dest)
+                .await
+                .unwrap_err(),
+            "Orca に接続できません"
+        );
+        assert!(orca.chunk_calls().is_empty());
+        assert!(left_in(&dir).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_host_without_stat_is_read_with_the_preview() {
+        let dir = temp_dir("download-no-stat");
+        let dest = dir.join("out.txt");
+        let mut orca = Remote::new(Vec::new());
+        orca.stat = Some(Err((
+            "Orca がエラーを返しました（method_not_found）",
+            "Unknown method: files.stat",
+        )));
+        orca.preview = Some(json!({"content": "hello\n", "isBinary": false}));
+        assert_eq!(
+            download(&mut orca, "/work/a", "a.txt", &dest)
+                .await
+                .unwrap(),
+            6
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"hello\n");
+        assert_eq!(
+            orca.calls
+                .iter()
+                .map(|(m, _)| m.as_str())
+                .collect::<Vec<_>>(),
+            ["files.stat", "files.readPreview"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_preview_longer_than_the_size_is_refused() {
+        let dir = temp_dir("download-preview-size");
+        let dest = dir.join("out.txt");
+        let mut orca = Remote::new(vec![0; 1]);
+        orca.has_chunks = false;
+        orca.preview = Some(json!({"content": "hello\n", "isBinary": false}));
+        assert_eq!(
+            download(&mut orca, "/work/a", "a", &dest)
+                .await
+                .unwrap_err(),
+            "ファイルを読めません"
+        );
+        assert!(left_in(&dir).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_temporary_name_that_is_taken_is_not_used() {
+        let dir = temp_dir("download-taken");
+        let dest = dir.join("out.bin");
+        let file = pattern(100);
+        // a `.part` the owner already has stays as it is, on success and on failure
+        std::fs::write(dir.join(".out.bin.part"), b"mine").unwrap();
+        std::fs::write(dir.join(".out.bin.1.part"), b"mine too").unwrap();
+        let mut orca = Remote::new(file.clone());
+        download(&mut orca, "/work/a", "a", &dest).await.unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), file);
+        assert_eq!(std::fs::read(dir.join(".out.bin.part")).unwrap(), b"mine");
+        assert_eq!(
+            std::fs::read(dir.join(".out.bin.1.part")).unwrap(),
+            b"mine too"
+        );
+        let mut orca = Remote::new(file);
+        orca.fail_on_chunk = Some(0);
+        assert!(download(&mut orca, "/work/a", "a", &dest).await.is_err());
+        assert_eq!(std::fs::read(dir.join(".out.bin.part")).unwrap(), b"mine");
+        assert_eq!(
+            left_in(&dir),
+            [".out.bin.1.part", ".out.bin.part", "out.bin"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_in_the_place_of_the_temporary_file_is_not_followed() {
+        let dir = temp_dir("download-link");
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"keep").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join(".out.bin.part")).unwrap();
+        let dest = dir.join("out.bin");
+        let mut orca = Remote::new(pattern(20));
+        download(&mut orca, "/work/a", "a", &dest).await.unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        assert_eq!(std::fs::read(&dest).unwrap(), pattern(20));
+        let mut orca = Remote::new(pattern(20));
+        orca.fail_on_chunk = Some(0);
+        assert!(download(&mut orca, "/work/a", "a", &dest).await.is_err());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        assert!(dir.join(".out.bin.part").symlink_metadata().is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_long_name_gets_a_temporary_name_that_fits() {
+        let dir = temp_dir("download-long");
+        for name in ["a".repeat(MAX_NAME), "あ".repeat(MAX_NAME / 3)] {
+            let dest = dir.join(&name);
+            assert_eq!(name.len(), MAX_NAME);
+            for attempt in [0, 1, 999] {
+                let temp = temp_path(&dest, attempt).unwrap();
+                let temp_name = temp.file_name().unwrap().to_str().unwrap();
+                assert!(temp_name.len() <= MAX_NAME, "{}", temp_name.len());
+                assert!(temp_name.starts_with('.') && temp_name.ends_with(".part"));
+                assert_eq!(temp.parent(), dest.parent());
+            }
+            let mut orca = Remote::new(pattern(30));
+            download(&mut orca, "/work/a", "a", &dest).await.unwrap();
+            assert_eq!(std::fs::read(&dest).unwrap(), pattern(30));
+            assert_eq!(left_in(&dir), std::slice::from_ref(&name));
+            std::fs::remove_file(&dest).unwrap();
+        }
     }
 
     #[tokio::test]
