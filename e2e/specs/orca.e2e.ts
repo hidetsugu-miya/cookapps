@@ -2968,6 +2968,7 @@ describe("orca: files and editor (A-18)", () => {
     await openFileWith(rust("let a = 1;\n"));
     expect(await tokens("comment")).toEqual([]);
     await type("// typed\n");
+    await browser.waitUntil(async () => (await tokens("comment")).length === 1, { timeoutMsg: "the typed line was never colored" });
     expect(await tokens("comment")).toEqual(["// typed"]);
     expect(await layerText()).toBe("let a = 1;\n// typed\n");
   });
@@ -2984,14 +2985,14 @@ describe("orca: files and editor (A-18)", () => {
     expect(moved.replace(/\s/g, "")).toBe("translate(0px,-48px)");
   });
 
-  it("draws a long text plain at once and colors it when the typing has stopped (A-21)", async () => {
+  it("colors a long text after it is read, and draws it again with the typed line within the wait (A-21)", async () => {
     await openFiles();
     const long = "let a = 1;\n".repeat(3000);
     await openFileWith(rust(long));
     await browser.waitUntil(async () => (await count(".orca-edit-hl .hljs-keyword")) > 0, { timeoutMsg: "the long text was never colored" });
     await type("let b = 2;\n");
-    expect(await layerText()).toBe(`${long}let b = 2;\n`);
     await browser.waitUntil(async () => (await tokens("keyword")).length === 3001, { timeoutMsg: "the typed line was never colored" });
+    expect(await layerText()).toBe(`${long}let b = 2;\n`);
   });
 
   it("has the colors in variables of the page, apart from the layout (A-21)", async () => {

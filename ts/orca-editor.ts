@@ -40,9 +40,9 @@ interface EditorFile {
   writing: Promise<void> | null;
   // Focus the text when it is first shown.
   wantFocus: boolean;
-  // The grammar of the highlighter for the file (null: none, drawn plain), and the timer of a coloring that waits for the typing to stop.
+  // The grammar of the highlighter for the file (null: none, drawn plain), and how to cancel the drawing of the layer that waits for the next frame or for the wait of a long text (null: none waits).
   highlight: string | null;
-  paintTimer: number | null;
+  cancelPaint: (() => void) | null;
   el: HTMLElement;
   area: HTMLTextAreaElement;
   // The layer under the textarea that carries the same text in colors.
@@ -51,7 +51,7 @@ interface EditorFile {
   note: HTMLElement;
 }
 
-// Up to this many characters the text is colored at each key; a longer one is drawn plain at once and colored when the typing has stopped for COLOR_WAIT_MS, as coloring a file of the size the editor takes (384 KiB) takes longer than a key.
+// Up to this many characters the layer is drawn again once a frame while keys come; a longer text keeps the layer it has (old colors, old text) and is drawn again at most once in COLOR_WAIT_MS, as coloring a file of the size the editor takes (384 KiB) takes longer than a key.
 const COLOR_NOW_MAX = 30000;
 const COLOR_WAIT_MS = 150;
 
@@ -76,26 +76,50 @@ function setSave(f: EditorFile, save: Save) {
   f.state.dataset.state = save;
 }
 
-// Draws the text of the textarea in the layer under it: in colors by the grammar of the file, else plain. The layer always holds the same text as the textarea, which has none of its own to show.
-function paint(f: EditorFile) {
-  if (f.paintTimer !== null) clearTimeout(f.paintTimer);
-  f.paintTimer = null;
+// Draws the text of the textarea in the layer under it: in colors by the grammar of the file, else plain. The layer holds the text of the textarea after this.
+function draw(f: EditorFile) {
   const text = f.area.value;
-  const color = (grammar: string) => {
-    f.code.innerHTML = hljs.highlight(text, { language: grammar, ignoreIllegals: true }).value;
-  };
-  if (!f.highlight) {
-    f.code.textContent = text;
-  } else if (text.length <= COLOR_NOW_MAX) {
-    color(f.highlight);
+  if (f.highlight) f.code.innerHTML = hljs.highlight(text, { language: f.highlight, ignoreIllegals: true }).value;
+  else f.code.textContent = text;
+}
+
+function cancelPaint(f: EditorFile) {
+  f.cancelPaint?.();
+  f.cancelPaint = null;
+}
+
+// Draws the layer once when the run comes, and asks for nothing more while that waits: the text it draws is the textarea's then.
+function drawLater(f: EditorFile, wait: (run: () => void) => () => void) {
+  if (f.cancelPaint) return;
+  f.cancelPaint = wait(() => {
+    f.cancelPaint = null;
+    draw(f);
+  });
+}
+const nextFrame = (run: () => void) => {
+  const id = requestAnimationFrame(run);
+  return () => cancelAnimationFrame(id);
+};
+const afterColorWait = (run: () => void) => {
+  const id = window.setTimeout(run, COLOR_WAIT_MS);
+  return () => clearTimeout(id);
+};
+
+// The first drawing, when the file is read: a long text is drawn plain at once and colored after COLOR_WAIT_MS.
+function paint(f: EditorFile) {
+  cancelPaint(f);
+  if (f.highlight && f.area.value.length > COLOR_NOW_MAX) {
+    f.code.textContent = f.area.value;
+    drawLater(f, afterColorWait);
   } else {
-    f.code.textContent = text;
-    const grammar = f.highlight;
-    f.paintTimer = window.setTimeout(() => {
-      f.paintTimer = null;
-      if (f.area.value === text) color(grammar);
-    }, COLOR_WAIT_MS);
+    draw(f);
   }
+}
+
+// At each key: the text is drawn again once a frame, or, for a long text, at most once in COLOR_WAIT_MS with the old layer kept till then.
+function repaint(f: EditorFile) {
+  if (!f.highlight) draw(f);
+  else drawLater(f, f.area.value.length <= COLOR_NOW_MAX ? nextFrame : afterColorWait);
 }
 
 // The layer under the textarea follows the scroll of the textarea.
@@ -191,9 +215,9 @@ function create(id: string, target: string | null, project: string, path: string
   const body = tag("div", "orca-edit-body");
   body.append(layer, area);
   el.append(head, note, body);
-  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, paintTimer: null, el, area, code, state, note };
+  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, el, area, code, state, note };
   area.oninput = () => {
-    paint(f);
+    repaint(f);
     if (!f.dirty) {
       f.dirty = true;
       changed();
@@ -235,7 +259,7 @@ export async function closeFile(id: string) {
   while (canSave(f)) await flush(f);
   if (f.dirty && !f.blocked) return false;
   clearTimer(f);
-  if (f.paintTimer !== null) clearTimeout(f.paintTimer);
+  cancelPaint(f);
   f.el.remove();
   files.delete(id);
   return true;

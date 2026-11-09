@@ -15,12 +15,13 @@ permissions:
 jobs:
   # Names the tag, checks it, and (for the merge of the Release PR) pushes it. It ends before the build when the tag has a run of its own.
   tag:
-    # Only a merged pull request of this repository from release/next goes on; any other closed pull request, and every fork, ends here.
+    # Only a pull request of this repository from release/next that the owner merged goes on; any other closed pull request, a merge by anyone else, and every fork, ends here.
     if: >-
       github.event_name == 'push'
       || (github.event.pull_request.merged == true
           && github.event.pull_request.head.ref == 'release/next'
-          && github.event.pull_request.head.repo.full_name == github.repository)
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.event.pull_request.merged_by.login == github.repository_owner)
     runs-on: ubuntu-latest
     # contents: write pushes the tag, actions: read lists the runs of the tag.
     permissions:

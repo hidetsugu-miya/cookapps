@@ -37,7 +37,7 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   fi
   grep -q -E '^\.claude/(hooks/guard-e2e\.sh|tools/check-guard-e2e\.sh)$' <<< "$changed" \
     && gate "guard-e2e.sh の自己テスト" "$top/.claude/tools/check-guard-e2e.sh"
-  grep -q -E '^\.claude/tools/plan-release[^/]*\.py$' <<< "$changed" \
+  grep -q -E '^\.claude/tools/plan-release[^/]*\.py$|^\.claude/(tools/(nightly-limit|use-worktree)\.sh|hooks/post-gh\.sh)$' <<< "$changed" \
     && gate "plan-release.py の自己テスト" python3 -I "$top/.claude/tools/plan-release-test.py"
   # New commits need run-ci.sh's and run-e2e.sh's passing records for HEAD and release-verifier's pass record (.claude/rules/review.md).
   # The CI and E2E records are needed on a release-only HEAD too: the records are per HEAD.

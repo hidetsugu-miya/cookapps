@@ -1,4 +1,4 @@
-/*! Languages added to highlight.min.js (cookapps, A-21): the files languages/{dockerfile,powershell,dos,dart,scala,groovy,elixir,erlang,haskell,clojure,protobuf,cmake,nim,verilog,delphi,fsharp,julia,tcl,coffeescript,handlebars,scheme,twig}.min.js of @highlightjs/cdn-assets 11.12.0, joined as they are. Highlight.js, (c) 2006-2026 Josh Goebel and other contributors, License: BSD-3-Clause */
+/*! Languages added to highlight.min.js (cookapps, A-21): the files languages/{dockerfile,powershell,dos,dart,scala,groovy,elixir,erlang,haskell,clojure,protobuf,cmake,nim,verilog,delphi,fsharp,julia,tcl,coffeescript,handlebars,scheme,twig,pgsql}.min.js of @highlightjs/cdn-assets 11.12.0, joined as they are. Highlight.js, (c) 2006-2026 Josh Goebel and other contributors, License: BSD-3-Clause */
 /*! `dockerfile` grammar compiled for Highlight.js 11.12.0 */
 (()=>{var e=(()=>{"use strict";return e=>({name:"Dockerfile",aliases:["docker"],
 case_insensitive:!0,
