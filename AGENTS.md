@@ -78,6 +78,7 @@ e2e/           WebdriverIO specs, fixtures and mocks
 scripts/       check-version.sh, install-app.sh, make-latest-json.sh
 docs/          public documentation (GitHub Pages)
 requirements/  the requirements, one file per area
+tmp/           scratch files, gitignored except .keep
 ```
 
 - The frontend is plain TypeScript, HTML and CSS.
