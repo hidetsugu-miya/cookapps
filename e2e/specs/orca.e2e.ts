@@ -3193,6 +3193,68 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
     expect(await callsOf("orca_file_read")).toHaveLength(1);
   });
+
+  // The right button on a row of the tree, as the page gets it; whether the page kept the browser's own menu from showing.
+  const rightClickRow = (path: string) =>
+    browser.execute(
+      (p, once) => {
+        if (!window.__e2e_once__(once)) return false;
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+        document.querySelector(`.orca-file[data-path="${p}"]`)!.dispatchEvent(event);
+        return event.defaultPrevented;
+      },
+      path,
+      onceId(),
+    );
+
+  it("opens a menu of the two copies on the right button of a file, and writes the path and the path from the worktree", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await stubClipboard();
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー"]);
+    await pickItem("パスのコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
+    await expect($(".toast")).toHaveText(expect.stringContaining("パスをコピーしました"));
+    await expect($(".menu")).not.toExist();
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("相対パスをコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the relative path was never copied" });
+    expect(await copiedTexts()).toEqual(["/work/example-app/a.rs", "a.rs"]);
+  });
+
+  it("opens the same menu on a folder, and on a file in an open folder with its path from the worktree", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    await stubClipboard();
+    expect(await rightClickRow("src")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー"]);
+    await pickItem("パスのコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
+    expect(await rightClickRow("src/main.rs")).toBe(true);
+    await pickItem("相対パスをコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the relative path was never copied" });
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+    expect(await rightClickRow("src/main.rs")).toBe(true);
+    await pickItem("パスのコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 3, { timeoutMsg: "the path was never copied" });
+    expect(await copiedTexts()).toEqual(["/work/example-app/src", "src/main.rs", "/work/example-app/src/main.rs"]);
+  });
+
+  it("closes the menu of a row with Escape and writes nothing", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await stubClipboard();
+    expect(await rightClickRow("b.log")).toBe(true);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    expect(await copiedTexts()).toEqual([]);
+  });
 });
 
 describe("orca: search the list (A-19)", () => {
