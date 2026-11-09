@@ -69,9 +69,13 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #relogin { margin-bottom: 8px; }
 #relogin > div, #cal-notice > div, #todo-notice > div, #slack-notice > div { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; background: #fff4e5; margin-bottom: 4px; }
 #threads ul { list-style: none; margin: 0; padding: 0; }
-#read-heading, .feed-heading { display: flex; align-items: center; gap: 6px; margin: 16px 16px 4px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs)); font-weight: normal; color: #444; }
-#read-heading svg, .feed-heading svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+#unread-heading, #read-heading, .feed-heading { display: flex; align-items: center; gap: 6px; margin: 16px 16px 4px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs)); font-weight: normal; color: #444; }
+#unread-heading svg, #read-heading svg, .feed-heading svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 #read-heading:has(+ #read-threads:empty) { display: none; }
+/* The unread heading carries "すべて既読にする" at its right end; the button's height sets the heading's. */
+#unread-heading { padding: 0; overflow: visible; }
+#unread-count { font-variant-numeric: tabular-nums; }
+#unread-heading .text-btn { margin-left: auto; }
 #threads li { display: grid; grid-template-columns: 20px 8px 32px 180px 1fr auto; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 12px; cursor: pointer; }
 #threads li:hover { background: var(--hover); }
 #threads li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -115,8 +119,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #inbox-header { padding: 16px 32px 10px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #slack-header { padding: 14px 24px 10px 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #slack-header .icon-btn { color: #444746; border-radius: 50%; }
-#inbox-header .text-btn:disabled, #slack-header .text-btn:disabled { opacity: .4; cursor: default; }
-#inbox-header .text-btn:disabled:hover, #slack-header .text-btn:disabled:hover { background: #fff; }
+#unread-heading .text-btn:disabled, #slack-header .text-btn:disabled { opacity: .4; cursor: default; }
+#unread-heading .text-btn:disabled:hover, #slack-header .text-btn:disabled:hover { background: #fff; }
 /* The right-hand group starts at the first button that is shown: the AI summary button, or the Slack button while the summary button is hidden. */
 #mail-header #thread-summary:not([hidden]), #mail-header #thread-summary[hidden] + #thread-slack { margin-left: auto; }
 #thread-head { margin: 16px 0 20px 56px; font-size: calc(22px * var(--fs)); line-height: 1.35; }

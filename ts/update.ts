@@ -1,6 +1,7 @@
 // The updater: a popup at the bottom right, a dot on the settings button and on the update tab, and the settings card with the running version and the way to update.
 // Manual: a newer version shows the popup, and its main button replaces the app and restarts it.
 // Auto: a newer version is replaced in the background; the popup then asks for a restart (never by itself, so no screen in use is lost).
+// The check goes on while the restart waits: a version newer than the replaced one is replaced again.
 // "あとで" closes the popup for that version until the app quits; a newer version shows it again. The settings card keeps the same operation as a button.
 import type { AppInfo } from "./bindings/AppInfo";
 import type { UpdateInfo } from "./bindings/UpdateInfo";

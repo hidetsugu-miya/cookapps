@@ -66,7 +66,6 @@
     </header>
     <header id="inbox-header" hidden>
       <h1>受信トレイ</h1>
-      <button id="mail-mark-all" class="text-btn" disabled>すべて既読にする</button>
     </header>
     <p id="error" hidden></p>
     <div id="mail-area" class="split-main">
@@ -77,6 +76,7 @@
       <div id="relogin" hidden></div>
       <div id="inbox-state" hidden></div>
       <div id="threads" hidden>
+        <h2 id="unread-heading" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5"/></svg><span>未読</span><span id="unread-count"></span><button id="mail-mark-all" class="text-btn">すべて既読にする</button></h2>
         <ul id="unread-threads"></ul>
         <h2 id="read-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>既読</h2>
         <ul id="read-threads"></ul>

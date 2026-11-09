@@ -269,13 +269,25 @@ fn group_of(state: &str) -> OrcaGroup {
     }
 }
 
-/// The text of a row's line: the first line of the prompt, else the task's title, the conversation's name, or the first line of the last answer.
-fn line_of(agent: &Value) -> String {
+/// A terminal title without the status mark Claude Code puts in front of it: a first character that is no letter or digit, followed by a space, is taken off with the spaces after it, once.
+fn without_status_mark(title: &str) -> &str {
+    let mut chars = title.chars();
+    match (chars.next(), chars.next()) {
+        (Some(mark), Some(space)) if !mark.is_alphanumeric() && space.is_whitespace() => {
+            chars.as_str().trim_start()
+        }
+        _ => title,
+    }
+}
+
+/// The text of a row's line: the first line of the prompt, else the task's title, the conversation's name, the first line of the last answer, or the title of the pane's terminal without its status mark.
+fn line_of(agent: &Value, terminal_title: Option<&str>) -> String {
     text_of(agent, "prompt")
         .and_then(first_line)
         .or_else(|| text_of(agent, "taskTitle").and_then(first_line))
         .or_else(|| text_of(agent, "conversationName").and_then(first_line))
         .or_else(|| text_of(agent, "lastAssistantMessage").and_then(first_line))
+        .or_else(|| terminal_title.and_then(|t| first_line(without_status_mark(t))))
         .unwrap_or_default()
 }
 
@@ -361,12 +373,13 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
         .filter(|t| t["agentIdentity"] == "claude")
         .collect();
     let recorded = |t: &Value| text_of(t, "recordedPaneKey").map(str::to_owned);
-    let handles: Vec<(String, &str)> = live
+    let handles: Vec<(String, &str, Option<&str>)> = live
         .into_iter()
         .filter_map(|t| {
             Some((
                 format!("{}:{}", text_of(t, "tabId")?, text_of(t, "leafId")?),
                 text_of(t, "handle")?,
+                text_of(t, "title"),
             ))
         })
         .chain(orphaned.iter().filter_map(|t| {
@@ -376,7 +389,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                 .filter(|o| recorded(o).as_ref() == Some(&pane))
                 .count()
                 == 1;
-            alone.then_some((pane, text_of(t, "handle")?))
+            alone.then_some((pane, text_of(t, "handle")?, text_of(t, "title")))
         }))
         .collect();
     let mut rows: Vec<(i64, OrcaRow)> = Vec::new();
@@ -391,12 +404,8 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
             let group = group_of(agent["state"].as_str().unwrap_or_default());
             let updated = ms_of(agent, "updatedAt");
             let pane_key = text_of(agent, "paneKey");
-            let handle = pane_key.and_then(|pane| {
-                handles
-                    .iter()
-                    .find(|(key, _)| key == pane)
-                    .map(|(_, handle)| (*handle).to_owned())
-            });
+            let terminal = pane_key.and_then(|pane| handles.iter().find(|(key, ..)| key == pane));
+            let handle = terminal.map(|(_, handle, _)| (*handle).to_owned());
             rows.push((
                 updated,
                 OrcaRow {
@@ -405,7 +414,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                     branch: text_of(worktree, "displayName")
                         .unwrap_or_default()
                         .to_owned(),
-                    line: line_of(agent),
+                    line: line_of(agent, terminal.and_then(|(_, _, title)| *title)),
                     at_ms: if group == OrcaGroup::Done {
                         updated
                     } else {
@@ -1524,17 +1533,78 @@ mod tests {
         a["taskTitle"] = json!("Task\nsecond");
         a["conversationName"] = json!("Conversation");
         a["lastAssistantMessage"] = json!("\nAnswer\nmore");
-        assert_eq!(line_of(&a), "Write the docs");
+        assert_eq!(line_of(&a, None), "Write the docs");
         a["prompt"] = json!("\n\n  \nfirst real line\nnext");
-        assert_eq!(line_of(&a), "first real line");
+        assert_eq!(line_of(&a, None), "first real line");
         a["prompt"] = json!("  ");
-        assert_eq!(line_of(&a), "Task");
+        assert_eq!(line_of(&a, None), "Task");
         a["taskTitle"] = json!(" ");
-        assert_eq!(line_of(&a), "Conversation");
+        assert_eq!(line_of(&a, None), "Conversation");
         a["conversationName"] = Value::Null;
-        assert_eq!(line_of(&a), "Answer");
+        assert_eq!(line_of(&a, None), "Answer");
         a.as_object_mut().unwrap().remove("lastAssistantMessage");
-        assert_eq!(line_of(&a), "");
+        assert_eq!(line_of(&a, None), "");
+    }
+
+    #[test]
+    fn a_status_mark_and_its_space_are_taken_off_the_front_of_a_terminal_title() {
+        for (title, line) in [
+            ("◑ 題名", "題名"),
+            ("✳ Claude Code", "Claude Code"),
+            ("⠂ Fix the list", "Fix the list"),
+            ("◑  two spaces", "two spaces"),
+            ("題名", "題名"),
+            ("Plain title", "Plain title"),
+            ("1 first", "1 first"),
+            ("「括弧」 題名", "「括弧」 題名"),
+            ("◑題名", "◑題名"),
+            ("◑ ◑ twice", "◑ twice"),
+            ("◑", "◑"),
+            ("", ""),
+        ] {
+            assert_eq!(without_status_mark(title), line, "{title}");
+        }
+    }
+
+    #[test]
+    fn the_line_falls_back_to_the_title_of_the_terminal_of_the_pane() {
+        let mut a = agent("tabA:leaf1", "done");
+        let obj = a.as_object_mut().unwrap();
+        obj.remove("prompt");
+        let titled = |title: &str| {
+            json!({"terminals": [
+                {"handle": "term_1", "tabId": "tabA", "leafId": "leaf1", "title": title},
+                {"handle": "term_2", "tabId": "tabB", "leafId": "leaf2", "title": "◑ other pane"},
+            ]})
+        };
+        let line = |a: &Value, terminals: &Value| {
+            rows_of(&ps(std::slice::from_ref(a)), terminals)[0]
+                .line
+                .clone()
+        };
+        assert_eq!(
+            line(&a, &titled("◑ Terminal title\nsecond")),
+            "Terminal title"
+        );
+        assert_eq!(line(&a, &titled("Terminal title")), "Terminal title");
+        assert_eq!(line(&a, &titled("  ")), "");
+        assert_eq!(line(&a, &terminals()), "");
+        assert_eq!(line(&a, &json!({"terminals": []})), "");
+        a["lastAssistantMessage"] = json!("Answer");
+        assert_eq!(line(&a, &titled("◑ Terminal title")), "Answer");
+        a["prompt"] = json!("Prompt");
+        assert_eq!(line(&a, &titled("◑ Terminal title")), "Prompt");
+    }
+
+    #[test]
+    fn the_line_of_an_orphaned_terminal_pane_falls_back_to_its_title() {
+        let mut a = agent("tabA:leaf1", "done");
+        a.as_object_mut().unwrap().remove("prompt");
+        let terminals = json!({"terminals": [{
+            "handle": "term_9", "orphaned": true, "agentIdentity": "claude",
+            "recordedPaneKey": "tabA:leaf1", "title": "✳ Orphan title",
+        }]});
+        assert_eq!(rows_of(&ps(&[a]), &terminals)[0].line, "Orphan title");
     }
 
     #[test]
@@ -1553,7 +1623,7 @@ mod tests {
     fn a_long_line_is_cut() {
         let mut a = agent("tabA:leaf1", "working");
         a["prompt"] = json!("あ".repeat(LINE_LIMIT + 50));
-        assert_eq!(line_of(&a).chars().count(), LINE_LIMIT);
+        assert_eq!(line_of(&a, None).chars().count(), LINE_LIMIT);
     }
 
     #[test]
