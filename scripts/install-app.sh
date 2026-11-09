@@ -18,7 +18,8 @@ fi
 export APPLE_SIGNING_IDENTITY
 
 # ソースの版は固定の 0.0.0 で、版はタグだけが持つ。最新のタグの版を渡して、入れたアプリがすぐ更新を出さないようにする（タグが無ければ 0.0.0 のまま）。
-version=$(git tag --list 'v0.*' --sort=-v:refname | head -n 1)
+# git リポジトリの外（ソースの zip など）では、タグが無いときと同じく版なしでビルドする。
+version=$(git tag --list 'v0.*' --sort=-v:refname 2>/dev/null | head -n 1 || true)
 if [ -n "$version" ]; then
   npx tauri build --bundles app --config "{\"version\":\"${version#v}\"}"
 else

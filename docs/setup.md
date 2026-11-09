@@ -60,7 +60,7 @@ npm install
 scripts/install-app.sh
 ```
 
-スクリプトは `npx tauri build --bundles app` で `.app` を作り、署名を確かめてから `/Applications/cookapps.app` に置きます。
+スクリプトは `npx tauri build --bundles app` で `.app` を作り（手元の最新のタグがあれば、その版を `--config` で渡します）、署名を確かめてから `/Applications/cookapps.app` に置きます。
 cookapps が起動中のときは、終了してからやり直します。
 古い版はゴミ箱へ移します。
 署名の証明書は、キーチェーンの最初の Apple Development 証明書を使います。
@@ -75,9 +75,12 @@ Developer ID での署名と公証はしていません。
 
 NSIS のインストーラーを作り、実行して入れます。
 
+ソースの版は固定の `0.0.0` で、版はタグだけが持ちます。
+最新のタグの版を `--config` で渡します（次は `v0.55.2` の例です）。
+
 ```sh
 npm ci
-npx tauri build --bundles nsis
+npx tauri build --bundles nsis --config '{"version":"0.55.2"}'
 ```
 
 インストーラーは `src-tauri/target/release/bundle/nsis/` に `cookapps_{バージョン}_x64-setup.exe` として出ます。
