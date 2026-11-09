@@ -257,7 +257,7 @@ git -C "$main" merge --ff-only origin/main
 
 ### Keep one Release PR open while changes wait, and let the owner merge it
 
-The owner releases, by merging the Release PR: no schedule and no agent merges it (at the owner's instruction, 2026-11-09; Discussion #293). The agents prepare it, the owner merges it, and the next agent to act tags it.
+The owner releases, by merging the Release PR: no schedule and no agent merges it (at the owner's instruction, 2026-11-09; Discussion #293). The agents prepare it, the owner merges it, and the merge tags and releases it by itself (`release.yml`; at the owner's instruction, 2026-11-09; #303).
 `plan-release.py release` says what waits (`changes`: merged and not released, a change that is only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/` not counted), whether the Release PR exists, and the version it writes (the first heading of `CHANGELOG.md`; the source holds no version, `versioning.md`).
 The 00:30 run looks at it after it has merged its own pull request, and a session does when the owner asks:
 - Changes wait and there is no Release PR: open it from the branch `release/next`, with a commit that writes the entries of `CHANGELOG.md` under the heading `## v{version}` and of `docs/features.md` (`versioning.md`).
@@ -294,19 +294,27 @@ Good: S-12 is new since v0.32.0 -> v0.33.0
 Bad:  the issue says enhancement -> minor
 ```
 
-### After the owner merges the Release PR, the next run tags it
+### After the owner merges the Release PR, the workflow tags and releases it, and the next run sees it through
 
-1. The owner merges the Release PR, after the preparer has done these in `release/next`: take in main, and write `CHANGELOG.md` (its first heading `## v{version}` is the version, which `tag_due` reads after the merge) and `docs/features.md`. No version line of the source changes: it is fixed (`versioning.md`; at the owner's instruction, 2026-11-09; Discussion #293).
+The merge of a pull request from `release/next` starts `release.yml`: its `tag` job reads the first `## v{version}` heading of `CHANGELOG.md` at the merge commit, checks the version as for a pushed tag, and pushes the annotated tag on the merge commit, and its `release` job builds and publishes in the same run (at the owner's instruction, 2026-11-09; #303). No agent tags by hand when it works.
+1. The owner merges the Release PR, after the preparer has done these in `release/next`: take in main, and write `CHANGELOG.md` (its first heading `## v{version}` is the version, which the workflow reads at the merge and `tag_due` too) and `docs/features.md`. No version line of the source changes: it is fixed (`versioning.md`; at the owner's instruction, 2026-11-09; Discussion #293).
    Read `README.md` against the changes that go out, with `readme-product`: fix a photo or a claim they make out of date in `release/next`, and write in the body that nothing needed it otherwise (at the owner's instruction, 2026-11-07). `README.md` and `docs/` keep the diff release-only.
    Run `run-ci.sh` and `run-e2e.sh` on the HEAD of `release/next` (the release-only diff stands for the review only; the records are per HEAD), push, and run `post-checks.sh`.
-2. The next agent to act (the 00:30 run, or a session) runs `plan-release.py release`. When it prints `tag_due`, that agent makes the annotated tag on the commit it names and pushes the tag (`versioning.md`).
-3. It watches the release job through to the end (`review.md`).
-4. It runs `plan-release.py close`, which closes the milestones whose issues are all closed and released.
-5. It comments the version on each issue listed in the body of the Release PR.
+2. The next agent to act (the 00:30 run, or a session) runs `plan-release.py release`.
+   - `follow_up` is printed (the tag exists, and the Release PR it names has no mark yet): the workflow has tagged, and nobody has seen the release through. Watch the `release` run of the merge to the end (`watch-ci.sh`, `review.md`), then do 3 and 4. No `follow_up` and no `tag_due`: nothing left from a merge.
+   - `tag_due` is printed: the tag does not exist yet. Look at the runs first (`gh run list --workflow release.yml --limit 5`). A run in progress is the workflow tagging: wait for it, and watch it.
+     A run that failed in the `tag` job is a finding about the Release PR (a version that is not the heading, a source version that is not fixed, a commit that is not on main): write the cause in the hand-over and tell the owner; do not tag by hand over a failed check. A failure of the runner or the network is retried like the one below.
+     Where no run of the merge exists (the workflow was off, or the run was lost), make the annotated tag by hand on the commit `tag_due` names and push it (`versioning.md`); the push starts the `release` run, and the workflow tags nothing that already has a tag.
+   - A run that failed in the `release` job after the tag was pushed: find the cause with `--log-failed`. A failure of the runner or the network (nothing in the commit) is retried with `gh run rerun {run ID} --failed`; the rerun builds the tag that is already on the merge commit. Any other cause is fixed with the next patch version (`review.md`), and a published tag is never moved (`versioning.md`).
+3. It runs `plan-release.py close`, which closes the milestones whose issues are all closed and released.
+4. It comments the version on each issue listed in the body of the Release PR, once the `release` run has succeeded, and then marks the Release PR with a comment whose first line is `<!-- released v{version} -->` (`follow_up` of `plan-release.py release` stays open until the mark is there, because the workflow tags at the merge and no agent is there to see it; at the owner's instruction, 2026-11-09; #303). A tag made by hand is followed up the same way.
 The tag comes first because what waits is counted from the last tag (`plan-release.py release`).
 
 ```text
-Good: the owner merges -> the 00:30 run finds tag_due -> tags, pushes, watch-ci.sh succeeds -> close -> "v0.33.0 で対応しました" on each issue
+Good: the owner merges -> the workflow tags v0.33.0 and releases -> the 00:30 run sees `follow_up`, watch-ci.sh succeeds -> close -> "v0.33.0 で対応しました" on each issue -> the mark on the Release PR
+Good: tag_due is printed and no run of the merge exists -> tag it by hand on the commit it names, push, and watch
 Bad:  comment on the issues before the release run has succeeded
-Bad:  tag origin/main after another pull request has merged on top of the Release PR (the tag goes on the commit that tag_due names)
+Bad:  comment on the issues and leave no mark, so that the next run comments on them again
+Bad:  tag origin/main by hand after another pull request has merged on top of the Release PR (the tag goes on the commit that tag_due names)
+Bad:  tag by hand at once when tag_due is printed, while the run of the merge is still going (it tags in a minute)
 ```

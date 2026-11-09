@@ -1,38 +1,108 @@
 name: Release
 
-# Only a pushed version tag runs anything: static, unit and E2E checks run on the developer's machine before a push (AGENTS.md, CI).
+# Two things start a release: a pushed version tag `v*`, and the merge of the Release PR (the pull request from `release/next`), which tags the merge commit itself (at the owner's instruction, 2026-11-09; #303).
+# Static, unit and E2E checks run on the developer's machine before a push (AGENTS.md, CI).
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
+  # Names the tag, checks it, and (for the merge of the Release PR) pushes it. It ends before the build when the tag has a run of its own.
+  tag:
+    # Only a merged pull request of this repository from release/next goes on; any other closed pull request, and every fork, ends here.
+    if: >-
+      github.event_name == 'push'
+      || (github.event.pull_request.merged == true
+          && github.event.pull_request.head.ref == 'release/next'
+          && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    # contents: write pushes the tag, actions: read lists the runs of the tag.
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      tag: ${{ steps.name.outputs.tag }}
+      sha: ${{ steps.name.outputs.sha }}
+      # A step that is skipped (a tag push) writes nothing, and then the build goes on.
+      build: ${{ steps.push.outputs.build || 'true' }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # A tag push is checked out at the tagged commit, and a merge at its merge commit (not GITHUB_SHA of a closed pull request, which is not that commit).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      # The version is the tag's alone: the source holds the fixed 0.0.0 (check-version.sh), and the build takes the version from the tag.
+      # The tag is the version of the first `## v{x.y.z}` heading of CHANGELOG.md (the rule of changelog_version in plan-release.py), which the Release PR writes: a pushed tag must equal it, and a merge takes its tag from it.
+      - name: Name the tag and check it
+        id: name
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+        run: |
+          scripts/check-version.sh
+          changelog=$(sed -nE 's/^## (v[0-9]+\.[0-9]+\.[0-9]+)[[:blank:]]*$/\1/p' CHANGELOG.md | head -n 1)
+          if [ "$EVENT" = push ]; then tag=$REF_NAME; else tag=$changelog; fi
+          [[ "$tag" =~ ^v0\.[0-9]+\.[0-9]+$ ]]
+          test "$changelog" = "$tag"
+          # A commit that is not on main must not reach the installed apps through latest.json.
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$SHA" --jq .status)
+          test "$status" = identical || test "$status" = behind
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      # The tag is pushed with GITHUB_TOKEN, which starts no workflow, so the build goes on in the next job of this run.
+      # A tag that a person pushed has a push run of its own: this run then builds nothing, so that the tag is not released twice.
+      # A tag that is already on this commit and has no push run is this job's own, from an earlier attempt: the build goes on.
+      - name: Tag the merge commit
+        id: push
+        if: github.event_name == 'pull_request'
+        env:
+          TAG: ${{ steps.name.outputs.tag }}
+          SHA: ${{ steps.name.outputs.sha }}
+        run: |
+          runs=$(gh run list --workflow release.yml --event push --commit "$SHA" --json databaseId --jq length)
+          if [ "$runs" -gt 0 ]; then
+            echo "The tag $TAG has a run of its own; this run builds nothing."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          at=$(git ls-remote origin "refs/tags/$TAG" "refs/tags/$TAG^{}" | tail -n 1 | cut -f1)
+          if [ -z "$at" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "$TAG" "$SHA"
+            git push origin "refs/tags/$TAG"
+          else
+            test "$at" = "$SHA"
+          fi
+
   # Release: the signed macOS app and the files the installed app updates itself from (latest.json, read by the updater plugin).
   release:
+    needs: tag
+    if: needs.tag.outputs.build == 'true'
     runs-on: macos-latest
     permissions:
       contents: write
     defaults:
       run:
         shell: bash
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The version is the tag's alone: the source holds the fixed 0.0.0 (check-version.sh), and the build below takes the version from the tag.
-      # The tag must also be the version of the first `## v{x.y.z}` heading of CHANGELOG.md (the rule of changelog_version in plan-release.py), which the Release PR writes.
-      - name: Check the tag, the changelog, the source version and main
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          scripts/check-version.sh
-          [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]]
-          changelog=$(sed -nE 's/^## (v[0-9]+\.[0-9]+\.[0-9]+)[[:blank:]]*$/\1/p' CHANGELOG.md | head -n 1)
-          test "$changelog" = "$TAG"
-          # A commit that is not on main must not reach the installed apps through latest.json.
-          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)
-          test "$status" = identical || test "$status" = behind
+        with:
+          ref: ${{ needs.tag.outputs.sha }}
       # The version is in the ref (1.99.1), so the action takes no toolchain input.
       - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
       # The same clean-up as rust-cache.yml: rust-cache hashes `rustc -vV` of every installed toolchain, so one that the runner image brings would split the key.
@@ -64,12 +134,10 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          TAG: ${{ github.ref_name }}
         run: npx tauri build --bundles app --config "{\"version\":\"${TAG#v}\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
           dir=src-tauri/target/release/bundle/macos
           scripts/make-latest-json.sh "$TAG" "$dir/cookapps.app.tar.gz.sig" "$GITHUB_REPOSITORY" > latest.json
