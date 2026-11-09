@@ -13,7 +13,7 @@ check() {
   local want=$1 name=$2 got
   jq -n --arg t "$3" --argjson i "$4" '{tool_name: $t, tool_input: $i}' | "$guard" >/dev/null 2>&1
   got=$?
-  [ "$got" -eq "$want" ] && echo "ok   $name" || { echo "FAIL $name (期待 $want、結果 $got)"; fail=1; }
+  [ "$got" -eq "$want" ] && echo "ok   $name" || { echo "FAIL $name (期待 ${want}、結果 ${got})"; fail=1; }
 }
 bash_in() { jq -n --arg c "$1" '{command: $c}'; }
 file_in() { jq -n --arg p "$1" --arg c "$2" '{file_path: $p, content: $c, new_string: $c}'; }
@@ -24,6 +24,11 @@ check 2 "記録にリダイレクト" Bash "$(bash_in 'echo {} > .claude/e2e/abc
 check 2 "記録を rm" Bash "$(bash_in 'rm -f /repo/.claude/e2e/abc')"
 check 2 "記録へ cp" Bash "$(bash_in 'cp /tmp/x .claude/e2e/abc')"
 check 2 "run-e2e.sh と連結した記録の書き込み" Bash "$(bash_in '.claude/tools/run-e2e.sh; echo {} > .claude/e2e/abc')"
+check 2 "CI の記録に Write" Write "$(file_in /repo/.claude/ci/abc 'x')"
+check 2 "CI の記録にリダイレクト" Bash "$(bash_in 'echo {} > .claude/ci/abc')"
+check 2 "CI の記録を rm" Bash "$(bash_in 'rm -f /repo/.claude/ci/abc')"
+check 2 "E2E の記録を run-ci.sh で書く" Bash "$(bash_in '.claude/tools/run-ci.sh && echo {} > .claude/e2e/abc')"
+check 2 "CI の記録を run-e2e.sh で書く" Bash "$(bash_in '.claude/tools/run-e2e.sh && echo {} > .claude/ci/abc')"
 check 2 "src/ に差し替え" Edit "$(file_in /repo/src/main.js "$T = { core: {} };")"
 check 2 "src/ に __e2e" Write "$(file_in /repo/src/x.js 'window.__e2e_mocks__ = {};')"
 check 2 "src/ に @wdio" Write "$(file_in /repo/src/x.js 'import "@wdio/globals";')"
@@ -37,6 +42,9 @@ check 2 "/tmp にモックを heredoc" Bash "$(bash_in "cat > /tmp/mock.js <<'EO
 check 0 "記録を cat" Bash "$(bash_in 'cat .claude/e2e/abc')"
 check 0 "記録を jq で読む" Bash "$(bash_in 'jq .passed /repo/.claude/e2e/abc')"
 check 0 "run-e2e.sh を単独で呼ぶ" Bash "$(bash_in '.claude/tools/run-e2e.sh .claude/worktrees/x')"
+check 0 "CI の記録を cat" Bash "$(bash_in 'cat .claude/ci/abc')"
+check 0 "CI の記録を jq で読む" Bash "$(bash_in 'jq .passed /repo/.claude/ci/abc')"
+check 0 "run-ci.sh を単独で呼ぶ" Bash "$(bash_in '.claude/tools/run-ci.sh .claude/worktrees/x')"
 check 0 "e2e/ にモックを Write" Write "$(file_in /repo/e2e/fixtures.js "$T.core = { invoke() {} };")"
 check 0 "worktree の e2e/ にモックを Write" Edit "$(file_in /repo/.claude/worktrees/w/e2e/fixtures.js "$T.core = {};")"
 check 0 "ts/ の読むだけの Edit" Edit "$(file_in /repo/ts/ipc.ts "const { invoke } = $T.core;")"

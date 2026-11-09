@@ -5,9 +5,9 @@
 ### Reviewers find, release-verifier decides, and `pre-git.sh` gates
 
 Reviewers (security, performance, code) find and rate findings, and edit nothing.
-release-verifier decides whether a finding is real and whether it stops the release, checks the E2E record with `check-e2e.sh`, and alone writes the pass record.
+release-verifier decides whether a finding is real and whether it stops the release, checks the CI and E2E records with `check-ci.sh` and `check-e2e.sh`, and alone writes the pass record.
 It reads the code for blocking findings, and for a Low only when its text suggests the definition of blocking. Other Lows pass through as report-only, and whoever fixes one confirms it then.
-`pre-git.sh` is the mechanical gate: it checks the records and the static checks, and it never judges a finding.
+`pre-git.sh` is the mechanical gate: it checks the CI, E2E and pass records of HEAD, runs none of the checks itself, and never judges a finding.
 Without this split, the reviewers and the verifier both checked whether a finding was fixed, and the verifier read the code for every Low.
 
 ```text
@@ -17,15 +17,16 @@ Bad:  the reviewer and release-verifier both check in round 2 that the same find
 
 ## Flow
 
-### Run E2E on HEAD before launching the reviewers, and fix any failure first
+### Run CI and E2E on HEAD before launching the reviewers, and fix any failure first
 
-Run `.claude/tools/run-e2e.sh` on the HEAD to be reviewed (`e2e.md`), and launch the reviewers only after it passes.
-A fix for an E2E failure changes the code the reviewers read, so their read goes stale (4 of the last 30 runs failed, each fixed by a commit minutes later).
-A run takes about a minute (measured median 58 seconds), which is cheaper than an Opus reviewer launch.
+Run `.claude/tools/run-ci.sh` (static checks and unit tests; it stops at the first failing check) and then `.claude/tools/run-e2e.sh` on the HEAD to be reviewed (`e2e.md`), and launch the reviewers only after both pass.
+CI goes first, so that a fix for a type, lint, clippy or unit test failure lands before E2E runs on the code.
+A fix for a CI or E2E failure changes the code the reviewers read, so their read goes stale (4 of the last 30 E2E runs failed, each fixed by a commit minutes later).
+An E2E run takes about a minute (measured median 58 seconds), which is cheaper than an Opus reviewer launch.
 
 ```text
-Good: commit -> run-e2e.sh passes -> reviewers -> release-verifier
-Bad:  commit -> reviewers -> run-e2e.sh fails -> fix -> the reviewers read the old code
+Good: commit -> run-ci.sh passes -> run-e2e.sh passes -> reviewers -> release-verifier
+Bad:  commit -> reviewers -> run-ci.sh fails -> fix -> the reviewers read the old code
 ```
 
 ### In the first round, review the whole range to be pushed, with only the reviewers that are needed
@@ -140,35 +141,35 @@ Bad:  add a new feature to a Low fix and push with only the range check
 Do not rebuild things the findings do not mention, and do not make improvements on the side.
 A rebuilt diff produces new findings in the second round.
 
-## E2E record
+## CI and E2E records
 
-### Run E2E on every HEAD before handing it to the reviewers or release-verifier
+### Run CI and E2E on every HEAD before handing it to the reviewers or release-verifier
 
-Run `.claude/tools/run-e2e.sh` on a HEAD before you hand it to the reviewers or to release-verifier (`e2e.md`).
-release-verifier and `pre-git.sh` both call `.claude/tools/check-e2e.sh`, which requires a passing, clean record for HEAD (`.claude/e2e/{HEAD SHA}`) with the version of that commit. Without it, release-verifier fails.
-Reviewers cannot confirm screen behavior by reading the diff.
+Run `.claude/tools/run-ci.sh` and `.claude/tools/run-e2e.sh` on a HEAD before you hand it to the reviewers or to release-verifier (`testing.md`, `e2e.md`).
+release-verifier and `pre-git.sh` call `.claude/tools/check-ci.sh` and `.claude/tools/check-e2e.sh`, which require a passing, clean record for HEAD (`.claude/ci/{HEAD SHA}`, `.claude/e2e/{HEAD SHA}`) with the version of that commit. Without either, release-verifier fails.
+Reviewers cannot confirm screen behavior by reading the diff, and `pre-git.sh` runs none of the checks, so a push is stopped when the record of HEAD is missing.
 
 ```text
-Good: commit -> run-e2e.sh -> reviewers -> fix High -> run-e2e.sh -> second-round review -> release-verifier -> pass
-Bad:  launch release-verifier without running E2E
-Bad:  run E2E only after the reviewers, and fix its failure under them
+Good: commit -> run-ci.sh -> run-e2e.sh -> reviewers -> fix High -> run-ci.sh -> run-e2e.sh -> second-round review -> release-verifier -> pass
+Bad:  launch release-verifier without running CI or E2E
+Bad:  run CI or E2E only after the reviewers, and fix its failure under them
 ```
 
-### Rerun E2E every time a commit is added
+### Rerun CI and E2E every time a commit is added
 
-A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-e2e.sh` before handing it to release-verifier.
-The record is per HEAD SHA, and the previous HEAD's record cannot be used for the new HEAD.
+A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-ci.sh` and `run-e2e.sh` before handing it to release-verifier.
+The records are per HEAD SHA, and the previous HEAD's record cannot be used for the new HEAD.
 
 ```text
-Good: pass -> fix Low and commit -> run-e2e.sh -> release-verifier (range check) -> push
-Bad:  after a Low fix, push with the previous HEAD's E2E record
+Good: pass -> fix Low and commit -> run-ci.sh -> run-e2e.sh -> release-verifier (range check) -> push
+Bad:  after a Low fix, push with the previous HEAD's CI or E2E record
 ```
 
 ## Release-only commits
 
 ### Let a release-only commit keep the pass
 
-The commits of the Release PR make a new HEAD. They need E2E on that HEAD, and no release-verifier launch (an Opus launch for a mechanical check).
+The commits of the Release PR make a new HEAD. They need CI and E2E on that HEAD (the version lines change what cargo and tsc check, so the exemption below covers only the review pass record), and no release-verifier launch (an Opus launch for a mechanical check).
 `pre-git.sh` takes the newest commit of the push range that has a pass record, or else the base of the range, which already passed this gate when it reached the remote, and runs `.claude/tools/release-only-diff.sh {that commit} HEAD`. `post-checks.sh` does the same from `origin/main`. The diff counts as release-only when it holds only:
 - `README.md`, `CHANGELOG.md` and anything under `docs/`
 - `src-tauri/Cargo.toml`, with only the `version` line of `[package]` changed (a dependency's version must not)
@@ -180,8 +181,9 @@ A feature branch that takes in a moved main is not release-only, and it goes thr
 Only release-verifier still writes pass records.
 
 ```text
-Good: release/next raises the version and writes CHANGELOG -> run-e2e.sh -> push (the diff is release-only)
+Good: release/next raises the version and writes CHANGELOG -> run-ci.sh -> run-e2e.sh -> push (the diff is release-only)
 Bad:  a feature branch merges main with other commits in -> push without a review
+Bad:  release/next raises the version -> push without run-ci.sh
 ```
 
 ## Scope of a version

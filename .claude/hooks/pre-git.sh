@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse(Bash): commit/tag は公開禁止語の検査、push はさらにレビューの合格記録と全検査を確かめる。
+# PreToolUse(Bash): commit/tag は公開禁止語の検査、push はさらに CI・E2E・レビューの合格記録を確かめる（検査そのものは走らせない。CI は run-ci.sh、E2E は run-e2e.sh が回す）。
 set -uo pipefail
 root="${CLAUDE_PROJECT_DIR:?}"
 cmd=$(jq -r '.tool_input.command // empty')
@@ -24,12 +24,15 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   git rev-parse -q --verify '@{u}' >/dev/null 2>&1 || range='origin/main..HEAD'
   git rev-parse -q --verify "${range%..*}" >/dev/null 2>&1 \
     && gate "公開禁止語(コミットメッセージ $range)" "$guard" log "$range"
-  # The gates below check the working tree, so it must equal the commits being pushed.
+  # The records are of HEAD's commit, so the working tree must equal the commits being pushed.
   git diff --quiet HEAD || { echo "push 前の検査: コミットしていない変更があります。検査はコミットの中身と一致しません" >&2; git diff --stat HEAD >&2; exit 2; }
-  # New commits need run-e2e.sh's passing record for HEAD and release-verifier's pass record (.claude/rules/review.md).
-  # The pass record may be on an earlier commit of the range when only the release work (version, README, docs) comes after it.
+  # New commits need run-ci.sh's and run-e2e.sh's passing records for HEAD and release-verifier's pass record (.claude/rules/review.md).
+  # The CI and E2E records are needed on a release-only HEAD too: the version lines change what cargo and tsc check.
+  # A push with no new commit (a tag on a commit already on the remote) needs none of them.
+  # Only release-verifier's pass record may be on an earlier commit of the range when only the release work (version, README, docs) comes after it.
   if ! git rev-parse -q --verify "${range%..*}" >/dev/null 2>&1 || [ -n "$(git rev-list -n 1 "$range")" ]; then
     main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
+    gate "CI" "$main/.claude/tools/check-ci.sh"
     gate "E2E" "$main/.claude/tools/check-e2e.sh"
     if [ ! -f "$main/.claude/reviews/$(git rev-parse HEAD)" ]; then
       base=""
@@ -50,16 +53,5 @@ if grep -q -E "${g}push" <<< "$cmd"; then
       fi
     fi
   fi
-  gate "バージョン一致" scripts/check-version.sh
-  gate "tsc (ts)" npm run build:ts
-  gate "tsc (e2e)" npm run e2e:check
-  gate "Biome lint" npm run lint
-  cd src-tauri || exit 0
-  gate "cargo fmt --check" mise exec -- cargo fmt --check
-  # The checks before a push run once, so they need no data for incremental builds (CARGO_INCREMENTAL=0).
-  gate "cargo clippy" env CARGO_INCREMENTAL=0 mise exec -- cargo clippy --all-targets --all-features -- -D warnings
-  gate "cargo test --all-features" env CARGO_INCREMENTAL=0 mise exec -- cargo test --all-features
-  # cargo test writes the types of the Rust structs (ts/bindings/); a copy that differs from the commit is out of date.
-  gate "bindings の差分" bash -c 'out=$(git status --porcelain ../ts/bindings) && [ -z "$out" ] || { echo "$out"; exit 1; }'
 fi
 exit 0
