@@ -122,6 +122,11 @@ fn needs_install(installed: Option<&str>, version: &str) -> bool {
     }
 }
 
+/// Whether `install_update` has nothing to ask GitHub for: no update was kept by a check, and the app is already replaced, so only the restart is left.
+fn restart_only(kept: bool, installed: Option<&str>) -> bool {
+    !kept && installed.is_some()
+}
+
 /// What a check reports, from the version the app was replaced with (`installed`) and the newest release newer than the running app (`latest`).
 /// A release newer than the replaced one is still to be installed (`installed: false`); anything else leaves only the restart.
 fn report(installed: Option<&str>, latest: Option<&str>) -> Option<UpdateInfo> {
@@ -139,7 +144,7 @@ fn report(installed: Option<&str>, latest: Option<&str>) -> Option<UpdateInfo> {
 }
 
 /// Whether a newer version is out. The sidebar shows its update button only for `Some`. The found update is kept for `install_update`.
-/// Once the app is replaced it still asks GitHub, so a release newer than the replaced one is reported as not yet installed; the same version stays "restart only", and so does a check that fails.
+/// Once the app is replaced it still asks GitHub, so a release newer than the replaced one is reported as not yet installed; the same version stays "restart only". A check that fails is an error, and the screen keeps what it showed.
 #[tauri::command]
 pub async fn check_update(
     app: tauri::AppHandle,
@@ -150,18 +155,14 @@ pub async fn check_update(
         return Ok(None);
     }
     let done = installed.0.lock().unwrap().clone();
-    let update = match find(&app, "check_update").await {
-        Ok(update) => update,
-        Err(_) if done.is_some() => None,
-        Err(e) => return Err(e),
-    };
+    let update = find(&app, "check_update").await?;
     let info = report(done.as_deref(), update.as_ref().map(|u| u.version.as_str()));
     *found.lock().unwrap() = update.filter(|_| info.as_ref().is_some_and(|i| !i.installed));
     Ok(info)
 }
 
 /// Downloads the newer version, checks its signature and replaces the app, without restarting it (`restart_app` does).
-/// Does nothing when there is none, or when the app is already replaced with that version or a later one.
+/// Does nothing when there is none, or when the app is already replaced and no check kept a newer one (so it asks GitHub for nothing, and works offline), or with that version or a later one.
 #[tauri::command]
 pub async fn install_update(
     app: tauri::AppHandle,
@@ -171,11 +172,14 @@ pub async fn install_update(
     // A second call waits here, then finds the app already replaced.
     let _busy = installed.1.lock().await;
     let kept = found.lock().unwrap().take();
+    let done = installed.0.lock().unwrap().clone();
+    if restart_only(kept.is_some(), done.as_deref()) {
+        return Ok(());
+    }
     let update = match kept {
         Some(u) => Some(u),
         None => find(&app, "install_update").await?,
     };
-    let done = installed.0.lock().unwrap().clone();
     if let Some(update) = update.filter(|u| needs_install(done.as_deref(), &u.version)) {
         update
             .download_and_install(|_, _| {}, || {})
@@ -231,6 +235,14 @@ mod tests {
         assert!(!needs_install(Some("0.54.1"), "0.54.0"));
         assert!(!needs_install(Some("0.54.0"), "latest"));
         assert!(!needs_install(Some("nope"), "0.54.1"));
+    }
+
+    #[test]
+    fn restart_only_when_the_app_is_replaced_and_no_update_is_kept() {
+        assert!(restart_only(false, Some("0.54.0")));
+        assert!(!restart_only(true, Some("0.54.0")));
+        assert!(!restart_only(false, None));
+        assert!(!restart_only(true, None));
     }
 
     #[test]
