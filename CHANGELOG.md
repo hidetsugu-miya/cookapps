@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.56.1
+
+M-9: a card of new mail goes as soon as its thread becomes read, whether it is marked read in the list or in the thread, or read on another device (#304).
+
+The tools used to develop the app now check a file edited in the working copy of a branch, and the commits pushed from it, in that copy (#310, #311), and keep a log of how long each check took (#260).
+
 ## v0.56.0
 
 A-21 (new): a file opened in the editor of the Orca screen (A-18) is colored by its language: comments, keywords, strings, names and the like each have their own color (#298). The language is taken from the file name (`Dockerfile`, `Makefile` and the like), the extension and the first line, the same way as Orca's own editor (#299). A long file is colored a moment after typing pauses.
