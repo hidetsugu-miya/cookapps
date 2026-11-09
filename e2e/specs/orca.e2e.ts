@@ -1054,9 +1054,10 @@ describe("orca: projects", () => {
   it("starts with the projects: a status icon, the name and the number of sessions, then the SSH hosts", async () => {
     await openOrca(withTerminals());
     await expect($("#orca-bell")).toHaveAttribute("aria-pressed", "false");
-    expect(await projectNames()).toEqual(["example-app", "example-api", "example-web", "example-lib", "example-idle", "example-host", "other-host"]);
+    // The working projects come first (example-app, example-web), then the rest as the read lists them.
+    expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle", "example-host", "other-host"]);
     // example-app has a running agent and a shell, example-api a waiting agent, example-lib a done one, example-idle nothing; the SSH host shows what its worktrees do.
-    expect(await projectStatuses()).toEqual(["working", "question", "working", "done", "idle", "working", "idle"]);
+    expect(await projectStatuses()).toEqual(["working", "working", "question", "done", "idle", "working", "idle"]);
     expect(await textsOf("#orca-feed .orca-n")).toEqual(["2", "1", "1", "1", "2"]);
     expect(await textsOf("#orca-feed .orca-sec")).toEqual(["SSH"]);
     await expect($("#orca-feed .orca-row")).not.toExist();
@@ -1071,9 +1072,9 @@ describe("orca: projects", () => {
 
   it("lists an SSH host of the target that this machine does not list, under SSH", async () => {
     await openOrca(orcaOverview(sample(), worktrees(), { ssh: [orcaSsh("s1", "example-host")], hosts: [{ key: "ssh:s9", name: "lost-host", status: "working", sessions: 1, atMs: 0 }] }));
-    expect(await projectNames()).toEqual(["example-app", "example-api", "example-web", "example-lib", "example-host", "lost-host"]);
+    expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-host", "lost-host"]);
     expect(await textsOf("#orca-feed .orca-sec")).toEqual(["SSH"]);
-    expect(await projectStatuses()).toEqual(["working", "question", "working", "done", "idle", "working"]);
+    expect(await projectStatuses()).toEqual(["working", "working", "question", "done", "idle", "working"]);
     // Its row is a project like the others: it can be selected.
     await project("lost-host").click();
     await expect(project("lost-host")).toHaveAttribute("aria-pressed", "true");
@@ -1226,14 +1227,14 @@ describe("orca: projects", () => {
     const sessionOf = (id: string) => $(`#orca-feed .orca-session[data-session="${id}"]`);
     const pressedSessions = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session")].filter((r) => r.getAttribute("aria-pressed") === "true").map((r) => r.dataset.session));
 
-    it("puts an arrow at the left of each project that has a session tab, and none at the others (example-web's one session has no pane, and the host's number comes with no row of it), with every project closed at first", async () => {
+    it("puts an arrow at the left of each project that has a session tab, and none at the others (example-web's one session has no pane, and the host's number comes with no row of it), with the working project open at first and the others closed", async () => {
       await openOrca(withTerminals());
       expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-arrow")].map((a) => [a.dataset.key, a.getAttribute("aria-expanded")]))).toEqual([
-        ["arrow:proj_example-app", "false"],
+        ["arrow:proj_example-app", "true"],
         ["arrow:proj_example-api", "false"],
         ["arrow:proj_example-lib", "false"],
       ]);
-      await expect($("#orca-feed .orca-session")).not.toExist();
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
       // The arrow is at the left of the row, before the status icon.
       const left = await browser.execute(() => {
         const r = (e: Element) => e.getBoundingClientRect();
@@ -1242,26 +1243,48 @@ describe("orca: projects", () => {
       expect(left[0]).toBeLessThanOrEqual(left[1]);
     });
 
-    it("opens the selected project with its sessions under it and closes the others, one at a time", async () => {
+    it("opens a project with its sessions under it without closing the others, so that several are open at once", async () => {
       await openOrca(withTerminals());
-      await project("example-app").click();
-      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
+      // example-app works, so it is open at first; its sessions have the status icon and the title.
       expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
-      // A session row has the status icon and the title.
       expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-session .orca-ic")].map((i) => [i.dataset.status, i.getAttribute("aria-label")]))).toEqual([
         ["working", "作業中"],
         ["done", "起動中"],
       ]);
       await project("example-api").click();
       await expect(arrow("example-api")).toHaveAttribute("aria-expanded", "true");
-      await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "false");
-      expect(await sessionTitles()).toEqual(["Fix the parser"]);
-      expect(await count("#orca-feed .orca-sessions")).toBe(1);
-      // The arrow of a project that is not selected selects it, which opens it.
-      await arrow("example-app").click();
-      await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
       await expect(arrow("example-app")).toHaveAttribute("aria-expanded", "true");
-      expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh", "Fix the parser"]);
+      expect(await count("#orca-feed .orca-sessions")).toBe(2);
+      // The arrow of a project that is not selected opens it and does not select it.
+      await arrow("example-lib").click();
+      await expect(arrow("example-lib")).toHaveAttribute("aria-expanded", "true");
+      await expect(project("example-lib")).toHaveAttribute("aria-pressed", "false");
+      await expect(project("example-api")).toHaveAttribute("aria-pressed", "true");
+      expect(await sessionTitles()).toEqual(["Write the docs", "zsh", "Fix the parser", "Opened the pull request."]);
+      // A session of a project that is not selected selects its project and its tab.
+      await sessionOf(claudeTab("example-lib")).click();
+      await expect(project("example-lib")).toHaveAttribute("aria-pressed", "true");
+      expect(await pressedSessions()).toEqual([claudeTab("example-lib")]);
+      await expect(selectedTab()).toHaveText(expect.stringContaining("Opened the pull request."));
+    });
+
+    it("draws a session row one level in from its project: its icon and title right of the project's name", async () => {
+      await openOrca(withTerminals());
+      const left = await browser.execute(() => {
+        const r = (e: Element) => e.getBoundingClientRect();
+        const session = document.querySelector("#orca-feed .orca-session")!;
+        return {
+          projectRow: r(document.querySelector('.orca-project[data-key="proj_example-app"]')!).left,
+          name: r(document.querySelector('.orca-project[data-key="proj_example-app"] .orca-project-name')!).left,
+          sessionRow: r(session).left,
+          icon: r(session.querySelector(".orca-ic")!).left,
+          title: r(session.querySelector(".orca-session-title")!).left,
+        };
+      });
+      expect(left.sessionRow).toBeGreaterThan(left.projectRow);
+      expect(left.icon).toBeGreaterThan(left.name);
+      expect(left.title).toBeGreaterThan(left.name);
     });
 
     it("closes with the arrow of the selected project and opens again with it, keeping the tabs, the work pane and the number", async () => {
@@ -1287,6 +1310,77 @@ describe("orca: projects", () => {
       await expect($("#orca-feed .orca-session")).not.toExist();
       await project("example-app").click();
       expect(await sessionTitles()).toEqual(["Write the docs", "zsh"]);
+    });
+
+    describe("the working projects", () => {
+      // A read as Orca lists it: the projects in the order given (the newest activity first), each working unless it is in `done` or `waiting`.
+      const read = (order: string[], done: string[] = [], waiting: string[] = []) =>
+        orcaOverview(
+          order.map((repo) => orcaRow(repo, "main", `Task of ${repo}`, done.includes(repo) ? { group: "done" } : waiting.includes(repo) ? { group: "waiting" } : {})),
+          order.map((repo) => orcaWorktree(repo, "main")),
+        );
+      const names = () => projectNames();
+      const reread = async (value: ReturnType<typeof read>) => {
+        const overview = await mock("orca_overview", value);
+        await $("#orca-refresh").click();
+        await waitForCalls(overview);
+      };
+      const expectNames = (want: string[]) => browser.waitUntil(async () => (await names()).join() === want.join(), { timeoutMsg: `the order never became ${want.join()}` });
+      const expanded = (repo: string) => browser.execute((k) => document.querySelector(`#orca-feed .orca-arrow[data-key="${k}"]`)?.getAttribute("aria-expanded") ?? null, `arrow:proj_${repo}`);
+
+      it("keeps the order of the working projects through reads that reorder them, puts one that starts at the front, and sends one that stops below", async () => {
+        await openOrca(read(["w-a", "w-b", "w-q"], [], ["w-q"]));
+        // The project that only waits for the user is not in the working group: it stays below.
+        expect(await names()).toEqual(["w-a", "w-b", "w-q"]);
+        // Orca lists the newest activity first, and it moves with the work: the order shown does not.
+        await reread(read(["w-q", "w-b", "w-a"], [], ["w-q"]));
+        await browser.pause(300);
+        expect(await names()).toEqual(["w-a", "w-b", "w-q"]);
+        // A project that starts to work goes in front of the others.
+        await reread(read(["w-c", "w-b", "w-a", "w-q"], [], ["w-q"]));
+        await expectNames(["w-c", "w-a", "w-b", "w-q"]);
+        // One that stops goes below the working ones, and a project that only waits stays below them.
+        await reread(read(["w-c", "w-b", "w-a", "w-q"], ["w-a"], ["w-q"]));
+        await expectNames(["w-c", "w-b", "w-a", "w-q"]);
+        // Starting again, it goes in front.
+        await reread(read(["w-a", "w-c", "w-b", "w-q"], [], ["w-q"]));
+        await expectNames(["w-a", "w-c", "w-b", "w-q"]);
+        // The ones below keep the order of the read.
+        await reread(read(["w-a", "w-c", "w-b", "w-q"], ["w-a", "w-b", "w-c"], ["w-q"]));
+        await expectNames(["w-a", "w-c", "w-b", "w-q"]);
+        await reread(read(["w-b", "w-c", "w-a", "w-q"], ["w-a", "w-b", "w-c"], ["w-q"]));
+        await expectNames(["w-b", "w-c", "w-a", "w-q"]);
+      });
+
+      it("opens every working project at first, and a waiting or finished one is closed", async () => {
+        await openOrca(read(["w-a", "w-b", "w-d", "w-q"], ["w-d"], ["w-q"]));
+        expect(await expanded("w-a")).toBe("true");
+        expect(await expanded("w-b")).toBe("true");
+        expect(await expanded("w-d")).toBe("false");
+        expect(await expanded("w-q")).toBe("false");
+        expect(await sessionTitles()).toEqual(["Task of w-a", "Task of w-b"]);
+      });
+
+      it("opens a project again when it starts to work after the user closed it, and leaves it closed while it keeps working", async () => {
+        await openOrca(read(["w-a", "w-b"]));
+        await arrow("w-a").click();
+        expect(await expanded("w-a")).toBe("false");
+        // Still working: the user's closing stands.
+        await reread(read(["w-b", "w-a"]));
+        await browser.pause(300);
+        expect(await expanded("w-a")).toBe("false");
+        // It stops and starts again: a new work, so it opens.
+        await reread(read(["w-b", "w-a"], ["w-a"]));
+        await expectNames(["w-b", "w-a"]);
+        expect(await expanded("w-a")).toBe("false");
+        await reread(read(["w-a", "w-b"]));
+        await browser.waitUntil(async () => (await expanded("w-a")) === "true", { timeoutMsg: "the project that began to work again stayed closed" });
+        expect(await names()).toEqual(["w-a", "w-b"]);
+        // A project that comes new and works opens at once.
+        await reread(read(["w-c", "w-a", "w-b"]));
+        await browser.waitUntil(async () => (await expanded("w-c")) === "true", { timeoutMsg: "the new working project stayed closed" });
+        expect(await names()).toEqual(["w-c", "w-a", "w-b"]);
+      });
     });
 
     it("lists the sessions in the order of the tabs, through a read that reorders them", async () => {

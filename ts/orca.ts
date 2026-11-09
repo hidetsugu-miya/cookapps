@@ -71,8 +71,12 @@ let query = "";
 let cursor: string | null = null;
 // The project selected (its key; null: none). Its tab selected is the one shown in the pane of its layout that has the focus (`selectedTab`).
 let projectKey: string | null = null;
-// The selected project is open in the list (its sessions under it) unless the user closed it with its arrow; selecting a project opens it again. Only the selected project is ever open.
-let collapsed = false;
+// The projects open in the list (their sessions under them), by key, kept in memory only. Each has its own state: selecting a project opens it, its arrow opens and closes it, and a project that starts to work opens again.
+const opened = new Set<string>();
+// The projects whose status is working, in the order they entered that group. A read does not reorder them (the project list of the read is newest first by activity, which moves with the work); one that starts to work is put first, one that stops leaves the group.
+let workingOrder: string[] = [];
+// The target `workingOrder` and `opened` were made for: the keys of another target are not these.
+let workingTarget: string | null = null;
 // The host element of each pane drawn, by pane id: the terminals are placed in them.
 let paneHosts = new Map<string, HTMLElement>();
 // The order tabs were first seen in, so that a read that reorders the sessions does not move the tabs. A tab with a terminal is known by its handle, so a terminal that changes kind (a plain one where Claude starts, or the other way round) keeps its place.
@@ -309,20 +313,20 @@ function rowNode(r: OrcaRow, key: string, now: number) {
 }
 
 // A session of the open project: its status icon and title, selected when it is the tab selected.
-function sessionNode(t: Tab) {
+function sessionNode(t: Tab, key: string) {
   const row = tag("button", "orca-session");
   row.type = "button";
   row.dataset.key = `tab:${t.id}`;
   // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
   row.dataset.session = t.id;
-  row.setAttribute("aria-pressed", String(t.id === selectedTab()));
+  row.setAttribute("aria-pressed", String(key === projectKey && t.id === selectedTab()));
   row.append(statusIcon(t.status, t.label), tag("span", "orca-session-title", t.title));
-  row.onclick = () => selectTab(t.id);
+  row.onclick = () => selectSession(key, t.id);
   return row;
 }
 
 // A project, or an SSH host: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs.
-function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
+function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, onCursor: boolean, re: RegExp | null) {
   const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
@@ -336,8 +340,9 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   row.onclick = () => selectProject(key);
   wrap.append(row);
   // A row of Orca with no pane gives no tab, so the arrow follows the tabs and not the number.
-  if (!tabsOf(key).some((t) => t.kind !== "file")) return wrap;
-  const open = key === projectKey && !collapsed;
+  const tabs = tabsOf(key).filter((t) => t.kind !== "file");
+  if (!tabs.length) return wrap;
+  const open = opened.has(key);
   const arrow = tag("button", "icon-btn orca-arrow");
   arrow.type = "button";
   arrow.dataset.key = `arrow:${key}`;
@@ -348,7 +353,7 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   wrap.append(arrow);
   if (open) {
     const list = tag("div", "orca-sessions");
-    list.append(...tabs.filter((t) => t.kind !== "file").map(sessionNode));
+    list.append(...tabs.map((t) => sessionNode(t, key)));
     wrap.append(list);
   }
   return wrap;
@@ -366,9 +371,25 @@ function emptyNode(text: string) {
 // A row of the project list: a project of this machine or an SSH host.
 type ProjectRow = Pick<OrcaProject, "key" | "name" | "status" | "sessions">;
 
-// The rows of the list: the projects of the target, then the SSH hosts (the machine's, then the target's that it does not list).
+// Keeps `workingOrder` and `opened` in step with the projects of a read that worked: a project that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them) and opens; one that does not work leaves it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing.
+function trackWorking() {
+  if (view === null || view.state !== "ready" || switching) return;
+  if (view.target !== workingTarget) {
+    workingTarget = view.target;
+    workingOrder = [];
+    opened.clear();
+  }
+  const now = view.projects.filter((p) => p.status === "working").map((p) => p.key);
+  const kept = workingOrder.filter((k) => now.includes(k));
+  const entered = now.filter((k) => !kept.includes(k));
+  for (const k of entered) opened.add(k);
+  workingOrder = [...entered, ...kept];
+}
+
+// The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the rest as the read lists them), then the SSH hosts (the machine's, then the target's that it does not list).
 function projectRows(): { local: ProjectRow[]; hosts: ProjectRow[] } {
-  const local: ProjectRow[] = view?.projects ?? [];
+  const all: ProjectRow[] = view?.projects ?? [];
+  const local: ProjectRow[] = [...workingOrder.flatMap((k) => all.filter((p) => p.key === k)), ...all.filter((p) => !workingOrder.includes(p.key))];
   const hosts: ProjectRow[] = ssh.map((t) => {
     const host = view?.hosts.find((h) => h.key === `ssh:${t.id}`);
     return { key: `ssh:${t.id}`, name: t.label, status: host?.status ?? "idle", sessions: host?.sessions ?? 0 };
@@ -407,9 +428,9 @@ function cursorKey(rows = visibleRows(matcher())) {
   return cursor !== null && keys.includes(cursor) ? cursor : (keys[0] ?? null);
 }
 
-function projectNodes(tabs: Tab[], re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null): HTMLElement[] {
+function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null): HTMLElement[] {
   const { local, hosts } = rows;
-  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, tabs, r.key === on, re);
+  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, r.key === on, re);
   const nodes: HTMLElement[] = local.map(node);
   if (hosts.length) nodes.push(tag("h3", "orca-sec", "SSH"), ...hosts.map(node));
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
@@ -426,24 +447,25 @@ function workingNodes(now: number): HTMLElement[] {
   return nodes.length ? nodes : [emptyNode("動いているエージェントはありません")];
 }
 
-// Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed. `tabs` are the selected project's.
-function drawFeed(tabs: Tab[]) {
+// Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
+function drawFeed() {
   const now = Date.now();
-  // The sessions under the open project: what is drawn of them.
-  const sessions = projectKey === null || collapsed ? [] : tabs.filter((t) => t.kind !== "file").map((t) => [t.id, t.status, t.label, t.title]);
+  trackWorking();
+  // The sessions under the open projects: what is drawn of them.
+  const sessions = [...opened].map((k) => [k, tabsOf(k).filter((t) => t.kind !== "file").map((t) => [t.id, t.status, t.label, t.title])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
   const re = working ? null : matcher();
   const rows = visibleRows(re);
   const on = working ? null : cursorKey(rows);
-  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), on], projectKey, collapsed, sessions, selectedTab(), switching, Math.floor(now / 60_000)]);
+  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), on], projectKey, sessions, selectedTab(), switching, Math.floor(now / 60_000)]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...(working ? workingNodes(now) : projectNodes(tabs, re, rows, on)));
+  box.replaceChildren(...(working ? workingNodes(now) : projectNodes(re, rows, on)));
   box.scrollTop = top;
   if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
@@ -636,7 +658,7 @@ function draw() {
   drawBell();
   drawSearch();
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
-  drawFeed(tabs);
+  drawFeed();
   drawWork(tabs);
   drawFiles(tabs);
   syncTerminal(tabs);
@@ -823,23 +845,30 @@ export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], c
 
 // ---- selecting and closing ----
 
-// Makes `key` the selected project, open in the list.
+// Makes `key` the selected project, open in the list (the others stay as they are).
 function setProject(key: string | null) {
   projectKey = key;
-  collapsed = false;
+  if (key !== null) opened.add(key);
 }
 
-// Selects the project and, in it, the tab last selected there, else the first. The project opens and the others close.
+// Selects the project and, in it, the tab last selected there, else the first. The project opens.
 function selectProject(key: string) {
   started = null;
   setProject(key);
   draw();
 }
 
-// The arrow of a project: the selected one closes or opens its sessions in the list (the tabs and the work pane stay as they are); the arrow of another project selects it, which opens it.
+// The arrow of a project: opens or closes its sessions in the list, and only that (the selection, the tabs and the work pane stay as they are).
 function toggleProject(key: string) {
-  if (key !== projectKey) return selectProject(key);
-  collapsed = !collapsed;
+  if (!opened.delete(key)) opened.add(key);
+  draw();
+}
+
+// A session of an open project: selects the project and its tab.
+function selectSession(key: string, id: string) {
+  started = null;
+  setProject(key);
+  chooseTab(id);
   draw();
 }
 
@@ -998,7 +1027,7 @@ const searchInput = () => $<HTMLInputElement>("orca-search-input");
 // What a change of the text or of the row the keys are on redraws: the field and the list. The work pane does not change with it.
 function drawSearchList() {
   drawSearch();
-  drawFeed(projectKey === null ? [] : tabsOf(projectKey));
+  drawFeed();
 }
 
 // Ends the search: the list is the whole list again.
