@@ -3083,6 +3083,82 @@ describe("orca: files and editor (A-18)", () => {
     await browser.waitUntil(async () => (await names()).join() === "only-b.rs", { timeoutMsg: "the tree of the other worktree never showed" });
   });
 
+  // example-idle has no session (so no tab), and lists a worktree that is not the main one before the main one; example-app has a Claude session in a worktree that is not the main one.
+  const withIdle = (extra: Record<string, unknown> = {}, more: ReturnType<typeof orcaWorktree>[] = []) =>
+    orcaOverview(
+      [orcaRow("example-app", "feat/b", "Write the docs", { path: "/work/example-app-b" })],
+      [
+        orcaWorktree("example-app", "main"),
+        orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" }),
+        orcaWorktree("example-idle", "feat/z", { path: "/work/example-idle-z" }),
+        orcaWorktree("example-idle", "main"),
+        ...more,
+      ],
+      extra,
+    );
+
+  it("shows the main worktree of the selected project when it has no tab, and the selected tab's worktree once a project with a tab is selected", async () => {
+    await openOrca(withIdle(), { orca_terminal_read: ["$"], orca_files_list: root() });
+    await project("example-idle").click();
+    await expect($(".orca-empty")).toHaveText("セッションはありません");
+    await filesToggle().click();
+    await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    expect(await callsOf("orca_files_list")).toEqual([{ path: "/work/example-idle", dir: "", ignored: false, environment: null }]);
+    const list = await mock("orca_files_list", dirOf("", [["only-b.rs", false]]));
+    await project("example-app").click();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/b");
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app-b", dir: "", ignored: false, environment: null }]);
+    await browser.waitUntil(async () => (await names()).join() === "only-b.rs", { timeoutMsg: "the tree of the selected tab never showed" });
+  });
+
+  it("opens a file of the main worktree in a tab when the project has no tab", async () => {
+    await openOrca(withIdle(), { orca_terminal_read: ["$"], orca_files_list: root(), editor_settings: { autosaveMs: 100 } });
+    await project("example-idle").click();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const read = await mock("orca_file_read", text("fn main() {}\n"));
+    await doublePress("a.rs");
+    expect(await waitForCalls(read)).toEqual([{ path: "/work/example-idle", relative: "a.rs", environment: null }]);
+    await expect(selectedTab().$(".orca-tab-title")).toHaveText("a.rs");
+    await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
+  });
+
+  it("keeps the open folders and does not read the root again when the first file of a project with no tab is opened", async () => {
+    await openOrca(withIdle(), { orca_terminal_read: ["$"], orca_files_list: root(), editor_settings: { autosaveMs: 100 } });
+    await project("example-idle").click();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const inner = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCalls(inner);
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    const list = await mock("orca_files_list", root());
+    const read = await mock("orca_file_read", text("fn main() {}\n"));
+    await doublePress("src/main.rs");
+    expect(await waitForCalls(read)).toEqual([{ path: "/work/example-idle", relative: "src/main.rs", environment: null }]);
+    await expect(selectedTab().$(".orca-tab-title")).toHaveText("main.rs");
+    await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
+    expect(await names()).toEqual(["src", "lib", "main.rs", "target", "a.rs", "b.log"]);
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+    expect(await callsOf(list)).toEqual([]);
+  });
+
+  it("leaves the pane empty for a project with no tab when the row cannot be read, as an SSH host's", async () => {
+    const hostRow = { key: "ssh:s1", name: "s1", status: "idle" as const, sessions: 0, atMs: 0 };
+    const hostTree = orcaWorktree("remote-app", "main", { path: "/home/dev/remote-app", projectKey: "ssh:s1", isMain: true });
+    await openOrca(withIdle({ ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow] }, [hostTree]), { orca_terminal_read: ["$"], orca_files_list: root() });
+    await project("example-idle").click();
+    await filesToggle().click();
+    await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
+    const list = await mock("orca_files_list", root());
+    await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
+    await expect($("#orca-files-title")).toHaveText("");
+    expect(await count("#orca-files-tree .orca-file")).toBe(0);
+    await expect($("#orca-files-reload")).toBeDisabled();
+    expect(await callsOf(list)).toEqual([]);
+  });
+
   it("reads a saved environment's files with its name", async () => {
     await openOrca(orcaOverview(sample(), worktrees(), studio), { orca_terminal_read: ["$"], orca_files_list: root() });
     await project("example-app").click();

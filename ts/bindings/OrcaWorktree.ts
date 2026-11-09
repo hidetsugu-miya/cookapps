@@ -7,4 +7,8 @@ export type OrcaWorktree = { path: string, repo: string, branch: string,
 /**
  * The project the worktree belongs to (`OrcaProject::key`; empty when it has none), which the plus of the work pane narrows the worktrees by (A-16).
  */
-projectKey: string, };
+projectKey: string, 
+/**
+ * Whether it is the repository's own folder (`isMainWorktree` of Orca), which the file pane shows for a project with no tab (A-18).
+ */
+isMain: boolean, };
