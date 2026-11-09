@@ -210,12 +210,11 @@ describe("inbox", () => {
       await $("#mail-mark-all").click();
       await waitForCalls(setRead, 2);
       await release(setRead, rejects("Gmail が断りました"));
+      await release(setRead, true);
+      // The failures are reported once, when the last request has answered; the row that failed is unread again, so the 未読 heading is back with its count.
       await expect($("#error")).toHaveText(expect.stringContaining("1 件を更新できませんでした: Gmail が断りました"));
-      // The row that failed is unread again, so the heading is back with its count, and the button waits for the other request.
       await waitForCount("#unread-threads li", 1);
       await expect($("#unread-count")).toHaveText("1");
-      await expect($("#mail-mark-all")).toBeDisabled();
-      await release(setRead, true);
       await expect(rowOf("unread-threads", "First unread")).toExist();
       await expect($(".toast")).toHaveText(expect.stringContaining("1 件を既読にしました"));
       await expect($("#mail-mark-all")).toBeEnabled();
