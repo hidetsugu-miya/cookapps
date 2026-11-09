@@ -179,12 +179,12 @@ def existing_order(free):
 
 def derive_groups(ordered):
     """Groups of a previous plan: consecutive issues that share a version milestone, so that a sync keeps them together.
-    An 8-point issue ends a run, and a run over the cap is left to the allocation."""
+    An 8-point issue ends a run, and a run that adds a requirement ID and holds more than MAX_COUNTED counted issues is left to the allocation."""
     groups = []
     run = []
 
     def flush():
-        if len(run) > 1 and sum(1 for i in run if counted(i)) <= MAX_COUNTED:
+        if len(run) > 1 and (not capped(run) or sum(1 for i in run if counted(i)) <= MAX_COUNTED):
             groups.append([i.number for i in run])
         run.clear()
 
@@ -710,10 +710,15 @@ def parse_time(s):
     return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
 
 
+def open_in_milestone(issues, title):
+    """The number of open issues of the milestone `title` that the release waits for: not `needs:owner`, not blocked by an open issue, and counted (not `documentation`)."""
+    return sum(1 for i in issues if i.state == "open" and i.milestone == title and not has(i, "needs:owner") and not i.blocked_by and counted(i))
+
+
 def release_facts(waiting, pr_labels, now, milestone=None, milestone_open=None):
     """Applies R0 to R3 of issues.md and gathers the figures of R4, which the release-planner judges.
     `waiting` are the merged changes not released yet, `pr_labels` the labels of the Release PR (None when there is none),
-    `milestone` the planned version (the lowest open milestone, which `close` releases) and `milestone_open` the number of its issues that are still open.
+    `milestone` the planned version (the lowest open milestone, which `close` releases) and `milestone_open` the number of its issues that are still open and can start (open_in_milestone).
     -> {"rule": "R0".."R3" | "R4", "decision": "wait" | "release" | None, ...}"""
     pr_labels = pr_labels or []
     changes = sorted((i for i in waiting if is_waiting(i) and counted(i)), key=lambda i: (i.closed_at or "", i.number))
@@ -1120,7 +1125,7 @@ def cmd_release_facts(args):
     waiting = [i for i in state.issues.values() if is_waiting(i)]
     planned = min((parse_version(m["title"]) for m in state.milestones if m["state"] == "open" and parse_version(m["title"])), default=None)
     title = format_version(planned) if planned else None
-    still_open = sum(1 for i in state.issues.values() if i.state == "open" and i.milestone == title) if title else None
+    still_open = open_in_milestone(state.issues.values(), title) if title else None
     print(json.dumps(release_facts(waiting, labels, now, title, still_open), ensure_ascii=False, indent=2))
 
 

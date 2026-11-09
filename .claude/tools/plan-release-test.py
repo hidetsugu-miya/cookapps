@@ -469,6 +469,21 @@ class ReleaseDecision(unittest.TestCase):
         self.assertEqual((out["milestone"], out["milestone_open"]), (None, None))
 
 
+class OpenInMilestone(unittest.TestCase):
+    def test_counts_only_the_issues_the_release_waits_for(self):
+        issues = [
+            mk(1, milestone="v0.40.0"),
+            mk(2, ["needs:owner"], milestone="v0.40.0"),
+            mk(3, milestone="v0.40.0", blocked=[9]),
+            mk(4, ["documentation"], milestone="v0.40.0"),
+            mk(5, milestone="v0.41.0"),
+            mk(6, milestone="v0.40.0", state="closed"),
+            mk(7, ["bug"], milestone="v0.40.0"),
+        ]
+        self.assertEqual(pr.open_in_milestone(issues, "v0.40.0"), 2)
+        self.assertEqual(pr.open_in_milestone(issues, "v0.42.0"), 0)
+
+
 class Refuse(unittest.TestCase):
     def test_open_issue_without_points_label(self):
         issues = [mk(1, ["point:2"]), mk(2, ["bug"]), mk(3, state="closed")]
@@ -1010,8 +1025,12 @@ class DeriveGroups(unittest.TestCase):
         self.assertEqual(pr.derive_groups(free), [[3, 4]])
 
     def test_run_over_the_cap_is_left_to_the_allocation(self):
-        free = [mk(n, milestone="v0.40.0") for n in range(1, 5)]
+        free = [mk(n, ["adds:requirement"], milestone="v0.40.0") for n in range(1, 5)]
         self.assertEqual(pr.derive_groups(free), [])
+
+    def test_patch_run_over_MAX_COUNTED_stays_a_group(self):
+        free = [mk(n, milestone="v0.40.1") for n in range(1, 5)]
+        self.assertEqual(pr.derive_groups(free), [[1, 2, 3, 4]])
 
     def test_documentation_does_not_count_toward_the_cap(self):
         free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.40.0"), mk(3, milestone="v0.40.0"), mk(4, ["documentation"], milestone="v0.40.0")]

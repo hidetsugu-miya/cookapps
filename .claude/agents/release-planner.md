@@ -71,7 +71,7 @@ R0 から R3（Release PR の `release:hold`、Release PR か待ちの変更の 
 
 1. `waiting`（リリース待ちの変更）の各 issue の title と labels を見る。必要なら本文を `gh issue view` で読む。
 2. 目安に照らす。次のどちらかに当たれば、リリースする側に傾く（2026-11-09 のオーナーの指示。まとめた patch 版を、その一部がマージされただけで出さないため）。
-   - 予定の版（`milestone`、最初の開いたマイルストーン）の issue がすべてマージされた（`milestone_open` が 0）
+   - 予定の版（`milestone`、最初の開いたマイルストーン）の issue がすべてマージされた（`milestone_open` が 0。`needs:owner`、開いた blocker のある issue、`documentation` の issue は数えない）
    - 最古の待ちが 24 時間以上（`oldest_hours`）
 3. 目安から外すときは、その理由を書く。たとえば、目安に当たるのに待つ（同じ箇所の続きの issue がもうすぐ入る、など）、目安に当たらないのにリリースする（利用者が困っている、など）。理由は `waiting` の issue か `path:line` に結び付ける。
 4. 目安どおりに決めたときも、どの目安に当たったか（当たらなかったか）を理由に書く。
