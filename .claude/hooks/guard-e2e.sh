@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse: E2E の記録（.claude/e2e/）を run-e2e.sh 以外が書くのと、E2E（e2e/）の外にモックを作るのを止める。
+# PreToolUse: E2E の記録（.claude/e2e/）を run-e2e.sh 以外が、CI の記録（.claude/ci/）を run-ci.sh 以外が書くのと、E2E（e2e/）の外にモックを作るのを止める。
 # 検出語は、このファイル自身が検査に掛からないよう、わざと分けて書いている。
 set -uo pipefail
 input=$(cat)

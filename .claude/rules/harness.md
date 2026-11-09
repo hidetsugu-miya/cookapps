@@ -17,6 +17,7 @@ It runs every day at 21:00 and needs no argument.
 In the main checkout and in every worktree, it deletes what has nothing modified in the last 24 hours, or nothing newer than the `src-tauri/Cargo.toml` of that checkout, and nothing while cargo or rustc runs: the entries of `incremental/` in each profile, and the entries of cookapps itself (`cookapps-*`, `cookapps_lib-*`, `libcookapps_lib-*`, `cookapps_mcp-*`) in `deps/`, `build/` and `.fingerprint/`.
 The second condition removes the output of an earlier version without waiting 24 hours, because a version bump changes the hash of cookapps's own output and nothing uses the old one again.
 The output of dependency crates stays.
+It also deletes the files of `.claude/ci/` and `.claude/e2e/` (the records and logs of `run-ci.sh` and `run-e2e.sh`) in the main checkout that are older than 30 days; `check-ci.sh` and `check-e2e.sh` read only the record of HEAD.
 It prints the size of each target before and after, and appends it to `.claude/nightly/clean-target-{date}.log` (deleted after 30 days).
 The launchd plists are `~/Library/LaunchAgents/jp.mysis.cookapps.improvement-proposal.plist`, `jp.mysis.cookapps.discussion-judge.plist`, `jp.mysis.cookapps.milestone-dev.plist` and `jp.mysis.cookapps.clean-target.plist` (21:00, running `clean-target.sh`), outside the repository. After a change to a plist, `launchctl bootout gui/$(id -u)/{label}` and `launchctl bootstrap gui/$(id -u) {plist}` load it again.
 A gate that stops a command is a finding about the change, not an obstacle to route around.

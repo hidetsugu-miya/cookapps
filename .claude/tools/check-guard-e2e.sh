@@ -13,7 +13,7 @@ check() {
   local want=$1 name=$2 got
   jq -n --arg t "$3" --argjson i "$4" '{tool_name: $t, tool_input: $i}' | "$guard" >/dev/null 2>&1
   got=$?
-  [ "$got" -eq "$want" ] && echo "ok   $name" || { echo "FAIL $name (期待 $want、結果 $got)"; fail=1; }
+  [ "$got" -eq "$want" ] && echo "ok   $name" || { echo "FAIL $name (期待 ${want}、結果 ${got})"; fail=1; }
 }
 bash_in() { jq -n --arg c "$1" '{command: $c}'; }
 file_in() { jq -n --arg p "$1" --arg c "$2" '{file_path: $p, content: $c, new_string: $c}'; }
