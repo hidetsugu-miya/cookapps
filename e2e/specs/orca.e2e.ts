@@ -3352,14 +3352,14 @@ describe("orca: files and editor (A-18)", () => {
 });
 
 describe("orca: search the list (A-19)", () => {
-  // example-app, example-api, example-web, example-lib and example-idle as projects, then the SSH hosts example-host and other-host.
+  // example-app, example-web, example-api, example-lib and example-idle as projects (the working ones, example-app and example-web, come first), then the SSH hosts example-host and other-host.
   const overview = () =>
     orcaOverview(sample(), [...worktrees(), orcaWorktree("example-idle", "main")], {
       terminals: [orcaTerminal("example-app", "zsh")],
       ssh: [orcaSsh("s1", "example-host"), orcaSsh("s2", "other-host")],
       hosts: [{ key: "ssh:s1", name: "s1", status: "working" as const, sessions: 2, atMs: 0 }],
     });
-  const ALL = ["example-app", "example-api", "example-web", "example-lib", "example-idle", "example-host", "other-host"];
+  const ALL = ["example-app", "example-web", "example-api", "example-lib", "example-idle", "example-host", "other-host"];
   const input = () => $("#orca-search-input");
   const names = () => textsOf("#orca-feed .orca-project-name");
   const secs = () => textsOf("#orca-feed .orca-sec");
