@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.55.2
+
+M-1, M-6: the button 「すべて既読にする」 of the inbox moved from the header to the right end of a heading 「未読」 above the unread rows (#234). The heading shows the number of unread threads. It is not shown when there is none, so a button that cannot be pressed no longer stays on the screen.
+
+U-1, U-2: while the app waits for a restart in auto mode, the check for updates goes on (#235). A version newer than the one already replaced is replaced the same way and the popup names it, and the same version is not downloaded again. After an update, the restart opens the new app only once the old one has ended, so the Dock shows one icon and not two (#270).
+
+A-6: the list of Orca is 25% of the screen at first, not 30% (#272). A row of a Claude session whose prompt, task title, conversation name and last message are all empty takes the title of its terminal, so the title is no longer empty (#277). In the working view (the bell), the headings 「入力待ち」, 「作業中」 and 「完了」 open and close their groups when pressed (#276).
+
+A-8: in the list of Orca, the working projects keep the order they entered the working group, so they no longer swap places as the work moves (#271). A project that begins to work goes to the front of them. The rows of the sessions under a project are indented one level. Any number of projects can be open at once, and at first every working project is open; a project opens again when a new session of it begins to work.
+
+A-18: a right click on a row of the file pane opens a menu in Japanese with 「パスのコピー」 and 「相対パスをコピー」, and the browser's own menu no longer shows there (#269). With no tab open, the file pane shows the files of the main worktree of the project selected in the list, so the files can be seen without starting a terminal or Claude first (#268).
+
 ## v0.55.1
 
 No change to the app. Only the tools used to develop it changed (#262).
