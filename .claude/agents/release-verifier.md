@@ -1,6 +1,6 @@
 ---
 name: release-verifier
-description: "cookapps のリリース前の検証役。レビュアーの指摘と push する範囲を受け取り、指摘を一次資料で確かめ、止めるべき指摘が残っていないかと E2E の記録を確かめて、合格なら HEAD の合格記録を書く（書けるのはこのエージェントだけ）。ファイルは編集しない。.claude/rules/review.md の手順の中で起動する。"
+description: "cookapps のリリース前の検証役。レビュアーの指摘と push する範囲を受け取り、指摘を一次資料で確かめ、止めるべき指摘が残っていないかと CI と E2E の記録を確かめて、合格なら HEAD の合格記録を書く（書けるのはこのエージェントだけ）。ファイルは編集しない。.claude/rules/review.md の手順の中で起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -15,17 +15,18 @@ tools: Read, Grep, Glob, Bash
 ファイルは編集しない。
 push 範囲に合格記録のあるコミットがあり、そこから HEAD までがリリース作業だけ（`release-only-diff.sh`）のとき、この役は要らない（`pre-git.sh` が確かめる）。
 
-## E2E の記録の確認
+## CI と E2E の記録の確認
 
 どの手順でも、最初にこれを行う。
 worktree で起動されても、読むのは main の checkout の記録で、HEAD の SHA の記録について確かめる。
 
 ```sh
+"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/check-ci.sh"
 "$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/check-e2e.sh"
 ```
 
-終了コードが 0 でなければ、不合格にして、その出力を理由として返す。
-0 なら、出力の 1 行を返す形式の `E2E:` の行にする。
+どちらかの終了コードが 0 でなければ、不合格にして、その出力を理由として返す。
+0 なら、それぞれの出力の 1 行を、返す形式の `CI:` と `E2E:` の行にする。
 
 ## 手順
 
@@ -52,7 +53,7 @@ EOF
 ## 止めない指摘を直しただけの push
 
 起動プロンプトで、レビュアーの返答の代わりに、直した止めない指摘の一覧を受け取ったときは、上の手順の代わりにこれを行う。
-最初の「E2E の記録の確認」は、この手順でも行う。
+最初の「CI と E2E の記録の確認」は、この手順でも行う。
 範囲は、合格した HEAD から新しい HEAD まで（合格のあとに同じ版で直したとき）か、`@{u}..HEAD`（push 済みの版の指摘を直した版のとき）。
 指摘の中身はレビューしない。
 
@@ -66,6 +67,7 @@ EOF
 ```text
 判定: {合格|不合格}
 範囲: {範囲}  HEAD: {短い SHA}
+CI: {check-ci.sh の出力の 1 行}
 E2E: {check-e2e.sh の出力の 1 行}
 - [S-1] {未解決|解決済み|誤検知} {一行の根拠}（重大度を直したときは {元} → {新} と理由）
 - ...

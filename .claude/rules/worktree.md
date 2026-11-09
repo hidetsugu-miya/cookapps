@@ -12,7 +12,7 @@ Every branch reaches main through a pull request (`issues.md`), so several sessi
 `.claude/tools/new-worktree.sh {branch}` makes the branch from `origin/main`, puts the worktree in `.claude/worktrees/{branch with / as -}`, copies the files and directories of `.worktreeinclude` from the main checkout to the same places, clones the main checkout's `src-tauri/target` into the worktree (`cp -cpR`, an APFS clone that keeps the modification times; the `incremental/` of each profile is deleted from the copy), and runs `npm ci`.
 The clone gives the worktree the build output of the dependency crates, so its first build compiles only cookapps itself.
 Where cloning is not possible (a volume that is not APFS), `cp` falls back to a plain copy (`man cp`); when the copy itself fails (a full disk, for example), the script deletes the half-made copy, warns on stderr, and the worktree starts from an empty target as before.
-A worktree made by hand has no `node_modules`, no clone of `src-tauri/target` and none of the private files (`run-e2e.sh` runs `npm ci` itself when `node_modules` is missing, but nothing copies the private files).
+A worktree made by hand has no `node_modules`, no clone of `src-tauri/target` and none of the private files (`run-ci.sh` and `run-e2e.sh` run `npm ci` themselves when `node_modules` is missing, but nothing copies the private files).
 Call it by the main checkout's path, from any checkout.
 
 ```sh
@@ -37,7 +37,7 @@ When main has moved since the branch started, run `git fetch origin main && git 
 The ruleset refuses a pull request whose branch does not contain main, so a combined failure is found before the merge.
 
 ```text
-Good: another branch was merged -> git merge origin/main in the worktree -> run-e2e.sh -> review -> push -> post-checks.sh -> merge
+Good: another branch was merged -> git merge origin/main in the worktree -> run-ci.sh -> run-e2e.sh -> review -> push -> post-checks.sh -> merge
 Bad:  merge first, and find on main that the two branches break each other
 ```
 
@@ -76,7 +76,7 @@ main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
 
 A worktree's `src-tauri/target` is a clone of the main checkout's, so it shares disk blocks with it until a file is rewritten, and `du` counts the shared part in every copy.
 Read the real use from the fall of free space in `df`, not from `du`.
-`pre-git.sh` runs clippy and the tests with `CARGO_INCREMENTAL=0`, so the checks before a push leave no data for incremental builds, and `clean-target.sh` deletes the output of earlier versions of cookapps itself (`harness.md`).
+`run-ci.sh` runs clippy and the tests with `CARGO_INCREMENTAL=0`, so the checks before a push leave no data for incremental builds, and `clean-target.sh` deletes the output of earlier versions of cookapps itself (`harness.md`).
 Remove it with `git worktree remove`, without `--force`, so that a worktree with uncommitted files is refused.
 Leave a locked worktree alone: a session is using it.
 

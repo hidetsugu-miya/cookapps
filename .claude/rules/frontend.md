@@ -38,7 +38,7 @@ import { count } from "./state.js"; count = 3;
 ### Use the generated files in `ts/bindings/` for types shared with Rust, and never edit them by hand
 
 Write the arguments and return values of commands in `Commands` in `ts/ipc.ts`, and import data types from `bindings/`, which ts-rs writes during `cargo test`.
-The Rust struct decides the shape. A hand edit is overwritten by the next `cargo test`, and the bindings diff in `pre-git.sh` fails.
+The Rust struct decides the shape. A hand edit is overwritten by the next `cargo test`, and the bindings diff in `run-ci.sh` fails.
 
 ```ts
 import type { Inbox } from "./bindings/Inbox";

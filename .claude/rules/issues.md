@@ -27,7 +27,7 @@ gh issue view 13 --json author --jq .author.login   # Good: check this first
 ### File a bug only after reproducing it
 
 Reading the code gives a cause, not a bug: run the failing behavior first, and write in the issue what was run and what it showed (at the owner's instruction, 2026-11-05).
-Reproduce a screen's behavior with a temporary spec in `e2e/specs/`, which runs in the real WKWebView with no window and touches no real service. It is the one exception to one spec per screen (`e2e.md`). Do not commit it: `run-e2e.sh` refuses a dirty tree, so run `npm run e2e:build` and then `npm run e2e`, which writes no record, and delete the spec afterwards.
+Reproduce a screen's behavior with a temporary spec in `e2e/specs/`, which runs in the real WKWebView with no window and touches no real service. It is the one exception to one spec per screen (`e2e.md`). Do not commit it: `run-ci.sh` and `run-e2e.sh` refuse a dirty tree, so run `npm run e2e:build` and then `npm run e2e`, which writes no record, and delete the spec afterwards.
 For the inside of a mail body's iframe, use the means in `frontend.md`.
 Reproduce Rust logic with a temporary `cargo test`, with a local `TcpListener` for an HTTP branch (`rust.md`), and delete the test afterwards.
 Do not start the real app for this. When the fault depends on a real service's answer, ask the owner for the check instead of writing to their account, and write in the issue what stayed unchecked.
@@ -141,7 +141,7 @@ A candidate of the job that the AI may decide (a bug fix, a refactoring that kee
 A candidate that matches any of these goes to a Discussion (Ideas, in the form of "Record a design or layout discussion in a Discussion (Ideas) when it starts", first line `<!-- ai -->`), and `discussion-judge` decides it:
 - It changes what the owner sees or uses into a form `requirements/` does not describe.
 - It changes or removes a rule marked "at the owner's instruction".
-- It loosens what stops a change (hooks, `pre-git.sh`, the guards, the severity of the review, the release table).
+- It loosens what stops a change (hooks, `pre-git.sh`, `run-ci.sh`, the guards, the severity of the review, the release table).
 - Two or more options remain that primary sources and a prototype cannot settle.
 
 File at most 3 issues in a run. Make no new Discussion while 5 or more Ideas Discussions are open, and no `needs:owner` issue while 5 or more proposals are open with `needs:owner`.
@@ -164,6 +164,7 @@ The job runs only at 00:30 (at the owner's instruction, 2026-11-07: the three ru
 A run lasts 3 hours at most and takes any number of issues. `nightly.sh` hands the run the end of its 3 hours as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh` before it starts a new issue or a release; nothing kills the process.
 When the limit stops a run, the issue in hand stays as it is, and the hand-over says where.
 The run releases when the release table says so, at any hour within its 3 hours; there is no release window (at the owner's instruction, 2026-11-07).
+The run does the CI command (`run-ci.sh`) and E2E on the Release PR's HEAD before it asks `nightly-limit.sh release {tag}`, so that their time counts against the 3 hours; the push stops without their records (`testing.md`).
 A run takes any number of issues, but the versions it releases are one minor and its patches: after v0.53.0, the run may release v0.53.1, and v0.54.0 waits for the next run (at the owner's instruction, 2026-11-08). `nightly-limit.sh release {tag}` refuses a tag of another minor than the tags the run has made. A refused release leaves the Release PR for the next run, and a `point:8` issue whose release is refused is not merged, but left reviewed in its worktree and handed over.
 A run leaves alone an issue that a session of the owner may hold: an open pull request that closes it, or a worktree named `issue-{n}`, unless the previous hand-over lists it as the run's own (`plan-release.py next --mine`).
 
@@ -230,7 +231,7 @@ The owner has no notification to wait for: the owner reads a Discussion when the
 `discussion-judge` (the agent) decides, and the skill of the same name applies the result. Another AI than the one that wrote the Discussion checks its options against the code, the requirements, the rules and the logs again.
 A Discussion is picked up when the owner has commented after the last mark, when it has no mark at all (it is older than the mark), or when the last mark is 3 days old with no reply.
 A decision becomes an issue through `issue-plan` (or links the issue that already exists), and the Discussion gets a comment "決定" and is closed as resolved. A reply of the owner that asks a new question is answered in a comment, and the Discussion stays open.
-`discussion-judge` does not decide, until a comment of the owner decides it, anything that loosens what stops a change (hooks, `pre-git.sh`, the guards, the severity of the review, the release table) or overturns a rule marked "at the owner's instruction".
+`discussion-judge` does not decide, until a comment of the owner decides it, anything that loosens what stops a change (hooks, `pre-git.sh`, `run-ci.sh`, the guards, the severity of the review, the release table) or overturns a rule marked "at the owner's instruction".
 It does not take the recommendation of the AI that wrote the Discussion as a reason.
 A Discussion it leaves waiting gets a comment of what it waits for, with `<!-- wait -->` after the mark, so that it is not picked up as stale again; the owner's next comment picks it up.
 One run judges at most 5 Discussions, the lowest numbers first, and the rest wait for the next night.
@@ -312,7 +313,7 @@ Bad:  the issue says enhancement -> minor
 
 1. In `release/next`, take in main, correct the version, and write `CHANGELOG.md` and `docs/features.md`.
    Read `README.md` against the changes that go out, with `readme-product`: fix a photo or a claim they make out of date in `release/next`, and write in the body that nothing needed it otherwise (at the owner's instruction, 2026-11-07). `README.md` and `docs/` keep the diff release-only.
-2. Run `run-e2e.sh`, push, run `post-checks.sh` (the release-only diff stands for the review), and merge.
+2. Run `run-ci.sh` and `run-e2e.sh` on the HEAD of `release/next` (the version lines change what cargo and tsc check, so the release-only diff stands for the review only), push, run `post-checks.sh`, and merge.
 3. Tag the merge commit and push the tag (`versioning.md`), then watch the release (`review.md`).
 4. Run `plan-release.py close {tag}`: it closes the milestone and moves what is left in it to the next tag. Then apply the saved plan again (`plan-release.py apply` on `.claude/plan.json` of the main checkout; `apply` leaves out the issues that have closed or been fixed), so that the issues that moved are in the right order for the new tags. When `apply` refuses it with exit 2, whatever the reason, reorder with `issue-plan` (from its step 4).
 5. Comment the version on each issue that went out.
