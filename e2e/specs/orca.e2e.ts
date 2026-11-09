@@ -494,7 +494,7 @@ describe("orca", () => {
     });
     expect(box.listRight).toBeLessThanOrEqual(box.splitLeft + 1);
     expect(box.splitRight).toBeLessThanOrEqual(box.workLeft + 1);
-    expect(box.share).toBeCloseTo(0.3, 2);
+    expect(box.share).toBeCloseTo(0.25, 2);
     expect(box.header).toBe(32);
     expect(box.tabs).toBe(32);
     expect(box.tabsTop).toBe(box.headerTop);
@@ -997,7 +997,7 @@ describe("orca: the divider", () => {
       key,
     );
 
-  it("is a vertical separator that starts at 30%", async () => {
+  it("is a vertical separator that starts at 25%", async () => {
     await openOrca();
     const split = $("#orca-split");
     await expect(split).toHaveAttribute("role", "separator");
@@ -1005,8 +1005,8 @@ describe("orca: the divider", () => {
     await expect(split).toHaveAttribute("tabindex", "0");
     await expect(split).toHaveAttribute("aria-valuemin", "20");
     await expect(split).toHaveAttribute("aria-valuemax", "50");
-    await expect(split).toHaveAttribute("aria-valuenow", "30");
-    expect(await share()).toBeCloseTo(0.3, 2);
+    await expect(split).toHaveAttribute("aria-valuenow", "25");
+    expect(await share()).toBeCloseTo(0.25, 2);
   });
 
   it("sets the list width by dragging, and keeps it between 20% and 50% however far it is dragged", async () => {
@@ -1026,7 +1026,7 @@ describe("orca: the divider", () => {
     await openOrca();
     await press("ArrowRight");
     await press("ArrowRight");
-    expect(await share()).toBeCloseTo(0.34, 2);
+    expect(await share()).toBeCloseTo(0.29, 2);
     for (let i = 0; i < 20; i++) await press("ArrowRight");
     expect(await share()).toBeCloseTo(0.5, 2);
     for (let i = 0; i < 30; i++) await press("ArrowLeft");
