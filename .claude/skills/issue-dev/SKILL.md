@@ -1,12 +1,12 @@
 ---
-name: milestone-dev
-description: Implements the open cookapps issues in the order of the plan, up to 10 points a night, one after another on one branch with one pull request, and prepares the Release PR for the owner to merge. Use on /milestone-dev and 「次を進めて」. Invoking it is the owner's instruction to start those issues.
+name: issue-dev
+description: Implements the open cookapps issues in the order of the plan, up to 10 points a night, one after another on one branch with one pull request, and prepares the Release PR for the owner to merge. Use on /issue-dev and 「次を進めて」. Invoking it is the owner's instruction to start those issues.
 ---
 
-# milestone-dev
+# issue-dev
 
 One run takes the issues in the order of the plan until their points reach 10, does them one after another in the one worktree on one branch, and merges one pull request that closes them all. It never releases: it prepares the Release PR, and the owner merges it (`.claude/rules/issues.md`).
-The owner starts it, either in a session or through the job the owner registered, which runs `.claude/tools/nightly.sh milestone-dev` at 00:30 only; nothing else starts it.
+The owner starts it, either in a session or through the job the owner registered, which runs `.claude/tools/nightly.sh issue-dev` at 00:30 only; nothing else starts it.
 A run from that job has no one to answer: never wait on the owner, and end with the hand-over and report of step 8.
 `NIGHTLY_DEADLINE_EPOCH` is set in such a run, and in no session. The limits below apply only when it is set; the script `nightly-limit.sh` knows them.
 
@@ -40,7 +40,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    3. Implement with `code-implementer`, and change the requirement section in the same branch. Commit the issue (`{prefix}: {summary} (#{n})`), then run `run-ci.sh` in the background (`run_in_background`) and wait for its exit, so that a static or unit failure is found before the next issue. Fix a failure before going on.
    4. When nothing more is taken, run `run-e2e.sh` in the background the same way. Then follow `review.md` as it stands, once, on the range `origin/main..HEAD` of the whole branch: reviewers, `release-verifier`, fixes. If the process of `review.md` ends with an issue that cannot pass (the redesign limit), undo that issue's commits only with `git revert` (also on a branch that is not pushed: later issues' commits and the review fixes must stay), hand it over with the finding, and review the rest again.
    5. Push, `gh pr create` with one `Closes #{n}` line for each issue, `post-checks.sh`, `gh pr merge --merge`, and fast-forward the main checkout (`worktree.md`, `issues.md`). The hook then runs `plan-release.py release`.
-7. **Prepare the Release PR.** Run `plan-release.py release` again. If `changes` is empty, go to step 8. Otherwise take the worktree for `release/next` (`use-worktree.sh release/next`; on exit 3, say so in the hand-over and go to step 8) and do "Keep one Release PR open while changes wait" in `issues.md`:
+7. **Prepare the Release PR.** Read the output of `plan-release.py release` that the hook printed after the merge of 6.5; run the command yourself only when this run merged nothing (it came here from step 4) or the hook said that it failed. If `changes` is empty, go to step 8. Otherwise take the worktree for `release/next` (`use-worktree.sh release/next`; on exit 3, say so in the hand-over and go to step 8) and do "Keep one Release PR open while changes wait" in `issues.md`:
    - Take in main (`git merge origin/main`), write the entries of `CHANGELOG.md`, under the heading `## v{version}` (`version` of `release`, checked against `requirements/` for the digit; "Take the digit from the requirement IDs"), and of `docs/features.md`. Change no version line of the source: it is fixed (`versioning.md`). Read `README.md` against the changes that go out with `readme-product`, and fix it in `release/next` only when a photo or a claim is out of date.
    - Run `run-ci.sh` and then `run-e2e.sh` on the HEAD of `release/next` (in the background, as in 6.3), push, and run `post-checks.sh`.
    - Open the pull request (`gh pr create`, title `release: v{version}`), or update the open one (`gh pr edit`). The body lists the changes (the issues, with their points), the digit and why, and whether `README.md` needed anything. It holds no decision to release.

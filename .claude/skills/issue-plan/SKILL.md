@@ -21,7 +21,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    - `documentation` when it changes only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/`
 3. **Split a `point:5` or `point:8` issue into a feature.** Skip this step for an issue of `point:3` or less, and for an issue with `needs:owner`: its content is not decided yet, and the owner accepts or declines that issue itself. An issue of `point:5` or `point:8` with no `needs:owner` and no milestone named for a feature is split here: a milestone named for a version (`v0.56.0`) is the old mechanism and is no mark, so such an issue is moved to a feature's milestone here too. It comes to this step by one of two routes: the session hook starts this skill from step 1 when a session creates the issue or removes its `needs:owner`, and `plan-release.py unsplit` lists it when it was made or released on the GitHub screen, or still sits in a milestone named for a version ("To only reorder" below). A part of an issue with `proposal` gets `proposal` too.
    - Name the feature in a few words (the name the owner would say, such as `Orca のファイル欄`), and make the milestone: `gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/milestones" -f title="{feature}" -f description="#{n} {title}"`.
-   - Split the issue into parts that merge one by one, each of `point:3` or less, each with its own labels (`adds:requirement` on the part that adds the requirement ID), and create them in the milestone: `gh issue create --milestone "{feature}" ...`. Follow step 2 for each part. Parts that need each other get their order from step 4. When the issue is `point:8`, give every part the label `solo` (make it once if it is missing: `gh label create solo --description "a part of a point:8 issue: the parts are a release of their own"`), so that the parts keep the rule of a `point:8` change (`issues.md`).
+   - Split the issue into parts that merge one by one, each of `point:3` or less, each with its own labels (`adds:requirement` on the part that adds the requirement ID), and create them in the milestone: `gh issue create --milestone "{feature}" ...`. Follow step 2 for each part. Parts that need each other get their order from step 5. When the issue is `point:8`, give every part the label `solo` (make it once if it is missing: `gh label create solo --description "a part of a point:8 issue: the parts are a release of their own"`), so that the parts keep the rule of a `point:8` change (`issues.md`).
    - Close the large issue with `gh issue close {n} --reason "not planned" --comment "{list of the parts}"`.
    - When it cannot be split into parts that merge one by one, keep it as one issue and put it alone in the milestone: `gh issue edit {n} --milestone "{feature}"`.
    - An issue that already has a milestone named for a feature (the owner set it) keeps it, and `unsplit` does not list it. Do not rename or close a milestone here.
@@ -33,18 +33,18 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    On exit 2, relaunch `release-planner` with the stderr added, at most twice. If it still fails, state the failure in the report: `next` puts the issues that the saved plan lacks behind the others, in the basic order.
 7. **Report** each new issue, each milestone made and the order, as `apply` prints it (`1. #42 title [feature] - reason`).
 
-To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in a `milestone-dev` run, so that the issues in hand are left alone), apply step 3 to each issue number it prints, and then start at step 5.
+To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in an `issue-dev` run, so that the issues in hand are left alone), apply step 3 to each issue number it prints, and then start at step 5.
 
-Once, in the session after the change that retired the milestones named for versions merged, run `plan-release.py migrate --dry-run` and then `plan-release.py migrate`: it takes a version's milestone off the open issues of less than 5 points and closes the version milestones left empty. It splits nothing; run it again after the first "To only reorder" pass, to close the ones that pass emptied.
+When `unsplit` printed an issue in a milestone named for a version, run `plan-release.py migrate` after that pass: it takes a version's milestone off the open issues of less than 5 points and closes the version milestones left empty.
 
 ## Not here
 
 - Version numbers and checks: `plan-release.py`
 - What counts as related: `.claude/agents/release-planner.md`
 - Releasing: the owner merges the Release PR (`issues.md`). The order does not start a release.
-- Implementing: the `milestone-dev` skill
+- Implementing: the `issue-dev` skill
 
 ## When it runs
 
 - An issue is created, or its `needs:owner` is removed: from step 1 (the hook says so). The parts made in step 3 are placed by one pass of steps 5 to 7 after the last part.
-- A `milestone-dev` run starts: "To only reorder", so that issues made outside a session, such as on the GitHub screen, are split and placed too.
+- An `issue-dev` run starts: "To only reorder", so that issues made outside a session, such as on the GitHub screen, are split and placed too.
