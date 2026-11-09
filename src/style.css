@@ -73,7 +73,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #unread-heading svg, #read-heading svg, .feed-heading svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 #read-heading:has(+ #read-threads:empty) { display: none; }
 /* The unread heading carries "すべて既読にする" at its right end; the button's height sets the heading's. */
-#unread-heading { padding: 0; }
+#unread-heading { padding: 0; overflow: visible; }
 #unread-count { font-variant-numeric: tabular-nums; }
 #unread-heading .text-btn { margin-left: auto; }
 #threads li { display: grid; grid-template-columns: 20px 8px 32px 180px 1fr auto; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 12px; cursor: pointer; }
