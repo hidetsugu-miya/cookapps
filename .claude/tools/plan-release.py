@@ -599,7 +599,8 @@ def released_at(repo, tags, last_tag):
     return api(f"repos/{repo}/commits/{sha}")["commit"]["committer"]["date"] if sha else None
 
 
-def load_state():
+def load_state(blockers=True):
+    """`blockers` False leaves `blocked_by` empty: only `snapshot`, `apply` and `next` read it, and it costs one request for each open issue."""
     repo = gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
     owner = gh("repo", "view", "--json", "owner", "--jq", ".owner.login").strip()
     tags = api(f"repos/{repo}/tags?per_page=100", paginate=True)
@@ -619,8 +620,10 @@ def load_state():
 
     ids = {n: i.id for n, i in issues.items()}
     states = {n: i.state for n, i in issues.items()}
+    # The list already says how many blockers an issue has, open or closed; an issue with none is not asked.
+    unblocked = {r["number"] for r in raw if (r.get("issue_dependencies_summary") or {}).get("total_blocked_by") == 0}
     for n, i in issues.items():
-        if i.state != "open":
+        if not blockers or i.state != "open" or n in unblocked:
             continue
         for b in api(f"repos/{repo}/issues/{n}/dependencies/blocked_by?per_page=100", paginate=True):
             if not b["repository_url"].endswith("/" + repo):
@@ -788,7 +791,7 @@ def cmd_next(args):
 
 
 def cmd_unsplit(args):
-    state = load_state()
+    state = load_state(blockers=False)
     mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
     found = [
         {"number": i.number, "title": i.title, "points": points(i), "milestone": i.milestone}
@@ -798,7 +801,7 @@ def cmd_unsplit(args):
 
 
 def cmd_migrate(args):
-    state = load_state()
+    state = load_state(blockers=False)
     milestones = api(f"repos/{state.repo}/milestones?state=open&per_page=100", paginate=True)
     moves = migration(list(state.issues.values()), milestones)
     by_title = {m["title"]: m["number"] for m in milestones}
@@ -823,7 +826,7 @@ def release_pr_of(owner):
 
 
 def cmd_release(args):
-    state = load_state()
+    state = load_state(blockers=False)
     facts = release_facts(list(state.issues.values()), release_pr_of(state.owner), state.last_tag)
     merged = json.loads(gh("pr", "list", "--state", "merged", "--head", RELEASE_BRANCH, "--limit", "10", "--json", "number,author,mergedAt,mergeCommit"))
     merged = [p for p in merged if p["author"]["login"] == state.owner]
@@ -844,7 +847,7 @@ def cmd_release(args):
 
 
 def cmd_close(args):
-    state = load_state()
+    state = load_state(blockers=False)
     milestones = api(f"repos/{state.repo}/milestones?state=open&per_page=100", paginate=True)
     for m in done_milestones(milestones, state.issues.values()):
         if not args.dry_run:
