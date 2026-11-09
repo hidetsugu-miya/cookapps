@@ -1,4 +1,6 @@
 use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -205,9 +207,53 @@ pub async fn install_update(
     Ok(())
 }
 
+/// The `.app` bundle a running binary `Contents/MacOS/<exe>` belongs to; `None` for any other shape of path.
+#[cfg(target_os = "macos")]
+fn bundle_path(exe: &Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    let is_bundle = macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension()? == "app";
+    is_bundle.then(|| bundle.to_path_buf())
+}
+
+/// Starts a shell that waits (up to 10 seconds) for this process to end and then opens the bundle again.
+/// Tauri's own `restart()` opens the new app with `open -n` while this process is still alive, which puts a second tile in the Dock.
+#[cfg(target_os = "macos")]
+fn spawn_reopen(bundle: &Path) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    Command::new("/bin/sh")
+        .arg("-c")
+        .arg(r#"i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; exec /usr/bin/open "$2""#)
+        .arg("sh")
+        .arg(std::process::id().to_string())
+        .arg(bundle)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(drop)
+}
+
 /// Restarts the app, which then runs the version `install_update` put in place.
+/// On macOS the new app is opened only after this process has ended (U-1).
 #[tauri::command]
 pub async fn restart_app(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let exe = std::env::current_exe().ok();
+        if let Some(bundle) = exe.as_deref().and_then(bundle_path) {
+            if spawn_reopen(&bundle).is_ok() {
+                app.exit(0);
+                return Ok(());
+            }
+        }
+    }
     app.restart()
 }
 
@@ -250,6 +296,27 @@ mod tests {
         assert!(!needs_install(Some("0.54.1"), "0.54.0"));
         assert!(!needs_install(Some("0.54.0"), "latest"));
         assert!(!needs_install(Some("nope"), "0.54.1"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_path_is_the_app_that_holds_contents_macos_exe() {
+        assert_eq!(
+            bundle_path(Path::new(
+                "/Applications/cookapps.app/Contents/MacOS/cookapps"
+            )),
+            Some(PathBuf::from("/Applications/cookapps.app"))
+        );
+        for odd in [
+            "/repo/target/debug/cookapps",
+            "/Applications/cookapps.app/Contents/Resources/cookapps",
+            "/Applications/cookapps/Contents/MacOS/cookapps",
+            "/Applications/cookapps.app/MacOS/cookapps",
+            "cookapps",
+            "/",
+        ] {
+            assert_eq!(bundle_path(Path::new(odd)), None, "{odd}");
+        }
     }
 
     #[test]
