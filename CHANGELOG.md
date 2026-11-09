@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.56.0
+
+A-21 (new): a file opened in the editor of the Orca screen (A-18) is colored by its language: comments, keywords, strings, names and the like each have their own color (#298). The language is taken from the file name (`Dockerfile`, `Makefile` and the like), the extension and the first line, the same way as Orca's own editor (#299). A long file is colored a moment after typing pauses.
+
+The release now starts when the Release PR is merged, without waiting for a tag (#303). The tools used to develop the app also run their own tests before a push (#255).
+
 ## v0.55.3
 
 No change to the app. Only the tools used to develop and release it changed (#292, #294, #295). From this version the version of the app is taken from the release tag when it is built, so a build made from the source without a tag reports 0.0.0.
