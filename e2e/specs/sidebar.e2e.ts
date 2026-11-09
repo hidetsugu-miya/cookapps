@@ -91,6 +91,25 @@ describe("sidebar", () => {
     await expect($("#update-go")).toHaveText("再起動");
   });
 
+  it("auto: while the restart waits, a version newer than the replaced one is replaced too, and the same version is not", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady, update_mode: "auto", check_update: { version: "9.9.9", installed: false } });
+    expect(await waitForCalls("install_update")).toEqual([null]);
+    await expect($("#update-pop-text")).toHaveText("再起動すると v9.9.9 になります");
+    const same = await mock("check_update", { version: "9.9.9", installed: true });
+    const install = await mock("install_update", null);
+    await recheck();
+    await waitForCalls(same);
+    await browser.pause(300);
+    expect(await callsOf(install)).toEqual([]);
+    const newer = await mock("check_update", { version: "9.9.10", installed: false });
+    await recheck();
+    await waitForCalls(newer);
+    expect(await waitForCalls(install)).toEqual([null]);
+    await expect($("#update-pop-title")).toHaveText("新しい版の準備ができました");
+    await expect($("#update-pop-text")).toHaveText("再起動すると v9.9.10 になります");
+    await expect($("#update-go")).toHaveText("再起動");
+  });
+
   it("waits while the update is on its way, and on a failure shows the error and keeps the popup", async () => {
     await boot({ inbox: inbox(), claude_status: claudeReady, update_mode: "manual", check_update: { version: "9.9.9", installed: false } });
     await popup().waitForDisplayed();
