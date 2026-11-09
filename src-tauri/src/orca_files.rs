@@ -17,7 +17,8 @@ use std::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -526,7 +527,6 @@ fn temp_path(dest: &Path) -> Result<PathBuf, String> {
 }
 
 /// Copies the file `relative` of the worktree at `path` to `dest` on this PC, and answers its size in bytes. `dest` is written whole or not at all: the bytes go to a temporary file in its folder, which is moved onto `dest` when every chunk has come, and is deleted when anything fails (an old `dest` stays as it was). `dest` is not checked here: the caller gives it, never the page.
-#[allow(dead_code)] // the Tauri command that saves an Orca file to this PC calls it
 pub(crate) async fn download(
     rpc: &mut impl Rpc,
     path: &str,
@@ -622,6 +622,48 @@ pub async fn orca_file_write(
         &signature,
     )
     .await
+}
+
+/// The name the save dialog starts with: the last part of the file's path from the worktree.
+fn suggested_name(relative: &str) -> &str {
+    relative.rsplit('/').next().unwrap_or(relative)
+}
+
+/// Copies the file `relative` of the worktree at `path` to this PC, to the place the owner picks in the save dialog (A-22), and answers the name of the file saved, or `None` when the dialog was cancelled. The place is the dialog's alone: the page gives none.
+#[tauri::command]
+pub async fn orca_file_download(
+    app: AppHandle,
+    window: WebviewWindow,
+    path: String,
+    relative: String,
+    environment: Option<String>,
+) -> Result<Option<String>, String> {
+    check_relative(&relative, false)?;
+    host_of(&path, environment.as_deref()).await?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_parent(&window)
+        .set_file_name(suggested_name(&relative))
+        .save_file(move |picked| {
+            let _ = sender.send(picked);
+        });
+    let Some(picked) = receiver
+        .await
+        .map_err(|_| "保存先を選べません".to_owned())?
+    else {
+        return Ok(None);
+    };
+    let dest = picked
+        .into_path()
+        .map_err(|_| "保存先の場所が正しくありません".to_owned())?;
+    let mut connection = Connection::open(environment).await?;
+    download(&mut connection, &path, &relative, &dest).await?;
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or("保存先の場所が正しくありません")?;
+    Ok(Some(name))
 }
 
 // ---- the settings ----
@@ -737,6 +779,12 @@ mod tests {
             answers: answers.into_iter().collect(),
             ..Fake::default()
         }
+    }
+
+    #[test]
+    fn the_save_dialog_starts_with_the_last_part_of_the_path() {
+        assert_eq!(suggested_name("a.rs"), "a.rs");
+        assert_eq!(suggested_name("src/lib/main.rs"), "main.rs");
     }
 
     #[test]

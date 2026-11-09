@@ -177,6 +177,7 @@ pub fn run() {
     #[cfg(feature = "e2e")]
     use_mock_keyring();
     builder
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(navigation_plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -309,6 +310,7 @@ pub fn run() {
             orca_files::orca_files_list,
             orca_files::orca_file_read,
             orca_files::orca_file_write,
+            orca_files::orca_file_download,
             orca_files::editor_settings,
             orca_files::editor_settings_set,
             fonts::font_settings,

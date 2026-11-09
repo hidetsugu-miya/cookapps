@@ -3540,13 +3540,13 @@ describe("orca: files and editor (A-18)", () => {
       onceId(),
     );
 
-  it("opens a menu of the two copies on the right button of a file, and writes the path and the path from the worktree", async () => {
+  it("opens a menu of the two copies and the download on the right button of a file, and writes the path and the path from the worktree", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await stubClipboard();
     expect(await rightClickRow("a.rs")).toBe(true);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー"]);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード"]);
     await pickItem("パスのコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
     await expect($(".toast")).toHaveText(expect.stringContaining("パスをコピーしました"));
@@ -3576,6 +3576,54 @@ describe("orca: files and editor (A-18)", () => {
     await pickItem("パスのコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 3, { timeoutMsg: "the path was never copied" });
     expect(await copiedTexts()).toEqual(["/work/example-app/src", "src/main.rs", "/work/example-app/src/main.rs"]);
+  });
+
+  // A-22: the download of a file. Rust opens the save dialog and writes where it says; the page sends the worktree, the path from it and the target, and never a place to save.
+  it("downloads a file from the menu with the worktree, its path and no place to save, and says the name of the file saved", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const download = await mock("orca_file_download", "a.rs");
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("ダウンロード");
+    expect(await waitForCalls(download)).toEqual([{ path: "/work/example-app", relative: "a.rs", environment: null }]);
+    await expect($(".toast")).toHaveText(expect.stringContaining("a.rs をダウンロードしました"));
+    await expect($(".menu")).not.toExist();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("sends the path from the worktree of a file in an open folder", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    const download = await mock("orca_file_download", "main.rs");
+    expect(await rightClickRow("src/main.rs")).toBe(true);
+    await pickItem("ダウンロード");
+    expect(await waitForCalls(download)).toEqual([{ path: "/work/example-app", relative: "src/main.rs", environment: null }]);
+  });
+
+  it("shows nothing when the save dialog is cancelled", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const download = await mock("orca_file_download", null);
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("ダウンロード");
+    await waitForCalls(download);
+    await browser.pause(300);
+    await expect($(".toast")).not.toBeDisplayed();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the message of a download that failed, and no toast", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const download = await mock("orca_file_download", rejects("この PC にファイルを書けません: Permission denied"));
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("ダウンロード");
+    await waitForCalls(download);
+    await expect($("#error")).toHaveText("この PC にファイルを書けません: Permission denied");
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   it("closes the menu of a row with Escape and writes nothing", async () => {
