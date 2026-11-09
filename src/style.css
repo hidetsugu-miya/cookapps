@@ -762,7 +762,12 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-mark.failed { background: var(--agent-failed); }
 .orca-mark.interrupted { background: var(--agent-muted); }
 @media (prefers-reduced-motion: reduce) { .orca-mark.working { animation: none; } }
-.orca-group { flex: none; display: flex; align-items: center; gap: 8px; min-height: 32px; margin: 6px 0 0; padding: 0 8px; font-size: calc(12px * var(--fs)); font-weight: 600; color: #444; }
+.orca-group { flex: none; margin: 6px 0 0; font-size: calc(12px * var(--fs)); font-weight: 600; color: #444; }
+.orca-group-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.orca-group-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-group-arrow { display: flex; flex: none; }
+.orca-group-arrow svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.orca-group-btn[aria-expanded="true"] .orca-group-arrow svg { transform: rotate(90deg); }
 .orca-group .orca-count { margin-left: auto; min-width: 20px; height: 18px; line-height: calc(18px * var(--fs)); text-align: center; border-radius: 9px; background: rgba(23, 54, 42, .08); font-weight: normal; font-size: calc(11px * var(--fs)); color: var(--muted); }
 /* A row of the working view: the icon, the title and the time; the latest action; Claude's mark and the worktree. */
 .orca-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; column-gap: 8px; row-gap: 3px; width: 100%; box-sizing: border-box; margin-bottom: 2px; padding: 8px; border: 0; border-radius: 12px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
