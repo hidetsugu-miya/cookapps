@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-"""Keeps one GitHub milestone per planned tag (the milestone title is the tag; a closed milestone is released).
+"""Orders the open issues of cookapps, and tells a run what to start and what the owner has to release (issues.md).
 
 Usage:
   plan-release.py snapshot
   plan-release.py apply <plan.json> [--dry-run]
-  plan-release.py sync [--dry-run]
-  plan-release.py close <tag>
+  plan-release.py unsplit [--mine <issue numbers>]
+  plan-release.py migrate [--dry-run]
   plan-release.py next [--mine <issue numbers>]
-  plan-release.py release-facts [--now <ISO time>]
+  plan-release.py release
+  plan-release.py close [--dry-run]
 
-`apply` leaves out of the plan the closed issues and the fixed ones (stderr says which), and, unless --dry-run, saves the plan it accepted
-as `.claude/plan.json` of the main checkout. `next` reads that plan: `start` lists the issues of every open milestone that can start, in the order of the plan,
-and `parallel` the ones among them to start at once: they touch (`touches` of the plan) none of the files and requirements of the issues in progress, of the issues another session holds, or of one another.
+`snapshot` prints the open issues the planner orders. `apply` leaves out of the plan the closed issues and the fixed ones (stderr says which), writes the
+`blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
+`start` lists the issues a run may begin, in the order of the plan. `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
+(open, no `needs:owner`, not in hand, and no milestone named for a feature; a milestone named for a version is no mark): `issue-plan` applies its step 3 to each before it orders.
+`migrate` is run once after the milestones named for versions are retired: it takes such a milestone off the open issues of less than 5 points and closes the ones left empty (it splits nothing). `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
+and the tag that is due after a merge. `close` closes the milestones (a milestone is a feature, not a version) whose issues are all done and released.
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
 """
 import argparse
-import datetime
 import json
 import os
 import re
@@ -24,10 +27,8 @@ import sys
 from collections import Counter
 from dataclasses import dataclass, field
 
-MAX_COUNTED = 3
-PARALLEL = 3  # issues in hand at once: the ones in progress and the ones `next` says to start
 PLAN_FILE = os.path.join(".claude", "plan.json")
-TMP_PREFIX = "plan-tmp-"
+RELEASE_BRANCH = "release/next"
 
 
 class PlanError(Exception):
@@ -75,12 +76,6 @@ def highest_tag(names):
     return format_version(max(versions)) if versions else None
 
 
-def base_tag(names, milestones):
-    """The highest released tag; a tag whose milestone is still open is not released until `close` closes it."""
-    unreleased = {m["title"] for m in milestones if m["state"] == "open"}
-    return highest_tag([n for n in names if n not in unreleased])
-
-
 def bump(version, minor):
     major, mi, pa = version
     return (major, mi + 1, 0) if minor else (major, mi, pa + 1)
@@ -91,6 +86,7 @@ def has(issue, label):
 
 
 QUICK_POINTS = ("point:1", "point:2", "point:3")
+ALL_POINTS = ("point:1", "point:2", "point:3", "point:5", "point:8")
 
 
 def quick_bug(issue):
@@ -99,8 +95,9 @@ def quick_bug(issue):
 
 
 def solo(issue):
-    """A change of 8 points is a version of its own."""
-    return has(issue, "point:8")
+    """A member of a unit that is a release of its own: an issue of 8 points, or a part (`solo`) of a point:8 issue that `issue-plan` split.
+    The unit is that one point:8 issue, or all the `solo` parts of one milestone; `nightly-limit.sh` keeps a unit apart from everything else in a night."""
+    return has(issue, "point:8") or has(issue, "solo")
 
 
 def urgent(issue):
@@ -111,17 +108,13 @@ def importance(issue):
     return "high" if has(issue, "importance:high") else "low" if has(issue, "importance:low") else "normal"
 
 
+def points(issue):
+    """The number of the `point:*` label, or None."""
+    return next((int(label.split(":")[1]) for label in ALL_POINTS if has(issue, label)), None)
+
+
 def counted(issue):
     return not has(issue, "documentation")
-
-
-def capped(issues):
-    """A version that adds a requirement ID holds at most MAX_COUNTED counted issues; a patch version (no `adds:requirement`) has no cap."""
-    return any(has(i, "adds:requirement") for i in issues)
-
-
-def eligible_title(title):
-    return parse_version(title) is not None or (title.startswith(TMP_PREFIX) and len(title) > len(TMP_PREFIX))
 
 
 def missing_points(issues):
@@ -145,18 +138,20 @@ def parse_stream(text):
             out.append(obj)
 
 
-# ---- pure: queue and allocation ----
+# ---- pure: queue ----
+
+IMPORTANCE_RANK = {"high": 0, "normal": 1, "low": 2}
 
 
-def existing_order(free):
-    """The urgent issues first, then the quick bugs, then the rest, each in the order of the previous plan.
+def base_key(i):
+    """The basis of the order (issues.md): importance, then fewer points first, then the older issue first."""
+    return (IMPORTANCE_RANK[importance(i)], points(i) or 99, i.created_at, i.number)
+
+
+def base_order(free):
+    """The order the planner starts from: the urgent issues first, then the quick bugs, then the rest, each by `base_key`.
     An urgent issue or a quick bug that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
-
-    def key(i):
-        v = parse_version(i.milestone)
-        return (0, v, i.created_at, i.number) if v else (1, (), i.created_at, i.number)
-
-    ordered = sorted(free, key=key)
+    ordered = sorted(free, key=base_key)
     rank = {i.number: k for k, i in enumerate(ordered)}
     by_number = {i.number: i for i in ordered}
     lead = []
@@ -177,30 +172,14 @@ def existing_order(free):
     return lead + [i for i in ordered if i.number not in taken]
 
 
-def derive_groups(ordered):
-    """Groups of a previous plan: consecutive issues that share a version milestone, so that a sync keeps them together.
-    An 8-point issue ends a run, and a run that adds a requirement ID and holds more than MAX_COUNTED counted issues is left to the allocation."""
-    groups = []
-    run = []
-
-    def flush():
-        if len(run) > 1 and (not capped(run) or sum(1 for i in run if counted(i)) <= MAX_COUNTED):
-            groups.append([i.number for i in run])
-        run.clear()
-
-    for i in ordered:
-        alone = solo(i)
-        if alone or parse_version(i.milestone) is None or (run and run[-1].milestone != i.milestone):
-            flush()
-        if not alone and parse_version(i.milestone) is not None:
-            run.append(i)
-    flush()
-    return groups
-
-
 def is_waiting(i):
-    """A merged change not released yet: closed as completed. An issue closed as not planned (wontfix) is no change."""
+    """A merged change not released yet: closed as completed after the last release. An issue closed as not planned (wontfix) is no change."""
     return i.state == "closed" and i.state_reason == "completed"
+
+
+def release_changes(issues):
+    """The changes the Release PR carries: merged, not released, and not only documentation, the oldest first."""
+    return sorted((i for i in issues if is_waiting(i) and counted(i)), key=lambda i: (i.closed_at or "", i.number))
 
 
 def split_issues(issues, pr_closing):
@@ -210,63 +189,6 @@ def split_issues(issues, pr_closing):
     in_progress = sorted((i for i in open_ if i.number in pr_closing), key=lambda i: (i.created_at, i.number))
     rest = [i for i in open_ if i.number not in pr_closing]
     return waiting, in_progress, rest
-
-
-def allocate(queue, groups, base):
-    """Walks the queue and returns [{"version", "issues": [numbers]}].
-    A version that adds a requirement ID holds at most MAX_COUNTED counted issues; a patch version has no cap, so consecutive patch issues share one version (at the owner's instruction, 2026-11-09).
-    An 8-point issue is a version of its own, and an urgent issue ends the version it is in."""
-    pos = {i.number: k for k, i in enumerate(queue)}
-    group_len = {}
-    for g in groups:
-        positions = sorted(pos[n] for n in g if n in pos)
-        if positions:
-            group_len[positions[0]] = len(positions)
-
-    slots = []
-    cur = []
-
-    def close():
-        nonlocal cur
-        if cur:
-            slots.append(cur)
-            cur = []
-
-    def count(issues):
-        return sum(1 for i in issues if counted(i))
-
-    k = 0
-    while k < len(queue):
-        n = group_len.get(k, 1)
-        unit = queue[k : k + n]
-        k += n
-        if n == 1 and solo(unit[0]):
-            close()
-            slots.append(unit)
-            continue
-        if capped(cur + unit) and count(cur) + count(unit) > MAX_COUNTED:
-            close()
-        cur = cur + unit
-        if any(urgent(i) for i in unit) or (capped(cur) and count(cur) >= MAX_COUNTED):
-            close()
-    close()
-
-    merged = []
-    carry = []
-    for idx, slot in enumerate(slots):
-        slot = carry + slot
-        if idx < len(slots) - 1 and not any(counted(i) for i in slot):
-            carry = slot
-            continue
-        carry = []
-        merged.append(slot)
-
-    out = []
-    version = parse_version(base) or (0, 0, 0)
-    for slot in merged:
-        version = bump(version, capped(slot))
-        out.append({"version": format_version(version), "issues": [i.number for i in slot]})
-    return out
 
 
 # ---- pure: validation of a plan ----
@@ -280,39 +202,25 @@ def _int(x):
 
 
 def parse_plan(plan):
-    """-> (problem, order, groups, blocked_by, touches), the numbers as ints. `problem` is a message when the shape is wrong, and the rest is then None.
-    `touches` maps an issue number to what the issue is expected to touch; it may be left out."""
-    bad = (None, None, None, None)
+    """-> (problem, order, blocked_by), the numbers as ints. `problem` is a message when the shape is wrong, and the rest is then None.
+    Keys of an older plan that are not used any more (`groups`, `touches`) are ignored."""
+    bad = (None, None)
     if not isinstance(plan, dict):
         return ("plan: not a JSON object", *bad)
     order = plan.get("order")
     if not isinstance(order, list) or any(_int(n) is None for n in order):
         return ("plan.order: must be a list of issue numbers", *bad)
-    groups = plan.get("groups", [])
     blocked_by = plan.get("blocked_by", {})
-    touches = plan.get("touches", {})
-    if not isinstance(groups, list) or any(not isinstance(g, list) or any(_int(n) is None for n in g) for g in groups):
-        return ("plan.groups: must be a list of lists of issue numbers", *bad)
     if not isinstance(blocked_by, dict) or any(
         _int(k) is None or not isinstance(v, list) or any(_int(b) is None for b in v) for k, v in blocked_by.items()
     ):
         return ("plan.blocked_by: must map an issue number to a list of issue numbers", *bad)
-    if not isinstance(touches, dict) or any(
-        _int(k) is None or not isinstance(v, list) or any(not isinstance(t, str) for t in v) for k, v in touches.items()
-    ):
-        return ("plan.touches: must map an issue number to a list of strings", *bad)
-    return (
-        None,
-        [_int(n) for n in order],
-        [[_int(n) for n in g] for g in groups],
-        {_int(k): [_int(b) for b in v] for k, v in blocked_by.items()},
-        {_int(k): list(v) for k, v in touches.items()},
-    )
+    return (None, [_int(n) for n in order], {_int(k): [_int(b) for b in v] for k, v in blocked_by.items()})
 
 
 def validate_plan(plan, free, fixed, states):
     """-> list of problems. `states` maps an issue number to "open" or "closed"."""
-    problem, order, groups, blocked_by, _ = parse_plan(plan)
+    problem, order, blocked_by = parse_plan(plan)
     if problem:
         return [problem]
 
@@ -330,23 +238,6 @@ def validate_plan(plan, free, fixed, states):
         problems.append(f"order: #{n} {why}")
 
     position = {n: k for k, n in enumerate(order)}
-    seen = set()
-    for g in groups:
-        label = "group " + str(g)
-        if any(n not in free_by for n in g):
-            problems.append(f"{label}: holds an issue that is not in order")
-            continue
-        if len(set(g)) != len(g) or seen & set(g):
-            problems.append(f"{label}: an issue is in two groups or twice in one")
-            continue
-        seen |= set(g)
-        ps = sorted(position[n] for n in g if n in position)
-        if ps != list(range(ps[0], ps[0] + len(ps))):
-            problems.append(f"{label}: members are not adjacent in order")
-        if len(g) > 1 and any(solo(free_by[n]) for n in g):
-            problems.append(f"{label}: holds a point:8 issue with another issue")
-        if capped([free_by[n] for n in g]) and sum(1 for n in g if counted(free_by[n])) > MAX_COUNTED:
-            problems.append(f"{label}: adds a requirement ID and holds more than {MAX_COUNTED} counted issues")
 
     for n, blockers in sorted(blocked_by.items()):
         if n not in free_by:
@@ -410,15 +301,15 @@ def validate_plan(plan, free, fixed, states):
 
 
 def mentioned(plan):
-    """The issue numbers a well-formed plan names in order, groups, the keys of blocked_by and the keys of reasons, once each, in that sequence.
+    """The issue numbers a well-formed plan names in order, the keys of blocked_by and the keys of reasons, once each, in that sequence.
     The issues named as blockers are not counted: a blocker may be closed."""
-    problem, order, groups, blocked_by, _ = parse_plan(plan)
+    problem, order, blocked_by = parse_plan(plan)
     if problem:
         return []
     reasons = plan.get("reasons", {})
     keys = [_int(k) for k in reasons] if isinstance(reasons, dict) else []
     out = []
-    for n in order + [n for g in groups for n in g] + list(blocked_by) + [k for k in keys if k is not None]:
+    for n in order + list(blocked_by) + [k for k in keys if k is not None]:
         if n not in out:
             out.append(n)
     return out
@@ -426,9 +317,9 @@ def mentioned(plan):
 
 def prune_plan(plan, states, fixed_numbers):
     """-> (the plan without the fixed issues and the closed ones, [(number, "fixed" | "closed")]).
-    They leave order, the groups (a group left with fewer than 2 issues is dropped), the keys of blocked_by and the keys of reasons.
+    They leave order, the keys of blocked_by and the keys of reasons.
     A number nobody knows stays, for the validation to refuse. A plan of the wrong shape is returned as it is."""
-    problem, order, groups, blocked_by, _ = parse_plan(plan)
+    problem, order, blocked_by = parse_plan(plan)
     if problem:
         return plan, []
 
@@ -437,45 +328,14 @@ def prune_plan(plan, states, fixed_numbers):
 
     dropped = [(n, why(n)) for n in mentioned(plan) if why(n)]
     gone = {n for n, _ in dropped}
-    kept = [[n for n in g if n not in gone] for g in groups]
     pruned = dict(
         plan,
         order=[n for n in order if n not in gone],
-        groups=[k for g, k in zip(groups, kept) if len(k) > 1 or len(k) == len(g)],
         blocked_by={str(k): v for k, v in blocked_by.items() if k not in gone},
     )
     if isinstance(plan.get("reasons"), dict):
         pruned["reasons"] = {k: v for k, v in plan["reasons"].items() if _int(k) not in gone}
     return pruned, dropped
-
-
-def touch_overlap(x, y):
-    """Two entries of `touches` overlap when they are equal, or one is a directory (it ends with "/") and the other lies under it."""
-    return x == y or (x.endswith("/") and y.startswith(x)) or (y.endswith("/") and x.startswith(y))
-
-
-def overlaps(a, b):
-    """`a` and `b` are the `touches` of two issues, or None when the plan does not say. An issue that is not known overlaps every issue."""
-    if a is None or b is None:
-        return True
-    return any(touch_overlap(x, y) for x in a for y in b)
-
-
-def pick_parallel(candidates, in_progress, touches, held=()):
-    """-> the numbers among `candidates` (in order) to start at once: until the issues in progress and the picked ones reach PARALLEL,
-    each one that overlaps none of the issues in progress, none of the issues another session holds (`held`, of any milestone) and none of those picked before it.
-    One that overlaps is skipped, and the next is looked at. The held issues are not counted in PARALLEL, and one the plan does not know overlaps every issue."""
-    busy = [touches.get(n) for n in [*in_progress, *held]]
-    picked = []
-    for n in candidates:
-        if len(in_progress) + len(picked) >= PARALLEL:
-            break
-        t = touches.get(n)
-        if any(overlaps(t, u) for u in busy):
-            continue
-        picked.append(n)
-        busy.append(t)
-    return picked
 
 
 def diff_relations(free_numbers, current, wanted):
@@ -489,267 +349,176 @@ def diff_relations(free_numbers, current, wanted):
     return add, remove
 
 
-# ---- pure: milestone writes ----
-
-
-def plan_writes(slots, milestones, issue_ms):
-    """-> (ops, errors). Ops, in order:
-    ("create", slot index, title), ("rename", milestone number, title),
-    ("set", issue number, milestone number | ("new", slot index)), ("delete", milestone number).
-    Replaying them never asks GitHub for a title another milestone holds.
-    """
-    by_number = {m["number"]: m for m in milestones}
-    elig = {n for n, m in by_number.items() if m["state"] == "open" and eligible_title(m["title"])}
-    closed_titles = {m["title"]: n for n, m in by_number.items() if m["state"] != "open"}
-
-    errors = [
-        f"{s['version']} is held by the closed milestone #{closed_titles[s['version']]}"
-        for s in slots
-        if s["version"] in closed_titles
-    ]
-    if errors:
-        return [], errors
-
-    # Reuse: the open milestone that already holds most of the members; else one that already has the title.
-    claim = {}
-    claimed = set()
-    for i, s in enumerate(slots):
-        counts = Counter(issue_ms.get(n) for n in s["issues"])
-        cands = sorted(
-            (-c, 0 if by_number[k]["title"] == s["version"] else 1, k)
-            for k, c in counts.items()
-            if k in elig and k not in claimed
-        )
-        if cands:
-            claim[i] = cands[0][2]
-            claimed.add(cands[0][2])
-    for i, s in enumerate(slots):
-        if i in claim:
-            continue
-        same = sorted(k for k in elig - claimed if by_number[k]["title"] == s["version"])
-        if same:
-            claim[i] = same[0]
-            claimed.add(same[0])
-
-    cur_title = {n: m["title"] for n, m in by_number.items()}
-    held = {m["title"]: n for n, m in by_number.items()}
-    pending = {}
-    for i, s in enumerate(slots):
-        if i not in claim:
-            pending[("new", i)] = s["version"]
-        elif cur_title[claim[i]] != s["version"]:
-            pending[claim[i]] = s["version"]
-
-    def order_key(k):
-        return (1, k[1]) if isinstance(k, tuple) else (0, k)
-
-    ops = []
-    while pending:
-        ready = sorted((k for k, t in pending.items() if t not in held), key=order_key)
-        if ready:
-            k = ready[0]
-            t = pending.pop(k)
-            if isinstance(k, tuple):
-                ops.append(("create", k[1], t))
-                held[t] = k
-            else:
-                del held[cur_title[k]]
-                ops.append(("rename", k, t))
-                cur_title[k] = t
-                held[t] = k
-            continue
-        # Stuck: free a title through a temporary one, an unclaimed holder first, else the lowest of a cycle.
-        evict = next(
-            (held[t] for t in sorted(pending.values()) if isinstance(held[t], int) and held[t] not in pending), None
-        )
-        if evict is None:
-            evict = min(k for k in pending if isinstance(k, int))
-        tmp = f"{TMP_PREFIX}{evict}"
-        if cur_title[evict] == tmp:
-            return [], [f"cannot free the title wanted by #{evict}"]
-        del held[cur_title[evict]]
-        ops.append(("rename", evict, tmp))
-        cur_title[evict] = tmp
-        held[tmp] = evict
-
-    for i, s in enumerate(slots):
-        target = claim.get(i, ("new", i))
-        for n in s["issues"]:
-            if i not in claim or issue_ms.get(n) != claim[i]:
-                ops.append(("set", n, target))
-
-    leaving = Counter(issue_ms.get(n) for s in slots for n in s["issues"])
-    for k in sorted(elig - claimed):
-        m = by_number[k]
-        if m["open_issues"] + m["closed_issues"] - leaving[k] <= 0:
-            ops.append(("delete", k))
-    return ops, []
-
-
-def result_lines(slots, issues, reasons):
+def result_lines(order, issues, reasons):
     lines = []
-    for s in slots:
-        for n in s["issues"]:
-            line = f"#{n} {s['version']}"
-            was = issues[n].milestone
-            if was and was != s["version"]:
-                line += f" (was {was})"
-            if reasons.get(str(n)):
-                line += f" - {reasons[str(n)]}"
-            lines.append(line)
+    for k, n in enumerate(order, 1):
+        line = f"{k}. #{n} {issues[n].title}"
+        if issues[n].milestone:
+            line += f" [{issues[n].milestone}]"
+        if reasons.get(str(n)):
+            line += f" - {reasons[str(n)]}"
+        lines.append(line)
     return lines
 
 
 # ---- pure: next ----
 
 
-def worktree_issues(porcelain):
-    """-> {issue number: branch} from `git worktree list --porcelain`, for the worktrees other than the first (the main checkout).
-    A worktree belongs to an issue when its branch or its folder name holds `issue-{n}`."""
-    out = {}
-    for block in porcelain.strip().split("\n\n")[1:]:
-        path = branch = ""
-        for line in block.splitlines():
-            if line.startswith("worktree "):
-                path = line[len("worktree ") :]
-            elif line.startswith("branch "):
-                branch = line[len("branch ") :].removeprefix("refs/heads/")
-        for text in (branch, path.rstrip("/").rsplit("/", 1)[-1]):
-            for m in re.finditer(r"issue-(\d+)(?!\d)", text):
-                out.setdefault(int(m.group(1)), branch or path)
-    return out
+def plan_positions(plan):
+    """-> {issue number: position in order} of a saved plan; empty without a usable plan."""
+    problem, order, _ = parse_plan(plan)
+    return {} if problem else {n: k for k, n in enumerate(order)}
 
 
-def plan_view(plan):
-    """-> ({issue number: position in order}, {issue number: touches}) of a saved plan; both are empty without a usable plan."""
-    problem, order, _, _, touches = parse_plan(plan)
-    if problem:
-        return {}, {}
-    return {n: k for k, n in enumerate(order)}, touches
+def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
+    """The open issues of 5 or 8 points that wait for `issue-plan` step 3: no needs:owner (the owner has not settled it), not in hand (`pr_closing`, `mine`),
+    and no milestone of a feature. The mark of a split issue, or of one kept whole, is a milestone named for a feature; a milestone named for a version is the old mechanism and is no mark."""
+    return [
+        i
+        for i in issues
+        if i.state == "open"
+        and points(i) in (5, 8)
+        and not has(i, "needs:owner")
+        and i.number not in pr_closing
+        and i.number not in mine
+        and (not i.milestone or parse_version(i.milestone))
+    ]
 
 
-def build_next(issues, milestones, pr_closing, held_by_worktree=None, mine=frozenset(), plan=None):
-    """`held`: an issue that another session may be working on (an open pull request closes it, or a worktree named issue-{n} exists)
-    and that the previous hand-over does not list as this run's own (`mine`). It is neither started nor continued.
-    `start` holds the issues that can start in the first milestone that has work and in the milestones after it, by the order of the saved `plan` within a version
-    (the issues the plan lacks come last, oldest first). Of the later milestones, nothing is reported but what can start and what is in progress as this run's own:
-    an issue with needs:owner, one that is held, and one with an open blocker are left out.
-    An issue of a later milestone that merges first moves the slots, and allocate has nothing to refuse.
-    `parallel` is the numbers of `start` to begin now (pick_parallel): it avoids the issues in progress and every issue another session holds, in any open milestone."""
-    held_by_worktree = held_by_worktree or {}
-    position, touches = plan_view(plan)
-    open_versions = sorted(
-        (parse_version(m["title"]), m["title"]) for m in milestones if m["state"] == "open" and parse_version(m["title"])
+def migration(issues, milestones):
+    """-> {"clear": numbers, "close": titles}: the move from the milestones named for versions to the ones named for features (issues.md).
+    `clear`: the open issues of less than 5 points (or with no points yet) that sit in a milestone named for a version; they belong to no feature.
+    `close`: the open milestones named for a version that no open issue will be left in. `milestones`: the open milestones of the API, with `open_issues`.
+    An issue of 5 or 8 points keeps its milestone here: `unsplit` and `issue-plan` step 3 move it."""
+    clear = sorted(
+        i.number for i in issues if i.state == "open" and parse_version(i.milestone) and points(i) not in (5, 8)
     )
-    titles = [t for _, t in open_versions]
+    cleared = Counter(i.milestone for i in issues if i.number in clear)
+    close = [
+        m["title"]
+        for m in milestones
+        if parse_version(m["title"]) and m["open_issues"] - cleared[m["title"]] <= 0
+    ]
+    return {"clear": clear, "close": close}
+
+
+def build_next(issues, pr_closing, mine=frozenset(), plan=None):
+    """What a run does with the open issues. One worktree and one branch carry the run, so there is no parallel set: `start` is the queue.
+    `mine`: the issues the previous hand-over lists as this run's own; they are `in_progress` (continue them first).
+    `held`: an open pull request of the owner closes the issue and it is not `mine`: someone else's work, left alone.
+    `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last: urgent, quick bugs, then `base_key`).
+    An issue with needs:owner, one with an open blocker, and a member of a solo unit (point:8, or a `solo` part) while a change waits for the release are left out.
+    `stop` says why `start` is empty on purpose: a change of a solo unit waits for the owner's merge, and nothing new begins before it (the rest of its unit included).
+    `waiting` are the changes that wait for the release."""
+    position = plan_positions(plan)
+    waiting = release_changes(issues)
 
     def brief(i):
-        return {"number": i.number, "title": i.title, "labels": i.labels}
-
-    def with_milestone(i):
-        return dict(brief(i), milestone=i.milestone)
+        return {"number": i.number, "title": i.title, "labels": i.labels, "points": points(i)}
 
     def start_key(i):
-        v = parse_version(i.milestone)
-        return (v, 0, position[i.number], "", 0) if i.number in position else (v, 1, 0, i.created_at, i.number)
+        if i.number in position:
+            return (0, position[i.number], (), 0)
+        return (1, 0, (not urgent(i), not quick_bug(i), *base_key(i)), i.number)
 
-    by_created = lambda i: (i.created_at, i.number)  # noqa: E731
-    waiting = sorted((i for i in issues if is_waiting(i) and i.milestone in titles), key=lambda i: (i.closed_at or "", i.number))
-    open_issues = [i for i in issues if i.state == "open" and i.milestone in titles]
-    chosen = next((t for t in titles if any(i.milestone == t for i in open_issues)), None)
     out = {
-        "milestone": chosen,
         "start": [],
-        "parallel": [],
         "in_progress": [],
         "held": [],
         "needs_owner": [],
         "blocked": [],
-        "waiting": [with_milestone(i) for i in waiting],
-        "later_needs_owner_only": False,
+        "waits_for_release": [],
+        "waiting": [dict(brief(i), closed_at=i.closed_at) for i in waiting],
+        "stop": None,
     }
-    if chosen is None:
-        return out
-    here = sorted((i for i in open_issues if i.milestone == chosen), key=by_created)
     startable = []
-    in_progress = []
-    for i in here:
-        if i.number in pr_closing:
-            if i.number in mine:
-                in_progress.append(i)
-            else:
-                out["held"].append(dict(brief(i), reason="pull request open"))
+    for i in sorted((i for i in issues if i.state == "open"), key=lambda i: (i.created_at, i.number)):
+        if i.number in mine:
+            out["in_progress"].append(brief(i))
+        elif i.number in pr_closing:
+            out["held"].append(dict(brief(i), reason="pull request open"))
         elif has(i, "needs:owner"):
             out["needs_owner"].append(brief(i))
-        elif i.number in held_by_worktree and i.number not in mine:
-            out["held"].append(dict(brief(i), reason="worktree " + held_by_worktree[i.number]))
         elif i.blocked_by:
             out["blocked"].append({"number": i.number, "title": i.title, "blocked_by": sorted(i.blocked_by)})
+        elif solo(i) and waiting:
+            out["waits_for_release"].append(i.number)
         else:
             startable.append(i)
-    later = sorted((i for i in open_issues if i.milestone != chosen), key=lambda i: (parse_version(i.milestone), *by_created(i)))
-    for i in later:
-        if i.number in pr_closing:
-            if i.number in mine:
-                in_progress.append(i)
-        elif not (has(i, "needs:owner") or (i.number in held_by_worktree and i.number not in mine) or i.blocked_by):
-            startable.append(i)
+    if any(solo(i) for i in waiting):
+        out["stop"] = "a point:8 change (or a part of one, labelled solo) waits for the owner to merge the Release PR; start nothing new"
+        return out
     startable.sort(key=start_key)
-    out["start"] = [with_milestone(i) for i in startable]
-    out["in_progress"] = [with_milestone(i) for i in in_progress]
-    held = [i.number for i in open_issues if i.number not in mine and (i.number in pr_closing or i.number in held_by_worktree)]
-    out["parallel"] = pick_parallel([i.number for i in startable], [i.number for i in in_progress], touches, held)
-    out["later_needs_owner_only"] = bool(later) and all(has(i, "needs:owner") for i in later)
+    out["start"] = [brief(i) for i in startable]
     return out
 
 
-# ---- pure: release facts ----
+# ---- pure: release ----
 
 
-def parse_time(s):
-    return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
-
-
-def open_in_milestone(issues, title):
-    """The number of open issues of the milestone `title` that the release waits for: not `needs:owner`, not blocked by an open issue, and counted (not `documentation`)."""
-    return sum(1 for i in issues if i.state == "open" and i.milestone == title and not has(i, "needs:owner") and not i.blocked_by and counted(i))
-
-
-def release_facts(waiting, pr_labels, now, milestone=None, milestone_open=None):
-    """Applies R0 to R3 of issues.md and gathers the figures of R4, which the release-planner judges.
-    `waiting` are the merged changes not released yet, `pr_labels` the labels of the Release PR (None when there is none),
-    `milestone` the planned version (the lowest open milestone, which `close` releases) and `milestone_open` the number of its issues that are still open and can start (open_in_milestone).
-    -> {"rule": "R0".."R3" | "R4", "decision": "wait" | "release" | None, ...}"""
-    pr_labels = pr_labels or []
-    changes = sorted((i for i in waiting if is_waiting(i) and counted(i)), key=lambda i: (i.closed_at or "", i.number))
-    if "release:hold" in pr_labels:
-        rule, decision = "R0", "wait"
-    elif "urgency:high" in pr_labels or any(urgent(i) for i in changes):
-        rule, decision = "R1", "release"
-    elif any(solo(i) for i in changes):
-        rule, decision = "R2", "release"
-    elif any(has(i, "bug") and has(i, "importance:high") for i in changes):
-        rule, decision = "R3", "release"
-    else:
-        rule, decision = "R4", None
-
-    def hours(i):
-        return round((now - parse_time(i.closed_at)).total_seconds() / 3600, 1) if i.closed_at else None
-
-    rows = [
-        {"number": i.number, "title": i.title, "labels": i.labels, "closed_at": i.closed_at, "hours": hours(i)} for i in changes
-    ]
-    ages = [r["hours"] for r in rows if r["hours"] is not None]
+def release_facts(issues, release_pr, last_tag):
+    """The figures a run needs to prepare the Release PR.
+    `issues`: the owner's issues (the waiting ones are picked from them). `release_pr`: {"number", "title", "url", "labels"} of the open Release PR, or None.
+    `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; the run tells the owner at once.
+    `minor`: a change adds a requirement ID (issues.md checks the label against requirements/). `version`: the version the Release PR raises to."""
+    changes = release_changes(issues)
+    labels = (release_pr or {}).get("labels", [])
+    minor = any(has(i, "adds:requirement") for i in changes)
+    base = parse_version(last_tag) or (0, 0, 0)
     return {
-        "rule": rule,
-        "decision": decision,
-        "changes": len(changes),
-        "bugs": sum(1 for i in changes if has(i, "bug")),
-        "oldest_hours": max(ages) if ages else None,
-        "milestone": milestone,
-        "milestone_open": milestone_open,
-        "waiting": rows,
+        "last_tag": last_tag,
+        "changes": [
+            {"number": i.number, "title": i.title, "labels": i.labels, "points": points(i), "closed_at": i.closed_at} for i in changes
+        ],
+        "release_pr": release_pr and {k: release_pr[k] for k in ("number", "title", "url")},
+        "urgent": "urgency:high" in labels or any(urgent(i) or (has(i, "bug") and has(i, "importance:high")) for i in changes),
+        "solo": any(solo(i) for i in changes),
+        "minor": minor,
+        "version": format_version(bump(base, minor)) if changes else None,
     }
+
+
+def with_tag_due(facts, due):
+    """Adds `tag_due` to the facts. While a tag is due (the owner has merged the Release PR and the tag is not made), what is counted from the last tag is the merged Release PR itself,
+    so `changes`, `urgent`, `solo`, `minor` and `version` are emptied: the tag comes first, and `release` runs again after it."""
+    facts["tag_due"] = due
+    if due:
+        facts.update(changes=[], urgent=False, solo=False, minor=False, version=None)
+    return facts
+
+
+def cargo_version(text):
+    """The `version` of the `[package]` table of a Cargo.toml, or None."""
+    in_package = False
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("["):
+            in_package = s == "[package]"
+        elif in_package:
+            m = re.fullmatch(r'version\s*=\s*"([^"]+)"', s)
+            if m:
+                return m.group(1)
+    return None
+
+
+def tag_due(merged_prs, tag_names, read_version):
+    """-> {"tag", "commit", "pr"} when the newest merged Release PR raised the version to a tag that does not exist yet, else None.
+    `merged_prs`: [{"number", "mergedAt", "mergeCommit": {"oid"}}] of the owner's merged Release PRs. `read_version(oid)`: the version in Cargo.toml at that commit.
+    The tag goes on the merge commit of the Release PR, not on origin/main, which may have moved on (versioning.md)."""
+    if not merged_prs:
+        return None
+    newest = max(merged_prs, key=lambda p: p["mergedAt"])
+    oid = (newest.get("mergeCommit") or {}).get("oid")
+    version = read_version(oid) if oid else None
+    if not version or f"v{version}" in tag_names:
+        return None
+    return {"tag": f"v{version}", "commit": oid, "pr": newest["number"]}
+
+
+def done_milestones(milestones, issues):
+    """-> the open milestones to close: they hold closed issues and no open one, and none of their issues waits for the release."""
+    waiting = {i.milestone for i in issues if is_waiting(i)}
+    return [m for m in milestones if m["open_issues"] == 0 and m["closed_issues"] > 0 and m["title"] not in waiting]
 
 
 # ---- gh ----
@@ -778,15 +547,15 @@ def api(path, method="GET", fields=None, paginate=False):
 class State:
     repo: str
     owner: str
-    base: str | None
-    milestones: list
-    issues: dict  # owner's open issues, and the closed ones of the open milestones
+    last_tag: str | None
+    issues: dict  # owner's open issues, and the ones closed since the last release
     fixed: list
     free: list
     pr_closing: set
     ids: dict  # issue number -> database id
     states: dict  # issue number -> "open" | "closed"
     skipped: int
+    tags: list  # the names of the tags
 
 
 def to_issue(raw):
@@ -806,21 +575,27 @@ def to_issue(raw):
     )
 
 
+def released_at(repo, tags, last_tag):
+    """The time of the commit the last tag names: the merge of its Release PR. What closed after it waits for the next release."""
+    sha = next((t["commit"]["sha"] for t in tags if t["name"] == last_tag), None)
+    return api(f"repos/{repo}/commits/{sha}")["commit"]["committer"]["date"] if sha else None
+
+
 def load_state():
     repo = gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
     owner = gh("repo", "view", "--json", "owner", "--jq", ".owner.login").strip()
-    tags = [t["name"] for t in api(f"repos/{repo}/tags?per_page=100", paginate=True)]
-    milestones = api(f"repos/{repo}/milestones?state=all&per_page=100", paginate=True)
-    base = base_tag(tags, milestones)
+    tags = api(f"repos/{repo}/tags?per_page=100", paginate=True)
+    names = [t["name"] for t in tags]
+    last_tag = highest_tag(names)
+    since = released_at(repo, tags, last_tag) if last_tag else None
 
     raw = [r for r in api(f"repos/{repo}/issues?state=open&per_page=100", paginate=True) if "pull_request" not in r]
-    for m in milestones:
-        if m["state"] == "open" and eligible_title(m["title"]):
-            raw += [
-                r
-                for r in api(f"repos/{repo}/issues?state=closed&milestone={m['number']}&per_page=100", paginate=True)
-                if "pull_request" not in r
-            ]
+    if since:
+        raw += [
+            r
+            for r in api(f"repos/{repo}/issues?state=closed&since={since}&per_page=100", paginate=True)
+            if "pull_request" not in r and (r.get("closed_at") or "") > since
+        ]
     skipped = sum(1 for r in raw if r["user"]["login"] != owner)
     issues = {r["number"]: to_issue(r) for r in raw if r["user"]["login"] == owner}
 
@@ -846,15 +621,15 @@ def load_state():
     return State(
         repo=repo,
         owner=owner,
-        base=base,
-        milestones=milestones,
+        last_tag=last_tag,
         issues=issues,
         fixed=waiting + in_progress,
-        free=existing_order(rest),
+        free=base_order(rest),
         pr_closing=pr_closing,
         ids=ids,
         states=states,
         skipped=skipped,
+        tags=names,
     )
 
 
@@ -862,64 +637,6 @@ def refuse_missing_points(state):
     bad = missing_points(state.issues.values())
     if bad:
         raise PlanError([f"#{i.number} has no point:* label; run the issue-plan skill" for i in bad])
-
-
-def describe(op):
-    kind = op[0]
-    if kind == "create":
-        return f"create milestone {op[2]}"
-    if kind == "rename":
-        return f"rename milestone #{op[1]} to {op[2]}"
-    if kind == "set":
-        return f"set milestone of #{op[1]} to " + (f"new slot {op[2][1]}" if isinstance(op[2], tuple) else f"#{op[2]}")
-    return f"delete milestone #{op[1]}"
-
-
-def run_ops(state, ops):
-    repo = state.repo
-    created = {}
-    for op in ops:
-        kind = op[0]
-        if kind == "create":
-            created[op[1]] = api(f"repos/{repo}/milestones", "POST", {"title": op[2]})["number"]
-        elif kind == "rename":
-            api(f"repos/{repo}/milestones/{op[1]}", "PATCH", {"title": op[2]})
-        elif kind == "set":
-            target = created[op[2][1]] if isinstance(op[2], tuple) else op[2]
-            api(f"repos/{repo}/issues/{op[1]}", "PATCH", {"milestone": target})
-        else:
-            api(f"repos/{repo}/milestones/{op[1]}", "DELETE")
-
-
-def execute(state, order, groups, wanted, reasons, base, dry_run):
-    """Allocates the queue, writes the milestones and the relations, and prints one line per issue.
-    `wanted` is None to leave the blocked_by relations alone."""
-    by_number = {i.number: i for i in state.free}
-    queue = state.fixed + [by_number[n] for n in order]
-    slots = allocate(queue, groups, base)
-    issue_ms = {i.number: i.milestone_number for i in queue}
-    ops, errors = plan_writes(slots, state.milestones, issue_ms)
-    if errors:
-        raise PlanError(errors)
-    add, remove = ([], []) if wanted is None else diff_relations(
-        [i.number for i in state.free], {i.number: i.blocked_by for i in state.free}, wanted
-    )
-    lines = result_lines(slots, state.issues, reasons)
-
-    if dry_run:
-        for op in ops:
-            print("# " + describe(op), file=sys.stderr)
-        for n, b in add:
-            print(f"# #{n} blocked by #{b}: add", file=sys.stderr)
-        for n, b in remove:
-            print(f"# #{n} blocked by #{b}: remove", file=sys.stderr)
-    else:
-        run_ops(state, ops)
-        for n, b in add:
-            api(f"repos/{state.repo}/issues/{n}/dependencies/blocked_by", "POST", {"issue_id": state.ids[b]})
-        for n, b in remove:
-            api(f"repos/{state.repo}/issues/{n}/dependencies/blocked_by/{state.ids[b]}", "DELETE")
-    print("\n".join(lines))
 
 
 # ---- commands ----
@@ -933,7 +650,8 @@ def issue_json(i):
         "labels": i.labels,
         "urgency": "high" if urgent(i) else "normal",
         "importance": importance(i),
-        "milestone": i.milestone,
+        "points": points(i),
+        "milestone": None if parse_version(i.milestone) else i.milestone,
         "createdAt": i.created_at,
         "blocked_by": sorted(i.blocked_by),
     }
@@ -945,7 +663,7 @@ def cmd_snapshot(args):
     print(
         json.dumps(
             {
-                "last_tag": state.base,
+                "last_tag": state.last_tag,
                 "fixed": [issue_json(i) for i in state.fixed],
                 "free": [issue_json(i) for i in state.free],
             },
@@ -993,33 +711,10 @@ def read_plan(path):
     return plan
 
 
-def closed_milestone_numbers(milestones):
-    """-> the numbers of the closed milestones that hold closed issues, newest version first: a plan made before a release may still name those issues."""
-    found = [(parse_version(m["title"]), m["number"]) for m in milestones if m["state"] == "closed" and m["closed_issues"] > 0]
-    return [n for v, n in sorted(((v, n) for v, n in found if v), reverse=True)]
-
-
-def closed_in(raw_issues, numbers):
-    """-> {number: "closed"} for the issues among `raw_issues` (the answer of the issues API) that are in `numbers` and closed. A pull request is not an issue."""
-    return {r["number"]: "closed" for r in raw_issues if r["number"] in numbers and r["state"] == "closed" and "pull_request" not in r}
-
-
-def closed_states(repo, numbers, milestones):
-    """-> {number: "closed"} for the numbers GitHub says are closed. The closed issues of a released milestone are not in the state, and a plan made before the release may still name them.
-    The closed milestones are read in bulk, newest first, until every number is found; the numbers still unknown are read one by one."""
-    left = set(numbers)
+def closed_states(repo, numbers):
+    """-> {number: "closed"} for the numbers GitHub says are closed. The issues closed before the last release are not in the state, and a plan made earlier may still name them."""
     out = {}
-    for m in closed_milestone_numbers(milestones):
-        if not left:
-            break
-        try:
-            raw = api(f"repos/{repo}/issues?state=closed&milestone={m}&per_page=100", paginate=True)
-        except GhError:
-            continue
-        found = closed_in(raw, left)
-        out.update(found)
-        left -= set(found)
-    for n in sorted(left):
+    for n in sorted(numbers):
         try:
             raw = api(f"repos/{repo}/issues/{n}")
         except GhError:
@@ -1038,7 +733,7 @@ def cmd_apply(args):
     state = load_state()
     refuse_missing_points(state)
     states = dict(state.states)
-    states.update(closed_states(state.repo, [n for n in mentioned(plan) if n not in states], state.milestones))
+    states.update(closed_states(state.repo, [n for n in mentioned(plan) if n not in states]))
     plan, dropped = prune_plan(plan, states, {i.number for i in state.fixed})
     for n, why in dropped:
         print(f"dropped #{n} ({why})", file=sys.stderr)
@@ -1046,15 +741,20 @@ def cmd_apply(args):
     if problems:
         raise PlanError(problems)
     wanted = {int(k): [int(b) for b in v] for k, v in plan.get("blocked_by", {}).items()}
-    execute(
-        state,
-        [int(n) for n in plan["order"]],
-        [[int(n) for n in g] for g in plan.get("groups", [])],
-        wanted,
-        plan.get("reasons", {}),
-        state.base,
-        args.dry_run,
-    )
+    order = [int(n) for n in plan["order"]]
+    by_number = {i.number: i for i in state.free}
+    add, remove = diff_relations([i.number for i in state.free], {i.number: i.blocked_by for i in state.free}, wanted)
+    if args.dry_run:
+        for n, b in add:
+            print(f"# #{n} blocked by #{b}: add", file=sys.stderr)
+        for n, b in remove:
+            print(f"# #{n} blocked by #{b}: remove", file=sys.stderr)
+    else:
+        for n, b in add:
+            api(f"repos/{state.repo}/issues/{n}/dependencies/blocked_by", "POST", {"issue_id": state.ids[b]})
+        for n, b in remove:
+            api(f"repos/{state.repo}/issues/{n}/dependencies/blocked_by/{state.ids[b]}", "DELETE")
+    print("\n".join(result_lines(order, by_number, plan.get("reasons", {}))))
     if not args.dry_run:
         try:
             save_plan(saved_plan_path(), plan)
@@ -1062,71 +762,71 @@ def cmd_apply(args):
             print(f"the plan was applied but not saved: {e}", file=sys.stderr)
 
 
-def sync(args, base=None):
-    state = load_state()
-    refuse_missing_points(state)
-    execute(state, [i.number for i in state.free], derive_groups(state.free), None, {}, base or state.base, args.dry_run)
-
-
-def cmd_sync(args):
-    sync(args)
-
-
-def cmd_close(args):
-    tag = args.tag
-    repo = gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
-    if tag not in [t["name"] for t in api(f"repos/{repo}/tags?per_page=100", paginate=True)]:
-        raise PlanError([f"tag {tag} does not exist on GitHub"])
-    state = load_state()
-    refuse_missing_points(state)
-    versions = sorted(
-        (parse_version(m["title"]), m) for m in state.milestones if m["state"] == "open" and parse_version(m["title"])
-    )
-    if versions:
-        low = versions[0][1]
-        holder = next((m for m in state.milestones if m["title"] == tag and m["number"] != low["number"]), None)
-        if holder and holder["state"] != "open":
-            raise PlanError([f"{tag} is held by the closed milestone #{holder['number']}"])
-        for i in state.issues.values():
-            if i.state == "open" and i.milestone_number == low["number"]:
-                api(f"repos/{repo}/issues/{i.number}", "PATCH", {"milestone": None})
-        if holder:
-            api(f"repos/{repo}/milestones/{holder['number']}", "PATCH", {"title": f"{TMP_PREFIX}{holder['number']}"})
-        fields = {"state": "closed"}
-        if low["title"] != tag:
-            fields["title"] = tag
-        api(f"repos/{repo}/milestones/{low['number']}", "PATCH", fields)
-        print(f"closed milestone {tag}", file=sys.stderr)
-    sync(args, base=tag)
-
-
 def cmd_next(args):
     state = load_state()
     mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
-    worktrees = worktree_issues(subprocess.run(["git", "worktree", "list", "--porcelain"], capture_output=True, text=True).stdout)
     plan = read_plan(saved_plan_path())
-    print(
-        json.dumps(
-            build_next(list(state.issues.values()), state.milestones, state.pr_closing, worktrees, mine, plan),
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, plan), ensure_ascii=False, indent=2))
 
 
-def cmd_release_facts(args):
+def cmd_unsplit(args):
     state = load_state()
-    labels = json.loads(gh("pr", "list", "--state", "open", "--head", "release/next", "--json", "author,labels"))
-    labels = [label["name"] for p in labels if p["author"]["login"] == state.owner for label in p["labels"]]
-    try:
-        now = parse_time(args.now) if args.now else datetime.datetime.now(datetime.timezone.utc)
-    except ValueError as e:
-        raise PlanError([f"--now: {e}"])
-    waiting = [i for i in state.issues.values() if is_waiting(i)]
-    planned = min((parse_version(m["title"]) for m in state.milestones if m["state"] == "open" and parse_version(m["title"])), default=None)
-    title = format_version(planned) if planned else None
-    still_open = open_in_milestone(state.issues.values(), title) if title else None
-    print(json.dumps(release_facts(waiting, labels, now, title, still_open), ensure_ascii=False, indent=2))
+    mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
+    found = [
+        {"number": i.number, "title": i.title, "points": points(i), "milestone": i.milestone}
+        for i in unsplit(list(state.issues.values()), state.pr_closing, mine)
+    ]
+    print(json.dumps(found, ensure_ascii=False, indent=2))
+
+
+def cmd_migrate(args):
+    state = load_state()
+    milestones = api(f"repos/{state.repo}/milestones?state=open&per_page=100", paginate=True)
+    moves = migration(list(state.issues.values()), milestones)
+    by_title = {m["title"]: m["number"] for m in milestones}
+    for n in moves["clear"]:
+        if not args.dry_run:
+            api(f"repos/{state.repo}/issues/{n}", "PATCH", {"milestone": None})
+        print(f"took the milestone off #{n}")
+    for title in moves["close"]:
+        if not args.dry_run:
+            api(f"repos/{state.repo}/milestones/{by_title[title]}", "PATCH", {"state": "closed"})
+        print(f"closed milestone {title}")
+
+
+def release_pr_of(owner):
+    """-> the open Release PR of the owner, or None."""
+    found = json.loads(gh("pr", "list", "--state", "open", "--head", RELEASE_BRANCH, "--json", "number,title,url,author,labels"))
+    found = [p for p in found if p["author"]["login"] == owner]
+    if not found:
+        return None
+    p = found[0]
+    return {"number": p["number"], "title": p["title"], "url": p["url"], "labels": [label["name"] for label in p["labels"]]}
+
+
+def cmd_release(args):
+    state = load_state()
+    facts = release_facts(list(state.issues.values()), release_pr_of(state.owner), state.last_tag)
+    merged = json.loads(gh("pr", "list", "--state", "merged", "--head", RELEASE_BRANCH, "--limit", "10", "--json", "number,author,mergedAt,mergeCommit"))
+    merged = [p for p in merged if p["author"]["login"] == state.owner]
+
+    def read_version(oid):
+        try:
+            return cargo_version(gh("api", f"repos/{state.repo}/contents/src-tauri/Cargo.toml?ref={oid}", "-H", "Accept: application/vnd.github.raw+json"))
+        except GhError:
+            return None
+
+    with_tag_due(facts, tag_due(merged, state.tags, read_version))
+    print(json.dumps(facts, ensure_ascii=False, indent=2))
+
+
+def cmd_close(args):
+    state = load_state()
+    milestones = api(f"repos/{state.repo}/milestones?state=open&per_page=100", paginate=True)
+    for m in done_milestones(milestones, state.issues.values()):
+        if not args.dry_run:
+            api(f"repos/{state.repo}/milestones/{m['number']}", "PATCH", {"state": "closed"})
+        print(f"closed milestone {m['title']}")
 
 
 def main(argv=None):
@@ -1137,18 +837,19 @@ def main(argv=None):
     a.add_argument("plan")
     a.add_argument("--dry-run", action="store_true")
     a.set_defaults(fn=cmd_apply)
-    s = sub.add_parser("sync")
-    s.add_argument("--dry-run", action="store_true")
-    s.set_defaults(fn=cmd_sync)
-    c = sub.add_parser("close")
-    c.add_argument("tag")
-    c.set_defaults(fn=cmd_close, dry_run=False)
     n = sub.add_parser("next")
     n.add_argument("--mine", default="", help="issue numbers the previous hand-over lists as this run's own, such as 140,141")
     n.set_defaults(fn=cmd_next)
-    r = sub.add_parser("release-facts")
-    r.add_argument("--now", help="ISO time such as 2026-11-06T12:00:00Z; the time of the run when omitted")
-    r.set_defaults(fn=cmd_release_facts)
+    u = sub.add_parser("unsplit")
+    u.add_argument("--mine", default="", help="issue numbers the previous hand-over lists as this run's own, such as 140,141")
+    u.set_defaults(fn=cmd_unsplit)
+    m = sub.add_parser("migrate")
+    m.add_argument("--dry-run", action="store_true")
+    m.set_defaults(fn=cmd_migrate)
+    sub.add_parser("release").set_defaults(fn=cmd_release)
+    c = sub.add_parser("close")
+    c.add_argument("--dry-run", action="store_true")
+    c.set_defaults(fn=cmd_close)
     args = p.parse_args(argv)
     try:
         args.fn(args)

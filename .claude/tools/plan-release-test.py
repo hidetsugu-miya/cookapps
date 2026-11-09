@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Tests of the pure functions of plan-release.py. No network and no gh.
+"""Tests of the pure functions of plan-release.py, and of the shell tools around the nightly run (nightly-limit.sh, use-worktree.sh) and the hook post-gh.sh.
+No network and no gh.
 Run: python3 -I .claude/tools/plan-release-test.py
 """
-import datetime
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -35,12 +37,8 @@ def mk(n, labels=(), milestone=None, created=None, state="open", closed=None, bl
     )
 
 
-def ms(number, title, state="open", open_issues=0, closed_issues=0):
-    return {"number": number, "title": title, "state": state, "open_issues": open_issues, "closed_issues": closed_issues}
-
-
-def slot_view(slots):
-    return [(s["version"], s["issues"]) for s in slots]
+def numbers(issues):
+    return [i.number for i in issues]
 
 
 class Versions(unittest.TestCase):
@@ -51,213 +49,89 @@ class Versions(unittest.TestCase):
         self.assertEqual(pr.highest_tag(["v0.9.0", "v0.10.0", "nightly", "v0.2.5"]), "v0.10.0")
         self.assertIsNone(pr.highest_tag(["nightly"]))
 
-    def test_base_skips_a_tag_whose_milestone_is_open(self):
-        tags = ["v0.45.0", "v0.46.0"]
-        open_ms = [ms(1, "v0.46.0"), ms(2, "v0.47.0")]
-        self.assertEqual(pr.base_tag(tags, open_ms), "v0.45.0")
-        self.assertEqual(pr.base_tag(tags, [ms(1, "v0.46.0", state="closed"), ms(2, "v0.47.0")]), "v0.46.0")
-        self.assertEqual(pr.base_tag(tags, [ms(2, "v0.47.0")]), "v0.46.0")
-        self.assertIsNone(pr.base_tag(["v0.46.0"], open_ms))
-
     def test_bump(self):
         self.assertEqual(pr.bump((0, 39, 2), True), (0, 40, 0))
         self.assertEqual(pr.bump((0, 39, 2), False), (0, 39, 3))
         self.assertEqual(pr.format_version((0, 40, 0)), "v0.40.0")
 
 
+class Points(unittest.TestCase):
+    def test_the_points_of_an_issue(self):
+        self.assertEqual(pr.points(mk(1, ["bug", "point:3"])), 3)
+        self.assertEqual(pr.points(mk(2, ["point:8"])), 8)
+        self.assertIsNone(pr.points(mk(3, ["bug"])))
+
+
 class Ordering(unittest.TestCase):
-    def test_existing_order(self):
-        a = mk(1, milestone="v0.41.0", created="2026-11-01T00:00:09Z")
-        b = mk(2, milestone="v0.40.0", created="2026-11-01T00:00:08Z")
-        c = mk(3, milestone="v0.40.0", created="2026-11-01T00:00:01Z")
-        d = mk(4, created="2026-11-01T00:00:02Z")
-        e = mk(5, milestone="plan-tmp-7", created="2026-11-01T00:00:00Z")
-        order = [i.number for i in pr.existing_order([a, b, c, d, e])]
-        self.assertEqual(order, [3, 2, 1, 5, 4])
-        self.assertEqual(pr.existing_order([]), [])
-
-    def test_version_order_is_numeric(self):
-        a = mk(1, milestone="v0.10.0")
-        b = mk(2, milestone="v0.9.0")
-        self.assertEqual([i.number for i in pr.existing_order([a, b])], [2, 1])
-
-    def test_quick_bugs_go_first_in_their_old_order(self):
-        a = mk(1, milestone="v0.40.0", created="2026-11-01T00:00:01Z")
-        b = mk(2, ["bug", "point:2"], milestone="v0.42.0", created="2026-11-01T00:00:02Z")
-        c = mk(3, ["bug", "point:2"], milestone="v0.41.0", created="2026-11-01T00:00:03Z")
-        d = mk(4, ["bug", "point:5"], milestone="v0.41.0", created="2026-11-01T00:00:04Z")
-        e = mk(5, ["point:2"], created="2026-11-01T00:00:05Z")
-        f = mk(6, ["bug", "point:2"], created="2026-11-01T00:00:06Z")
-        self.assertEqual([i.number for i in pr.existing_order([a, b, c, d, e, f])], [3, 2, 6, 1, 4, 5])
+    def test_the_basis_is_importance_then_fewer_points_then_older(self):
+        a = mk(1, ["point:3"], created="2026-11-01T00:00:01Z")
+        b = mk(2, ["point:1"], created="2026-11-01T00:00:02Z")
+        c = mk(3, ["point:1", "importance:high"], created="2026-11-01T00:00:03Z")
+        d = mk(4, ["point:1", "importance:low"], created="2026-11-01T00:00:04Z")
+        e = mk(5, ["point:1"], created="2026-11-01T00:00:00Z")
+        self.assertEqual(numbers(pr.base_order([a, b, c, d, e])), [3, 5, 2, 1, 4])
+        self.assertEqual(pr.base_order([]), [])
 
     def test_bugs_of_1_2_and_3_points_go_first_but_not_those_of_5_and_8(self):
-        a = mk(1, created="2026-11-01T00:00:01Z")
+        a = mk(1, ["point:1"], created="2026-11-01T00:00:01Z")
         b = mk(2, ["bug", "point:8"], created="2026-11-01T00:00:02Z")
         c = mk(3, ["bug", "point:5"], created="2026-11-01T00:00:03Z")
         d = mk(4, ["bug", "point:3"], created="2026-11-01T00:00:04Z")
         e = mk(5, ["bug", "point:2"], created="2026-11-01T00:00:05Z")
         f = mk(6, ["bug", "point:1"], created="2026-11-01T00:00:06Z")
-        g = mk(7, ["point:1"], created="2026-11-01T00:00:07Z")
-        self.assertEqual([i.number for i in pr.existing_order([a, b, c, d, e, f, g])], [4, 5, 6, 1, 2, 3, 7])
+        self.assertEqual(numbers(pr.base_order([a, b, c, d, e, f])), [6, 5, 4, 1, 3, 2])
+
+    def test_urgent_issues_go_before_quick_bugs_and_the_rest(self):
+        a = mk(1, ["point:2"])
+        b = mk(2, ["bug", "point:2"])
+        c = mk(3, ["urgency:high", "point:5"])
+        d = mk(4, ["urgency:high", "bug", "point:2"])
+        e = mk(5, ["urgency:high", "point:1"])
+        self.assertEqual(numbers(pr.base_order([a, b, c, d, e])), [5, 4, 3, 2, 1])
 
     def test_a_quick_bug_takes_its_free_blocker_with_it(self):
-        a = mk(1, milestone="v0.40.0")
-        b = mk(2, ["bug", "point:2"], milestone="v0.41.0", blocked=[1])
-        c = mk(3, ["bug", "point:2"], milestone="v0.42.0", blocked=[99])
-        d = mk(4, milestone="v0.40.0")
-        self.assertEqual([i.number for i in pr.existing_order([d, a, b, c])], [1, 2, 3, 4])
+        a = mk(1, ["point:3"])
+        b = mk(2, ["bug", "point:2"], blocked=[1])
+        c = mk(3, ["bug", "point:2"], blocked=[99])
+        d = mk(4, ["point:1"])
+        self.assertEqual(numbers(pr.base_order([d, a, b, c])), [1, 2, 3, 4])
 
-    def test_blockers_of_a_quick_bug_are_taken_through_the_chain_and_shared_ones_once(self):
-        x = mk(1, milestone="v0.40.0")
-        y = mk(2, milestone="v0.40.0", blocked=[1])
-        z = mk(3, milestone="v0.40.0")
-        b1 = mk(4, ["bug", "point:2"], milestone="v0.41.0", blocked=[2])
-        b2 = mk(5, ["bug", "point:2"], milestone="v0.42.0", blocked=[1, 3])
-        free = [z, y, x, b2, b1]
-        order = [i.number for i in pr.existing_order(free)]
+    def test_blockers_are_taken_through_the_chain_and_shared_ones_once(self):
+        x = mk(1, ["point:3"])
+        y = mk(2, ["point:3"], blocked=[1])
+        z = mk(3, ["point:3"])
+        b1 = mk(4, ["bug", "point:2"], blocked=[2])
+        b2 = mk(5, ["bug", "point:2"], blocked=[1, 3])
+        order = numbers(pr.base_order([z, y, x, b2, b1]))
         self.assertEqual(order, [1, 2, 4, 3, 5])
         problems = pr.validate_plan(
-            {"order": order, "groups": [], "blocked_by": {"2": [1], "4": [2], "5": [1, 3]}},
-            free,
+            {"order": order, "blocked_by": {"2": [1], "4": [2], "5": [1, 3]}},
+            [z, y, x, b2, b1],
             [],
             {n: "open" for n in range(1, 6)},
         )
         self.assertEqual(problems, [])
 
     def test_split_queue(self):
-        w2 = mk(1, state="closed", closed="2026-11-02T00:00:00Z", milestone="v0.40.0")
-        w1 = mk(2, state="closed", closed="2026-11-01T00:00:00Z", milestone="v0.40.0")
+        w2 = mk(1, state="closed", closed="2026-11-02T00:00:00Z")
+        w1 = mk(2, state="closed", closed="2026-11-01T00:00:00Z")
         prog = mk(3, created="2026-11-01T00:00:05Z")
-        urgent = mk(4, labels=["urgency:high"])
-        urgent_and_pr = mk(5, labels=["urgency:high"])
-        old_label = mk(7, labels=["release:now"])
         rest = mk(6)
-        dropped = mk(8, state="closed", closed="2026-11-03T00:00:00Z", milestone="v0.40.0", reason="not_planned")
-        waiting, in_progress, others = pr.split_issues([w2, w1, prog, urgent, urgent_and_pr, old_label, rest, dropped], {3, 5})
-        self.assertEqual([i.number for i in waiting], [2, 1])
-        self.assertEqual([i.number for i in in_progress], [3, 5])
-        # an urgent issue is planned like the others (the order puts it first); release:now means nothing any more
-        self.assertEqual([i.number for i in others], [4, 7, 6])
+        dropped = mk(8, state="closed", closed="2026-11-03T00:00:00Z", reason="not_planned")
+        waiting, in_progress, others = pr.split_issues([w2, w1, prog, rest, dropped], {3})
+        self.assertEqual(numbers(waiting), [2, 1])
+        self.assertEqual(numbers(in_progress), [3])
+        self.assertEqual(numbers(others), [6])
 
-    def test_urgent_issues_go_before_quick_bugs_and_the_rest(self):
-        a = mk(1, milestone="v0.40.0", created="2026-11-01T00:00:01Z")
-        b = mk(2, ["bug", "point:2"], milestone="v0.40.0", created="2026-11-01T00:00:02Z")
-        c = mk(3, ["urgency:high"], milestone="v0.42.0", created="2026-11-01T00:00:03Z")
-        d = mk(4, ["urgency:high", "bug", "point:2"], created="2026-11-01T00:00:04Z")
-        e = mk(5, ["urgency:high"], milestone="v0.41.0", created="2026-11-01T00:00:05Z")
-        self.assertEqual([i.number for i in pr.existing_order([a, b, c, d, e])], [5, 3, 4, 2, 1])
-
-    def test_an_urgent_issue_takes_its_free_blocker_with_it(self):
-        a = mk(1, milestone="v0.40.0")
-        b = mk(2, ["urgency:high"], milestone="v0.41.0", blocked=[1])
-        c = mk(3, ["bug", "point:2"], milestone="v0.39.0")
-        self.assertEqual([i.number for i in pr.existing_order([c, a, b])], [1, 2, 3])
-
-    def test_urgency_and_importance_in_the_snapshot(self):
-        j = pr.issue_json(mk(1, ["urgency:high", "importance:low"], milestone="v0.40.0"))
-        self.assertEqual((j["urgency"], j["importance"]), ("high", "low"))
-        self.assertNotIn("pin", j)
+    def test_urgency_importance_and_points_in_the_snapshot(self):
+        j = pr.issue_json(mk(1, ["urgency:high", "importance:low", "point:2"], milestone="Orca files"))
+        self.assertEqual((j["urgency"], j["importance"], j["points"], j["milestone"]), ("high", "low", 2, "Orca files"))
         j = pr.issue_json(mk(2, ["importance:high"]))
-        self.assertEqual((j["urgency"], j["importance"]), ("normal", "high"))
-        j = pr.issue_json(mk(3, ["release:now"]))
-        self.assertEqual((j["urgency"], j["importance"]), ("normal", "normal"))
+        self.assertEqual((j["urgency"], j["importance"], j["points"]), ("normal", "high", None))
 
-
-class Allocation(unittest.TestCase):
-    def test_current_repository(self):
-        queue = [
-            mk(43, ["documentation", "point:2"], state="closed"),
-            mk(42, ["point:8", "adds:requirement"]),
-            mk(33, ["point:8", "adds:requirement"]),
-            mk(45, ["documentation", "point:2"]),
-            mk(47, ["point:3"]),
-            mk(48, ["point:3"]),
-        ]
-        slots = pr.allocate(queue, [], "v0.39.2")
-        self.assertEqual(
-            slot_view(slots),
-            [("v0.40.0", [43, 42]), ("v0.41.0", [33]), ("v0.41.1", [45, 47, 48])],
-        )
-
-    def test_patch_issues_have_no_cap_and_share_one_version(self):
-        queue = [mk(n, ["point:3"]) for n in range(1, 8)]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1, 2, 3, 4, 5, 6, 7])])
-
-    def test_a_version_that_adds_a_requirement_is_cut_at_three(self):
-        queue = [mk(n, ["point:3", "adds:requirement"]) for n in range(1, 5)]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.2.0", [1, 2, 3]), ("v0.3.0", [4])])
-        queue = [mk(1, ["adds:requirement"])] + [mk(n, ["point:3"]) for n in range(2, 6)]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.2.0", [1, 2, 3]), ("v0.2.1", [4, 5])])
-
-    def test_a_requirement_issue_does_not_join_more_than_three_patch_issues(self):
-        queue = [mk(n, ["point:3"]) for n in range(1, 5)] + [mk(5, ["adds:requirement"])]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1, 2, 3, 4]), ("v0.2.0", [5])])
-        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["adds:requirement"])]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.2.0", [1, 2, 3])])
-
-    def test_documentation_does_not_count(self):
-        queue = [mk(1, ["point:3", "adds:requirement"]), mk(2, ["point:3"]), mk(3, ["documentation"]), mk(4, ["point:3"]), mk(5, ["point:3"])]
-        self.assertEqual(
-            slot_view(pr.allocate(queue, [], "v0.1.0")),
-            [("v0.2.0", [1, 2, 3, 4]), ("v0.2.1", [5])],
-        )
-
-    def test_urgent_closes_the_slot(self):
-        queue = [mk(1, ["urgency:high", "point:2"]), mk(2, ["point:2"]), mk(3, ["point:2"])]
-        self.assertEqual(
-            slot_view(pr.allocate(queue, [], "v0.1.0")),
-            [("v0.1.1", [1]), ("v0.1.2", [2, 3])],
-        )
-
-    def test_release_now_no_longer_closes_the_slot(self):
-        queue = [mk(1, ["release:now", "point:2"]), mk(2, ["point:2"]), mk(3, ["point:2"])]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1, 2, 3])])
-
-    def test_an_8_point_issue_stays_alone_among_patch_issues(self):
-        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["point:8"]), mk(4, ["point:3"]), mk(5, ["point:3"])]
-        self.assertEqual(
-            slot_view(pr.allocate(queue, [], "v0.41.0")),
-            [("v0.41.1", [1, 2]), ("v0.41.2", [3]), ("v0.41.3", [4, 5])],
-        )
-
-    def test_merged_patch_issues_and_the_ones_that_follow_share_a_version(self):
-        queue = [mk(1, ["bug", "point:2"], state="closed"), mk(2, ["bug", "point:2"], state="closed")] + [
-            mk(n, ["bug", "point:2"]) for n in range(3, 7)
-        ]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.55.1")), [("v0.55.2", [1, 2, 3, 4, 5, 6])])
-
-    def test_documentation_only_slot_joins_next(self):
-        queue = [mk(1, ["documentation"]), mk(2, ["point:8"]), mk(3, ["point:3"])]
-        self.assertEqual(
-            slot_view(pr.allocate(queue, [], "v0.1.0")),
-            [("v0.1.1", [1, 2]), ("v0.1.2", [3])],
-        )
-
-    def test_trailing_documentation_only_slot_stays(self):
-        queue = [mk(1, ["point:8"]), mk(2, ["documentation"])]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1]), ("v0.1.2", [2])])
-
-    def test_group_that_does_not_fit_starts_a_new_slot(self):
-        queue = [mk(1, ["point:3", "adds:requirement"]), mk(2, ["point:3"]), mk(3, ["point:3"]), mk(4, ["point:3"])]
-        slots = pr.allocate(queue, [[3, 4]], "v0.1.0")
-        self.assertEqual(slot_view(slots), [("v0.2.0", [1, 2]), ("v0.2.1", [3, 4])])
-
-    def test_group_that_fits_stays(self):
-        queue = [mk(1, ["point:3", "adds:requirement"]), mk(2, ["point:3"]), mk(3, ["point:3"])]
-        self.assertEqual(slot_view(pr.allocate(queue, [[2, 3]], "v0.1.0")), [("v0.2.0", [1, 2, 3])])
-
-    def test_minor_bump_for_requirement_then_patch(self):
-        queue = [mk(1, ["point:8", "adds:requirement"]), mk(2, ["point:8"]), mk(3, ["point:8", "adds:requirement"])]
-        self.assertEqual(
-            slot_view(pr.allocate(queue, [], "v0.5.3")),
-            [("v0.6.0", [1]), ("v0.6.1", [2]), ("v0.7.0", [3])],
-        )
-
-    def test_no_tag_starts_from_zero(self):
-        self.assertEqual(slot_view(pr.allocate([mk(1, ["adds:requirement"])], [], None)), [("v0.1.0", [1])])
-
-    def test_empty_queue(self):
-        self.assertEqual(pr.allocate([], [], "v0.1.0"), [])
+    def test_a_milestone_named_for_a_version_is_not_given_to_the_planner(self):
+        self.assertIsNone(pr.issue_json(mk(1, milestone="v0.56.0"))["milestone"])
+        self.assertEqual(pr.issue_json(mk(2, milestone="Orca files"))["milestone"], "Orca files")
 
 
 class Validation(unittest.TestCase):
@@ -270,709 +144,376 @@ class Validation(unittest.TestCase):
         return pr.validate_plan(plan, self.free, self.fixed, self.states)
 
     def test_valid(self):
-        plan = {"order": [42, 32, 50, 33], "groups": [[32, 50]], "blocked_by": {"33": [42, 7, 9]}, "reasons": {}}
+        plan = {"order": [42, 32, 50, 33], "blocked_by": {"33": [42, 7, 9]}, "reasons": {}}
         self.assertEqual(self.check(plan), [])
 
-    def test_touches_may_be_left_out_and_may_name_a_fixed_issue(self):
-        plan = {"order": [42, 32, 50, 33], "touches": {"32": ["ts/a.ts", "req:A-18"], "7": ["src-tauri/src/"]}}
+    def test_keys_of_an_older_plan_are_ignored(self):
+        plan = {"order": [42, 32, 50, 33], "groups": [[32, 50]], "touches": {"32": ["ts/a.ts"]}}
         self.assertEqual(self.check(plan), [])
-
-    def test_touches_must_map_a_number_to_strings(self):
-        base = {"order": [42, 32, 50, 33]}
-        for touches in (["ts/a.ts"], {"32": "ts/a.ts"}, {"32": [1]}, {"x": ["ts/a.ts"]}):
-            problems = self.check(dict(base, touches=touches))
-            self.assertEqual(len(problems), 1, touches)
-            self.assertIn("plan.touches", problems[0])
 
     def test_order_must_hold_each_free_issue_once(self):
-        problems = self.check({"order": [42, 32, 32, 7, 99], "groups": [], "blocked_by": {}})
+        problems = self.check({"order": [42, 32, 32, 7, 99], "blocked_by": {}})
         text = "\n".join(problems)
         for needle in ("#50", "#33", "twice", "#7", "#99"):
             self.assertIn(needle, text)
 
-    def test_group_must_be_adjacent(self):
-        problems = self.check({"order": [32, 42, 50, 33], "groups": [[32, 50]], "blocked_by": {}})
-        self.assertTrue(any("adjacent" in p for p in problems))
-
-    def test_group_with_8_points(self):
-        problems = self.check({"order": [32, 42, 50, 33], "groups": [[32, 42]], "blocked_by": {}})
-        self.assertTrue(any("point:8" in p for p in problems))
-
-    def test_group_of_documentation_may_exceed_three_members(self):
-        free = [mk(1), mk(2), mk(3), mk(4, ["documentation"])]
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4], "groups": [[1, 2, 3, 4]], "blocked_by": {}}, free, [], {}), [])
-
     def test_blocker_must_come_first(self):
-        problems = self.check({"order": [33, 42, 32, 50], "groups": [], "blocked_by": {"33": [42]}})
-        self.assertTrue(any("#33" in p and "#42" in p for p in problems))
+        problems = self.check({"order": [32, 50, 42, 33], "blocked_by": {"42": [33]}})
+        self.assertTrue(any("#33 blocks #42" in p for p in problems))
 
     def test_quick_bug_must_come_before_other_issues(self):
-        free = [mk(1), mk(2, ["bug", "point:2"]), mk(3, ["bug", "point:5"]), mk(4, ["bug", "point:2"])]
-        plan = lambda order, blocked=None: {"order": order, "groups": [], "blocked_by": blocked or {}}  # noqa: E731
-        check = lambda p: pr.validate_plan(p, free, [], {1: "open", 2: "open", 3: "open", 4: "open"})  # noqa: E731
-        self.assertEqual(check(plan([2, 4, 1, 3])), [])
-        problems = check(plan([1, 2, 4, 3]))
-        self.assertEqual(len(problems), 2)
-        self.assertTrue(all("bug of 1, 2 or 3 points" in p and "#1" in p for p in problems))
-        self.assertTrue(any("#2" in p for p in problems) and any("#4" in p for p in problems))
-        problems = check(plan([2, 3, 4, 1]))
-        self.assertEqual(len(problems), 1)
-        self.assertIn("#3", problems[0])
+        free = [mk(1), mk(2, ["bug", "point:2"]), mk(3)]
+        states = {1: "open", 2: "open", 3: "open"}
+        problems = pr.validate_plan({"order": [1, 2, 3]}, free, [], states)
+        self.assertEqual(problems, ["order: #2 is a bug of 1, 2 or 3 points but is placed after #1"])
+        self.assertEqual(pr.validate_plan({"order": [2, 1, 3]}, free, [], states), [])
 
     def test_bugs_of_1_2_and_3_points_must_come_first_but_not_those_of_5_and_8(self):
-        free = [mk(1), mk(2, ["bug", "point:1"]), mk(3, ["bug", "point:3"]), mk(4, ["bug", "point:5"]), mk(5, ["bug", "point:8"])]
-        states = {n: "open" for n in range(1, 6)}
-        check = lambda order: pr.validate_plan({"order": order, "groups": [], "blocked_by": {}}, free, [], states)  # noqa: E731
-        self.assertEqual(check([2, 3, 1, 4, 5]), [])
-        self.assertEqual(len(check([4, 5, 2, 3, 1])), 2)
-        self.assertEqual(check([2, 3, 5, 4, 1]), [])
+        free = [mk(1), mk(2, ["bug", "point:5"]), mk(3, ["bug", "point:8"])]
+        states = {1: "open", 2: "open", 3: "open"}
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3]}, free, [], states), [])
 
     def test_quick_bug_may_follow_what_blocks_it(self):
-        free = [mk(1), mk(5), mk(2, ["bug", "point:2"]), mk(4, ["bug", "point:2"])]
-        states = {1: "open", 2: "open", 4: "open", 5: "open", 9: "closed"}
-        check = lambda order, blocked: pr.validate_plan(  # noqa: E731
-            {"order": order, "groups": [], "blocked_by": blocked}, free, [], states
-        )
-        # #2 waits for #1 directly, and #4 for #1 through #2; #5 blocks nothing
-        self.assertEqual(check([1, 2, 4, 5], {"2": [1], "4": [2]}), [])
-        self.assertEqual(check([1, 2, 4, 5], {"2": [1], "4": [9]}), [])
-        problems = check([1, 5, 2, 4], {"2": [1]})
-        self.assertTrue(any("#5" in p and "#2" in p for p in problems))
-        # a blocker placed after the bug does not excuse it, and the blocker rule still applies
-        problems = check([2, 1, 4, 5], {"2": [1]})
-        self.assertTrue(any("blocks #2" in p for p in problems))
+        free = [mk(1), mk(2, ["bug", "point:2"], blocked=[1])]
+        states = {1: "open", 2: "open"}
+        plan = {"order": [1, 2], "blocked_by": {"2": [1]}}
+        self.assertEqual(pr.validate_plan(plan, free, [], states), [])
 
     def test_urgent_issue_must_come_before_other_issues_but_after_its_blockers(self):
-        free = [mk(1), mk(2, ["urgency:high"]), mk(3, ["bug", "point:2"]), mk(4, ["urgency:high"])]
-        states = {1: "open", 2: "open", 3: "open", 4: "open"}
-        check = lambda order, blocked=None: pr.validate_plan(  # noqa: E731
-            {"order": order, "groups": [], "blocked_by": blocked or {}}, free, [], states
-        )
-        self.assertEqual(check([2, 4, 3, 1]), [])
-        problems = check([3, 2, 4, 1])
-        self.assertEqual(len(problems), 2)
-        self.assertTrue(all("urgency:high" in p and "#3" in p for p in problems))
-        problems = check([1, 2, 4, 3])
-        self.assertTrue(any("#2" in p and "#1" in p for p in problems))
-        self.assertEqual(check([1, 2, 4, 3], {"2": [1], "4": [1], "3": [1]}), [])
+        free = [mk(1), mk(2, ["urgency:high"], blocked=[1]), mk(3)]
+        states = {1: "open", 2: "open", 3: "open"}
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "blocked_by": {"2": [1]}}, free, [], states), [])
+        problems = pr.validate_plan({"order": [3, 1, 2], "blocked_by": {"2": [1]}}, free, [], states)
+        self.assertTrue(any("#2 has urgency:high but is placed after #3" in p for p in problems))
 
     def test_quick_bug_may_follow_urgent_issues_only(self):
-        free = [mk(1), mk(2, ["urgency:high"]), mk(3, ["bug", "point:2"])]
+        free = [mk(1, ["urgency:high"]), mk(2, ["bug", "point:2"]), mk(3)]
         states = {1: "open", 2: "open", 3: "open"}
-        ok = pr.validate_plan({"order": [2, 3, 1], "groups": [], "blocked_by": {}}, free, [], states)
-        self.assertEqual(ok, [])
-        bad = pr.validate_plan({"order": [1, 3, 2], "groups": [], "blocked_by": {}}, free, [], states)
-        self.assertEqual(len(bad), 2)
-
-    def test_release_now_has_no_rule(self):
-        free = [mk(1), mk(2, ["release:now"])]
-        self.assertEqual(pr.validate_plan({"order": [1, 2], "groups": [], "blocked_by": {}}, free, [], {}), [])
-
-    def test_a_group_of_patch_issues_has_no_cap_and_a_group_that_adds_a_requirement_holds_three(self):
-        free = [mk(n) for n in range(1, 6)]
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4, 5], "groups": [[1, 2, 3, 4]], "blocked_by": {}}, free, [], {}), [])
-        free = [mk(1, ["adds:requirement"])] + [mk(n) for n in range(2, 6)]
-        problems = pr.validate_plan({"order": [1, 2, 3, 4, 5], "groups": [[1, 2, 3, 4]], "blocked_by": {}}, free, [], {})
-        self.assertEqual(len(problems), 1)
-        self.assertIn("more than 3", problems[0])
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3]}, free, [], states), [])
 
     def test_cycle(self):
-        problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"32": [50], "50": [32]}})
-        self.assertTrue(any("cycle" in p for p in problems))
-
-    def test_self_block_is_a_cycle(self):
-        problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"32": [32]}})
+        problems = self.check({"order": [32, 50, 42, 33], "blocked_by": {"32": [50], "50": [32]}})
         self.assertTrue(any("cycle" in p for p in problems))
 
     def test_unknown_blocker_and_fixed_blocked(self):
-        problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"33": [99], "7": [32]}})
+        problems = self.check({"order": [32, 50, 42, 33], "blocked_by": {"32": [777], "7": [32]}})
         text = "\n".join(problems)
-        self.assertIn("#99", text)
-        self.assertIn("#7", text)
+        self.assertIn("#777", text)
+        self.assertIn("#7 is not an issue to plan", text)
 
     def test_malformed(self):
-        self.assertTrue(self.check({"groups": [], "blocked_by": {}}))
-        self.assertTrue(self.check({"order": "x"}))
+        for plan in ([], {"order": "x"}, {"order": [1], "blocked_by": []}, {"order": [1], "blocked_by": {"1": 2}}):
+            self.assertEqual(len(self.check(plan)), 1, plan)
 
 
 class Relations(unittest.TestCase):
     def test_diff_adds_and_removes_for_free_issues_only(self):
-        current = {1: [5], 2: [6], 9: [1]}
-        add, remove = pr.diff_relations([1, 2, 3], current, {1: [5, 7], 3: [2]})
-        self.assertEqual(add, [(1, 7), (3, 2)])
-        self.assertEqual(remove, [(2, 6)])
+        add, remove = pr.diff_relations([1, 2], {1: [5], 3: [6]}, {1: [7], 2: [5]})
+        self.assertEqual(add, [(1, 7), (2, 5)])
+        self.assertEqual(remove, [(1, 5)])
 
     def test_no_change(self):
         self.assertEqual(pr.diff_relations([1], {1: [2]}, {1: [2]}), ([], []))
 
 
-class ReleaseDecision(unittest.TestCase):
-    NOW = datetime.datetime(2026, 11, 6, 12, 0, tzinfo=datetime.timezone.utc)
-
-    def waiting(self, n, labels=(), hours=1):
-        closed = self.NOW - datetime.timedelta(hours=hours)
-        return mk(n, labels, state="closed", milestone="v0.40.0", closed=closed.strftime("%Y-%m-%dT%H:%M:%SZ"))
-
-    def decide(self, waiting, pr_labels=None):
-        return pr.release_facts(waiting, pr_labels, self.NOW)
-
-    def test_nothing_waits(self):
-        out = self.decide([])
-        self.assertEqual((out["rule"], out["decision"]), ("R4", None))
-        self.assertEqual((out["changes"], out["bugs"], out["oldest_hours"]), (0, 0, None))
-
-    def test_hold_wins_over_everything(self):
-        out = self.decide([self.waiting(1, ["urgency:high"])], ["release:hold", "urgency:high"])
-        self.assertEqual((out["rule"], out["decision"]), ("R0", "wait"))
-
-    def test_urgent_change_or_urgent_release_pr(self):
-        out = self.decide([self.waiting(1, ["urgency:high", "point:2"]), self.waiting(2, ["point:8"])])
-        self.assertEqual((out["rule"], out["decision"]), ("R1", "release"))
-        out = self.decide([self.waiting(1)], ["urgency:high"])
-        self.assertEqual((out["rule"], out["decision"]), ("R1", "release"))
-        out = self.decide([self.waiting(1, ["release:now"])])
-        self.assertEqual(out["rule"], "R4")
-
-    def test_8_point_change(self):
-        out = self.decide([self.waiting(1, ["point:8"])])
-        self.assertEqual((out["rule"], out["decision"]), ("R2", "release"))
-
-    def test_important_bug(self):
-        out = self.decide([self.waiting(1, ["bug", "importance:high"])])
-        self.assertEqual((out["rule"], out["decision"]), ("R3", "release"))
-        out = self.decide([self.waiting(1, ["importance:high"])])
-        self.assertEqual(out["rule"], "R4")
-
-    def test_a_change_closed_as_not_planned_does_not_wait(self):
-        dropped = mk(1, ["point:8", "urgency:high"], state="closed", milestone="v0.40.0", closed="2026-11-06T11:00:00Z", reason="not_planned")
-        out = self.decide([dropped])
-        self.assertEqual((out["rule"], out["decision"], out["changes"], out["waiting"]), ("R4", None, 0, []))
-        out = self.decide([dropped, self.waiting(2, ["bug"], hours=30)])
-        self.assertEqual((out["rule"], out["changes"], out["oldest_hours"]), ("R4", 1, 30.0))
-
-    def test_documentation_is_not_counted(self):
-        out = self.decide([self.waiting(1, ["documentation", "urgency:high"]), self.waiting(2, ["documentation", "point:8"])])
-        self.assertEqual((out["rule"], out["decision"], out["changes"]), ("R4", None, 0))
-
-    def test_judgment_facts(self):
-        out = self.decide(
-            [self.waiting(1, ["bug"], hours=30), self.waiting(2, ["bug", "importance:low"], hours=5), self.waiting(3, hours=2)]
-        )
-        self.assertEqual((out["rule"], out["decision"]), ("R4", None))
-        self.assertEqual((out["changes"], out["bugs"], out["oldest_hours"]), (3, 2, 30.0))
-        self.assertEqual([w["number"] for w in out["waiting"]], [1, 2, 3])
-
-    def test_the_planned_version_and_its_open_issues_are_passed_on(self):
-        out = pr.release_facts([self.waiting(1)], None, self.NOW, "v0.40.0", 2)
-        self.assertEqual((out["milestone"], out["milestone_open"]), ("v0.40.0", 2))
-        out = self.decide([self.waiting(1)])
-        self.assertEqual((out["milestone"], out["milestone_open"]), (None, None))
-
-
-class OpenInMilestone(unittest.TestCase):
-    def test_counts_only_the_issues_the_release_waits_for(self):
-        issues = [
-            mk(1, milestone="v0.40.0"),
-            mk(2, ["needs:owner"], milestone="v0.40.0"),
-            mk(3, milestone="v0.40.0", blocked=[9]),
-            mk(4, ["documentation"], milestone="v0.40.0"),
-            mk(5, milestone="v0.41.0"),
-            mk(6, milestone="v0.40.0", state="closed"),
-            mk(7, ["bug"], milestone="v0.40.0"),
-        ]
-        self.assertEqual(pr.open_in_milestone(issues, "v0.40.0"), 2)
-        self.assertEqual(pr.open_in_milestone(issues, "v0.42.0"), 0)
-
-
-class Refuse(unittest.TestCase):
-    def test_open_issue_without_points_label(self):
-        issues = [mk(1, ["point:2"]), mk(2, ["bug"]), mk(3, state="closed")]
-        self.assertEqual([i.number for i in pr.missing_points(issues)], [2])
-
-
-def simulate(ops, milestones):
-    """Replays the ops against fake titles and fails like GitHub (422) on a held title."""
-    titles = {m["number"]: m["title"] for m in milestones}
-    gone = set()
-    next_number = 100
-    created = {}
-    for op in ops:
-        if op[0] == "create":
-            assert op[2] not in titles.values(), f"422 on create {op[2]}"
-            titles[next_number] = op[2]
-            created[op[1]] = next_number
-            next_number += 1
-        elif op[0] == "rename":
-            assert op[2] not in titles.values(), f"422 on rename to {op[2]}"
-            titles[op[1]] = op[2]
-        elif op[0] == "delete":
-            gone.add(op[1])
-            del titles[op[1]]
-    return titles, created
-
-
-class Writes(unittest.TestCase):
-    def test_steady_state_makes_no_write(self):
-        slots = [{"version": "v0.40.0", "issues": [43, 42]}, {"version": "v0.41.0", "issues": [33]}]
-        milestones = [ms(4, "v0.40.0", open_issues=1, closed_issues=1), ms(5, "v0.41.0", open_issues=1)]
-        ops, errors = pr.plan_writes(slots, milestones, {43: 4, 42: 4, 33: 5})
-        self.assertEqual((ops, errors), ([], []))
-
-    def test_new_issue_creates_a_milestone_and_sets_it(self):
-        slots = [{"version": "v0.40.0", "issues": [42]}, {"version": "v0.41.0", "issues": [50]}]
-        milestones = [ms(4, "v0.40.0", open_issues=1)]
-        ops, errors = pr.plan_writes(slots, milestones, {42: 4, 50: None})
-        self.assertEqual(errors, [])
-        self.assertEqual(ops, [("create", 1, "v0.41.0"), ("set", 50, ("new", 1))])
-
-    def test_moving_an_issue_only_sets_it(self):
-        slots = [{"version": "v0.40.0", "issues": [1, 2]}, {"version": "v0.41.0", "issues": [3]}]
-        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=2)]
-        ops, _ = pr.plan_writes(slots, milestones, {1: 4, 2: 5, 3: 5})
-        self.assertEqual(ops, [("set", 2, 4)])
-
-    def test_swap_goes_through_a_temporary_title(self):
-        slots = [{"version": "v0.40.0", "issues": [2]}, {"version": "v0.41.0", "issues": [1]}]
-        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=1)]
-        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 5})
-        self.assertEqual(errors, [])
-        titles, _ = simulate(ops, milestones)
-        self.assertEqual(titles, {4: "v0.41.0", 5: "v0.40.0"})
-        self.assertTrue(any(op[0] == "rename" and op[2].startswith("plan-tmp-") for op in ops))
-        self.assertEqual([op for op in ops if op[0] == "set"], [])
-
-    def test_three_cycle(self):
-        slots = [
-            {"version": "v0.40.0", "issues": [3]},
-            {"version": "v0.41.0", "issues": [1]},
-            {"version": "v0.42.0", "issues": [2]},
-        ]
-        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=1), ms(6, "v0.42.0", open_issues=1)]
-        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 5, 3: 6})
-        self.assertEqual(errors, [])
-        titles, _ = simulate(ops, milestones)
-        self.assertEqual(titles, {4: "v0.41.0", 5: "v0.42.0", 6: "v0.40.0"})
-
-    def test_shift_by_one_needs_no_temporary_title(self):
-        slots = [{"version": "v0.41.0", "issues": [1]}, {"version": "v0.42.0", "issues": [2]}]
-        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=1)]
-        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 5})
-        self.assertEqual(errors, [])
-        titles, _ = simulate(ops, milestones)
-        self.assertEqual(sorted(titles.values()), ["v0.41.0", "v0.42.0"])
-        self.assertFalse(any(op[2].startswith("plan-tmp-") for op in ops if op[0] == "rename"))
-
-    def test_target_held_by_a_closed_milestone_is_an_error(self):
-        slots = [{"version": "v0.39.2", "issues": [1]}]
-        milestones = [ms(3, "v0.39.2", state="closed", closed_issues=1)]
-        ops, errors = pr.plan_writes(slots, milestones, {1: None})
-        self.assertEqual(ops, [])
-        self.assertEqual(len(errors), 1)
-        self.assertIn("v0.39.2", errors[0])
-        self.assertIn("#3", errors[0])
-
-    def test_empty_milestone_is_deleted_only_when_its_title_is_ours(self):
-        slots = [{"version": "v0.40.0", "issues": [1]}]
-        milestones = [
-            ms(4, "v0.40.0", open_issues=1),
-            ms(5, "v0.41.0"),
-            ms(6, "plan-tmp-6"),
-            ms(7, "backlog"),
-            ms(8, "v0.42.0", open_issues=1),
-        ]
-        ops, _ = pr.plan_writes(slots, milestones, {1: 4})
-        self.assertEqual(ops, [("delete", 5), ("delete", 6)])
-
-    def test_unclaimed_milestone_with_foreign_issues_is_kept(self):
-        slots = [{"version": "v0.40.0", "issues": [1]}]
-        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=2)]
-        ops, _ = pr.plan_writes(slots, milestones, {1: 4})
-        self.assertEqual(ops, [])
-
-    def test_issue_leaving_makes_its_old_milestone_empty_and_deleted(self):
-        slots = [{"version": "v0.40.0", "issues": [1, 2]}]
-        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0", open_issues=1)]
-        ops, _ = pr.plan_writes(slots, milestones, {1: 4, 2: 5})
-        self.assertEqual(ops, [("set", 2, 4), ("delete", 5)])
-
-    def test_leftover_temporary_milestone_is_reused(self):
-        slots = [{"version": "v0.40.0", "issues": [1, 2]}]
-        milestones = [ms(4, "plan-tmp-4", open_issues=2)]
-        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 4})
-        self.assertEqual(errors, [])
-        self.assertEqual(ops, [("rename", 4, "v0.40.0")])
-
-    def test_unclaimed_holder_of_a_needed_title_is_reused_instead_of_a_create(self):
-        slots = [{"version": "v0.40.0", "issues": [1]}, {"version": "v0.41.0", "issues": [2]}]
-        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.41.0")]
-        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: None})
-        self.assertEqual(errors, [])
-        self.assertEqual(ops, [("set", 2, 5)])
-
-    def test_rename_blocked_by_an_unclaimed_holder_evicts_it(self):
-        slots = [{"version": "v0.40.0", "issues": [1]}]
-        milestones = [ms(4, "v0.39.9", open_issues=1), ms(5, "v0.40.0", open_issues=1)]
-        ops, errors = pr.plan_writes(slots, milestones, {1: 4, 2: 5})
-        self.assertEqual(errors, [])
-        titles, _ = simulate(ops, milestones)
-        self.assertEqual(titles[4], "v0.40.0")
-
-    def test_milestone_with_most_members_is_taken(self):
-        slots = [{"version": "v0.40.0", "issues": [1, 2, 3]}]
-        milestones = [ms(4, "v0.40.0", open_issues=1), ms(5, "v0.99.0", open_issues=2)]
-        ops, _ = pr.plan_writes(slots, milestones, {1: 4, 2: 5, 3: 5})
-        titles, _ = simulate(ops, milestones)
-        self.assertEqual(titles[5], "v0.40.0")
-        self.assertIn(("set", 1, 5), ops)
-
-
 class Report(unittest.TestCase):
     def test_lines(self):
-        slots = [{"version": "v0.40.0", "issues": [42, 43]}, {"version": "v0.41.0", "issues": [33]}]
-        issues = {42: mk(42, milestone="v0.40.0"), 43: mk(43, milestone="v0.39.2"), 33: mk(33)}
-        lines = pr.result_lines(slots, issues, {"33": "after #42"})
-        self.assertEqual(lines, ["#42 v0.40.0", "#43 v0.40.0 (was v0.39.2)", "#33 v0.41.0 - after #42"])
+        issues = {1: mk(1, milestone="Orca files"), 2: mk(2)}
+        lines = pr.result_lines([2, 1], issues, {"1": "same area as #2"})
+        self.assertEqual(lines, ["1. #2 issue 2", "2. #1 issue 1 [Orca files] - same area as #2"])
+
+
+def waiting(n, labels=(), closed="2026-11-06T10:00:00Z"):
+    return mk(n, labels, state="closed", closed=closed)
 
 
 class Next(unittest.TestCase):
-    def test_next(self):
-        milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0"), ms(6, "v0.41.1"), ms(7, "backlog")]
+    def test_the_queue_follows_the_saved_plan_and_the_issues_the_plan_lacks_come_last(self):
         issues = [
-            mk(43, ["documentation"], milestone="v0.40.0", state="closed", closed="2026-11-04T00:00:00Z"),
-            mk(44, ["point:8"], milestone="v0.40.0", state="closed", closed="2026-11-04T01:00:00Z", reason="not_planned"),
-            mk(42, ["point:8"], milestone="v0.40.0"),
-            mk(41, ["point:2"], milestone="v0.40.0", created="2026-11-01T00:00:01Z"),
-            mk(40, ["point:2"], milestone="v0.40.0", blocked=[42]),
-            mk(39, ["needs:owner"], milestone="v0.40.0"),
-            mk(38, ["needs:owner"], milestone="v0.40.0", blocked=[42]),
-            mk(37, [], milestone="v0.40.0"),
-            mk(33, [], milestone="v0.41.0"),
-            mk(48, ["needs:owner"], milestone="v0.41.1"),
+            mk(1, ["point:3"], created="2026-11-01T00:00:01Z"),
+            mk(2, ["point:3"], created="2026-11-01T00:00:02Z"),
+            mk(3, ["point:3"], created="2026-11-01T00:00:03Z"),
+            mk(4, ["point:2", "bug"], created="2026-11-01T00:00:04Z"),
+            mk(5, ["point:1"], created="2026-11-01T00:00:05Z"),
         ]
-        out = pr.build_next(issues, milestones, {37}, mine={37})
-        self.assertEqual(out["milestone"], "v0.40.0")
-        self.assertEqual([i["number"] for i in out["start"]], [41, 42, 33])
-        self.assertEqual([i["milestone"] for i in out["start"]], ["v0.40.0", "v0.40.0", "v0.41.0"])
-        self.assertEqual([i["number"] for i in out["in_progress"]], [37])
+        plan = {"order": [3, 1, 2]}
+        out = pr.build_next(issues, set(), frozenset(), plan)
+        self.assertEqual([i["number"] for i in out["start"]], [3, 1, 2, 4, 5])
+        self.assertEqual(out["start"][0]["points"], 3)
+        self.assertIsNone(out["stop"])
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual([i["number"] for i in out["start"]], [4, 5, 1, 2, 3])
+
+    def test_needs_owner_blocked_and_held_issues_are_reported_not_started(self):
+        issues = [
+            mk(1, ["point:2"]),
+            mk(2, ["point:2", "needs:owner"]),
+            mk(3, ["point:2"], blocked=[1]),
+            mk(4, ["point:2"]),
+        ]
+        out = pr.build_next(issues, {4}, frozenset(), None)
+        self.assertEqual([i["number"] for i in out["start"]], [1])
+        self.assertEqual([i["number"] for i in out["needs_owner"]], [2])
+        self.assertEqual(out["blocked"], [{"number": 3, "title": "issue 3", "blocked_by": [1]}])
+        self.assertEqual([(i["number"], i["reason"]) for i in out["held"]], [(4, "pull request open")])
+
+    def test_an_issue_the_hand_over_lists_is_in_progress_and_is_not_held(self):
+        issues = [mk(1, ["point:2"]), mk(2, ["point:2"])]
+        out = pr.build_next(issues, {1}, frozenset({1}), None)
+        self.assertEqual([i["number"] for i in out["in_progress"]], [1])
         self.assertEqual(out["held"], [])
-        self.assertEqual([i["number"] for i in out["needs_owner"]], [38, 39])
-        self.assertEqual(out["blocked"], [{"number": 40, "title": "issue 40", "blocked_by": [42]}])
-        self.assertEqual([i["number"] for i in out["waiting"]], [43])
-        self.assertFalse(out["later_needs_owner_only"])
-        self.assertEqual(set(out["start"][0]), {"number", "title", "labels", "milestone"})
+        self.assertEqual([i["number"] for i in out["start"]], [2])
 
-    def test_an_issue_another_session_has_is_held(self):
-        milestones = [ms(4, "v0.40.0")]
-        issues = [mk(n, milestone="v0.40.0") for n in (1, 2, 3, 4)] + [mk(5, ["needs:owner"], milestone="v0.40.0")]
-        out = pr.build_next(issues, milestones, {1, 2}, {3: "fix/issue-3-x", 4: "fix/issue-4-y", 5: "fix/issue-5-z"}, mine={2, 4})
-        self.assertEqual([i["number"] for i in out["start"]], [4])
-        self.assertEqual([i["number"] for i in out["in_progress"]], [2])
-        self.assertEqual(
-            [(i["number"], i["reason"]) for i in out["held"]], [(1, "pull request open"), (3, "worktree fix/issue-3-x")]
-        )
-        self.assertEqual([i["number"] for i in out["needs_owner"]], [5])
+    def test_a_point_8_issue_does_not_start_while_a_change_waits(self):
+        issues = [mk(1, ["point:8"]), mk(2, ["point:2"]), waiting(3, ["point:2"])]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual([i["number"] for i in out["start"]], [2])
+        self.assertEqual(out["waits_for_release"], [1])
+        self.assertEqual([w["number"] for w in out["waiting"]], [3])
 
-    def test_parallel_leaves_out_what_overlaps_an_issue_another_session_holds_in_any_milestone(self):
-        milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0")]
+    def test_a_point_8_issue_starts_when_nothing_waits(self):
+        issues = [mk(1, ["point:8"]), mk(2, ["point:2"]), waiting(3, ["documentation"])]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual([i["number"] for i in out["start"]], [2, 1])
+        self.assertEqual(out["waits_for_release"], [])
+        self.assertEqual(out["waiting"], [])
+
+    def test_the_parts_of_a_split_point_8_issue_start_together_when_nothing_waits(self):
+        issues = [mk(1, ["point:3", "solo"], milestone="Slack thread"), mk(2, ["point:3", "solo"], milestone="Slack thread"), mk(3, ["point:2"])]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual(sorted(i["number"] for i in out["start"]), [1, 2, 3])
+        self.assertEqual(out["waits_for_release"], [])
+
+    def test_a_solo_part_does_not_start_while_a_change_waits(self):
+        issues = [mk(1, ["point:3", "solo"], milestone="Slack thread"), mk(2, ["point:2"]), waiting(3, ["point:2"])]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual([i["number"] for i in out["start"]], [2])
+        self.assertEqual(out["waits_for_release"], [1])
+
+    def test_nothing_starts_while_a_part_of_a_solo_unit_waits_for_the_owner_and_the_rest_of_the_unit_waits_too(self):
         issues = [
-            mk(1, milestone="v0.40.0"),
-            mk(2, milestone="v0.40.0"),
-            mk(3, milestone="v0.40.0"),
-            mk(4, milestone="v0.41.0"),
-            mk(5, milestone="v0.41.0"),
+            waiting(1, ["point:3", "solo"]),
+            mk(2, ["point:3", "solo"], milestone="Slack thread"),
+            mk(3, ["point:2"]),
         ]
-        plan = {
-            "order": [1, 2, 3, 4, 5],
-            "touches": {"1": ["ts/a.ts"], "2": ["ts/b.ts"], "3": ["ts/c.ts"], "4": ["ts/d.ts"], "5": ["ts/e.ts"]},
-        }
-        out = pr.build_next(issues, milestones, {3}, {4: "fix/issue-4-x"}, plan=plan)
-        self.assertEqual([i["number"] for i in out["start"]], [1, 2, 5])
-        self.assertEqual(out["parallel"], [1, 2, 5])
-        plan["touches"]["1"] = ["ts/c.ts"]
-        plan["touches"]["5"] = ["ts/d.ts"]
-        out = pr.build_next(issues, milestones, {3}, {4: "fix/issue-4-x"}, plan=plan)
-        self.assertEqual(out["parallel"], [2])
-
-    def test_worktree_issues(self):
-        porcelain = (
-            "worktree /w/cookapps\nHEAD aaa\nbranch refs/heads/issue-9-main\n\n"
-            "worktree /w/cookapps/.claude/worktrees/fix-issue-12-foo\nHEAD bbb\nbranch refs/heads/fix/issue-12-foo\n\n"
-            "worktree /w/cookapps/.claude/worktrees/issue-7\nHEAD ccc\nbranch refs/heads/feat/C-2\n\n"
-            "worktree /w/cookapps/.claude/worktrees/feat-C-2\nHEAD ddd\nbranch refs/heads/feat/C-2\nlocked\n\n"
-            "worktree /w/cookapps/.claude/worktrees/x\nHEAD eee\ndetached\n"
-        )
-        self.assertEqual(pr.worktree_issues(porcelain), {12: "fix/issue-12-foo", 7: "feat/C-2"})
-        self.assertEqual(pr.worktree_issues(""), {})
-
-    def test_later_milestones_only_need_the_owner(self):
-        milestones = [ms(4, "v0.40.0"), ms(6, "v0.41.1")]
-        issues = [mk(1, [], milestone="v0.40.0"), mk(2, ["needs:owner"], milestone="v0.41.1")]
-        self.assertTrue(pr.build_next(issues, milestones, set())["later_needs_owner_only"])
-
-    def test_skips_a_milestone_without_open_issues(self):
-        milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0")]
-        issues = [mk(1, milestone="v0.40.0", state="closed", closed="2026-11-04T00:00:00Z"), mk(2, milestone="v0.41.0")]
-        out = pr.build_next(issues, milestones, set())
-        self.assertEqual(out["milestone"], "v0.41.0")
-        self.assertEqual([i["number"] for i in out["waiting"]], [1])
-
-    def test_nothing_planned(self):
-        out = pr.build_next([], [ms(4, "v0.40.0")], set())
-        self.assertIsNone(out["milestone"])
+        out = pr.build_next(issues, set(), frozenset(), None)
         self.assertEqual(out["start"], [])
-        self.assertFalse(out["later_needs_owner_only"])
+        self.assertIn("solo", out["stop"])
+
+    def test_nothing_new_starts_while_a_point_8_change_waits_for_the_owner(self):
+        issues = [mk(1, ["point:2"]), waiting(2, ["point:8"])]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual(out["start"], [])
+        self.assertIn("point:8", out["stop"])
+
+    def test_nothing_open(self):
+        out = pr.build_next([], set(), frozenset(), None)
+        self.assertEqual((out["start"], out["in_progress"], out["stop"]), ([], [], None))
+
+    def test_a_broken_plan_is_taken_as_no_plan(self):
+        issues = [mk(1, ["point:3"]), mk(2, ["point:1"])]
+        out = pr.build_next(issues, set(), frozenset(), {"order": "x"})
+        self.assertEqual([i["number"] for i in out["start"]], [2, 1])
+
+
+class Unsplit(unittest.TestCase):
+    def test_a_big_issue_with_no_milestone_and_no_needs_owner_is_unsplit(self):
+        issues = [
+            mk(1, ["point:5"]),
+            mk(2, ["point:8", "bug"]),
+            mk(3, ["point:3"]),
+            mk(4, ["point:5", "needs:owner"]),
+            mk(5, ["point:8"], milestone="Orca files", ms_number=7),
+            mk(6, ["point:5"], state="closed"),
+        ]
+        self.assertEqual(numbers(pr.unsplit(issues)), [1, 2])
+
+    def test_a_big_issue_in_a_milestone_named_for_a_version_is_unsplit(self):
+        issues = [
+            mk(1, ["point:5"], milestone="v0.56.0", ms_number=3),
+            mk(2, ["point:8"], milestone="Orca files", ms_number=7),
+            mk(3, ["point:3"], milestone="v0.56.0", ms_number=3),
+            mk(4, ["point:5", "needs:owner"], milestone="v0.56.0", ms_number=3),
+        ]
+        self.assertEqual(numbers(pr.unsplit(issues)), [1])
+
+    def test_an_issue_in_hand_is_not_unsplit(self):
+        issues = [mk(1, ["point:5"]), mk(2, ["point:8"], milestone="v0.56.0"), mk(3, ["point:5"]), mk(4, ["point:5"])]
+        self.assertEqual(numbers(pr.unsplit(issues, pr_closing={2}, mine={3})), [1, 4])
+
+    def test_nothing_is_unsplit_once_every_big_issue_is_split_or_waits_for_the_owner(self):
+        self.assertEqual(pr.unsplit([mk(1, ["point:2"]), mk(2, ["point:5", "needs:owner"])]), [])
+
+
+class Migration(unittest.TestCase):
+    def ms(self, number, title, open_issues, closed_issues=0):
+        return {"number": number, "title": title, "open_issues": open_issues, "closed_issues": closed_issues}
+
+    def test_a_version_milestone_is_taken_off_an_issue_of_less_than_5_points(self):
+        issues = [
+            mk(1, ["point:3"], milestone="v0.56.0"),
+            mk(2, ["point:5"], milestone="v0.56.0"),
+            mk(3, ["point:8", "needs:owner"], milestone="v0.56.0"),
+            mk(4, ["point:2"], milestone="Orca files"),
+            mk(5, ["point:1"]),
+            mk(6, [], milestone="v0.57.0"),
+            mk(7, ["point:2"], milestone="v0.56.0", state="closed"),
+        ]
+        out = pr.migration(issues, [self.ms(1, "v0.56.0", 3, 1), self.ms(2, "v0.57.0", 1), self.ms(3, "Orca files", 1)])
+        self.assertEqual(out["clear"], [1, 6])
+
+    def test_a_version_milestone_with_no_open_issue_left_is_closed(self):
+        issues = [mk(1, ["point:3"], milestone="v0.56.0"), mk(2, ["point:5"], milestone="v0.57.0")]
+        milestones = [self.ms(1, "v0.56.0", 1), self.ms(2, "v0.57.0", 1), self.ms(3, "v0.58.0", 0, 2), self.ms(4, "Orca files", 0, 2)]
+        self.assertEqual(pr.migration(issues, milestones)["close"], ["v0.56.0", "v0.58.0"])
+
+    def test_a_version_milestone_that_holds_an_issue_of_someone_else_stays_open(self):
+        issues = [mk(1, ["point:3"], milestone="v0.56.0")]
+        self.assertEqual(pr.migration(issues, [self.ms(1, "v0.56.0", 2)])["close"], [])
 
 
 class Prune(unittest.TestCase):
-    states = {1: "open", 2: "open", 3: "open", 4: "closed", 5: "open", 6: "closed"}
-
-    def prune(self, plan, fixed=(5,)):
-        return pr.prune_plan(plan, self.states, set(fixed))
-
     def test_closed_and_fixed_issues_leave_every_part_of_the_plan(self):
         plan = {
-            "order": [4, 1, 5, 2, 3],
-            "groups": [[1, 2], [4, 3]],
-            "blocked_by": {"4": [1], "2": [5, 4], "3": [4]},
-            "reasons": {"4": "r4", "1": "r1", "5": "r5"},
-            "touches": {"4": ["a"], "1": ["b"], "5": ["c"]},
+            "order": [1, 2, 3, 4],
+            "blocked_by": {"2": [1], "3": [2]},
+            "reasons": {"1": "a", "2": "b", "3": "c"},
         }
-        pruned, dropped = self.prune(plan)
-        self.assertEqual(pruned["order"], [1, 2, 3])
-        self.assertEqual(pruned["groups"], [[1, 2]])
-        self.assertEqual(pruned["blocked_by"], {"2": [5, 4], "3": [4]})
-        self.assertEqual(pruned["reasons"], {"1": "r1"})
-        self.assertEqual(pruned["touches"], plan["touches"])
-        self.assertEqual(dropped, [(4, "closed"), (5, "fixed")])
-
-    def test_a_group_left_with_fewer_than_two_is_dropped_and_one_that_lost_nothing_stays(self):
-        pruned, _ = self.prune({"order": [1, 2, 3, 4, 5], "groups": [[1, 4], [2, 3], [5]]})
-        self.assertEqual(pruned["groups"], [[2, 3]])
-        pruned, _ = self.prune({"order": [1, 2, 3], "groups": [[3]]})
-        self.assertEqual(pruned["groups"], [[3]])
-
-    def test_a_group_member_not_in_order_is_still_dropped(self):
-        pruned, dropped = self.prune({"order": [1, 2], "groups": [[2, 4]]})
-        self.assertEqual(pruned["groups"], [])
-        self.assertEqual(dropped, [(4, "closed")])
+        pruned, dropped = pr.prune_plan(plan, {1: "closed", 3: "open"}, {2})
+        self.assertEqual(pruned["order"], [3, 4])
+        self.assertEqual(pruned["blocked_by"], {"3": [2]})  # a blocker that is fixed stays: only the keys of dropped issues go
+        self.assertEqual(pruned["reasons"], {"3": "c"})
+        self.assertEqual(dropped, [(1, "closed"), (2, "fixed")])
 
     def test_a_number_nobody_knows_stays_for_the_validation_to_refuse(self):
-        pruned, dropped = self.prune({"order": [1, 99, 4]})
+        pruned, dropped = pr.prune_plan({"order": [1, 99]}, {1: "open"}, set())
         self.assertEqual(pruned["order"], [1, 99])
-        self.assertEqual(dropped, [(4, "closed")])
-        free = [mk(1)]
-        problems = pr.validate_plan(pruned, free, [], {1: "open"})
-        self.assertTrue(any("#99" in p for p in problems))
+        self.assertEqual(dropped, [])
 
     def test_fixed_wins_over_closed_and_each_number_is_reported_once(self):
-        pruned, dropped = pr.prune_plan({"order": [6, 1], "reasons": {"6": "x"}, "blocked_by": {"6": [1]}}, self.states, {6})
-        self.assertEqual(dropped, [(6, "fixed")])
-        self.assertEqual(pruned, {"order": [1], "groups": [], "blocked_by": {}, "reasons": {}})
+        plan = {"order": [1, 2], "blocked_by": {"1": [2]}, "reasons": {"1": "x"}}
+        _, dropped = pr.prune_plan(plan, {1: "closed", 2: "closed"}, {1})
+        self.assertEqual(dropped, [(1, "fixed"), (2, "closed")])
 
     def test_a_plan_of_the_wrong_shape_is_returned_as_it_is(self):
-        for plan in ({"order": "x"}, [1, 2], {"order": [1], "touches": {"1": "a"}}):
-            self.assertEqual(pr.prune_plan(plan, self.states, set()), (plan, []))
+        self.assertEqual(pr.prune_plan({"order": "x"}, {}, set()), ({"order": "x"}, []))
 
     def test_a_pruned_plan_passes_the_validation_that_the_full_one_fails(self):
-        free = [mk(1), mk(2)]
-        fixed = [mk(5)]
-        states = {1: "open", 2: "open", 5: "open", 4: "closed"}
-        plan = {"order": [4, 1, 5, 2], "blocked_by": {"2": [1]}}
-        self.assertTrue(pr.validate_plan(plan, free, fixed, states))
-        pruned, _ = pr.prune_plan(plan, states, {5})
-        self.assertEqual(pr.validate_plan(pruned, free, fixed, states), [])
+        free = [mk(2), mk(3)]
+        states = {2: "open", 3: "open", 1: "closed"}
+        plan = {"order": [1, 2, 3], "blocked_by": {"3": [1]}}
+        self.assertTrue(pr.validate_plan(plan, free, [], states))
+        pruned, _ = pr.prune_plan(plan, states, set())
+        self.assertEqual(pr.validate_plan(pruned, free, [], states), [])
 
     def test_mentioned(self):
-        plan = {"order": [3, 1], "groups": [[1, 2]], "blocked_by": {"4": [9]}, "reasons": {"5": "x", "3": "y"}}
-        self.assertEqual(pr.mentioned(plan), [3, 1, 2, 4, 5])
+        plan = {"order": [3, 1], "blocked_by": {"2": [9]}, "reasons": {"1": "a", "4": "b"}}
+        self.assertEqual(pr.mentioned(plan), [3, 1, 2, 4])
         self.assertEqual(pr.mentioned({"order": "x"}), [])
 
 
-class Overlap(unittest.TestCase):
-    def test_equal_entries_overlap(self):
-        self.assertTrue(pr.overlaps(["ts/a.ts"], ["ts/b.ts", "ts/a.ts"]))
-        self.assertTrue(pr.overlaps(["req:A-18"], ["req:A-18"]))
-        self.assertFalse(pr.overlaps(["ts/a.ts", "req:A-1"], ["ts/b.ts", "req:A-18"]))
+class ReleaseFacts(unittest.TestCase):
+    def facts(self, issues, release_pr=None, last_tag="v0.55.2"):
+        return pr.release_facts(issues, release_pr, last_tag)
 
-    def test_a_directory_overlaps_what_lies_under_it(self):
-        self.assertTrue(pr.overlaps(["src-tauri/src/"], ["src-tauri/src/orca.rs"]))
-        self.assertTrue(pr.overlaps(["src-tauri/src/orca.rs"], ["src-tauri/src/"]))
-        self.assertTrue(pr.overlaps(["src-tauri/"], ["src-tauri/src/"]))
-        self.assertFalse(pr.overlaps(["src-tauri/src/"], ["src-tauri/srcs/a.rs"]))
-        self.assertFalse(pr.overlaps(["src-tauri/src"], ["src-tauri/src/orca.rs"]))
+    def test_nothing_waits(self):
+        out = self.facts([mk(1, ["point:2"])])
+        self.assertEqual(out["changes"], [])
+        self.assertEqual((out["urgent"], out["solo"], out["minor"], out["version"], out["release_pr"]), (False, False, False, None, None))
 
-    def test_an_unknown_issue_overlaps_every_issue(self):
-        self.assertTrue(pr.overlaps(None, ["a"]))
-        self.assertTrue(pr.overlaps(["a"], None))
-        self.assertTrue(pr.overlaps(None, None))
-        self.assertTrue(pr.overlaps(None, []))
-
-    def test_an_issue_that_touches_nothing_overlaps_no_known_issue(self):
-        self.assertFalse(pr.overlaps([], ["a"]))
-
-
-class ClosedStates(unittest.TestCase):
-    def test_the_milestones_to_read_are_the_closed_ones_with_closed_issues_newest_first(self):
-        milestones = [
-            ms(1, "v0.38.0", "closed", 0, 4),
-            ms(2, "v0.40.0", "closed", 0, 2),
-            ms(3, "v0.39.0", "closed", 0, 0),
-            ms(4, "v0.41.0", "open", 1, 1),
-            ms(5, "backlog", "closed", 0, 3),
-            ms(6, "v0.39.1", "closed", 0, 1),
-        ]
-        self.assertEqual(pr.closed_milestone_numbers(milestones), [2, 6, 1])
-
-    def test_the_issues_read_in_bulk_are_the_closed_numbers_asked_for(self):
-        raw = [
-            {"number": 5, "state": "closed"},
-            {"number": 6, "state": "closed", "pull_request": {}},
-            {"number": 7, "state": "closed"},
-            {"number": 8, "state": "open"},
-        ]
-        self.assertEqual(pr.closed_in(raw, {5, 6, 8, 9}), {5: "closed"})
-        self.assertEqual(pr.closed_in([], {5}), {})
-
-
-class Parallel(unittest.TestCase):
-    def test_overlapping_issues_are_skipped_and_the_next_is_looked_at(self):
-        touches = {1: ["ts/a.ts"], 2: ["ts/a.ts"], 3: ["ts/b.ts"], 4: ["ts/c.ts"], 5: ["ts/d.ts"]}
-        self.assertEqual(pr.pick_parallel([1, 2, 3, 4, 5], [], touches), [1, 3, 4])
-
-    def test_the_cap_counts_the_issues_in_progress(self):
-        touches = {n: [f"ts/{n}.ts"] for n in range(1, 8)}
-        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [], touches), [1, 2, 3])
-        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [5], touches), [1, 2])
-        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [5, 6], touches), [1])
-        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [5, 6, 7], touches), [])
-
-    def test_an_issue_overlapping_one_in_progress_is_skipped(self):
-        touches = {1: ["ts/a.ts"], 2: ["ts/b.ts"], 9: ["ts/a.ts"]}
-        self.assertEqual(pr.pick_parallel([1, 2], [9], touches), [2])
-
-    def test_an_issue_the_plan_does_not_know_overlaps_all(self):
-        touches = {1: ["ts/a.ts"], 3: ["ts/c.ts"]}
-        self.assertEqual(pr.pick_parallel([2, 1, 3], [], touches), [2])
-        self.assertEqual(pr.pick_parallel([1, 2, 3], [], touches), [1, 3])
-        self.assertEqual(pr.pick_parallel([1, 3], [9], touches), [])
-
-    def test_the_first_unknown_candidate_alone_when_nothing_is_in_progress(self):
-        self.assertEqual(pr.pick_parallel([1, 2, 3], [], {}), [1])
-
-    def test_nothing_to_start(self):
-        self.assertEqual(pr.pick_parallel([], [], {}), [])
-        self.assertEqual(pr.PARALLEL, 3)
-
-    def test_an_issue_overlapping_one_another_session_holds_is_skipped(self):
-        touches = {1: ["ts/a.ts"], 2: ["ts/b.ts"], 9: ["ts/a.ts"]}
-        self.assertEqual(pr.pick_parallel([1, 2], [], touches, [9]), [2])
-
-    def test_the_issues_held_by_other_sessions_are_not_counted_in_the_cap(self):
-        touches = {n: [f"ts/{n}.ts"] for n in range(1, 10)}
-        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [], touches, [7, 8, 9]), [1, 2, 3])
-        self.assertEqual(pr.pick_parallel([1, 2, 3, 4], [5], touches, [7, 8, 9]), [1, 2])
-
-    def test_a_held_issue_the_plan_does_not_know_overlaps_all(self):
-        self.assertEqual(pr.pick_parallel([1, 2], [], {1: ["ts/a.ts"], 2: ["ts/b.ts"]}, [9]), [])
-
-
-class NextAcrossMilestones(unittest.TestCase):
-    milestones = [ms(4, "v0.40.0"), ms(5, "v0.41.0"), ms(6, "v0.42.0")]
-
-    def test_start_runs_through_the_later_milestones_in_the_order_of_the_plan(self):
-        issues = [
-            mk(10, milestone="v0.40.0"),
-            mk(11, milestone="v0.40.0"),
-            mk(12, milestone="v0.41.0"),
-            mk(13, milestone="v0.41.0"),
-            mk(14, milestone="v0.42.0"),
-            mk(15, milestone="v0.42.0"),
-        ]
-        plan = {"order": [11, 10, 13, 12, 15, 14], "touches": {}}
-        out = pr.build_next(issues, self.milestones, set(), plan=plan)
-        self.assertEqual([i["number"] for i in out["start"]], [11, 10, 13, 12, 15, 14])
-        self.assertEqual(out["milestone"], "v0.40.0")
-
-    def test_the_issues_the_plan_lacks_come_last_in_their_version_oldest_first(self):
-        issues = [
-            mk(10, milestone="v0.40.0", created="2026-11-01T00:00:05Z"),
-            mk(11, milestone="v0.40.0", created="2026-11-01T00:00:01Z"),
-            mk(12, milestone="v0.40.0", created="2026-11-01T00:00:03Z"),
-            mk(13, milestone="v0.41.0", created="2026-11-01T00:00:02Z"),
-            mk(14, milestone="v0.41.0", created="2026-11-01T00:00:01Z"),
-        ]
-        out = pr.build_next(issues, self.milestones, set(), plan={"order": [12, 13]})
-        self.assertEqual([i["number"] for i in out["start"]], [12, 11, 10, 13, 14])
-        out = pr.build_next(issues, self.milestones, set())
-        self.assertEqual([i["number"] for i in out["start"]], [11, 12, 10, 14, 13])
-
-    def test_needs_owner_held_and_blocked_issues_of_a_later_milestone_are_left_out_and_not_reported(self):
-        issues = [
-            mk(10, milestone="v0.40.0"),
-            mk(21, ["needs:owner"], milestone="v0.41.0"),
-            mk(22, milestone="v0.41.0"),
-            mk(23, milestone="v0.41.0"),
-            mk(24, milestone="v0.41.0", blocked=[10]),
-            mk(25, milestone="v0.41.0"),
-            mk(26, milestone="v0.41.0"),
-        ]
-        out = pr.build_next(issues, self.milestones, {22}, {23: "fix/issue-23-x"}, mine={26})
-        self.assertEqual([i["number"] for i in out["start"]], [10, 25, 26])
-        self.assertEqual(out["held"], [])
-        self.assertEqual(out["needs_owner"], [])
-        self.assertEqual(out["blocked"], [])
-
-    def test_the_later_milestones_are_taken_and_an_issue_that_merges_first_breaks_no_allocation(self):
-        issues = [
-            mk(10, ["point:8", "adds:requirement"], milestone="v0.40.0"),
-            mk(11, ["adds:requirement"], milestone="v0.41.0"),
-            mk(12, ["adds:requirement"], milestone="v0.41.0"),
-        ]
-        plan = {"order": [10, 11, 12], "touches": {"10": ["ts/a.ts"], "11": ["ts/b.ts"], "12": ["ts/c.ts"]}}
-        out = pr.build_next(issues, self.milestones, set(), plan=plan)
-        self.assertEqual(out["parallel"], [10, 11, 12])
-        done = mk(11, ["adds:requirement"], milestone="v0.41.0", state="closed")
-        queue = [done, issues[0], issues[2]]
-        self.assertEqual(
-            slot_view(pr.allocate(queue, [], "v0.39.0")),
-            [("v0.40.0", [11]), ("v0.41.0", [10]), ("v0.42.0", [12])],
+    def test_the_changes_are_the_merged_ones_oldest_first_and_documentation_is_not_one(self):
+        out = self.facts(
+            [
+                waiting(1, ["point:2"], closed="2026-11-06T12:00:00Z"),
+                waiting(2, ["point:3"], closed="2026-11-06T10:00:00Z"),
+                waiting(3, ["documentation"]),
+                mk(4, state="closed", closed="2026-11-06T09:00:00Z", reason="not_planned"),
+            ]
         )
+        self.assertEqual([c["number"] for c in out["changes"]], [2, 1])
+        self.assertEqual(out["changes"][0]["points"], 3)
 
-    def test_an_issue_of_this_run_in_progress_in_a_later_milestone_is_in_progress(self):
-        issues = [mk(10, milestone="v0.40.0"), mk(12, milestone="v0.41.0"), mk(13, milestone="v0.41.0")]
-        out = pr.build_next(issues, self.milestones, {12, 13}, mine={12})
-        self.assertEqual([(i["number"], i["milestone"]) for i in out["in_progress"]], [(12, "v0.41.0")])
-        self.assertEqual([i["number"] for i in out["start"]], [10])
-        self.assertEqual(out["held"], [])
+    def test_the_digit_follows_the_requirement_label(self):
+        self.assertEqual(self.facts([waiting(1)])["version"], "v0.55.3")
+        out = self.facts([waiting(1), waiting(2, ["adds:requirement"])])
+        self.assertEqual((out["minor"], out["version"]), (True, "v0.56.0"))
 
-    def test_parallel_picks_the_issues_that_do_not_overlap(self):
-        issues = [mk(10, milestone="v0.40.0"), mk(11, milestone="v0.40.0"), mk(12, milestone="v0.41.0"), mk(13, milestone="v0.42.0")]
-        plan = {
-            "order": [10, 11, 12, 13],
-            "touches": {"10": ["ts/a.ts"], "11": ["ts/a.ts"], "12": ["ts/b.ts"], "13": ["req:A-18"]},
-        }
-        out = pr.build_next(issues, self.milestones, set(), plan=plan)
-        self.assertEqual(out["parallel"], [10, 12, 13])
+    def test_no_tag_starts_from_zero(self):
+        self.assertEqual(self.facts([waiting(1)], last_tag=None)["version"], "v0.0.1")
 
-    def test_parallel_leaves_room_for_the_issues_in_progress_and_avoids_their_files(self):
-        issues = [mk(9, milestone="v0.40.0"), mk(10, milestone="v0.40.0"), mk(11, milestone="v0.40.0"), mk(12, milestone="v0.41.0")]
-        plan = {"order": [10, 11, 12], "touches": {"9": ["ts/a.ts"], "10": ["ts/a.ts"], "11": ["ts/b.ts"], "12": ["ts/c.ts"]}}
-        out = pr.build_next(issues, self.milestones, {9}, mine={9}, plan=plan)
-        self.assertEqual(out["parallel"], [11, 12])
+    def test_urgent(self):
+        self.assertTrue(self.facts([waiting(1, ["urgency:high"])])["urgent"])
+        self.assertTrue(self.facts([waiting(1, ["bug", "importance:high"])])["urgent"])
+        self.assertFalse(self.facts([waiting(1, ["importance:high"])])["urgent"])
+        pr_ = {"number": 5, "title": "release: v0.55.3", "url": "u", "labels": ["urgency:high"]}
+        out = self.facts([waiting(1)], pr_)
+        self.assertTrue(out["urgent"])
+        self.assertEqual(out["release_pr"], {"number": 5, "title": "release: v0.55.3", "url": "u"})
+        self.assertFalse(self.facts([waiting(1, ["documentation", "urgency:high"])])["urgent"])
 
-    def test_without_a_plan_one_issue_is_picked(self):
-        issues = [mk(10, milestone="v0.40.0"), mk(11, milestone="v0.41.0")]
-        out = pr.build_next(issues, self.milestones, set())
-        self.assertEqual(out["parallel"], [10])
-        self.assertEqual([i["number"] for i in out["start"]], [10, 11])
+    def test_solo(self):
+        self.assertTrue(self.facts([waiting(1, ["point:8"])])["solo"])
+        self.assertTrue(self.facts([waiting(1, ["point:3", "solo"])])["solo"])
+        self.assertFalse(self.facts([waiting(1, ["point:5"])])["solo"])
 
-    def test_a_broken_plan_is_taken_as_no_plan(self):
-        issues = [mk(10, milestone="v0.40.0"), mk(11, milestone="v0.41.0")]
-        out = pr.build_next(issues, self.milestones, set(), plan={"order": "x"})
-        self.assertEqual(out["parallel"], [10])
 
-    def test_nothing_planned_has_no_parallel(self):
-        self.assertEqual(pr.build_next([], [ms(4, "v0.40.0")], set())["parallel"], [])
+class TagDueHidesTheChanges(unittest.TestCase):
+    def test_while_a_tag_is_due_nothing_is_shown_as_waiting(self):
+        facts = pr.release_facts([waiting(1, ["urgency:high", "adds:requirement", "point:8"])], None, "v0.55.2")
+        due = {"tag": "v0.56.0", "commit": "bbb", "pr": 12}
+        out = pr.with_tag_due(facts, due)
+        self.assertEqual(out["tag_due"], due)
+        self.assertEqual(out["changes"], [])
+        self.assertEqual((out["urgent"], out["solo"], out["minor"], out["version"]), (False, False, False, None))
+
+    def test_with_no_tag_due_the_facts_are_kept(self):
+        facts = pr.release_facts([waiting(1)], None, "v0.55.2")
+        out = pr.with_tag_due(dict(facts), None)
+        self.assertIsNone(out["tag_due"])
+        self.assertEqual({k: v for k, v in out.items() if k != "tag_due"}, facts)
+
+
+class CargoVersion(unittest.TestCase):
+    def test_the_version_of_the_package_table(self):
+        text = '[package]\nname = "cookapps"\nversion = "0.55.2"\n\n[dependencies]\nserde = { version = "1" }\nfoo = "1"\n[dev]\nversion = "9.9.9"\n'
+        self.assertEqual(pr.cargo_version(text), "0.55.2")
+        self.assertIsNone(pr.cargo_version('[dependencies]\nversion = "1.0.0"\n'))
+        self.assertIsNone(pr.cargo_version(""))
+
+
+class TagDue(unittest.TestCase):
+    PRS = [
+        {"number": 10, "mergedAt": "2026-11-05T00:00:00Z", "mergeCommit": {"oid": "aaa"}},
+        {"number": 12, "mergedAt": "2026-11-08T00:00:00Z", "mergeCommit": {"oid": "bbb"}},
+    ]
+
+    def test_the_newest_release_pr_with_no_tag_is_due_on_its_merge_commit(self):
+        read = {"aaa": "0.55.1", "bbb": "0.55.2"}.get
+        self.assertEqual(pr.tag_due(self.PRS, ["v0.55.1"], read), {"tag": "v0.55.2", "commit": "bbb", "pr": 12})
+
+    def test_nothing_is_due_when_the_tag_exists(self):
+        read = {"aaa": "0.55.1", "bbb": "0.55.2"}.get
+        self.assertIsNone(pr.tag_due(self.PRS, ["v0.55.1", "v0.55.2"], read))
+
+    def test_nothing_is_due_without_a_release_pr_or_a_readable_version(self):
+        self.assertIsNone(pr.tag_due([], ["v0.55.1"], lambda oid: "0.55.2"))
+        self.assertIsNone(pr.tag_due(self.PRS, [], lambda oid: None))
+        self.assertIsNone(pr.tag_due([{"number": 1, "mergedAt": "2026-11-01T00:00:00Z", "mergeCommit": None}], [], lambda oid: "0.1.0"))
+
+
+class DoneMilestones(unittest.TestCase):
+    def ms(self, number, title, open_issues, closed_issues):
+        return {"number": number, "title": title, "open_issues": open_issues, "closed_issues": closed_issues}
+
+    def test_a_milestone_is_done_when_its_issues_are_closed_and_released(self):
+        milestones = [self.ms(1, "A", 0, 3), self.ms(2, "B", 1, 2), self.ms(3, "C", 0, 0), self.ms(4, "D", 0, 2)]
+        issues = [mk(10, state="closed", closed="2026-11-06T10:00:00Z", milestone="D")]
+        self.assertEqual([m["title"] for m in pr.done_milestones(milestones, issues)], ["A"])
+
+    def test_a_closed_issue_that_is_not_released_does_not_count_as_waiting_when_not_planned(self):
+        milestones = [self.ms(4, "D", 0, 2)]
+        issues = [mk(10, state="closed", closed="2026-11-06T10:00:00Z", milestone="D", reason="not_planned")]
+        self.assertEqual([m["title"] for m in pr.done_milestones(milestones, issues)], ["D"])
 
 
 class SavedPlan(unittest.TestCase):
@@ -984,7 +525,7 @@ class SavedPlan(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "plan.json")
             self.assertIsNone(pr.read_plan(path))
-            plan = {"order": [1, 2], "groups": [], "blocked_by": {}, "touches": {"1": ["ts/a.ts"]}}
+            plan = {"order": [1, 2], "blocked_by": {}}
             pr.save_plan(path, plan)
             self.assertEqual(pr.read_plan(path), plan)
             self.assertEqual(os.listdir(d), ["plan.json"])
@@ -992,9 +533,6 @@ class SavedPlan(unittest.TestCase):
             self.assertEqual(pr.read_plan(path), {"order": [3]})
 
     def test_a_broken_plan_is_ignored_with_one_line(self):
-        import contextlib
-        import io
-
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "plan.json")
             for text in ("{", '{"order": "x"}', "[1]"):
@@ -1007,53 +545,24 @@ class SavedPlan(unittest.TestCase):
                 self.assertIn("ignored", err.getvalue())
 
 
-class DeriveGroups(unittest.TestCase):
-    def test_consecutive_issues_of_one_milestone_form_a_group(self):
-        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.40.0"), mk(3, milestone="v0.41.0"), mk(4, milestone="v0.41.0"), mk(5, milestone="v0.41.0")]
-        self.assertEqual(pr.derive_groups(free), [[1, 2], [3, 4, 5]])
-
-    def test_singles_unplanned_and_temporary_milestones_form_no_group(self):
-        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.41.0"), mk(3), mk(4), mk(5, milestone="plan-tmp-7"), mk(6, milestone="plan-tmp-7")]
-        self.assertEqual(pr.derive_groups(free), [])
-
-    def test_not_consecutive_is_not_a_group(self):
-        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.41.0"), mk(3, milestone="v0.40.0")]
-        self.assertEqual(pr.derive_groups(free), [])
-
-    def test_8_point_issue_breaks_a_run(self):
-        free = [mk(1, milestone="v0.40.0"), mk(2, ["point:8"], milestone="v0.40.0"), mk(3, milestone="v0.40.0"), mk(4, milestone="v0.40.0")]
-        self.assertEqual(pr.derive_groups(free), [[3, 4]])
-
-    def test_run_over_the_cap_is_left_to_the_allocation(self):
-        free = [mk(n, ["adds:requirement"], milestone="v0.40.0") for n in range(1, 5)]
-        self.assertEqual(pr.derive_groups(free), [])
-
-    def test_patch_run_over_MAX_COUNTED_stays_a_group(self):
-        free = [mk(n, milestone="v0.40.1") for n in range(1, 5)]
-        self.assertEqual(pr.derive_groups(free), [[1, 2, 3, 4]])
-
-    def test_documentation_does_not_count_toward_the_cap(self):
-        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.40.0"), mk(3, milestone="v0.40.0"), mk(4, ["documentation"], milestone="v0.40.0")]
-        self.assertEqual(pr.derive_groups(free), [[1, 2, 3, 4]])
-
-    def test_sync_keeps_the_slots_of_a_previous_plan(self):
-        free = [mk(1, ["adds:requirement"], milestone="v0.40.0"), mk(2, milestone="v0.40.0")] + [
-            mk(n, ["adds:requirement"], milestone="v0.41.0") for n in (3, 4, 5)
-        ]
-        ordered = pr.existing_order(free)
-        self.assertEqual(
-            slot_view(pr.allocate(ordered, pr.derive_groups(ordered), "v0.39.2")),
-            [("v0.40.0", [1, 2]), ("v0.41.0", [3, 4, 5])],
-        )
-        # without the groups, the second slot would have been packed into the first
-        self.assertEqual(slot_view(pr.allocate(ordered, [], "v0.39.2")), [("v0.40.0", [1, 2, 3]), ("v0.41.0", [4, 5])])
+class Refuse(unittest.TestCase):
+    def test_open_issue_without_points_label(self):
+        bad = pr.missing_points([mk(1, ["point:2"]), mk(2, ["bug"]), mk(3, state="closed")])
+        self.assertEqual(numbers(bad), [2])
 
 
-# The hooks that run are the main checkout's (a worktree's own copy takes effect after the merge): test those
+class Stream(unittest.TestCase):
+    def test_paginated_output_is_flattened(self):
+        self.assertEqual(pr.parse_stream('[{"a":1}][{"a":2}]\n[]'), [{"a": 1}, {"a": 2}])
+        self.assertEqual(pr.parse_stream('{"a":1}'), [{"a": 1}])
+        self.assertEqual(pr.parse_stream(""), [])
+
+
 _common = subprocess.run(
-    ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=here, check=True, capture_output=True, text=True
+    ["git", "-C", here, "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, check=True
 ).stdout.strip()
 HOOK = os.path.join(os.path.dirname(_common), ".claude", "hooks", "post-gh.sh")
+TOOLS = here
 
 
 class Hook(unittest.TestCase):
@@ -1086,11 +595,13 @@ class Hook(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout.strip() else ""
 
-    def test_merge_runs_sync(self):
+    def test_merge_shows_what_waits_for_the_release(self):
         for cmd in ["gh pr merge --merge", "cd x && gh pr merge 5 --merge", "a; gh pr merge", "echo hi | gh pr merge", "echo x\ngh pr merge"]:
-            self.assertIn("STUB", self.run_hook(cmd), cmd)
+            out = self.run_hook(cmd)
+            self.assertIn("STUB", out, cmd)
+            self.assertIn("Release PR", out, cmd)
 
-    def test_sync_failure_is_passed_on(self):
+    def test_release_failure_is_passed_on(self):
         stub = os.path.join(self.root, ".claude", "tools", "plan-release.py")
         with open(stub, "w") as f:
             f.write("#!/bin/sh\necho boom >&2\nexit 2\n")
@@ -1127,11 +638,213 @@ class Hook(unittest.TestCase):
             self.assertEqual(self.run_hook(cmd), "", cmd)
 
 
-class Stream(unittest.TestCase):
-    def test_paginated_output_is_flattened(self):
-        self.assertEqual(pr.parse_stream('[{"a":1}][{"a":2}]\n[]'), [{"a": 1}, {"a": 2}])
-        self.assertEqual(pr.parse_stream('{"a":1}'), [{"a": 1}])
-        self.assertEqual(pr.parse_stream(""), [])
+class NightlyLimit(unittest.TestCase):
+    """nightly-limit.sh with the points and the clock given by the environment."""
+
+    # "{issue number} {points} [{unit}]": the unit is `i{n}` for a point:8 issue, `m:{milestone}` for a `solo` part, and nothing for any other issue
+    POINTS = "1 1\n2 2\n3 3\n5 5\n8 8 i8\n9 3\n10 3\n11 3 m:Slack thread\n12 3 m:Slack thread\n13 2 m:Slack thread\n14 3 m:Orca files\n15 8 i15\n16 3 m:Slack thread\n17 3 m:Slack thread\n"
+
+    def run_limit(self, *args, deadline=2000, now=1000):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("NIGHTLY_")}
+        env["NIGHTLY_POINTS_LIST"] = self.POINTS
+        if deadline is not None:
+            env["NIGHTLY_DEADLINE_EPOCH"] = str(deadline)
+            env["NIGHTLY_NOW_EPOCH"] = str(now)
+        r = subprocess.run(["sh", os.path.join(TOOLS, "nightly-limit.sh"), *args], capture_output=True, text=True, env=env)
+        return r.returncode, r.stdout + r.stderr
+
+    def test_the_first_issue_may_start(self):
+        self.assertEqual(self.run_limit("issue", "5")[0], 0)
+
+    def test_issues_fit_up_to_ten_points(self):
+        self.assertEqual(self.run_limit("issue", "9", "--taken", "5,2")[0], 0)  # 5 + 2 + 3 = 10
+        code, text = self.run_limit("issue", "3", "--taken", "5,9")  # 5 + 3 + 3 = 11
+        self.assertEqual(code, 3, text)
+        self.assertIn("10", text)
+
+    def test_a_smaller_issue_still_fits_where_a_bigger_one_did_not(self):
+        self.assertEqual(self.run_limit("issue", "3", "--taken", "5,9")[0], 3)
+        self.assertEqual(self.run_limit("issue", "2", "--taken", "5,9")[0], 0)  # 5 + 3 + 2 = 10
+
+    def test_after_the_deadline_nothing_starts(self):
+        code, text = self.run_limit("issue", "1", deadline=1000, now=1000)
+        self.assertEqual(code, 1, text)
+        self.assertEqual(self.run_limit("judgment", deadline=1000, now=1500)[0], 1)
+        self.assertEqual(self.run_limit("proposal", deadline=2000, now=1500)[0], 0)
+
+    def test_a_point_8_issue_starts_only_as_the_first_issue_and_nothing_follows_it(self):
+        self.assertEqual(self.run_limit("issue", "8")[0], 0)
+        self.assertEqual(self.run_limit("issue", "8", "--taken", "1")[0], 3)
+        code, text = self.run_limit("issue", "1", "--taken", "8")
+        self.assertEqual(code, 3, text)
+        self.assertIn("#8", text)
+
+    def test_the_parts_of_one_solo_unit_start_together(self):
+        self.assertEqual(self.run_limit("issue", "11")[0], 0)
+        self.assertEqual(self.run_limit("issue", "12", "--taken", "11")[0], 0)
+        self.assertEqual(self.run_limit("issue", "13", "--taken", "11,12")[0], 0)  # 3 + 3 + 2
+
+    def test_a_solo_part_does_not_start_with_an_issue_that_is_not_in_the_unit(self):
+        code, text = self.run_limit("issue", "11", "--taken", "1")
+        self.assertEqual(code, 3, text)
+        code, text = self.run_limit("issue", "1", "--taken", "11")
+        self.assertEqual(code, 3, text)
+        self.assertIn("#11", text)
+        self.assertEqual(self.run_limit("issue", "12", "--taken", "11,1")[0], 3)
+
+    def test_a_part_of_another_unit_and_a_point_8_issue_do_not_start_with_a_unit(self):
+        self.assertEqual(self.run_limit("issue", "14", "--taken", "11")[0], 3)
+        self.assertEqual(self.run_limit("issue", "8", "--taken", "11")[0], 3)
+        self.assertEqual(self.run_limit("issue", "11", "--taken", "8")[0], 3)
+        self.assertEqual(self.run_limit("issue", "15", "--taken", "8")[0], 3)
+
+    def test_the_parts_of_a_unit_still_keep_to_ten_points(self):
+        code, text = self.run_limit("issue", "17", "--taken", "11,12,16")  # 3 + 3 + 3 + 3 = 12
+        self.assertEqual(code, 3, text)
+        self.assertIn("10", text)
+        self.assertEqual(self.run_limit("issue", "16", "--taken", "11,12")[0], 0)
+
+    def test_a_session_has_no_time_or_points_limit_but_the_unit_rule_stands(self):
+        self.assertEqual(self.run_limit("issue", "3", "--taken", "5,9,10", deadline=None)[0], 0)
+        self.assertEqual(self.run_limit("issue", "8", "--taken", "1", deadline=None)[0], 3)
+        self.assertEqual(self.run_limit("issue", "12", "--taken", "11", deadline=None)[0], 0)
+        self.assertEqual(self.run_limit("issue", "12", "--taken", "1", deadline=None)[0], 3)
+
+    def test_an_issue_without_a_point_label_is_refused(self):
+        self.assertEqual(self.run_limit("issue", "77")[0], 2)
+        self.assertEqual(self.run_limit("issue", "1", "--taken", "77")[0], 2)
+
+    def test_wrong_usage(self):
+        for args in (["issue"], ["issue", "x"], ["issue", "1", "--taken"], ["issue", "1", "5"], ["release", "v0.1.0"], ["judgment", "1"], []):
+            self.assertEqual(self.run_limit(*args)[0], 2, args)
+
+
+class UseWorktree(unittest.TestCase):
+    """use-worktree.sh in a throwaway repository with a bare origin."""
+
+    def git(self, cwd, *args):
+        return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, check=True).stdout.strip()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = self.tmp.name
+        self.origin = os.path.join(t, "origin.git")
+        self.main = os.path.join(t, "main")
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", self.origin], check=True)
+        subprocess.run(["git", "clone", "-q", self.origin, self.main], check=True, capture_output=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            self.git(self.main, "config", k, v)
+        os.makedirs(os.path.join(self.main, ".claude", "tools"))
+        for name in ("use-worktree.sh",):
+            with open(os.path.join(TOOLS, name), encoding="utf-8") as f, open(os.path.join(self.main, ".claude", "tools", name), "w") as g:
+                g.write(f.read())
+        with open(os.path.join(self.main, ".worktreeinclude"), "w") as f:
+            f.write("# private\nsecret.txt\n")
+        with open(os.path.join(self.main, "secret.txt"), "w") as f:
+            f.write("one\n")
+        with open(os.path.join(self.main, ".gitignore"), "w") as f:
+            f.write("secret.txt\n")
+        self.git(self.main, "add", ".gitignore")
+        self.commit(self.main, "a.txt", "a\n", "first")
+        self.git(self.main, "push", "-q", "origin", "main")
+        self.work = os.path.join(self.main, ".claude", "worktrees", "work")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def commit(self, cwd, name, text, message):
+        with open(os.path.join(cwd, name), "w") as f:
+            f.write(text)
+        self.git(cwd, "add", name)
+        self.git(cwd, "commit", "-q", "-m", message)
+
+    def use(self, arg):
+        script = os.path.join(self.main, ".claude", "tools", "use-worktree.sh")
+        r = subprocess.run(["bash", script, arg], capture_output=True, text=True, cwd=self.main)
+        return r.returncode, r.stdout.strip().splitlines()[-1] if r.stdout.strip() else "", r.stderr
+
+    def merge_to_main(self, branch):
+        self.git(self.work, "push", "-q", "origin", f"{branch}:main")
+
+    def test_the_first_use_makes_the_worktree_on_the_branch_with_the_private_files(self):
+        code, path, err = self.use("feat/one")
+        self.assertEqual((code, path), (0, os.path.realpath(self.work)), err)
+        self.assertEqual(self.git(self.work, "branch", "--show-current"), "feat/one")
+        with open(os.path.join(self.work, "secret.txt")) as f:
+            self.assertEqual(f.read(), "one\n")
+
+    def test_the_same_branch_is_a_continuation_and_another_branch_finds_it_in_use(self):
+        self.use("feat/one")
+        self.commit(self.work, "b.txt", "b\n", "work")
+        self.assertEqual(self.use("feat/one")[0], 0)
+        code, _, err = self.use("feat/two")
+        self.assertEqual(code, 3)
+        self.assertIn("push していないコミット", err)
+        self.assertEqual(self.git(self.work, "branch", "--show-current"), "feat/one")
+
+    def test_uncommitted_changes_mean_in_use(self):
+        self.use("feat/one")
+        with open(os.path.join(self.work, "a.txt"), "w") as f:
+            f.write("changed\n")
+        code, _, err = self.use("feat/two")
+        self.assertEqual(code, 3)
+        self.assertIn("未コミット", err)
+
+    def test_after_the_merge_the_worktree_is_reused_from_the_new_origin_main(self):
+        self.use("feat/one")
+        self.commit(self.work, "b.txt", "b\n", "work")
+        self.merge_to_main("feat/one")
+        code, path, err = self.use("feat/two")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.git(self.work, "branch", "--show-current"), "feat/two")
+        self.assertTrue(os.path.exists(os.path.join(self.work, "b.txt")))
+        branches = self.git(self.main, "branch", "--format=%(refname:short)").split()
+        self.assertNotIn("feat/one", branches)
+
+    def test_the_private_files_are_copied_again_at_each_use(self):
+        self.use("feat/one")
+        with open(os.path.join(self.main, "secret.txt"), "w") as f:
+            f.write("two\n")
+        self.use("feat/one")
+        with open(os.path.join(self.work, "secret.txt")) as f:
+            self.assertEqual(f.read(), "two\n")
+
+    def test_park_returns_the_worktree_to_idle_only_when_nothing_is_lost(self):
+        self.use("feat/one")
+        self.commit(self.work, "b.txt", "b\n", "work")
+        script = os.path.join(self.main, ".claude", "tools", "use-worktree.sh")
+        r = subprocess.run(["bash", script, "--park"], capture_output=True, text=True, cwd=self.main)
+        self.assertEqual(r.returncode, 3)
+        self.merge_to_main("feat/one")
+        r = subprocess.run(["bash", script, "--park"], capture_output=True, text=True, cwd=self.main)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.git(self.work, "branch", "--show-current"), "")
+        self.assertEqual(self.use("feat/two")[0], 0)
+
+    def test_a_pushed_branch_that_is_not_merged_does_not_keep_the_worktree(self):
+        self.use("release/next")
+        self.commit(self.work, "b.txt", "b\n", "release work")
+        self.assertEqual(self.use("feat/two")[0], 3)
+        self.git(self.work, "push", "-q", "origin", "release/next")
+        code, _, err = self.use("feat/two")
+        self.assertEqual(code, 0, err)
+        branches = self.git(self.main, "branch", "--format=%(refname:short)").split()
+        self.assertIn("release/next", branches)  # the branch of an open pull request is kept
+        code, _, err = self.use("release/next")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.exists(os.path.join(self.work, "b.txt")))
+
+    def test_a_branch_that_exists_and_is_merged_is_moved_up_to_origin_main(self):
+        self.use("release/next")
+        self.git(self.work, "push", "-q", "origin", "release/next")
+        script = os.path.join(self.main, ".claude", "tools", "use-worktree.sh")
+        subprocess.run(["bash", script, "--park"], capture_output=True, text=True, cwd=self.main, check=True)
+        self.git(self.main, "branch", "-f", "release/next", "origin/main")
+        self.commit(self.main, "c.txt", "c\n", "later")
+        self.git(self.main, "push", "-q", "origin", "main")
+        code, _, err = self.use("release/next")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.exists(os.path.join(self.work, "c.txt")))
 
 
 if __name__ == "__main__":

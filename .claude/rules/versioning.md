@@ -16,14 +16,14 @@ Bad:  update stuff
 ### Give each release an annotated tag `v0.{minor}.{patch}`, on the merge commit of the Release PR
 
 Only a pushed tag starts the release (`testing.md`), so a merge with no tag is not a release.
-When to release is decided in `issues.md`.
-Tag only after the merge, so that the tag never points at a commit main does not have.
+The owner releases by merging the Release PR, and the next agent to act tags the merge commit (`issues.md`).
+Tag only after the merge, so that the tag never points at a commit main does not have, and tag the commit that `tag_due` of `plan-release.py release` names, because another pull request may have merged on top of the Release PR before the tag.
 Make the tag in the same command as the push: `pre-git.sh` runs before the command, so a stopped push (a missing record, a forbidden word) leaves no tag behind.
 Do not use the major version yet; keep it fixed at 0.
 The owner decides when to treat the project as 1.0.
 
 ```sh
-git fetch origin main && git tag -a v0.5.0 -m v0.5.0 origin/main && git push origin v0.5.0   # the Release PR raised version to 0.5.0
+git fetch origin main && git tag -a v0.5.0 -m v0.5.0 {commit of tag_due} && git push origin v0.5.0   # the Release PR raised version to 0.5.0
 ```
 
 ### Never move a published tag

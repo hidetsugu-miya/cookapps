@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PostToolUse(Bash): issue の作成と needs:owner の解消のあとは issue-plan の続行を、gh pr merge のあとは plan-release.py sync の結果とリリースの判定の続行を、セッションに伝える。常に exit 0。
+# PostToolUse(Bash): issue の作成と needs:owner の解消のあとは issue-plan の続行を、gh pr merge のあとは plan-release.py release の結果と Release PR の用意の続行を、セッションに伝える。常に exit 0。
 set -uo pipefail
 cmd=$(jq -r '.tool_input.command // empty')
 [ -n "$cmd" ] || exit 0
@@ -15,13 +15,13 @@ if ran 'issue[[:space:]]+create' \
 fi
 if ran 'pr[[:space:]]+merge'; then
   main="$(git -C "${CLAUDE_PROJECT_DIR:?}" rev-parse --path-format=absolute --git-common-dir)/.."
-  out=$("$main/.claude/tools/plan-release.py" sync 2>&1)
+  out=$("$main/.claude/tools/plan-release.py" release 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ]; then
-    msgs+=("gh pr merge のあとに plan-release.py sync を実行しました。issue ごとの予定 tag:"$'\n'"$out")
-    msgs+=("次はリリースの判定です。plan-release.py release-facts を実行し、rule が R4 なら release-planner を mode: release で起動して、結果を Release PR の本文に書いてください（issues.md の R0 から R4）。")
+    msgs+=("gh pr merge のあとに plan-release.py release を実行しました:"$'\n'"$out")
+    msgs+=("tag_due があれば、タグを打つのが先です（issues.md の「After the owner merges the Release PR」の手順 2）。リリースを待つ変更があれば、Release PR は 00:30 の実行か、オーナーに頼まれたセッションが用意します（なければ作り、あれば本文を更新します。マージするのはオーナーです）。")
   else
-    msgs+=("gh pr merge のあとに plan-release.py sync を実行しましたが、失敗しました（exit ${rc}）:"$'\n'"$out")
+    msgs+=("gh pr merge のあとに plan-release.py release を実行しましたが、失敗しました（exit ${rc}）:"$'\n'"$out")
   fi
 fi
 
