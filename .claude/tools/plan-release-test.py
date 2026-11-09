@@ -538,6 +538,33 @@ class TagDue(unittest.TestCase):
         self.assertIsNone(pr.tag_due([{"number": 1, "mergedAt": "2026-11-01T00:00:00Z", "mergeCommit": None}], [], lambda oid: "0.1.0"))
 
 
+class FollowUpDue(unittest.TestCase):
+    PRS = TagDue.PRS
+    READ = {"aaa": "0.55.1", "bbb": "0.55.2"}.get
+
+    def test_the_newest_release_pr_with_a_tag_and_no_mark_is_open(self):
+        out = pr.follow_up_due(self.PRS, ["v0.55.1", "v0.55.2"], self.READ, lambda number, tag: False)
+        self.assertEqual(out, {"tag": "v0.55.2", "commit": "bbb", "pr": 12})
+
+    def test_the_mark_is_asked_for_the_newest_pr_and_its_tag(self):
+        asked = []
+        pr.follow_up_due(self.PRS, ["v0.55.2"], self.READ, lambda number, tag: asked.append((number, tag)) or False)
+        self.assertEqual(asked, [(12, "v0.55.2")])
+
+    def test_nothing_is_open_once_the_pr_is_marked(self):
+        self.assertIsNone(pr.follow_up_due(self.PRS, ["v0.55.2"], self.READ, lambda number, tag: True))
+
+    def test_nothing_is_open_while_the_tag_is_due(self):
+        self.assertIsNone(pr.follow_up_due(self.PRS, ["v0.55.1"], self.READ, lambda number, tag: False))
+
+    def test_nothing_is_open_without_a_release_pr_or_a_readable_version(self):
+        self.assertIsNone(pr.follow_up_due([], ["v0.55.2"], self.READ, lambda number, tag: False))
+        self.assertIsNone(pr.follow_up_due(self.PRS, ["v0.55.2"], lambda oid: None, lambda number, tag: False))
+
+    def test_the_mark_is_a_comment_line_with_the_tag(self):
+        self.assertEqual(pr.follow_up_mark("v0.55.2"), "<!-- released v0.55.2 -->")
+
+
 class DoneMilestones(unittest.TestCase):
     def ms(self, number, title, open_issues, closed_issues):
         return {"number": number, "title": title, "open_issues": open_issues, "closed_issues": closed_issues}

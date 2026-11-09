@@ -19,7 +19,7 @@ if ran 'pr[[:space:]]+merge'; then
   rc=$?
   if [ "$rc" -eq 0 ]; then
     msgs+=("gh pr merge のあとに plan-release.py release を実行しました:"$'\n'"$out")
-    msgs+=("tag_due があれば、タグを打つのが先です（issues.md の「After the owner merges the Release PR」の手順 2）。リリースを待つ変更があれば、Release PR は 00:30 の実行か、オーナーに頼まれたセッションが用意します（なければ作り、あれば本文を更新します。マージするのはオーナーです）。")
+    msgs+=("Release PR のマージはタグ打ちとリリースを release.yml が自分で行います。follow_up があれば、release の run を見届けて issue にコメントするのが先です。tag_due があれば、run を見てから、run が無いときだけ手でタグを打ちます（issues.md の「After the owner merges the Release PR」の手順 2）。リリースを待つ変更があれば、Release PR は 00:30 の実行か、オーナーに頼まれたセッションが用意します（なければ作り、あれば本文を更新します。マージするのはオーナーです）。")
   else
     msgs+=("gh pr merge のあとに plan-release.py release を実行しましたが、失敗しました（exit ${rc}）:"$'\n'"$out")
   fi

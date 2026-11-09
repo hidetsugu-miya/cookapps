@@ -15,14 +15,15 @@ Bad:  update stuff
 
 ### Give each release an annotated tag `v0.{minor}.{patch}`, on the merge commit of the Release PR
 
-Only a pushed tag starts the release (`testing.md`), so a merge with no tag is not a release.
-The owner releases by merging the Release PR, and the next agent to act tags the merge commit (`issues.md`).
-Tag only after the merge, so that the tag never points at a commit main does not have, and tag the commit that `tag_due` of `plan-release.py release` names, because another pull request may have merged on top of the Release PR before the tag.
-Make the tag in the same command as the push: `pre-git.sh` runs before the command, so a stopped push (a missing record, a forbidden word) leaves no tag behind.
+A pushed tag starts the release (`testing.md`), and so does the merge of the Release PR, which tags its own merge commit (at the owner's instruction, 2026-11-09; #303).
+The owner releases by merging the Release PR: the `tag` job of `release.yml` reads the first `## v{version}` heading of `CHANGELOG.md` at the merge commit, checks it as it checks a pushed tag, pushes the annotated tag on that commit with `GITHUB_TOKEN`, and the `release` job of the same run builds and publishes (a tag pushed with `GITHUB_TOKEN` starts no other workflow). It tags the merge commit itself, not the head of main, because another pull request may have merged on top of the Release PR.
+No agent tags a release that way. The tag made by hand is the way back when the workflow did not tag (`issues.md`, "After the owner merges the Release PR"): tag the commit that `tag_due` of `plan-release.py release` names, and the push of the tag starts the `release` run as before. The workflow does not tag a version whose tag exists, and a merge run builds nothing when the tag already has a run of its own, so a tag made by hand never makes a second release.
+Make a tag by hand in the same command as the push: `pre-git.sh` runs before the command, so a stopped push (a missing record, a forbidden word) leaves no tag behind.
 Do not use the major version yet; keep it fixed at 0.
 The owner decides when to treat the project as 1.0.
 
 ```sh
+# only when the workflow did not tag
 git fetch origin main && git tag -a v0.5.0 -m v0.5.0 {commit of tag_due} && git push origin v0.5.0   # the Release PR wrote `## v0.5.0` at the top of CHANGELOG.md
 ```
 

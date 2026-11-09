@@ -2,9 +2,8 @@
 # guard-e2e.sh の自己確認: PreToolUse の入力を流し、止める（exit 2）・通す（exit 0）を確かめる。
 # 検出語は guard-e2e.sh 自身と同じく、このファイルが検査に掛からないよう分けて書いている。
 set -uo pipefail
-# The hooks that run are the main checkout's (a worktree's own copy takes effect after the merge): check those
-main="$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)/.."
-guard="$main/.claude/hooks/guard-e2e.sh"
+# Check the guard-e2e.sh of this script's own checkout, so that a branch's change to it is tested before the merge (pre-git.sh runs this on a push that touches it)
+guard="$(cd "$(dirname "$0")/../hooks" && pwd)/guard-e2e.sh"
 T="window.__TAU""RI__"
 fail=0
 

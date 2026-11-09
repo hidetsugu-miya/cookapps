@@ -15,7 +15,7 @@ Usage:
 `start` lists the issues a run may begin, in the order of the plan. `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
 (open, no `needs:owner`, not in hand, and no milestone named for a feature; a milestone named for a version is no mark): `issue-plan` applies its step 3 to each before it orders.
 `migrate` is run once after the milestones named for versions are retired: it takes such a milestone off the open issues of less than 5 points and closes the ones left empty (it splits nothing). `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
-and the tag that is due after a merge. `close` closes the milestones (a milestone is a feature, not a version) whose issues are all done and released.
+the tag that is due after a merge (the workflow tags at the merge, so it shows only until it has, or when it did not), and the release whose follow-up is open (its tag exists, and the issues are not commented yet). `close` closes the milestones (a milestone is a feature, not a version) whose issues are all done and released.
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
 """
 import argparse
@@ -500,8 +500,8 @@ def changelog_version(text):
     return m.group(1) if m else None
 
 
-def tag_due(merged_prs, tag_names, read_version):
-    """-> {"tag", "commit", "pr"} when the newest merged Release PR wrote a version that has no tag yet, else None.
+def newest_release(merged_prs, read_version):
+    """-> {"tag", "commit", "pr"} of the newest merged Release PR, with the tag of the version it wrote, or None.
     `merged_prs`: [{"number", "mergedAt", "mergeCommit": {"oid"}}] of the owner's merged Release PRs. `read_version(oid)`: the version of the first heading of CHANGELOG.md at that commit.
     The tag goes on the merge commit of the Release PR, not on origin/main, which may have moved on (versioning.md)."""
     if not merged_prs:
@@ -509,9 +509,28 @@ def tag_due(merged_prs, tag_names, read_version):
     newest = max(merged_prs, key=lambda p: p["mergedAt"])
     oid = (newest.get("mergeCommit") or {}).get("oid")
     version = read_version(oid) if oid else None
-    if not version or f"v{version}" in tag_names:
+    if not version:
         return None
     return {"tag": f"v{version}", "commit": oid, "pr": newest["number"]}
+
+
+def tag_due(merged_prs, tag_names, read_version):
+    """-> the newest merged Release PR (see newest_release) when its version has no tag yet, else None.
+    release.yml tags the merge commit at the merge (issues.md), so this shows only until it has, or when the workflow did not: the way back is a tag by hand."""
+    due = newest_release(merged_prs, read_version)
+    return due if due and due["tag"] not in tag_names else None
+
+
+def follow_up_due(merged_prs, tag_names, read_version, is_marked):
+    """-> the newest merged Release PR (see newest_release) when its tag exists and `is_marked(pr, tag)` is false, else None.
+    The workflow tags at the merge, so nobody sees the tag come: the follow-up (the comment on each issue of the Release PR) is open until the agent that did it marks the Release PR."""
+    due = newest_release(merged_prs, read_version)
+    return due if due and due["tag"] in tag_names and not is_marked(due["pr"], due["tag"]) else None
+
+
+def follow_up_mark(tag):
+    """The first line of the comment on a Release PR that says its follow-up is done."""
+    return f"<!-- released {tag} -->"
 
 
 def done_milestones(milestones, issues):
@@ -815,7 +834,12 @@ def cmd_release(args):
         except GhError:
             return None
 
+    def is_marked(number, tag):
+        comments = json.loads(gh("pr", "view", str(number), "--json", "comments"))["comments"]
+        return any(c["author"]["login"] == state.owner and c["body"].startswith(follow_up_mark(tag)) for c in comments)
+
     with_tag_due(facts, tag_due(merged, state.tags, read_version))
+    facts["follow_up"] = follow_up_due(merged, state.tags, read_version, is_marked)
     print(json.dumps(facts, ensure_ascii=False, indent=2))
 
 

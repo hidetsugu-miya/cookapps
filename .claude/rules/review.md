@@ -205,14 +205,15 @@ Bad:  the main agent creates a file in .claude/reviews/
 
 ## After the push
 
-### After pushing a version tag, watch the release through to the end before you report completion
+### After pushing a version tag or finding a merged Release PR, watch the release through to the end before you report completion
 
-Confirm that the `release` run of the tag succeeded and that the GitHub Release has its files.
-If it failed, find the cause with `--log-failed`, fix it with the next patch version, and report that result too.
-A merge with no tag starts no release, so there is nothing to watch (the workflows of a push to main, `rust-cache.yml` and `pages.yml`, may still run).
+Confirm that the `release` run of the tag succeeded and that the GitHub Release has its files. The merge of the Release PR starts that run itself (`release.yml`; at the owner's instruction, 2026-11-09; #303), so the agent that finds the merge watches it too.
+If it failed, find the cause with `--log-failed` and act as `issues.md` says ("After the owner merges the Release PR": rerun a failure of the runner or the network with `gh run rerun {run ID} --failed`, fix any other cause with the next patch version), and report that result too.
+The merge of any other pull request starts no release, so there is nothing to watch (the workflows of a push to main, `rust-cache.yml` and `pages.yml`, may still run).
 
 ```sh
-.claude/tools/watch-ci.sh             # waits for the release run of HEAD to appear and to end; on failure prints the cause log and exits non-zero
+.claude/tools/watch-ci.sh             # waits for the release run of HEAD (a tagged commit) to appear and to end; on failure prints the cause log and exits non-zero
+.claude/tools/watch-ci.sh {commit}    # the same for a given commit: after a merge of the Release PR, `git fetch origin main` and pass `follow_up.commit` (or `tag_due.commit`) of `plan-release.py release`, because HEAD is not its merge commit
 .claude/tools/watch-ci.sh {run ID}    # waits for one run only
 ```
 
