@@ -28,7 +28,9 @@ describe("inbox", () => {
     await waitForCount("#unread-threads li", 2);
   });
 
-  it("lists the unread threads, then the read ones under the 既読 heading", async () => {
+  it("lists the unread threads under the 未読 heading with their count, then the read ones under the 既読 heading", async () => {
+    await expect($("#unread-heading span")).toHaveText("未読");
+    await expect($("#unread-count")).toHaveText("2");
     await expect($("#read-heading")).toHaveText("既読");
     await expect($("#unread-threads")).toHaveText(expect.stringContaining("First unread"));
     await expect($("#unread-threads")).toHaveText(expect.stringContaining("Second unread"));
@@ -117,13 +119,15 @@ describe("inbox", () => {
     expect(await callsOf(make)).toHaveLength(1);
   });
 
-  it("shows a header with the title and the unread operation only on the list, no reload button while nothing failed, and the thread's toolbar only on a thread", async () => {
+  it("shows a header with the title only on the list, with the unread operation at the right end of the 未読 heading, no reload button while nothing failed, and the thread's toolbar only on a thread", async () => {
     await expect($("#title")).not.toExist();
     await expect($("#reload")).not.toExist();
     await expect($("#inbox-state button")).not.toExist();
     await expect($("#inbox-header")).toBeDisplayed();
     await expect($("#inbox-header h1")).toHaveText("受信トレイ");
-    await expect($("#mail-mark-all")).toHaveText("すべて既読にする");
+    await expect($("#inbox-header #mail-mark-all")).not.toExist();
+    await expect($("#unread-heading #mail-mark-all")).toHaveText("すべて既読にする");
+    expect(await browser.execute(() => document.getElementById("unread-heading")!.lastElementChild!.id)).toBe("mail-mark-all");
     await expect($("#mail-header")).not.toBeDisplayed();
     await mock("thread", threadDetail("Already read", "Old news", false));
     await rowOf("read-threads", "Already read").$(".subject").click();
@@ -154,22 +158,24 @@ describe("inbox", () => {
   describe("marking all read", () => {
     const unreadThreads = (n: number) => Array.from({ length: n }, (_, i) => thread(`m${i}`, `Thread ${i}`, true));
 
-    it("cannot be pressed with no unread thread, and can with one", async () => {
+    it("is not shown, with its 未読 heading, when no thread is unread, and can be pressed with one", async () => {
       await boot({ inbox: inbox([thread("t3", "Already read", false)]) });
       await waitForCount("#read-threads li", 1);
-      await expect($("#mail-mark-all")).toBeDisabled();
+      await expect($("#unread-heading")).not.toBeDisplayed();
+      await expect($("#mail-mark-all")).not.toBeDisplayed();
       await boot({ inbox: inbox() });
       await waitForCount("#unread-threads li", 2);
+      await expect($("#unread-heading")).toBeDisplayed();
       await expect($("#mail-mark-all")).toBeEnabled();
     });
 
     it("makes every unread thread read with set_read, one request each, changes the rows at once, and offers 元に戻す", async () => {
       const setRead = await mock("set_read", holds);
       await $("#mail-mark-all").click();
-      // Before Gmail has answered, both rows are read and in the read section, and the button has nothing left to do.
+      // Before Gmail has answered, both rows are read and in the read section, and the 未読 heading with the button has nothing left to show.
       await waitForCount("#unread-threads li", 0);
       await waitForCount("#read-threads li", 3);
-      await expect($("#mail-mark-all")).toBeDisabled();
+      await expect($("#unread-heading")).not.toBeDisplayed();
       expect(await waitForCalls(setRead, 2)).toEqual([
         { account, id: "t1", read: true },
         { account, id: "t2", read: true },
@@ -203,11 +209,13 @@ describe("inbox", () => {
       const setRead = await mock("set_read", holds);
       await $("#mail-mark-all").click();
       await waitForCalls(setRead, 2);
-      await release(setRead, true);
       await release(setRead, rejects("Gmail が断りました"));
+      await release(setRead, true);
+      // The failures are reported once, when the last request has answered; the row that failed is unread again, so the 未読 heading is back with its count.
       await expect($("#error")).toHaveText(expect.stringContaining("1 件を更新できませんでした: Gmail が断りました"));
       await waitForCount("#unread-threads li", 1);
-      await expect(rowOf("unread-threads", "Second unread")).toExist();
+      await expect($("#unread-count")).toHaveText("1");
+      await expect(rowOf("unread-threads", "First unread")).toExist();
       await expect($(".toast")).toHaveText(expect.stringContaining("1 件を既読にしました"));
       await expect($("#mail-mark-all")).toBeEnabled();
     });
