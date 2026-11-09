@@ -33,7 +33,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    On exit 2, relaunch `release-planner` with the stderr added, at most twice. If it still fails, state the failure in the report: `next` puts the issues that the saved plan lacks behind the others, in the basic order.
 7. **Report** each new issue, each milestone made and the order, as `apply` prints it (`1. #42 title [feature] - reason`).
 
-To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in a `milestone-dev` run, so that the issues in hand are left alone), apply step 3 to each issue number it prints, and then start at step 5.
+To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in a `issue-dev` run, so that the issues in hand are left alone), apply step 3 to each issue number it prints, and then start at step 5.
 
 Once, in the session after the change that retired the milestones named for versions merged, run `plan-release.py migrate --dry-run` and then `plan-release.py migrate`: it takes a version's milestone off the open issues of less than 5 points and closes the version milestones left empty. It splits nothing; run it again after the first "To only reorder" pass, to close the ones that pass emptied.
 
@@ -42,9 +42,9 @@ Once, in the session after the change that retired the milestones named for vers
 - Version numbers and checks: `plan-release.py`
 - What counts as related: `.claude/agents/release-planner.md`
 - Releasing: the owner merges the Release PR (`issues.md`). The order does not start a release.
-- Implementing: the `milestone-dev` skill
+- Implementing: the `issue-dev` skill
 
 ## When it runs
 
 - An issue is created, or its `needs:owner` is removed: from step 1 (the hook says so). The parts made in step 3 are placed by one pass of steps 5 to 7 after the last part.
-- A `milestone-dev` run starts: "To only reorder", so that issues made outside a session, such as on the GitHub screen, are split and placed too.
+- A `issue-dev` run starts: "To only reorder", so that issues made outside a session, such as on the GitHub screen, are split and placed too.

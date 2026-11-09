@@ -1,12 +1,12 @@
 ---
-name: milestone-dev
-description: Implements the open cookapps issues in the order of the plan, up to 10 points a night, one after another on one branch with one pull request, and prepares the Release PR for the owner to merge. Use on /milestone-dev and 「次を進めて」. Invoking it is the owner's instruction to start those issues.
+name: issue-dev
+description: Implements the open cookapps issues in the order of the plan, up to 10 points a night, one after another on one branch with one pull request, and prepares the Release PR for the owner to merge. Use on /issue-dev and 「次を進めて」. Invoking it is the owner's instruction to start those issues.
 ---
 
-# milestone-dev
+# issue-dev
 
 One run takes the issues in the order of the plan until their points reach 10, does them one after another in the one worktree on one branch, and merges one pull request that closes them all. It never releases: it prepares the Release PR, and the owner merges it (`.claude/rules/issues.md`).
-The owner starts it, either in a session or through the job the owner registered, which runs `.claude/tools/nightly.sh milestone-dev` at 00:30 only; nothing else starts it.
+The owner starts it, either in a session or through the job the owner registered, which runs `.claude/tools/nightly.sh issue-dev` at 00:30 only; nothing else starts it.
 A run from that job has no one to answer: never wait on the owner, and end with the hand-over and report of step 8.
 `NIGHTLY_DEADLINE_EPOCH` is set in such a run, and in no session. The limits below apply only when it is set; the script `nightly-limit.sh` knows them.
 

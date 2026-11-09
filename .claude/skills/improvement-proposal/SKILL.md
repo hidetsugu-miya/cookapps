@@ -60,5 +60,5 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 ## Not here
 
-- Accepting an issue for the owner: the owner removes `needs:owner`, and `milestone-dev` implements it.
+- Accepting an issue for the owner: the owner removes `needs:owner`, and `issue-dev` implements it.
 - Declining a proposal: the owner closes it with `wontfix`.

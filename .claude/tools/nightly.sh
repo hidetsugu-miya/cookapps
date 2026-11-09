@@ -1,19 +1,19 @@
 #!/bin/sh
-# Runs a skill headlessly from the main checkout; launchd starts improvement-proposal every day at 22:00 and milestone-dev at 00:30 (issues.md).
-# Usage: nightly.sh improvement-proposal|milestone-dev  (the exit code is claude's)
+# Runs a skill headlessly from the main checkout; launchd starts improvement-proposal every day at 22:00 and issue-dev at 00:30 (issues.md).
+# Usage: nightly.sh improvement-proposal|issue-dev  (the exit code is claude's)
 # Keeps one run per skill with a lock directory, writes .claude/nightly/{skill}-{date}.log (logs older than 30 days are deleted), and shows a macOS notification at the end.
 # Every skill gets NIGHTLY_DEADLINE_EPOCH, which the skill checks with nightly-limit.sh before it starts something new; nothing kills the process at the deadline.
-# improvement-proposal: 1 hour after the start, 23:00 for the job: no new candidate starts after it, so that the run ends well before milestone-dev starts at 00:30 and waits for it.
-# milestone-dev: the end of its 3 hours (03:30 for the job), which stops new issues (nightly-limit.sh also holds a run to 10 points), and HANDOVER_RUN_START (handover.sh). It first waits for the lock of improvement-proposal to go (at most 30 minutes), so that the issues made there are placed in the same night.
+# improvement-proposal: 1 hour after the start, 23:00 for the job: no new candidate starts after it, so that the run ends well before issue-dev starts at 00:30 and waits for it.
+# issue-dev: the end of its 3 hours (03:30 for the job), which stops new issues (nightly-limit.sh also holds a run to 10 points), and HANDOVER_RUN_START (handover.sh). It first waits for the lock of improvement-proposal to go (at most 30 minutes), so that the issues made there are placed in the same night.
 set -u
 if [ $# -ne 1 ]; then
-  echo "使い方: nightly.sh improvement-proposal|milestone-dev" >&2
+  echo "使い方: nightly.sh improvement-proposal|issue-dev" >&2
   exit 2
 fi
 case "$1" in
-  improvement-proposal | milestone-dev) skill="$1" ;;
+  improvement-proposal | issue-dev) skill="$1" ;;
   *)
-    echo "使い方: nightly.sh improvement-proposal|milestone-dev" >&2
+    echo "使い方: nightly.sh improvement-proposal|issue-dev" >&2
     exit 2
     ;;
 esac
@@ -55,7 +55,7 @@ wait_for() {
   done
 }
 case "$skill" in
-  milestone-dev)
+  issue-dev)
     wait_for improvement-proposal
     export HANDOVER_RUN_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     export NIGHTLY_DEADLINE_EPOCH=$(($(date +%s) + 3 * 3600))
