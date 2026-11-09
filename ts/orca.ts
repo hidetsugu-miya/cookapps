@@ -77,6 +77,8 @@ const opened = new Set<string>();
 let workingOrder: string[] = [];
 // The target `workingOrder` and `opened` were made for: the keys of another target are not these.
 let workingTarget: string | null = null;
+// The groups of the working view that the user closed with their headings (A-6): held in memory only, every group is open at first.
+const closedGroups = new Set<OrcaRow["group"]>();
 // The host element of each pane drawn, by pane id: the terminals are placed in them.
 let paneHosts = new Map<string, HTMLElement>();
 // The order tabs were first seen in, so that a read that reorders the sessions does not move the tabs. A tab with a terminal is known by its handle, so a terminal that changes kind (a plain one where Claude starts, or the other way round) keeps its place.
@@ -290,10 +292,24 @@ function drawSearch() {
   $("orca-search-clear").hidden = query === "";
 }
 
+// The heading of a group is one button: the arrow, the status icon, the name and the number. Pressing it closes the group's rows (the heading and the number stay) or opens them again.
 function heading(group: OrcaRow["group"], n: number) {
   const h = tag("h2", `orca-group ${group}`);
-  h.append(statusIcon(GROUP_STATUS[group], GROUP_LABELS[group]), GROUP_LABELS[group], tag("span", "orca-count", String(n)));
+  const button = tag("button", "orca-group-btn");
+  button.type = "button";
+  button.dataset.key = `group:${group}`;
+  button.setAttribute("aria-expanded", String(!closedGroups.has(group)));
+  const arrow = tag("span", "orca-group-arrow");
+  arrow.innerHTML = CHEVRON_SVG;
+  button.append(arrow, statusIcon(GROUP_STATUS[group], GROUP_LABELS[group]), GROUP_LABELS[group], tag("span", "orca-count", String(n)));
+  button.onclick = () => toggleGroup(group);
+  h.append(button);
   return h;
+}
+
+function toggleGroup(group: OrcaRow["group"]) {
+  if (!closedGroups.delete(group)) closedGroups.add(group);
+  draw();
 }
 
 // Three lines: the status icon, the title and the time; the latest action; and Claude's mark with the worktree.
@@ -442,7 +458,8 @@ function workingNodes(now: number): HTMLElement[] {
   for (const group of ["waiting", "working", "done"] as const) {
     const list = rows.filter((r) => r.group === group);
     if (!list.length) continue;
-    nodes.push(heading(group, list.length), ...list.map((r) => rowNode(r, r.paneKey ?? `${group}/${r.repo}/${r.branch}/${r.line}`, now)));
+    nodes.push(heading(group, list.length));
+    if (!closedGroups.has(group)) nodes.push(...list.map((r) => rowNode(r, r.paneKey ?? `${group}/${r.repo}/${r.branch}/${r.line}`, now)));
   }
   return nodes.length ? nodes : [emptyNode("動いているエージェントはありません")];
 }
@@ -459,7 +476,7 @@ function drawFeed() {
   const re = working ? null : matcher();
   const rows = visibleRows(re);
   const on = working ? null : cursorKey(rows);
-  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), on], projectKey, sessions, selectedTab(), switching, Math.floor(now / 60_000)]);
+  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), on], projectKey, sessions, selectedTab(), switching, [...closedGroups], Math.floor(now / 60_000)]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();

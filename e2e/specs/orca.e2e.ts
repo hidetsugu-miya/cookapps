@@ -1221,6 +1221,44 @@ describe("orca: projects", () => {
     await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
   });
 
+  describe("the groups of the working view (A-6)", () => {
+    const toggle = (group: string) => $(`#orca-feed .orca-group-btn[data-key="group:${group}"]`);
+    const expanded = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-group-btn")].map((b) => b.getAttribute("aria-expanded")));
+
+    it("opens every group at first, hides the rows of a group when its heading is pressed and shows them again when it is pressed once more, keeping the heading and the number", async () => {
+      await openWorking();
+      expect(await expanded()).toEqual(["true", "true", "true"]);
+      expect(await rowTexts(".orca-prompt")).toEqual(["Fix the parser", "Write the docs", "Update the page", "Opened the pull request."]);
+      await toggle("working").click();
+      await expect(toggle("working")).toHaveAttribute("aria-expanded", "false");
+      expect(await expanded()).toEqual(["true", "false", "true"]);
+      expect(await rowTexts(".orca-prompt")).toEqual(["Fix the parser", "Opened the pull request."]);
+      // The heading and its number stay.
+      expect(await groups()).toEqual(["入力待ち1", "作業中2", "完了1"]);
+      await toggle("working").click();
+      await expect(toggle("working")).toHaveAttribute("aria-expanded", "true");
+      expect(await rowTexts(".orca-prompt")).toEqual(["Fix the parser", "Write the docs", "Update the page", "Opened the pull request."]);
+    });
+
+    // The harness's synthesized Enter and Space do not run the default action of a button (checked: neither `keys` nor `addValue` presses it), so the keyboard is checked by what makes it work: a native button that can be focused, and that keeps the focus when the list is drawn again.
+    it("is a native button in the heading that a keyboard reaches, and keeps the focus when it opens or closes", async () => {
+      await openWorking();
+      const state = () =>
+        browser.execute(() => {
+          const b = document.querySelector<HTMLButtonElement>('#orca-feed .orca-group-btn[data-key="group:done"]')!;
+          return [b.tagName, b.type, b.disabled, b.tabIndex, b.parentElement!.tagName];
+        });
+      expect(await state()).toEqual(["BUTTON", "button", false, 0, "H2"]);
+      await browser.execute(() => document.querySelector<HTMLElement>('#orca-feed .orca-group-btn[data-key="group:done"]')!.focus());
+      await browser.execute(() => document.querySelector<HTMLElement>('#orca-feed .orca-group-btn[data-key="group:done"]')!.click());
+      await expect(toggle("done")).toHaveAttribute("aria-expanded", "false");
+      await expect(toggle("done")).toBeFocused();
+      await browser.execute(() => document.querySelector<HTMLElement>('#orca-feed .orca-group-btn[data-key="group:done"]')!.click());
+      await expect(toggle("done")).toHaveAttribute("aria-expanded", "true");
+      await expect(toggle("done")).toBeFocused();
+    });
+  });
+
   describe("the sessions under a project (A-8)", () => {
     const arrow = (repo: string) => $(`#orca-feed .orca-arrow[data-key="arrow:proj_${repo}"]`);
     const sessionTitles = () => textsOf("#orca-feed .orca-session .orca-session-title");
