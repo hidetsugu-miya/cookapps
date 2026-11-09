@@ -44,7 +44,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    - A candidate that is a bug follows "File a bug only after reproducing it" (`issues.md`); if it does not reproduce, drop it.
    - Drop a candidate out of scope, and a refactoring that would change behavior.
 7. **Sort the kept candidates.** In the job, a candidate that comes from `ux-scout` does not exist. For the others:
-   - **Discussion:** the candidate matches any of these (Discussion #160, second version): it changes what the owner sees or uses into a form `requirements/` does not describe; it changes or removes a rule marked "at the owner's instruction"; it loosens what stops a change (hooks, `pre-git.sh`, `run-ci.sh`, the guards, the severity of the review, the release table); or two or more options remain that primary sources and a prototype cannot settle.
+   - **Discussion:** the candidate matches any of these (Discussion #160, second version): it changes what the owner sees or uses into a form `requirements/` does not describe; it changes or removes a rule marked "at the owner's instruction"; it loosens what stops a change (hooks, `pre-git.sh`, `run-ci.sh`, the guards, the severity of the review, the rule that the owner merges the Release PR); or two or more options remain that primary sources and a prototype cannot settle.
    - **Issue decided by the AI:** every other candidate (a bug fix, a refactoring that keeps behavior, a statement that no longer matches the code or the requirements, a change that strengthens a gate). Say in the body why it fits here, with the evidence.
    - **Issue for the owner:** a candidate of `ux-scout`, as always.
 

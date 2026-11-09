@@ -129,6 +129,10 @@ class Ordering(unittest.TestCase):
         j = pr.issue_json(mk(2, ["importance:high"]))
         self.assertEqual((j["urgency"], j["importance"], j["points"]), ("normal", "high", None))
 
+    def test_a_milestone_named_for_a_version_is_not_given_to_the_planner(self):
+        self.assertIsNone(pr.issue_json(mk(1, milestone="v0.56.0"))["milestone"])
+        self.assertEqual(pr.issue_json(mk(2, milestone="Orca files"))["milestone"], "Orca files")
+
 
 class Validation(unittest.TestCase):
     def setUp(self):
@@ -451,6 +455,22 @@ class ReleaseFacts(unittest.TestCase):
         self.assertTrue(self.facts([waiting(1, ["point:8"])])["solo"])
         self.assertTrue(self.facts([waiting(1, ["point:3", "solo"])])["solo"])
         self.assertFalse(self.facts([waiting(1, ["point:5"])])["solo"])
+
+
+class TagDueHidesTheChanges(unittest.TestCase):
+    def test_while_a_tag_is_due_nothing_is_shown_as_waiting(self):
+        facts = pr.release_facts([waiting(1, ["urgency:high", "adds:requirement", "point:8"])], None, "v0.55.2")
+        due = {"tag": "v0.56.0", "commit": "bbb", "pr": 12}
+        out = pr.with_tag_due(facts, due)
+        self.assertEqual(out["tag_due"], due)
+        self.assertEqual(out["changes"], [])
+        self.assertEqual((out["urgent"], out["solo"], out["minor"], out["version"]), (False, False, False, None))
+
+    def test_with_no_tag_due_the_facts_are_kept(self):
+        facts = pr.release_facts([waiting(1)], None, "v0.55.2")
+        out = pr.with_tag_due(dict(facts), None)
+        self.assertIsNone(out["tag_due"])
+        self.assertEqual({k: v for k, v in out.items() if k != "tag_due"}, facts)
 
 
 class CargoVersion(unittest.TestCase):

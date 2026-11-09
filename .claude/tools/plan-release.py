@@ -478,6 +478,15 @@ def release_facts(issues, release_pr, last_tag):
     }
 
 
+def with_tag_due(facts, due):
+    """Adds `tag_due` to the facts. While a tag is due (the owner has merged the Release PR and the tag is not made), what is counted from the last tag is the merged Release PR itself,
+    so `changes`, `urgent`, `solo`, `minor` and `version` are emptied: the tag comes first, and `release` runs again after it."""
+    facts["tag_due"] = due
+    if due:
+        facts.update(changes=[], urgent=False, solo=False, minor=False, version=None)
+    return facts
+
+
 def cargo_version(text):
     """The `version` of the `[package]` table of a Cargo.toml, or None."""
     in_package = False
@@ -642,7 +651,7 @@ def issue_json(i):
         "urgency": "high" if urgent(i) else "normal",
         "importance": importance(i),
         "points": points(i),
-        "milestone": i.milestone,
+        "milestone": None if parse_version(i.milestone) else i.milestone,
         "createdAt": i.created_at,
         "blocked_by": sorted(i.blocked_by),
     }
@@ -807,7 +816,7 @@ def cmd_release(args):
         except GhError:
             return None
 
-    facts["tag_due"] = tag_due(merged, state.tags, read_version)
+    with_tag_due(facts, tag_due(merged, state.tags, read_version))
     print(json.dumps(facts, ensure_ascii=False, indent=2))
 
 

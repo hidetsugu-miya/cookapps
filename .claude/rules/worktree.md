@@ -9,7 +9,7 @@ The worktree is never deleted: each piece of work switches it to a branch cut fr
 A piece of work that finds the worktree in use does not touch it: a session waits or tells the owner, and a nightly run writes it in the hand-over and goes on to what needs no worktree.
 
 ```text
-Good: a session needs the worktree, `use-worktree.sh` exits 3 because a night branch is unmerged -> the session tells the owner
+Good: a session needs the worktree, `use-worktree.sh` exits 3 because a night branch holds commits that are not pushed -> the session tells the owner
 Bad:  a second worktree for the same repository, so that two pieces of work run at once
 ```
 
@@ -21,7 +21,7 @@ Every branch reaches main through a pull request (`issues.md`).
 ### Take the worktree with `use-worktree.sh`, and give it back with `--park`
 
 `.claude/tools/use-worktree.sh {branch}` makes the worktree when it is missing and, when it exists, switches it to the branch (cut from `origin/main`; a branch that already exists is switched to, and brought up to date with `origin/main` when it is merged).
-The worktree is free when its tree is clean and its HEAD is in `origin/main`, so no change and no commit can be lost by switching. Otherwise it is in use: the script says why on stderr and exits 3, and changes nothing. When the worktree is already on the branch asked for, the script only prints its path (the work goes on).
+The worktree is free when its tree is clean and its HEAD is in some remote branch (a pushed branch that is not merged yet does not keep it), so no change and no commit can be lost by switching. Otherwise it is in use: the script says why on stderr and exits 3, and changes nothing. When the worktree is already on the branch asked for, the script only prints its path (the work goes on).
 When it makes the worktree, it copies the files and directories of `.worktreeinclude` from the main checkout to the same places, clones the main checkout's `src-tauri/target` into the worktree (`cp -cpR`, an APFS clone that keeps the modification times; the `incremental/` of each profile is deleted from the copy), and runs `npm ci`.
 At every use it copies the private files again (the main checkout's are the originals), and runs `npm ci` when `package-lock.json` changed between the old HEAD and the new one.
 Where cloning is not possible (a volume that is not APFS), `cp` falls back to a plain copy (`man cp`); when the copy itself fails (a full disk, for example), the script deletes the half-made copy, warns on stderr, and the worktree starts from an empty target.
