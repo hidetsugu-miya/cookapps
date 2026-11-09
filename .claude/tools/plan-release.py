@@ -4,13 +4,15 @@
 Usage:
   plan-release.py snapshot
   plan-release.py apply <plan.json> [--dry-run]
+  plan-release.py unsplit
   plan-release.py next [--mine <issue numbers>]
   plan-release.py release
   plan-release.py close [--dry-run]
 
 `snapshot` prints the open issues the planner orders. `apply` leaves out of the plan the closed issues and the fixed ones (stderr says which), writes the
 `blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
-`start` lists the issues a run may begin, in the order of the plan. `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
+`start` lists the issues a run may begin, in the order of the plan. `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
+(open, no `needs:owner`, no milestone): `issue-plan` applies its step 3 to each before it orders. `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
 and the tag that is due after a merge. `close` closes the milestones (a milestone is a feature, not a version) whose issues are all done and released.
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
 """
@@ -363,6 +365,15 @@ def plan_positions(plan):
     """-> {issue number: position in order} of a saved plan; empty without a usable plan."""
     problem, order, _ = parse_plan(plan)
     return {} if problem else {n: k for k, n in enumerate(order)}
+
+
+def unsplit(issues):
+    """The open issues of 5 or 8 points that wait for `issue-plan` step 3: no needs:owner (the owner has not settled it), and no milestone (nobody has split it)."""
+    return [
+        i
+        for i in issues
+        if i.state == "open" and points(i) in (5, 8) and not has(i, "needs:owner") and not i.milestone
+    ]
 
 
 def build_next(issues, pr_closing, mine=frozenset(), plan=None):
@@ -723,6 +734,12 @@ def cmd_next(args):
     print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, plan), ensure_ascii=False, indent=2))
 
 
+def cmd_unsplit(args):
+    state = load_state()
+    found = [{"number": i.number, "title": i.title, "points": points(i)} for i in unsplit(list(state.issues.values()))]
+    print(json.dumps(found, ensure_ascii=False, indent=2))
+
+
 def release_pr_of(owner):
     """-> the open Release PR of the owner, or None."""
     found = json.loads(gh("pr", "list", "--state", "open", "--head", RELEASE_BRANCH, "--json", "number,title,url,author,labels"))
@@ -769,6 +786,7 @@ def main(argv=None):
     n = sub.add_parser("next")
     n.add_argument("--mine", default="", help="issue numbers the previous hand-over lists as this run's own, such as 140,141")
     n.set_defaults(fn=cmd_next)
+    sub.add_parser("unsplit").set_defaults(fn=cmd_unsplit)
     sub.add_parser("release").set_defaults(fn=cmd_release)
     c = sub.add_parser("close")
     c.add_argument("--dry-run", action="store_true")

@@ -19,7 +19,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    - `importance:high` or `importance:low` (none means normal), with the reason as a one-line comment. A bug that stops use or loses data is `importance:high`. Do not change one the owner set.
    - `urgency:high` only when the owner said so ("urgent", "top priority", "as soon as possible"), never on your own judgment; say that it was their word. `release:now` is retired.
    - `documentation` when it changes only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/`
-3. **Split a `point:5` or `point:8` issue into a feature.** Skip this step for an issue of `point:3` or less, and for an issue with `needs:owner`: its content is not decided yet, and the owner accepts or declines that issue itself. Split it when its `needs:owner` is removed (the hook starts this skill again from step 1). A part of an issue with `proposal` gets `proposal` too.
+3. **Split a `point:5` or `point:8` issue into a feature.** Skip this step for an issue of `point:3` or less, and for an issue with `needs:owner`: its content is not decided yet, and the owner accepts or declines that issue itself. An issue of `point:5` or `point:8` with no `needs:owner` and no milestone is split here. It comes to this step by one of two routes: the session hook starts this skill from step 1 when a session creates the issue or removes its `needs:owner`, and `plan-release.py unsplit` lists it when it was made or released on the GitHub screen ("To only reorder" below). A part of an issue with `proposal` gets `proposal` too.
    - Name the feature in a few words (the name the owner would say, such as `Orca のファイル欄`), and make the milestone: `gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/milestones" -f title="{feature}" -f description="#{n} {title}"`.
    - Split the issue into parts that merge one by one, each of `point:3` or less, each with its own labels (`adds:requirement` on the part that adds the requirement ID), and create them in the milestone: `gh issue create --milestone "{feature}" ...`. Follow step 2 for each part. Parts that need each other get their order from step 4.
    - Close the large issue with `gh issue close {n} --reason "not planned" --comment "{list of the parts}"`.
@@ -32,7 +32,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    On exit 2, relaunch `release-planner` with the stderr added, at most twice. If it still fails, state the failure in the report: `next` puts the issues that the saved plan lacks behind the others, in the basic order.
 7. **Report** each new issue, each milestone made and the order, as `apply` prints it (`1. #42 title [feature] - reason`).
 
-To only reorder, start at step 5.
+To only reorder, run `plan-release.py unsplit`, apply step 3 to each issue number it prints, and then start at step 5.
 
 ## Not here
 
@@ -44,4 +44,4 @@ To only reorder, start at step 5.
 ## When it runs
 
 - An issue is created, or its `needs:owner` is removed: from step 1 (the hook says so). The parts made in step 3 are placed by one pass of steps 5 to 7 after the last part.
-- A `milestone-dev` run starts: from step 5, so that issues made outside a session, such as on the GitHub screen, are placed too.
+- A `milestone-dev` run starts: "To only reorder", so that issues made outside a session, such as on the GitHub screen, are split and placed too.

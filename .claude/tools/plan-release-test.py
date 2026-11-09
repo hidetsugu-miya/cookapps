@@ -290,6 +290,22 @@ class Next(unittest.TestCase):
         self.assertEqual([i["number"] for i in out["start"]], [2, 1])
 
 
+class Unsplit(unittest.TestCase):
+    def test_a_big_issue_with_no_milestone_and_no_needs_owner_is_unsplit(self):
+        issues = [
+            mk(1, ["point:5"]),
+            mk(2, ["point:8", "bug"]),
+            mk(3, ["point:3"]),
+            mk(4, ["point:5", "needs:owner"]),
+            mk(5, ["point:8"], milestone="Orca files", ms_number=7),
+            mk(6, ["point:5"], state="closed"),
+        ]
+        self.assertEqual(numbers(pr.unsplit(issues)), [1, 2])
+
+    def test_nothing_is_unsplit_once_every_big_issue_is_split_or_waits_for_the_owner(self):
+        self.assertEqual(pr.unsplit([mk(1, ["point:2"]), mk(2, ["point:5", "needs:owner"])]), [])
+
+
 class Prune(unittest.TestCase):
     def test_closed_and_fixed_issues_leave_every_part_of_the_plan(self):
         plan = {

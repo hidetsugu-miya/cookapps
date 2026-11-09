@@ -108,7 +108,7 @@ The hard rules of the order are checked by `plan-release.py`, which refuses a pl
 
 Everything else is `release-planner`'s judgment, with this as the basis: urgency, then importance, then fewer points first (1 < 2 < 3 < 5 < 8), then the older issue first. The issues of one milestone stay together when that costs nothing in priority. Where it moves an issue ahead of an older one, it writes the reason.
 An issue the saved plan lacks goes behind those it has, urgent ones first, then the bugs of 1, 2 or 3 points, then by that basis (`plan-release.py next`).
-The reorder (`issue-plan`, from its step 5) runs when an issue is created or its `needs:owner` is removed (the hook says so), and at the start of every `milestone-dev` run, which also places the issues made outside a session, such as on the GitHub screen. There is no separate schedule for it.
+The reorder (`issue-plan`) runs when an issue is created or its `needs:owner` is removed (the hook says so), and at the start of every `milestone-dev` run. The run first splits every issue of `point:5` or `point:8` that `plan-release.py unsplit` prints (open, no `needs:owner`, no milestone), so an issue made or released on the GitHub screen is split before it is taken, and then places the issues. There is no separate schedule for it.
 The plan saved by the last `apply` is `.claude/plan.json` of the main checkout. Plan only the owner's issues.
 
 ```text
