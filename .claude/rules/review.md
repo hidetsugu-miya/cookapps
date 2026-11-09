@@ -212,7 +212,8 @@ If it failed, find the cause with `--log-failed`, fix it with the next patch ver
 The merge of any other pull request starts no release, so there is nothing to watch (the workflows of a push to main, `rust-cache.yml` and `pages.yml`, may still run).
 
 ```sh
-.claude/tools/watch-ci.sh             # waits for the release run of HEAD (a tagged commit, or a merge commit of the Release PR) to appear and to end; on failure prints the cause log and exits non-zero
+.claude/tools/watch-ci.sh             # waits for the release run of HEAD (a tagged commit) to appear and to end; on failure prints the cause log and exits non-zero
+.claude/tools/watch-ci.sh {commit}    # the same for a given commit: after a merge of the Release PR, `git fetch origin main` and pass `follow_up.commit` (or `tag_due.commit`) of `plan-release.py release`, because HEAD is not its merge commit
 .claude/tools/watch-ci.sh {run ID}    # waits for one run only
 ```
 
