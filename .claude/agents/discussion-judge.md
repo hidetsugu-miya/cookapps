@@ -67,7 +67,7 @@ Bash は `git`、`gh` の読み取り、`rg` などの読み取りのコマン�
 - `decision`: 何を決めたかを日本語で書く。誰の判断かを書く（オーナーのコメントか、確かめ直した結果か）。
 - `issue.title`: 日本語の題。
 - `issue.body`: 日本語。何を変えるか、その根拠（`path:line`）、範囲外。オーナーのコメントが決めていないときは `## AI が決めたこと` の節を付け、決めた内容と、確かめ直した根拠を書く。本文の最後は `Created by Claude Code`。Discussion へのリンクは呼び出し側が付ける。公開リポジトリなので個人情報を書かない。
-- `issue.labels`: `point:*` を 1 つ（`point:1`・`point:2`・`point:3`・`point:5`・`point:8`。基準は `.claude/rules/issues.md`）。`documentation` は、ドキュメントと `.claude/agents/`、`.claude/rules/`、`.claude/skills/` だけを変えるとき。`adds:requirement` は要件 ID を足すとき。`needs:owner`、`urgency:high`、`release:pin` は付けない。
+- `issue.labels`: `point:*` を 1 つ（`point:1`・`point:2`・`point:3`・`point:5`・`point:8`。基準は `.claude/rules/issues.md`）。`documentation` は、ドキュメントと `.claude/agents/`、`.claude/rules/`、`.claude/skills/` だけを変えるとき。`adds:requirement` は要件 ID を足すとき。`needs:owner`、`urgency:high` は付けない。
 - 実装を伴わない決定（方針だけで、変えるものがない）は、`issue.existing` も `issue.title` も null にする。
 
 ## 返す形式

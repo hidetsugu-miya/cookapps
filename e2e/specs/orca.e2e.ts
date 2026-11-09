@@ -1220,6 +1220,44 @@ describe("orca: projects", () => {
     await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
   });
 
+  describe("the groups of the working view (A-6)", () => {
+    const toggle = (group: string) => $(`#orca-feed .orca-group-btn[data-key="group:${group}"]`);
+    const expanded = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-group-btn")].map((b) => b.getAttribute("aria-expanded")));
+
+    it("opens every group at first, hides the rows of a group when its heading is pressed and shows them again when it is pressed once more, keeping the heading and the number", async () => {
+      await openWorking();
+      expect(await expanded()).toEqual(["true", "true", "true"]);
+      expect(await rowTexts(".orca-prompt")).toEqual(["Fix the parser", "Write the docs", "Update the page", "Opened the pull request."]);
+      await toggle("working").click();
+      await expect(toggle("working")).toHaveAttribute("aria-expanded", "false");
+      expect(await expanded()).toEqual(["true", "false", "true"]);
+      expect(await rowTexts(".orca-prompt")).toEqual(["Fix the parser", "Opened the pull request."]);
+      // The heading and its number stay.
+      expect(await groups()).toEqual(["入力待ち1", "作業中2", "完了1"]);
+      await toggle("working").click();
+      await expect(toggle("working")).toHaveAttribute("aria-expanded", "true");
+      expect(await rowTexts(".orca-prompt")).toEqual(["Fix the parser", "Write the docs", "Update the page", "Opened the pull request."]);
+    });
+
+    // The harness's synthesized Enter and Space do not run the default action of a button (checked: neither `keys` nor `addValue` presses it), so the keyboard is checked by what makes it work: a native button that can be focused, and that keeps the focus when the list is drawn again.
+    it("is a native button in the heading that a keyboard reaches, and keeps the focus when it opens or closes", async () => {
+      await openWorking();
+      const state = () =>
+        browser.execute(() => {
+          const b = document.querySelector<HTMLButtonElement>('#orca-feed .orca-group-btn[data-key="group:done"]')!;
+          return [b.tagName, b.type, b.disabled, b.tabIndex, b.parentElement!.tagName];
+        });
+      expect(await state()).toEqual(["BUTTON", "button", false, 0, "H2"]);
+      await browser.execute(() => document.querySelector<HTMLElement>('#orca-feed .orca-group-btn[data-key="group:done"]')!.focus());
+      await browser.execute(() => document.querySelector<HTMLElement>('#orca-feed .orca-group-btn[data-key="group:done"]')!.click());
+      await expect(toggle("done")).toHaveAttribute("aria-expanded", "false");
+      await expect(toggle("done")).toBeFocused();
+      await browser.execute(() => document.querySelector<HTMLElement>('#orca-feed .orca-group-btn[data-key="group:done"]')!.click());
+      await expect(toggle("done")).toHaveAttribute("aria-expanded", "true");
+      await expect(toggle("done")).toBeFocused();
+    });
+  });
+
   describe("the sessions under a project (A-8)", () => {
     const arrow = (repo: string) => $(`#orca-feed .orca-arrow[data-key="arrow:proj_${repo}"]`);
     const sessionTitles = () => textsOf("#orca-feed .orca-session .orca-session-title");
@@ -3154,6 +3192,68 @@ describe("orca: files and editor (A-18)", () => {
     await tabOf("file:1").$(".orca-tab-btn").click();
     await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
     expect(await callsOf("orca_file_read")).toHaveLength(1);
+  });
+
+  // The right button on a row of the tree, as the page gets it; whether the page kept the browser's own menu from showing.
+  const rightClickRow = (path: string) =>
+    browser.execute(
+      (p, once) => {
+        if (!window.__e2e_once__(once)) return false;
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+        document.querySelector(`.orca-file[data-path="${p}"]`)!.dispatchEvent(event);
+        return event.defaultPrevented;
+      },
+      path,
+      onceId(),
+    );
+
+  it("opens a menu of the two copies on the right button of a file, and writes the path and the path from the worktree", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await stubClipboard();
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー"]);
+    await pickItem("パスのコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
+    await expect($(".toast")).toHaveText(expect.stringContaining("パスをコピーしました"));
+    await expect($(".menu")).not.toExist();
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("相対パスをコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the relative path was never copied" });
+    expect(await copiedTexts()).toEqual(["/work/example-app/a.rs", "a.rs"]);
+  });
+
+  it("opens the same menu on a folder, and on a file in an open folder with its path from the worktree", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    await stubClipboard();
+    expect(await rightClickRow("src")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー"]);
+    await pickItem("パスのコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
+    expect(await rightClickRow("src/main.rs")).toBe(true);
+    await pickItem("相対パスをコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the relative path was never copied" });
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+    expect(await rightClickRow("src/main.rs")).toBe(true);
+    await pickItem("パスのコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 3, { timeoutMsg: "the path was never copied" });
+    expect(await copiedTexts()).toEqual(["/work/example-app/src", "src/main.rs", "/work/example-app/src/main.rs"]);
+  });
+
+  it("closes the menu of a row with Escape and writes nothing", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await stubClipboard();
+    expect(await rightClickRow("b.log")).toBe(true);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    expect(await copiedTexts()).toEqual([]);
   });
 });
 
