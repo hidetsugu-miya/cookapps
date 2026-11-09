@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 公開してはいけない語（置き換え元のメールアプリ名を含む）を検出する。AGENTS.md を含む gitignore されていない全ファイルが対象。マッチした行の本文は出さず、path:line と語だけを出す。
 # 使い方: guard-public.sh file <path> | tree | text | log <range>   （マッチがあれば exit 1）
+# 検査する checkout: file はそのファイルの属する checkout（worktree のファイルは worktree）、tree と log は呼ばれたときのカレントディレクトリの checkout。
 # 語の一覧は、この hook 自身が公開できない語を含むため追跡せず、同じ場所の public-words（gitignore、1 行 1 パターン）から読む。無い・空のときは止める（exit 1）。
 set -uo pipefail
 
@@ -11,8 +12,6 @@ if [ -f "$words" ]; then
 fi
 [ "${#PATTERNS[@]}" -gt 0 ] || { echo "公開禁止語の一覧 $words がありません（または空です）。検査できないので止めます。メインのチェックアウトから複写してください" >&2; exit 1; }
 
-root="$(cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" && pwd -P)"
-cd "$root"
 status=0
 
 # stdin を語ごとに走査し、ラベル:行番号 と語を出す。
@@ -29,6 +28,8 @@ case "${1:-}" in
   file)
     f=${2:?path}
     [ -f "$f" ] || exit 0
+    root="$(git -C "$(dirname "$f")" rev-parse --show-toplevel 2>/dev/null)" || exit 0
+    cd "$root" || exit 0
     abs="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"
     case "$abs" in "$root"/*) ;; *) exit 0 ;; esac
     rel=${abs#"$root"/}
@@ -37,13 +38,15 @@ case "${1:-}" in
     scan_stream "$rel" < "$rel"
     ;;
   tree)
+    cd "$(git rev-parse --show-toplevel)" || exit 1
     for p in "${PATTERNS[@]}"; do
       out=$(git grep -I -n -i -E --untracked -e "$p" -- . | cut -d: -f1,2) || true
       [ -n "$out" ] && { while IFS= read -r l; do echo "$l: 公開禁止語 /$p/ に一致" >&2; done <<< "$out"; status=1; }
     done
     ;;
   text) scan_stream "stdin" ;;
-  log) git log --format=%B "${2:?range}" | scan_stream "commit-message" ;;
+  log) cd "$(git rev-parse --show-toplevel)" || exit 1
+    git log --format=%B "${2:?range}" | scan_stream "commit-message" ;;
   *) echo "usage: $0 file <path>|tree|text|log <range>" >&2; exit 64 ;;
 esac
 exit $status

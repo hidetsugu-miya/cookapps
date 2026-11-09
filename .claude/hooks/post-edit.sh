@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # PostToolUse(Write|Edit|MultiEdit): 公開禁止語の検査、rustfmt、TypeScript の tsc。
 set -uo pipefail
-root="${CLAUDE_PROJECT_DIR:?}"
 f=$(jq -r '.tool_input.file_path // empty')
 [ -n "$f" ] && [ -f "$f" ] || exit 0
+# 編集したファイルの属する checkout（main か worktree）を検査の root にする。
+root="$(git -C "$(dirname "$f")" rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
 msg=$("$(cd "$(dirname "$0")" && pwd)/guard-public.sh" file "$f" 2>&1) || { echo "$msg" >&2; exit 2; }
 
