@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # PostToolUse(Write|Edit|MultiEdit): 公開禁止語の検査、rustfmt、TypeScript の tsc。
 set -uo pipefail
+. "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
+hook_log_begin
 f=$(jq -r '.tool_input.file_path // empty')
 [ -n "$f" ] && [ -f "$f" ] || exit 0
 # 編集したファイルの属する checkout（main か worktree）を検査の root にする。

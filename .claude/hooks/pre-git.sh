@@ -3,6 +3,8 @@
 # push の範囲が guard-e2e.sh か plan-release*.py、この hook に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
 # 検査する checkout は hook 入力の cwd（git に -C があればその場所）の checkout で、CLAUDE_PROJECT_DIR ではない（#310）。記録の置き場所だけは --git-common-dir の main の checkout。
 set -uo pipefail
+. "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
+hook_log_begin
 input=$(cat)
 cmd=$(jq -r '.tool_input.command // empty' <<< "$input")
 cwd=$(jq -r '.cwd // empty' <<< "$input")
@@ -19,10 +21,13 @@ top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) \
   || top=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$top" || exit 0
 
-# gate <名前> <コマンド...>: 失敗したら名前と出力末尾 40 行を出して exit 2。
+# gate <名前> <コマンド...>: 失敗したら名前と出力末尾 40 行を出して exit 2。名前と所要時間はログに残す（hook-log.sh）。
 gate() {
-  local name=$1 out; shift
-  out=$("$@" 2>&1) || { echo "ゲート失敗: $name"$'\n'"$(tail -n 40 <<< "$out")" >&2; exit 2; }
+  local name=$1 out rc t; shift
+  t=$(hook_log_now)
+  out=$("$@" 2>&1); rc=$?
+  hook_log_gate "$name" "$t" "$rc"
+  [ "$rc" -eq 0 ] || { echo "ゲート失敗: $name"$'\n'"$(tail -n 40 <<< "$out")" >&2; exit 2; }
 }
 
 grep -q -E "${g}(commit|tag)|git-commit-run[[:space:]]+commit" <<< "$cmd" \
@@ -43,9 +48,9 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   else
     changed=$(git ls-files)
   fi
-  grep -q -E '^\.claude/(hooks/guard-e2e\.sh|tools/check-guard-e2e\.sh)$' <<< "$changed" \
+  grep -q -E '^\.claude/(hooks/(guard-e2e|hook-log)\.sh|tools/check-guard-e2e\.sh)$' <<< "$changed" \
     && gate "guard-e2e.sh の自己テスト" "$top/.claude/tools/check-guard-e2e.sh"
-  grep -q -E '^\.claude/(hooks/pre-git\.sh|tools/check-pre-git\.sh)$' <<< "$changed" \
+  grep -q -E '^\.claude/(hooks/(pre-git|hook-log)\.sh|tools/check-pre-git\.sh)$' <<< "$changed" \
     && gate "pre-git.sh の自己テスト" "$top/.claude/tools/check-pre-git.sh"
   grep -q -E '^\.claude/tools/plan-release[^/]*\.py$|^\.claude/(tools/(nightly-limit|use-worktree)\.sh|hooks/post-gh\.sh)$' <<< "$changed" \
     && gate "plan-release.py の自己テスト" python3 -I "$top/.claude/tools/plan-release-test.py"

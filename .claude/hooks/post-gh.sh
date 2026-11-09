@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # PostToolUse(Bash): issue の作成と needs:owner の解消のあとは issue-plan の続行を、gh pr merge のあとは plan-release.py release の結果と Release PR の用意の続行を、セッションに伝える。常に exit 0。
 set -uo pipefail
+. "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
+hook_log_begin
 cmd=$(jq -r '.tool_input.command // empty')
 [ -n "$cmd" ] || exit 0
 

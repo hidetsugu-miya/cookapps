@@ -8,6 +8,7 @@ fail=0
 
 tmp=$(mktemp -d) || exit 2
 trap 'rm -rf "$tmp"' EXIT
+export COOKAPPS_HOOK_LOG_DIR="$tmp/hook-logs"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.test GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.test
 

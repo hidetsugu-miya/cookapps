@@ -19,5 +19,6 @@ src-tauri/.cargo/
 e2e/dist/
 src/js/
 graphify-out/
+logs/
 tmp/*
 !tmp/.keep
