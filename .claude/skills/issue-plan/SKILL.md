@@ -19,7 +19,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    - `importance:high` or `importance:low` (none means normal), with the reason as a one-line comment. A bug that stops use or loses data is `importance:high`. Do not change one the owner set.
    - `urgency:high` only when the owner said so ("urgent", "top priority", "as soon as possible"), never on your own judgment; say that it was their word. `release:now` is retired.
    - `documentation` when it changes only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/`
-3. **Split a `point:5` or `point:8` issue into a feature.** Skip this step for an issue of `point:3` or less.
+3. **Split a `point:5` or `point:8` issue into a feature.** Skip this step for an issue of `point:3` or less, and for an issue with `needs:owner`: its content is not decided yet, and the owner accepts or declines that issue itself. Split it when its `needs:owner` is removed (the hook starts this skill again from step 1). A part of an issue with `proposal` gets `proposal` too.
    - Name the feature in a few words (the name the owner would say, such as `Orca のファイル欄`), and make the milestone: `gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/milestones" -f title="{feature}" -f description="#{n} {title}"`.
    - Split the issue into parts that merge one by one, each of `point:3` or less, each with its own labels (`adds:requirement` on the part that adds the requirement ID), and create them in the milestone: `gh issue create --milestone "{feature}" ...`. Follow step 2 for each part. Parts that need each other get their order from step 4.
    - Close the large issue with `gh issue close {n} --reason "not planned" --comment "{list of the parts}"`.
