@@ -417,10 +417,11 @@ function trackWorking() {
   for (const k of opened) if (!known.has(k)) opened.delete(k);
 }
 
-// The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the rest as the read lists them), then the SSH hosts (the machine's, then the target's that it does not list).
+// The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the stopped ones, which have a session and do not work, then those with no session, both as the read lists them), then the SSH hosts (the machine's, then the target's that it does not list).
 function projectRows(): { local: ProjectRow[]; hosts: ProjectRow[] } {
   const all: ProjectRow[] = view?.projects ?? [];
-  const local: ProjectRow[] = [...workingOrder.flatMap((k) => all.filter((p) => p.key === k)), ...all.filter((p) => !workingOrder.includes(p.key))];
+  const rest = all.filter((p) => !workingOrder.includes(p.key));
+  const local: ProjectRow[] = [...workingOrder.flatMap((k) => all.filter((p) => p.key === k)), ...rest.filter((p) => p.sessions > 0), ...rest.filter((p) => p.sessions === 0)];
   const hosts: ProjectRow[] = ssh.map((t) => {
     const host = view?.hosts.find((h) => h.key === `ssh:${t.id}`);
     return { key: `ssh:${t.id}`, name: t.label, status: host?.status ?? "idle", sessions: host?.sessions ?? 0 };

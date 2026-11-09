@@ -1070,6 +1070,14 @@ describe("orca: projects", () => {
     expect(place.statusBottom).toBeLessThanOrEqual(place.listBottom + 1);
   });
 
+  it("puts the stopped projects (a session, not working) under the working ones and above those with no session, each group in the order of the read", async () => {
+    const overview = withTerminals();
+    const byName = (name: string) => overview.projects.find((p) => p.name === name)!;
+    // The read lists a project with no session before the stopped ones (example-api waits, example-lib is done), and the working one last.
+    await openOrca({ ...overview, projects: [byName("example-idle"), byName("example-api"), byName("example-lib"), byName("example-app"), byName("example-web")] });
+    expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle", "example-host", "other-host"]);
+  });
+
   it("lists an SSH host of the target that this machine does not list, under SSH", async () => {
     await openOrca(orcaOverview(sample(), worktrees(), { ssh: [orcaSsh("s1", "example-host")], hosts: [{ key: "ssh:s9", name: "lost-host", status: "working", sessions: 1, atMs: 0 }] }));
     expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-host", "lost-host"]);
