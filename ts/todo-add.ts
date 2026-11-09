@@ -1,15 +1,16 @@
-// The Todo screen's add field: Quick Add, or a Slack message link summarised by Claude and confirmed on a card; and a task made from a mail.
+// The Todo screen's add field: Quick Add, or a Slack message link summarised by Claude and confirmed in a modal (todo-draft.ts); and a task made from a mail.
 import { getClaude } from "./claude.js";
 import type { Summary } from "./bindings/Summary";
 import { $, composing, isMac, tag } from "./dom.js";
 import { hostOf } from "./format.js";
 import { CLAUDE_SVG, CLOSE_SVG, DATE_SVG, FOLDER_SVG, SLACK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { setScreen } from "./nav.js";
+import { currentScreen, setScreen } from "./nav.js";
 import { getSlackWorkspaces, loadSlackWorkspaces } from "./slack-workspaces.js";
 import { toast } from "./toast.js";
 import { inboxOf, projectName, projectOf, todoState, viewProjectId } from "./todo-data.js";
 import { openDueEditor, openProjectPicker } from "./todo-detail.js";
+import { draftOpen, type DraftHooks, openDraft, resumeDraft } from "./todo-draft.js";
 import { openPrompt } from "./todo-prompt.js";
 import { todoCall } from "./todo-write.js";
 import { loadTodo } from "./todo.js";
@@ -71,6 +72,11 @@ let adding = false;
 // What the add field's button and hint last showed; the list's redraw calls updateAddMode every 10 seconds.
 let shownAddMode: { summarize: boolean; hint: string; adding: boolean } | null = null;
 export function updateAddMode() {
+  // A draft hidden by the prompt screen comes back, and one that was ready while another screen was shown opens, once the Todo screen is shown again.
+  if (currentScreen() === "todo") {
+    resumeDraft();
+    openNextDraft();
+  }
   const { summarize, hint } = addMode();
   if (shownAddMode?.summarize === summarize && shownAddMode.hint === hint && shownAddMode.adding === adding) return;
   shownAddMode = { summarize, hint, adding };
@@ -88,8 +94,8 @@ export function updateAddMode() {
   line.append(hint);
 }
 
-// What the confirmation card of a summary needs to know about the message it came from: the link, its host, and where the task goes.
-// The Todo add field and the Slack thread both draw the card.
+// What the confirmation of a summary needs to know about the message it came from: the link, its host, and where the task goes.
+// The Todo add field confirms it in the modal of todo-draft.ts, and the Slack thread on the card below.
 export interface ReviewJob {
   url: string;
   host: string | null;
@@ -100,19 +106,24 @@ export interface ReviewJob {
   today: boolean;
 }
 
-// What the owner of the card does with it: drop it, learn that the task was added (`added` is its name; null when Todoist needs a token), and open the prompt screen (none: no link to it).
+// What the owner of the card does with it: drop it, and learn that the task was added (`added` is its name; null when Todoist needs a token).
 export interface ReviewHooks {
   remove: () => void;
   added: (name: string | null) => void;
-  editPrompt?: () => void;
 }
 
+// Adds the task the user confirmed (`todoist_add_from_slack`): the link and where the task goes are the job's, the rest is what the user left in the name, the description and the due text. Answers the task's name.
+export const addSlackTodo = (job: ReviewJob, content: string, description: string, due: string) =>
+  invoke("todoist_add_from_slack", { url: job.url, content, description, due, projectId: job.projectId, today: job.today });
+
 // The Slack links being summarised, waiting for the user's confirmation, or that failed, above the list. Several may be there at once.
-// `el` is the row drawn for it: a row is replaced alone, so a card being typed in keeps its focus when another one changes.
+// `el` is the row drawn for it: a row is replaced alone, so a row being typed in keeps its focus when another one changes.
 interface PendingAdd extends ReviewJob {
   failed: string | null;
-  // Set when Claude has answered; the card then asks the user to confirm it.
+  // Set when Claude has answered; the draft modal then asks the user to confirm it.
   summary: Summary | null;
+  // Whether the draft modal was opened for it; its row is then gone.
+  opened: boolean;
   el: HTMLElement | null;
 }
 const pendingAdds: PendingAdd[] = [];
@@ -127,15 +138,35 @@ function closeButton(onclick: () => void) {
 
 // Draws the job's row where it is, or at the end for a new job.
 function showPending(job: PendingAdd) {
-  const row = job.failed ? failedRow(job) : job.summary ? reviewCard(job, job.summary, todoHooks(job)) : busyRow(job);
+  if (job.opened) return;
+  const row = job.failed ? failedRow(job) : job.summary ? readyRow(job) : busyRow(job);
   if (job.el) job.el.replaceWith(row);
   else $("todo-pending").append(row);
   job.el = row;
 }
 
 function removePending(job: PendingAdd) {
-  pendingAdds.splice(pendingAdds.indexOf(job), 1);
+  const i = pendingAdds.indexOf(job);
+  if (i >= 0) pendingAdds.splice(i, 1);
   job.el?.remove();
+}
+
+// A summary that waits for the draft modal, which is open for another one or cannot open on this screen.
+function readyRow(job: PendingAdd) {
+  const row = tag("div", "pending");
+  row.append(tag("span", "sp", "Todo の案ができました"), tag("span", "pending-channel", job.host ?? ""));
+  return row;
+}
+
+// Opens the draft modal for the first summary that waits for it, when no draft is open and the Todo screen is shown.
+function openNextDraft() {
+  if (draftOpen() || currentScreen() !== "todo") return;
+  const job = pendingAdds.find((j) => j.summary && !j.opened);
+  if (!job?.summary) return;
+  job.opened = true;
+  job.el?.remove();
+  job.el = null;
+  openDraft(job, job.summary, draftHooks(job));
 }
 
 function busyRow(job: PendingAdd) {
@@ -157,14 +188,18 @@ function failedRow(job: PendingAdd) {
   return row;
 }
 
-// The card in the Todo add field: it goes away when dropped or added, and the list is read again after an add.
-const todoHooks = (job: PendingAdd): ReviewHooks => ({
-  remove: () => removePending(job),
+// The draft modal of the Todo add field: it goes away when dropped or added (the next waiting one opens), and the list is read again after an add.
+const draftHooks = (job: PendingAdd): DraftHooks => ({
+  remove: () => {
+    removePending(job);
+    openNextDraft();
+  },
   added: (name) => {
     removePending(job);
     // null: a token is needed, and the load shows the token form.
     if (name !== null) toast(`「${name}」を追加しました`);
     loadTodo(false, false);
+    openNextDraft();
   },
   editPrompt: () => openPrompt("todo"),
 });
@@ -176,9 +211,9 @@ function reviewField(label: string, control: HTMLElement) {
 }
 
 // The day and the time in a due text the calendar of the card's popover wrote (`YYYY-MM-DD`, with ` HH:MM`), to open the popover on them again. It reads back the popover's own text and decides nothing about the task.
-const CARD_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
+export const CARD_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
 
-// The card that asks the user to confirm Claude's summary: name, description, due date and project can be changed, the link cannot (it ends the description).
+// The card that asks the user to confirm Claude's summary in the Slack thread: name, description, due date and project can be changed, the link cannot (it ends the description).
 export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks) {
   const name = tag("input", "review-name");
   name.value = summary.content;
@@ -249,12 +284,6 @@ export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks)
   const head = tag("div", "review-head");
   head.insertAdjacentHTML("beforeend", CLAUDE_SVG);
   head.append(tag("span", "review-head-text", "Claude の要約です。確かめてから追加してください"));
-  if (hooks.editPrompt) {
-    const editPrompt = tag("button", "link-btn", "プロンプトを編集");
-    editPrompt.type = "button";
-    editPrompt.onclick = hooks.editPrompt;
-    head.append(editPrompt);
-  }
   const chips = tag("div", "review-chips");
   chips.append(dueChip, project);
   const body = tag("div", "review-body");
@@ -271,15 +300,7 @@ export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks)
     add.replaceChildren(tag("span", "spin"), "追加中");
     error.hidden = true;
     try {
-      const added = await invoke("todoist_add_from_slack", {
-        url: job.url,
-        content: name.value,
-        description: description.value,
-        due: dueText,
-        projectId: job.projectId,
-        today: job.today,
-      });
-      hooks.added(added);
+      hooks.added(await addSlackTodo(job, name.value, description.value, dueText));
     } catch (e) {
       // The card stays as the user left it.
       error.textContent = `追加できませんでした: ${e}`;
@@ -307,7 +328,7 @@ export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks)
   return card;
 }
 
-// Sends the Slack link to Rust, which reads the message and has Claude summarise it. The field is free at once; the result shows in the row above the list as a card to confirm.
+// Sends the Slack link to Rust, which reads the message and has Claude summarise it. The field is free at once; a row above the list shows that it is on its way, and the result opens in the draft modal.
 function addFromSlack(url: string) {
   const input = $<HTMLInputElement>("todo-add-input");
   // Like Quick Add: in "今日" the task goes to the inbox, due today unless the user gives a date.
@@ -315,7 +336,7 @@ function addFromSlack(url: string) {
   input.value = "";
   updateAddMode();
   input.focus();
-  const job: PendingAdd = { url, host: slackMessageHost(url), failed: null, summary: null, projectId: inToday ? null : (viewProjectId(todoState.view) ?? null), recommended: null, today: inToday, el: null };
+  const job: PendingAdd = { url, host: slackMessageHost(url), failed: null, summary: null, opened: false, projectId: inToday ? null : (viewProjectId(todoState.view) ?? null), recommended: null, today: inToday, el: null };
   pendingAdds.push(job);
   showPending(job);
   invoke("todoist_summarize_slack", { url }).then(
@@ -330,6 +351,7 @@ function addFromSlack(url: string) {
       if (summary.projectId !== null && projectOf(summary.projectId)) job.projectId = job.recommended = summary.projectId;
       job.summary = summary;
       showPending(job);
+      openNextDraft();
     },
     (e) => {
       job.failed = String(e);

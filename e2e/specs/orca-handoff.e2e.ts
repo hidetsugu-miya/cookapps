@@ -1083,6 +1083,8 @@ describe("orca handoff: the session history", () => {
 
 describe("orca handoff: attached images (A-10)", () => {
   const dropped = (repo: string, name = "shot.png") => `/work/${repo}/.orca/drops/${name}`;
+  // What `orca_attach_file` answers for an image: the path with its blank, to be pasted as a bracketed paste.
+  const attached = (repo: string, name = "shot.png") => ({ text: `${dropped(repo, name)} `, bracketed: true });
   const thumbs = () => count(`${MAIL.pane} .attachment`);
   const paste = (...files: Parameters<typeof fire>[2]) => fire("paste", `${MAIL.pane} textarea`, files);
   const drop = (...files: Parameters<typeof fire>[2]) => fire("drop", MAIL.pane, files);
@@ -1145,7 +1147,7 @@ describe("orca handoff: attached images (A-10)", () => {
 
   it("puts each image in the chosen worktree and the target, then hands over the instruction with the paths", async () => {
     await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }) });
-    const attach = await mock("orca_attach_image", dropped("example-app"));
+    const attach = await mock("orca_attach_file", attached("example-app"));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
     await chooseWorktree(MAIL, "/work/example-app");
@@ -1162,7 +1164,7 @@ describe("orca handoff: attached images (A-10)", () => {
 
   it("hands over only the paths, one on each line in order, when the instruction is blank", async () => {
     await openMail();
-    const attach = await mock("orca_attach_image", dropped("example-app", "first.png"));
+    const attach = await mock("orca_attach_file", attached("example-app", "first.png"));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
     await chooseWorktree(MAIL, "/work/example-app");
@@ -1176,7 +1178,7 @@ describe("orca handoff: attached images (A-10)", () => {
 
   it("puts the image in the worktree of the running session picked", async () => {
     await openMail();
-    const attach = await mock("orca_attach_image", dropped("example-api"));
+    const attach = await mock("orca_attach_file", attached("example-api"));
     const handoff = await mock("orca_handoff", { paneKey: null, handle: "term_example-api" } satisfies OrcaStarted);
     await openPane(MAIL);
     await rowByHandle(MAIL, "term_example-api").click();
@@ -1192,7 +1194,7 @@ describe("orca handoff: attached images (A-10)", () => {
 
   it("keeps the text and the images and hands over nothing when an image cannot be put, and does not put it again after a failed handoff", async () => {
     await openMail();
-    const attach = await mock("orca_attach_image", rejects("Orca がエラーを返しました（forbidden）"));
+    const attach = await mock("orca_attach_file", rejects("Orca がエラーを返しました（forbidden）"));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
     await chooseWorktree(MAIL, "/work/example-app");
@@ -1206,20 +1208,20 @@ describe("orca handoff: attached images (A-10)", () => {
     expect(await thumbs()).toBe(1);
     expect(await callsOf(handoff)).toEqual([]);
     // The image goes this time, and the handoff fails: the next press does not put the image again.
-    await mock("orca_attach_image", dropped("example-app"));
+    await mock("orca_attach_file", attached("example-app"));
     await mock("orca_handoff", rejects("Orca が指示を受け付けませんでした"));
     await sendButton(MAIL).click();
     await expect($(`${MAIL.pane} .ho-form .pending.fail`)).toHaveText("Orca が指示を受け付けませんでした");
-    expect(await callsOf("orca_attach_image")).toHaveLength(1);
+    expect(await callsOf("orca_attach_file")).toHaveLength(1);
     const again = await mock("orca_handoff", started);
     await sendButton(MAIL).click();
     expect(await waitForCalls(again)).toHaveLength(1);
-    expect(await callsOf("orca_attach_image")).toHaveLength(1);
+    expect(await callsOf("orca_attach_file")).toHaveLength(1);
   });
 
   it("keeps an image whose read was still running when the send began", async () => {
     await openMail();
-    await mock("orca_attach_image", dropped("example-app"));
+    await mock("orca_attach_file", attached("example-app"));
     const handoff = await mock("orca_handoff", holds);
     await openPane(MAIL);
     await chooseWorktree(MAIL, "/work/example-app");
@@ -1253,7 +1255,7 @@ describe("orca handoff: attached images (A-10)", () => {
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();
     await expect($(`${MAIL.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
-    const attach = await mock("orca_attach_image", dropped("example-app"));
+    const attach = await mock("orca_attach_file", attached("example-app"));
     const post = await mock("orca_send", null);
     await field(MAIL).setValue("続けて");
     await paste(image());

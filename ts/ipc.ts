@@ -1,6 +1,7 @@
 // The commands of src-tauri (`invoke_handler`): each one's arguments and answer. The data types are ts-rs's (bindings/).
 // A command with no arguments is called as `invoke("inbox")`. An answer of `null` is what a Rust `()` or `None` becomes.
 import type { AppInfo } from "./bindings/AppInfo";
+import type { AttachedFile } from "./bindings/AttachedFile";
 import type { Channel } from "./bindings/Channel";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
@@ -42,6 +43,7 @@ import type { ThemeSelection } from "./bindings/ThemeSelection";
 import type { Timeline } from "./bindings/Timeline";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { Todo } from "./bindings/Todo";
+import type { TodoDraftEdit } from "./bindings/TodoDraftEdit";
 import type { TodoPrompt } from "./bindings/TodoPrompt";
 import type { UpdateInfo } from "./bindings/UpdateInfo";
 import type { UpdateMode } from "./bindings/UpdateMode";
@@ -144,7 +146,7 @@ export interface Commands {
   };
   // The newest 20 rows of the joined channels (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
-  // `unreadTotal` the unread messages among all those held and the unread replies (the Slack button's badge), `markableChannels` the channels "すべて既読にする" would move, `unreadThreads` the threads it would clear. Messages are kept in memory only.
+  // `unreadTotal` the unread messages among all those held and the unread replies (the Slack button's badge), `markableChannels` the channels "すべて既読にする" would move, `unreadThreads` the threads it would clear, `arrived` the unread messages this read found that the one before did not hold (newest first, none at the first read after the start). Messages are kept in memory only.
   // With `cached` true nothing is asked of Slack: the list is made again from what Rust holds (after a channel was hidden or put back).
   slack_timeline: { args: { cached: boolean } | undefined; result: Timeline };
   // The channels kept off the Slack list, in the order they were hidden, with the channel's name (its ID when the name is not known). Slack itself is not told (its mute cannot be read).
@@ -194,6 +196,9 @@ export interface Commands {
   claude_todo_prompt_reset: { args: undefined; result: TodoPrompt };
   // Claude's answer to a request about the instructions in the edit field; `history` is the conversation before this request. Nothing is saved.
   claude_edit_todo_prompt: { args: { body: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
+  // Claude's fix of a Todo proposal made from a Slack message: the same conversation, for the name and the description (`content`, `description`) instead of the instructions; each part is null with no lines when it is left alone.
+  // The model and effort are those of `slackSummary`. Nothing is saved, not even the request.
+  claude_edit_todo_draft: { args: { content: string; description: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoDraftEdit };
   // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions. Nothing is saved.
   claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
@@ -222,7 +227,7 @@ export interface Commands {
   // Pauses (`true`, the window is hidden) or resumes the periodic reads of the session that is read; the connection and what is held stay.
   orca_chat_pause: { args: { paused: boolean }; result: null };
   // A-10: puts the image `data` (base64) in `.orca/drops/` of the worktree at `path` of the target `environment` and answers the text for Claude: the absolute path of the file, with a backslash before a blank or shell character. `name` only gives the file a name; PNG, JPEG, GIF and WebP up to 20 MiB, by the bytes. Not tried again: a failure carries its message.
-  orca_attach_image: { args: { path: string; name: string; data: string; environment: string | null }; result: string };
+  orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. A terminal that is already closed is a success.
   orca_close: { args: { handle: string; environment: string | null }; result: null };
   // A-11: answers the questions of a Claude session that waits (the picks are 0-based indexes into `options`), by typing digits and Tab into its terminal `handle` one key at a time, each only when the screen shows what it is for. Not tried again: a failure carries its message.

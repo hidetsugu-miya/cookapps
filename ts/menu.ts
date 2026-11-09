@@ -35,6 +35,8 @@ export function showMenu(anchor: Element, node: HTMLElement, onOutside?: () => v
 export interface MenuItem {
   label: string;
   color: string;
+  // The markup of a line icon (a constant of icons.ts, never text from outside) shown in place of the dot of `color`.
+  icon?: string;
   current: boolean;
   // How deep the item is nested, shown as an indent.
   depth?: number;
@@ -50,10 +52,14 @@ export function openMenu(anchor: Element, items: MenuItem[]) {
     const b = tag("button");
     b.setAttribute("role", "menuitem");
     b.setAttribute("aria-current", String(item.current));
-    const dot = tag("span", "pdot");
-    dot.style.background = item.color;
+    if (item.icon) b.innerHTML = item.icon;
+    else {
+      const dot = tag("span", "pdot");
+      dot.style.background = item.color;
+      b.append(dot);
+    }
     if (item.depth) b.style.paddingLeft = `${10 + item.depth * 16}px`;
-    b.append(dot, item.label);
+    b.append(item.label);
     if (item.tag) b.append(tag("span", "tag", item.tag));
     b.onclick = () => {
       closeMenu();

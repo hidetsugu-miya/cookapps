@@ -368,9 +368,9 @@ async function attach(host: HTMLElement, files: File[]) {
   if (message !== null) onError(message);
   if (!images.length) return;
   try {
-    const lines = await uploadAttachments(images, instance.source.path, instance.source.environment);
+    const files = await uploadAttachments(images, instance.source.path, instance.source.environment);
     // The paths go only to the terminal the images were put on.
-    if (instance.host === host) instance.term.paste(`${lines.join(" ")} `);
+    if (instance.host === host) instance.term.paste(files.map((f) => f.text).join(""));
   } catch (e) {
     onError(e);
   }

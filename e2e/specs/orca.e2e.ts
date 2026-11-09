@@ -2253,6 +2253,8 @@ describe("orca: the terminal colors (A-14, A-15)", () => {
 
 describe("orca: images on a terminal (A-10)", () => {
   const dropped = (repo: string, name = "shot.png") => `/work/${repo}/.orca/drops/${name}`;
+  // What `orca_attach_file` answers for an image: the path with its blank, to be pasted as a bracketed paste.
+  const attached = (repo: string, name = "shot.png") => ({ text: `${dropped(repo, name)} `, bracketed: true });
   const shown = ".orca-term-box:not([hidden]) .xterm-helper-textarea";
   const area = ".orca-term";
   const inputs = (command: string) => callsOf(command).then((calls) => calls.map((c) => (c as { text: string }).text));
@@ -2276,7 +2278,7 @@ describe("orca: images on a terminal (A-10)", () => {
 
   it("puts a pasted image in the worktree of a terminal of this machine and types its path there", async () => {
     await openMirror();
-    const attach = await mock("orca_attach_image", dropped("example-app"));
+    const attach = await mock("orca_attach_file", attached("example-app"));
     const input = await mock("orca_terminal_input", null);
     expect(await fire("paste", shown, [image()])).toBe(true);
     expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-app", name: "shot.png", data: PNG, environment: null }]);
@@ -2285,7 +2287,7 @@ describe("orca: images on a terminal (A-10)", () => {
 
   it("leaves a paste with no image, or with only a file that is not an image, to the terminal", async () => {
     await openMirror();
-    const attach = await mock("orca_attach_image", dropped("example-app"));
+    const attach = await mock("orca_attach_file", attached("example-app"));
     await fire("paste", shown, []);
     await fire("paste", shown, [note]);
     await browser.pause(300);
@@ -2294,7 +2296,7 @@ describe("orca: images on a terminal (A-10)", () => {
 
   it("takes images dropped on the terminal, cancels a dragover that carries a file, and types the paths in order on one line", async () => {
     await openMirror();
-    const attach = await mock("orca_attach_image", dropped("example-app", "first.png"));
+    const attach = await mock("orca_attach_file", attached("example-app", "first.png"));
     const input = await mock("orca_terminal_input", null);
     expect(await fire("dragover", area, [image()])).toBe(true);
     expect(await fire("dragover", area, [])).toBe(false);
@@ -2306,7 +2308,7 @@ describe("orca: images on a terminal (A-10)", () => {
 
   it("refuses a dropped file that is not an image with the message, and puts nothing", async () => {
     await openMirror();
-    const attach = await mock("orca_attach_image", dropped("example-app"));
+    const attach = await mock("orca_attach_file", attached("example-app"));
     const input = await mock("orca_terminal_input", null);
     await fire("drop", area, [note]);
     await expect($("#error")).toHaveText("画像だけを添付できます");
@@ -2316,17 +2318,17 @@ describe("orca: images on a terminal (A-10)", () => {
 
   it("shows the message of an image that cannot be put and types nothing", async () => {
     await openMirror();
-    const attach = await mock("orca_attach_image", rejects("SSH の接続先の worktree には画像を添付できません"));
+    const attach = await mock("orca_attach_file", rejects("SSH の接続先の worktree にはファイルを添付できません"));
     const input = await mock("orca_terminal_input", null);
     await fire("paste", shown, [image()]);
     await waitForCalls(attach);
-    await expect($("#error")).toHaveText("SSH の接続先の worktree には画像を添付できません");
+    await expect($("#error")).toHaveText("SSH の接続先の worktree にはファイルを添付できません");
     expect(await callsOf(input)).toEqual([]);
   });
 
   it("does not take a file dropped anywhere else, and does not let the webview navigate to it", async () => {
     await openMirror();
-    const attach = await mock("orca_attach_image", dropped("example-app"));
+    const attach = await mock("orca_attach_file", attached("example-app"));
     const before = await browser.execute(() => location.href);
     expect(await fire("dragover", "document", [image()])).toBe(true);
     expect(await fire("drop", "document", [image()])).toBe(true);
@@ -2343,7 +2345,7 @@ describe("orca: images on a terminal (A-10)", () => {
     await sendStream(streamList(sample(), worktrees()));
     await project("example-api").click();
     await waitForCalls("orca_stream_terminal");
-    const attach = await mock("orca_attach_image", dropped("example-api"));
+    const attach = await mock("orca_attach_file", attached("example-api"));
     const input = await mock("orca_stream_input", null);
     await fire("paste", shown, [image()]);
     expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-api", name: "shot.png", data: PNG, environment: "Studio" }]);
@@ -2352,7 +2354,7 @@ describe("orca: images on a terminal (A-10)", () => {
 
   it("types the path in the terminal streamed from a saved environment, to its handle", async () => {
     await openStream();
-    const attach = await mock("orca_attach_image", dropped("example-app"));
+    const attach = await mock("orca_attach_file", attached("example-app"));
     const input = await mock("orca_stream_input", null);
     await fire("drop", area, [image()]);
     expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-app", name: "shot.png", data: PNG, environment: "Studio" }]);
@@ -2361,13 +2363,13 @@ describe("orca: images on a terminal (A-10)", () => {
 
   it("does not type the path in another terminal when the tab changed while the image went", async () => {
     await openStream();
-    const attach = await mock("orca_attach_image", holds);
+    const attach = await mock("orca_attach_file", holds);
     const input = await mock("orca_stream_input", null);
     await fire("paste", shown, [image()]);
     await waitForCalls(attach);
     await project("example-api").click();
     await waitForCalls("orca_stream_terminal", 2);
-    await release(attach, dropped("example-app"));
+    await release(attach, attached("example-app"));
     await browser.pause(500);
     expect(await callsOf(input)).toEqual([]);
   });
@@ -3547,6 +3549,8 @@ describe("orca: files and editor (A-18)", () => {
     expect(await rightClickRow("a.rs")).toBe(true);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
     expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(3);
+    expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     await pickItem("パスのコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
     await expect($(".toast")).toHaveText(expect.stringContaining("パスをコピーしました"));
@@ -3566,6 +3570,8 @@ describe("orca: files and editor (A-18)", () => {
     await stubClipboard();
     expect(await rightClickRow("src")).toBe(true);
     expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     await pickItem("パスのコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
     expect(await rightClickRow("src/main.rs")).toBe(true);

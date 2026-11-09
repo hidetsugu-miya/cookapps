@@ -1564,6 +1564,10 @@ pub struct Timeline {
     markable_channels: u32,
     /// The threads with unread replies "すべて既読にする" would clear (S-14).
     unread_threads: u32,
+    /// The unread messages (S-8, as `unread` says) this read found that the one before it did not hold, newest first, `UNREAD_MAX` at most, for the pop-up of a new message.
+    /// Empty for the first read after the start, for a channel this read is the first to know the read position of, and for the messages of a watched thread (S-13).
+    /// The same message is in the answer once: a read from the cache (`cached: true`) decides it as a full read does.
+    arrived: Vec<TimelineMessage>,
 }
 
 /// An attached file of a thread's message. `thumb_url` is set only for an image Slack serves a 360px preview of;
@@ -1738,6 +1742,8 @@ struct TimelineCache {
     replies_limited_until: Mutex<HashMap<String, Instant>>,
     /// The same, for `conversations.mark` ("すべて既読にする").
     mark_limited_until: Mutex<HashMap<String, Instant>>,
+    /// The newest message of each channel the last read decided arrivals over (`arrivals`); `None` until the first read after the start.
+    arrival_marks: Mutex<Option<ArrivalMarks>>,
 }
 
 impl TimelineCache {
@@ -1774,6 +1780,23 @@ impl TimelineCache {
             .retain(|(t, _, _), _| t != team_id);
         self.replies_limited_until.lock().unwrap().remove(team_id);
         self.mark_limited_until.lock().unwrap().remove(team_id);
+        if let Some(marks) = self.arrival_marks.lock().unwrap().as_mut() {
+            marks.retain(|(t, _), _| t != team_id);
+        }
+    }
+
+    /// The unread messages of `held` (newest first, the channels kept off the list left out) that the last read did not hold, and the memory of this read for the next one (`arrivals`).
+    /// The messages of the watched threads are left out, as the unread section leaves them out.
+    fn take_arrivals(&self, held: &[Raw], watched: &[Watched]) -> Vec<Raw> {
+        let mut marks = self.arrival_marks.lock().unwrap();
+        let (arrived, next) = arrivals(
+            marks.as_ref(),
+            held,
+            |m| self.last_read(&m.team_id, &m.channel).is_some(),
+            |m| unread_by_cache(self, m),
+        );
+        *marks = Some(next);
+        without_watched_threads(arrived, watched)
     }
 
     fn watch_entry(&self, key: &WatchKey) -> Option<WatchEntry> {
@@ -3024,6 +3047,48 @@ fn select_timeline(sorted: Vec<Raw>, unread: impl Fn(&Raw) -> bool) -> Vec<Raw> 
         .filter(|m| unread(m))
         .take(UNREAD_MAX)
         .collect()
+}
+
+/// (team, channel) -> the `ts` (as `ts_key`) of the newest message held when arrivals were last decided.
+type ArrivalMarks = HashMap<(String, String), (u64, u64)>;
+
+/// The messages of `held` (newest first) that arrived since the read that made `prev`, and the marks for the next read.
+/// A message arrived when it is `unread` and newer than its channel's mark. A channel with no mark is not decided: the read position of a channel not `known` is not a fact yet, and the messages
+/// held when it first is would all be taken for new. Its mark is set from this read on, and `prev` of `None` (the first read after the start) gives nothing.
+/// A mark never moves back, so a message deleted from Slack does not make an older one new, and a message is in at most one answer.
+fn arrivals(
+    prev: Option<&ArrivalMarks>,
+    held: &[Raw],
+    known: impl Fn(&Raw) -> bool,
+    unread: impl Fn(&Raw) -> bool,
+) -> (Vec<Raw>, ArrivalMarks) {
+    let mut next: ArrivalMarks = HashMap::new();
+    for m in held.iter().filter(|m| known(m)) {
+        let key = ts_key(&m.ts);
+        let mark = next
+            .entry((m.team_id.clone(), m.channel.clone()))
+            .or_default();
+        *mark = (*mark).max(key);
+    }
+    if let Some(prev) = prev {
+        for (channel, mark) in &mut next {
+            if let Some(before) = prev.get(channel) {
+                *mark = (*mark).max(*before);
+            }
+        }
+    }
+    let arrived = prev.map_or_else(Vec::new, |prev| {
+        held.iter()
+            .filter(|m| {
+                prev.get(&(m.team_id.clone(), m.channel.clone()))
+                    .is_some_and(|before| ts_key(&m.ts) > *before)
+            })
+            .filter(|m| unread(m))
+            .take(UNREAD_MAX)
+            .cloned()
+            .collect()
+    });
+    (arrived, next)
 }
 
 /// A channel `choose_info_channels` may pick: the newest message held, the read position kept (`None`: not known), and when `conversations.info` was last called for it (`None`: never).
@@ -4289,6 +4354,7 @@ fn cached_timeline(
     let threads = unread_threads(cache, channels, workspaces, hidden, watched, seen);
     let unchecked = unchecked_watch_rows(&rows)
         + never_checked_threads(&thread_candidates(cache, &held, &threads, watched));
+    let arrived = cache.take_arrivals(&held, watched);
     let picked = pick_timeline(cache, held, watched, threads);
     let (mut pending, mut largest) = (0, 0);
     for w in workspaces {
@@ -4314,7 +4380,20 @@ fn cached_timeline(
         unread_total: picked.unread_total,
         markable_channels: picked.markable_channels,
         unread_threads: picked.unread_threads,
+        arrived: arrived_messages(cache, workspaces, &arrived),
     }
+}
+
+/// The arrived messages as the screen draws them, with the names the cache holds.
+fn arrived_messages(
+    cache: &TimelineCache,
+    workspaces: &[Workspace],
+    arrived: &[Raw],
+) -> Vec<TimelineMessage> {
+    arrived
+        .iter()
+        .filter_map(|raw| message_of(cache, workspaces, raw, true))
+        .collect()
 }
 
 /// The newest `UNREAD_MAX` unread messages (`select_timeline`) of the joined public and private channels (no direct messages) of every workspace, with the threads with unread replies (S-14), newest first, and the watched threads (S-13).
@@ -4519,6 +4598,7 @@ pub async fn slack_timeline(
             &threads,
             &watched,
         ));
+    let arrived = state.timeline.take_arrivals(&all, &watched);
     let picked = pick_timeline(&state.timeline, all, &watched, threads);
 
     // Names: the senders and the people the rows and their unread replies draw, once each, in the order the list shows them.
@@ -4530,6 +4610,7 @@ pub async fn slack_timeline(
             std::iter::once(&row.raw).chain(row.replies.iter().flat_map(|u| u.replies.iter()))
         })
         .chain(rows.iter().map(|r| &r.raw))
+        .chain(arrived.iter())
         .flat_map(|m| {
             people_of(m)
                 .into_iter()
@@ -4565,6 +4646,7 @@ pub async fn slack_timeline(
         unread_total: picked.unread_total,
         markable_channels: picked.markable_channels,
         unread_threads: picked.unread_threads,
+        arrived: arrived_messages(&state.timeline, &workspaces, &arrived),
     })
 }
 
@@ -8414,5 +8496,126 @@ mod tests {
         let placeholder = watch_row(&w2, None, "g", &[], |_| false).raw;
         let row = timeline_message(&placeholder, &w, None, &|_| None, false);
         assert!(row.blocks.is_empty() && row.attachments.is_empty() && row.rich.is_empty());
+    }
+
+    /// The held messages of the channel C1 of T1 at `secs` seconds after 1700000000, newest first.
+    fn held_at(secs: &[u64]) -> Vec<Raw> {
+        let mut list: Vec<Raw> = secs
+            .iter()
+            .map(|s| raw("C1", &format!("{}.000000", 1_700_000_000 + s)))
+            .collect();
+        list.sort_by_key(|m| std::cmp::Reverse(ts_key(&m.ts)));
+        list
+    }
+
+    fn arrived_secs(arrived: &[Raw]) -> Vec<usize> {
+        arrived.iter().map(secs).collect()
+    }
+
+    #[test]
+    fn the_first_read_after_the_start_has_no_arrivals_and_only_what_is_newer_than_the_read_before_arrives(
+    ) {
+        let (first, marks) = arrivals(None, &held_at(&[1, 2, 3]), |_| true, |_| true);
+        assert!(first.is_empty());
+        let (arrived, marks) =
+            arrivals(Some(&marks), &held_at(&[1, 2, 3, 4, 5]), |_| true, |_| true);
+        assert_eq!(arrived_secs(&arrived), [5, 4]);
+        // The same messages again: nothing is told twice, as when a read from the cache follows a full read.
+        let (again, marks) = arrivals(Some(&marks), &held_at(&[1, 2, 3, 4, 5]), |_| true, |_| true);
+        assert!(again.is_empty());
+        let (later, _) = arrivals(Some(&marks), &held_at(&[2, 3, 4, 5, 6]), |_| true, |_| true);
+        assert_eq!(arrived_secs(&later), [6]);
+    }
+
+    #[test]
+    fn a_message_that_is_not_unread_is_not_an_arrival_but_moves_the_mark() {
+        let (_, marks) = arrivals(None, &held_at(&[1]), |_| true, |_| true);
+        // 2 is the user's own post (or read), 3 is unread.
+        let (arrived, marks) = arrivals(
+            Some(&marks),
+            &held_at(&[1, 2, 3]),
+            |_| true,
+            |m| secs(m) != 2,
+        );
+        assert_eq!(arrived_secs(&arrived), [3]);
+        // It is not an arrival later either, when it is unread by a changed read position.
+        let (later, _) = arrivals(Some(&marks), &held_at(&[1, 2, 3]), |_| true, |_| true);
+        assert!(later.is_empty());
+    }
+
+    #[test]
+    fn a_channel_whose_read_position_is_not_known_yet_decides_nothing_until_it_is() {
+        let (_, marks) = arrivals(None, &held_at(&[1, 2]), |_| false, |_| true);
+        assert!(marks.is_empty());
+        // Its position becomes known: the messages held then are not new.
+        let (arrived, marks) = arrivals(Some(&marks), &held_at(&[1, 2]), |_| true, |_| true);
+        assert!(arrived.is_empty());
+        assert_eq!(marks.len(), 1);
+        let (arrived, _) = arrivals(Some(&marks), &held_at(&[1, 2, 3]), |_| true, |_| true);
+        assert_eq!(arrived_secs(&arrived), [3]);
+    }
+
+    #[test]
+    fn the_mark_never_moves_back_and_a_channel_that_left_the_held_messages_loses_its_mark() {
+        let (_, marks) = arrivals(None, &held_at(&[1, 5]), |_| true, |_| true);
+        // 5 was deleted: 4 is older than the mark, so it is not new.
+        let (arrived, marks) = arrivals(Some(&marks), &held_at(&[1, 4]), |_| true, |_| true);
+        assert!(arrived.is_empty());
+        assert_eq!(marks.values().next(), Some(&(1_700_000_005, 0)));
+        // The channel is kept off the list (not held) and put back: its messages are not new.
+        let (_, marks) = arrivals(Some(&marks), &[], |_| true, |_| true);
+        assert!(marks.is_empty());
+        let (arrived, _) = arrivals(Some(&marks), &held_at(&[1, 4]), |_| true, |_| true);
+        assert!(arrived.is_empty());
+    }
+
+    #[test]
+    fn no_more_than_the_newest_twenty_arrive_and_the_other_channels_marks_are_apart() {
+        let (_, marks) = arrivals(None, &held_at(&[1]), |_| true, |_| true);
+        let many: Vec<u64> = (2..=40).collect();
+        let (arrived, _) = arrivals(Some(&marks), &held_at(&many), |_| true, |_| true);
+        assert_eq!(arrived.len(), UNREAD_MAX);
+        assert_eq!(secs(&arrived[0]), 40);
+        // A channel with no mark is not decided while another has one.
+        let mut held = held_at(&[1, 2]);
+        held.push(raw("C9", "1700000009.000000"));
+        let (arrived, _) = arrivals(Some(&marks), &held, |_| true, |_| true);
+        assert_eq!(arrived_secs(&arrived), [2]);
+    }
+
+    #[test]
+    fn a_list_made_from_the_cache_returns_the_new_unread_message_once_and_leaves_out_the_own_post_the_hidden_channel_and_the_first_read(
+    ) {
+        let cache = cache_with(3, 0);
+        let workspaces = vec![workspace("T1", "https://one.slack.com/")];
+        let channels = ChannelCache::default();
+        cache.put_last_read("T1", "C1", "1700000001.000000");
+        cache.put_own_user("T1", "UME");
+        let list = |hidden: &[Hidden], watched: &[Watched]| {
+            cached_timeline(&cache, &channels, &workspaces, hidden, watched, &[])
+        };
+        // The first list since the start tells nothing, though two of its messages are unread.
+        let first = list(&[], &[]);
+        assert_eq!(first.unread_total, 2);
+        assert!(first.arrived.is_empty());
+        let mut now = cache.team_history("T1").remove("C1").unwrap().1;
+        let at = |s: &str| format!("{}.000000", 1_700_000_000 + s.parse::<u64>().unwrap());
+        let mut own = raw("C1", &at("5"));
+        own.user = Some("UME".into());
+        now.extend([raw("C1", &at("4")), own, raw("C1", &at("6"))]);
+        cache.put_channel_history("T1", "C1", now, Instant::now());
+        let second = list(&[], &[]);
+        let ts: Vec<&str> = second.arrived.iter().map(|m| m.ts.as_str()).collect();
+        assert_eq!(ts, [at("6"), at("4")]);
+        assert!(second.arrived.iter().all(|m| m.unread && m.team_id == "T1"));
+        // The same list again, as after a background read, does not tell them again.
+        assert!(list(&[], &[]).arrived.is_empty());
+        // A channel kept off the list tells nothing, nor does its coming back.
+        let mut more = cache.team_history("T1").remove("C1").unwrap().1;
+        more.push(raw("C1", &at("7")));
+        cache.put_channel_history("T1", "C1", more, Instant::now());
+        let kept_off = [hidden("T1", "C1")];
+        assert!(list(&kept_off, &[]).arrived.is_empty());
+        assert!(list(&[], &[]).arrived.is_empty());
     }
 }

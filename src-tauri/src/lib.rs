@@ -9,6 +9,7 @@ pub mod ghostty;
 pub mod gmail;
 pub mod image_senders;
 pub mod images;
+pub mod mail_address;
 pub mod orca;
 pub mod orca_answer;
 pub mod orca_attach;
@@ -282,6 +283,7 @@ pub fn run() {
             claude::claude_model_settings,
             claude::claude_model_settings_save,
             claude::claude_edit_todo_prompt,
+            claude::claude_edit_todo_draft,
             claude::claude_proofread_slack,
             claude::claude_chat_thread,
             orca::orca_overview,
@@ -294,7 +296,7 @@ pub fn run() {
             orca::orca_terminal_read,
             orca::orca_terminal_input,
             orca::orca_open_url,
-            orca_attach::orca_attach_image,
+            orca_attach::orca_attach_file,
             orca_answer::orca_answer,
             orca_chat::orca_chat_open,
             orca_chat::orca_chat_close,

@@ -2,7 +2,7 @@
 import type { ThreadItem } from "./bindings/ThreadItem";
 import { dismiss } from "./arrivals.js";
 import { $, span } from "./dom.js";
-import { avatarColor, formatDate, initials, senderName, unescapeHtml } from "./format.js";
+import { avatarColor, formatDate, initials, unescapeHtml } from "./format.js";
 import { CHECK_SVG, TODO_SVG } from "./icons.js";
 import { load, removeRow } from "./inbox.js";
 import { invoke } from "./ipc.js";
@@ -215,7 +215,7 @@ export function row(t: ThreadItem) {
   const subject = span("subject", t.subject || "(件名なし)");
   subject.append(span("snippet", ` — ${unescapeHtml(t.snippet)}`));
   li.onclick = () => openThread(t, li);
-  const name = senderName(t.from);
+  const name = t.fromName || t.fromAddress;
   const avatar = span("avatar", initials(name));
   avatar.style.background = avatarColor(name);
   // Marks which account the thread belongs to.
