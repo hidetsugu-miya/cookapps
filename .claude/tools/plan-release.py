@@ -4,7 +4,8 @@
 Usage:
   plan-release.py snapshot
   plan-release.py apply <plan.json> [--dry-run]
-  plan-release.py unsplit
+  plan-release.py unsplit [--mine <issue numbers>]
+  plan-release.py migrate [--dry-run]
   plan-release.py next [--mine <issue numbers>]
   plan-release.py release
   plan-release.py close [--dry-run]
@@ -12,7 +13,8 @@ Usage:
 `snapshot` prints the open issues the planner orders. `apply` leaves out of the plan the closed issues and the fixed ones (stderr says which), writes the
 `blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
 `start` lists the issues a run may begin, in the order of the plan. `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
-(open, no `needs:owner`, no milestone): `issue-plan` applies its step 3 to each before it orders. `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
+(open, no `needs:owner`, not in hand, and no milestone named for a feature; a milestone named for a version is no mark): `issue-plan` applies its step 3 to each before it orders.
+`migrate` is run once after the milestones named for versions are retired: it takes such a milestone off the open issues of less than 5 points and closes the ones left empty (it splits nothing). `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
 and the tag that is due after a merge. `close` closes the milestones (a milestone is a feature, not a version) whose issues are all done and released.
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
 """
@@ -367,13 +369,36 @@ def plan_positions(plan):
     return {} if problem else {n: k for k, n in enumerate(order)}
 
 
-def unsplit(issues):
-    """The open issues of 5 or 8 points that wait for `issue-plan` step 3: no needs:owner (the owner has not settled it), and no milestone (nobody has split it)."""
+def unsplit(issues, pr_closing=frozenset(), mine=frozenset()):
+    """The open issues of 5 or 8 points that wait for `issue-plan` step 3: no needs:owner (the owner has not settled it), not in hand (`pr_closing`, `mine`),
+    and no milestone of a feature. The mark of a split issue, or of one kept whole, is a milestone named for a feature; a milestone named for a version is the old mechanism and is no mark."""
     return [
         i
         for i in issues
-        if i.state == "open" and points(i) in (5, 8) and not has(i, "needs:owner") and not i.milestone
+        if i.state == "open"
+        and points(i) in (5, 8)
+        and not has(i, "needs:owner")
+        and i.number not in pr_closing
+        and i.number not in mine
+        and (not i.milestone or parse_version(i.milestone))
     ]
+
+
+def migration(issues, milestones):
+    """-> {"clear": numbers, "close": titles}: the move from the milestones named for versions to the ones named for features (issues.md).
+    `clear`: the open issues of less than 5 points (or with no points yet) that sit in a milestone named for a version; they belong to no feature.
+    `close`: the open milestones named for a version that no open issue will be left in. `milestones`: the open milestones of the API, with `open_issues`.
+    An issue of 5 or 8 points keeps its milestone here: `unsplit` and `issue-plan` step 3 move it."""
+    clear = sorted(
+        i.number for i in issues if i.state == "open" and parse_version(i.milestone) and points(i) not in (5, 8)
+    )
+    cleared = Counter(i.milestone for i in issues if i.number in clear)
+    close = [
+        m["title"]
+        for m in milestones
+        if parse_version(m["title"]) and m["open_issues"] - cleared[m["title"]] <= 0
+    ]
+    return {"clear": clear, "close": close}
 
 
 def build_next(issues, pr_closing, mine=frozenset(), plan=None):
@@ -736,8 +761,27 @@ def cmd_next(args):
 
 def cmd_unsplit(args):
     state = load_state()
-    found = [{"number": i.number, "title": i.title, "points": points(i)} for i in unsplit(list(state.issues.values()))]
+    mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
+    found = [
+        {"number": i.number, "title": i.title, "points": points(i), "milestone": i.milestone}
+        for i in unsplit(list(state.issues.values()), state.pr_closing, mine)
+    ]
     print(json.dumps(found, ensure_ascii=False, indent=2))
+
+
+def cmd_migrate(args):
+    state = load_state()
+    milestones = api(f"repos/{state.repo}/milestones?state=open&per_page=100", paginate=True)
+    moves = migration(list(state.issues.values()), milestones)
+    by_title = {m["title"]: m["number"] for m in milestones}
+    for n in moves["clear"]:
+        if not args.dry_run:
+            api(f"repos/{state.repo}/issues/{n}", "PATCH", {"milestone": None})
+        print(f"took the milestone off #{n}")
+    for title in moves["close"]:
+        if not args.dry_run:
+            api(f"repos/{state.repo}/milestones/{by_title[title]}", "PATCH", {"state": "closed"})
+        print(f"closed milestone {title}")
 
 
 def release_pr_of(owner):
@@ -786,7 +830,12 @@ def main(argv=None):
     n = sub.add_parser("next")
     n.add_argument("--mine", default="", help="issue numbers the previous hand-over lists as this run's own, such as 140,141")
     n.set_defaults(fn=cmd_next)
-    sub.add_parser("unsplit").set_defaults(fn=cmd_unsplit)
+    u = sub.add_parser("unsplit")
+    u.add_argument("--mine", default="", help="issue numbers the previous hand-over lists as this run's own, such as 140,141")
+    u.set_defaults(fn=cmd_unsplit)
+    m = sub.add_parser("migrate")
+    m.add_argument("--dry-run", action="store_true")
+    m.set_defaults(fn=cmd_migrate)
     sub.add_parser("release").set_defaults(fn=cmd_release)
     c = sub.add_parser("close")
     c.add_argument("--dry-run", action="store_true")

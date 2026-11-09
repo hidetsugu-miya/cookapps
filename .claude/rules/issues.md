@@ -95,7 +95,7 @@ Bad:  add status:doing and status:merged, and keep them in step with the pull re
 
 ### Order every issue, and give a feature its own milestone, with `issue-plan`
 
-A milestone is a feature, not a version: it is named for the feature ("Orca files"), and a closed one is a feature that has been released (at the owner's instruction, 2026-11-09; Discussion #293). Only a `point:5` or `point:8` issue starts one.
+A milestone is a feature, not a version: it is named for the feature ("Orca files"), and a closed one is a feature that has been released (at the owner's instruction, 2026-11-09; Discussion #293). Only a `point:5` or `point:8` issue starts one. A milestone named for a version (`v0.56.0`) is the old mechanism: it is not a mark of anything, and `plan-release.py migrate` retires it once (it takes the milestone off the open issues of less than 5 points and closes the empty ones).
 `issue-plan` splits such an issue into issues of `point:3` or less, puts them in the milestone, and closes the large issue as not planned with a comment that lists the parts. An issue that cannot be split into parts that merge one by one stays one issue and is alone in its milestone.
 An issue of `point:3` or less that belongs to no feature has no milestone. A milestone does not decide the order, a version or the release.
 `plan-release.py close` closes a milestone once all its issues are closed and released.
@@ -108,7 +108,7 @@ The hard rules of the order are checked by `plan-release.py`, which refuses a pl
 
 Everything else is `release-planner`'s judgment, with this as the basis: urgency, then importance, then fewer points first (1 < 2 < 3 < 5 < 8), then the older issue first. The issues of one milestone stay together when that costs nothing in priority. Where it moves an issue ahead of an older one, it writes the reason.
 An issue the saved plan lacks goes behind those it has, urgent ones first, then the bugs of 1, 2 or 3 points, then by that basis (`plan-release.py next`).
-The reorder (`issue-plan`) runs when an issue is created or its `needs:owner` is removed (the hook says so), and at the start of every `milestone-dev` run. The run first splits every issue of `point:5` or `point:8` that `plan-release.py unsplit` prints (open, no `needs:owner`, no milestone), so an issue made or released on the GitHub screen is split before it is taken, and then places the issues. There is no separate schedule for it.
+The reorder (`issue-plan`) runs when an issue is created or its `needs:owner` is removed (the hook says so), and at the start of every `milestone-dev` run. The run first splits every issue of `point:5` or `point:8` that `plan-release.py unsplit` prints (open, no `needs:owner`, not in hand, and no milestone named for a feature: the mark of a split issue, or of one kept whole), so an issue made or released on the GitHub screen is split before it is taken, and then places the issues. There is no separate schedule for it.
 The plan saved by the last `apply` is `.claude/plan.json` of the main checkout. Plan only the owner's issues.
 
 ```text
