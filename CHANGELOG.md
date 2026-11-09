@@ -5,7 +5,7 @@ The project was named cookup until v0.14.6.
 
 ## v0.55.3
 
-No change to the app. Only the tools used to develop and release it changed (#294, #295). From this version the version of the app is taken from the release tag when it is built, so a build made from the source without a tag reports 0.0.0.
+No change to the app. Only the tools used to develop and release it changed (#292, #294, #295). From this version the version of the app is taken from the release tag when it is built, so a build made from the source without a tag reports 0.0.0.
 
 ## v0.55.2
 
