@@ -1,4 +1,4 @@
-// The file pane of the Orca screen (A-18): the files of the worktree of the selected tab, as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted, with what git ignores marked); this module draws it and takes the presses.
+// The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted, with what git ignores marked); this module draws it and takes the presses.
 // A folder is read when it is opened (each time), and the reload button reads the root and the open folders again, one after the other. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path. The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one).
 import type { OrcaDir } from "./bindings/OrcaDir";
@@ -9,7 +9,7 @@ import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { copyText } from "./view.js";
 
-// The worktree of the selected tab, with the name its heading shows ("{repo} ・ {branch}").
+// The worktree shown (the selected tab's, else the selected project's main one), with the name its heading shows ("{repo} ・ {branch}").
 export interface FilesContext {
   target: string | null;
   path: string;
