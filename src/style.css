@@ -723,7 +723,7 @@ button.status:hover { filter: brightness(.95); }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }
-#orca-list { flex: none; width: clamp(20%, var(--list-w, 30%), 50%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
+#orca-list { flex: none; width: clamp(20%, var(--list-w, 25%), 50%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
 #orca-split { flex: none; }
 /* A-12: a header of 32px, level with the tab strip of the work pane: the bell (with its number) and the reload at the right, buttons of 24px. */
 #orca-header { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 2px; height: 32px; box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); }
