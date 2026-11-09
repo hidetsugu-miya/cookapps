@@ -567,19 +567,31 @@ function syncEditor(tabs: Tab[]) {
   showEditors(placements);
 }
 
-// The file pane follows the selected tab: its worktree, and the files open in it.
-function drawFiles(tabs: Tab[]) {
+// The worktree the file pane shows: the selected tab's, else (no tab) the main worktree of the selected project. An SSH host's row has no files to read, so a project with no tab gives none there.
+function filesWorktree(tabs: Tab[]): { path: string; label: string } | null {
   const tab = findTab(view?.target ?? null, projectKey ?? "", tabs, selectedTab() ?? "");
+  if (tab !== undefined) return { path: tab.path, label: tab.where };
+  if (projectKey === null || projectKey.startsWith("ssh:")) return null;
+  const main = view?.worktrees.find((w) => w.projectKey === projectKey && w.isMain);
+  // A project with tabs whose layout is not answered yet has no selected tab for a moment: nothing is read for it,
+  // except when the only tabs are files of the main worktree (the first file opened in a project with no tab), whose tree stays.
+  if (tabs.some((t) => t.kind !== "file" || t.path !== main?.path)) return null;
+  return main === undefined ? null : { path: main.path, label: worktreeLabel(main) };
+}
+
+// The file pane follows its worktree and the files open in it.
+function drawFiles(tabs: Tab[]) {
+  const worktree = filesWorktree(tabs);
   const target = view?.target ?? null;
-  syncFiles(tab === undefined ? null : { target, path: tab.path, label: tab.where }, tab === undefined || projectKey === null ? new Set() : openedIn(target, projectKey, tab.path));
+  syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
 }
 
 // A file of the file pane was pressed twice: it opens as a tab in the focused pane and is selected, and the editor takes the typing.
 function openFile(relative: string) {
-  const tab = projectKey === null ? undefined : findTab(view?.target ?? null, projectKey, tabsOf(projectKey), selectedTab() ?? "");
-  if (tab === undefined || projectKey === null || view === null) return;
+  const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
+  if (worktree === null || projectKey === null || view === null) return;
   started = null;
-  const id = openEditorFile(view.target, projectKey, tab.path, relative);
+  const id = openEditorFile(view.target, projectKey, worktree.path, relative);
   // The select asks Rust for the layout with the new tab in it (`runPaneOp` reads the tabs when it asks).
   chooseTab(id);
   draw();

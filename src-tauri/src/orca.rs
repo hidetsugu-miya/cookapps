@@ -174,6 +174,8 @@ pub struct OrcaWorktree {
     pub branch: String,
     /// The project the worktree belongs to (`OrcaProject::key`; empty when it has none), which the plus of the work pane narrows the worktrees by (A-16).
     pub project_key: String,
+    /// Whether it is the repository's own folder (`isMainWorktree` of Orca), which the file pane shows for a project with no tab (A-18).
+    pub is_main: bool,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
@@ -446,6 +448,7 @@ pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
                 repo: text_of(w, "repo").unwrap_or_default().to_owned(),
                 branch: text_of(w, "displayName").unwrap_or_default().to_owned(),
                 project_key: project_key_of(w).unwrap_or_default(),
+                is_main: w["isMainWorktree"] == true,
             })
         })
         .collect()
@@ -1767,7 +1770,7 @@ mod tests {
     #[test]
     fn every_worktree_with_a_path_is_a_launch_target() {
         let doc = json!({"worktrees": [
-            {"path": "/work/a", "repo": "a", "repoId": "repo-a", "displayName": "main", "agents": []},
+            {"path": "/work/a", "repo": "a", "repoId": "repo-a", "displayName": "main", "isMainWorktree": true, "agents": []},
             {"repo": "no-path", "displayName": "x"},
             {"path": "/work/b", "repo": "b"},
             {"path": "/ssh/c", "repo": "c", "repoId": "repo-c", "hostId": "box", "displayName": "dev"},
@@ -1780,19 +1783,22 @@ mod tests {
                     path: "/work/a".into(),
                     repo: "a".into(),
                     branch: "main".into(),
-                    project_key: "repo-a".into()
+                    project_key: "repo-a".into(),
+                    is_main: true
                 },
                 OrcaWorktree {
                     path: "/work/b".into(),
                     repo: "b".into(),
                     branch: String::new(),
-                    project_key: String::new()
+                    project_key: String::new(),
+                    is_main: false
                 },
                 OrcaWorktree {
                     path: "/ssh/c".into(),
                     repo: "c".into(),
                     branch: "dev".into(),
-                    project_key: "ssh:box".into()
+                    project_key: "ssh:box".into(),
+                    is_main: false
                 },
             ]
         );
