@@ -109,8 +109,57 @@ async fn find(app: &tauri::AppHandle, command: &str) -> Result<Option<Update>, S
     app.updater().map_err(fail)?.check().await.map_err(fail)
 }
 
+/// Whether `version` is newer than the version the app was replaced with (`installed`), or nothing replaced it yet.
+/// A version that cannot be read is never newer: the updater has parsed both before this.
+fn needs_install(installed: Option<&str>, version: &str) -> bool {
+    let Some(done) = installed else { return true };
+    match (
+        semver::Version::parse(done),
+        semver::Version::parse(version),
+    ) {
+        (Ok(done), Ok(version)) => version > done,
+        _ => false,
+    }
+}
+
+/// Whether `install_update` has nothing to ask GitHub for: no update was kept by a check, and the app is already replaced, so only the restart is left.
+fn restart_only(kept: bool, installed: Option<&str>) -> bool {
+    !kept && installed.is_some()
+}
+
+/// The result of replacing the app with `update`. A failure puts `update` back in `slot`, so the update button still has it and asks GitHub for nothing.
+fn keep_on_failure<T, E>(
+    slot: &Mutex<Option<T>>,
+    update: T,
+    result: Result<(), E>,
+) -> Result<T, E> {
+    match result {
+        Ok(()) => Ok(update),
+        Err(e) => {
+            *slot.lock().unwrap() = Some(update);
+            Err(e)
+        }
+    }
+}
+
+/// What a check reports, from the version the app was replaced with (`installed`) and the newest release newer than the running app (`latest`).
+/// A release newer than the replaced one is still to be installed (`installed: false`); anything else leaves only the restart.
+fn report(installed: Option<&str>, latest: Option<&str>) -> Option<UpdateInfo> {
+    match (installed, latest) {
+        (_, Some(v)) if needs_install(installed, v) => Some(UpdateInfo {
+            version: v.to_string(),
+            installed: false,
+        }),
+        (Some(done), _) => Some(UpdateInfo {
+            version: done.to_string(),
+            installed: true,
+        }),
+        _ => None,
+    }
+}
+
 /// Whether a newer version is out. The sidebar shows its update button only for `Some`. The found update is kept for `install_update`.
-/// Once the app is replaced, it asks GitHub no more until the restart: the restart is all that is left, and the next check after it finds any later release.
+/// Once the app is replaced it still asks GitHub, so a release newer than the replaced one is reported as not yet installed; the same version stays "restart only". A check that fails is an error, and the screen keeps what it showed.
 #[tauri::command]
 pub async fn check_update(
     app: tauri::AppHandle,
@@ -121,23 +170,15 @@ pub async fn check_update(
         return Ok(None);
     }
     let done = installed.0.lock().unwrap().clone();
-    if let Some(version) = done {
-        return Ok(Some(UpdateInfo {
-            version,
-            installed: true,
-        }));
-    }
     let update = find(&app, "check_update").await?;
-    let info = update.as_ref().map(|u| UpdateInfo {
-        version: u.version.clone(),
-        installed: false,
-    });
-    *found.lock().unwrap() = update;
+    let info = report(done.as_deref(), update.as_ref().map(|u| u.version.as_str()));
+    *found.lock().unwrap() = update.filter(|_| info.as_ref().is_some_and(|i| !i.installed));
     Ok(info)
 }
 
 /// Downloads the newer version, checks its signature and replaces the app, without restarting it (`restart_app` does).
-/// Does nothing when there is none, or when the app is already replaced.
+/// A failed replacement keeps the found update for the next call.
+/// Does nothing when there is none, or when the app is already replaced and no check kept a newer one (so it asks GitHub for nothing, and works offline), or with that version or a later one.
 #[tauri::command]
 pub async fn install_update(
     app: tauri::AppHandle,
@@ -146,18 +187,18 @@ pub async fn install_update(
 ) -> Result<(), String> {
     // A second call waits here, then finds the app already replaced.
     let _busy = installed.1.lock().await;
-    if installed.0.lock().unwrap().is_some() {
+    let kept = found.lock().unwrap().take();
+    let done = installed.0.lock().unwrap().clone();
+    if restart_only(kept.is_some(), done.as_deref()) {
         return Ok(());
     }
-    let kept = found.lock().unwrap().take();
     let update = match kept {
         Some(u) => Some(u),
         None => find(&app, "install_update").await?,
     };
-    if let Some(update) = update {
-        update
-            .download_and_install(|_, _| {}, || {})
-            .await
+    if let Some(update) = update.filter(|u| needs_install(done.as_deref(), &u.version)) {
+        let result = update.download_and_install(|_, _| {}, || {}).await;
+        let update = keep_on_failure(&found, update, result)
             .map_err(|e| log_failure("install_update", "-", format!("更新できません: {e}")))?;
         *installed.0.lock().unwrap() = Some(update.version);
     }
@@ -185,6 +226,67 @@ mod tests {
         for text in ["", "{", "{}", r#"{"mode":"later"}"#, r#"{"mode":1}"#] {
             assert_eq!(parse_mode(text), UpdateMode::Auto, "{text}");
         }
+    }
+
+    fn info(version: &str, installed: bool) -> Option<UpdateInfo> {
+        Some(UpdateInfo {
+            version: version.to_string(),
+            installed,
+        })
+    }
+
+    fn same(a: Option<UpdateInfo>, b: Option<UpdateInfo>) {
+        let key = |i: &Option<UpdateInfo>| i.as_ref().map(|i| (i.version.clone(), i.installed));
+        assert_eq!(key(&a), key(&b));
+    }
+
+    #[test]
+    fn needs_install_is_true_only_for_a_version_newer_than_the_replaced_one() {
+        assert!(needs_install(None, "0.54.0"));
+        assert!(needs_install(Some("0.54.0"), "0.54.1"));
+        assert!(needs_install(Some("0.54.9"), "0.55.0"));
+        assert!(needs_install(Some("0.9.0"), "0.10.0"));
+        assert!(!needs_install(Some("0.54.0"), "0.54.0"));
+        assert!(!needs_install(Some("0.54.1"), "0.54.0"));
+        assert!(!needs_install(Some("0.54.0"), "latest"));
+        assert!(!needs_install(Some("nope"), "0.54.1"));
+    }
+
+    #[test]
+    fn restart_only_when_the_app_is_replaced_and_no_update_is_kept() {
+        assert!(restart_only(false, Some("0.54.0")));
+        assert!(!restart_only(true, Some("0.54.0")));
+        assert!(!restart_only(false, None));
+        assert!(!restart_only(true, None));
+    }
+
+    #[test]
+    fn a_failed_replacement_puts_the_update_back_and_a_good_one_leaves_the_slot_empty() {
+        let slot = Mutex::new(None);
+        assert_eq!(
+            keep_on_failure(&slot, "0.54.1", Err("disk full")),
+            Err("disk full")
+        );
+        assert_eq!(*slot.lock().unwrap(), Some("0.54.1"));
+        slot.lock().unwrap().take();
+        assert_eq!(
+            keep_on_failure::<_, &str>(&slot, "0.54.1", Ok(())),
+            Ok("0.54.1")
+        );
+        assert_eq!(*slot.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn report_offers_a_release_once_and_a_newer_one_again_after_the_replacement() {
+        same(report(None, None), None);
+        same(report(None, Some("0.54.0")), info("0.54.0", false));
+        same(report(Some("0.54.0"), None), info("0.54.0", true));
+        same(report(Some("0.54.0"), Some("0.54.0")), info("0.54.0", true));
+        same(
+            report(Some("0.54.0"), Some("0.54.1")),
+            info("0.54.1", false),
+        );
+        same(report(Some("0.54.1"), Some("0.54.0")), info("0.54.1", true));
     }
 
     #[test]
