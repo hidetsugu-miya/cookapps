@@ -1,11 +1,13 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab, as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted, with what git ignores marked); this module draws it and takes the presses.
-// A folder is read when it is opened (each time), and the reload button reads the root and the open folders again, one after the other. A file opens in the editor on a double press. The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read when it is opened (each time), and the reload button reads the root and the open folders again, one after the other. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path. The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one).
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, tag } from "./dom.js";
 import { CHEVRON_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { openMenu } from "./menu.js";
+import { copyText } from "./view.js";
 
 // The worktree of the selected tab, with the name its heading shows ("{repo} ・ {branch}").
 export interface FilesContext {
@@ -98,6 +100,14 @@ function toggleDir(path: string) {
   }
 }
 
+// The menu of a row (the right button): the path of the entry on the machine of the worktree, and its path from the worktree.
+function openRowMenu(anchor: Element, relative: string) {
+  const here = context;
+  if (here === null) return;
+  const item = (label: string, text: string, done: string) => ({ label, color: "var(--accent)", current: false, pick: () => void copyText(text, done) });
+  openMenu(anchor, [item("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), item("相対パスをコピー", relative, "相対パスをコピーしました")]);
+}
+
 function row(entry: OrcaFileEntry, depth: number) {
   const button = tag("button", "orca-file");
   button.type = "button";
@@ -105,6 +115,10 @@ function row(entry: OrcaFileEntry, depth: number) {
   button.dataset.kind = entry.isDirectory ? "dir" : "file";
   button.dataset.ignored = String(entry.ignored);
   button.style.setProperty("--depth", String(depth));
+  button.oncontextmenu = (e) => {
+    e.preventDefault();
+    openRowMenu(button, entry.path);
+  };
   const mark = tag("span", "orca-file-mark");
   if (entry.isDirectory) {
     const open = expanded.has(entry.path);
