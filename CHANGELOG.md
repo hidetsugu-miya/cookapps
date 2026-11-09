@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.55.1
+
+No change to the app. Only the tools used to develop it changed (#262).
+
 ## v0.55.0
 
 A-20: the settings have a tab 「フォント」 where the family and the size of the text are chosen for each screen (#203). Mail, the calendar and Slack have one choice each; the project list and the work space of Todo and of Orca are chosen apart, and the terminals and the file editor of Orca have their own. A choice is drawn at once and saved in `font-settings.json`; nothing looks different until one is made, and the terminals can still follow the settings imported from Ghostty.
