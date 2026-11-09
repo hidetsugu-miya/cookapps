@@ -2944,6 +2944,26 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
   });
 
+  it("keeps the open folders and does not read the root again when the first file of a project with no tab is opened", async () => {
+    await openOrca(withIdle(), { orca_terminal_read: ["$"], orca_files_list: root(), editor_settings: { autosaveMs: 100 } });
+    await project("example-idle").click();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const inner = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCalls(inner);
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    const list = await mock("orca_files_list", root());
+    const read = await mock("orca_file_read", text("fn main() {}\n"));
+    await doublePress("src/main.rs");
+    expect(await waitForCalls(read)).toEqual([{ path: "/work/example-idle", relative: "src/main.rs", environment: null }]);
+    await expect(selectedTab().$(".orca-tab-title")).toHaveText("main.rs");
+    await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
+    expect(await names()).toEqual(["src", "lib", "main.rs", "target", "a.rs", "b.log"]);
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+    expect(await callsOf(list)).toEqual([]);
+  });
+
   it("leaves the pane empty for a project with no tab when the row cannot be read, as an SSH host's", async () => {
     const hostRow = { key: "ssh:s1", name: "s1", status: "idle" as const, sessions: 0, atMs: 0 };
     const hostTree = orcaWorktree("remote-app", "main", { path: "/home/dev/remote-app", projectKey: "ssh:s1", isMain: true });

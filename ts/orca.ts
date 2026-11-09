@@ -554,9 +554,11 @@ function syncEditor(tabs: Tab[]) {
 function filesWorktree(tabs: Tab[]): { path: string; label: string } | null {
   const tab = findTab(view?.target ?? null, projectKey ?? "", tabs, selectedTab() ?? "");
   if (tab !== undefined) return { path: tab.path, label: tab.where };
-  // A project with tabs whose layout is not answered yet has no selected tab for a moment: nothing is read for it.
-  if (tabs.length > 0 || projectKey === null || projectKey.startsWith("ssh:")) return null;
+  if (projectKey === null || projectKey.startsWith("ssh:")) return null;
   const main = view?.worktrees.find((w) => w.projectKey === projectKey && w.isMain);
+  // A project with tabs whose layout is not answered yet has no selected tab for a moment: nothing is read for it,
+  // except when the only tabs are files of the main worktree (the first file opened in a project with no tab), whose tree stays.
+  if (tabs.some((t) => t.kind !== "file" || t.path !== main?.path)) return null;
   return main === undefined ? null : { path: main.path, label: worktreeLabel(main) };
 }
 
