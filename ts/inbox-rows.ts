@@ -1,5 +1,6 @@
 // The rows of the inbox list: building one, its read state, and the unread count on the sidebar.
 import type { ThreadItem } from "./bindings/ThreadItem";
+import { dismiss } from "./arrivals.js";
 import { $, span } from "./dom.js";
 import { avatarColor, formatDate, initials, senderName, unescapeHtml } from "./format.js";
 import { CHECK_SVG, TODO_SVG } from "./icons.js";
@@ -150,8 +151,9 @@ export function place(li: HTMLLIElement, unread: boolean) {
   list.insertBefore(li, next || null);
 }
 
-// Reflects the read state in the row: bold, dot, checkbox, and its section.
+// Reflects the read state in the row: bold, dot, checkbox, and its section. A thread that is read has no popup for new mail (M-9).
 export function setReadState(t: ThreadItem, li: HTMLLIElement, read: boolean) {
+  if (read) dismiss(rowKey(t));
   const moves = li.isConnected && li.classList.contains("unread") === read;
   t.unread = !read;
   li.classList.toggle("unread", !read);

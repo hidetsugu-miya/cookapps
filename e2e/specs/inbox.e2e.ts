@@ -482,6 +482,25 @@ describe("inbox", () => {
       await waitForCount(".arrival", 0);
     });
 
+    it("closes the popup of a thread that the list marks read", async () => {
+      await arrive(arrivedThread);
+      await waitForCount(".arrival", 1);
+      const setRead = await mock("set_read", true);
+      await rowOf("unread-threads", "Lunch plan").$(".read-box").click();
+      expect(await waitForCalls(setRead)).toEqual([{ account, id: "t9", read: true }]);
+      await waitForCount(".arrival", 0);
+    });
+
+    it("closes the popup of a thread that a sync finds read", async () => {
+      await arrive(arrivedThread);
+      await waitForCount(".arrival", 1);
+      const sync = await mock("sync", { kind: "changed", threads: [thread("t9", "Lunch plan", false)], removed: [], arrived: [], historyId: "102" });
+      await syncRound();
+      await waitForCalls(sync);
+      await waitForCount(".arrival", 0);
+      await mock("sync", { kind: "unchanged" });
+    });
+
     it("does not let the timer of a closed popup close the next popup of the same thread", async () => {
       await arrive(arrivedThread);
       await $('.arrival button[aria-label="閉じる"]').click();
