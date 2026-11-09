@@ -127,6 +127,21 @@ fn restart_only(kept: bool, installed: Option<&str>) -> bool {
     !kept && installed.is_some()
 }
 
+/// The result of replacing the app with `update`. A failure puts `update` back in `slot`, so the update button still has it and asks GitHub for nothing.
+fn keep_on_failure<T, E>(
+    slot: &Mutex<Option<T>>,
+    update: T,
+    result: Result<(), E>,
+) -> Result<T, E> {
+    match result {
+        Ok(()) => Ok(update),
+        Err(e) => {
+            *slot.lock().unwrap() = Some(update);
+            Err(e)
+        }
+    }
+}
+
 /// What a check reports, from the version the app was replaced with (`installed`) and the newest release newer than the running app (`latest`).
 /// A release newer than the replaced one is still to be installed (`installed: false`); anything else leaves only the restart.
 fn report(installed: Option<&str>, latest: Option<&str>) -> Option<UpdateInfo> {
@@ -162,6 +177,7 @@ pub async fn check_update(
 }
 
 /// Downloads the newer version, checks its signature and replaces the app, without restarting it (`restart_app` does).
+/// A failed replacement keeps the found update for the next call.
 /// Does nothing when there is none, or when the app is already replaced and no check kept a newer one (so it asks GitHub for nothing, and works offline), or with that version or a later one.
 #[tauri::command]
 pub async fn install_update(
@@ -181,9 +197,8 @@ pub async fn install_update(
         None => find(&app, "install_update").await?,
     };
     if let Some(update) = update.filter(|u| needs_install(done.as_deref(), &u.version)) {
-        update
-            .download_and_install(|_, _| {}, || {})
-            .await
+        let result = update.download_and_install(|_, _| {}, || {}).await;
+        let update = keep_on_failure(&found, update, result)
             .map_err(|e| log_failure("install_update", "-", format!("更新できません: {e}")))?;
         *installed.0.lock().unwrap() = Some(update.version);
     }
@@ -243,6 +258,22 @@ mod tests {
         assert!(!restart_only(true, Some("0.54.0")));
         assert!(!restart_only(false, None));
         assert!(!restart_only(true, None));
+    }
+
+    #[test]
+    fn a_failed_replacement_puts_the_update_back_and_a_good_one_leaves_the_slot_empty() {
+        let slot = Mutex::new(None);
+        assert_eq!(
+            keep_on_failure(&slot, "0.54.1", Err("disk full")),
+            Err("disk full")
+        );
+        assert_eq!(*slot.lock().unwrap(), Some("0.54.1"));
+        slot.lock().unwrap().take();
+        assert_eq!(
+            keep_on_failure::<_, &str>(&slot, "0.54.1", Ok(())),
+            Ok("0.54.1")
+        );
+        assert_eq!(*slot.lock().unwrap(), None);
     }
 
     #[test]
