@@ -6,7 +6,7 @@
 
 | Layer | What it checks | Tools | What it does not check |
 |-------|----------------|-------|------------------------|
-| Static | Format, lint, types, Rust-TS type match, version match | cargo fmt, clippy, Biome (lint only), tsc, bindings diff, `scripts/check-version.sh` | Behavior |
+| Static | Format, lint, types, Rust-TS type match, fixed source version | cargo fmt, clippy, Biome (lint only), tsc, bindings diff, `scripts/check-version.sh` | Behavior |
 | Unit | Pure Rust logic (parsing API responses, validating input, computing dates, IDs and URLs, converting errors) | cargo test | Screens, WebView |
 | E2E | Screen behavior (how command results are drawn, the commands and arguments an operation calls, how errors show) | WebdriverIO (real WKWebView, commands mocked) | Processing inside Rust |
 
@@ -55,11 +55,11 @@ Bad:  call the real Gmail API from a test
 
 ### Run every check on this machine before a push, and run no check in GitHub Actions
 
-`.github/workflows/release.yml` runs only on a pushed tag `v*`, and its one job, `release`, checks that the tag is the version of its commit and that the commit is on main, and puts the signed `.app`, its updater files and `latest.json` in a GitHub Release (U-1).
+`.github/workflows/release.yml` runs only on a pushed tag `v*`, and its one job, `release`, checks that the source version is still the fixed one, that the tag has the form `v0.{minor}.{patch}` and that the commit is on main, and builds the app with the version of the tag, and puts the signed `.app`, its updater files and `latest.json` in a GitHub Release (U-1).
 A pull request runs no workflow of ours, and a push to main that changes the dependencies, the Rust version or `docs/` runs none that checks anything (at the owner's instruction, 2026-11-04: the same checks already ran before the push, and running them again cost time).
 The two workflows of such a push are `rust-cache.yml`, which only builds the Rust dependencies to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml`, which builds `docs/` and deploys it to GitHub Pages.
-Before a push, `.claude/tools/run-ci.sh` runs the version match, tsc (`ts` and `e2e`), Biome, cargo fmt, clippy, cargo test and the bindings diff, and writes a record for HEAD to `.claude/ci/{HEAD SHA}` in the main checkout. It runs on a clean working tree only, and only it can write the record (`guard-e2e.sh`).
-`pre-git.sh` runs none of these checks. If there are new commits, it checks the CI record, the E2E record (`e2e.md`) and the review pass record (`review.md`) for HEAD, through `check-ci.sh`, `check-e2e.sh` and the pass file; a push with no new commit (a tag on a commit already on the remote) needs none of them. The record is needed on a Release PR's HEAD too, because its version lines change what cargo and tsc check.
+Before a push, `.claude/tools/run-ci.sh` runs the version check (the source version is the fixed value), tsc (`ts` and `e2e`), Biome, cargo fmt, clippy, cargo test and the bindings diff, and writes a record for HEAD to `.claude/ci/{HEAD SHA}` in the main checkout. It runs on a clean working tree only, and only it can write the record (`guard-e2e.sh`).
+`pre-git.sh` runs none of these checks. If there are new commits, it checks the CI record, the E2E record (`e2e.md`) and the review pass record (`review.md`) for HEAD, through `check-ci.sh`, `check-e2e.sh` and the pass file; a push with no new commit (a tag on a commit already on the remote) needs none of them. The record is needed on a Release PR's HEAD too, because the records are per HEAD.
 `post-checks.sh` checks the same records and then sends the E2E and review results to GitHub as the statuses `e2e` and `review`, which the ruleset on main requires (`issues.md`); no workflow runs for them.
 These checks run only on macOS; nothing checks Windows.
 

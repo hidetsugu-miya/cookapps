@@ -460,7 +460,7 @@ def release_facts(issues, release_pr, last_tag):
     """The figures a run needs to prepare the Release PR.
     `issues`: the owner's issues (the waiting ones are picked from them). `release_pr`: {"number", "title", "url", "labels"} of the open Release PR, or None.
     `urgent`: a change that waits has urgency:high, or is a bug with importance:high, or the Release PR has urgency:high; the run tells the owner at once.
-    `minor`: a change adds a requirement ID (issues.md checks the label against requirements/). `version`: the version the Release PR raises to."""
+    `minor`: a change adds a requirement ID (issues.md checks the label against requirements/). `version`: the version the Release PR writes as the first heading of CHANGELOG.md."""
     changes = release_changes(issues)
     labels = (release_pr or {}).get("labels", [])
     minor = any(has(i, "adds:requirement") for i in changes)
@@ -487,23 +487,15 @@ def with_tag_due(facts, due):
     return facts
 
 
-def cargo_version(text):
-    """The `version` of the `[package]` table of a Cargo.toml, or None."""
-    in_package = False
-    for line in text.splitlines():
-        s = line.strip()
-        if s.startswith("["):
-            in_package = s == "[package]"
-        elif in_package:
-            m = re.fullmatch(r'version\s*=\s*"([^"]+)"', s)
-            if m:
-                return m.group(1)
-    return None
+def changelog_version(text):
+    """The version of the first `## v{version}` heading of a CHANGELOG.md, or None. The Release PR writes it, and the tag is taken from it (versioning.md)."""
+    m = re.search(r"^## v(\d+\.\d+\.\d+)[ \t]*$", text, re.MULTILINE)
+    return m.group(1) if m else None
 
 
 def tag_due(merged_prs, tag_names, read_version):
-    """-> {"tag", "commit", "pr"} when the newest merged Release PR raised the version to a tag that does not exist yet, else None.
-    `merged_prs`: [{"number", "mergedAt", "mergeCommit": {"oid"}}] of the owner's merged Release PRs. `read_version(oid)`: the version in Cargo.toml at that commit.
+    """-> {"tag", "commit", "pr"} when the newest merged Release PR wrote a version that has no tag yet, else None.
+    `merged_prs`: [{"number", "mergedAt", "mergeCommit": {"oid"}}] of the owner's merged Release PRs. `read_version(oid)`: the version of the first heading of CHANGELOG.md at that commit.
     The tag goes on the merge commit of the Release PR, not on origin/main, which may have moved on (versioning.md)."""
     if not merged_prs:
         return None
@@ -812,7 +804,7 @@ def cmd_release(args):
 
     def read_version(oid):
         try:
-            return cargo_version(gh("api", f"repos/{state.repo}/contents/src-tauri/Cargo.toml?ref={oid}", "-H", "Accept: application/vnd.github.raw+json"))
+            return changelog_version(gh("api", f"repos/{state.repo}/contents/CHANGELOG.md?ref={oid}", "-H", "Accept: application/vnd.github.raw+json"))
         except GhError:
             return None
 

@@ -48,6 +48,7 @@ A new requirement gets a section there and an entry here.
 - Updates use `tauri-plugin-updater`. Pushing the annotated tag `v{version}` starts the `release` job, which makes `cookapps.app.tar.gz`, its `.sig` and `latest.json` (`scripts/make-latest-json.sh`) and puts them in a GitHub Release.
   The app reads `releases/latest/download/latest.json` (`plugins.updater.endpoints` in `tauri.conf.json`) and verifies the download with the public key `plugins.updater.pubkey`.
   `bundle.createUpdaterArtifacts` is not in `tauri.conf.json`; the `release` job passes it with `--config`, so a local build needs no signing key.
+  The version is the tag's alone (at the owner's instruction, 2026-11-09; Discussion #293): `version` in `src-tauri/Cargo.toml` and `Cargo.lock` is fixed at `0.0.0` and `tauri.conf.json` has none, and the `release` job passes the version of the tag with `--config` too, which Info.plist, `app.package_info()` (U-2) and the updater's comparison take. A build without it (`tauri dev`, E2E) reports `0.0.0`, and `scripts/install-app.sh` passes the latest tag.
 - The refresh token is stored locally so the user does not log in at every start.
 - Tokens go in the OS keychain (macOS Keychain, Windows Credential Manager), never in a plain file.
 - The list of accounts (email addresses only) is saved in `accounts.json` in the app config directory.
@@ -126,7 +127,7 @@ No check is repeated in two layers.
 
 | Layer | What it checks | Tools | What it does not check |
 |-------|----------------|-------|------------------------|
-| Static | Format, lint, types, Rust-TS type match, version match | cargo fmt, clippy, Biome (lint only), tsc, bindings diff, `scripts/check-version.sh` | Behavior |
+| Static | Format, lint, types, Rust-TS type match, fixed source version | cargo fmt, clippy, Biome (lint only), tsc, bindings diff, `scripts/check-version.sh` | Behavior |
 | Unit | Pure Rust logic (parsing API responses, validating input, computing dates, IDs and URLs, converting errors) | cargo test | Screens, WebView |
 | E2E | Screen behavior (how command results are drawn, the commands and arguments an operation calls, how errors show) | WebdriverIO (real WKWebView, commands mocked) | Processing inside Rust |
 
@@ -145,7 +146,7 @@ cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 cd src-tauri && cargo test --all-features    # also writes the ts-rs types to ts/bindings/
 npm run e2e:build   # build the app for E2E (feature e2e)
 npm run e2e         # WebdriverIO
-scripts/check-version.sh   # the version in Cargo.toml, tauri.conf.json and Cargo.lock matches
+scripts/check-version.sh   # the source version is the fixed one: 0.0.0 in Cargo.toml and Cargo.lock, none in tauri.conf.json
 ```
 
 `.claude/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.claude/tools/run-e2e.sh` does the same for E2E.
@@ -157,11 +158,11 @@ The release is `.github/workflows/release.yml`, and only a pushed tag `v*` start
 Static, unit and E2E checks run on the developer's machine before a push (`run-ci.sh` and `run-e2e.sh`, with a record for each HEAD that `pre-git.sh` checks), not in GitHub Actions, so a pull request runs no workflow of this repository.
 A push to main that changes the dependencies, the Rust version or `docs/` runs two workflows, and neither checks anything: `rust-cache.yml` builds the Rust dependencies of the release to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml` builds `docs/` with Jekyll and deploys it to GitHub Pages.
 A change reaches main through a pull request, and the machine that ran the checks sends their results as the commit statuses `e2e` and `review`.
-A release is the owner's merge of the Release PR, the pull request that raises the version (an agent prepares it, `.claude/rules/issues.md`), followed by its tag, which the next agent to act pushes.
+A release is the owner's merge of the Release PR, the pull request that writes the new version at the top of `CHANGELOG.md` (an agent prepares it, `.claude/rules/issues.md`), followed by its tag, which the next agent to act pushes.
 
 | Job | Environment | What it does |
 |-----|-------------|--------------|
-| `release` | macos-latest | restores the Rust cache (`Swatinem/rust-cache`, `shared-key: release`, `prefix-key: v1-rust`, never saves), checks that the tag is the version of its commit and that the commit is on main, then puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| `release` | macos-latest | restores the Rust cache (`Swatinem/rust-cache`, `shared-key: release`, `prefix-key: v1-rust`, never saves), checks that the source version is still the fixed one, that the tag has the form `v0.{minor}.{patch}` and that the commit is on main, then builds the app with the version of the tag (`--config`) and puts the signed `.app`, its updater files and `latest.json` in a GitHub Release. The secrets are `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 | `cache` (`rust-cache.yml`) | macos-latest | on a push to main that changes `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `rust-toolchain.toml`, `.cargo/config.toml` (part of the cache key) or one of the two workflow files, on a schedule (Monday and Thursday 18:17 UTC) and by hand, restores the cache with the same toolchain, toolchain clean-up and `rust-cache` settings as `release`; unless that is an exact hit it runs `npx tauri build --no-bundle` and saves the cache. It holds no secret |
 | `build` and `deploy` (`pages.yml`) | ubuntu-24.04 | on a push to main that changes `docs/`, builds it with `actions/jekyll-build-pages` and deploys it with `actions/deploy-pages`. It needs the Pages source set to "GitHub Actions" (`build_type: workflow`) |
 

@@ -73,7 +73,7 @@ main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
 
 The worktree's `src-tauri/target` is a clone of the main checkout's, so it shares disk blocks with it until a file is rewritten, and `du` counts the shared part in both.
 Read the real use from the fall of free space in `df`, not from `du`.
-`run-ci.sh` runs clippy and the tests with `CARGO_INCREMENTAL=0`, so the checks before a push leave no data for incremental builds, and `clean-target.sh` deletes the output of earlier versions of cookapps itself (`harness.md`).
+`run-ci.sh` runs clippy and the tests with `CARGO_INCREMENTAL=0`, so the checks before a push leave no data for incremental builds, and `clean-target.sh` deletes the old output of cookapps itself (`harness.md`).
 Remove a worktree of an older layout (one named after its branch) with `git worktree remove`, without `--force`, so that a worktree with uncommitted files is refused; the one worktree itself stays.
 
 ```text
@@ -83,14 +83,15 @@ Bad:  rm -rf .claude/worktrees/work while a night run is using it
 
 ## Versions and tags
 
-### On a worktree branch, do not raise the version
+### On a worktree branch, do not write a version
 
-Only the Release PR updates `version` in `Cargo.toml`, `tauri.conf.json` and `Cargo.lock`, `docs/features.md`, and `CHANGELOG.md` (`issues.md`). The tag is made on its merge commit (`versioning.md`).
-If the branch of a night and the Release PR each raised them, the same lines would conflict at every merge.
+The source holds no version (`versioning.md`: `0.0.0` in `Cargo.toml` and `Cargo.lock`, none in `tauri.conf.json`), and `scripts/check-version.sh` fails when a branch changes it (at the owner's instruction, 2026-11-09; Discussion #293).
+Only the Release PR writes `docs/features.md` and `CHANGELOG.md`, with the heading of the new version (`issues.md`). The tag is made on its merge commit (`versioning.md`).
+If the branch of a night and the Release PR each wrote them, the same lines would conflict at every merge.
 
 ```text
-Good: commit only the implementation on night/2026-11-10 and merge its pull request; the Release PR raises to 0.8.0
-Bad:  raise to 0.8.0 inside feat/C-1
+Good: commit only the implementation on night/2026-11-10 and merge its pull request; the Release PR writes `## v0.8.0` in CHANGELOG.md
+Bad:  change the version in Cargo.toml inside feat/C-1
 ```
 
 ## Private files

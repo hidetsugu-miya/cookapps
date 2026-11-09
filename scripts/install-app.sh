@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # cookapps を .app にビルドして Apple Development 証明書で署名し、/Applications に置く。
 # 使い方: scripts/install-app.sh [--no-install]   （--no-install はビルドと署名の確認まで）
+# 版は手元の最新のタグから取る（git fetch --tags で新しくできる）。
 # 署名の ID は環境変数 APPLE_SIGNING_IDENTITY で渡す。無ければ keychain の最初の Apple Development 証明書を使う。
 set -euo pipefail
 
@@ -16,7 +17,13 @@ if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
 fi
 export APPLE_SIGNING_IDENTITY
 
-npx tauri build --bundles app
+# ソースの版は固定の 0.0.0 で、版はタグだけが持つ。最新のタグの版を渡して、入れたアプリがすぐ更新を出さないようにする（タグが無ければ 0.0.0 のまま）。
+version=$(git tag --list 'v0.*' --sort=-v:refname | head -n 1)
+if [ -n "$version" ]; then
+  npx tauri build --bundles app --config "{\"version\":\"${version#v}\"}"
+else
+  npx tauri build --bundles app
+fi
 
 app="$root/src-tauri/target/release/bundle/macos/cookapps.app"
 codesign --verify --deep --strict "$app"

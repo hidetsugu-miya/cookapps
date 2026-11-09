@@ -27,9 +27,9 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   # The records are of HEAD's commit, so the working tree must equal the commits being pushed.
   git diff --quiet HEAD || { echo "push 前の検査: コミットしていない変更があります。検査はコミットの中身と一致しません" >&2; git diff --stat HEAD >&2; exit 2; }
   # New commits need run-ci.sh's and run-e2e.sh's passing records for HEAD and release-verifier's pass record (.claude/rules/review.md).
-  # The CI and E2E records are needed on a release-only HEAD too: the version lines change what cargo and tsc check.
+  # The CI and E2E records are needed on a release-only HEAD too: the records are per HEAD.
   # A push with no new commit (a tag on a commit already on the remote) needs none of them.
-  # Only release-verifier's pass record may be on an earlier commit of the range when only the release work (version, README, docs) comes after it.
+  # Only release-verifier's pass record may be on an earlier commit of the range when only the release work (README, CHANGELOG, docs) comes after it.
   if ! git rev-parse -q --verify "${range%..*}" >/dev/null 2>&1 || [ -n "$(git rev-list -n 1 "$range")" ]; then
     main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
     gate "CI" "$main/.claude/tools/check-ci.sh"

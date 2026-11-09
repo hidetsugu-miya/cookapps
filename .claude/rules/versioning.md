@@ -23,7 +23,7 @@ Do not use the major version yet; keep it fixed at 0.
 The owner decides when to treat the project as 1.0.
 
 ```sh
-git fetch origin main && git tag -a v0.5.0 -m v0.5.0 {commit of tag_due} && git push origin v0.5.0   # the Release PR raised version to 0.5.0
+git fetch origin main && git tag -a v0.5.0 -m v0.5.0 {commit of tag_due} && git push origin v0.5.0   # the Release PR wrote `## v0.5.0` at the top of CHANGELOG.md
 ```
 
 ### Never move a published tag
@@ -49,15 +49,17 @@ Bad:  only a fix, but v0.5.0 becomes v0.6.0
 
 ## What the tagged commit contains
 
-### Match `version` to the tag
+### Keep the version in the tag alone, and fix it in the source
 
-Make `version` in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json` the same number as the tag.
-Let `Cargo.lock` follow.
-If the version the app reports and the tag differ, you cannot tell which code is running.
+The version of a release is its tag, and nothing else holds it (at the owner's instruction, 2026-11-09; Discussion #293).
+`version` in `src-tauri/Cargo.toml` and `Cargo.lock` is fixed at `0.0.0`, and `src-tauri/tauri.conf.json` has no `version`; `scripts/check-version.sh` fails when any of the three differs, so a branch that raises one fails the static check.
+The `release` job takes the version from the tag and gives it to `tauri build` with `--config` (`release.yml`): Info.plist, `package_info()` (the version of the settings screen) and the updater's comparison all take it from there, so the app reports the version of its tag.
+A build of a branch or of `tauri dev` reports `0.0.0`, and a build by hand passes the latest tag the same way (`scripts/install-app.sh`).
+The Release PR therefore changes no version line, and its first heading in `CHANGELOG.md` (`## v{version}`) is where the version is written down before the tag exists: `plan-release.py release` reads it from the merge commit to find the tag that is due.
 
 ```toml
 [package]
-version = "0.5.0"  # same as tag v0.5.0
+version = "0.0.0"  # fixed; the tag v0.5.0 gives the build its version
 ```
 
 ### When you add a feature, update `docs/features.md` too
@@ -83,10 +85,11 @@ This commit is v0.4.0.
 
 ## Record
 
-### Add each version to the top of `CHANGELOG.md`, in the commit that raises the version
+### Add each version to the top of `CHANGELOG.md`, in the commit of the Release PR
 
 A list of tags alone does not show what went into each version.
 The newest comes first, so the latest changes are the first thing read, and the file is tracked, so the tag and its entry cannot drift apart (at the owner's instruction, 2026-11-04).
+The heading must be exactly `## v{version}` (the Release PR writes the version of the coming tag there, and `plan-release.py release` takes the tag from the first such heading of the merge commit).
 The file is for the users of the app: keep personal information and work methods (review flow, hooks, skills) out of it. Work methods go in `.claude/rules/`, and personal information in the gitignored rules (`publishing.md`).
 
 ```markdown

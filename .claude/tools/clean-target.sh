@@ -1,9 +1,9 @@
 #!/bin/sh
 # Deletes the old build output of cookapps itself from src-tauri/target of the main checkout and of every worktree; launchd runs it every day at 21:00 (harness.md).
 # Usage: clean-target.sh  (no arguments; it prints the size of each target before and after)
-# In each profile (target/debug, target/release, ...) it deletes what has nothing modified in the last 24 hours, or nothing newer than the src-tauri/Cargo.toml of its checkout (the output of an earlier version, which no build uses again), and nothing while cargo or rustc runs:
+# In each profile (target/debug, target/release, ...) it deletes what has nothing modified in the last 24 hours, or nothing newer than the src-tauri/Cargo.toml of its checkout (the output built before the last change of Cargo.toml, which is now a change of the dependencies or features: the version is fixed at 0.0.0, so a release does not touch the file; no build uses that output again), and nothing while cargo or rustc runs:
 # every entry directly under incremental/, and the entries of cookapps itself (cookapps-*, cookapps_lib-*, libcookapps_lib-*, cookapps_mcp-*) directly under deps/, build/ and .fingerprint/.
-# The output of dependency crates stays, because a version bump changes only the hash of the output of cookapps itself.
+# The output of dependency crates stays, because a change of the dependencies of cookapps changes the hash of the output of cookapps itself, and the output of the crates that did not change is still used.
 # It also deletes the records and logs of run-ci.sh and run-e2e.sh (.claude/ci/ and .claude/e2e/ of the main checkout) that are older than 30 days; check-ci.sh and check-e2e.sh read only the record of HEAD.
 # It appends to .claude/nightly/clean-target-{date}.log in the main checkout (logs older than 30 days are deleted).
 set -u
