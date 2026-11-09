@@ -22,7 +22,7 @@ GitHub にもファイルにも書かない。
 issue どうしの関連を読み、どの順で実装するかと、各 issue が何を触るかを決める。
 起動プロンプトで `snapshot` の JSON を受け取る。
 `fixed` は順番が決まっていて動かせない issue で、`free` がこの役の並べる issue。
-各 issue の `urgency`（`high` か `normal`）、`importance`（`high`・`normal`・`low`）、`pin`（オーナーが版を指定した issue なら true）が付いている。
+各 issue の `urgency`（`high` か `normal`）、`importance`（`high`・`normal`・`low`）が付いている。
 
 ### 手順
 
@@ -44,8 +44,8 @@ issue どうしの関連を読み、どの順で実装するかと、各 issue �
 - 依存先（`blocked_by` に挙げた issue）は、依存元より前に置く。
 - `urgency` が `high` の issue の前に置いてよいのは、その issue（または、それより前の緊急な issue）の依存先だけにする。
 - `bug` と、`point:1`・`point:2`・`point:3` のどれかが付いた issue の前に置いてよいのは、緊急な issue と、その issue（または、それより前の同種の issue）の依存先だけにする。`point:5` と `point:8` のバグは前に出さない。守らない並びは `plan-release.py` が拒否する。
-- 同梱の組は `order` で隣り合わせる。`point:8` は組に入れない。1 組は 3 件まで。`groups` には `free` の issue だけを書く。
-- `pin` が true の issue は、`groups` に入れない。同じ版に指定された issue は `plan-release.py` が 1 つの版にまとめる（`point:8` も、3 件を超えても）。版は動かさない。`order` の中の位置だけを決める。
+- 同梱の組は `order` で隣り合わせる。`point:8` は組に入れない。要件 ID を足す（`adds:requirement`）issue を含む組は 3 件まで。`groups` には `free` の issue だけを書く。
+- 要件 ID を足さない issue（バグ修正や hotfix）は、`plan-release.py` が件数の上限なしで、続いて並ぶものを 1 つの patch 版にまとめる。まとめるための組は書かない。まとめた版を切るのは、`point:8`、`urgency:high`、要件 ID を足す issue だけ（2026-11-09 のオーナーの指示）。
 - `fixed` の issue は、依存先にだけ書ける。
 - `needs:owner` の issue も並べる。未決定の中身は推測せず、本文から分かる関連だけで置く。
 - 古い順から動かす issue と、関連を付けた issue には、`reasons` に一行の理由を書く。
@@ -70,9 +70,8 @@ JSON だけを返す。
 R0 から R3（Release PR の `release:hold`、Release PR か待ちの変更の `urgency:high`、`point:8`、重要度が高いバグ）は `plan-release.py` が適用済みで、この役は見ない。R4 だけを決める。
 
 1. `waiting`（リリース待ちの変更）の各 issue の title と labels を見る。必要なら本文を `gh issue view` で読む。
-2. 目安に照らす。次のどれかに当たれば、リリースする側に傾く。
-   - 待っている `bug` が 2 件以上（`bugs`）
-   - 待っている変更が 3 件以上（`changes`）
+2. 目安に照らす。次のどちらかに当たれば、リリースする側に傾く（2026-11-09 のオーナーの指示。まとめた patch 版を、その一部がマージされただけで出さないため）。
+   - 予定の版（`milestone`、最初の開いたマイルストーン）の issue がすべてマージされた（`milestone_open` が 0）
    - 最古の待ちが 24 時間以上（`oldest_hours`）
 3. 目安から外すときは、その理由を書く。たとえば、目安に当たるのに待つ（同じ箇所の続きの issue がもうすぐ入る、など）、目安に当たらないのにリリースする（利用者が困っている、など）。理由は `waiting` の issue か `path:line` に結び付ける。
 4. 目安どおりに決めたときも、どの目安に当たったか（当たらなかったか）を理由に書く。
@@ -80,7 +79,7 @@ R0 から R3（Release PR の `release:hold`、Release PR か待ちの変更の 
 JSON だけを返す。
 
 ```json
-{"decision":"wait","deviates":false,"reason":"変更 2 件・バグ 1 件、最古の待ちは 5 時間で、目安のどれにも届かない"}
+{"decision":"wait","deviates":false,"reason":"変更 2 件、予定の版 v0.55.2 に未マージが 3 件、最古の待ちは 5 時間で、目安のどちらにも届かない"}
 ```
 
 `decision` は `release` か `wait`。`deviates` は目安から外したときだけ true。

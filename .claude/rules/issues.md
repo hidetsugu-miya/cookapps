@@ -7,7 +7,7 @@
 The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
 The one exception is the launchd job that the owner registered, which runs once a day, at 00:30: `nightly.sh milestone-dev` runs `milestone-dev` headlessly, and that job counts as the owner's instruction too (at the owner's instruction, 2026-11-06; once a day since 2026-11-07, at 05:00 since 2026-11-07, at 00:30 since 2026-11-08; Discussion #160).
 Do not start an issue with `needs:owner`: a product decision is still open.
-Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05), and it also takes ahead the issues of the later milestones that overlap neither the issues in progress nor one another, at most 3 in hand at once, and only while no `release:pin` issue is open (at the owner's instruction, 2026-11-08; #236).
+Invoking `milestone-dev` is that instruction: it implements the first open milestone that has work (at the owner's instruction, 2026-11-05), and it also takes ahead the issues of the later milestones that overlap neither the issues in progress nor one another, at most 3 in hand at once (at the owner's instruction, 2026-11-08; #236).
 
 ```text
 Good: the owner says "implement #13" in a session -> the session works on #13
@@ -83,15 +83,16 @@ Good: #150 loses the saved Todo on a failed sync -> importance:high, with "デ�
 Bad:  #150 loses data, and no importance label is put, so it waits for the count
 ```
 
-### Pin an issue to a version with `release:pin`, and never move it
+### Put the issues that add no requirement ID in one patch version, with no cap
 
-The owner puts `release:pin` on an issue to say which version it goes out in; the version is the issue's milestone. `plan-release.py` never moves the milestone of a pinned issue, and refuses a plan whose slots have already passed that version (at the owner's instruction, 2026-11-06; Discussion #136).
-Pinned issues of one version share it, even with a `point:8` one and even over the cap of 3; no other issue joins them, and they are not put in a group.
-A pin without a version milestone means nothing.
+A version whose issues add no requirement ID (no `adds:requirement`) has no limit on its issues, so the bug fixes and hotfixes that follow one another in the order share one patch version (at the owner's instruction, 2026-11-09; #279: "pinのルールは外してください。ホットフィックスやバグフィックスは可能な限りまとめたいです。"). This replaces the label that pinned an issue to a version, which is retired: nothing reads it any more.
+A version that adds a requirement ID still holds at most 3 counted issues, and a `point:8` issue is still a version of its own.
+`plan-release.py` takes the version number from the order, so nobody fixes an issue to a version by hand.
 
 ```text
-Good: #128 and #135 are pinned to v0.42.0 -> both go out in v0.42.0, #135 being 8 points
-Bad:  #135 is 8 points, so plan-release.py moves it to a version of its own and #128 stays alone
+Good: five bugs of 1 or 2 points follow one another in the order -> they are all v0.55.2
+Good: S-12 is added by three issues, and a fourth follows -> the fourth is in the next version
+Bad:  a fourth hotfix is cut into v0.55.3 only because the first three filled the cap
 ```
 
 ### Use `needs:owner` only for a product decision
@@ -269,7 +270,7 @@ Its title is `release: v{version}`, and its body holds the decision, the digit a
 Merged Release PRs are the release history, so the reason for each release stays with it.
 
 ```text
-判定: 待つ（R4）  変更 2 件・バグ 1 件、最古の待ちは 5 時間（目安のどれにも届かない）
+判定: 待つ（R4）  変更 2 件、予定の版に未マージが 3 件、最古の待ちは 5 時間（目安のどれにも届かない）
 版:   minor（要件 ID S-12 が増えた）
 
 - #21 Slack の書式を表示する  point:3  (closes #12)
@@ -288,13 +289,13 @@ Evaluate them after every merge and when a session starts work on an issue, and 
 | R3 | A waiting bug has `importance:high` | Release now |
 | R4 | None of the above | `release-planner` judges |
 
-For R4 the guide is to release when 2 or more bugs are waiting, when 3 or more changes are waiting, or when the oldest waiting merge is 24 hours old or more. When the planner departs from the guide, it writes the reason, and the body keeps it.
+For R4 the guide is to release when every issue of the planned version (the lowest open milestone, which `release-facts` prints as `milestone` with the issues still open in it as `milestone_open`) has merged, or when the oldest waiting merge is 24 hours old or more (at the owner's instruction, 2026-11-09; #279). The earlier guide (2 bugs, or 3 changes) released a bundled patch version after its first merges, and `plan-release.py close` then moved the rest of the bundle to the next tag. When the planner departs from the guide, it writes the reason, and the body keeps it.
 Before merging a `point:8` pull request, release what is waiting, so that an 8-point change is a version of its own and a fault in it can be told apart.
 A change that is only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/` is not counted; it goes out with the next tag.
 The guide's figures are first values, not measurements; each release shows the owner a restart prompt (U-2), so correct them from use.
 
 ```text
-Good: 2 changes waiting, no bug, the oldest 5 hours old -> R4, the planner says wait, and the body says why
+Good: 2 changes waiting, 3 issues of the planned version still open, the oldest 5 hours old -> R4, the planner says wait, and the body says why
 Good: a waiting bug has importance:high -> R3, release now
 Bad:  2 waiting, but they look important -> release at R4 without writing why it departs from the guide
 ```

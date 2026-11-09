@@ -153,14 +153,14 @@ class Ordering(unittest.TestCase):
         c = mk(3, ["bug", "point:2"], milestone="v0.39.0")
         self.assertEqual([i.number for i in pr.existing_order([c, a, b])], [1, 2, 3])
 
-    def test_urgency_importance_and_pin_in_the_snapshot(self):
-        i = mk(1, ["urgency:high", "importance:low", "release:pin"], milestone="v0.40.0")
-        j = pr.issue_json(i)
-        self.assertEqual((j["urgency"], j["importance"], j["pin"]), ("high", "low", True))
+    def test_urgency_and_importance_in_the_snapshot(self):
+        j = pr.issue_json(mk(1, ["urgency:high", "importance:low"], milestone="v0.40.0"))
+        self.assertEqual((j["urgency"], j["importance"]), ("high", "low"))
+        self.assertNotIn("pin", j)
         j = pr.issue_json(mk(2, ["importance:high"]))
-        self.assertEqual((j["urgency"], j["importance"], j["pin"]), ("normal", "high", False))
+        self.assertEqual((j["urgency"], j["importance"]), ("normal", "high"))
         j = pr.issue_json(mk(3, ["release:now"]))
-        self.assertEqual((j["urgency"], j["importance"], j["pin"]), ("normal", "normal", False))
+        self.assertEqual((j["urgency"], j["importance"]), ("normal", "normal"))
 
 
 class Allocation(unittest.TestCase):
@@ -179,18 +179,27 @@ class Allocation(unittest.TestCase):
             [("v0.40.0", [43, 42]), ("v0.41.0", [33]), ("v0.41.1", [45, 47, 48])],
         )
 
-    def test_cap_of_three_and_patch_bumps(self):
-        queue = [mk(n, ["point:3"]) for n in range(1, 5)]
-        self.assertEqual(
-            slot_view(pr.allocate(queue, [], "v0.1.0")),
-            [("v0.1.1", [1, 2, 3]), ("v0.1.2", [4])],
-        )
+    def test_patch_issues_have_no_cap_and_share_one_version(self):
+        queue = [mk(n, ["point:3"]) for n in range(1, 8)]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1, 2, 3, 4, 5, 6, 7])])
+
+    def test_a_version_that_adds_a_requirement_is_cut_at_three(self):
+        queue = [mk(n, ["point:3", "adds:requirement"]) for n in range(1, 5)]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.2.0", [1, 2, 3]), ("v0.3.0", [4])])
+        queue = [mk(1, ["adds:requirement"])] + [mk(n, ["point:3"]) for n in range(2, 6)]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.2.0", [1, 2, 3]), ("v0.2.1", [4, 5])])
+
+    def test_a_requirement_issue_does_not_join_more_than_three_patch_issues(self):
+        queue = [mk(n, ["point:3"]) for n in range(1, 5)] + [mk(5, ["adds:requirement"])]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1, 2, 3, 4]), ("v0.2.0", [5])])
+        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["adds:requirement"])]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.2.0", [1, 2, 3])])
 
     def test_documentation_does_not_count(self):
-        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["documentation"]), mk(4, ["point:3"]), mk(5, ["point:3"])]
+        queue = [mk(1, ["point:3", "adds:requirement"]), mk(2, ["point:3"]), mk(3, ["documentation"]), mk(4, ["point:3"]), mk(5, ["point:3"])]
         self.assertEqual(
             slot_view(pr.allocate(queue, [], "v0.1.0")),
-            [("v0.1.1", [1, 2, 3, 4]), ("v0.1.2", [5])],
+            [("v0.2.0", [1, 2, 3, 4]), ("v0.2.1", [5])],
         )
 
     def test_urgent_closes_the_slot(self):
@@ -204,63 +213,18 @@ class Allocation(unittest.TestCase):
         queue = [mk(1, ["release:now", "point:2"]), mk(2, ["point:2"]), mk(3, ["point:2"])]
         self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1, 2, 3])])
 
-    def test_pinned_issues_share_their_version_even_with_an_8_point_one(self):
-        queue = [
-            mk(128, ["point:3", "release:pin"], milestone="v0.42.0", state="closed"),
-            mk(135, ["point:8", "release:pin"], milestone="v0.42.0"),
-            mk(140, ["point:3"]),
-        ]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [128, 135]), ("v0.42.1", [140])])
-
-    def test_a_pinned_slot_keeps_its_version_and_closes_the_slot_before_it(self):
-        queue = [
-            mk(1, ["point:3"]),
-            mk(128, ["point:3", "release:pin"], milestone="v0.42.0"),
-            mk(135, ["point:8", "release:pin"], milestone="v0.42.0"),
-        ]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.41.1", [1]), ("v0.42.0", [128, 135])])
-
-    def test_a_later_pinned_issue_joins_the_first_one_and_the_others_stay_in_order(self):
-        queue = [
-            mk(128, ["point:3", "release:pin"], milestone="v0.42.0", state="closed"),
-            mk(130, ["point:3"], state="closed"),
-            mk(135, ["point:8", "release:pin"], milestone="v0.42.0"),
-        ]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [128, 135]), ("v0.42.1", [130])])
-
-    def test_pins_of_different_versions_or_without_a_version_stay_ordinary(self):
-        queue = [
-            mk(1, ["point:8", "release:pin"], milestone="v0.42.0"),
-            mk(2, ["point:3", "release:pin"], milestone="v0.43.0"),
-            mk(3, ["point:8", "release:pin"]),
-            mk(4, ["point:3", "release:pin"]),
-        ]
+    def test_an_8_point_issue_stays_alone_among_patch_issues(self):
+        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["point:8"]), mk(4, ["point:3"]), mk(5, ["point:3"])]
         self.assertEqual(
             slot_view(pr.allocate(queue, [], "v0.41.0")),
-            [("v0.42.0", [1]), ("v0.43.0", [2]), ("v0.43.1", [3]), ("v0.43.2", [4])],
+            [("v0.41.1", [1, 2]), ("v0.41.2", [3]), ("v0.41.3", [4, 5])],
         )
 
-    def test_a_pinned_version_that_is_already_reached_is_refused(self):
-        queue = [mk(1, ["adds:requirement"]), mk(2, ["point:8"]), mk(128, ["release:pin"], milestone="v0.42.0")]
-        with self.assertRaises(pr.PlanError) as ctx:
-            pr.allocate(queue, [], "v0.41.0")
-        self.assertIn("v0.42.0 is pinned (#128)", ctx.exception.problems[0])
-        with self.assertRaises(pr.PlanError):
-            pr.allocate([mk(128, ["release:pin"], milestone="v0.41.0")], [], "v0.41.0")
-
-    def test_an_unpinned_8_point_issue_stays_alone(self):
-        queue = [mk(1, ["point:3", "release:pin"], milestone="v0.42.0"), mk(2, ["point:8"], milestone="v0.42.0")]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [1]), ("v0.42.1", [2])])
-
-    def test_a_documentation_only_pin_does_not_wait_for_the_next_slot(self):
-        queue = [mk(1, ["documentation", "release:pin"], milestone="v0.42.0"), mk(2, ["point:3"])]
-        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.41.0")), [("v0.42.0", [1]), ("v0.42.1", [2])])
-
-    def test_pinned_issues_are_not_derived_into_groups(self):
-        a = mk(1, ["release:pin"], milestone="v0.42.0")
-        b = mk(2, milestone="v0.42.0")
-        c = mk(3, milestone="v0.42.0")
-        self.assertEqual(pr.derive_groups([a, b, c]), [[2, 3]])
+    def test_merged_patch_issues_and_the_ones_that_follow_share_a_version(self):
+        queue = [mk(1, ["bug", "point:2"], state="closed"), mk(2, ["bug", "point:2"], state="closed")] + [
+            mk(n, ["bug", "point:2"]) for n in range(3, 7)
+        ]
+        self.assertEqual(slot_view(pr.allocate(queue, [], "v0.55.1")), [("v0.55.2", [1, 2, 3, 4, 5, 6])])
 
     def test_documentation_only_slot_joins_next(self):
         queue = [mk(1, ["documentation"]), mk(2, ["point:8"]), mk(3, ["point:3"])]
@@ -274,13 +238,13 @@ class Allocation(unittest.TestCase):
         self.assertEqual(slot_view(pr.allocate(queue, [], "v0.1.0")), [("v0.1.1", [1]), ("v0.1.2", [2])])
 
     def test_group_that_does_not_fit_starts_a_new_slot(self):
-        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["point:3"]), mk(4, ["point:3"])]
+        queue = [mk(1, ["point:3", "adds:requirement"]), mk(2, ["point:3"]), mk(3, ["point:3"]), mk(4, ["point:3"])]
         slots = pr.allocate(queue, [[3, 4]], "v0.1.0")
-        self.assertEqual(slot_view(slots), [("v0.1.1", [1, 2]), ("v0.1.2", [3, 4])])
+        self.assertEqual(slot_view(slots), [("v0.2.0", [1, 2]), ("v0.2.1", [3, 4])])
 
     def test_group_that_fits_stays(self):
-        queue = [mk(1, ["point:3"]), mk(2, ["point:3"]), mk(3, ["point:3"])]
-        self.assertEqual(slot_view(pr.allocate(queue, [[2, 3]], "v0.1.0")), [("v0.1.1", [1, 2, 3])])
+        queue = [mk(1, ["point:3", "adds:requirement"]), mk(2, ["point:3"]), mk(3, ["point:3"])]
+        self.assertEqual(slot_view(pr.allocate(queue, [[2, 3]], "v0.1.0")), [("v0.2.0", [1, 2, 3])])
 
     def test_minor_bump_for_requirement_then_patch(self):
         queue = [mk(1, ["point:8", "adds:requirement"]), mk(2, ["point:8"]), mk(3, ["point:8", "adds:requirement"])]
@@ -330,12 +294,9 @@ class Validation(unittest.TestCase):
         problems = self.check({"order": [32, 42, 50, 33], "groups": [[32, 50]], "blocked_by": {}})
         self.assertTrue(any("adjacent" in p for p in problems))
 
-    def test_group_with_8_points_and_over_three(self):
+    def test_group_with_8_points(self):
         problems = self.check({"order": [32, 42, 50, 33], "groups": [[32, 42]], "blocked_by": {}})
         self.assertTrue(any("point:8" in p for p in problems))
-        free = [mk(n) for n in (1, 2, 3, 4)]
-        problems = pr.validate_plan({"order": [1, 2, 3, 4], "groups": [[1, 2, 3, 4]], "blocked_by": {}}, free, [], {})
-        self.assertTrue(any("3" in p for p in problems))
 
     def test_group_of_documentation_may_exceed_three_members(self):
         free = [mk(1), mk(2), mk(3), mk(4, ["documentation"])]
@@ -407,26 +368,13 @@ class Validation(unittest.TestCase):
         free = [mk(1), mk(2, ["release:now"])]
         self.assertEqual(pr.validate_plan({"order": [1, 2], "groups": [], "blocked_by": {}}, free, [], {}), [])
 
-    def test_a_group_may_not_hold_a_pinned_issue(self):
-        free = [mk(1, ["release:pin"], milestone="v0.42.0"), mk(2), mk(3, ["release:pin"])]
-        plan = {"order": [1, 2, 3], "groups": [[1, 2]], "blocked_by": {}}
-        problems = pr.validate_plan(plan, free, [], {})
+    def test_a_group_of_patch_issues_has_no_cap_and_a_group_that_adds_a_requirement_holds_three(self):
+        free = [mk(n) for n in range(1, 6)]
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4, 5], "groups": [[1, 2, 3, 4]], "blocked_by": {}}, free, [], {}), [])
+        free = [mk(1, ["adds:requirement"])] + [mk(n) for n in range(2, 6)]
+        problems = pr.validate_plan({"order": [1, 2, 3, 4, 5], "groups": [[1, 2, 3, 4]], "blocked_by": {}}, free, [], {})
         self.assertEqual(len(problems), 1)
-        self.assertIn("release:pin", problems[0])
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "groups": [[2, 3]], "blocked_by": {}}, free, [], {}), [])
-
-    def test_a_later_pinned_issue_may_not_depend_on_an_issue_after_the_first_pin_of_its_version(self):
-        free = [mk(1, ["release:pin"], milestone="v0.42.0"), mk(2), mk(3, ["release:pin"], milestone="v0.42.0")]
-        plan = {"order": [1, 2, 3], "groups": [], "blocked_by": {"3": [2]}}
-        problems = pr.validate_plan(plan, free, [], {2: "open"})
-        self.assertEqual(len(problems), 1)
-        self.assertIn("#3", problems[0])
-        self.assertIn("#2", problems[0])
-        self.assertIn("v0.42.0", problems[0])
-        ok = {"order": [2, 1, 3], "groups": [], "blocked_by": {"3": [2]}}
-        self.assertEqual(pr.validate_plan(ok, free, [], {2: "open"}), [])
-        same = [mk(1, ["release:pin"], milestone="v0.42.0"), mk(3, ["release:pin"], milestone="v0.42.0")]
-        self.assertEqual(pr.validate_plan({"order": [1, 3], "groups": [], "blocked_by": {"3": [1]}}, same, [], {1: "open"}), [])
+        self.assertIn("more than 3", problems[0])
 
     def test_cycle(self):
         problems = self.check({"order": [32, 50, 42, 33], "groups": [], "blocked_by": {"32": [50], "50": [32]}})
@@ -513,6 +461,12 @@ class ReleaseDecision(unittest.TestCase):
         self.assertEqual((out["rule"], out["decision"]), ("R4", None))
         self.assertEqual((out["changes"], out["bugs"], out["oldest_hours"]), (3, 2, 30.0))
         self.assertEqual([w["number"] for w in out["waiting"]], [1, 2, 3])
+
+    def test_the_planned_version_and_its_open_issues_are_passed_on(self):
+        out = pr.release_facts([self.waiting(1)], None, self.NOW, "v0.40.0", 2)
+        self.assertEqual((out["milestone"], out["milestone_open"]), ("v0.40.0", 2))
+        out = self.decide([self.waiting(1)])
+        self.assertEqual((out["milestone"], out["milestone_open"]), (None, None))
 
 
 class Refuse(unittest.TestCase):
@@ -953,26 +907,7 @@ class NextAcrossMilestones(unittest.TestCase):
         self.assertEqual(out["needs_owner"], [])
         self.assertEqual(out["blocked"], [])
 
-    def test_a_pinned_issue_of_the_first_milestone_still_starts_and_nothing_starts_from_the_later_milestones(self):
-        issues = [mk(10, ["release:pin"], milestone="v0.40.0"), mk(11, milestone="v0.41.0")]
-        plan = {"order": [10, 11], "touches": {"10": ["ts/a.ts"], "11": ["ts/b.ts"]}}
-        out = pr.build_next(issues, self.milestones, set(), plan=plan)
-        self.assertEqual([i["number"] for i in out["start"]], [10])
-        self.assertEqual(out["parallel"], [10])
-
-    def test_with_an_open_pin_anywhere_nothing_starts_from_the_later_milestones_even_before_its_version(self):
-        issues = [
-            mk(10, ["point:8", "adds:requirement"], milestone="v0.40.0"),
-            mk(11, ["adds:requirement"], milestone="v0.41.0"),
-            mk(12, ["adds:requirement"], milestone="v0.41.0"),
-            mk(13, ["release:pin"], milestone="v0.42.0"),
-        ]
-        plan = {"order": [10, 11, 12, 13], "touches": {"10": ["ts/a.ts"], "11": ["ts/b.ts"], "12": ["ts/c.ts"], "13": ["ts/d.ts"]}}
-        out = pr.build_next(issues, self.milestones, set(), plan=plan)
-        self.assertEqual([i["number"] for i in out["start"]], [10])
-        self.assertEqual(out["parallel"], [10])
-
-    def test_without_a_pin_the_later_milestones_are_taken_and_an_issue_that_merges_first_breaks_no_allocation(self):
+    def test_the_later_milestones_are_taken_and_an_issue_that_merges_first_breaks_no_allocation(self):
         issues = [
             mk(10, ["point:8", "adds:requirement"], milestone="v0.40.0"),
             mk(11, ["adds:requirement"], milestone="v0.41.0"),
@@ -987,12 +922,6 @@ class NextAcrossMilestones(unittest.TestCase):
             slot_view(pr.allocate(queue, [], "v0.39.0")),
             [("v0.40.0", [11]), ("v0.41.0", [10]), ("v0.42.0", [12])],
         )
-
-    def test_an_issue_in_progress_after_a_pinned_version_stays_in_progress(self):
-        issues = [mk(10, milestone="v0.40.0"), mk(12, ["release:pin"], milestone="v0.41.0"), mk(13, milestone="v0.42.0")]
-        out = pr.build_next(issues, self.milestones + [ms(8, "v0.43.0")], {13}, mine={13})
-        self.assertEqual([i["number"] for i in out["in_progress"]], [13])
-        self.assertEqual([i["number"] for i in out["start"]], [10])
 
     def test_an_issue_of_this_run_in_progress_in_a_later_milestone_is_in_progress(self):
         issues = [mk(10, milestone="v0.40.0"), mk(12, milestone="v0.41.0"), mk(13, milestone="v0.41.0")]
@@ -1089,14 +1018,16 @@ class DeriveGroups(unittest.TestCase):
         self.assertEqual(pr.derive_groups(free), [[1, 2, 3, 4]])
 
     def test_sync_keeps_the_slots_of_a_previous_plan(self):
-        free = [mk(1, milestone="v0.40.0"), mk(2, milestone="v0.40.0"), mk(3, milestone="v0.41.0"), mk(4, milestone="v0.41.0"), mk(5, milestone="v0.41.0")]
+        free = [mk(1, ["adds:requirement"], milestone="v0.40.0"), mk(2, milestone="v0.40.0")] + [
+            mk(n, ["adds:requirement"], milestone="v0.41.0") for n in (3, 4, 5)
+        ]
         ordered = pr.existing_order(free)
         self.assertEqual(
             slot_view(pr.allocate(ordered, pr.derive_groups(ordered), "v0.39.2")),
-            [("v0.39.3", [1, 2]), ("v0.39.4", [3, 4, 5])],
+            [("v0.40.0", [1, 2]), ("v0.41.0", [3, 4, 5])],
         )
         # without the groups, the second slot would have been packed into the first
-        self.assertEqual(slot_view(pr.allocate(ordered, [], "v0.39.2")), [("v0.39.3", [1, 2, 3]), ("v0.39.4", [4, 5])])
+        self.assertEqual(slot_view(pr.allocate(ordered, [], "v0.39.2")), [("v0.40.0", [1, 2, 3]), ("v0.41.0", [4, 5])])
 
 
 # The hooks that run are the main checkout's (a worktree's own copy takes effect after the merge): test those
