@@ -52,10 +52,12 @@ export function updateBadge() {
   syncMarkAll();
 }
 
-// "すべて既読にする" is pressable while a thread is unread and no run of it is on its way.
+// The "未読" heading, with its count and "すべて既読にする", is shown while a thread is unread; the button is pressable while no run of it is on its way.
 let markAllBusy = false;
 function syncMarkAll() {
-  $<HTMLButtonElement>("mail-mark-all").disabled = markAllBusy || badge === 0;
+  $("unread-heading").hidden = badge === 0;
+  $("unread-count").textContent = String(badge);
+  $<HTMLButtonElement>("mail-mark-all").disabled = markAllBusy;
 }
 
 // The keys of the threads the last "すべて既読にする" made read, for its "元に戻す". A newer run replaces them.
