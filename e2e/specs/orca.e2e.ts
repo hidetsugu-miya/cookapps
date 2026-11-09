@@ -1419,6 +1419,54 @@ describe("orca: projects", () => {
         await browser.waitUntil(async () => (await expanded("w-c")) === "true", { timeoutMsg: "the new working project stayed closed" });
         expect(await names()).toEqual(["w-c", "w-a", "w-b"]);
       });
+
+      // A read of agents given one by one: `[repo, leaf, group]`, a project for each repo in the order of first appearance.
+      const agents = (list: [string, string, "working" | "waiting" | "done"][]) => {
+        const repos = [...new Set(list.map(([repo]) => repo))];
+        return orcaOverview(
+          list.map(([repo, leaf, group]) => orcaRow(repo, "main", `Task of ${repo} ${leaf}`, { group, paneKey: `tab_${repo}:${leaf}`, handle: `term_${repo}_${leaf}` })),
+          repos.map((repo) => orcaWorktree(repo, "main")),
+        );
+      };
+
+      it("keeps a project with a working session and a waiting one in the working group, open at first, through a question and its answer", async () => {
+        await openOrca(agents([["w-q", "leaf_1", "waiting"], ["w-m", "leaf_1", "working"], ["w-m", "leaf_2", "waiting"], ["w-a", "leaf_1", "working"]]));
+        // The status of w-m is the question (it outranks working), but a session of it works: it is in the group, and open. Only w-q, which just waits, is below.
+        expect(await names()).toEqual(["w-m", "w-a", "w-q"]);
+        expect(await expanded("w-m")).toBe("true");
+        expect(await expanded("w-a")).toBe("true");
+        expect(await expanded("w-q")).toBe("false");
+        // The read lists the projects in another order, and the second session of w-m is answered: nothing moves.
+        await reread(agents([["w-a", "leaf_1", "working"], ["w-q", "leaf_1", "waiting"], ["w-m", "leaf_1", "working"], ["w-m", "leaf_2", "working"]]));
+        await browser.pause(300);
+        expect(await names()).toEqual(["w-m", "w-a", "w-q"]);
+        // It asks again: nothing moves, and the project stays open.
+        await reread(agents([["w-m", "leaf_2", "waiting"], ["w-q", "leaf_1", "waiting"], ["w-m", "leaf_1", "working"], ["w-a", "leaf_1", "working"]]));
+        await browser.pause(300);
+        expect(await names()).toEqual(["w-m", "w-a", "w-q"]);
+        expect(await expanded("w-m")).toBe("true");
+      });
+
+      it("opens a project the user closed when another session of it begins to work, and leaves it closed on a read that adds none", async () => {
+        await openOrca(agents([["w-a", "leaf_1", "working"], ["w-b", "leaf_1", "working"]]));
+        await arrow("w-a").click();
+        expect(await expanded("w-a")).toBe("false");
+        // The same work, and a session that is done: the user's closing stands.
+        await reread(agents([["w-a", "leaf_1", "working"], ["w-a", "leaf_2", "done"], ["w-b", "leaf_1", "working"]]));
+        await browser.pause(300);
+        expect(await expanded("w-a")).toBe("false");
+        // Another session of w-a begins to work, while the first still does: it opens, and the group keeps its order.
+        await reread(agents([["w-b", "leaf_1", "working"], ["w-a", "leaf_1", "working"], ["w-a", "leaf_2", "working"]]));
+        await browser.waitUntil(async () => (await expanded("w-a")) === "true", { timeoutMsg: "the project with a new working session stayed closed" });
+        expect(await names()).toEqual(["w-a", "w-b"]);
+        // Closed again, and a read with the same two working sessions leaves it closed.
+        await arrow("w-a").click();
+        expect(await expanded("w-a")).toBe("false");
+        await reread(agents([["w-a", "leaf_1", "working"], ["w-a", "leaf_2", "working"], ["w-b", "leaf_1", "working"]]));
+        await browser.pause(300);
+        expect(await expanded("w-a")).toBe("false");
+        expect(await names()).toEqual(["w-a", "w-b"]);
+      });
     });
 
     it("lists the sessions in the order of the tabs, through a read that reorders them", async () => {

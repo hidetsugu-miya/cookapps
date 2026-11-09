@@ -73,9 +73,11 @@ let cursor: string | null = null;
 let projectKey: string | null = null;
 // The projects open in the list (their sessions under them), by key, kept in memory only. Each has its own state: selecting a project opens it, its arrow opens and closes it, and a project that starts to work opens again.
 const opened = new Set<string>();
-// The projects whose status is working, in the order they entered that group. A read does not reorder them (the project list of the read is newest first by activity, which moves with the work); one that starts to work is put first, one that stops leaves the group.
+// The projects with a working session, in the order they entered that group. A read does not reorder them (the project list of the read is newest first by activity, which moves with the work); one that starts to work is put first, one that stops leaves the group.
 let workingOrder: string[] = [];
-// The target `workingOrder` and `opened` were made for: the keys of another target are not these.
+// The sessions that worked at the last read that worked, by project (the pane keys of the rows): a project opens when a read has one that was not here.
+let workingIds = new Map<string, Set<string>>();
+// The target `workingOrder`, `workingIds` and `opened` were made for: the keys of another target are not these.
 let workingTarget: string | null = null;
 // The groups of the working view that the user closed with their headings (A-6): held in memory only, every group is open at first.
 const closedGroups = new Set<OrcaRow["group"]>();
@@ -387,19 +389,27 @@ function emptyNode(text: string) {
 // A row of the project list: a project of this machine or an SSH host.
 type ProjectRow = Pick<OrcaProject, "key" | "name" | "status" | "sessions">;
 
-// Keeps `workingOrder` and `opened` in step with the projects of a read that worked: a project that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them) and opens; one that does not work leaves it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing.
+// Keeps `workingOrder` and `opened` in step with the sessions of a read that worked. A project is in the working group when a session of it works (its own status may be a question, which outranks working). One that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them); one with no working session leaves it. A project opens when a working session appears in it that the last read did not have, also when the user closed it; sessions that kept working leave it as the user left it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing.
 function trackWorking() {
   if (view === null || view.state !== "ready" || switching) return;
   if (view.target !== workingTarget) {
     workingTarget = view.target;
     workingOrder = [];
+    workingIds = new Map();
     opened.clear();
   }
-  const now = view.projects.filter((p) => p.status === "working").map((p) => p.key);
-  const kept = workingOrder.filter((k) => now.includes(k));
-  const entered = now.filter((k) => !kept.includes(k));
-  for (const k of entered) opened.add(k);
-  workingOrder = [...entered, ...kept];
+  const now = new Map<string, Set<string>>();
+  for (const r of view.rows) {
+    if (r.status !== "working") continue;
+    const ids = now.get(r.projectKey) ?? new Set<string>();
+    ids.add(r.paneKey ?? `${r.repo}/${r.branch}`);
+    now.set(r.projectKey, ids);
+  }
+  const keys = view.projects.map((p) => p.key).filter((k) => now.has(k));
+  const kept = workingOrder.filter((k) => keys.includes(k));
+  for (const k of keys) if ([...now.get(k)!].some((id) => !workingIds.get(k)?.has(id))) opened.add(k);
+  workingOrder = [...keys.filter((k) => !kept.includes(k)), ...kept];
+  workingIds = now;
 }
 
 // The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the rest as the read lists them), then the SSH hosts (the machine's, then the target's that it does not list).
