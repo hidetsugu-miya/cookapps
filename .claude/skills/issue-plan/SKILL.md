@@ -33,7 +33,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    On exit 2, relaunch `release-planner` with the stderr added, at most twice. If it still fails, state the failure in the report: `next` puts the issues that the saved plan lacks behind the others, in the basic order.
 7. **Report** each new issue, each milestone made and the order, as `apply` prints it (`1. #42 title [feature] - reason`).
 
-To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in a `issue-dev` run, so that the issues in hand are left alone), apply step 3 to each issue number it prints, and then start at step 5.
+To only reorder, run `plan-release.py unsplit` (with `--mine {numbers}` in an `issue-dev` run, so that the issues in hand are left alone), apply step 3 to each issue number it prints, and then start at step 5.
 
 When `unsplit` printed an issue in a milestone named for a version, run `plan-release.py migrate` after that pass: it takes a version's milestone off the open issues of less than 5 points and closes the version milestones left empty.
 
@@ -47,4 +47,4 @@ When `unsplit` printed an issue in a milestone named for a version, run `plan-re
 ## When it runs
 
 - An issue is created, or its `needs:owner` is removed: from step 1 (the hook says so). The parts made in step 3 are placed by one pass of steps 5 to 7 after the last part.
-- A `issue-dev` run starts: "To only reorder", so that issues made outside a session, such as on the GitHub screen, are split and placed too.
+- An `issue-dev` run starts: "To only reorder", so that issues made outside a session, such as on the GitHub screen, are split and placed too.
