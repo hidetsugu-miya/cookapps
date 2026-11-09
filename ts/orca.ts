@@ -1068,7 +1068,7 @@ export function initOrca() {
   // The history of A-7 is read only by the side pane of A-9 now; it still pauses with the window.
   initOrcaChat();
   initOrcaTerminal(showError);
-  initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.3, property: "--list-w" });
+  initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError });
   initOrcaFiles({ open: openFile, toggle: toggleFilesAndDraw });
