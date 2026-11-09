@@ -156,7 +156,10 @@ async function markRead(account: string, id: string) {
     // The detail view stays, as for a sync; the list shows the re-login row at the next load.
     if (done === null) return applySync(account, { kind: "needsLogin" });
     const r = rows.get(`${account}/${id}`);
-    if (done && r) setReadState(r.t, r.li, true);
+    if (done && r) {
+      setReadState(r.t, r.li, true);
+      dismiss(rowKey(r.t));
+    }
   } catch (e) {
     showError(e);
   } finally {

@@ -42,6 +42,8 @@ check() {
 check 2 "main で起動し worktree で push（記録なし）" "$work" "git push -u origin HEAD"
 check 2 "main で起動し main から git -C で worktree を push（記録なし）" "$main" "git -C $work push -u origin HEAD"
 check 2 "main で起動し main から git -C で相対の worktree を push（記録なし）" "$tmp" "git -C work push -u origin HEAD"
+check 2 "main で起動し cd で worktree に移って push（記録なし）" "$main" "cd $work && git push -u origin HEAD"
+check 2 "main で起動し cd の相対パスで worktree に移って push（記録なし）" "$tmp" "cd work; git push -u origin HEAD"
 
 # 通す: 記録がそろった worktree と、新しいコミットの無い main
 mkdir -p "$main/.claude/ci" "$main/.claude/e2e" "$main/.claude/reviews"

@@ -2,11 +2,13 @@
 # PostToolUse(Write|Edit|MultiEdit): 公開禁止語の検査、rustfmt、TypeScript の tsc。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
-hook_log_begin
 f=$(jq -r '.tool_input.file_path // empty')
 [ -n "$f" ] && [ -f "$f" ] || exit 0
 # 編集したファイルの属する checkout（main か worktree）を検査の root にする。
 root="$(git -C "$(dirname "$f")" rev-parse --show-toplevel 2>/dev/null)" || exit 0
+# Only the files of this repository (the main checkout and its worktrees) are checked, not those of another repository.
+[ "$(git -C "$(dirname "$f")" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" = "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ] || exit 0
+hook_log_begin
 
 msg=$("$(cd "$(dirname "$0")" && pwd)/guard-public.sh" file "$f" 2>&1) || { echo "$msg" >&2; exit 2; }
 

@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash): commit/tag は公開禁止語の検査、push はさらに CI・E2E・レビューの合格記録を確かめる（CI と E2E の検査そのものは走らせない。CI は run-ci.sh、E2E は run-e2e.sh が回す）。
 # push の範囲が guard-e2e.sh か plan-release*.py、この hook に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
-# 検査する checkout は hook 入力の cwd（git に -C があればその場所）の checkout で、CLAUDE_PROJECT_DIR ではない（#310）。記録の置き場所だけは --git-common-dir の main の checkout。
+# 検査する checkout は hook 入力の cwd（先頭の cd DIR && か cd DIR; と、git の -C があればその場所）の checkout で、CLAUDE_PROJECT_DIR ではない（#310）。記録の置き場所だけは --git-common-dir の main の checkout。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
-hook_log_begin
 input=$(cat)
 cmd=$(jq -r '.tool_input.command // empty' <<< "$input")
-cwd=$(jq -r '.cwd // empty' <<< "$input")
 g='git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+'
 grep -q -E "${g}(commit|tag|push)|git-commit-run[[:space:]]+commit" <<< "$cmd" || exit 0
+hook_log_begin
+cwd=$(jq -r '.cwd // empty' <<< "$input")
 
 guard="$(cd "$(dirname "$0")" && pwd)/guard-public.sh"
 [ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
+# A leading `cd DIR &&` (or `cd DIR;`) moves the command to DIR, and a `git -C` after it is relative to DIR.
+if [[ $cmd =~ ^[[:space:]]*cd[[:space:]]+([^[:space:];\&\|]+)[[:space:]]*(\&\&|;) ]]; then
+  dir=${BASH_REMATCH[1]//[\"\']/}
+  dir=${dir/#\~/$HOME}
+  case "$dir" in /*) cwd=$dir ;; *) cwd="$cwd/$dir" ;; esac
+fi
 if [[ $cmd =~ git[[:space:]]+-C[[:space:]]+([^[:space:]]+)[[:space:]]+(commit|tag|push) ]]; then
   dir=${BASH_REMATCH[1]//[\"\']/}
   case "$dir" in /*) cwd=$dir ;; *) cwd="$cwd/$dir" ;; esac

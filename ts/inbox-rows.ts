@@ -100,6 +100,7 @@ async function markRows(list: { t: ThreadItem; li: HTMLLIElement }[], read: bool
           setReadState(t, li, !read);
         } else {
           done.push(rowKey(t));
+          if (read) dismiss(rowKey(t));
         }
       } catch (e) {
         setReadState(t, li, !read);
@@ -151,9 +152,8 @@ export function place(li: HTMLLIElement, unread: boolean) {
   list.insertBefore(li, next || null);
 }
 
-// Reflects the read state in the row: bold, dot, checkbox, and its section. A thread that is read has no popup for new mail (M-9).
+// Reflects the read state in the row: bold, dot, checkbox, and its section.
 export function setReadState(t: ThreadItem, li: HTMLLIElement, read: boolean) {
-  if (read) dismiss(rowKey(t));
   const moves = li.isConnected && li.classList.contains("unread") === read;
   t.unread = !read;
   li.classList.toggle("unread", !read);
@@ -173,6 +173,7 @@ async function sendRead(t: ThreadItem, li: HTMLLIElement, read: boolean, control
     const done = await invoke("set_read", { account: t.account, id: t.id, read });
     if (done === null) return load();
     setReadState(t, li, read);
+    if (read) dismiss(rowKey(t));
   } catch (e) {
     setReadState(t, li, !t.unread);
     showError(e);
@@ -235,5 +236,7 @@ export function row(t: ThreadItem) {
   trail.append(span("date", formatDate(t.dateMs)), actions);
   li.append(readBox(t, li), span("unread-dot", ""), avatar, span("from", name), subject, trail);
   setReadState(t, li, !t.unread);
+  // A thread that is read, by the owner or by a sync, has no popup for new mail (M-9).
+  if (!t.unread) dismiss(rowKey(t));
   return li;
 }

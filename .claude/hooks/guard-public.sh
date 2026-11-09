@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 公開してはいけない語（置き換え元のメールアプリ名を含む）を検出する。AGENTS.md を含む gitignore されていない全ファイルが対象。マッチした行の本文は出さず、path:line と語だけを出す。
 # 使い方: guard-public.sh file <path> | tree | text | log <range>   （マッチがあれば exit 1）
-# 検査する checkout: file はそのファイルの属する checkout（worktree のファイルは worktree）、tree と log は呼ばれたときのカレントディレクトリの checkout。
+# 検査する checkout: file はそのファイルの属する checkout（worktree のファイルは worktree。この hook 自身のリポジトリ以外のファイルは検査しない）、tree と log は呼ばれたときのカレントディレクトリの checkout。
 # 語の一覧は、この hook 自身が公開できない語を含むため追跡せず、同じ場所の public-words（gitignore、1 行 1 パターン）から読む。無い・空のときは止める（exit 1）。
 set -uo pipefail
 
@@ -29,6 +29,7 @@ case "${1:-}" in
     f=${2:?path}
     [ -f "$f" ] || exit 0
     root="$(git -C "$(dirname "$f")" rev-parse --show-toplevel 2>/dev/null)" || exit 0
+    [ "$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" = "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ] || exit 0
     cd "$root" || exit 0
     abs="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"
     case "$abs" in "$root"/*) ;; *) exit 0 ;; esac
