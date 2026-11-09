@@ -20,6 +20,7 @@ use crate::{
     orca::worktree_host,
     orca_attach::{worktree_params, Rpc},
     orca_chat::{CallError, Connection},
+    orca_language::{detect_language, highlight_name},
 };
 
 const SETTINGS_FILE: &str = "editor-settings.json";
@@ -63,6 +64,7 @@ pub struct OrcaDir {
 }
 
 /// The text of a file for the editor, with LF line ends (`crlf` says the file has CRLF, which the write brings back), and the signature of the text as the disk holds it.
+/// `language` is the name Orca's editor gives the file (A-21), and `highlight` the name the page's highlighter knows it by (null: no grammar, the text is drawn plain).
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -70,6 +72,8 @@ pub struct OrcaFileText {
     pub content: String,
     pub crlf: bool,
     pub signature: String,
+    pub language: String,
+    pub highlight: Option<String>,
 }
 
 /// What Orca did with a save: wrote it, or refused because the disk no longer holds the text that was read (`changed`: another text, `missing`: no file, `not-utf8`: bytes that are not text).
@@ -309,7 +313,7 @@ fn line_ending(text: &str) -> Result<bool, String> {
 }
 
 /// The text the editor gets from an answer of `files.read`: Orca's reply must be the whole file, as text, in the size the editor takes.
-fn parse_text(result: &Value) -> Result<OrcaFileText, String> {
+fn parse_text(result: &Value, relative: &str) -> Result<OrcaFileText, String> {
     let too_large = || format!("{} KiB を超えるファイルは開けません", MAX_TEXT / 1024);
     let too_big = result["byteLength"]
         .as_u64()
@@ -326,6 +330,7 @@ fn parse_text(result: &Value) -> Result<OrcaFileText, String> {
         return Err("UTF-8 ではないファイルは開けません".into());
     }
     let crlf = line_ending(content)?;
+    let language = detect_language(relative, content);
     Ok(OrcaFileText {
         content: if crlf {
             content.replace("\r\n", "\n")
@@ -334,6 +339,8 @@ fn parse_text(result: &Value) -> Result<OrcaFileText, String> {
         },
         crlf,
         signature: disk_signature(content),
+        language: language.to_owned(),
+        highlight: highlight_name(language).map(str::to_owned),
     })
 }
 
@@ -345,7 +352,7 @@ async fn read(rpc: &mut impl Rpc, path: &str, relative: &str) -> Result<OrcaFile
         )
         .await
         .map_err(reason)?;
-    parse_text(&answer)
+    parse_text(&answer, relative)
 }
 
 /// What Orca answered to `files.writeIfUnchanged`: `{ok: false, diskConflict}` is a refusal, anything else (`{ok: true}`, `{ok: true, unchanged: true}` for the same text, or an old host's empty answer) a write.
@@ -843,47 +850,72 @@ mod tests {
 
     #[test]
     fn a_read_is_the_whole_text_with_lf() {
-        let text =
-            parse_text(&json!({"content": "a\nb\n", "truncated": false, "byteLength": 4})).unwrap();
+        let text = parse_text(
+            &json!({"content": "a\nb\n", "truncated": false, "byteLength": 4}),
+            "a.txt",
+        )
+        .unwrap();
         assert_eq!(
             text,
             OrcaFileText {
                 content: "a\nb\n".into(),
                 crlf: false,
                 signature: disk_signature("a\nb\n"),
+                language: "plaintext".into(),
+                highlight: None,
             }
         );
         // A CRLF file reaches the editor with LF, and its signature is of the bytes on the disk.
-        let text = parse_text(&json!({"content": "a\r\nb\r\n"})).unwrap();
+        let text = parse_text(&json!({"content": "a\r\nb\r\n"}), "a.txt").unwrap();
         assert_eq!((text.content.as_str(), text.crlf), ("a\nb\n", true));
         assert_eq!(text.signature, disk_signature("a\r\nb\r\n"));
+    }
+
+    #[test]
+    fn a_read_names_the_language_of_the_file() {
+        let text = parse_text(&json!({"content": "fn main() {}\n"}), "src/main.rs").unwrap();
+        assert_eq!(text.language, "rust");
+        assert_eq!(text.highlight.as_deref(), Some("rust"));
+        // A name decides, and so does a `#!` line of a name with no extension; a language without a grammar has no highlight name.
+        let text = parse_text(&json!({"content": "FROM x\n"}), "docker/Dockerfile").unwrap();
+        assert_eq!(text.highlight.as_deref(), Some("dockerfile"));
+        let text = parse_text(&json!({"content": "#!/bin/sh\n"}), "bin/run").unwrap();
+        assert_eq!(text.highlight.as_deref(), Some("bash"));
+        let text = parse_text(&json!({"content": "x"}), "main.zig").unwrap();
+        assert_eq!((text.language.as_str(), text.highlight), ("zig", None));
     }
 
     #[test]
     fn a_file_the_editor_cannot_keep_whole_is_refused() {
         let large = format!("{} KiB を超えるファイルは開けません", MAX_TEXT / 1024);
         assert_eq!(
-            parse_text(&json!({"content": "a", "truncated": true})).unwrap_err(),
+            parse_text(&json!({"content": "a", "truncated": true}), "a.txt").unwrap_err(),
             large
         );
         assert_eq!(
-            parse_text(&json!({"content": "a", "byteLength": MAX_TEXT + 1})).unwrap_err(),
+            parse_text(
+                &json!({"content": "a", "byteLength": MAX_TEXT + 1}),
+                "a.txt"
+            )
+            .unwrap_err(),
             large
         );
         assert_eq!(
-            parse_text(&json!({"content": "a".repeat(MAX_TEXT + 1)})).unwrap_err(),
+            parse_text(&json!({"content": "a".repeat(MAX_TEXT + 1)}), "a.txt").unwrap_err(),
             large
         );
-        assert!(
-            parse_text(&json!({"content": "a".repeat(MAX_TEXT), "byteLength": MAX_TEXT})).is_ok()
-        );
+        assert!(parse_text(
+            &json!({"content": "a".repeat(MAX_TEXT), "byteLength": MAX_TEXT}),
+            "a.txt"
+        )
+        .is_ok());
         assert_eq!(
-            parse_text(&json!({"content": "a\u{FFFD}b"})).unwrap_err(),
+            parse_text(&json!({"content": "a\u{FFFD}b"}), "a.txt").unwrap_err(),
             "UTF-8 ではないファイルは開けません"
         );
-        assert!(parse_text(&json!({"content": "a\rb"})).is_err());
-        assert!(parse_text(&json!({"truncated": false})).is_err());
-        assert!(parse_text(&json!({"content": 3})).is_err());
+        assert!(parse_text(&json!({"content": "a\rb"}), "a.txt").is_err());
+        assert!(parse_text(&json!({"truncated": false}), "a.txt").is_err());
+        assert!(parse_text(&json!({"content": 3}), "a.txt").is_err());
     }
 
     #[tokio::test]

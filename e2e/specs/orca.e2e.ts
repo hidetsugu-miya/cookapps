@@ -2849,7 +2849,7 @@ describe("orca: files and editor (A-18)", () => {
       ["a.rs", false],
       ["b.log", false, true],
     ]);
-  const text = (content: string, signature = "sig-1"): OrcaFileText => ({ content, crlf: false, signature });
+  const text = (content: string, signature = "sig-1", language = "plaintext", highlight: string | null = null): OrcaFileText => ({ content, crlf: false, signature, language, highlight });
   const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
   const names = () => textsOf("#orca-files-tree .orca-file-name");
   // The button of the file pane that is on the screen (one at a time: the corner pane's while the pane is hidden, the pane's own while it is shown).
@@ -2897,13 +2897,15 @@ describe("orca: files and editor (A-18)", () => {
       add,
       onceId(),
     );
-  // Opens a.rs with `content` and waits for its text (`rows` is how many rows the tree has).
-  async function openA(content = "fn main() {}\n", signature = "sig-1", rows = 4) {
-    await mock("orca_file_read", text(content, signature));
+  // Opens a.rs with the answer of the read and waits for its text.
+  async function openFileWith(read: OrcaFileText, rows = 4) {
+    await mock("orca_file_read", read);
     await waitForCount("#orca-files-tree .orca-file", rows);
     await doublePress("a.rs");
-    await expect($(".orca-edit-area")).toHaveValue(content, { trim: false });
+    await expect($(".orca-edit-area")).toHaveValue(read.content, { trim: false });
   }
+  // Opens a.rs with `content` and waits for its text (`rows` is how many rows the tree has).
+  const openA = (content = "fn main() {}\n", signature = "sig-1", rows = 4) => openFileWith(text(content, signature), rows);
 
   it("draws the text of the editor with the family and size chosen in the settings (A-20), apart from the terminals", async () => {
     await openFiles({ font_settings: fontSettings({ editor: { family: "Menlo", size: 18, ghostty: false }, orcaWork: { family: null, size: 13, ghostty: false } }) });
@@ -2917,6 +2919,86 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles();
     await openA();
     expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize)).toBe("12.5px");
+  });
+
+  // A-21: the colors of the editor. The language is Rust's (`orca_file_read` answers `language` and `highlight`); the tokens are the highlighter's elements under the textarea.
+  const tokens = (kind: string) => textsOf(`.orca-edit-hl .hljs-${kind}`);
+  const layerText = () => browser.execute(() => document.querySelector(".orca-edit-hl")!.textContent);
+  const rust = (content: string) => text(content, "sig-1", "rust", "rust");
+
+  it("colors the text of a file by its language, in a layer under the textarea that holds the same text (A-21)", async () => {
+    await openFiles();
+    await openFileWith(rust('fn main() {\n    let x = "a"; // note\n}\n'));
+    expect(await tokens("keyword")).toEqual(["fn", "let"]);
+    expect(await tokens("string")).toEqual(['"a"']);
+    expect(await tokens("comment")).toEqual(["// note"]);
+    expect(await layerText()).toBe('fn main() {\n    let x = "a"; // note\n}\n');
+    await expect($(".orca-edit-hl")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("shows the colors of the tokens and the caret of the textarea, whose own text is transparent (A-21)", async () => {
+    await openFiles();
+    await openFileWith(rust("fn a() {}\n"));
+    const colors = await browser.execute(() => ({
+      keyword: getComputedStyle(document.querySelector(".orca-edit-hl .hljs-keyword")!).color,
+      plain: getComputedStyle(document.querySelector(".orca-edit-hl code")!).color,
+      area: getComputedStyle(document.querySelector(".orca-edit-area")!).color,
+    }));
+    expect(colors.keyword).toBe("rgb(207, 34, 46)");
+    expect(colors.area).toBe("rgba(0, 0, 0, 0)");
+    expect(colors.plain).not.toBe(colors.keyword);
+  });
+
+  it("draws the text plain, in the same layer, for a language the highlighter has no grammar for (A-21)", async () => {
+    await openFiles();
+    await openFileWith(text("const std = @import(\"std\");\n", "sig-1", "zig", null));
+    expect(await count(".orca-edit-hl [class^='hljs-']")).toBe(0);
+    expect(await layerText()).toBe('const std = @import("std");\n');
+  });
+
+  it("escapes the text of the file in the layer, so a tag in it stays text (A-21)", async () => {
+    await openFiles();
+    await openFileWith(text('<img src=x onerror="alert(1)"> &amp;\n', "sig-1", "plaintext", null));
+    expect(await count(".orca-edit-hl img")).toBe(0);
+    expect(await layerText()).toBe('<img src=x onerror="alert(1)"> &amp;\n');
+  });
+
+  it("colors the text again at each key, and the layer keeps the text of the textarea (A-21)", async () => {
+    await openFiles();
+    await openFileWith(rust("let a = 1;\n"));
+    expect(await tokens("comment")).toEqual([]);
+    await type("// typed\n");
+    expect(await tokens("comment")).toEqual(["// typed"]);
+    expect(await layerText()).toBe("let a = 1;\n// typed\n");
+  });
+
+  it("moves the layer with the scroll of the textarea (A-21)", async () => {
+    await openFiles();
+    await openFileWith(rust("let a = 1;\n".repeat(200)));
+    await browser.execute(() => {
+      const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+      area.scrollTop = 48;
+      area.dispatchEvent(new Event("scroll"));
+    });
+    const moved = await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-hl code")!.style.transform);
+    expect(moved.replace(/\s/g, "")).toBe("translate(0px,-48px)");
+  });
+
+  it("draws a long text plain at once and colors it when the typing has stopped (A-21)", async () => {
+    await openFiles();
+    const long = "let a = 1;\n".repeat(3000);
+    await openFileWith(rust(long));
+    await browser.waitUntil(async () => (await count(".orca-edit-hl .hljs-keyword")) > 0, { timeoutMsg: "the long text was never colored" });
+    await type("let b = 2;\n");
+    expect(await layerText()).toBe(`${long}let b = 2;\n`);
+    await browser.waitUntil(async () => (await tokens("keyword")).length === 3001, { timeoutMsg: "the typed line was never colored" });
+  });
+
+  it("has the colors in variables of the page, apart from the layout (A-21)", async () => {
+    await openFiles();
+    await openFileWith(rust("fn a() {}\n"));
+    await browser.execute(() => document.documentElement.style.setProperty("--hl-keyword", "rgb(1, 2, 3)"));
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-hl .hljs-keyword")!).color)).toBe("rgb(1, 2, 3)");
   });
 
   it("has one button that shows and hides the file pane: in the upper row of the pane while it is shown, at the right end of the tab strip while it is hidden", async () => {

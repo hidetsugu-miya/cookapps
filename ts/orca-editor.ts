@@ -1,4 +1,4 @@
-// The editor of the Orca screen (A-18): a file of a worktree opened as a tab of the work pane, in a textarea. Rust reads and saves the text (`orca_file_read`, `orca_file_write`) and decides whether a save went through; this module draws and takes the typing.
+// The editor of the Orca screen (A-18): a file of a worktree opened as a tab of the work pane, in a textarea with its text drawn in colors under it (A-21). Rust reads and saves the text (`orca_file_read`, `orca_file_write`), decides whether a save went through and names the language to color it by; this module draws and takes the typing.
 // A file is saved by itself: once the typing has stopped for the time of the settings, the text goes to Rust with the signature of the text that was read, and Orca writes only if the disk still holds it.
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
@@ -40,11 +40,20 @@ interface EditorFile {
   writing: Promise<void> | null;
   // Focus the text when it is first shown.
   wantFocus: boolean;
+  // The grammar of the highlighter for the file (null: none, drawn plain), and the timer of a coloring that waits for the typing to stop.
+  highlight: string | null;
+  paintTimer: number | null;
   el: HTMLElement;
   area: HTMLTextAreaElement;
+  // The layer under the textarea that carries the same text in colors.
+  code: HTMLElement;
   state: HTMLElement;
   note: HTMLElement;
 }
+
+// Up to this many characters the text is colored at each key; a longer one is drawn plain at once and colored when the typing has stopped for COLOR_WAIT_MS, as coloring a file of the size the editor takes (384 KiB) takes longer than a key.
+const COLOR_NOW_MAX = 30000;
+const COLOR_WAIT_MS = 150;
 
 const files = new Map<string, EditorFile>();
 let lastId = 0;
@@ -65,6 +74,33 @@ function setSave(f: EditorFile, save: Save) {
   f.save = save;
   f.state.textContent = SAVE_LABELS[save];
   f.state.dataset.state = save;
+}
+
+// Draws the text of the textarea in the layer under it: in colors by the grammar of the file, else plain. The layer always holds the same text as the textarea, which has none of its own to show.
+function paint(f: EditorFile) {
+  if (f.paintTimer !== null) clearTimeout(f.paintTimer);
+  f.paintTimer = null;
+  const text = f.area.value;
+  const color = (grammar: string) => {
+    f.code.innerHTML = hljs.highlight(text, { language: grammar, ignoreIllegals: true }).value;
+  };
+  if (!f.highlight) {
+    f.code.textContent = text;
+  } else if (text.length <= COLOR_NOW_MAX) {
+    color(f.highlight);
+  } else {
+    f.code.textContent = text;
+    const grammar = f.highlight;
+    f.paintTimer = window.setTimeout(() => {
+      f.paintTimer = null;
+      if (f.area.value === text) color(grammar);
+    }, COLOR_WAIT_MS);
+  }
+}
+
+// The layer under the textarea follows the scroll of the textarea.
+function followScroll(f: EditorFile) {
+  f.code.style.transform = `translate(${-f.area.scrollLeft}px, ${-f.area.scrollTop}px)`;
 }
 
 function clearTimer(f: EditorFile) {
@@ -119,6 +155,8 @@ async function load(f: EditorFile) {
   try {
     const text = await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
+    f.highlight = text.highlight;
+    paint(f);
     f.crlf = text.crlf;
     f.signature = text.signature;
     f.read = "ready";
@@ -128,6 +166,7 @@ async function load(f: EditorFile) {
     f.note.textContent = String(e);
     f.note.hidden = false;
     f.area.hidden = true;
+    f.area.parentElement!.hidden = true;
   }
   changed();
 }
@@ -145,15 +184,23 @@ function create(id: string, target: string | null, project: string, path: string
   area.spellcheck = false;
   area.disabled = true;
   area.setAttribute("aria-label", relative);
-  el.append(head, note, area);
-  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, el, area, state, note };
+  const code = tag("code");
+  const layer = tag("pre", "orca-edit-hl");
+  layer.setAttribute("aria-hidden", "true");
+  layer.append(code);
+  const body = tag("div", "orca-edit-body");
+  body.append(layer, area);
+  el.append(head, note, body);
+  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, paintTimer: null, el, area, code, state, note };
   area.oninput = () => {
+    paint(f);
     if (!f.dirty) {
       f.dirty = true;
       changed();
     }
     schedule(f);
   };
+  area.onscroll = () => followScroll(f);
   return f;
 }
 
@@ -188,6 +235,7 @@ export async function closeFile(id: string) {
   while (canSave(f)) await flush(f);
   if (f.dirty && !f.blocked) return false;
   clearTimer(f);
+  if (f.paintTimer !== null) clearTimeout(f.paintTimer);
   f.el.remove();
   files.delete(id);
   return true;
@@ -200,7 +248,11 @@ export function showEditors(placements: { id: string; host: HTMLElement }[]) {
   for (const { id, host } of placements) {
     const f = files.get(id);
     if (!f) continue;
-    if (f.el.parentElement !== host) host.replaceChildren(f.el);
+    if (f.el.parentElement !== host) {
+      host.replaceChildren(f.el);
+      // A textarea that was out of the page starts at the top again.
+      followScroll(f);
+    }
     if (f.wantFocus && !f.area.disabled && !f.area.hidden) {
       f.wantFocus = false;
       f.area.focus({ preventScroll: true });

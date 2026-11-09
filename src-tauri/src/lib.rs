@@ -16,6 +16,7 @@ pub mod orca_chat;
 pub mod orca_e2ee;
 pub mod orca_files;
 pub mod orca_handoff;
+pub mod orca_language;
 pub mod orca_panes;
 pub mod orca_stream;
 pub mod orca_theme;

@@ -1,4 +1,4 @@
-:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; }
+:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. */
@@ -871,7 +871,25 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-state[data-state="saved"] { color: var(--accent); }
 .orca-edit-state[data-state="changed"], .orca-edit-state[data-state="missing"], .orca-edit-state[data-state="not-utf8"], .orca-edit-state[data-state="error"] { color: var(--warn); }
 .orca-edit .orca-empty { margin: 0; padding: 48px 24px; }
-.orca-edit-area { flex: 1; min-height: 0; box-sizing: border-box; width: 100%; margin: 0; padding: 8px 12px; border: 0; border-radius: 0; background: var(--surface); color: inherit; font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; tab-size: 2; white-space: pre; overflow: auto; resize: none; outline: none; }
+/* A-21: the editor is two layers of the same text. The textarea is on top with its text transparent (the caret and the selection show), and under it a `pre` carries the same text in colors, moved by the scroll of the textarea; both take the same font, padding and line height, so the letters sit on one another. */
+.orca-edit-body { position: relative; flex: 1; min-height: 0; background: var(--surface); }
+.orca-edit-area, .orca-edit-hl code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; tab-size: 2; white-space: pre; letter-spacing: normal; }
+.orca-edit-area { position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; color: transparent; caret-color: CanvasText; overflow: auto; resize: none; outline: none; }
+.orca-edit-area::selection { background: var(--hl-select); }
+.orca-edit-hl { position: absolute; inset: 0; margin: 0; overflow: hidden; pointer-events: none; }
+.orca-edit-hl code { display: block; box-sizing: border-box; width: max-content; min-width: 100%; padding: 8px 12px; color: CanvasText; }
+.orca-edit-hl .hljs-comment, .orca-edit-hl .hljs-quote { color: var(--hl-comment); font-style: italic; }
+.orca-edit-hl .hljs-keyword, .orca-edit-hl .hljs-selector-tag, .orca-edit-hl .hljs-doctag, .orca-edit-hl .hljs-template-tag, .orca-edit-hl .hljs-name { color: var(--hl-keyword); }
+.orca-edit-hl .hljs-string, .orca-edit-hl .hljs-regexp, .orca-edit-hl .hljs-meta .hljs-string { color: var(--hl-string); }
+.orca-edit-hl .hljs-number, .orca-edit-hl .hljs-literal, .orca-edit-hl .hljs-symbol, .orca-edit-hl .hljs-bullet, .orca-edit-hl .hljs-link { color: var(--hl-number); }
+.orca-edit-hl .hljs-title, .orca-edit-hl .hljs-section, .orca-edit-hl .hljs-selector-id, .orca-edit-hl .hljs-selector-class { color: var(--hl-title); }
+.orca-edit-hl .hljs-type, .orca-edit-hl .hljs-built_in, .orca-edit-hl .hljs-class .hljs-title { color: var(--hl-type); }
+.orca-edit-hl .hljs-attr, .orca-edit-hl .hljs-attribute, .orca-edit-hl .hljs-variable, .orca-edit-hl .hljs-property, .orca-edit-hl .hljs-template-variable, .orca-edit-hl .hljs-selector-attr, .orca-edit-hl .hljs-selector-pseudo { color: var(--hl-attr); }
+.orca-edit-hl .hljs-meta { color: var(--hl-meta); }
+.orca-edit-hl .hljs-addition { color: var(--ins); background: var(--soft); }
+.orca-edit-hl .hljs-deletion { color: var(--del); background: var(--del-bg); }
+.orca-edit-hl .hljs-emphasis { font-style: italic; }
+.orca-edit-hl .hljs-strong { font-weight: 700; }
 .orca-edit-area:disabled { opacity: .6; }
 .item input.editor-ms { width: 90px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: #fff; }
 .item input.editor-ms:focus { outline: 2px solid var(--accent); border-color: transparent; }
