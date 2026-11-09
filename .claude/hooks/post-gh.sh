@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # PostToolUse(Bash): issue の作成と needs:owner の解消のあとは issue-plan の続行を、gh pr merge のあとは plan-release.py release の結果と Release PR の用意の続行を、セッションに伝える。常に exit 0。
 set -uo pipefail
+. "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
 cmd=$(jq -r '.tool_input.command // empty')
 [ -n "$cmd" ] || exit 0
 
@@ -8,12 +9,21 @@ cmd=$(jq -r '.tool_input.command // empty')
 bare=$(perl -0777 -pe 's/"(?:\\.|[^"\\])*"/""/gs; s/\x27[^\x27]*\x27/\x27\x27/gs' <<< "$cmd")
 ran() { grep -q -E "(^|[;&|(])[[:space:]]*gh[[:space:]]+$1([[:space:]]|\$)" <<< "$bare"; }
 
-msgs=()
+plan=0
 if ran 'issue[[:space:]]+create' \
   || { ran 'issue[[:space:]]+edit' && grep -q -E -e '--remove-label[ =][^|;&]*needs:owner' <<< "$cmd"; }; then
+  plan=1
+fi
+merge=0
+ran 'pr[[:space:]]+merge' && merge=1
+[ "$plan" -eq 1 ] || [ "$merge" -eq 1 ] || exit 0
+hook_log_begin
+
+msgs=()
+if [ "$plan" -eq 1 ]; then
   msgs+=("issue を作成した、または needs:owner を外しました。issue-plan スキルの手順を続けてください（まだ始めていなければ、ここから始めてください）。")
 fi
-if ran 'pr[[:space:]]+merge'; then
+if [ "$merge" -eq 1 ]; then
   main="$(git -C "${CLAUDE_PROJECT_DIR:?}" rev-parse --path-format=absolute --git-common-dir)/.."
   out=$("$main/.claude/tools/plan-release.py" release 2>&1)
   rc=$?

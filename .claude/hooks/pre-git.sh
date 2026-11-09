@@ -1,19 +1,39 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash): commit/tag は公開禁止語の検査、push はさらに CI・E2E・レビューの合格記録を確かめる（CI と E2E の検査そのものは走らせない。CI は run-ci.sh、E2E は run-e2e.sh が回す）。
-# push の範囲が guard-e2e.sh か plan-release*.py に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
+# push の範囲が guard-e2e.sh か plan-release*.py、この hook に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
+# 検査する checkout は hook 入力の cwd（先頭の cd DIR && か cd DIR; と、git の -C があればその場所）の checkout で、CLAUDE_PROJECT_DIR ではない（#310）。記録の置き場所だけは --git-common-dir の main の checkout。
 set -uo pipefail
-root="${CLAUDE_PROJECT_DIR:?}"
-cmd=$(jq -r '.tool_input.command // empty')
+. "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
+input=$(cat)
+cmd=$(jq -r '.tool_input.command // empty' <<< "$input")
 g='git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+'
 grep -q -E "${g}(commit|tag|push)|git-commit-run[[:space:]]+commit" <<< "$cmd" || exit 0
+hook_log_begin
+cwd=$(jq -r '.cwd // empty' <<< "$input")
 
 guard="$(cd "$(dirname "$0")" && pwd)/guard-public.sh"
-cd "$root" || exit 0
+[ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
+# A leading `cd DIR &&` (or `cd DIR;`) moves the command to DIR, and a `git -C` after it is relative to DIR.
+if [[ $cmd =~ ^[[:space:]]*cd[[:space:]]+([^[:space:];\&\|]+)[[:space:]]*(\&\&|;) ]]; then
+  dir=${BASH_REMATCH[1]//[\"\']/}
+  dir=${dir/#\~/$HOME}
+  case "$dir" in /*) cwd=$dir ;; *) cwd="$cwd/$dir" ;; esac
+fi
+if [[ $cmd =~ git[[:space:]]+-C[[:space:]]+([^[:space:]]+)[[:space:]]+(commit|tag|push) ]]; then
+  dir=${BASH_REMATCH[1]//[\"\']/}
+  case "$dir" in /*) cwd=$dir ;; *) cwd="$cwd/$dir" ;; esac
+fi
+top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) \
+  || top=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$top" || exit 0
 
-# gate <名前> <コマンド...>: 失敗したら名前と出力末尾 40 行を出して exit 2。
+# gate <名前> <コマンド...>: 失敗したら名前と出力末尾 40 行を出して exit 2。名前と所要時間はログに残す（hook-log.sh）。
 gate() {
-  local name=$1 out; shift
-  out=$("$@" 2>&1) || { echo "ゲート失敗: $name"$'\n'"$(tail -n 40 <<< "$out")" >&2; exit 2; }
+  local name=$1 out rc t; shift
+  t=$(hook_log_now)
+  out=$("$@" 2>&1); rc=$?
+  hook_log_gate "$name" "$t" "$rc"
+  [ "$rc" -eq 0 ] || { echo "ゲート失敗: $name"$'\n'"$(tail -n 40 <<< "$out")" >&2; exit 2; }
 }
 
 grep -q -E "${g}(commit|tag)|git-commit-run[[:space:]]+commit" <<< "$cmd" \
@@ -29,14 +49,15 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   git diff --quiet HEAD || { echo "push 前の検査: コミットしていない変更があります。検査はコミットの中身と一致しません" >&2; git diff --stat HEAD >&2; exit 2; }
   # The self-tests of a hook and of a tool run on this checkout's own copy, and only when the range touches what they test (#255).
   # With no base to compare, they run.
-  top=$(git rev-parse --show-toplevel)
   if git rev-parse -q --verify "${range%..*}" >/dev/null 2>&1; then
     changed=$(git diff --name-only "${range%..*}" HEAD)
   else
     changed=$(git ls-files)
   fi
-  grep -q -E '^\.claude/(hooks/guard-e2e\.sh|tools/check-guard-e2e\.sh)$' <<< "$changed" \
+  grep -q -E '^\.claude/(hooks/(guard-e2e|hook-log)\.sh|tools/check-guard-e2e\.sh)$' <<< "$changed" \
     && gate "guard-e2e.sh の自己テスト" "$top/.claude/tools/check-guard-e2e.sh"
+  grep -q -E '^\.claude/(hooks/(pre-git|hook-log)\.sh|tools/check-pre-git\.sh)$' <<< "$changed" \
+    && gate "pre-git.sh の自己テスト" "$top/.claude/tools/check-pre-git.sh"
   grep -q -E '^\.claude/tools/plan-release[^/]*\.py$|^\.claude/(tools/(nightly-limit|use-worktree)\.sh|hooks/post-gh\.sh)$' <<< "$changed" \
     && gate "plan-release.py の自己テスト" python3 -I "$top/.claude/tools/plan-release-test.py"
   # New commits need run-ci.sh's and run-e2e.sh's passing records for HEAD and release-verifier's pass record (.claude/rules/review.md).

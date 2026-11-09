@@ -1,5 +1,6 @@
 // The rows of the inbox list: building one, its read state, and the unread count on the sidebar.
 import type { ThreadItem } from "./bindings/ThreadItem";
+import { dismiss } from "./arrivals.js";
 import { $, span } from "./dom.js";
 import { avatarColor, formatDate, initials, senderName, unescapeHtml } from "./format.js";
 import { CHECK_SVG, TODO_SVG } from "./icons.js";
@@ -99,6 +100,7 @@ async function markRows(list: { t: ThreadItem; li: HTMLLIElement }[], read: bool
           setReadState(t, li, !read);
         } else {
           done.push(rowKey(t));
+          if (read) dismiss(rowKey(t));
         }
       } catch (e) {
         setReadState(t, li, !read);
@@ -171,6 +173,7 @@ async function sendRead(t: ThreadItem, li: HTMLLIElement, read: boolean, control
     const done = await invoke("set_read", { account: t.account, id: t.id, read });
     if (done === null) return load();
     setReadState(t, li, read);
+    if (read) dismiss(rowKey(t));
   } catch (e) {
     setReadState(t, li, !t.unread);
     showError(e);
@@ -233,5 +236,7 @@ export function row(t: ThreadItem) {
   trail.append(span("date", formatDate(t.dateMs)), actions);
   li.append(readBox(t, li), span("unread-dot", ""), avatar, span("from", name), subject, trail);
   setReadState(t, li, !t.unread);
+  // A thread that is read, by the owner or by a sync, has no popup for new mail (M-9).
+  if (!t.unread) dismiss(rowKey(t));
   return li;
 }

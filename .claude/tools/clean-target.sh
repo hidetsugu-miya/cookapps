@@ -5,6 +5,7 @@
 # every entry directly under incremental/, and the entries of cookapps itself (cookapps-*, cookapps_lib-*, libcookapps_lib-*, cookapps_mcp-*) directly under deps/, build/ and .fingerprint/.
 # The output of dependency crates stays, because a change of the dependencies of cookapps changes the hash of the output of cookapps itself, and the output of the crates that did not change is still used.
 # It also deletes the records and logs of run-ci.sh and run-e2e.sh (.claude/ci/ and .claude/e2e/ of the main checkout) that are older than 30 days; check-ci.sh and check-e2e.sh read only the record of HEAD.
+# It deletes the hook logs, logs/hooks-{date}.log of the main checkout (hook-log.sh), that are older than 30 days.
 # It appends to .claude/nightly/clean-target-{date}.log in the main checkout (logs older than 30 days are deleted).
 set -u
 if [ $# -ne 0 ]; then
@@ -17,6 +18,7 @@ cd "$main" || exit 1
 mkdir -p .claude/nightly
 log="$(pwd -P)/.claude/nightly/clean-target-$(date +%Y-%m-%d).log"
 find .claude/nightly -name 'clean-target-*.log' -mtime +30 -delete
+[ -d logs ] && find logs -maxdepth 1 -name 'hooks-*.log' -mtime +30 -delete
 
 # True when nothing in $1 (the entry itself or, for a directory, anything inside it) was modified in the last 24 hours,
 # or is newer than the file $2 (the Cargo.toml of the checkout; a missing file does not count).

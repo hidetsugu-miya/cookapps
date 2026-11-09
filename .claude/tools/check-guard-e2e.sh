@@ -6,6 +6,10 @@ set -uo pipefail
 guard="$(cd "$(dirname "$0")/../hooks" && pwd)/guard-e2e.sh"
 T="window.__TAU""RI__"
 fail=0
+# The hook writes its run to logs/ (hook-log.sh); a test run writes to a temporary directory instead.
+COOKAPPS_HOOK_LOG_DIR=$(mktemp -d) || exit 2
+export COOKAPPS_HOOK_LOG_DIR
+trap 'rm -rf "$COOKAPPS_HOOK_LOG_DIR"' EXIT
 
 # check <期待する終了コード> <名前> <tool_name> <tool_input の JSON>
 check() {
