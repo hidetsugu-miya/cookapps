@@ -343,8 +343,8 @@ function sessionNode(t: Tab, key: string) {
   return row;
 }
 
-// A project, or an SSH host: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs.
-function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, onCursor: boolean, re: RegExp | null) {
+// A project, or an SSH host: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
+function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
   const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
@@ -358,7 +358,6 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   row.onclick = () => selectProject(key);
   wrap.append(row);
   // A row of Orca with no pane gives no tab, so the arrow follows the tabs and not the number.
-  const tabs = tabsOf(key).filter((t) => t.kind !== "file");
   if (!tabs.length) return wrap;
   const open = opened.has(key);
   const arrow = tag("button", "icon-btn orca-arrow");
@@ -389,7 +388,7 @@ function emptyNode(text: string) {
 // A row of the project list: a project of this machine or an SSH host.
 type ProjectRow = Pick<OrcaProject, "key" | "name" | "status" | "sessions">;
 
-// Keeps `workingOrder` and `opened` in step with the sessions of a read that worked. A project is in the working group when a session of it works (its own status may be a question, which outranks working). One that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them); one with no working session leaves it. A project opens when a working session appears in it that the last read did not have, also when the user closed it; sessions that kept working leave it as the user left it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing.
+// Keeps `workingOrder` and `opened` in step with the sessions of a read that worked. A project is in the working group when a session of it works (its own status may be a question, which outranks working), or when its icon works with no working Claude row (another agent, or a worktree's status). One that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them); one that does not work leaves it. A project opens when work appears in it that the last read did not have (a working session, or the project's own work with no such session), also when the user closed it; work that went on leaves it as the user left it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing. A project the list no longer holds is forgotten by `opened`.
 function trackWorking() {
   if (view === null || view.state !== "ready" || switching) return;
   if (view.target !== workingTarget) {
@@ -397,6 +396,8 @@ function trackWorking() {
     workingOrder = [];
     workingIds = new Map();
     opened.clear();
+    // The project chosen before the first read of this target (A-9) stays open.
+    if (projectKey !== null) opened.add(projectKey);
   }
   const now = new Map<string, Set<string>>();
   for (const r of view.rows) {
@@ -405,11 +406,15 @@ function trackWorking() {
     ids.add(r.paneKey ?? `${r.repo}/${r.branch}`);
     now.set(r.projectKey, ids);
   }
+  // A project whose icon works with no working Claude row: its own id, which no pane key is.
+  for (const p of view.projects) if (p.status === "working" && !now.has(p.key)) now.set(p.key, new Set([`project:${p.key}`]));
   const keys = view.projects.map((p) => p.key).filter((k) => now.has(k));
   const kept = workingOrder.filter((k) => keys.includes(k));
   for (const k of keys) if ([...now.get(k)!].some((id) => !workingIds.get(k)?.has(id))) opened.add(k);
   workingOrder = [...keys.filter((k) => !kept.includes(k)), ...kept];
   workingIds = now;
+  const known = new Set([...view.projects.map((p) => p.key), ...view.hosts.map((h) => h.key), ...ssh.map((t) => `ssh:${t.id}`)]);
+  for (const k of opened) if (!known.has(k)) opened.delete(k);
 }
 
 // The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the rest as the read lists them), then the SSH hosts (the machine's, then the target's that it does not list).
@@ -454,9 +459,10 @@ function cursorKey(rows = visibleRows(matcher())) {
   return cursor !== null && keys.includes(cursor) ? cursor : (keys[0] ?? null);
 }
 
-function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null): HTMLElement[] {
+// `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here.
+function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
   const { local, hosts } = rows;
-  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, r.key === on, re);
+  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, openTabs.get(r.key) ?? tabsOf(r.key).filter((t) => t.kind !== "file"), r.key === on, re);
   const nodes: HTMLElement[] = local.map(node);
   if (hosts.length) nodes.push(tag("h3", "orca-sec", "SSH"), ...hosts.map(node));
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
@@ -479,7 +485,8 @@ function drawFeed() {
   const now = Date.now();
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
-  const sessions = [...opened].map((k) => [k, tabsOf(k).filter((t) => t.kind !== "file").map((t) => [t.id, t.status, t.label, t.title])]);
+  const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, tabsOf(k).filter((t) => t.kind !== "file")]));
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
@@ -492,7 +499,7 @@ function drawFeed() {
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...(working ? workingNodes(now) : projectNodes(re, rows, on)));
+  box.replaceChildren(...(working ? workingNodes(now) : projectNodes(re, rows, on, openTabs)));
   box.scrollTop = top;
   if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }

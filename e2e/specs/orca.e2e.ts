@@ -1447,6 +1447,30 @@ describe("orca: projects", () => {
         expect(await expanded("w-m")).toBe("true");
       });
 
+      it("puts a project whose icon works with no working Claude row in the working group, open, and opens it again when it begins to work again", async () => {
+        // w-x works by its icon (another agent, or a worktree's status) but has only a plain terminal; w-y is idle with one.
+        const read = (xStatus: "working" | "done") => {
+          const base = orcaOverview([], [orcaWorktree("w-y", "main"), orcaWorktree("w-x", "main")], { terminals: [orcaTerminal("w-y", "zsh"), orcaTerminal("w-x", "zsh")] });
+          return { ...base, projects: base.projects.map((p) => (p.key === "proj_w-x" ? { ...p, status: xStatus } : p)) };
+        };
+        await openOrca(read("working"));
+        expect(await names()).toEqual(["w-x", "w-y"]);
+        expect(await expanded("w-x")).toBe("true");
+        expect(await expanded("w-y")).toBe("false");
+        // The user closes it: the same work leaves it closed.
+        await arrow("w-x").click();
+        expect(await expanded("w-x")).toBe("false");
+        await reread(read("working"));
+        await browser.pause(300);
+        expect(await expanded("w-x")).toBe("false");
+        // It stops, leaves the group, and works again: a new work, so it opens.
+        await reread(read("done"));
+        await expectNames(["w-y", "w-x"]);
+        await reread(read("working"));
+        await expectNames(["w-x", "w-y"]);
+        await browser.waitUntil(async () => (await expanded("w-x")) === "true", { timeoutMsg: "the project that works by its icon stayed closed" });
+      });
+
       it("opens a project the user closed when another session of it begins to work, and leaves it closed on a read that adds none", async () => {
         await openOrca(agents([["w-a", "leaf_1", "working"], ["w-b", "leaf_1", "working"]]));
         await arrow("w-a").click();
