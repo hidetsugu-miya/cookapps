@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.55.0
+
+A-20: the settings have a tab 「フォント」 where the family and the size of the text are chosen for each screen (#203). Mail, the calendar and Slack have one choice each; the project list and the work space of Todo and of Orca are chosen apart, and the terminals and the file editor of Orca have their own. A choice is drawn at once and saved in `font-settings.json`; nothing looks different until one is made, and the terminals can still follow the settings imported from Ghostty.
+
+A-19: the list of Orca has a search field above it (#200). What is typed narrows the projects and the SSH hosts to the names that hold it, with the matching letters in bold. Cmd+J moves the focus to the field from anywhere on the Orca screen, Down and Up move along the rows, Enter selects the row, and Escape clears the field.
+
+A-8: the list of Orca is an accordion (#157). A project with sessions has an arrow at the left of its row; the project selected is open, and below it is a row for each session. Pressing a row selects its tab, and pressing a tab moves the selection to its row.
+
+A-18: while the file pane is shown, its button is in a row of its own above the heading, at the right end; while it is hidden, it is at the right end of the tab bar of the pane in the top right corner (#242).
+
 ## v0.54.5
 
 No change to the app. Only the way it is built changed (#257).

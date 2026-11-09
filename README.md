@@ -38,7 +38,7 @@
 [Orca](docs/orca.md) で動くセッションを、ウィンドウを切り替えずに扱えます。
 
 <p align="center">
-  <img src="docs/assets/readme/orca.png" alt="プロジェクトの一覧と、セッションのタブが並ぶ画面" width="960" />
+  <img src="docs/assets/readme/orca.png" alt="検索欄とプロジェクトの一覧、開いたプロジェクトのセッションと、タブが並ぶ画面" width="960" />
 </p>
 
 ## 連絡と予定を、1 つの画面で
