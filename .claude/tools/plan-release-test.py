@@ -381,9 +381,14 @@ class Prune(unittest.TestCase):
         }
         pruned, dropped = pr.prune_plan(plan, {1: "closed", 3: "open"}, {2})
         self.assertEqual(pruned["order"], [3, 4])
-        self.assertEqual(pruned["blocked_by"], {"3": [2]})  # a blocker that is fixed stays: only the keys of dropped issues go
+        self.assertEqual(pruned["blocked_by"], {})  # the key of a dropped issue goes, and so does a dropped issue as a blocker
         self.assertEqual(pruned["reasons"], {"3": "c"})
         self.assertEqual(dropped, [(1, "closed"), (2, "fixed")])
+
+    def test_a_dependency_on_a_closed_or_fixed_issue_goes_and_an_emptied_key_goes_with_it(self):
+        plan = {"order": [2, 3, 4], "blocked_by": {"3": [1, 4], "2": [1, 5], "4": [5]}}
+        pruned, _ = pr.prune_plan(plan, {1: "closed", 2: "open", 3: "open", 4: "open", 5: "open"}, {5})
+        self.assertEqual(pruned["blocked_by"], {"3": [4]})
 
     def test_a_number_nobody_knows_stays_for_the_validation_to_refuse(self):
         pruned, dropped = pr.prune_plan({"order": [1, 99]}, {1: "open"}, set())
@@ -405,6 +410,27 @@ class Prune(unittest.TestCase):
         self.assertTrue(pr.validate_plan(plan, free, [], states))
         pruned, _ = pr.prune_plan(plan, states, set())
         self.assertEqual(pr.validate_plan(pruned, free, [], states), [])
+
+    def test_a_closed_issue_that_is_only_a_blocker_is_found_and_dropped(self):
+        plan = {"order": [2], "blocked_by": {"2": [9, 7, 9]}}
+        self.assertEqual(pr.blockers(plan), [7, 9])
+        self.assertEqual(pr.blockers({"order": "x"}), [])
+        self.assertEqual(pr.mentioned(plan), [2])  # a blocker is not mentioned, so cmd_apply asks GitHub about blockers() too
+        calls = []
+
+        def fake_api(path):
+            calls.append(path)
+            return {"state": "closed" if path.endswith("/9") else "open"}
+
+        real, pr.api = pr.api, fake_api
+        try:
+            states = pr.closed_states("o/r", [*pr.mentioned(plan), *pr.blockers(plan)])
+        finally:
+            pr.api = real
+        self.assertEqual(states, {9: "closed"})
+        pruned, dropped = pr.prune_plan(plan, {2: "open", 7: "open", **states}, set())
+        self.assertEqual(pruned["blocked_by"], {"2": [7]})
+        self.assertEqual(dropped, [])
 
     def test_mentioned(self):
         plan = {"order": [3, 1], "blocked_by": {"2": [9]}, "reasons": {"1": "a", "4": "b"}}
