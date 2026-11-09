@@ -96,7 +96,7 @@ Bad:  add status:doing and status:merged, and keep them in step with the pull re
 ### Order every issue, and give a feature its own milestone, with `issue-plan`
 
 A milestone is a feature, not a version: it is named for the feature ("Orca files"), and a closed one is a feature that has been released (at the owner's instruction, 2026-11-09; Discussion #293). Only a `point:5` or `point:8` issue starts one. A milestone named for a version (`v0.56.0`) is the old mechanism: it is not a mark of anything, and `plan-release.py migrate` retires it once (it takes the milestone off the open issues of less than 5 points and closes the empty ones).
-`issue-plan` splits such an issue into issues of `point:3` or less, puts them in the milestone, and closes the large issue as not planned with a comment that lists the parts. An issue that cannot be split into parts that merge one by one stays one issue and is alone in its milestone.
+`issue-plan` splits such an issue into issues of `point:3` or less, puts them in the milestone, and closes the large issue as not planned with a comment that lists the parts. When the large issue is `point:8`, it gives every part the label `solo`, so that the parts keep the rule of a `point:8` change ("Run `milestone-dev`" and "Keep one Release PR open" below). An issue that cannot be split into parts that merge one by one stays one issue and is alone in its milestone.
 An issue of `point:3` or less that belongs to no feature has no milestone. A milestone does not decide the order, a version or the release.
 `plan-release.py close` closes a milestone once all its issues are closed and released.
 Every open issue is ordered, `needs:owner` included: it waits unstarted. `release-planner` decides the order from how the issues relate, and `plan-release.py` checks it against the hard rules below and saves it; `milestone-dev` takes the issues from the front.
@@ -113,7 +113,7 @@ The plan saved by the last `apply` is `.claude/plan.json` of the main checkout. 
 
 ```text
 Good: #50 depends on #42 -> the planner puts it after #42, and `next` lists #42 first
-Good: S-12 is a point:8 issue that splits into three issues of 3, 3 and 2 points -> milestone "Slack thread", three issues in it, and #12 is closed as not planned with their list
+Good: S-12 is a point:8 issue that splits into three issues of 3, 3 and 2 points -> milestone "Slack thread", three issues in it, each with `solo`, and #12 is closed as not planned with their list
 Bad:  gh issue create alone, and the issue is not in the order
 Bad:  a milestone is named v0.56.0, as a forecast of a version
 ```
@@ -156,7 +156,8 @@ A run lasts 3 hours at most. `nightly.sh` hands the run the end of its 3 hours a
 A run takes the issues in the order of the plan (`plan-release.py next`, `start`) until their points reach 10 (at the owner's instruction, 2026-11-09; Discussion #293). `nightly-limit.sh` decides it from the `point:*` labels: exit 3 means that issue does not fit, and a smaller issue further down may still be tried; exit 1 means the 3 hours are over, and nothing more starts.
 The run does all its issues in the one worktree (`worktree.md`), on one branch, as commits, and opens one pull request for them (`Closes #a` and `Closes #b` in its body); `review.md` runs once, on the range of that pull request.
 When the limit stops a run, the issue in hand stays as it is, and the hand-over says where.
-A `point:8` issue starts only when no change waits for the release, as the only issue of its run, and nothing new starts after its merge until the owner has merged the Release PR that carries it alone (at the owner's instruction, 2026-11-09; Discussion #293).
+A `point:8` change is a release of its own, and so is the set of the parts that `issue-plan` made from one (every issue with the label `solo` in one milestone). Call either a unit: a `point:8` issue is one unit, and the `solo` parts of one milestone are one unit.
+The parts of a unit start only when no change waits for the release, and they may all be in the same run and the same pull request. An issue that is not in the unit, and a part of another unit, are not in that run. Nothing new starts after the merge of a part until the owner has merged the Release PR that carries the unit alone (at the owner's instruction, 2026-11-09; Discussion #293). The parts a run did not reach wait for the next run, which starts them by the same rule once the owner has merged that Release PR.
 The run does not release. After it has merged its pull request it prepares the Release PR ("Keep one Release PR open while changes wait" below), and at its start it does what the owner's merge left to do ("After the owner merges the Release PR").
 A run leaves alone what a session of the owner may hold: the worktree when it is in use (`use-worktree.sh` says so), and an issue that an open pull request closes, unless the previous hand-over lists it as the run's own (`plan-release.py next --mine`).
 
@@ -266,7 +267,7 @@ The 00:30 run looks at it after it has merged its own pull request, and a sessio
 Its title is `release: v{version}`, and its body holds the changes, the digit and why, and whether `README.md` needed anything. The owner decides when to merge, so the body holds no decision to wait or to release.
 The preparer runs `run-ci.sh` and `run-e2e.sh` on the HEAD of `release/next` and pushes it with `post-checks.sh` before it ends, so that the owner can merge at once; the push stops without their records (`testing.md`).
 When `urgent` is true (a waiting change or the Release PR has `urgency:high`, or a waiting bug has `importance:high`), the preparer sends a push notification (Claude Code's PushNotification) as soon as the Release PR is ready, saying that it is urgent and giving its URL (at the owner's instruction, 2026-11-09; Discussion #293). It does not merge the Release PR.
-A `point:8` change is a Release PR of its own: it starts only when nothing waits, and nothing new starts until the owner has merged its Release PR (`plan-release.py next` says `stop`).
+A unit (a `point:8` issue, or the `solo` parts of one milestone) is a Release PR of its own: its parts start only when nothing waits, and nothing new starts, the rest of the unit included, until the owner has merged its Release PR (`plan-release.py next` says `stop`).
 Merged Release PRs are the release history.
 
 ```text

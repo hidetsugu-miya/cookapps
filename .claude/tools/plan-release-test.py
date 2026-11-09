@@ -274,6 +274,28 @@ class Next(unittest.TestCase):
         self.assertEqual(out["waits_for_release"], [])
         self.assertEqual(out["waiting"], [])
 
+    def test_the_parts_of_a_split_point_8_issue_start_together_when_nothing_waits(self):
+        issues = [mk(1, ["point:3", "solo"], milestone="Slack thread"), mk(2, ["point:3", "solo"], milestone="Slack thread"), mk(3, ["point:2"])]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual(sorted(i["number"] for i in out["start"]), [1, 2, 3])
+        self.assertEqual(out["waits_for_release"], [])
+
+    def test_a_solo_part_does_not_start_while_a_change_waits(self):
+        issues = [mk(1, ["point:3", "solo"], milestone="Slack thread"), mk(2, ["point:2"]), waiting(3, ["point:2"])]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual([i["number"] for i in out["start"]], [2])
+        self.assertEqual(out["waits_for_release"], [1])
+
+    def test_nothing_starts_while_a_part_of_a_solo_unit_waits_for_the_owner_and_the_rest_of_the_unit_waits_too(self):
+        issues = [
+            waiting(1, ["point:3", "solo"]),
+            mk(2, ["point:3", "solo"], milestone="Slack thread"),
+            mk(3, ["point:2"]),
+        ]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual(out["start"], [])
+        self.assertIn("solo", out["stop"])
+
     def test_nothing_new_starts_while_a_point_8_change_waits_for_the_owner(self):
         issues = [mk(1, ["point:2"]), waiting(2, ["point:8"])]
         out = pr.build_next(issues, set(), frozenset(), None)
@@ -427,6 +449,7 @@ class ReleaseFacts(unittest.TestCase):
 
     def test_solo(self):
         self.assertTrue(self.facts([waiting(1, ["point:8"])])["solo"])
+        self.assertTrue(self.facts([waiting(1, ["point:3", "solo"])])["solo"])
         self.assertFalse(self.facts([waiting(1, ["point:5"])])["solo"])
 
 
@@ -598,7 +621,8 @@ class Hook(unittest.TestCase):
 class NightlyLimit(unittest.TestCase):
     """nightly-limit.sh with the points and the clock given by the environment."""
 
-    POINTS = "1 1\n2 2\n3 3\n5 5\n8 8\n9 3\n10 3\n"
+    # "{issue number} {points} [{unit}]": the unit is `i{n}` for a point:8 issue, `m:{milestone}` for a `solo` part, and nothing for any other issue
+    POINTS = "1 1\n2 2\n3 3\n5 5\n8 8 i8\n9 3\n10 3\n11 3 m:Slack thread\n12 3 m:Slack thread\n13 2 m:Slack thread\n14 3 m:Orca files\n15 8 i15\n16 3 m:Slack thread\n17 3 m:Slack thread\n"
 
     def run_limit(self, *args, deadline=2000, now=1000):
         env = {k: v for k, v in os.environ.items() if not k.startswith("NIGHTLY_")}
@@ -635,9 +659,36 @@ class NightlyLimit(unittest.TestCase):
         self.assertEqual(code, 3, text)
         self.assertIn("#8", text)
 
-    def test_a_session_has_no_time_or_points_limit_but_the_point_8_rule_stands(self):
+    def test_the_parts_of_one_solo_unit_start_together(self):
+        self.assertEqual(self.run_limit("issue", "11")[0], 0)
+        self.assertEqual(self.run_limit("issue", "12", "--taken", "11")[0], 0)
+        self.assertEqual(self.run_limit("issue", "13", "--taken", "11,12")[0], 0)  # 3 + 3 + 2
+
+    def test_a_solo_part_does_not_start_with_an_issue_that_is_not_in_the_unit(self):
+        code, text = self.run_limit("issue", "11", "--taken", "1")
+        self.assertEqual(code, 3, text)
+        code, text = self.run_limit("issue", "1", "--taken", "11")
+        self.assertEqual(code, 3, text)
+        self.assertIn("#11", text)
+        self.assertEqual(self.run_limit("issue", "12", "--taken", "11,1")[0], 3)
+
+    def test_a_part_of_another_unit_and_a_point_8_issue_do_not_start_with_a_unit(self):
+        self.assertEqual(self.run_limit("issue", "14", "--taken", "11")[0], 3)
+        self.assertEqual(self.run_limit("issue", "8", "--taken", "11")[0], 3)
+        self.assertEqual(self.run_limit("issue", "11", "--taken", "8")[0], 3)
+        self.assertEqual(self.run_limit("issue", "15", "--taken", "8")[0], 3)
+
+    def test_the_parts_of_a_unit_still_keep_to_ten_points(self):
+        code, text = self.run_limit("issue", "17", "--taken", "11,12,16")  # 3 + 3 + 3 + 3 = 12
+        self.assertEqual(code, 3, text)
+        self.assertIn("10", text)
+        self.assertEqual(self.run_limit("issue", "16", "--taken", "11,12")[0], 0)
+
+    def test_a_session_has_no_time_or_points_limit_but_the_unit_rule_stands(self):
         self.assertEqual(self.run_limit("issue", "3", "--taken", "5,9,10", deadline=None)[0], 0)
         self.assertEqual(self.run_limit("issue", "8", "--taken", "1", deadline=None)[0], 3)
+        self.assertEqual(self.run_limit("issue", "12", "--taken", "11", deadline=None)[0], 0)
+        self.assertEqual(self.run_limit("issue", "12", "--taken", "1", deadline=None)[0], 3)
 
     def test_an_issue_without_a_point_label_is_refused(self):
         self.assertEqual(self.run_limit("issue", "77")[0], 2)

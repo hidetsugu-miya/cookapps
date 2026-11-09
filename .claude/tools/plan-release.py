@@ -95,8 +95,9 @@ def quick_bug(issue):
 
 
 def solo(issue):
-    """A change of 8 points is a release of its own."""
-    return has(issue, "point:8")
+    """A member of a unit that is a release of its own: an issue of 8 points, or a part (`solo`) of a point:8 issue that `issue-plan` split.
+    The unit is that one point:8 issue, or all the `solo` parts of one milestone; `nightly-limit.sh` keeps a unit apart from everything else in a night."""
+    return has(issue, "point:8") or has(issue, "solo")
 
 
 def urgent(issue):
@@ -406,8 +407,8 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None):
     `mine`: the issues the previous hand-over lists as this run's own; they are `in_progress` (continue them first).
     `held`: an open pull request of the owner closes the issue and it is not `mine`: someone else's work, left alone.
     `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last: urgent, quick bugs, then `base_key`).
-    An issue with needs:owner, one with an open blocker, and a point:8 issue while a change waits for the release are left out.
-    `stop` says why `start` is empty on purpose: a point:8 change waits for the owner's merge, and nothing new begins before it.
+    An issue with needs:owner, one with an open blocker, and a member of a solo unit (point:8, or a `solo` part) while a change waits for the release are left out.
+    `stop` says why `start` is empty on purpose: a change of a solo unit waits for the owner's merge, and nothing new begins before it (the rest of its unit included).
     `waiting` are the changes that wait for the release."""
     position = plan_positions(plan)
     waiting = release_changes(issues)
@@ -445,7 +446,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None):
         else:
             startable.append(i)
     if any(solo(i) for i in waiting):
-        out["stop"] = "a point:8 change waits for the owner to merge the Release PR; start nothing new"
+        out["stop"] = "a point:8 change (or a part of one, labelled solo) waits for the owner to merge the Release PR; start nothing new"
         return out
     startable.sort(key=start_key)
     out["start"] = [brief(i) for i in startable]
