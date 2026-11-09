@@ -473,12 +473,17 @@ class TagDueHidesTheChanges(unittest.TestCase):
         self.assertEqual({k: v for k, v in out.items() if k != "tag_due"}, facts)
 
 
-class CargoVersion(unittest.TestCase):
-    def test_the_version_of_the_package_table(self):
-        text = '[package]\nname = "cookapps"\nversion = "0.55.2"\n\n[dependencies]\nserde = { version = "1" }\nfoo = "1"\n[dev]\nversion = "9.9.9"\n'
-        self.assertEqual(pr.cargo_version(text), "0.55.2")
-        self.assertIsNone(pr.cargo_version('[dependencies]\nversion = "1.0.0"\n'))
-        self.assertIsNone(pr.cargo_version(""))
+class ChangelogVersion(unittest.TestCase):
+    def test_the_version_of_the_first_heading(self):
+        text = "# Changelog\n\nThe newest version comes first.\n\n## v0.55.2\n\nM-1: a\n\n## v0.55.1\n\nM-2: b\n"
+        self.assertEqual(pr.changelog_version(text), "0.55.2")
+
+    def test_a_heading_that_is_not_a_version_is_skipped(self):
+        self.assertEqual(pr.changelog_version("## Notes\n## v0.9.0 extra\n### v0.8.0\n## v0.7.1\n"), "0.7.1")
+
+    def test_none_without_a_version_heading(self):
+        self.assertIsNone(pr.changelog_version("# Changelog\n\n[package]\nversion = \"1.0.0\"\n"))
+        self.assertIsNone(pr.changelog_version(""))
 
 
 class TagDue(unittest.TestCase):

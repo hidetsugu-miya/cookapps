@@ -1,6 +1,6 @@
 [package]
 name = "cookapps"
-version = "0.55.2"
+version = "0.0.0"
 edition = "2021"
 default-run = "cookapps"
 

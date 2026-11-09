@@ -57,7 +57,7 @@ if [ ! -d "$dest" ]; then
   git -C "$main" worktree add --detach "$dest" origin/main
   copy_private
   # 依存クレートのビルド結果は場所によらず使えるので、main の checkout の target を clone で写して最初のビルドを速くする。
-  # 更新時刻は保つ（clean-target.sh が Cargo.toml との新旧で古い版の結果を消す）。APFS でない場所では cp が普通のコピーに切り替える。コピーに失敗したとき（ディスクが一杯など）は、作りかけを消して空から始める。
+  # 更新時刻は保つ（clean-target.sh が Cargo.toml との新旧で、依存の変更の前の結果を消す）。APFS でない場所では cp が普通のコピーに切り替える。コピーに失敗したとき（ディスクが一杯など）は、作りかけを消して空から始める。
   if [ -d "$main/src-tauri/target" ]; then
     if cp -cpR "$main/src-tauri/target" "$dest/src-tauri/target"; then
       rm -rf "$dest"/src-tauri/target/*/incremental

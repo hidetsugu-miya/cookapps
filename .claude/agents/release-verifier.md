@@ -58,7 +58,7 @@ EOF
 指摘の中身はレビューしない。
 
 1. `git status --porcelain` が空であることを確かめる。空でなければ不合格にする。
-2. `git diff {範囲}` の変更が、一覧の指摘の修正と、それに伴うテスト・説明の更新だけであることを確かめる。版の変更（`Cargo.toml`、`Cargo.lock`、`tauri.conf.json` の `version`）が入っていれば不合格にする。版を変えるのは Release PR だけで、その版上げは `release-only-diff.sh` の経路で通る（`.claude/rules/worktree.md`）。
+2. `git diff {範囲}` の変更が、一覧の指摘の修正と、それに伴うテスト・説明の更新だけであることを確かめる。版の変更（`Cargo.toml`、`Cargo.lock`、`tauri.conf.json` の `version`）が入っていれば不合格にする。ソースの版は固定で、版を持つのはタグだけである（`.claude/rules/versioning.md`）。
 3. 一覧に無い変更（機能の追加、指摘に無い作り直し）があれば不合格にし、その変更の `path:line` を返す。
 4. 合格なら、上の手順 7 と同じく記録を書く。
 

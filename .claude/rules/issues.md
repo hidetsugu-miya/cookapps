@@ -258,10 +258,10 @@ git -C "$main" merge --ff-only origin/main
 ### Keep one Release PR open while changes wait, and let the owner merge it
 
 The owner releases, by merging the Release PR: no schedule and no agent merges it (at the owner's instruction, 2026-11-09; Discussion #293). The agents prepare it, the owner merges it, and the next agent to act tags it.
-`plan-release.py release` says what waits (`changes`: merged and not released, a change that is only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/` not counted), whether the Release PR exists, and the version it raises to.
+`plan-release.py release` says what waits (`changes`: merged and not released, a change that is only documentation, `.claude/agents/`, `.claude/rules/` or `.claude/skills/` not counted), whether the Release PR exists, and the version it writes (the first heading of `CHANGELOG.md`; the source holds no version, `versioning.md`).
 The 00:30 run looks at it after it has merged its own pull request, and a session does when the owner asks:
-- Changes wait and there is no Release PR: open it from the branch `release/next`, with a commit that raises the version (`versioning.md`).
-- Changes wait and the Release PR is open: bring its branch up to date with main, correct the version (the digit may have changed), write the entries of the new changes in `CHANGELOG.md` and `docs/features.md`, and update the body.
+- Changes wait and there is no Release PR: open it from the branch `release/next`, with a commit that writes the entries of `CHANGELOG.md` under the heading `## v{version}` and of `docs/features.md` (`versioning.md`).
+- Changes wait and the Release PR is open: bring its branch up to date with main, correct the heading `## v{version}` of `CHANGELOG.md` (the digit may have changed), write the entries of the new changes in `CHANGELOG.md` and `docs/features.md`, and update the body.
 - Nothing waits: nothing to do.
 
 Its title is `release: v{version}`, and its body holds the changes, the digit and why, and whether `README.md` needed anything. The owner decides when to merge, so the body holds no decision to wait or to release.
@@ -296,9 +296,9 @@ Bad:  the issue says enhancement -> minor
 
 ### After the owner merges the Release PR, the next run tags it
 
-1. The owner merges the Release PR, after the preparer has done these in `release/next`: take in main, correct the version, and write `CHANGELOG.md` and `docs/features.md`.
+1. The owner merges the Release PR, after the preparer has done these in `release/next`: take in main, and write `CHANGELOG.md` (its first heading `## v{version}` is the version, which `tag_due` reads after the merge) and `docs/features.md`. No version line of the source changes: it is fixed (`versioning.md`; at the owner's instruction, 2026-11-09; Discussion #293).
    Read `README.md` against the changes that go out, with `readme-product`: fix a photo or a claim they make out of date in `release/next`, and write in the body that nothing needed it otherwise (at the owner's instruction, 2026-11-07). `README.md` and `docs/` keep the diff release-only.
-   Run `run-ci.sh` and `run-e2e.sh` on the HEAD of `release/next` (the version lines change what cargo and tsc check, so the release-only diff stands for the review only), push, and run `post-checks.sh`.
+   Run `run-ci.sh` and `run-e2e.sh` on the HEAD of `release/next` (the release-only diff stands for the review only; the records are per HEAD), push, and run `post-checks.sh`.
 2. The next agent to act (the 00:30 run, or a session) runs `plan-release.py release`. When it prints `tag_due`, that agent makes the annotated tag on the commit it names and pushes the tag (`versioning.md`).
 3. It watches the release job through to the end (`review.md`).
 4. It runs `plan-release.py close`, which closes the milestones whose issues are all closed and released.

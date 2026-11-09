@@ -19,15 +19,17 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # A tag that is not the version of its commit would publish an app that reports another version.
-      - name: Check the tag against the version and main
+      # The version is the tag's alone: the source holds the fixed 0.0.0 (check-version.sh), and the build below takes the version from the tag.
+      # The tag must also be the version of the first `## v{x.y.z}` heading of CHANGELOG.md (the rule of changelog_version in plan-release.py), which the Release PR writes.
+      - name: Check the tag, the changelog, the source version and main
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           scripts/check-version.sh
-          version=$(awk '/^\[/ { in_pkg = ($0 == "[package]") } in_pkg && /^version[[:space:]]*=/ { print; exit }' src-tauri/Cargo.toml | sed -E 's/^[^"]*"([^"]*)".*/\1/')
-          test "$TAG" = "v$version"
+          [[ "$TAG" =~ ^v0\.[0-9]+\.[0-9]+$ ]]
+          changelog=$(sed -nE 's/^## (v[0-9]+\.[0-9]+\.[0-9]+)[[:blank:]]*$/\1/p' CHANGELOG.md | head -n 1)
+          test "$changelog" = "$TAG"
           # A commit that is not on main must not reach the installed apps through latest.json.
           status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)
           test "$status" = identical || test "$status" = behind
@@ -53,7 +55,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # createUpdaterArtifacts is given here, not in tauri.conf.json, so a local build and e2e:build need no signing key.
+      # The version and createUpdaterArtifacts are given here with --config, not in tauri.conf.json: the version is the tag's, and a local build and e2e:build need no signing key.
+      # Info.plist, package_info() and the updater's comparison all take the version from this config.
       - name: Build and sign the app
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -61,7 +64,8 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          TAG: ${{ github.ref_name }}
+        run: npx tauri build --bundles app --config "{\"version\":\"${TAG#v}\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

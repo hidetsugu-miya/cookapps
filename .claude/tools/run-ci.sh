@@ -39,7 +39,7 @@ gate() {
   [ "$rc" -eq 0 ] || failed=$name
 }
 
-gate "バージョン一致" scripts/check-version.sh
+gate "ソースの版が固定値" scripts/check-version.sh
 gate "tsc (ts)" mise exec -- npm run build:ts
 gate "tsc (e2e)" mise exec -- npm run e2e:check
 gate "Biome lint" mise exec -- npm run lint

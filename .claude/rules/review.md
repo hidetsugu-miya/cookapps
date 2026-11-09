@@ -169,21 +169,18 @@ Bad:  after a Low fix, push with the previous HEAD's CI or E2E record
 
 ### Let a release-only commit keep the pass
 
-The commits of the Release PR make a new HEAD. They need CI and E2E on that HEAD (the version lines change what cargo and tsc check, so the exemption below covers only the review pass record), and no release-verifier launch (an Opus launch for a mechanical check).
+The commits of the Release PR make a new HEAD (at the owner's instruction, 2026-11-09; Discussion #293: the source holds no version, so no version line is exempt). They need CI and E2E on that HEAD (the records are per HEAD, so the exemption below covers only the review pass record), and no release-verifier launch (an Opus launch for a mechanical check).
 `pre-git.sh` takes the newest commit of the push range that has a pass record, or else the base of the range, which already passed this gate when it reached the remote, and runs `.claude/tools/release-only-diff.sh {that commit} HEAD`. `post-checks.sh` does the same from `origin/main`. The diff counts as release-only when it holds only:
 - `README.md`, `CHANGELOG.md` and anything under `docs/`
-- `src-tauri/Cargo.toml`, with only the `version` line of `[package]` changed (a dependency's version must not)
-- `src-tauri/Cargo.lock`, with only the `version` line right after `name = "cookapps"` changed
-- `src-tauri/tauri.conf.json`, with only the top-level `version` changed
 
 Any other path, or a deleted or missing side, is offending, and the push stops with the paths listed.
 A feature branch that takes in a moved main is not release-only, and it goes through the first round.
 Only release-verifier still writes pass records.
 
 ```text
-Good: release/next raises the version and writes CHANGELOG -> run-ci.sh -> run-e2e.sh -> push (the diff is release-only)
+Good: release/next writes CHANGELOG -> run-ci.sh -> run-e2e.sh -> push (the diff is release-only)
 Bad:  a feature branch merges main with other commits in -> push without a review
-Bad:  release/next raises the version -> push without run-ci.sh
+Bad:  release/next writes CHANGELOG -> push without run-ci.sh
 ```
 
 ## Scope of a version
