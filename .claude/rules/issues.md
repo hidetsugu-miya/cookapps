@@ -124,6 +124,7 @@ Bad:  a milestone is named v0.56.0, as a forecast of a version
 The job uses `refactor-scout` and `harness-scout`. Its scope is refactoring of `ts/` and `src-tauri/` that keeps behavior (`requirements/`, the E2E expectations and the `cargo test` expectations stay as they are), and the harness: hooks (not the permissions of `settings.local.json`), skills with the tools they run, and agents. UI and UX, new features and requirements, `docs/` and the README, versions and releases, personal settings and launchd are out of scope. `.claude/rules/` changes only to fix a statement that a change in scope made wrong.
 `ux-scout` runs only when the owner runs it in a session, because UI and UX are a product decision.
 It only creates issues. It never removes `needs:owner`, implements, or opens a pull request.
+Apart from the hand-over Discussion, the agents make no Discussion and read none to decide anything (at the owner's instruction, 2026-11-09); `improvement-proposal` reads the owner's older Ideas Discussions only to check that a proposal does not have the same purpose.
 `nightly.sh` hands the run the end of its 1 hour (23:00) as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh proposal` before it starts a new candidate; nothing kills the process. The 00:30 `milestone-dev` waits, up to 30 minutes, until the lock of this job is gone before it reorders, so that the issues made here are placed in the same night. The deadline is 1 hour so that the run ends well before 00:30 (a run took 7 minutes 41 seconds and 8 minutes 39 seconds, `.claude/nightly/` logs; the start times are at the owner's instruction, 2026-11-08).
 The run ends by commenting its result on the hand-over Discussion, with the mark `<!-- ai -->` and not the hand-over mark, so that the 00:30 run does not read it as a hand-over or as a reply of the owner.
 Give every proposal `proposal`, because its author is the owner's own account and cannot tell it from an issue the owner wrote.
@@ -136,7 +137,7 @@ A candidate that matches any of these goes to the owner as well: an issue with `
 - Two or more options remain that primary sources and a prototype cannot settle.
 
 File at most 3 issues in a run, and no `needs:owner` issue while 5 or more proposals are open with `needs:owner`.
-Do not file a proposal with the same purpose as a closed proposal or an open issue.
+Do not file a proposal with the same purpose as a closed proposal, an open issue, or an open or closed Discussion.
 The owner accepts an issue with `needs:owner` by removing it, which makes it an ordinary issue for `milestone-dev`, and declines a proposal by closing it with `wontfix`.
 
 ```text

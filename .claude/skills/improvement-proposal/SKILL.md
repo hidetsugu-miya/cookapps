@@ -25,12 +25,17 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 1. **Check the limits.** Run `gh issue list --state open --label proposal --label needs:owner --json number,title`: with 5 or more, file no `needs:owner` issue. When it may not be made, the run can still file issues the AI decides itself.
 2. **Take the worktree** with `use-worktree.sh proposal/{YYYY-MM-DD-HHMMSS}` (`worktree.md`), and work in the path it prints. Temporary specs and `cargo test` run there, so the main checkout stays clean (`run-ci.sh` and `run-e2e.sh` refuse a dirty tree at 00:30). On exit 3 the worktree is in use by a session's work: give the scouts the main checkout to read, and drop every candidate that needs a reproduction, because nothing may be run there.
-3. **Collect what is already known.** The number and title of every open issue (`gh issue list --state open --limit 200`) and of every closed issue with the `proposal` label (`gh issue list --state closed --label proposal --limit 200`). Together these are the list "of existing issues and closed proposals" for the scouts.
+3. **Collect what is already known.** The number and title of every open issue (`gh issue list --state open --limit 200`) and of every closed issue with the `proposal` label (`gh issue list --state closed --label proposal --limit 200`), and of every Ideas Discussion of the owner, open and closed, the hand-over Discussion excluded. The Discussions are only material for checking that a candidate has not the same purpose.
+   ```sh
+   nwo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"; owner="${nwo%/*}"; name="${nwo#*/}"
+   gh api graphql --paginate -f query='query($o:String!,$n:String!,$endCursor:String){repository(owner:$o,name:$n){discussions(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{number title category{name} author{login}}}}}' -f o="$owner" -f n="$name" | jq -s -r --arg owner "$owner" '.[].data.repository.discussions.nodes[] | select(.category.name == "Ideas" and .author.login == $owner and .title != "自走の引き継ぎ") | "#\(.number) \(.title)"'
+   ```
+   Together these are the list "of existing issues, closed proposals and Discussions" for the scouts.
 4. **Take photos for the UI evidence**, in a session and only when a screen is the evidence. Write a temporary spec with made-up data, the way `readme-product` does (`.claude/skills/readme-product/shots/`), run it with `npm run e2e:build` and `npm run e2e`, and delete the spec. Do not commit it. The photos stay in the scratchpad.
 5. **Launch the scouts in one message.** In the job: `refactor-scout` and `harness-scout`. In a session: those two and `ux-scout`.
    Each prompt carries the absolute worktree path, the list of step 3 and the limit of 5 candidates. `harness-scout` also gets the absolute path of `.claude/nightly/` in the main checkout (the logs are not in the worktree). `ux-scout` also gets the photo paths.
 6. **Verify every candidate yourself.**
-   - Drop a candidate that has the same purpose as an item of the step 3 list (an issue, or a closed proposal).
+   - Drop a candidate that has the same purpose as an item of the step 3 list (an issue, a closed proposal, or a Discussion, open or closed).
    - Open each `path:line` of the evidence and confirm it says what the candidate says. Drop what does not hold. For a log or hand-over passage, read it again and confirm that the event happened at least twice.
    - A candidate that is a bug follows "File a bug only after reproducing it" (`issues.md`); if it does not reproduce, drop it.
    - Drop a candidate out of scope, and a refactoring that would change behavior.
