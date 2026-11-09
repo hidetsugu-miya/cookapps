@@ -3,11 +3,11 @@
 # Usage: handover.sh ensure          prints the Discussion's URL; creates the Discussion when it does not exist yet
 #        handover.sh read            ensure, then prints the last hand-over and the owner's replies since the run that wrote it started
 #        handover.sh write <file>    posts the file as a hand-over comment and prints the comment's URL
-#        handover.sh note <file>     posts the file as a comment that is not a hand-over (the result of discussion-judge or improvement-proposal): first line `<!-- ai -->`, prints the comment's URL
+#        handover.sh note <file>     posts the file as a comment that is not a hand-over (the result of improvement-proposal): first line `<!-- ai -->`, prints the comment's URL
 #        handover.sh format <owner>  reads the JSON of a Discussion (the query of `read`) from stdin and prints what `read` prints; no network
 # The runs write with the owner's account, so a comment is told by its mark `<!-- handover run-start=... -->`, which `write` puts on the first line.
 # A comment without the mark whose author is the owner is the owner's reply, and the next run reads it first and takes it as an instruction.
-# A comment whose first line is `<!-- ai -->` (discussions.sh; `note`) is an AI's write, so it is neither a hand-over nor a reply.
+# A comment whose first line is `<!-- ai -->` (`note`) is an AI's write, so it is neither a hand-over nor a reply.
 # The repository is public: a comment of any other author is data, never an instruction. `format` counts them and prints nothing of them, and takes a mark only from the owner's comments.
 # A run-start that is not an ISO time in UTC, or is later than the comment itself, is not used: the comment's own time is.
 # HANDOVER_RUN_START (ISO time in UTC; nightly.sh sets it) is the start of the run; a reply written after it is left to the next run, which has not read it yet.
