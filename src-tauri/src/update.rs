@@ -220,6 +220,7 @@ fn bundle_path(exe: &Path) -> Option<PathBuf> {
 }
 
 /// Starts a shell that waits (up to 10 seconds) for this process to end and then opens the bundle again.
+/// If this process is still alive after the wait, it opens a new instance with `open -n`, as Tauri does, since a plain `open` would only bring this one to the front.
 /// Tauri's own `restart()` opens the new app with `open -n` while this process is still alive, which puts a second tile in the Dock.
 #[cfg(target_os = "macos")]
 fn spawn_reopen(bundle: &Path) -> std::io::Result<()> {
@@ -228,7 +229,7 @@ fn spawn_reopen(bundle: &Path) -> std::io::Result<()> {
 
     Command::new("/bin/sh")
         .arg("-c")
-        .arg(r#"i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; exec /usr/bin/open "$2""#)
+        .arg(r#"i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; if kill -0 "$1" 2>/dev/null; then exec /usr/bin/open -n "$2"; fi; exec /usr/bin/open "$2""#)
         .arg("sh")
         .arg(std::process::id().to_string())
         .arg(bundle)
