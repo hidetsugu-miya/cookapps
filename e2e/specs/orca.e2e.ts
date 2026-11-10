@@ -3215,7 +3215,8 @@ describe("orca: files and editor (A-18)", () => {
       document.querySelector(".orca-edit-gutter")!.dispatchEvent(new WheelEvent("wheel", { deltaY: 64, bubbles: true, cancelable: true }));
     }, onceId());
     await browser.waitUntil(async () => (await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.scrollTop)) === 64, { timeoutMsg: "the text never scrolled" });
-    expect(await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-nums")!.style.transform.replace(/\s/g, ""))).toBe("translateY(-64px)");
+    // The numbers follow at the scroll event, which comes after the scroll itself.
+    await browser.waitUntil(async () => (await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-nums")!.style.transform.replace(/\s/g, ""))) === "translateY(-64px)", { timeoutMsg: "the numbers never followed" });
   });
 
   it("keeps the numbers out of the selection, the copy and the reading aloud, and out of the textarea (A-18)", async () => {
