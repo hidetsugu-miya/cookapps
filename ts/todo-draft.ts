@@ -1,39 +1,44 @@
-// The modal that opens when Claude has summarised a Slack message (S-2): the draft of the Todo on the left, shaped like the task detail (the name and the description, and beside them the project, the date and the labels),
+// The page that opens when Claude has summarised a Slack message (S-2), in the place of the Todo list (the task detail's place, `#todo-main`): the draft of the Todo on the left, shaped like the task detail (the name and the description, and beside them the project, the date and the labels),
 // 破棄 at the bottom left and the add button at the bottom right. Nothing is created until the add button is pressed.
 // The left part is `.draft-todo`; at its right is the pane for Claude (S-18, `.draft-chat`): a request there makes Claude propose a new name and description, drawn as a diff
-// that 適用 puts into the left part and 却下 drops. The conversation is held in memory and is gone when the modal closes.
-// The screen behind is inert while it is open, so Tab stays inside; ✕ and 破棄 close it, and Escape and a click on the dimmed part do not, so a draft is never lost by accident.
+// that 適用 puts into the left part and 却下 drops. The conversation is held in memory and is gone when the page closes.
+// The Todo header's back button (`#todo-back`, the one of the task detail) and 破棄 close it; Escape does not, so a draft is never lost by accident.
+// The project list beside it is inert while the page is open, so that no other list can be chosen under it.
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { Summary } from "./bindings/Summary";
 import { createChat } from "./claude-chat.js";
 import { showModelSlot } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
 import { hostOf } from "./format.js";
-import { CLAUDE_SVG, CLOSE_SVG, DATE_SVG, PLUS_SVG, SLACK_SVG } from "./icons.js";
+import { CLAUDE_SVG, DATE_SVG, PLUS_SVG, SLACK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { getSlackWorkspaces } from "./slack-workspaces.js";
 import { addSlackTodo, CARD_DUE, type ReviewJob } from "./todo-add.js";
 import { inboxOf, projectName, projectOf, todoState } from "./todo-data.js";
 import { field, openDueEditor, openProjectPicker } from "./todo-detail.js";
+import { renderTodo } from "./todo.js";
 
-// What the owner of the draft does with it: drop it (破棄, ✕), learn that the task was added (`added` is its name; null when Todoist needs a token), and open the prompt screen.
+// What the owner of the draft does with it: drop it (破棄, the back button), learn that the task was added (`added` is its name; null when Todoist needs a token), and open the prompt screen.
 export interface DraftHooks {
   remove: () => void;
   added: (name: string | null) => void;
   editPrompt: () => void;
 }
 
-// The open draft: `scrim` is its node (hidden while the prompt screen is shown), `behind` the parts of the page made inert, `opener` where the focus returns.
-let open: { scrim: HTMLElement; behind: HTMLElement[]; opener: HTMLElement | null; shown: boolean } | null = null;
+// The open draft: `page` is its node (it stays in the document while another screen is shown), `opener` where the focus returns, `discard` what 破棄 and the back button do.
+let open: { page: HTMLElement; opener: HTMLElement | null; discard: () => void } | null = null;
 
-// Whether a draft is open, shown or not.
+// Whether a draft is open.
 export const draftOpen = () => open !== null;
+
+// Drops the open draft, as 破棄 does: the back button of the Todo header.
+export const discardDraft = () => open?.discard();
 
 // The left part of the open draft that the conversation reads and changes; `saving` is true while the add is on its way, when a proposal cannot be applied.
 let live: { name: HTMLInputElement; description: HTMLTextAreaElement; saving: boolean } | null = null;
 
 // The conversation with Claude about the name and the description (claude-chat.ts), one text for both: the two as a JSON array, so a proposal is stale as soon as either is edited by hand.
-// The elements of its pane are made with the modal (`draft-*` ids), so it is reset before they go.
+// The elements of its pane are made with the page (`draft-*` ids), so it is reset before they go.
 const chat = createChat({
   prefix: "draft",
   loginNote: "設定の Claude タブで接続すると、Claude と直せます",
@@ -50,45 +55,29 @@ const chat = createChat({
     if (r.content === null && r.description === null) return { reply: r.reply, body: null, diff: [] };
     return { reply: r.reply, body: JSON.stringify([r.content ?? content, r.description ?? description]), diff: [...r.contentDiff, ...r.descriptionDiff] };
   },
-  // An answer that arrives after the modal closed belongs to a draft that is gone; the next draft's pane is drawn again.
+  // An answer that arrives after the page closed belongs to a draft that is gone; the next draft's pane is drawn again.
   changed: () => live && chat.refresh(),
   locked: () => live?.saving ?? false,
   keyHint: false,
 });
 
+// Takes the open draft off the page and draws the Todo screen in its place (the list, with the next waiting draft opened by that if there is one).
 function close() {
   if (!open) return;
-  const { scrim, behind, opener } = open;
+  const { page, opener } = open;
   chat.reset();
   live = null;
   open = null;
-  scrim.remove();
-  for (const el of behind) el.inert = false;
-  (opener?.isConnected ? opener : $("todo-add-input")).focus();
+  page.remove();
+  $<HTMLButtonElement>("todo-back").disabled = false;
+  $("projects").inert = false;
+  if (todoState.todo) renderTodo();
+  if (!draftOpen()) (opener?.isConnected ? opener : $("todo-add-input")).focus();
 }
 
 // Draws the conversation's pane again when a draft is open (Claude was connected or disconnected meanwhile).
 export function refreshDraftChat() {
   if (live) chat.refresh();
-}
-
-// The scrim stays in the page, hidden, because the conversation's pane is found by its ids.
-function hide() {
-  if (!open?.shown) return;
-  open.shown = false;
-  open.scrim.hidden = true;
-  for (const el of open.behind) el.inert = false;
-}
-
-// Puts a draft that `hide` took off the page back, and focuses it.
-export function resumeDraft() {
-  if (!open || open.shown) return;
-  open.shown = true;
-  for (const el of open.behind) el.inert = true;
-  open.scrim.hidden = false;
-  // Claude may have been connected or disconnected on the settings screen meanwhile.
-  chat.refresh();
-  open.scrim.querySelector<HTMLElement>(".draft")!.focus();
 }
 
 export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
@@ -161,12 +150,8 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   source.append(`${team} の Slack のメッセージ`);
   const editPrompt = tag("button", "link-btn draft-prompt", "プロンプトを編集");
   editPrompt.type = "button";
-  const closeButton = tag("button", "icon-btn draft-close");
-  closeButton.type = "button";
-  closeButton.innerHTML = CLOSE_SVG;
-  closeButton.setAttribute("aria-label", "閉じる");
   const head = tag("div", "draft-head");
-  head.append(source, tag("span", "draft-grow"), editPrompt, closeButton);
+  head.append(source, tag("span", "draft-grow"), editPrompt);
 
   // The link of the message is put at the end of the description by Rust; it is shown here as it will be, and cannot be edited.
   const link = tag("div", "draft-link", job.url);
@@ -181,6 +166,7 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   const side = tag("aside", "detail-side");
   side.append(field("プロジェクト", projectButton), field("日付", dueButton), labels);
 
+  const back = $<HTMLButtonElement>("todo-back");
   const drop = tag("button", "text-btn danger draft-drop", "破棄");
   drop.type = "button";
   add.innerHTML = PLUS_SVG;
@@ -189,18 +175,12 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   const todo = tag("section", "draft-todo");
   todo.append(head, main, side, foot);
 
-  const dialog = tag("div", "draft");
-  dialog.id = "todo-draft";
-  dialog.setAttribute("role", "dialog");
-  dialog.setAttribute("aria-modal", "true");
-  dialog.setAttribute("aria-label", "Todo の案");
-  dialog.tabIndex = -1;
+  const page = tag("section", "draft");
+  page.id = "todo-draft";
+  page.setAttribute("aria-label", "Todo の案");
+  page.tabIndex = -1;
   const pane = claudePane();
-  dialog.append(todo, pane);
-  const scrim = tag("div", "scrim modal");
-  scrim.append(dialog);
-  // The dimmed part takes the press and does nothing; the default is cancelled so that the press does not move the focus out of the dialog.
-  scrim.onpointerdown = (e) => e.target === scrim && e.preventDefault();
+  page.append(todo, pane);
 
   live = { name, description, saving: false };
   // Editing the left part by hand makes an open proposal stale (it was made for the text it was asked about).
@@ -210,7 +190,7 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
     if (!name.value.trim()) return name.focus();
     live!.saving = true;
     chat.refresh();
-    drop.disabled = add.disabled = closeButton.disabled = true;
+    drop.disabled = add.disabled = back.disabled = true;
     add.replaceChildren(tag("span", "spin"));
     add.setAttribute("aria-label", "追加中");
     error.hidden = true;
@@ -224,7 +204,7 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
       error.hidden = false;
       live!.saving = false;
       chat.refresh();
-      drop.disabled = add.disabled = closeButton.disabled = false;
+      drop.disabled = add.disabled = back.disabled = false;
       add.innerHTML = PLUS_SVG;
       showProject();
     }
@@ -234,28 +214,26 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
     close();
     hooks.remove();
   };
-  drop.onclick = closeButton.onclick = discard;
-  editPrompt.onclick = () => {
-    hide();
-    hooks.editPrompt();
-  };
+  drop.onclick = discard;
+  editPrompt.onclick = hooks.editPrompt;
   // Enter in the name, or Cmd+Enter (Ctrl+Enter off macOS) anywhere in the draft, adds.
   // Not in the Claude pane, where Cmd+Enter sends the request.
-  dialog.onkeydown = (e) => {
+  page.onkeydown = (e) => {
     if (e.key !== "Enter" || composing(e) || pane.contains(e.target as Node) || !(e.target === name || (isMac ? e.metaKey : e.ctrlKey))) return;
     e.preventDefault();
     commit();
   };
 
-  const behind = [...document.querySelectorAll<HTMLElement>("#sidebar, #content")];
-  open = { scrim, behind, opener: document.activeElement as HTMLElement | null, shown: true };
-  for (const el of behind) el.inert = true;
-  document.body.append(scrim);
+  open = { page, opener: document.activeElement as HTMLElement | null, discard };
+  $("projects").inert = true;
+  $("todo-main").append(page);
+  // The page takes the list's place (and the title), and the back button shows.
+  renderTodo();
   chat.init();
   chat.clearInput();
   chat.draw();
   showModelSlot("draft-model");
-  dialog.focus();
+  page.focus();
 }
 
 // The pane for Claude, shaped like the Slack thread's (S-7): the log, the request field with its send button, and the model and effort under it. Its ids are the ones claude-chat.ts reads.

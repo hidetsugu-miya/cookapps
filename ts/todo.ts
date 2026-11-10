@@ -12,6 +12,7 @@ import { HandoffPane } from "./orca-handoff.js";
 import { todoCard } from "./orca-handoff-cards.js";
 import { initSplit } from "./split.js";
 import { renderDetail } from "./todo-detail.js";
+import { discardDraft, draftOpen } from "./todo-draft.js";
 import { loadedComments } from "./todo-comments.js";
 import { editingField, projectName, projectOf, recountTodo, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
@@ -29,15 +30,17 @@ export function syncTodoHandoff() {
   handoff.refreshCard();
 }
 
-// Which part the Todo screen shows: the token form, the task list, or one task.
-export function todoMode(mode: "token" | "list" | "detail") {
+// Which part the Todo screen shows: the token form, the task list, one task, or the page of a draft (S-2).
+export function todoMode(mode: "token" | "list" | "detail" | "draft") {
   $("todo-token").hidden = mode !== "token";
   $("projects").hidden = mode === "token";
   $("todo-add").hidden = mode !== "list";
   $("todo-pending").hidden = mode !== "list";
   $("todo-list").hidden = mode !== "list";
   $("todo-detail").hidden = mode !== "detail";
-  $("todo-back").hidden = mode !== "detail";
+  $("todo-back").hidden = mode !== "detail" && mode !== "draft";
+  $("todo-main").classList.toggle("drafting", mode === "draft");
+  document.getElementById("todo-draft")?.toggleAttribute("hidden", mode !== "draft");
   $("todo-prompt").hidden = mode !== "list";
   $("todo-more").hidden = mode !== "detail";
   $("todo-orca").hidden = mode !== "detail";
@@ -68,7 +71,11 @@ export function renderTodo() {
   todoState.undrawn = false;
   if (!projectOf(todoState.view) && todoState.view !== "today" && todoState.view !== "inbox") todoState.view = "today";
   renderProjects();
-  if (todoState.open) renderDetail();
+  // An open draft stays whatever the refresh brings; only its own back button and 破棄 close it.
+  if (draftOpen()) {
+    todoMode("draft");
+    $("todo-title").textContent = "Todo の案";
+  } else if (todoState.open) renderDetail();
   else renderList();
 }
 
@@ -297,6 +304,7 @@ export function initTodo() {
     else openMoreMenu();
   };
   $("todo-back").onclick = () => {
+    if (draftOpen()) return discardDraft();
     todoState.open = null;
     renderTodo();
     handoff.sync();

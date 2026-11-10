@@ -35,7 +35,7 @@ describe("todo", () => {
     expect(await callsOf(add)).toContainEqual({ text: "Buy milk", projectId: null, today: true });
   });
 
-  // The Todo screen with a Slack link pasted: the summary is mocked, and its draft modal is up.
+  // The Todo screen with a Slack link pasted: the summary is mocked, and its draft page is up.
   async function openSummaryCard() {
     await openTodo();
     const summarize = await mock("todoist_summarize_slack", slackSummary);
@@ -47,7 +47,7 @@ describe("todo", () => {
     return { summarize, addFromSlack };
   }
 
-  // Types `text` in the modal's due popover and confirms it with Enter.
+  // Types `text` in the page's due popover and confirms it with Enter.
   async function setCardDue(text: string) {
     await $("#todo-draft .draft-due").click();
     await $(".due-pop .chip-input").setValue(text);
@@ -57,7 +57,7 @@ describe("todo", () => {
   // The day button `n` of the month the due popover shows (not a day of the month before or after).
   const dayButton = (n: number) => $(`//div[contains(@class,"due-pop")]//button[contains(@class,"dp-day") and not(contains(@class,"other")) and text()="${n}"]`);
 
-  // The same modal with Claude's recommendation: `projectId` is an ID of the Todo fixtures (p1 is Work).
+  // The same page with Claude's recommendation: `projectId` is an ID of the Todo fixtures (p1 is Work).
   async function openRecommendedCard(projectId: string) {
     await openTodo();
     const summarize = await mock("todoist_summarize_slack", { ...slackSummary, projectId });
@@ -69,7 +69,7 @@ describe("todo", () => {
     return { addFromSlack };
   }
 
-  it("turns the button into 要約する for a Slack link and opens the summary in a modal to confirm", async () => {
+  it("turns the button into 要約する for a Slack link and opens the summary as a page of the Todo screen to confirm", async () => {
     await openTodo();
     const summarize = await mock("todoist_summarize_slack", slackSummary);
     const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
@@ -81,9 +81,8 @@ describe("todo", () => {
     expect(await waitForCalls(summarize)).toEqual([{ url: slackMessageUrl }]);
     await $("#todo-draft").waitForExist();
     await expect($("#todo-add-input")).toHaveValue("");
-    // The modal replaces the card and the busy row.
+    // The page replaces the card and the busy row.
     expect(await count(".review, #todo-pending .pending")).toBe(0);
-    await expect($("#todo-draft")).toHaveAttribute("aria-modal", "true");
     await expect($("#todo-draft .draft-name")).toHaveValue("Reply to the vendor");
     await expect($("#todo-draft .draft-desc")).toHaveValue(slackSummary.description);
     await expect($("#todo-draft .draft-due")).toHaveText("2026-11-06");
@@ -91,6 +90,43 @@ describe("todo", () => {
     await expect($("#todo-draft .draft-src")).toHaveText(expect.stringContaining("Example Team"));
     // Nothing is created until the user confirms.
     expect(await callsOf(addFromSlack)).toEqual([]);
+  });
+
+  it("opens the draft in the place of the list inside the Todo screen, with no dimmed layer and the side menu left, and the back button at the left of the header", async () => {
+    await openSummaryCard();
+    await expect($("#todo-main > #todo-draft")).toBeDisplayed();
+    await expect($("#todo-draft")).not.toHaveAttribute("role");
+    await expect($("#todo-draft")).not.toHaveAttribute("aria-modal");
+    expect(await count(".scrim")).toBe(0);
+    await expect($("#todo-list")).not.toBeDisplayed();
+    await expect($("#todo-add")).not.toBeDisplayed();
+    await expect($("#todo")).toBeDisplayed();
+    await expect($("#sidebar")).toBeDisplayed();
+    await expect($("#todo-back")).toBeDisplayed();
+    await expect($("#todo-title")).toHaveText("Todo の案");
+    const place = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().toJSON(), selector);
+    const [back, title, draft, chat] = [await place("#todo-back"), await place("#todo-title"), await place("#todo-draft"), await place("#todo-draft .draft-chat")];
+    expect(back.right).toBeLessThanOrEqual(title.left);
+    // The Claude pane is the right column of the page.
+    expect(chat.left).toBeGreaterThan(draft.left);
+    expect(chat.right).toBeLessThanOrEqual(draft.right);
+    // The side menu and the projects list are not made inert as a modal would; only the projects list is, so no other list is chosen under the page.
+    expect(await browser.execute(() => document.getElementById("sidebar")!.inert || document.getElementById("content")!.inert)).toBe(false);
+    expect(await browser.execute(() => document.getElementById("projects")!.inert)).toBe(true);
+  });
+
+  it("keeps the page over a background refresh of the Todo data", async () => {
+    await openSummaryCard();
+    await $("#todo-draft .draft-name").setValue("My own name");
+    const data = todoData();
+    data.tasks[0].content = "Write report v2";
+    await mock("todoist_load", data);
+    await browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+    await browser.waitUntil(async () => String(await $("#todo-list").getProperty("textContent")).includes("Write report v2"));
+    await expect($("#todo-draft")).toBeDisplayed();
+    await expect($("#todo-draft .draft-name")).toHaveValue("My own name");
+    await expect($("#todo-back")).toBeDisplayed();
+    await expect($("#todo-list")).not.toBeDisplayed();
   });
 
   it("puts the name and description on the left and the project, date and labels beside them, with 破棄 at the left and the + at the right of the foot", async () => {
@@ -108,18 +144,42 @@ describe("todo", () => {
     await expect($("#todo-draft .draft-add svg")).toExist();
   });
 
-  it("keeps the modal open on Escape, and closes it with ✕ without calling the add command", async () => {
+  it("keeps the page open on Escape, has no ✕, and goes back to the list with the back button without calling the add command", async () => {
     const { addFromSlack } = await openSummaryCard();
     await $("#todo-draft .draft-name").click();
     await browser.keys("Escape");
     await expect($("#todo-draft")).toExist();
-    await $("#todo-draft .draft-close").click();
+    expect(await count("#todo-draft .draft-close, #todo-draft .icon-btn[aria-label=閉じる]")).toBe(0);
+    await $("#todo-back").click();
     await $("#todo-draft").waitForExist({ reverse: true });
     expect(await callsOf(addFromSlack)).toEqual([]);
+    await expect($("#todo-list")).toBeDisplayed();
+    await expect($("#todo-add")).toBeDisplayed();
+    await expect($("#todo-back")).not.toBeDisplayed();
+    await expect($("#todo-title")).toHaveText("今日");
+    expect(await browser.execute(() => document.getElementById("projects")!.inert)).toBe(false);
     await expect($("#todo-add-input")).toBeEnabled();
   });
 
-  it("opens the next summary when the first modal is closed, and shows it as a row until then", async () => {
+  it("waits as a row while a task is open, and opens the page when the list is shown again", async () => {
+    await openTodo();
+    const summarize = await mock("todoist_summarize_slack", holds);
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await waitForCalls(summarize);
+    await $("#todo-list li.task").click();
+    await expect($("#todo-detail")).toBeDisplayed();
+    await release(summarize, slackSummary);
+    // The task stays open: the draft does not take the screen from it.
+    await expect($("#todo-detail")).toBeDisplayed();
+    expect(await count("#todo-draft")).toBe(0);
+    await $("#todo-back").click();
+    await $("#todo-draft").waitForExist();
+    await expect($("#todo-draft .draft-name")).toHaveValue("Reply to the vendor");
+    expect(await count("#todo-pending .pending")).toBe(0);
+  });
+
+  it("opens the next summary when the first page is closed, and shows it as a row until then", async () => {
     await openTodo();
     const summarize = await mock("todoist_summarize_slack", holds);
     await mock("todoist_add_from_slack", "Reply to the vendor");
@@ -294,7 +354,7 @@ describe("todo", () => {
     await expect($("#todo-draft .draft-due")).toHaveText("2026-11-15");
   });
 
-  describe("the Claude pane of the modal", () => {
+  describe("the Claude pane of the page", () => {
     // Types `text` in the pane's request field and presses the send button.
     const askClaude = async (text: string) => {
       await $("#draft-input").setValue(text);
@@ -387,7 +447,7 @@ describe("todo", () => {
       await expect($("#draft-log .diff-foot .text-btn.primary")).toBeEnabled();
     });
 
-    it("sends the conversation so far with the next request, and forgets it when the modal is closed", async () => {
+    it("sends the conversation so far with the next request, and forgets it when the page is closed", async () => {
       await openSummaryCard();
       const edit = await mock("claude_edit_todo_draft", todoDraftEdit);
       await askClaude("名前を短く");
@@ -450,8 +510,8 @@ describe("todo", () => {
       await expect($("#draft-chat-note")).not.toBeDisplayed();
     });
 
-    // Claude must be usable for the summary to open the modal, so the state changes after it: on the settings screen, reached from the prompt screen while the modal is off the screen.
-    it("turns the request field off and says so when Claude is disconnected while the modal is off the screen, and back on when it is connected again", async () => {
+    // Claude must be usable for the summary to open the page, so the state changes after it: on the settings screen, reached from the prompt screen while another screen is shown.
+    it("turns the request field off and says so when Claude is disconnected while another screen is shown, and back on when it is connected again", async () => {
       await openSummaryCard();
       await expect($("#draft-chat-note")).not.toBeDisplayed();
       await $("#todo-draft .draft-prompt").click();
@@ -459,7 +519,7 @@ describe("todo", () => {
       await $("#settings-tab-claude").click();
       await mock("claude_connection", connection("subscription", claudeMissing, { state: "none" }));
       await $("#claude-recheck").click();
-      // The pane follows at once, also while the modal is off the screen.
+      // The pane follows at once, also while another screen is shown.
       await browser.waitUntil(async () => !(await $("#draft-chat-note").getProperty("hidden")));
       await $("#nav-todo").click();
       await $("#todo-draft").waitForDisplayed();
@@ -487,7 +547,7 @@ describe("todo", () => {
     await expect($("#todo-draft .draft-due")).toHaveText("期限なし");
   });
 
-  it("tells in the modal how many messages of the thread the summary leaves out, and does not send the count on", async () => {
+  it("tells on the page how many messages of the thread the summary leaves out, and does not send the count on", async () => {
     await openTodo();
     await mock("todoist_summarize_slack", { ...slackSummary, omitted: 12 });
     const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
@@ -500,13 +560,13 @@ describe("todo", () => {
     expect(sent).not.toHaveProperty("omitted");
   });
 
-  it("shows no note in the modal when the summary reflects the whole thread", async () => {
+  it("shows no note on the page when the summary reflects the whole thread", async () => {
     await openSummaryCard();
     await expect($("#todo-draft .draft-omitted")).not.toExist();
     await expect($("#todo-draft .draft-target-cut")).not.toExist();
   });
 
-  it("tells in the modal that the linked message was cut, and does not send the flag on", async () => {
+  it("tells on the page that the linked message was cut, and does not send the flag on", async () => {
     await openTodo();
     await mock("todoist_summarize_slack", { ...slackSummary, targetCut: true });
     const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
@@ -519,7 +579,7 @@ describe("todo", () => {
     expect(sent).not.toHaveProperty("targetCut");
   });
 
-  it("starts the modal in the project Claude recommended, tagged 推奨 on the field and in the menu", async () => {
+  it("starts the page in the project Claude recommended, tagged 推奨 on the field and in the menu", async () => {
     const { addFromSlack } = await openRecommendedCard("p1");
     await expect($("#todo-draft .draft-project")).toHaveText(expect.stringContaining("Work"));
     await expect($("#todo-draft .draft-project .tag")).toHaveText("推奨");
@@ -555,25 +615,24 @@ describe("todo", () => {
     await expect($("#todo-draft .draft-project .tag")).toHaveText("推奨");
   });
 
-  it("ignores a recommendation that is not a project in the list, and the modal starts where it would", async () => {
+  it("ignores a recommendation that is not a project in the list, and the page starts where it would", async () => {
     await openRecommendedCard("p9");
     await expect($("#todo-draft .draft-project")).toHaveText("インボックス");
     await expect($("#todo-draft .draft-project .tag")).not.toExist();
   });
 
-  it("opens the prompt screen from the modal, and 戻る returns to the Todo screen with the modal and its edits still there", async () => {
+  it("opens the prompt screen from the page, and 戻る returns to the Todo screen with the page and its edits still there", async () => {
     await openSummaryCard();
     await $("#todo-draft .draft-name").setValue("My own name");
     await $("#todo-draft .draft-prompt").click();
-    // The modal stays in the page, off the screen, and the screen behind it is not inert.
+    // The page stays in the document, off the screen with the Todo screen.
     await expect($("#todo-draft")).not.toBeDisplayed();
-    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#sidebar, #content")].some((el) => el.inert))).toBe(false);
     await expect($("#prompt")).toBeDisplayed();
     await expect($("#todo")).not.toBeDisplayed();
     await expect($("#nav-settings")).toHaveAttribute("aria-current", "page");
     await $("#prompt-back").click();
     await expect($("#todo")).toBeDisplayed();
-    await $("#todo-draft").waitForExist();
+    await $("#todo-draft").waitForDisplayed();
     await expect($("#todo-draft .draft-name")).toHaveValue("My own name");
     await expect($("#nav-todo")).toHaveAttribute("aria-current", "page");
   });
@@ -586,7 +645,7 @@ describe("todo", () => {
   });
 
   // Focus is not checked: WebDriver's click leaves the focus on the clicked button in the hidden E2E window.
-  it("adds nothing and keeps the modal when the name is empty", async () => {
+  it("adds nothing and keeps the page when the name is empty", async () => {
     const { addFromSlack } = await openSummaryCard();
     await $("#todo-draft .draft-name").setValue("");
     await $("#todo-draft .draft-add").click();
@@ -594,14 +653,14 @@ describe("todo", () => {
     expect(await callsOf(addFromSlack)).toEqual([]);
   });
 
-  it("closes the modal with 破棄 and creates nothing", async () => {
+  it("closes the page with 破棄 and creates nothing", async () => {
     const { addFromSlack } = await openSummaryCard();
     await $("#todo-draft .draft-drop").click();
     await $("#todo-draft").waitForExist({ reverse: true });
     expect(await callsOf(addFromSlack)).toEqual([]);
   });
 
-  it("keeps what the user typed in the modal, with the error, when the add fails", async () => {
+  it("keeps what the user typed on the page, with the error, when the add fails", async () => {
     const { addFromSlack } = await openSummaryCard();
     await mock("todoist_add_from_slack", rejects("Todoist に接続できません"));
     await $("#todo-draft .draft-name").setValue("My own name");
@@ -656,7 +715,7 @@ describe("todo", () => {
     await expect($("#todo-add-input")).toHaveValue("Buy milk");
   });
 
-  it("shows a spinner on the modal's add button while the Slack task is being added, and 破棄 and ✕ stay disabled", async () => {
+  it("shows a spinner on the page's add button while the Slack task is being added, and 破棄 and the back button stay disabled", async () => {
     const { addFromSlack } = await openSummaryCard();
     await mock("todoist_add_from_slack", holds);
     await $("#todo-draft .draft-add").click();
@@ -665,7 +724,7 @@ describe("todo", () => {
     await expect($("#todo-draft .draft-add .spin")).toExist();
     await expect($("#todo-draft .draft-add")).toBeDisabled();
     await expect($("#todo-draft .draft-drop")).toBeDisabled();
-    await expect($("#todo-draft .draft-close")).toBeDisabled();
+    await expect($("#todo-back")).toBeDisabled();
     await release(addFromSlack, "Reply to the vendor");
     await $("#todo-draft").waitForExist({ reverse: true });
   });

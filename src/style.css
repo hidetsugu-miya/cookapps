@@ -340,11 +340,9 @@ button.review-chip:hover { background: var(--hover); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .text-btn.primary .spin { border-color: var(--accent-dim); border-top-color: #fff; }
 .review-add { display: inline-flex; align-items: center; gap: 6px; }
-/* The modal of Claude's draft of a Todo (ts/todo-draft.ts): the draft on the left like the task detail, project, date and labels beside it. A Claude pane is a second column of .draft. */
-.scrim.modal { align-items: center; justify-content: center; }
-/* A menu or the due popover opened from the modal lies over its dimmed part. */
-.scrim.modal ~ .menu { z-index: 16; }
-.draft { display: grid; grid-template-columns: minmax(0, 1fr) 340px; width: min(1060px, calc(100% - 48px)); height: min(560px, calc(100% - 48px)); overflow: hidden; border-radius: 12px; background: #fff; box-shadow: 0 16px 40px rgba(0, 0, 0, .25); }
+/* The page of Claude's draft of a Todo (ts/todo-draft.ts), in the place of the list: the draft on the left like the task detail, project, date and labels beside it. A Claude pane is a second column of .draft. */
+#todo-main.drafting { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
+.draft { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .draft:focus { outline: none; }
 .draft-chat { grid-column: 2; min-height: 0; border-left: 1px solid var(--line); }
 #draft-chat .composer-foot { justify-content: flex-end; }
