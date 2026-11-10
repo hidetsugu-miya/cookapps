@@ -98,8 +98,8 @@ async function openTodo(fixtures: Record<string, unknown> = {}) {
   await expect($("#todo-back")).toBeDisplayed();
 }
 
-// The list of Orca is read when the pane opens: the chip is enabled once the worktrees are in.
-const listRead = (screen: Screen) => expect($(`${screen.pane} .ho-worktree`)).toBeEnabled();
+// The list of Orca is read when the pane opens: the project chip is enabled once the projects are in.
+const listRead = (screen: Screen) => expect($(`${screen.pane} .ho-project`)).toBeEnabled();
 
 // Opens the pane of the screen shown: the header button of the mail and the Todo, the Orca tab of the Slack thread. The list of Orca is read when it opens.
 async function openPane(screen: Screen) {
@@ -111,10 +111,16 @@ async function openPane(screen: Screen) {
 const field = (screen: Screen) => $(`${screen.pane} textarea`);
 const sendButton = (screen: Screen) => $(`${screen.pane} .ho-form .text-btn.primary`);
 
-// Picks the worktree at `path` in the dialog of the chip.
-async function chooseWorktree(screen: Screen, path: string) {
+// Picks the project named `name` in the menu of its chip: the worktree is then the project's own folder (default).
+async function chooseProject(screen: Screen, name: string) {
+  await $(`${screen.pane} .ho-project`).click();
+  await $(`//div[@role="menu"]//button[normalize-space(.)="${name}"]`).click();
+}
+
+// Picks 新規作成 in the menu of the worktree chip.
+async function chooseNewWorktree(screen: Screen) {
   await $(`${screen.pane} .ho-worktree`).click();
-  await $(`.orca-dest-pop button[data-path="${path}"]`).click();
+  await $('//div[@role="menu"]//button[normalize-space(.)="新規作成"]').click();
 }
 
 describe("orca handoff", () => {
@@ -131,8 +137,11 @@ describe("orca handoff", () => {
     await expect($("#mail-split")).toHaveAttribute("role", "separator");
     await expect($("#mail-split")).toHaveAttribute("aria-label", "Orca の幅");
     await listRead(MAIL);
-    // The destination is the chip of a new session (no worktree chosen yet), and no running session is listed.
-    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["worktree を選ぶ"]);
+    // The chips of a new session run destination, project, worktree (no project chosen yet, so the worktree waits), and no running session is listed.
+    expect(await textsOf(`${MAIL.pane} .ho-new button`)).toEqual(["このマシン", "プロジェクトを選ぶ", "default"]);
+    await expect($(`${MAIL.pane} .ho-project`)).toHaveAttribute("aria-label", "プロジェクト");
+    await expect($(`${MAIL.pane} .ho-worktree`)).toBeDisabled();
+    await expect($(`${MAIL.pane} .ho-name`)).not.toBeDisplayed();
     expect(await count(`${MAIL.pane} .ho-row, ${MAIL.pane} .ho-group, ${MAIL.pane} .ho-new-btn`)).toBe(0);
     // The card names the content: the subject, the sender and the size of the text, and has no button to read the text.
     expect(await textsOf(`${MAIL.pane} .ho-card-title`)).toEqual([subject]);
@@ -148,15 +157,41 @@ describe("orca handoff", () => {
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("starts a new session in the chosen worktree with the instruction and the content as arguments of one command", async () => {
+  it("lists the projects of the destination in the menu of the project chip, and the worktree menu offers the project's own folder and 新規作成", async () => {
+    // The projects are those of the list, here the two that have a folder.
+    const project = (name: string) => ({ key: `proj_${name}`, name, status: "idle" as const, sessions: 0, atMs: 0 });
+    await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { projects: [project("example-app"), project("example-api")] }) });
+    await openPane(MAIL);
+    await $(`${MAIL.pane} .ho-project`).click();
+    expect(await textsOf(".menu [role=menuitem]")).toEqual(["example-app", "example-api"]);
+    await $('//div[@role="menu"]//button[normalize-space(.)="example-api"]').click();
+    expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["example-api"]);
+    // The branch is the one checked out in the project's folder now.
+    await $(`${MAIL.pane} .ho-worktree`).click();
+    expect(await textsOf(".menu [role=menuitem]")).toEqual(["default ・ main", "新規作成"]);
+    await expect($('//div[@role="menu"]//button[normalize-space(.)="default ・ main"]')).toHaveAttribute("aria-current", "true");
+    await $('//div[@role="menu"]//button[normalize-space(.)="新規作成"]').click();
+    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["新規作成"]);
+    await expect($(`${MAIL.pane} .ho-name`)).toBeDisplayed();
+    await expect($(`${MAIL.pane} .ho-name`)).toHaveAttribute("aria-label", "worktree の名前");
+    expect(await browser.execute(() => (document.querySelector("#mail-handoff .ho-name") as HTMLInputElement).placeholder)).toBe("");
+    // Back to the project's own folder hides the name again.
+    await $(`${MAIL.pane} .ho-worktree`).click();
+    await $('//div[@role="menu"]//button[normalize-space(.)="default ・ main"]').click();
+    await expect($(`${MAIL.pane} .ho-name`)).not.toBeDisplayed();
+  });
+
+  it("starts a new session in the project's own folder with the instruction and the content as arguments of one command", async () => {
     await openMail();
     const handoff = await mock("orca_handoff", started);
+    const create = await mock("orca_worktree_create", "/work/never");
     await openPane(MAIL);
     await field(MAIL).setValue("原因を調べて");
-    // The button waits for a worktree.
+    // The button waits for a project.
     await expect(sendButton(MAIL)).toBeDisabled();
-    await chooseWorktree(MAIL, "/work/example-app");
-    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["example-app ・ feat/a"]);
+    await chooseProject(MAIL, "example-app");
+    expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["example-app"]);
+    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["default ・ feat/a"]);
     await expect(sendButton(MAIL)).toBeEnabled();
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();
@@ -173,13 +208,100 @@ describe("orca handoff", () => {
     // Nothing else was sent, and the Orca screen's own launch was not used.
     expect(await callsOf("orca_start")).toHaveLength(0);
     expect(await callsOf(handoff)).toHaveLength(1);
+    // The folder of the project was used as it is: no worktree was made.
+    expect(await callsOf(create)).toHaveLength(0);
   });
 
-  it("keeps the chosen worktree in memory for the next handoff", async () => {
+  it("makes the worktree named in the field with orca_worktree_create and starts the session in the path it answers", async () => {
+    await openMail();
+    const create = await mock("orca_worktree_create", "/work/example-app-fix-invoice");
+    const handoff = await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseProject(MAIL, "example-app");
+    await chooseNewWorktree(MAIL);
+    await field(MAIL).setValue("請求書を直して");
+    await $(`${MAIL.pane} .ho-name`).setValue("fix-invoice");
+    await expect(sendButton(MAIL)).toBeEnabled();
+    await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
+    await sendButton(MAIL).click();
+    expect(await waitForCalls(create)).toEqual([{ project: "proj_example-app", name: "fix-invoice", environment: null }]);
+    const [call] = (await waitForCalls(handoff)) as { destination: unknown; instruction: string; environment: string | null }[];
+    expect(call.destination).toEqual({ kind: "new", path: "/work/example-app-fix-invoice" });
+    expect(call.instruction).toBe("請求書を直して");
+    expect(call.environment).toBeNull();
+    expect(await callsOf(create)).toHaveLength(1);
+    expect(await callsOf(handoff)).toHaveLength(1);
+    await expect($(`${MAIL.pane} .ho-session-name`)).toBeDisplayed();
+  });
+
+  it("makes the worktree in the destination chosen, and starts there", async () => {
+    await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { environments: ["Lab"] }) });
+    await mock("orca_destination", orcaOverview([], [orcaWorktree("example-lab", "main")], { target: "Lab", environments: ["Lab"], known: false }));
+    const create = await mock("orca_worktree_create", "/lab/example-lab-b");
+    const handoff = await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await $(`${MAIL.pane} .ho-destination`).click();
+    await $('//div[@role="menu"]//button[normalize-space(.)="Lab"]').click();
+    await browser.waitUntil(async () => (await textsOf(`${MAIL.pane} .ho-project`))[0] === "プロジェクトを選ぶ", { timeoutMsg: "the lists of the destination were not read" });
+    await chooseProject(MAIL, "example-lab");
+    await chooseNewWorktree(MAIL);
+    await field(MAIL).setValue("やって");
+    await $(`${MAIL.pane} .ho-name`).setValue("b");
+    await sendButton(MAIL).click();
+    expect(await waitForCalls(create)).toEqual([{ project: "proj_example-lab", name: "b", environment: "Lab" }]);
+    const [call] = (await waitForCalls(handoff)) as { destination: unknown; environment: string | null }[];
+    expect(call.destination).toEqual({ kind: "new", path: "/lab/example-lab-b" });
+    expect(call.environment).toBe("Lab");
+  });
+
+  it("starts nothing when the worktree cannot be made, keeps the text and the name, and shows the message of Rust", async () => {
+    await openMail();
+    const create = await mock("orca_worktree_create", rejects("worktree の名前を入力してください"));
+    const handoff = await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseProject(MAIL, "example-app");
+    await chooseNewWorktree(MAIL);
+    await field(MAIL).setValue("やって");
+    await sendButton(MAIL).click();
+    await waitForCalls(create);
+    await expect($(`${MAIL.pane} .ho-form .pending.fail`)).toHaveText("worktree の名前を入力してください");
+    await expect(field(MAIL)).toHaveValue("やって");
+    expect(await callsOf(handoff)).toHaveLength(0);
+    // Still the form with the card, the name field open, and the button ready to try again.
+    expect(await count(`${MAIL.pane} .ho-card`)).toBe(1);
+    await expect($(`${MAIL.pane} .ho-name`)).toBeDisplayed();
+    await expect(sendButton(MAIL)).toBeEnabled();
+    // The next send asks again (nothing was made).
+    await $(`${MAIL.pane} .ho-name`).setValue("fix");
+    await mock("orca_worktree_create", "/work/example-app-fix");
+    await sendButton(MAIL).click();
+    await waitForCalls(handoff);
+  });
+
+  it("does not make a second worktree when the launch fails after one was made and the same send is tried again", async () => {
+    await openMail();
+    const create = await mock("orca_worktree_create", "/work/example-app-fix");
+    const handoff = await mock("orca_handoff", rejects("Orca が指示を受け付けませんでした"));
+    await openPane(MAIL);
+    await chooseProject(MAIL, "example-app");
+    await chooseNewWorktree(MAIL);
+    await field(MAIL).setValue("やって");
+    await $(`${MAIL.pane} .ho-name`).setValue("fix");
+    await sendButton(MAIL).click();
+    await waitForCalls(handoff);
+    await expect($(`${MAIL.pane} .ho-form .pending.fail`)).toHaveText("Orca が指示を受け付けませんでした");
+    const again = await mock("orca_handoff", started);
+    await sendButton(MAIL).click();
+    const [call] = (await waitForCalls(again)) as { destination: unknown }[];
+    expect(call.destination).toEqual({ kind: "new", path: "/work/example-app-fix" });
+    expect(await callsOf(create)).toHaveLength(1);
+  });
+
+  it("keeps the chosen project in memory for the next handoff", async () => {
     await openMail();
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-api");
+    await chooseProject(MAIL, "example-api");
     await field(MAIL).setValue("この方針でお願い");
     await sendButton(MAIL).click();
     await waitForCalls(handoff);
@@ -191,14 +313,15 @@ describe("orca handoff", () => {
     await threadLoaded();
     await $(MAIL.button).click();
     await listRead(MAIL);
-    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["example-api ・ main"]);
+    expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["example-api"]);
+    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["default ・ main"]);
   });
 
   it("posts with no block when the card is taken off", async () => {
     await openMail();
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await $(`${MAIL.pane} [aria-label="渡す内容を外す"]`).click();
     expect(await count(`${MAIL.pane} .ho-card`)).toBe(0);
     await field(MAIL).setValue("ただの指示");
@@ -224,7 +347,7 @@ describe("orca handoff", () => {
     await browser.execute(() => ((document.querySelector("#mail-handoff .ho-card") as unknown as { __kept: boolean }).__kept = true));
     await browser.pause(2200);
     expect(await browser.execute(() => (document.querySelector("#mail-handoff .ho-card") as unknown as { __kept?: boolean }).__kept)).toBe(true);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("読んで");
     await sendButton(MAIL).click();
     const [call] = (await waitForCalls(handoff)) as { context: { body: string } }[];
@@ -236,7 +359,7 @@ describe("orca handoff", () => {
     await openMail();
     const handoff = await mock("orca_handoff", rejects("Orca が指示を受け付けませんでした"));
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("   ");
     await expect(sendButton(MAIL)).toBeDisabled();
     await field(MAIL).setValue("やって");
@@ -266,7 +389,7 @@ describe("orca handoff", () => {
     await openMail();
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();
@@ -307,7 +430,7 @@ describe("orca handoff", () => {
     await openMail();
     await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("質問して");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();
@@ -333,7 +456,7 @@ describe("orca handoff", () => {
     await openMail();
     await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();
@@ -355,7 +478,7 @@ describe("orca handoff", () => {
     await openMail();
     await mock("orca_handoff", { paneKey: null, handle: "term_new" } satisfies OrcaStarted);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("始めて");
     await sendButton(MAIL).click();
     await expect($(`${MAIL.pane} .ho-note`)).toBeDisplayed();
@@ -374,7 +497,7 @@ describe("orca handoff", () => {
     await mock("orca_handoff", started);
     await mock("orca_chat_close", null);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();
@@ -416,7 +539,7 @@ describe("orca handoff", () => {
     await mock("orca_handoff", started);
     const close = await mock("orca_chat_close", null);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();
@@ -450,7 +573,7 @@ describe("orca handoff", () => {
     await expect($("#todo-split")).toHaveAttribute("role", "separator");
     expect(await textsOf(`${TODO.pane} .ho-card-title`)).toEqual(["Write report"]);
     expect(await textsOf(`${TODO.pane} .ho-card-meta`)).toEqual(["説明なし ・ 今日"]);
-    await chooseWorktree(TODO, "/work/example-app");
+    await chooseProject(TODO, "example-app");
     await field(TODO).setValue("実装して");
     await sendButton(TODO).click();
     const [call] = (await waitForCalls(handoff)) as { destination: unknown; instruction: string; context: { kind: string; title: string; body: string } }[];
@@ -487,7 +610,7 @@ describe("orca handoff", () => {
     await listRead(SLACK);
     expect(await textsOf(`${SLACK.pane} .ho-card-title`)).toEqual(["#dev-billing のスレッド"]);
     expect(await textsOf(`${SLACK.pane} .ho-card-meta`)).toEqual(["Alice Example ほか ・ 2 件"]);
-    await chooseWorktree(SLACK, "/work/example-api");
+    await chooseProject(SLACK, "example-api");
     await field(SLACK).setValue("返信案を作って");
     await sendButton(SLACK).click();
     const [call] = (await waitForCalls(handoff)) as { destination: unknown; context: { kind: string; title: string; body: string } }[];
@@ -518,7 +641,7 @@ describe("orca handoff", () => {
     const destination = await mock("orca_destination", orcaOverview([], []));
     await openPane(MAIL);
     expect(await textsOf(`${MAIL.pane} .ho-destination`)).toEqual(["Studio"]);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("やって");
     await sendButton(MAIL).click();
     const [call] = (await waitForCalls(handoff)) as { environment: string | null }[];
@@ -540,18 +663,17 @@ describe("orca handoff", () => {
     const destination = await mock("orca_destination", orcaOverview([], [orcaWorktree("example-lab", "main")], { target: "Lab", environments: ["Studio", "Lab"], known: false }));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
-    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["example-app ・ feat/a"]);
+    await chooseProject(MAIL, "example-app");
+    expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["example-app"]);
     await $(`${MAIL.pane} .ho-destination`).click();
     expect(await textsOf(".menu [role=menuitem]")).toEqual(["このマシン", "Studio", "Lab"]);
     await $('//div[@role="menu"]//button[normalize-space(.)="Lab"]').click();
     expect(await waitForCalls(destination)).toEqual([{ environment: "Lab" }]);
-    // The worktrees are the destination's, and the one chosen for the old destination is dropped.
+    // The projects are the destination's, and the one chosen for the old destination is dropped.
     await browser.waitUntil(async () => (await textsOf(`${MAIL.pane} .ho-destination`))[0] === "Lab", { timeoutMsg: "the destination was not shown" });
-    await expect($(`${MAIL.pane} .ho-worktree`)).toBeEnabled();
-    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["worktree を選ぶ"]);
-    expect(await count(".orca-dest-pop")).toBe(0);
-    await chooseWorktree(MAIL, "/work/example-lab");
+    await expect($(`${MAIL.pane} .ho-project`)).toBeEnabled();
+    expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["プロジェクトを選ぶ"]);
+    await chooseProject(MAIL, "example-lab");
     await field(MAIL).setValue("やって");
     await sendButton(MAIL).click();
     const [call] = (await waitForCalls(handoff)) as { destination: unknown; environment: string | null }[];
@@ -580,7 +702,8 @@ describe("orca handoff", () => {
     await $(`${MAIL.pane} .ho-destination`).click();
     await $('//div[@role="menu"]//button[normalize-space(.)="Studio"]').click();
     await browser.waitUntil(async () => (await textsOf(`${MAIL.pane} .ho-notice`))[0]?.includes("読み込めませんでした: 接続できません"), { timeoutMsg: "the failed read was not told" });
-    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["worktree がありません"]);
+    expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["プロジェクトがありません"]);
+    await expect($(`${MAIL.pane} .ho-project`)).toBeDisabled();
     await field(MAIL).setValue("やって");
     await expect(sendButton(MAIL)).toBeDisabled();
   });
@@ -589,7 +712,7 @@ describe("orca handoff", () => {
     await openMail();
     const handoff = await mock("orca_handoff", holds);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("守る指示");
     await sendButton(MAIL).click();
     await waitForCalls(handoff);
@@ -644,7 +767,7 @@ describe("orca handoff", () => {
     await waitForCount(`${SLACK.pane} .ho-card`, 1);
     expect(await textsOf(`${SLACK.pane} .ho-card-title`)).toEqual(["#ops のスレッド"]);
     const handoff = await mock("orca_handoff", started);
-    await chooseWorktree(SLACK, "/work/example-app");
+    await chooseProject(SLACK, "example-app");
     await field(SLACK).setValue("返信案を作って");
     await sendButton(SLACK).click();
     const [call] = (await waitForCalls(handoff)) as { context: { body: string } }[];
@@ -662,7 +785,7 @@ describe("orca handoff", () => {
     await browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
     await browser.waitUntil(async () => (await textsOf(`${TODO.pane} .ho-card-title`))[0] === "Write report v2", { timeoutMsg: "the card did not take the new task" });
     const handoff = await mock("orca_handoff", started);
-    await chooseWorktree(TODO, "/work/example-app");
+    await chooseProject(TODO, "example-app");
     await field(TODO).setValue("直して");
     await sendButton(TODO).click();
     const [call] = (await waitForCalls(handoff)) as { context: { title: string; body: string } }[];
@@ -707,7 +830,7 @@ describe("orca handoff: the session history", () => {
     await openMail(fixtures);
     await mock("orca_handoff", launched);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("原因を調べて");
     await mock("orca_overview", orcaOverview(rows, worktrees()));
     await sendButton(MAIL).click();
@@ -720,7 +843,7 @@ describe("orca handoff: the session history", () => {
     await $(MAIL.button).click();
     await listRead(MAIL);
     await mock("orca_handoff", { paneKey: null, handle: "term_example-api" } satisfies OrcaStarted);
-    await chooseWorktree(MAIL, "/work/example-api");
+    await chooseProject(MAIL, "example-api");
     await field(MAIL).setValue("こちらも");
     await sendButton(MAIL).click();
     await waitForOpens(times);
@@ -1027,7 +1150,7 @@ describe("orca handoff: the session history", () => {
     await mock("orca_chat_open", rejects("エージェントの場所が正しくありません"));
     await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();
@@ -1159,12 +1282,12 @@ describe("orca handoff: attached files (A-10)", () => {
     expect(await textsOf(`${MAIL.pane} .attachment .attachment-name`)).toEqual(["<b>b</b>.txt"]);
   });
 
-  it("puts a file that is not an image in the chosen worktree and hands over its quoted path", async () => {
+  it("puts a file that is not an image in the worktree of the chosen project and hands over its quoted path", async () => {
     await openMail();
     const attach = await mock("orca_attach_file", attachedNote("example-app"));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("これを読んで");
     await paste(note);
     await waitForCount(`${MAIL.pane} .attachment`, 1);
@@ -1179,7 +1302,7 @@ describe("orca handoff: attached files (A-10)", () => {
     const attach = await mock("orca_attach_file", attached("example-app"));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("見て");
     await paste(huge);
     await expect($(`${MAIL.pane} .ho-form .pending.fail`)).toHaveText("ファイルは 20 MiB までです");
@@ -1201,10 +1324,10 @@ describe("orca handoff: attached files (A-10)", () => {
     expect(await thumbs()).toBe(0);
   });
 
-  it("enables the button for an image alone once a worktree is chosen, and not before", async () => {
+  it("enables the button for an image alone once a project is chosen, and not before", async () => {
     await openMail();
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await expect(sendButton(MAIL)).toBeDisabled();
     await paste(image());
     await waitForCount(`${MAIL.pane} .attachment`, 1);
@@ -1213,12 +1336,12 @@ describe("orca handoff: attached files (A-10)", () => {
     await expect(sendButton(MAIL)).toBeDisabled();
   });
 
-  it("puts each image in the chosen worktree and the target, then hands over the instruction with the paths", async () => {
+  it("puts each image in the worktree of the chosen project and the target, then hands over the instruction with the paths", async () => {
     await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { target: "Studio", environments: ["Studio"] }) });
     const attach = await mock("orca_attach_file", attached("example-app"));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("この画面を直して");
     await paste(image("shot.png"));
     await waitForCount(`${MAIL.pane} .attachment`, 1);
@@ -1239,8 +1362,8 @@ describe("orca handoff: attached files (A-10)", () => {
     await $(`${MAIL.pane} .ho-destination`).click();
     await $('//div[@role="menu"]//button[normalize-space(.)="Lab"]').click();
     await browser.waitUntil(async () => (await textsOf(`${MAIL.pane} .ho-destination`))[0] === "Lab", { timeoutMsg: "the destination was not shown" });
-    await expect($(`${MAIL.pane} .ho-worktree`)).toBeEnabled();
-    await chooseWorktree(MAIL, "/work/example-lab");
+    await expect($(`${MAIL.pane} .ho-project`)).toBeEnabled();
+    await chooseProject(MAIL, "example-lab");
     await paste(image("shot.png"));
     await waitForCount(`${MAIL.pane} .attachment`, 1);
     await sendButton(MAIL).click();
@@ -1255,7 +1378,7 @@ describe("orca handoff: attached files (A-10)", () => {
     const attach = await mock("orca_attach_file", attached("example-app", "first.png"));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await drop(image("first.png"), image("second.png"));
     await waitForCount(`${MAIL.pane} .attachment`, 2);
     await sendButton(MAIL).click();
@@ -1269,7 +1392,7 @@ describe("orca handoff: attached files (A-10)", () => {
     const attach = await mock("orca_attach_file", rejects("Orca がエラーを返しました（forbidden）"));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("見て");
     await paste(image());
     await waitForCount(`${MAIL.pane} .attachment`, 1);
@@ -1296,7 +1419,7 @@ describe("orca handoff: attached files (A-10)", () => {
     await mock("orca_attach_file", attached("example-app"));
     const handoff = await mock("orca_handoff", holds);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await paste(image("first.png"));
     await waitForCount(`${MAIL.pane} .attachment`, 1);
     // The paste and the press happen in one turn of the page: the second image is read after the send has begun.
@@ -1322,7 +1445,7 @@ describe("orca handoff: attached files (A-10)", () => {
     await openMail();
     await mock("orca_handoff", started);
     await openPane(MAIL);
-    await chooseWorktree(MAIL, "/work/example-app");
+    await chooseProject(MAIL, "example-app");
     await field(MAIL).setValue("始めて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(MAIL).click();

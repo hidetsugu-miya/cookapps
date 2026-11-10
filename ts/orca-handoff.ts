@@ -1,7 +1,7 @@
 // Handing the open mail, Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
-// Before a send it has the destination (the Orca to talk to, and a new session in a worktree of it), the card with the content (taken off with ×) and the instruction; nothing is sent until the user presses the button.
+// Before a send it has the destination (the Orca to talk to, the project, and the worktree of a new session: the project's own folder, or a new one made then), the card with the content (taken off with ×) and the instruction; nothing is sent until the user presses the button.
 // After a send it shows that session: its header, its history (orca-chat.ts) and a composer for more instructions. The prompt is composed in Rust (`orca_handoff`).
-// A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the session each item was handed to, and the destination and the worktree last chosen.
+// A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the session each item was handed to, and the destination and the project last chosen.
 import type { AttachedFile } from "./bindings/AttachedFile";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
@@ -12,7 +12,7 @@ import { closeChat, isChatOwner, makeChatView, openChat, setChatWorking, type Ch
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
 import { openMenu } from "./menu.js";
-import { elapsed, heldOrca, noticeOf, openInOrca, openWorktreeDialog, readDestination, refreshOrca, STATUS_LABELS, THIS_MACHINE, worktreeLabel } from "./orca.js";
+import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, THIS_MACHINE, worktreeLabel } from "./orca.js";
 
 // The item a pane is for: a key that is the same while the same mail, thread or task is shown, and the content to hand over, built when the pane is opened.
 export interface HandoffItem {
@@ -47,14 +47,17 @@ const sessions = new Map<string, Session>();
 const drafts = new Map<string, string>();
 // The files attached to the instruction of an item (A-10), by item key: they stay with the item while another is in view, and go with the send.
 const attached = new Map<string, Attachment[]>();
-// The worktree chosen for a new session, kept for the next handoff.
-let chosenPath: string | null = null;
+// The project chosen for a new session (`OrcaProject.key`), kept for the next handoff.
+let chosenProject: string | null = null;
+// The worktree a send of an item made and did not finish with (the files or the launch failed after it): a send again with the same project, name and destination uses it instead of making another.
+const made = new Map<string, { project: string; name: string; environment: string | null; path: string }>();
 // The Orca the panes talk to (a saved environment's name, null for this machine), kept for the next handoff. Undefined until one is chosen: the panes then follow the target of the Orca screen, which a choice here never changes.
 let chosenDest: string | null | undefined;
 const panes = new Set<HandoffPane>();
 let ticking = false;
 // While a session is shown, the list is read again this often (for its header).
 const POLL_MS = 10_000;
+const NEW_WORKTREE = "新規作成";
 const KIND_ICONS = { mail: MAIL_SVG, slack: SLACK_SVG, todo: TODO_SVG } as const;
 
 // The text of a send: the instruction, then the path of each file on a line of its own after a blank line; only the paths when the instruction is blank.
@@ -82,6 +85,8 @@ export class HandoffPane {
   private keys: Record<string, string> = {};
   private card: HandoffCard | null = null;
   private removed = false;
+  // True when the worktree of a new session is to be made (the chip says 新規作成); false for the project's own folder.
+  private fresh = false;
   // The keys of the items whose post is on its way, and the message of the last failed post of each item. They belong to the item, so a switch of the item loses neither.
   private sending = new Set<string>();
   private errors = new Map<string, string>();
@@ -102,6 +107,8 @@ export class HandoffPane {
     strip: HTMLElement;
     card?: { title: HTMLElement; meta: HTMLElement };
     destChip?: HTMLButtonElement;
+    projectChip?: HTMLButtonElement;
+    name?: HTMLInputElement;
     sessionTitle?: HTMLElement;
     note?: HTMLElement;
     error: HTMLElement;
@@ -240,11 +247,11 @@ export class HandoffPane {
     return readDestination(want ?? null);
   }
 
-  // The destination is chosen: the worktree of the old one is dropped, and the lists of the new one are read.
+  // The destination is chosen: the project of the old one is dropped, and the lists of the new one are read.
   private chooseDestination(name: string | null) {
     if (name === this.destination()) return;
     chosenDest = name;
-    chosenPath = null;
+    chosenProject = null;
     this.overview = null;
     this.update();
     this.reload(true);
@@ -348,22 +355,57 @@ export class HandoffPane {
         destChip,
         [null, ...this.environments()].map((name) => ({ label: name ?? THIS_MACHINE, color: "var(--accent)", current: name === this.destination(), pick: () => this.chooseDestination(name) })),
       );
+    const projectChip = tag("button", "review-chip ho-chip ho-project");
+    projectChip.type = "button";
+    projectChip.setAttribute("aria-label", "プロジェクト");
+    projectChip.setAttribute("aria-haspopup", "menu");
+    projectChip.onclick = () =>
+      openMenu(
+        projectChip,
+        (this.overview?.projects ?? []).map((p) => ({
+          label: p.name,
+          color: "var(--accent)",
+          current: p.key === chosenProject,
+          pick: () => {
+            chosenProject = p.key;
+            this.update();
+            this.el?.input.focus();
+          },
+        })),
+      );
     const chip = tag("button", "review-chip ho-chip ho-worktree");
     chip.type = "button";
-    chip.setAttribute("aria-haspopup", "dialog");
+    chip.setAttribute("aria-label", "worktree");
+    chip.setAttribute("aria-haspopup", "menu");
     chip.onclick = () =>
-      openWorktreeDialog(chip, this.overview?.worktrees ?? [], chosenPath, (path) => {
-        chosenPath = path;
-        this.update();
-        this.el?.input.focus();
-      });
-    fresh.append(destChip, chip);
+      openMenu(
+        chip,
+        [false, true].map((isNew) => ({
+          label: isNew ? NEW_WORKTREE : this.defaultLabel(),
+          color: "var(--accent)",
+          current: isNew === this.fresh,
+          pick: () => {
+            this.fresh = isNew;
+            this.update();
+            (isNew ? this.el?.name : this.el?.input)?.focus();
+          },
+        })),
+      );
+    // The name of the worktree to make; Rust checks it. A suggestion of Claude can be put in it (A-9).
+    const name = tag("input", "ho-name");
+    name.setAttribute("aria-label", "worktree の名前");
+    name.autocomplete = "off";
+    name.spellcheck = false;
+    name.oninput = () => this.updateSend();
+    name.hidden = true;
+    this.fresh = false;
+    fresh.append(destChip, projectChip, chip, name);
     const scroll = tag("div", "ho-scroll");
     scroll.append(notice, fresh);
     const main = tag("div", "ho-main");
     main.append(head, scroll);
     const foot = this.foot();
-    this.el = { notice, chip, destChip, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
+    this.el = { notice, chip, destChip, projectChip, name, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
     this.restoreDraft(foot.input);
@@ -403,7 +445,7 @@ export class HandoffPane {
     if (!this.el) return;
     this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice());
     if (this.mode() === "form") {
-      this.part("dest", [chosenPath, this.destination(), this.environments(), this.overview?.worktrees], () => this.drawDest());
+      this.part("dest", [chosenProject, this.fresh, this.destination(), this.environments(), this.overview?.projects, this.overview?.worktrees], () => this.drawDest());
       this.drawCard();
     } else {
       const s = this.session()!;
@@ -441,19 +483,33 @@ export class HandoffPane {
     this.el!.notice.replaceChildren(...(text ? [row] : []));
   }
 
-  // The chip with the destination (this machine, or the saved environment), and the chip with the worktree chosen.
+  // The project's own folder (its main worktree) in the list, which a send without 新規作成 starts in.
+  private defaultWorktree() {
+    return chosenProject === null ? undefined : this.overview?.worktrees.find((w) => w.projectKey === chosenProject && w.isMain);
+  }
+
+  // The label of the project's own folder: "default", and the branch checked out there now.
+  private defaultLabel() {
+    const main = this.defaultWorktree();
+    return main ? `default ・ ${main.branch}` : "default";
+  }
+
+  // The chips with the destination (this machine, or the saved environment), the project and the worktree chosen, and the name of a new worktree.
   private drawDest() {
-    const { chip, destChip } = this.el!;
+    const { chip, destChip, projectChip, name } = this.el!;
     const destination = this.destination();
     destChip!.textContent = destination ?? THIS_MACHINE;
     // With no saved environment there is nothing to choose, unless the destination is one that is gone.
     destChip!.disabled = destination === null && this.environments().length === 0;
-    const worktrees = this.overview?.worktrees ?? [];
+    const projects = this.overview?.projects ?? [];
     // While the lists of a new destination are on their way (no overview) nothing is dropped.
-    if (this.overview !== null && chosenPath !== null && !worktrees.some((w) => w.path === chosenPath)) chosenPath = null;
-    const chosen = worktrees.find((w) => w.path === chosenPath);
-    chip!.textContent = chosen ? worktreeLabel(chosen) : worktrees.length ? "worktree を選ぶ" : "worktree がありません";
-    chip!.disabled = worktrees.length === 0;
+    if (this.overview !== null && chosenProject !== null && !projects.some((p) => p.key === chosenProject)) chosenProject = null;
+    const chosen = projects.find((p) => p.key === chosenProject);
+    projectChip!.textContent = chosen ? chosen.name : projects.length ? "プロジェクトを選ぶ" : "プロジェクトがありません";
+    projectChip!.disabled = projects.length === 0;
+    chip!.textContent = this.fresh ? NEW_WORKTREE : this.defaultLabel();
+    chip!.disabled = chosen === undefined;
+    name!.hidden = !this.fresh;
   }
 
   // The card with the content to hand over, until it is taken off. The nodes are kept while the card changes: only their text is set.
@@ -519,8 +575,8 @@ export class HandoffPane {
     el.send.textContent = s ? "送る" : "起動する";
     el.input.disabled = this.busy;
     el.input.placeholder = s ? "追加の指示を書く" : "起動するエージェントへの指示を書く";
-    // A session with no terminal can be read but takes no post; a new one needs a worktree.
-    const target = s ? (s.handle ?? this.rowOf(s)?.handle ?? null) !== null : chosenPath !== null;
+    // A session with no terminal can be read but takes no post; a new one needs a project and its own folder, or a new worktree to make.
+    const target = s ? (s.handle ?? this.rowOf(s)?.handle ?? null) !== null : chosenProject !== null && (this.fresh || this.defaultWorktree() !== undefined);
     const hasFiles = this.itemKey !== null && (attached.get(this.itemKey)?.length ?? 0) > 0;
     el.send.disabled = this.busy || this.overview?.state === "missing" || !(el.input.value.trim() || hasFiles) || !target;
     const error = this.itemKey === null ? "" : (this.errors.get(this.itemKey) ?? "");
@@ -543,6 +599,15 @@ export class HandoffPane {
     this.sync();
   }
 
+  // Makes the worktree of a new session with `orca_worktree_create` and gives its path (Rust checks the name). One that an earlier send of the item made with the same project, name and destination is used again, so a retry after a later failure makes none twice.
+  private async makeWorktree(key: string, project: string, name: string, environment: string | null) {
+    const earlier = made.get(key);
+    if (earlier && earlier.project === project && earlier.name === name && earlier.environment === environment) return earlier.path;
+    const path = await invoke("orca_worktree_create", { project, name, environment });
+    made.set(key, { project, name, environment, path });
+    return path;
+  }
+
   // The first send hands the content over; a send to a session that is shown posts more instructions. A post is never tried again, and a failure keeps the text.
   private async submit() {
     const el = this.el;
@@ -553,24 +618,28 @@ export class HandoffPane {
     if (!text.trim() && !files.length) return;
     const environment = this.destination();
     const known = sessions.get(key);
-    const path = chosenPath;
+    const project = chosenProject;
+    const fresh = this.fresh;
+    const name = el.name?.value ?? "";
+    const own = this.defaultWorktree()?.path ?? null;
     const handle = known ? (known.handle ?? this.rowOf(known)?.handle ?? null) : null;
-    if (known ? handle === null : path === null) return;
+    if (known ? handle === null : project === null || (!fresh && own === null)) return;
     const card = this.removed ? null : this.card;
     this.sending.add(key);
     this.errors.delete(key);
     this.updateSend();
     try {
-      // The files go into the worktree of the session first, and their paths into the text.
-      const worktree = known ? known.path : path!;
+      // The worktree of a new session is made first when 新規作成 is chosen (a failure ends the send before anything starts); the files go into the worktree of the session, and their paths into the text.
+      const worktree = known ? known.path : fresh ? await this.makeWorktree(key, project!, name, environment) : own!;
       const body = files.length ? withFiles(text, await uploadAttachments(files, worktree, known ? known.environment : environment)) : text;
       if (known) {
         await invoke("orca_send", { handle: handle!, text: body, environment: known.environment });
       } else {
-        const destination: HandoffDestination = { kind: "new", path: path! };
+        const destination: HandoffDestination = { kind: "new", path: worktree };
         const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
         const started = await invoke("orca_handoff", { destination, instruction: body, context, environment });
-        sessions.set(key, { path: path!, paneKey: started.paneKey, handle: started.handle, environment, seen: false });
+        sessions.set(key, { path: worktree, paneKey: started.paneKey, handle: started.handle, environment, seen: false });
+        made.delete(key);
       }
       el.input.value = "";
       // Only the files sent: one added while the send ran (still being read when it began) stays.
