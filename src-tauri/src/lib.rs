@@ -287,6 +287,7 @@ pub fn run() {
             claude::claude_proofread_slack,
             claude::claude_chat_thread,
             orca::orca_overview,
+            orca::orca_destination,
             orca::orca_set_target,
             orca::orca_send,
             orca::orca_start,

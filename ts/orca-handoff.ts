@@ -1,7 +1,7 @@
 // Handing the open mail, Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
-// Before a send it has the destination (a new session in a worktree), the card with the content (taken off with ×) and the instruction; nothing is sent until the user presses the button.
+// Before a send it has the destination (the Orca to talk to, and a new session in a worktree of it), the card with the content (taken off with ×) and the instruction; nothing is sent until the user presses the button.
 // After a send it shows that session: its header, its history (orca-chat.ts) and a composer for more instructions. The prompt is composed in Rust (`orca_handoff`).
-// A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the session each item was handed to, and the worktree last chosen.
+// A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the session each item was handed to, and the destination and the worktree last chosen.
 import type { AttachedFile } from "./bindings/AttachedFile";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
@@ -11,7 +11,8 @@ import { type HandoffDestination, invoke } from "./ipc.js";
 import { closeChat, isChatOwner, makeChatView, openChat, setChatWorking, type ChatView } from "./orca-chat.js";
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
-import { elapsed, heldOrca, noticeOf, openInOrca, openWorktreeDialog, refreshOrca, STATUS_LABELS, worktreeLabel } from "./orca.js";
+import { openMenu } from "./menu.js";
+import { elapsed, heldOrca, noticeOf, openInOrca, openWorktreeDialog, readDestination, refreshOrca, STATUS_LABELS, THIS_MACHINE, worktreeLabel } from "./orca.js";
 
 // The item a pane is for: a key that is the same while the same mail, thread or task is shown, and the content to hand over, built when the pane is opened.
 export interface HandoffItem {
@@ -48,6 +49,8 @@ const drafts = new Map<string, string>();
 const attached = new Map<string, Attachment[]>();
 // The worktree chosen for a new session, kept for the next handoff.
 let chosenPath: string | null = null;
+// The Orca the panes talk to (a saved environment's name, null for this machine), kept for the next handoff. Undefined until one is chosen: the panes then follow the target of the Orca screen, which a choice here never changes.
+let chosenDest: string | null | undefined;
 const panes = new Set<HandoffPane>();
 let ticking = false;
 // While a session is shown, the list is read again this often (for its header).
@@ -98,7 +101,7 @@ export class HandoffPane {
     cardBox?: HTMLElement;
     strip: HTMLElement;
     card?: { title: HTMLElement; meta: HTMLElement };
-    target?: HTMLElement;
+    destChip?: HTMLButtonElement;
     sessionTitle?: HTMLElement;
     note?: HTMLElement;
     error: HTMLElement;
@@ -150,7 +153,7 @@ export class HandoffPane {
       // The card is built when the pane opens (the form is drawn), not for each item that goes by.
       this.card = null;
       this.open = key !== null && (this.host.forced === true || sessions.has(key));
-      this.overview = heldOrca();
+      this.overview = this.screenOverview();
       this.lastRead = 0;
     }
     this.item = item;
@@ -197,15 +200,54 @@ export class HandoffPane {
     if (this.open && this.mode() === "session" && this.overview?.state !== "missing" && Date.now() - this.lastRead >= POLL_MS) this.reload(false);
   }
 
+  // The Orca the pane talks to: that of the session shown, else the one chosen, else the target of the Orca screen.
+  private destination() {
+    const s = this.session();
+    if (s) return s.environment;
+    return chosenDest !== undefined ? chosenDest : (this.overview?.target ?? heldOrca()?.target ?? null);
+  }
+
+  // The list the Orca screen holds, when the destination is its target (or none was chosen); else null, and the destination's own read is awaited.
+  private screenOverview() {
+    const held = heldOrca();
+    const want = this.session()?.environment ?? chosenDest;
+    return want === undefined || held?.target === want ? held : null;
+  }
+
+  // The saved environments the destination can be changed to.
+  private environments() {
+    return this.overview?.environments.length ? this.overview.environments : (heldOrca()?.environments ?? []);
+  }
+
   // Reads the list of Orca: forced when the pane opens and after a send, and not while another read is on its way when it is the poll of a shown session.
   private async reload(force: boolean) {
     const seq = ++this.readSeq;
     this.lastRead = Date.now();
-    const overview = await refreshOrca(force);
+    const overview = await this.read(force);
     if (seq !== this.readSeq || !this.open) return;
     this.overview = overview;
     this.update();
     this.syncChat();
+  }
+
+  // The list of the screen when the destination is its target (also a stream, A-12), else a read of the destination alone.
+  private async read(force: boolean) {
+    const want = this.session()?.environment ?? chosenDest;
+    if (want === undefined || heldOrca()?.target === want) {
+      const screen = await refreshOrca(force);
+      if (want === undefined || screen?.target === want) return screen;
+    }
+    return readDestination(want ?? null);
+  }
+
+  // The destination is chosen: the worktree of the old one is dropped, and the lists of the new one are read.
+  private chooseDestination(name: string | null) {
+    if (name === this.destination()) return;
+    chosenDest = name;
+    chosenPath = null;
+    this.overview = null;
+    this.update();
+    this.reload(true);
   }
 
   // The read of the history belongs to this pane only while it shows a session in view; otherwise it is let go (a read that another owner took is not touched).
@@ -297,7 +339,16 @@ export class HandoffPane {
     head.hidden = this.host.forced === true;
     const notice = tag("div", "ho-notice");
     const fresh = tag("div", "ho-new");
-    const chip = tag("button", "review-chip ho-chip");
+    const destChip = tag("button", "review-chip ho-chip ho-destination");
+    destChip.type = "button";
+    destChip.setAttribute("aria-label", "送り先");
+    destChip.setAttribute("aria-haspopup", "menu");
+    destChip.onclick = () =>
+      openMenu(
+        destChip,
+        [null, ...this.environments()].map((name) => ({ label: name ?? THIS_MACHINE, color: "var(--accent)", current: name === this.destination(), pick: () => this.chooseDestination(name) })),
+      );
+    const chip = tag("button", "review-chip ho-chip ho-worktree");
     chip.type = "button";
     chip.setAttribute("aria-haspopup", "dialog");
     chip.onclick = () =>
@@ -306,17 +357,13 @@ export class HandoffPane {
         this.update();
         this.el?.input.focus();
       });
-    fresh.append(chip);
+    fresh.append(destChip, chip);
     const scroll = tag("div", "ho-scroll");
-    // An environment of Orca (not this machine) is named by the heading, as the status label of the Orca screen names it.
-    const label = tag("p", "ho-label", "送り先");
-    const target = tag("span", "ho-target");
-    label.append(target);
-    scroll.append(notice, label, fresh);
+    scroll.append(notice, fresh);
     const main = tag("div", "ho-main");
     main.append(head, scroll);
     const foot = this.foot();
-    this.el = { notice, chip, target, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
+    this.el = { notice, chip, destChip, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
     this.restoreDraft(foot.input);
@@ -356,7 +403,7 @@ export class HandoffPane {
     if (!this.el) return;
     this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice());
     if (this.mode() === "form") {
-      this.part("dest", [chosenPath, this.overview?.target, this.overview?.worktrees], () => this.drawDest());
+      this.part("dest", [chosenPath, this.destination(), this.environments(), this.overview?.worktrees], () => this.drawDest());
       this.drawCard();
     } else {
       const s = this.session()!;
@@ -394,12 +441,16 @@ export class HandoffPane {
     this.el!.notice.replaceChildren(...(text ? [row] : []));
   }
 
-  // The name of the environment beside the heading, and the chip with the worktree chosen.
+  // The chip with the destination (this machine, or the saved environment), and the chip with the worktree chosen.
   private drawDest() {
-    const { chip, target } = this.el!;
-    target!.textContent = this.overview?.target ?? "";
+    const { chip, destChip } = this.el!;
+    const destination = this.destination();
+    destChip!.textContent = destination ?? THIS_MACHINE;
+    // With no saved environment there is nothing to choose, unless the destination is one that is gone.
+    destChip!.disabled = destination === null && this.environments().length === 0;
     const worktrees = this.overview?.worktrees ?? [];
-    if (chosenPath !== null && !worktrees.some((w) => w.path === chosenPath)) chosenPath = null;
+    // While the lists of a new destination are on their way (no overview) nothing is dropped.
+    if (this.overview !== null && chosenPath !== null && !worktrees.some((w) => w.path === chosenPath)) chosenPath = null;
     const chosen = worktrees.find((w) => w.path === chosenPath);
     chip!.textContent = chosen ? worktreeLabel(chosen) : worktrees.length ? "worktree を選ぶ" : "worktree がありません";
     chip!.disabled = worktrees.length === 0;
@@ -500,7 +551,7 @@ export class HandoffPane {
     const text = el.input.value;
     const files = attached.get(key) ?? [];
     if (!text.trim() && !files.length) return;
-    const environment = this.overview?.target ?? null;
+    const environment = this.destination();
     const known = sessions.get(key);
     const path = chosenPath;
     const handle = known ? (known.handle ?? this.rowOf(known)?.handle ?? null) : null;

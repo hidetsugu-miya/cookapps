@@ -981,14 +981,20 @@ fn message_of(e: RunError) -> String {
     }
 }
 
+fn failed_overview(
+    message: String,
+    target: Option<String>,
+    environments: Vec<String>,
+) -> OrcaOverview {
+    OrcaOverview {
+        message,
+        target,
+        environments,
+        ..OrcaOverview::empty(OrcaState::Failed)
+    }
+}
+
 fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview {
-    let failed =
-        |message: String, target: Option<String>, environments: Vec<String>| OrcaOverview {
-            message,
-            target,
-            environments,
-            ..OrcaOverview::empty(OrcaState::Failed)
-        };
     // Only a full read asks for the environments and resolves the target; the others use the one the screen holds.
     let (target, environments, known) = if scope == OrcaScope::Full {
         let saved = load_target(dir);
@@ -999,18 +1005,28 @@ fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview 
             Err(RunError::Failed(message)) => {
                 return OrcaOverview {
                     known: false,
-                    ..failed(message, None, Vec::new())
+                    ..failed_overview(message, None, Vec::new())
                 }
             }
         };
         worktree_hosts().retain_environments(&environments);
         match resolve_target(&saved, &environments) {
             Ok(target) => (target, environments, true),
-            Err(message) => return failed(message, saved_name(&saved), environments),
+            Err(message) => return failed_overview(message, saved_name(&saved), environments),
         }
     } else {
         (held, Vec::new(), false)
     };
+    read_overview(target, environments, known, scope)
+}
+
+/// The lists of `target` (the agents with their terminals, the worktrees, the projects), drawn as `scope` asks.
+fn read_overview(
+    target: Option<String>,
+    environments: Vec<String>,
+    known: bool,
+    scope: OrcaScope,
+) -> OrcaOverview {
     let (ps, terminals) = read_lists(target.as_deref(), scope != OrcaScope::Badge);
     match (ps, terminals) {
         (Ok(ps), Ok(terminals)) => {
@@ -1041,8 +1057,47 @@ fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview 
         }
         (Err(RunError::Failed(message)), _) | (_, Err(RunError::Failed(message))) => OrcaOverview {
             known,
-            ..failed(message, target, environments)
+            ..failed_overview(message, target, environments)
         },
+    }
+}
+
+/// A-9: the saved environments when `environment` (`None`: this machine) may be read, else the overview that says why not. A name that is not among the saved ones is refused before it reaches the CLI.
+fn destination_check(
+    environment: Option<&str>,
+    listed: Result<Vec<String>, RunError>,
+) -> Result<Vec<String>, Box<OrcaOverview>> {
+    let environments = match listed {
+        Ok(environments) => environments,
+        Err(RunError::Missing) => return Err(Box::new(OrcaOverview::empty(OrcaState::Missing))),
+        Err(RunError::Failed(message)) => {
+            return Err(Box::new(failed_overview(
+                message,
+                environment.map(str::to_owned),
+                Vec::new(),
+            )))
+        }
+    };
+    match environment.map(|name| check_environment(name, &environments)) {
+        Some(Err(message)) => Err(Box::new(failed_overview(
+            message,
+            environment.map(str::to_owned),
+            environments,
+        ))),
+        _ => Ok(environments),
+    }
+}
+
+/// A-9: the lists of the destination the pane chose, whatever the Orca screen holds. The target saved for the screen is not read or changed.
+fn destination_overview(environment: Option<&str>) -> OrcaOverview {
+    match destination_check(environment, read_environments()) {
+        Ok(environments) => read_overview(
+            environment.map(str::to_owned),
+            environments,
+            false,
+            OrcaScope::Screen,
+        ),
+        Err(view) => *view,
     }
 }
 
@@ -1365,6 +1420,12 @@ pub async fn orca_overview(
         view.ssh = ssh;
     }
     Ok(view)
+}
+
+/// A-9: the lists of the destination the side pane chose (`None`: this machine, else a saved environment's name, which is checked against the saved ones). It does not touch the target the Orca screen holds.
+#[tauri::command]
+pub async fn orca_destination(environment: Option<String>) -> Result<OrcaOverview, String> {
+    blocking(move || destination_overview(environment.as_deref())).await
 }
 
 /// Saves the Orca to talk to: a saved environment's name, or `None` for this machine.
@@ -2052,6 +2113,43 @@ mod tests {
         assert!(check_environment("studio", &saved).is_err());
         assert!(check_environment("--json", &saved).is_err());
         assert!(check_environment("Studio", &[]).is_err());
+    }
+
+    #[test]
+    fn a_destination_is_read_only_when_it_is_this_machine_or_a_saved_environment() {
+        let saved = || Ok(vec!["Studio".to_owned(), "Lab".to_owned()]);
+        assert_eq!(destination_check(None, saved()).unwrap(), ["Studio", "Lab"]);
+        assert_eq!(
+            destination_check(Some("Lab"), saved()).unwrap(),
+            ["Studio", "Lab"]
+        );
+        // A name that is not saved is refused, and the saved ones stay in the answer so the pane can choose again.
+        for name in ["lab", "--json", ""] {
+            let view = destination_check(Some(name), saved()).unwrap_err();
+            assert_eq!(view.state, OrcaState::Failed);
+            assert_eq!(view.target.as_deref(), Some(name));
+            assert_eq!(view.environments, ["Studio", "Lab"]);
+            assert!(view.message.contains("保存されていない接続先"));
+        }
+    }
+
+    #[test]
+    fn a_destination_whose_environments_cannot_be_listed_is_not_read() {
+        let missing = destination_check(Some("Studio"), Err(RunError::Missing)).unwrap_err();
+        assert_eq!(missing.state, OrcaState::Missing);
+        let failed = destination_check(
+            Some("Studio"),
+            Err(RunError::Failed("応答がありません".into())),
+        )
+        .unwrap_err();
+        assert_eq!(failed.state, OrcaState::Failed);
+        assert_eq!(failed.message, "応答がありません");
+        assert_eq!(failed.target.as_deref(), Some("Studio"));
+        // This machine needs no environment, but the list is still asked for, so the pane can offer them.
+        let this_machine =
+            destination_check(None, Err(RunError::Failed("応答がありません".into()))).unwrap_err();
+        assert_eq!(this_machine.state, OrcaState::Failed);
+        assert_eq!(this_machine.target, None);
     }
 
     #[test]

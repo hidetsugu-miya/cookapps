@@ -208,6 +208,8 @@ export interface Commands {
   // `scope` "full" reads the saved environments and resolves the target (the saved one; with no file saved yet the first environment, else this machine; a saved environment that is gone, or a file that cannot be used while an environment is saved, is a failed read that picks nothing, with the environments listed so the owner can choose again),
   // "screen" reads the agents and their terminals of `target` (the one the screen holds), and "badge" only the agents, for the count (no terminals, so no handles). With "screen" and "badge", and when `environment list` itself failed, `known` is false and `target` and `environments` are not the answer: the screen keeps the ones it had.
   orca_overview: { args: { scope: "full" | "screen" | "badge"; target: string | null }; result: OrcaOverview };
+  // A-9: the lists of the destination the side pane chose (null: this machine, else a saved environment's name, checked against the saved ones; one that is not saved is a failed read). It reads the agents and their terminals, the worktrees and the projects like "screen", with `environments` filled, and does not touch the target the Orca screen holds.
+  orca_destination: { args: { environment: string | null }; result: OrcaOverview };
   // Saves the target: a saved environment's name, or null for this machine.
   orca_set_target: { args: { environment: string | null }; result: null };
   // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.

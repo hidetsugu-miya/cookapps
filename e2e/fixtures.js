@@ -63,6 +63,7 @@ const answers = {
   slack_file_images: {},
   // No orca command: the Orca screen reads once and stops.
   orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: true },
+  orca_destination: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: false },
   orca_chat_open: null,
   orca_chat_close: null,
   orca_chat_older: null,
