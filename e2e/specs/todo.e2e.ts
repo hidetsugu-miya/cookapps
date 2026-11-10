@@ -924,6 +924,109 @@ function flightsAlone() {
   return data;
 }
 
+// A-23: the list of projects is closed and opened by a button. Where the button is, and the width the tasks take.
+describe("todo: closing the list of projects (A-23)", () => {
+  const rect = (selector: string) => browser.execute((q) => {
+    const r = document.querySelector(q)!.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width };
+  }, selector);
+
+  it("has the button first in the list when it is open, and none in the header", async () => {
+    await openTodo();
+    const button = $("#projects-toggle");
+    await expect(button).toBeDisplayed();
+    await expect(button).toHaveAttribute("aria-label", "プロジェクト一覧");
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(await browser.execute(() => document.getElementById("projects-toggle")!.className)).toContain("icon-btn list-toggle");
+    expect(await browser.execute(() => document.getElementById("projects")!.firstElementChild!.id)).toBe("projects-toggle");
+    await expect($("#todo-list-toggle")).not.toBeDisplayed();
+    // At the top left of the list.
+    const [toggle, list] = await Promise.all(["#projects-toggle", "#projects"].map(rect));
+    expect(toggle.left - list.left).toBeLessThan(20);
+    expect(toggle.top - list.top).toBeLessThan(40);
+    // A press on it is not a drag of the window (the band is the header, and the button is not in it).
+    await expect(button).not.toHaveAttribute("data-tauri-drag-region");
+  });
+
+  it("closes the list, widens the tasks to its width, and puts the button at the left of the heading", async () => {
+    await openTodo();
+    const [listBefore, bodyBefore] = await Promise.all(["#projects", "#todo-body"].map(rect));
+    await $("#projects-toggle").click();
+    await expect($("#projects")).not.toBeDisplayed();
+    const [screen, body] = await Promise.all(["#todo", "#todo-body"].map(rect));
+    expect(body.left).toBeCloseTo(screen.left, 0);
+    expect(body.width).toBeCloseTo(bodyBefore.width + listBefore.width, 0);
+    // The button is first in the header, beside the heading and at its left.
+    const closed = $("#todo-list-toggle");
+    await expect(closed).toBeDisplayed();
+    await expect(closed).toHaveAttribute("aria-expanded", "false");
+    await expect(closed).toHaveAttribute("aria-label", "プロジェクト一覧");
+    expect(await browser.execute(() => document.querySelector("#todo-body > header")!.firstElementChild!.id)).toBe("todo-list-toggle");
+    const [button, title, header] = await Promise.all(["#todo-list-toggle", "#todo-title", "#todo-body > header"].map(rect));
+    expect(button.right).toBeLessThanOrEqual(title.left);
+    expect(button.left).toBeGreaterThanOrEqual(header.left);
+    // Level with the heading.
+    expect(Math.abs((button.top + button.bottom) / 2 - (title.top + title.bottom) / 2)).toBeLessThan(6);
+    // Still a button of the band: a press on it does not move the window.
+    await expect(closed).not.toHaveAttribute("data-tauri-drag-region");
+    // The green column stays.
+    await expect($("#sidebar")).toBeDisplayed();
+    await closed.click();
+    await expect($("#projects")).toBeDisplayed();
+    await expect($("#todo-list-toggle")).not.toBeDisplayed();
+    await expect($("#projects-toggle")).toHaveAttribute("aria-expanded", "true");
+    expect((await rect("#projects")).width).toBeCloseTo(listBefore.width, 0);
+  });
+
+  it("keeps the projects and their counts when the list is drawn again, and the button with them", async () => {
+    await openTodo();
+    await waitForText("#projects .proj .name", "Work");
+    await $("#projects-toggle").click();
+    await $("#todo-list-toggle").click();
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount("#todo-list li.task", 2);
+    expect(await count("#projects #projects-toggle")).toBe(1);
+    expect(await browser.execute(() => document.getElementById("projects")!.firstElementChild!.id)).toBe("projects-toggle");
+  });
+
+  it("keeps the list closed while the screen is left and shown again, and shows it open when the app starts", async () => {
+    await openTodo();
+    await $("#projects-toggle").click();
+    await expect($("#projects")).not.toBeDisplayed();
+    await $("#nav-mail").click();
+    await $("#nav-todo").click();
+    await expect($("#todo")).toBeDisplayed();
+    await expect($("#projects")).not.toBeDisplayed();
+    await expect($("#todo-list-toggle")).toBeDisplayed();
+    // Nothing is saved: a start gives the open list.
+    await openTodo();
+    await expect($("#projects")).toBeDisplayed();
+    await expect($("#todo-list-toggle")).not.toBeDisplayed();
+    await expect($("#projects-toggle")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("gives the focus to the button that is shown after a press", async () => {
+    await openTodo();
+    await $("#projects-toggle").click();
+    await browser.execute(() => document.getElementById("todo-list-toggle")!.focus());
+    await browser.keys("Enter");
+    await expect($("#projects")).toBeDisplayed();
+    expect(await browser.execute(() => document.activeElement?.id)).toBe("projects-toggle");
+    await browser.keys("Enter");
+    await expect($("#projects")).not.toBeDisplayed();
+    expect(await browser.execute(() => document.activeElement?.id)).toBe("todo-list-toggle");
+  });
+
+  it("still takes a task dropped on a project (T-2) after the list was closed and opened again", async () => {
+    await openTodo();
+    await $("#projects-toggle").click();
+    await $("#todo-list-toggle").click();
+    const move = await mock("todoist_move", true);
+    await dragRow("Write report", projectOf("p2"));
+    expect(await waitForCalls(move)).toEqual([{ id: "k1", projectId: "p2" }]);
+  });
+});
+
 describe("todo: moving a task by its grip", () => {
   // The Work project: "Write report" and "Plan trip" (closed).
   async function openWork() {

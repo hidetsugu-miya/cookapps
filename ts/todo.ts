@@ -10,6 +10,7 @@ import { closeMenu, showMenu } from "./menu.js";
 import { currentScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { todoCard } from "./orca-handoff-cards.js";
+import { drawListToggle, listToggle } from "./list-toggle.js";
 import { initSplit } from "./split.js";
 import { initTodoClaude, openedTodoClaude } from "./todo-claude.js";
 import { renderDetail } from "./todo-detail.js";
@@ -31,6 +32,27 @@ let orcaOpen = false;
 let claudeOpen = false;
 let claudeUsable = false;
 
+// The list of projects (A-23): `listOpen` is what the owner chose, held in memory only, so the screen is open again when the app starts; `tokenForm` is whether the token form is up, which has no list.
+let listOpen = true;
+let tokenForm = false;
+
+// Shows the list, or (closed) the button in the header that opens it again. The list's own button is in the list, so it goes with it.
+function layoutList() {
+  $("projects").hidden = tokenForm || !listOpen;
+  $("todo-list-toggle").hidden = tokenForm || listOpen;
+  drawListToggle($("projects-toggle"), listOpen);
+  drawListToggle($("todo-list-toggle"), listOpen);
+}
+
+// Closes the list or opens it again; the tasks take the width of a closed list.
+// The pressed button is hidden by it, so the focus goes on to the button that is shown now.
+function toggleList() {
+  const focused = document.activeElement?.classList.contains("list-toggle") ?? false;
+  listOpen = !listOpen;
+  layoutList();
+  if (focused) $(listOpen ? "projects-toggle" : "todo-list-toggle").focus({ preventScroll: true });
+}
+
 function layoutPanes() {
   const claude = claudeOpen && claudeUsable;
   $("todo-claude").hidden = !claude;
@@ -51,7 +73,8 @@ export function syncTodoHandoff() {
 // Which part the Todo screen shows: the token form, the task list, one task, or the page of a draft (S-2).
 export function todoMode(mode: "token" | "list" | "detail" | "draft") {
   $("todo-token").hidden = mode !== "token";
-  $("projects").hidden = mode === "token";
+  tokenForm = mode === "token";
+  layoutList();
   $("todo-add").hidden = mode !== "list";
   $("todo-pending").hidden = mode !== "list";
   $("todo-list").hidden = mode !== "list";
@@ -291,6 +314,14 @@ async function refreshTodo() {
 }
 
 export function initTodo() {
+  const inList = listToggle("プロジェクト一覧", toggleList);
+  inList.id = "projects-toggle";
+  $("projects").prepend(inList);
+  const inHeader = listToggle("プロジェクト一覧", toggleList);
+  inHeader.id = "todo-list-toggle";
+  inHeader.hidden = true;
+  $("todo-back").before(inHeader);
+  layoutList();
   handoff = new HandoffPane({
     root: $("todo-handoff"),
     current: () => {

@@ -786,6 +786,8 @@ button.status:hover { filter: brightness(.95); }
 .list-toggle svg { width: 15px; height: 15px; }
 #orca-header .list-toggle { margin-right: auto; }
 .orca-tabbar .list-toggle { margin-left: 6px; }
+/* A-23, Todo: first in the list of projects, level with the buttons of the header beside it; while the list is closed, first in that header. */
+#projects .list-toggle { display: flex; margin: 6px 0 8px; }
 /* Beside the bell: the question icon (or the working mark) and the number. */
 #orca-bell-badge { display: flex; align-items: center; gap: 2px; font-size: calc(11px * var(--fs)); font-weight: 600; }
 #orca-bell-badge .orca-ic { width: 10px; height: 10px; }
