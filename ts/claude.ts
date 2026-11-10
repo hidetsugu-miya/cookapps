@@ -246,6 +246,16 @@ function redrawModelSlot(id: string) {
   $(id)?.replaceChildren(...(modelSettings === null ? [] : purposeSelects(purpose, "")));
 }
 
+// The selects of a pane that makes its own slot (the Orca handoff pane of each screen), by the slot element and the purpose: they are drawn again when the settings are read.
+const ownSlots = new Map<HTMLElement, Purpose>();
+
+// Opens a slot a pane made itself: the settings are read the first time, and what was read is drawn if the slot is empty.
+export function showPurposeSlot(slot: HTMLElement, purpose: Purpose) {
+  ownSlots.set(slot, purpose);
+  if (modelSettings === null) loadModelSettings();
+  else if (slot.childElementCount === 0) slot.replaceChildren(...purposeSelects(purpose, ""));
+}
+
 // Every select drawn, on the settings screen and on the prompt screen.
 const modelSelects = () => [...document.querySelectorAll<HTMLSelectElement>("select[data-purpose]")];
 
@@ -300,6 +310,11 @@ export async function loadModelSettings() {
   modelSettings = read;
   redrawModels();
   for (const [id] of MODEL_SLOTS) redrawModelSlot(id);
+  for (const [slot, purpose] of ownSlots) {
+    // A pane draws its slot again each time its form is built: the ones that left the page are let go.
+    if (slot.isConnected) slot.replaceChildren(...purposeSelects(purpose, ""));
+    else ownSlots.delete(slot);
+  }
 }
 
 // The connection card: the rows, the key field, and the buttons that wait while a change or a read is on its way (or, for the key field, while the states are not known).
@@ -392,7 +407,7 @@ export function initClaude() {
           ["キーを貼って「確認して保存」を押す。キーは OS の資格情報の保管場所に入れ、画面には出さない。キーに切り替えると、この端末の Claude Code はログアウトされる（戻すときは ", code("claude auth login"), "）"],
           ["↻ で状態を確かめ直す"],
         ],
-        "Slack のメッセージとそのスレッドの、送信者の ID と本文のテキスト（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります。Slack に貼る文章を Claude と校正するときは、編集欄の文章、会話、依頼を、「校正する」か送信を押したときだけ送ります。Slack のスレッドの詳細で Claude に相談するときは、返信欄の文章、スレッドのメッセージ（送信者の名前、日時、画面に出ている本文。ボットの投稿のブロックと添付の文字、ボタンと添付のリンクの URL を含む）、会話、依頼を、同じく送信を押したときだけ送ります。モデルと effort は、Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack のスレッドの相談、Orca に渡す要約のそれぞれに選べます",
+        "Slack のメッセージとそのスレッドの、送信者の ID と本文のテキスト（Todoist のプロジェクトの ID と名前を添えて）と、「AI 要約」を押したメールの件名、差出人、日時、本文を、要約のため Anthropic に送ります。Todo の要約プロンプトを Claude と編集するときは、編集欄の指示と会話を送ります。Slack に貼る文章を Claude と校正するときは、編集欄の文章、会話、依頼を、「校正する」か送信を押したときだけ送ります。Slack のスレッドの詳細で Claude に相談するときは、返信欄の文章、スレッドのメッセージ（送信者の名前、日時、画面に出ている本文。ボットの投稿のブロックと添付の文字、ボタンと添付のリンクの URL を含む）、会話、依頼を、同じく送信を押したときだけ送ります。Orca に渡すペインで実装することを要約するときは、指示の文章、カードに出ている内容（メールのスレッド、Slack のスレッド、Todo のテキスト）、会話、直しの依頼を、「要約する」か「直す」を押したときだけ送ります。モデルと effort は、Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack のスレッドの相談、Orca に渡す要約のそれぞれに選べます",
       ),
     );
 }

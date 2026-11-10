@@ -20,7 +20,7 @@ use crate::{
     accounts::write_synced,
     auth::config_dir,
     orca_chat::check_pane_key,
-    orca_handoff::{compose, HandoffContext},
+    orca_handoff::{agreed_instruction, compose, HandoffContext},
     orca_stream::{clamp_viewport, OrcaViewport},
 };
 
@@ -1333,14 +1333,15 @@ pub(crate) fn forget_worktree_host(path: &str, environment: Option<&str>) {
     worktree_hosts().forget(environment, path);
 }
 
-/// Hands the content to a new session (A-9): the prompt is composed here, then the launch of A-6 runs once with its checks.
+/// Hands the content to a new session (A-9): the prompt is composed here from the summary the user agreed to (`points`), the attached files and the content, then the launch of A-6 runs once with its checks.
 fn handoff(
     destination: &OrcaDestination,
-    instruction: &str,
+    points: &[String],
+    files: &[String],
     context: Option<&HandoffContext>,
     environment: Option<&str>,
 ) -> Result<OrcaStarted, String> {
-    let text = compose(instruction, context)?;
+    let text = compose(&agreed_instruction(points, files)?, context)?;
     let OrcaDestination::New { path } = destination;
     launch(path, Some(&text), environment)
 }
@@ -1532,18 +1533,20 @@ pub async fn orca_worktree_create(
     blocking(move || create_worktree(&project, &name, environment.as_deref())).await?
 }
 
-/// A-9: starts a session in a worktree with the instruction and, when `context` is given, the content quoted as data.
+/// A-9: starts a session in a worktree with the summary the user agreed to (`points`), the text of each attached file (`files`, A-10) and, when `context` is given, the content quoted as data.
 #[tauri::command]
 pub async fn orca_handoff(
     destination: OrcaDestination,
-    instruction: String,
+    points: Vec<String>,
+    files: Vec<String>,
     context: Option<HandoffContext>,
     environment: Option<String>,
 ) -> Result<OrcaStarted, String> {
     blocking(move || {
         handoff(
             &destination,
-            &instruction,
+            &points,
+            &files,
             context.as_ref(),
             environment.as_deref(),
         )
@@ -2463,11 +2466,11 @@ mod tests {
     }
 
     #[test]
-    fn a_handoff_refuses_a_blank_instruction_before_it_runs_anything() {
+    fn a_handoff_refuses_a_summary_with_no_point_before_it_runs_anything() {
         let destination = OrcaDestination::New { path: "/w".into() };
         assert_eq!(
-            handoff(&destination, " \n", None, None).unwrap_err(),
-            "指示を書いてください"
+            handoff(&destination, &[" \n".into()], &[], None, None).unwrap_err(),
+            "要約がありません"
         );
     }
 
@@ -2481,7 +2484,7 @@ mod tests {
         let bad_path = OrcaDestination::New {
             path: "relative".into(),
         };
-        assert!(handoff(&bad_path, "i", Some(&context), None)
+        assert!(handoff(&bad_path, &["i".into()], &[], Some(&context), None)
             .unwrap_err()
             .contains("worktree"));
     }
