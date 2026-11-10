@@ -32,6 +32,8 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 const WORKTREE_LIMIT: &str = "200";
 /// How long a worktree confirmed against the target's list is believed without asking the CLI again (A-18).
 const HOST_TTL: Duration = Duration::from_secs(60);
+/// How long the launch that follows `create_worktree` may rely on its checks (A-9).
+const MADE_TTL: Duration = Duration::from_secs(60);
 /// Characters of a post (a send or the first prompt of a launch).
 pub(crate) const TEXT_LIMIT: usize = 100_000;
 /// Characters of the line a row shows; the screen cuts it with an ellipsis, this only keeps a long message from crossing the IPC.
@@ -1004,12 +1006,12 @@ fn read_environments() -> Result<Vec<String>, RunError> {
         .map(|result| environments_of(&result))
 }
 
+/// The answers of `orca worktree ps` and `orca terminal list`.
+type Lists = (Result<Value, RunError>, Result<Value, RunError>);
+
 /// `orca worktree ps` and, when `terminals` is true, `orca terminal list` of the target, run side by side: the answer waits for the slower one, not for both.
 /// Without terminals the second answer is an empty document.
-fn read_lists(
-    environment: Option<&str>,
-    terminals: bool,
-) -> (Result<Value, RunError>, Result<Value, RunError>) {
+fn read_lists(environment: Option<&str>, terminals: bool) -> Lists {
     std::thread::scope(|scope| {
         let list = scope.spawn(|| {
             if terminals {
@@ -1043,11 +1045,24 @@ fn failed_overview(
     }
 }
 
+/// True when the lists of this machine may be read at the same time as the saved environments: the file says this machine, so `resolve_target` cannot choose another target whatever the environments are.
+fn reads_local_lists_early(saved: &Saved) -> bool {
+    matches!(saved, Saved::Target(Target::Local))
+}
+
 fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview {
     // Only a full read asks for the environments and resolves the target; the others use the one the screen holds.
-    let (target, environments, known) = if scope == OrcaScope::Full {
+    let (target, environments, known, early) = if scope == OrcaScope::Full {
         let saved = load_target(dir);
-        let environments = match read_environments() {
+        let (listed, early) = if reads_local_lists_early(&saved) {
+            std::thread::scope(|threads| {
+                let lists = threads.spawn(|| read_lists(None, true));
+                (read_environments(), Some(lists.join().unwrap()))
+            })
+        } else {
+            (read_environments(), None)
+        };
+        let environments = match listed {
             Ok(environments) => environments,
             Err(RunError::Missing) => return OrcaOverview::empty(OrcaState::Missing),
             // The target and the environments are not learned: the screen keeps the ones it had.
@@ -1060,23 +1075,29 @@ fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview 
         };
         worktree_hosts().retain_environments(&environments);
         match resolve_target(&saved, &environments) {
-            Ok(target) => (target, environments, true),
+            // The lists read early are of this machine: they are thrown away when another target was resolved.
+            Ok(target) => {
+                let early = early.filter(|_| target.is_none());
+                (target, environments, true, early)
+            }
             Err(message) => return failed_overview(message, saved_name(&saved), environments),
         }
     } else {
-        (held, Vec::new(), false)
+        (held, Vec::new(), false, None)
     };
-    read_overview(target, environments, known, scope)
+    read_overview(target, environments, known, scope, early)
 }
 
-/// The lists of `target` (the agents with their terminals, the worktrees, the projects), drawn as `scope` asks.
+/// The lists of `target` (the agents with their terminals, the worktrees, the projects), drawn as `scope` asks. `early` is the pair `read_lists` gave for the same target and scope, when it was read already.
 fn read_overview(
     target: Option<String>,
     environments: Vec<String>,
     known: bool,
     scope: OrcaScope,
+    early: Option<Lists>,
 ) -> OrcaOverview {
-    let (ps, terminals) = read_lists(target.as_deref(), scope != OrcaScope::Badge);
+    let (ps, terminals) =
+        early.unwrap_or_else(|| read_lists(target.as_deref(), scope != OrcaScope::Badge));
     match (ps, terminals) {
         (Ok(ps), Ok(terminals)) => {
             worktree_hosts().sync(target.as_deref(), &ps);
@@ -1171,7 +1192,38 @@ fn destination_overview(environment: Option<&str>, force: bool) -> OrcaOverview 
         environments,
         false,
         OrcaScope::Screen,
+        None,
     )
+}
+
+/// A-9: the worktree `create_worktree` made last, with the target it was made in. The launch that follows it takes the record once instead of asking for the saved environments and the list again: the environment was checked and the path was named by Orca just before, and both must be the same. A record is believed for `MADE_TTL` only, is used up by the launch that takes it, and a launch that does not match it checks as any other.
+#[derive(Default)]
+struct MadeWorktree(Option<(Option<String>, String, Instant)>);
+
+impl MadeWorktree {
+    fn put(&mut self, environment: Option<&str>, path: &str, now: Instant) {
+        self.0 = Some((environment.map(str::to_owned), path.to_owned(), now));
+    }
+
+    /// True once for the path and the target of the record, if it is not older than `MADE_TTL`.
+    fn take(&mut self, environment: Option<&str>, path: &str, now: Instant) -> bool {
+        let Some((env, made, at)) = &self.0 else {
+            return false;
+        };
+        let fresh = now.saturating_duration_since(*at) < MADE_TTL;
+        let same = env.as_deref() == environment && made == path;
+        if same {
+            self.0 = None;
+        }
+        same && fresh
+    }
+}
+
+fn made_worktree() -> std::sync::MutexGuard<'static, MadeWorktree> {
+    static MADE: OnceLock<Mutex<MadeWorktree>> = OnceLock::new();
+    MADE.get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Checks `environment` against the saved ones (nothing is asked for this machine).
@@ -1242,7 +1294,12 @@ fn launch(
     if let Some(text) = prompt {
         check_text(text)?;
     }
-    check_start(path, environment)?;
+    // A-9: the worktree `create_worktree` just made was checked by it, so its launch asks for neither the saved environments nor the list.
+    if made_worktree().take(environment, path, Instant::now()) {
+        check_path(path)?;
+    } else {
+        check_start(path, environment)?;
+    }
     write(&launch_args(path, prompt, environment)).map(|result| started_of(&result))
 }
 
@@ -1259,7 +1316,9 @@ fn create_worktree(project: &str, name: &str, environment: Option<&str>) -> Resu
     let (ps, _) = read_lists(environment, false);
     check_project(&ps.map_err(message_of)?, project)?;
     let result = write(&create_worktree_args(project, name, environment))?;
-    created_worktree_path_of(&result)
+    let path = created_worktree_path_of(&result)?;
+    made_worktree().put(environment, &path, Instant::now());
+    Ok(path)
 }
 
 /// What a launch and a new terminal check before they run: the path is absolute, the environment is a saved one, and the path is a worktree of the list read just now.
@@ -2230,6 +2289,57 @@ mod tests {
             assert_eq!(view.target.as_deref(), Some(name));
             assert_eq!(view.environments, ["Studio", "Lab"]);
             assert!(view.message.contains("保存されていない接続先"));
+        }
+    }
+
+    #[test]
+    fn the_launch_after_a_new_worktree_is_spared_its_checks_once_for_the_same_target_and_path() {
+        let t0 = Instant::now();
+        let mut made = MadeWorktree::default();
+        assert!(!made.take(None, "/work/a", t0));
+        made.put(Some("Lab"), "/work/a", t0);
+        // Another target, or a path that differs in any way, checks as any launch, and leaves the record.
+        assert!(!made.take(None, "/work/a", t0));
+        assert!(!made.take(Some("Studio"), "/work/a", t0));
+        for other in ["/work/a/", "/work/A", "/work/b", ""] {
+            assert!(!made.take(Some("Lab"), other, t0), "{other}");
+        }
+        assert!(made.take(Some("Lab"), "/work/a", t0));
+        // The launch used it up: a retry checks.
+        assert!(!made.take(Some("Lab"), "/work/a", t0));
+    }
+
+    #[test]
+    fn a_new_worktree_of_this_machine_is_spared_its_checks_too() {
+        let t0 = Instant::now();
+        let mut made = MadeWorktree::default();
+        made.put(None, "/work/a", t0);
+        assert!(!made.take(Some("Lab"), "/work/a", t0));
+        assert!(made.take(None, "/work/a", t0));
+    }
+
+    #[test]
+    fn a_new_worktree_is_believed_only_for_its_time_and_the_newest_one_replaces_it() {
+        let t0 = Instant::now();
+        let mut made = MadeWorktree::default();
+        made.put(None, "/work/a", t0);
+        assert!(made.take(None, "/work/a", t0 + MADE_TTL - Duration::from_millis(1)));
+        made.put(None, "/work/a", t0);
+        assert!(!made.take(None, "/work/a", t0 + MADE_TTL));
+        // An old record that is late is gone, not kept for another look.
+        assert!(!made.take(None, "/work/a", t0));
+        made.put(None, "/work/a", t0);
+        made.put(None, "/work/b", t0);
+        assert!(!made.take(None, "/work/a", t0));
+        assert!(made.take(None, "/work/b", t0));
+    }
+
+    #[test]
+    fn the_lists_of_this_machine_are_read_early_only_when_the_file_says_this_machine() {
+        let env = Saved::Target(Target::Environment { name: "Lab".into() });
+        assert!(reads_local_lists_early(&Saved::Target(Target::Local)));
+        for other in [Saved::Nothing, Saved::Unusable, env] {
+            assert!(!reads_local_lists_early(&other), "{other:?}");
         }
     }
 
