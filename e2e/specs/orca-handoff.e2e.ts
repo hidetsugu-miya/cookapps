@@ -1081,10 +1081,12 @@ describe("orca handoff: the session history", () => {
   });
 });
 
-describe("orca handoff: attached images (A-10)", () => {
+describe("orca handoff: attached files (A-10)", () => {
   const dropped = (repo: string, name = "shot.png") => `/work/${repo}/.orca/drops/${name}`;
   // What `orca_attach_file` answers for an image: the path with its blank, to be pasted as a bracketed paste.
   const attached = (repo: string, name = "shot.png") => ({ text: `${dropped(repo, name)} `, bracketed: true });
+  // What it answers for any other file: the path in quotes with its blank.
+  const attachedNote = (repo: string, name = "notes.txt") => ({ text: `'${dropped(repo, name)}' `, bracketed: false });
   const thumbs = () => count(`${MAIL.pane} .attachment`);
   const paste = (...files: Parameters<typeof fire>[2]) => fire("paste", `${MAIL.pane} textarea`, files);
   const drop = (...files: Parameters<typeof fire>[2]) => fire("drop", MAIL.pane, files);
@@ -1094,7 +1096,6 @@ describe("orca handoff: attached images (A-10)", () => {
     await openPane(MAIL);
     await expect($(`${MAIL.pane} .attachments`)).not.toBeDisplayed();
     expect(await paste()).toBe(false);
-    expect(await paste(note)).toBe(false);
     expect(await thumbs()).toBe(0);
     expect(await paste(image())).toBe(true);
     await waitForCount(`${MAIL.pane} .attachment`, 1);
@@ -1106,7 +1107,7 @@ describe("orca handoff: attached images (A-10)", () => {
     await expect($(`${MAIL.pane} .attachments`)).not.toBeDisplayed();
   });
 
-  it("takes images dropped on the pane, cancels the dragover that carries a file, and refuses a file that is not an image", async () => {
+  it("takes images dropped on the pane and cancels the dragover that carries a file", async () => {
     await openMail();
     await openPane(MAIL);
     expect(await fire("dragover", MAIL.pane, [image()])).toBe(true);
@@ -1114,11 +1115,55 @@ describe("orca handoff: attached images (A-10)", () => {
     expect(await drop(image("a.png"), image("b.png"))).toBe(true);
     await waitForCount(`${MAIL.pane} .attachment`, 2);
     expect(await browser.execute((p) => [...document.querySelectorAll(`${p} .attachment img`)].map((i) => (i as HTMLImageElement).alt), MAIL.pane)).toEqual(["a.png", "b.png"]);
-    await drop(note, image("c.png"));
+  });
+
+  it("shows a file that is not an image by its name, takes it by paste and by drop, and removes it with its button", async () => {
+    await openMail();
+    await openPane(MAIL);
+    expect(await paste(note)).toBe(true);
+    await waitForCount(`${MAIL.pane} .attachment`, 1);
+    await expect($(`${MAIL.pane} .attachment .attachment-name`)).toHaveText("notes.txt");
+    expect(await count(`${MAIL.pane} .attachment img`)).toBe(0);
+    await drop(image("a.png"), { ...note, name: "<b>b</b>.txt" });
     await waitForCount(`${MAIL.pane} .attachment`, 3);
-    await expect($(`${MAIL.pane} .ho-form .pending.fail`)).toHaveText("画像だけを添付できます");
-    await drop(note);
-    expect(await thumbs()).toBe(3);
+    expect(await textsOf(`${MAIL.pane} .attachment .attachment-name`)).toEqual(["notes.txt", "<b>b</b>.txt"]);
+    expect(await count(`${MAIL.pane} .attachment .attachment-name b`)).toBe(0);
+    expect(await count(`${MAIL.pane} .attachment img`)).toBe(1);
+    await $(`${MAIL.pane} button[aria-label="notes.txt を外す"]`).click();
+    await waitForCount(`${MAIL.pane} .attachment`, 2);
+    expect(await textsOf(`${MAIL.pane} .attachment .attachment-name`)).toEqual(["<b>b</b>.txt"]);
+  });
+
+  it("puts a file that is not an image in the chosen worktree and hands over its quoted path", async () => {
+    await openMail();
+    const attach = await mock("orca_attach_file", attachedNote("example-app"));
+    const handoff = await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseWorktree(MAIL, "/work/example-app");
+    await field(MAIL).setValue("これを読んで");
+    await paste(note);
+    await waitForCount(`${MAIL.pane} .attachment`, 1);
+    await sendButton(MAIL).click();
+    const [call] = (await waitForCalls(handoff)) as { instruction: string }[];
+    expect(call.instruction).toBe(`これを読んで\n\n'${dropped("example-app", "notes.txt")}'`);
+    expect(await callsOf(attach)).toEqual([{ path: "/work/example-app", name: "notes.txt", data: btoa("hello"), environment: null }]);
+  });
+
+  it("shows the message of Rust for a file over 20 MiB, keeping the text and the file", async () => {
+    await openMail();
+    const attach = await mock("orca_attach_file", rejects("ファイルは 20 MiB までです"));
+    const handoff = await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseWorktree(MAIL, "/work/example-app");
+    await field(MAIL).setValue("見て");
+    await paste(note);
+    await waitForCount(`${MAIL.pane} .attachment`, 1);
+    await sendButton(MAIL).click();
+    await waitForCalls(attach);
+    await expect($(`${MAIL.pane} .ho-form .pending.fail`)).toHaveText("ファイルは 20 MiB までです");
+    await expect(field(MAIL)).toHaveValue("見て");
+    expect(await thumbs()).toBe(1);
+    expect(await callsOf(handoff)).toEqual([]);
   });
 
   it("does not take a file dropped outside the pane, and does not let the webview navigate to it", async () => {

@@ -5,7 +5,7 @@
 // This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminals shown are mirrors: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are dropped when the terminal stops (another tab, screen or a hidden window) or goes, so they never reach another terminal. Nothing a terminal prints or is typed is kept or logged here.
-// An image pasted or dropped on a terminal shown is put in its worktree and its path is typed in that terminal (A-10).
+// A file pasted or dropped on a terminal shown is put in its worktree and its path is typed in that terminal (A-10).
 // Ghostty's settings (A-13) set the font and the keys that send a text, and the font chosen in the settings (A-20) takes the place of their font; Shift+Enter sends a newline for Claude Code's input.
 // A URL in the text, or in an OSC 8 link, opens in the default browser with ⌘+click (the left button, no Ctrl or Alt), as in Orca's own terminal; the click on a URL without ⌘ selects as before.
 // A program that asks for the clipboard with OSC 52 (Claude Code does, for what is selected while it tracks the mouse) gets it, as in Orca's own terminal: a write is made only from what the terminal prints live, not from a snapshot or a mirror frame drawn again, and a read ("?") is never answered.
@@ -19,7 +19,7 @@ import type { TerminalSettings } from "./bindings/TerminalSettings";
 import type { TextKeybind } from "./bindings/TextKeybind";
 import { $, composing } from "./dom.js";
 import { invoke } from "./ipc.js";
-import { listenForImages, readImages, uploadAttachments } from "./orca-attach.js";
+import { listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 
 const SCROLLBACK = 5000;
 const MIRROR_MS = 1000;
@@ -45,7 +45,7 @@ const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "whi
 const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-\uffef]*[^\s"':,.!?{}|\\^~[\]`()<>\u3000-\u303f\uff00-\uffef]/;
 
 // Where a terminal comes from: the stream of a saved environment, or the mirror of this machine.
-// `path` is the worktree the terminal runs in and `environment` the target, where an image dropped on it is put (A-10).
+// `path` is the worktree the terminal runs in and `environment` the target, where a file dropped on it is put (A-10).
 export interface TermSource {
   kind: "stream" | "mirror";
   handle: string;
@@ -93,7 +93,7 @@ let focusedId: string | null = null;
 const watched = new Set<HTMLElement>();
 // The number the last showing of a stream took.
 let streamSeq = 0;
-// The host elements that take images already.
+// The host elements that take files already.
 const listening = new WeakSet<HTMLElement>();
 let onError: (e: unknown) => void = () => {};
 // Ghostty's settings as imported, null before the first import.
@@ -358,7 +358,7 @@ async function sendKeys(instance: Instance) {
   if (instance.source.kind === "mirror") setTimeout(() => readFrame(instance), 150);
 }
 
-// ---- images (A-10) ----
+// ---- files (A-10) ----
 
 // The texts of the files in order, the neighbours that go the same way (`bracketed`) joined into one.
 function runsOf(files: { text: string; bracketed: boolean }[]) {
@@ -371,18 +371,18 @@ function runsOf(files: { text: string; bracketed: boolean }[]) {
   return runs;
 }
 
-// Puts the images pasted or dropped on the terminal shown in its worktree and types their paths in it, as Orca's own terminal does. A file that is not an image is refused with the message.
+// Puts the files pasted or dropped on the terminal shown in its worktree and types their paths in it, as Orca's own terminal does. A file that cannot be read is refused with the message.
 async function attach(host: HTMLElement, files: File[]) {
   const instance = shownInstances().find((i) => i.host === host);
   if (!instance) return;
-  const { images, message } = await readImages(files);
-  if (message !== null) onError(message);
-  if (!images.length) return;
+  const read = await readFiles(files);
+  if (read.message !== null) onError(read.message);
+  if (!read.files.length) return;
   try {
-    const files = await uploadAttachments(images, instance.source.path, instance.source.environment);
-    // The paths go only to the terminal the images were put on. An image path is a paste (a program that asked for the bracketed paste gets it as one); any other file is typed as it is, by the same route as the keys.
+    const attached = await uploadAttachments(read.files, instance.source.path, instance.source.environment);
+    // The paths go only to the terminal the files were put on. An image path is a paste (a program that asked for the bracketed paste gets it as one); any other file is typed as it is, by the same route as the keys.
     if (instance.host === host) {
-      for (const run of runsOf(files)) {
+      for (const run of runsOf(attached)) {
         if (run.bracketed) instance.term.paste(run.text);
         else {
           instance.pending += run.text;
@@ -519,7 +519,7 @@ export function showTerminals(placements: Placement[], focusId: string | null) {
     hosts.add(host);
     if (!listening.has(host)) {
       listening.add(host);
-      listenForImages(host, (files) => attach(host, files));
+      listenForFiles(host, (files) => attach(host, files));
     }
     if (!watched.has(host)) {
       watched.add(host);

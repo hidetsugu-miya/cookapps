@@ -337,6 +337,11 @@ async function readThread(where: "keep" | "end") {
   handoff.refreshCard();
 }
 
+// Whether the thread of the message is the one on screen (a new message of it gets no popup, S-17).
+export function isSlackThreadShown(m: Pick<TimelineMessage, "teamId" | "channel" | "ts" | "threadTs">) {
+  return !$("slack-thread").hidden && current?.key === `${m.teamId}/${m.channel}/${m.threadTs ?? m.ts}`;
+}
+
 // Opens the thread of a message of the list.
 export function openSlackThread(m: TimelineMessage) {
   const ts = m.threadTs ?? m.ts;

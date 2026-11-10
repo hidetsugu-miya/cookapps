@@ -46,6 +46,7 @@ import type { TimelineMessage } from "../ts/bindings/TimelineMessage";
 import type { TimelineReply } from "../ts/bindings/TimelineReply";
 import type { UnreadReplies } from "../ts/bindings/UnreadReplies";
 import type { Todo } from "../ts/bindings/Todo";
+import type { TodoDraftEdit } from "../ts/bindings/TodoDraftEdit";
 import type { TodoPrompt } from "../ts/bindings/TodoPrompt";
 import type { Week } from "../ts/bindings/Week";
 import type { Workspace } from "../ts/bindings/Workspace";
@@ -198,7 +199,19 @@ export const threadDetail = (subject: string, body: string, unread: boolean): Th
   subject,
   unread,
   messages: [
-    { id: "m1", from: "Alice <alice@example.com>", to: account, dateMs: Date.now() - 60_000, snippet: body, html: false, body, authenticated: false },
+    {
+      id: "m1",
+      from: "Alice <alice@example.com>",
+      fromName: "Alice",
+      fromAddress: "alice@example.com",
+      to: account,
+      toLabel: "To 自分",
+      dateMs: Date.now() - 60_000,
+      snippet: body,
+      html: false,
+      body,
+      authenticated: false,
+    },
   ],
 });
 
@@ -394,6 +407,18 @@ export const claudeSettings: ClaudeSettings = {
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
 export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };
+
+// What `claude_edit_todo_draft` answers when Claude proposes a shorter name for `slackSummary` and leaves the description alone.
+export const todoDraftEdit: TodoDraftEdit = {
+  reply: "名前を短くします",
+  content: "Reply to vendor",
+  description: null,
+  contentDiff: [
+    { kind: "del", text: "Reply to the vendor" },
+    { kind: "ins", text: "Reply to vendor" },
+  ],
+  descriptionDiff: [],
+};
 
 // What `claude_edit_todo_prompt` answers when Claude proposes changing the line "Default body" to "Better body".
 export const promptEdit: PromptEdit = {

@@ -2251,10 +2251,13 @@ describe("orca: the terminal colors (A-14, A-15)", () => {
   });
 });
 
-describe("orca: images on a terminal (A-10)", () => {
+describe("orca: files on a terminal (A-10)", () => {
   const dropped = (repo: string, name = "shot.png") => `/work/${repo}/.orca/drops/${name}`;
   // What `orca_attach_file` answers for an image: the path with its blank, to be pasted as a bracketed paste.
   const attached = (repo: string, name = "shot.png") => ({ text: `${dropped(repo, name)} `, bracketed: true });
+  // What it answers for any other file: the path in quotes with its blank, to be typed as it is.
+  const attachedNote = (repo: string, name = "notes.txt") => ({ text: `'${dropped(repo, name)}' `, bracketed: false });
+  const NOTE = btoa("hello");
   const shown = ".orca-term-box:not([hidden]) .xterm-helper-textarea";
   const area = ".orca-term";
   const inputs = (command: string) => callsOf(command).then((calls) => calls.map((c) => (c as { text: string }).text));
@@ -2285,11 +2288,19 @@ describe("orca: images on a terminal (A-10)", () => {
     expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app_zsh", text: `${dropped("example-app")} ` }]);
   });
 
-  it("leaves a paste with no image, or with only a file that is not an image, to the terminal", async () => {
+  it("puts a pasted file that is not an image in the worktree and types its quoted path as it is", async () => {
+    await openMirror();
+    const attach = await mock("orca_attach_file", attachedNote("example-app"));
+    const input = await mock("orca_terminal_input", null);
+    expect(await fire("paste", shown, [note])).toBe(true);
+    expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-app", name: "notes.txt", data: NOTE, environment: null }]);
+    expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app_zsh", text: `'${dropped("example-app", "notes.txt")}' ` }]);
+  });
+
+  it("leaves a paste with no file to the terminal", async () => {
     await openMirror();
     const attach = await mock("orca_attach_file", attached("example-app"));
     await fire("paste", shown, []);
-    await fire("paste", shown, [note]);
     await browser.pause(300);
     expect(await callsOf(attach)).toEqual([]);
   });
@@ -2306,17 +2317,27 @@ describe("orca: images on a terminal (A-10)", () => {
     expect(await inputs(input)).toEqual([`${dropped("example-app", "first.png")} ${dropped("example-app", "first.png")} `]);
   });
 
-  it("refuses a dropped file that is not an image with the message, and puts nothing", async () => {
+  it("puts a dropped file that is not an image in the worktree and types its quoted path as it is", async () => {
     await openMirror();
-    const attach = await mock("orca_attach_file", attached("example-app"));
+    const attach = await mock("orca_attach_file", attachedNote("example-app"));
+    const input = await mock("orca_terminal_input", null);
+    expect(await fire("dragover", area, [note])).toBe(true);
+    expect(await fire("drop", area, [note])).toBe(true);
+    expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-app", name: "notes.txt", data: NOTE, environment: null }]);
+    expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app_zsh", text: `'${dropped("example-app", "notes.txt")}' ` }]);
+  });
+
+  it("shows the message of Rust for a file over 20 MiB and types nothing", async () => {
+    await openMirror();
+    const attach = await mock("orca_attach_file", rejects("ファイルは 20 MiB までです"));
     const input = await mock("orca_terminal_input", null);
     await fire("drop", area, [note]);
-    await expect($("#error")).toHaveText("画像だけを添付できます");
-    expect(await callsOf(attach)).toEqual([]);
+    await waitForCalls(attach);
+    await expect($("#error")).toHaveText("ファイルは 20 MiB までです");
     expect(await callsOf(input)).toEqual([]);
   });
 
-  it("shows the message of an image that cannot be put and types nothing", async () => {
+  it("shows the message of a file that cannot be put and types nothing", async () => {
     await openMirror();
     const attach = await mock("orca_attach_file", rejects("SSH の接続先の worktree にはファイルを添付できません"));
     const input = await mock("orca_terminal_input", null);
@@ -2364,9 +2385,9 @@ describe("orca: images on a terminal (A-10)", () => {
   it("types the text of a file whose answer is not bracketed as it is, and pastes a bracketed one, in a terminal that asked for the bracketed paste", async () => {
     await openStream();
     await sendTerm({ kind: "output", data: "\x1b[?2004h" });
-    const attach = await mock("orca_attach_file", { text: `'${dropped("example-app", "notes.txt")}' `, bracketed: false });
+    const attach = await mock("orca_attach_file", attachedNote("example-app"));
     const input = await mock("orca_stream_input", null);
-    await fire("paste", shown, [image("notes.txt")]);
+    await fire("paste", shown, [note]);
     await waitForCalls(attach);
     expect(await inputs(input)).toEqual([`'${dropped("example-app", "notes.txt")}' `]);
     await mock("orca_attach_file", attached("example-app"));

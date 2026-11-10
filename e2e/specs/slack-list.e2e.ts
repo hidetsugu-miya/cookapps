@@ -1,4 +1,6 @@
-import { attachment, boot, callsOf, claudeReady, count, emitEvent, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, rejects, release, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace } from "../support";
+import { attachment, boot, callsOf, claudeReady, count, emitEvent, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, rejects, release, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, thread as mailThread, threadMessage, timeline, timelineMessage, timelineReply, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace } from "../support";
+
+import type { TimelineMessage } from "../../ts/bindings/TimelineMessage";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 
@@ -1705,5 +1707,195 @@ describe("slack list: Socket Mode", () => {
     await emitEvent("slack-socket-status", socketStatus("connected"));
     await browser.pause(500);
     expect(await callsOf(read)).toEqual([]);
+  });
+});
+
+describe("slack list: the popups for a new Slack message (S-17)", () => {
+  const base = () => [timelineMessage(slackTs(30, 2), "Bob Example", "general", "Lunch at noon.", { unread: true })];
+  const fresh = (n: number, text: string, extra: Partial<TimelineMessage> = {}) => timelineMessage(slackTs(0, n), "Grace Example", "dev", text, { unread: true, ...extra });
+  const cards = () => textsOf(".arrival");
+  const syncRound = () =>
+    browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, onceId());
+
+  beforeEach(async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(base(), { refreshSecs: 300 }), claude_status: claudeReady });
+    await expect($("#nav-slack .nav-count")).toHaveText("1");
+  });
+
+  // One read that finds `arrived` (the rows hold them, newest first); the reads after it find nothing new, as Rust gives a message in one answer only.
+  async function arrive(arrived: TimelineMessage[], extra: Parameters<typeof timeline>[1] = {}) {
+    const rows = [...arrived, ...base()];
+    const read = await mock("slack_timeline", timeline(rows, { arrived, refreshSecs: 300, ...extra }));
+    await emitEvent("slack-timeline-dirty");
+    await waitForCalls(read);
+    await mock("slack_timeline", timeline(rows, { refreshSecs: 300, ...extra }));
+  }
+  // The same answer as after the message was read: it is not among the rows.
+  const readElsewhere = () => mock("slack_timeline", timeline(base(), { refreshSecs: 300 }));
+
+  it("shows a card for a new message with the sender, the channel, the text on one line and the buttons, and none for a read that found nothing new", async () => {
+    await arrive([]);
+    await browser.pause(300);
+    expect(await cards()).toEqual([]);
+    const message = fresh(1, "Deploy finished\nplease check the logs");
+    await arrive([message]);
+    await waitForCount(".arrival", 1);
+    const card = $(".arrival");
+    await expect(card).toHaveText(expect.stringContaining("Grace Example"));
+    await expect(card).toHaveText(expect.stringContaining("#dev"));
+    await expect(card).toHaveText(expect.stringContaining("Deploy finished"));
+    await expect(card.$(".feed-ws")).toBeDisplayed();
+    const look = await browser.execute(() => {
+      const card = document.querySelector(".arrival")!;
+      const line = getComputedStyle(card.querySelector(".arrival-subject")!);
+      const r = card.getBoundingClientRect();
+      return {
+        wrap: line.whiteSpace,
+        cut: line.textOverflow,
+        buttons: [...card.querySelectorAll(".arrival-actions > *")].map((b) => b.getAttribute("aria-label") ?? b.textContent),
+        right: innerWidth - r.right,
+        bottom: innerHeight - r.bottom,
+      };
+    });
+    expect(look.wrap).toBe("nowrap");
+    expect(look.cut).toBe("ellipsis");
+    expect(look.buttons).toEqual(["既読にする", "ウォッチ", "スレッドを開く"]);
+    await expect(card.$('button[aria-label="閉じる"]')).toBeDisplayed();
+    expect(look.right).toBe(24);
+    expect(look.bottom).toBeGreaterThanOrEqual(24);
+    // The same message found again does not add a second card.
+    await arrive([message]);
+    expect(await cards()).toHaveLength(1);
+  });
+
+  it("reads the message with the commands of the check of a row, and closes the card", async () => {
+    const message = fresh(1, "Deploy finished");
+    await arrive([message]);
+    await waitForCount(".arrival", 1);
+    const mark = await mock("slack_mark_read", true);
+    const open = await mock("slack_thread", slackThread([threadMessage(message.ts, "Grace Example", "Deploy finished")]));
+    await readElsewhere();
+    await $('.arrival button[aria-label="既読にする"]').click();
+    await waitForCount(".arrival", 0);
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: message.ts }]);
+    expect(await callsOf(open)).toEqual([]);
+    await expect($("#slack-thread")).not.toBeDisplayed();
+    await expect($("#slack-list")).not.toBeDisplayed();
+  });
+
+  it("watches the thread of the message with the command of the bookmark of a row, and closes the card", async () => {
+    const message = fresh(1, "Deploy finished");
+    await arrive([message]);
+    await waitForCount(".arrival", 1);
+    const watch = await mock("slack_watch", true);
+    await readElsewhere();
+    await $('.arrival button[aria-label="ウォッチ"]').click();
+    await waitForCount(".arrival", 0);
+    expect(await waitForCalls(watch)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: message.ts }]);
+  });
+
+  it("watches the thread of a reply sent to the channel by its thread's own timestamp", async () => {
+    const reply = fresh(1, "Also to the channel", { threadTs: "1700000000.000001" });
+    await arrive([reply]);
+    await waitForCount(".arrival", 1);
+    const watch = await mock("slack_watch", true);
+    await readElsewhere();
+    await $('.arrival button[aria-label="ウォッチ"]').click();
+    expect(await waitForCalls(watch)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: "1700000000.000001" }]);
+  });
+
+  it("opens the thread from another screen, sets the read position as the row does, and leaves the Slack button current", async () => {
+    const message = fresh(1, "Deploy finished");
+    await arrive([message]);
+    await waitForCount(".arrival", 1);
+    await expect($("#slack-list")).not.toBeDisplayed();
+    const mark = await mock("slack_mark_read", true);
+    const open = await mock("slack_thread", slackThread([threadMessage(message.ts, "Grace Example", "Deploy finished")]));
+    await readElsewhere();
+    await $(".arrival").$("button=スレッドを開く").click();
+    await expect($("#slack-thread")).toBeDisplayed();
+    await expect($("#nav-slack")).toHaveAttribute("aria-current", "page");
+    expect(await waitForCalls(open)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: message.ts }]);
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: message.ts }]);
+    await waitForCount(".arrival", 0);
+  });
+
+  it("closes with the close button and calls nothing", async () => {
+    await arrive([fresh(1, "Deploy finished")]);
+    const mark = await mock("slack_mark_read", true);
+    const watch = await mock("slack_watch", true);
+    await $('.arrival button[aria-label="閉じる"]').click();
+    await waitForCount(".arrival", 0);
+    expect(await callsOf(mark)).toEqual([]);
+    expect(await callsOf(watch)).toEqual([]);
+  });
+
+  it("has no check when pressing it would change nothing, as a row has none", async () => {
+    await arrive([fresh(1, "Deploy finished")], { missing: [{ teamId: workspace.teamId, team: workspace.team, scopes: ["channels:write"] }] });
+    await waitForCount(".arrival", 1);
+    expect(await count('.arrival button[aria-label="既読にする"]')).toBe(0);
+    await expect($('.arrival button[aria-label="ウォッチ"]')).toBeDisplayed();
+    await expect($(".arrival").$("button=スレッドを開く")).toBeDisplayed();
+  });
+
+  it("closes the card of a message that a later read finds read or gone", async () => {
+    await arrive([fresh(1, "Deploy finished")]);
+    await waitForCount(".arrival", 1);
+    const read = await readElsewhere();
+    await emitEvent("slack-timeline-dirty");
+    await waitForCalls(read);
+    await waitForCount(".arrival", 0);
+  });
+
+  it("closes the card of a message that the list marks read, with the check of its row", async () => {
+    const message = fresh(1, "Deploy finished");
+    await arrive([message]);
+    await waitForCount(".arrival", 1);
+    await mock("slack_mark_read", true);
+    await readElsewhere();
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 2);
+    // The first row is the message of the card.
+    await $("#slack-feed .feed-read").click();
+    await waitForCount(".arrival", 0);
+  });
+
+  it("gives no card for a new message of the thread that is open on screen", async () => {
+    const first = fresh(1, "Deploy finished");
+    await arrive([first]);
+    await mock("slack_mark_read", true);
+    await mock("slack_thread", slackThread([threadMessage(first.ts, "Grace Example", "Deploy finished")]));
+    await $(".arrival").$("button=スレッドを開く").click();
+    await expect($("#slack-thread")).toBeDisplayed();
+    await arrive([fresh(2, "Also to the channel", { threadTs: first.ts }), fresh(3, "Another topic")]);
+    await waitForCount(".arrival", 1);
+    await browser.pause(300);
+    expect(await cards()).toEqual([expect.stringContaining("Another topic")]);
+  });
+
+  it("stacks with the popups for new mail, 3 at most and the newest at the bottom, whichever kind", async () => {
+    const mail = mailThread("t9", "Lunch plan", true);
+    await waitForCount("#unread-threads li", 2);
+    const sync = await mock("sync", { kind: "changed", threads: [mail], removed: [], arrived: [mail.id], historyId: "101" });
+    await syncRound();
+    await waitForCalls(sync);
+    await mock("sync", { kind: "unchanged" });
+    await waitForCount(".arrival", 1);
+    // The newest first, as `arrived` is: "second" is the newer.
+    await arrive([fresh(2, "second"), fresh(1, "first")]);
+    await waitForCount(".arrival", 3);
+    const stack = await cards();
+    expect(stack[0]).toContain("Lunch plan");
+    expect(stack[1]).toContain("first");
+    expect(stack[2]).toContain("second");
+    // A fourth card makes the oldest go, the mail card here.
+    await arrive([fresh(3, "third")]);
+    await browser.waitUntil(async () => (await cards()).every((t) => !t.includes("Lunch plan")));
+    const after = await cards();
+    expect(after).toHaveLength(3);
+    expect([after[0], after[1], after[2]].map((t) => ["first", "second", "third"].find((w) => t.includes(w)))).toEqual(["first", "second", "third"]);
   });
 });

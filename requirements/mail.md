@@ -40,7 +40,7 @@ The popup shows the sender and the subject, and the actions "ゴミ箱へ移動"
 
 Details the owner left open:
 
-- Several new threads at once: one card each, stacked, the newest at the bottom. At most 3 cards show; a fourth makes the oldest go (its thread stays in the list, unread).
+- Several new threads at once: one card each, stacked, the newest at the bottom. At most 3 cards show, counting the popups for new Slack messages (S-17), which share this stack; a fourth makes the oldest go (its thread stays in the list, unread).
 - A card goes by itself after 10 seconds. The pointer or the focus on it holds it, and the 10 seconds start again when they leave. The close button closes it at once.
 - A thread whose card is on screen gets no second card, and neither does the thread that is open on screen (or that the detail view is still loading). A card goes when its thread is opened, from the list or with "詳細を開く", so that no button of it acts on a thread the detail view holds.
 - A card goes when its thread becomes read, whether the owner marks it read in the list (the checkbox of a row, "すべて既読にする") or a sync finds it read (read in Gmail or on another device), so that a card never stays for a thread that needs no attention.

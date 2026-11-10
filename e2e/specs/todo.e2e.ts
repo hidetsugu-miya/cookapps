@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettings, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, todoDraftEdit, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -292,6 +292,150 @@ describe("todo", () => {
     await expect($("#todo-draft .draft-due")).toHaveText("2026-11-14");
     await pickWith("PM3:00", 15);
     await expect($("#todo-draft .draft-due")).toHaveText("2026-11-15");
+  });
+
+  describe("the Claude pane of the modal", () => {
+    // Types `text` in the pane's request field and presses the send button.
+    const askClaude = async (text: string) => {
+      await $("#draft-input").setValue(text);
+      await $("#draft-send").click();
+    };
+
+    it("sends the left part as it is now with the request, and draws Claude's change as a diff in the pane", async () => {
+      await openSummaryCard();
+      const edit = await mock("claude_edit_todo_draft", todoDraftEdit);
+      await $("#todo-draft .draft-name").setValue("Reply to the vendor today");
+      await askClaude("名前を短く");
+      const [sent] = await waitForCalls(edit);
+      expect(sent).toEqual({ content: "Reply to the vendor today", description: slackSummary.description, history: [], instruction: "名前を短く" });
+      await waitForCount("#draft-log .chat-ai", 1);
+      await expect($("#draft-log .chat-user")).toHaveText("名前を短く");
+      await expect($("#draft-log .chat-ai")).toHaveText(expect.stringContaining("名前を短くします"));
+      expect(await textsOf("#draft-log .diff-del")).toEqual(["- Reply to the vendor"]);
+      expect(await textsOf("#draft-log .diff-ins")).toEqual(["+ Reply to vendor"]);
+      // Nothing is changed on the left, and nothing is added, until 適用.
+      await expect($("#todo-draft .draft-name")).toHaveValue("Reply to the vendor today");
+    });
+
+    it("puts the change into the left part with 適用, and keeps the other part", async () => {
+      await openSummaryCard();
+      await mock("claude_edit_todo_draft", todoDraftEdit);
+      await askClaude("名前を短く");
+      await waitForCount("#draft-log .chat-diff", 1);
+      await $("#draft-log .diff-foot .text-btn.primary").click();
+      await expect($("#todo-draft .draft-name")).toHaveValue("Reply to vendor");
+      await expect($("#todo-draft .draft-desc")).toHaveValue(slackSummary.description);
+      await expect($("#draft-log .diff-state")).toHaveText("適用しました");
+    });
+
+    it("changes the description alone when Claude proposes only that, and adds what is then on the left", async () => {
+      await openSummaryCard();
+      await mock("claude_edit_todo_draft", {
+        reply: "説明を足します",
+        content: null,
+        description: "- Asked for a quote",
+        contentDiff: [],
+        descriptionDiff: [
+          { kind: "del", text: "- Wants an answer by Friday" },
+        ],
+      });
+      const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
+      await askClaude("期限の行を消して");
+      await waitForCount("#draft-log .chat-diff", 1);
+      await $("#draft-log .diff-foot .text-btn.primary").click();
+      await expect($("#todo-draft .draft-name")).toHaveValue("Reply to the vendor");
+      await expect($("#todo-draft .draft-desc")).toHaveValue("- Asked for a quote");
+      await $("#todo-draft .draft-add").click();
+      const [sent] = await waitForCalls(addFromSlack);
+      expect(sent).toMatchObject({ content: "Reply to the vendor", description: "- Asked for a quote" });
+    });
+
+    it("leaves the left part as it is with 却下", async () => {
+      await openSummaryCard();
+      await mock("claude_edit_todo_draft", todoDraftEdit);
+      await askClaude("名前を短く");
+      await waitForCount("#draft-log .chat-diff", 1);
+      await $("#draft-log .diff-foot .text-btn:not(.primary)").click();
+      await expect($("#draft-log .diff-state")).toHaveText("却下しました");
+      await expect($("#todo-draft .draft-name")).toHaveValue("Reply to the vendor");
+      await expect($("#todo-draft .draft-desc")).toHaveValue(slackSummary.description);
+    });
+
+    it("cannot apply a change once the left part was edited by hand, as in the thread pane", async () => {
+      await openSummaryCard();
+      await mock("claude_edit_todo_draft", todoDraftEdit);
+      await askClaude("名前を短く");
+      await waitForCount("#draft-log .chat-diff", 1);
+      await $("#todo-draft .draft-desc").setValue("- Edited by hand");
+      await expect($("#draft-log .diff-foot .text-btn.primary")).toBeDisabled();
+      await expect($("#draft-log .diff-stale")).toBeDisplayed();
+      await expect($("#todo-draft .draft-name")).toHaveValue("Reply to the vendor");
+    });
+
+    it("sends the conversation so far with the next request, and forgets it when the modal is closed", async () => {
+      await openSummaryCard();
+      const edit = await mock("claude_edit_todo_draft", todoDraftEdit);
+      await askClaude("名前を短く");
+      await waitForCount("#draft-log .chat-ai", 1);
+      await askClaude("もう一度");
+      await browser.waitUntil(async () => (await callsOf(edit)).length === 2);
+      expect((await callsOf(edit))[1]).toMatchObject({ history: [{ role: "user", text: "名前を短く" }, { role: "assistant", text: "名前を短くします" }], instruction: "もう一度" });
+      await $("#todo-draft .draft-drop").click();
+      await $("#todo-draft").waitForExist({ reverse: true });
+      await mock("todoist_summarize_slack", slackSummary);
+      await $("#todo-add-input").setValue(slackMessageUrl);
+      await $("#todo-add-button").click();
+      await $("#todo-draft").waitForExist();
+      expect(await count("#draft-log > *")).toBe(0);
+    });
+
+    it("shows a failure in the pane and keeps the draft as it is", async () => {
+      await openSummaryCard();
+      await mock("claude_edit_todo_draft", rejects("claude failed"));
+      await askClaude("名前を短く");
+      await waitForCount("#draft-log .pending.fail", 1);
+      await expect($("#draft-log .pending.fail")).toHaveText(expect.stringContaining("claude failed"));
+      await expect($("#todo-draft .draft-name")).toHaveValue("Reply to the vendor");
+      await expect($("#draft-send")).toBeEnabled();
+    });
+
+    it("sends with Cmd+Enter in the request field and does not add the Todo", async () => {
+      await openSummaryCard();
+      const edit = await mock("claude_edit_todo_draft", todoDraftEdit);
+      const addFromSlack = await mock("todoist_add_from_slack", "Reply to the vendor");
+      await $("#draft-input").setValue("名前を短く");
+      await browser.execute((id) => {
+        if (!window.__e2e_once__(id)) return;
+        const mac = /Mac/.test(navigator.platform);
+        document.getElementById("draft-input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, bubbles: true, cancelable: true }));
+      }, onceId());
+      await waitForCalls(edit);
+      await waitForCount("#draft-log .chat-ai", 1);
+      expect(await callsOf(addFromSlack)).toEqual([]);
+      await expect($("#todo-draft")).toExist();
+    });
+
+    it("has the Slack summary's model and effort under the request field, and shows a note while Claude cannot be used", async () => {
+      await openSummaryCard();
+      await expect($("#draft-model select[data-kind=model]")).toHaveValue("sonnet");
+      await expect($("#draft-model select[data-kind=effort]")).toHaveValue("medium");
+      const save = await mock("claude_model_settings_save", { ...claudeSettings, slackSummary: { model: "opus", effort: "medium" } });
+      await $("#draft-model select[data-kind=model]").selectByAttribute("value", "opus");
+      const [saved] = await waitForCalls(save);
+      expect(saved).toEqual({ purpose: "slackSummary", model: "opus" });
+      await expect($("#draft-chat-note")).not.toBeDisplayed();
+    });
+
+    it("turns the request field off and says so when Claude is not connected", async () => {
+      await openTodo(claudeMissing);
+      await mock("todoist_summarize_slack", slackSummary);
+      await $("#todo-add-input").setValue(slackMessageUrl);
+      await $("#todo-add-button").click();
+      await $("#todo-draft").waitForExist();
+      await expect($("#draft-chat-note")).toBeDisplayed();
+      await expect($("#draft-input")).toBeDisabled();
+      await expect($("#draft-send")).toBeDisabled();
+    });
   });
 
   it("says 期限なし on the date field when the draft is for a project and the date is empty", async () => {

@@ -5,11 +5,13 @@
 // The list is read at startup and again every `refreshSecs` while the window is visible, on whatever screen (the Slack button's badge follows it); showing the screen reads it only when no read is on its way and the one held is older than `refreshSecs`.
 // Socket Mode (S-16) makes it again from Rust's cache when an event was read, and reads it in full when a connection is made.
 // A read on another screen draws nothing of the list (it is drawn when the screen is shown) and never calls `show()`.
+// The unread messages an answer says `arrived` get a popup each (S-17, arrivals-slack.ts), which does what the buttons of a row do.
 import type { Timeline } from "./bindings/Timeline";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import type { TimelineReply } from "./bindings/TimelineReply";
 import type { Workspace } from "./bindings/Workspace";
 import { renderWorkspaceTray } from "./accounts.js";
+import { announceSlackArrival, dismissSlackArrival, pruneSlackArrivals, slackKey } from "./arrivals-slack.js";
 import { $, tag } from "./dom.js";
 import { formatDate } from "./format.js";
 import { BOOKMARK_SVG, CHECK_SVG, CHEVRON_SVG, DOT_SVG, EYE_OFF_SVG } from "./icons.js";
@@ -18,7 +20,7 @@ import { setScreen } from "./nav.js";
 import { attachmentNode, blocksNode } from "./slack-blocks.js";
 import { richNodes } from "./slack-rich.js";
 import { getSlackWorkspaces, setSlackWorkspaces, slackListVersion } from "./slack-workspaces.js";
-import { openSlackThread } from "./slack-thread.js";
+import { isSlackThreadShown, openSlackThread } from "./slack-thread.js";
 import { decorateAvatar, loadIcons, slackMs, workspaceColor } from "./slack-view.js";
 import { toast } from "./toast.js";
 import { setNavCount, show, showError } from "./view.js";
@@ -49,6 +51,8 @@ function runPendingResync() {
 let lastTry = 0;
 // The version of `slackListVersion` the list was last made current with.
 let seenVersion = 0;
+// How many answers were held as the list so far; a popup carries the number of the answer it was found in (S-17).
+let answers = 0;
 // The unread messages among all the ones held (`unreadTotal` of the last answer, lowered at once by what the screen moves to read or hides): the Slack button's badge, which shows 20+ above this.
 let unreadCount = 0;
 const BADGE_CAP = 20;
@@ -283,6 +287,7 @@ function rowOf(m: TimelineMessage, key: string) {
     listScroll = feed().scrollTop;
     readRow(m);
     openSlackThread(m);
+    dismissSlackArrival(m);
   };
   row.append(press, avatar, main, tag("span", "feed-date", formatDate(slackMs(m.ts))));
   return row;
@@ -303,11 +308,11 @@ function readRow(m: TimelineMessage) {
 }
 
 // Whether pressing the check beside a row changes something: its position can be set (the token may write it) and it has an unread message, or it has unread replies, or it is a watched thread that was read and has new replies.
-function readable(m: TimelineMessage) {
+function readable(m: TimelineMessage, held = timeline) {
   if (m.unreadReplies) return true;
-  if (!m.watch) return m.unread && canWrite(m.teamId);
+  if (!m.watch) return m.unread && canWrite(m.teamId, held);
   if (m.watch.newReplies > 0 || m.watch.uncounted) return true;
-  return m.watch.status === "ok" && !!m.watch.unreadTo && canWrite(m.teamId);
+  return m.watch.status === "ok" && !!m.watch.unreadTo && canWrite(m.teamId, held);
 }
 
 // The check beside a row: it reads the row without opening the thread. The position of the channel is one, so the older rows of the channel are read too (as S-8 says for a press on the row).
@@ -370,7 +375,7 @@ function markRead(m: TimelineMessage): Promise<unknown> | undefined {
 
 // Whether the token of a workspace cannot set the read position (`channels:write` or `groups:write` missing).
 const lacksWrite = (x: { scopes: string[] }) => x.scopes.some((s) => s === "channels:write" || s === "groups:write");
-const canWrite = (teamId: string) => !timeline?.missing.some((x) => x.teamId === teamId && lacksWrite(x));
+const canWrite = (teamId: string, held = timeline) => !held?.missing.some((x) => x.teamId === teamId && lacksWrite(x));
 
 // Whether the Slack timestamp `a` is not after `b`, compared as numbers (seconds, then microseconds), not as text.
 function notAfter(a: string, b: string) {
@@ -622,11 +627,30 @@ function drawPending() {
 
 // Draws the list's parts when the list is on screen; it is drawn from what is held when it is shown (`revealSlackList`).
 function draw() {
+  // The popups of messages that are not unread rows any more go, whichever screen is shown.
+  if (timeline) pruneSlackArrivals(new Set(timeline.messages.filter((m) => m.unread).map(slackKey)), answers);
   if ($("slack-list").hidden) return;
   drawHeader();
   drawPending();
   drawNotice();
   drawFeed();
+}
+
+// Shows a popup for each unread message the answer found new (S-17), the oldest first so that the newest is at the bottom. Rust gives a message in one answer only, so every answer is announced, also one that is passed over (`held` false): its popups wait for the answer that follows it.
+// The buttons do what a row's do: the check reads the message (only when that changes something), the bookmark watches its thread, and the text button opens the thread, on the Slack screen, as pressing the row does.
+function announceArrived(next: Timeline, held: boolean) {
+  for (const m of [...next.arrived].reverse()) {
+    if (isSlackThreadShown(m)) continue;
+    announceSlackArrival(m, held ? answers : answers + 1, {
+      read: readable(m, next) ? () => readOne(m) : null,
+      watch: () => watchThread(m),
+      open: () => {
+        setScreen("slack");
+        readRow(m);
+        openSlackThread(m);
+      },
+    });
+  }
 }
 
 // Reads the list. `cached` asks Rust to make it again from what it holds, with no call to Slack (after a channel was hidden or put back): it is not a read of Slack, so it does not move `lastTry`.
@@ -649,7 +673,10 @@ async function load(cached = false) {
     fullReads--;
     lastTry = Date.now();
   }
-  if (seq !== loadSeq || changing > 0) {
+  const passedOver = seq !== loadSeq || changing > 0;
+  if (next && !passedOver) answers++;
+  if (next) announceArrived(next, !passedOver);
+  if (passedOver) {
     if (!cached && latestCached && changing === 0) load(true);
     runPendingResync();
     return;
@@ -675,6 +702,7 @@ function adoptWorkspaces(list: Workspace[]) {
   workspaces = list;
   setSlackWorkspaces(list);
   if (!list.length) {
+    pruneSlackArrivals(new Set(), Infinity);
     timeline = null;
     loadError = null;
     unreadCount = 0;

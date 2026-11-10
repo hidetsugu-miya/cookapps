@@ -6,9 +6,21 @@ export type MessageDetail = {
  */
 id: string, from: string, 
 /**
+ * The name of `from` (`Name <addr>`); empty when it has none.
+ */
+fromName: string, 
+/**
+ * The address of `from`.
+ */
+fromAddress: string, 
+/**
  * The To header as sent; empty when the message has none.
  */
-to: string, dateMs: number, 
+to: string, 
+/**
+ * The To line the header shows: "To 自分" when the account that reads the thread is a recipient, else the recipients' names; empty with no To.
+ */
+toLabel: string, dateMs: number, 
 /**
  * Gmail's own summary of the message, HTML-escaped.
  */

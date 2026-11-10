@@ -1,7 +1,8 @@
 // The popups for new mail (M-9): at the bottom right of the window, one card per new thread that auto sync found, with the actions trash, archive and open.
+// The stack is shared with the popups for new Slack messages (S-17, arrivals-slack.ts), which put their cards in it with `stackCard`.
 import type { ThreadItem } from "./bindings/ThreadItem";
 import { $, el, span, tag } from "./dom.js";
-import { avatarColor, initials, senderName } from "./format.js";
+import { avatarColor, initials } from "./format.js";
 import { CHECK_SVG, CLOSE_SVG } from "./icons.js";
 import { removeRow } from "./inbox.js";
 import { rowKey, rows } from "./inbox-rows.js";
@@ -29,8 +30,16 @@ export function dismiss(key: string) {
   cards.delete(key);
 }
 
+// Closes every card whose key and element `test` accepts (the Slack cards go when their message is read, S-17).
+export function dismissWhere(test: (key: string, card: HTMLElement) => boolean) {
+  for (const [key, card] of cards) if (test(key, card)) dismiss(key);
+}
+
+// Whether the card of `key` is on screen.
+export const isShown = (key: string) => cards.has(key);
+
 // A button of a card that runs `run` for the thread's row and closes the card.
-function action(button: HTMLButtonElement, label: string, key: string, run: () => void) {
+export function action(button: HTMLButtonElement, label: string, key: string, run: () => void) {
   button.type = "button";
   if (label) button.setAttribute("aria-label", label);
   button.onclick = () => {
@@ -45,7 +54,7 @@ export function announceArrival(t: ThreadItem) {
   const key = rowKey(t);
   const current = opened.current ?? loading.current;
   if (cards.has(key) || (current && !$("thread").hidden && rowKey(current) === key)) return;
-  const name = senderName(t.from);
+  const name = t.fromName || t.fromAddress;
   const card = el("arrival pop");
   card.setAttribute("role", "status");
   const avatar = span("avatar", initials(name));
@@ -75,7 +84,11 @@ export function announceArrival(t: ThreadItem) {
   const actions = el("arrival-actions");
   actions.append(trash, archive, open);
   card.append(head, actions);
+  stackCard(key, card);
+}
 
+// Puts a finished card of `key` at the bottom of the stack (mail and Slack share it, M-9, S-17): it goes by itself after SHOW_MS, held while the pointer or the focus is on it, and the oldest card makes room for the newest MAX_CARDS.
+export function stackCard(key: string, card: HTMLElement) {
   let timer = 0;
   const arm = () => {
     clearTimeout(timer);

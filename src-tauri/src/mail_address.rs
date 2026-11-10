@@ -69,8 +69,8 @@ fn name_and_address(
 }
 
 /// A From header or one To entry as its name and address: `Name <addr>` (the name may be in double quotes) splits,
-/// and anything else is an address with no name. This is the rule of `splitAddress` in `ts/format.ts`, which it replaces
-/// (`/^\s*"?(.*?)"?\s*<([^>]*)>\s*$/`), and not that of `image_senders::sender_address`.
+/// and anything else is an address with no name. This is the rule of the regular expression
+/// `/^\s*"?(.*?)"?\s*<([^>]*)>\s*$/`, and not that of `image_senders::sender_address`.
 pub fn split_address(s: &str) -> SplitAddress {
     let chars: Vec<char> = s.chars().collect();
     let found = chars.iter().rposition(|&c| !is_space(c)).and_then(|last| {
@@ -93,6 +93,46 @@ pub fn split_address(s: &str) -> SplitAddress {
         name: String::new(),
         address: s.trim_matches(is_space).to_owned(),
     })
+}
+
+/// The entries of a To header, split at commas outside double quotes, trimmed, with the empty ones left out.
+/// shortcut: a backslash-escaped quote inside a quoted name is not understood, upgrade if such a header shows up.
+fn split_recipients(to: &str) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut quoted = false;
+    let mut start = 0;
+    for (i, c) in to.char_indices() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if c == ',' && !quoted {
+            entries.push(&to[start..i]);
+            start = i + 1;
+        }
+    }
+    entries.push(&to[start..]);
+    entries
+        .into_iter()
+        .map(|e| e.trim_matches(is_space))
+        .filter(|e| !e.is_empty())
+        .collect()
+}
+
+/// The To line of a message: "To 自分" when `account` is among the recipients (the addresses compare in lower case),
+/// else "To " and the recipients' names (or addresses) joined with ", "; empty with no To.
+pub fn recipients_label(to: &str, account: &str) -> String {
+    let people: Vec<SplitAddress> = split_recipients(to)
+        .into_iter()
+        .map(split_address)
+        .collect();
+    if people.is_empty() {
+        return String::new();
+    }
+    let account = account.to_lowercase();
+    if people.iter().any(|p| p.address.to_lowercase() == account) {
+        return "To 自分".to_owned();
+    }
+    let names: Vec<&str> = people.iter().map(SplitAddress::display).collect();
+    format!("To {}", names.join(", "))
 }
 
 #[cfg(test)]
@@ -207,5 +247,69 @@ mod tests {
         assert_eq!(split_address("a@x").display(), "a@x");
         assert_eq!(split_address("<a@x>").display(), "a@x");
         assert_eq!(split_address("").display(), "");
+    }
+
+    #[test]
+    fn the_recipients_split_at_commas_outside_double_quotes() {
+        assert_eq!(split_recipients(""), Vec::<&str>::new());
+        assert_eq!(split_recipients(" , ,"), Vec::<&str>::new());
+        assert_eq!(split_recipients("a@x"), ["a@x"]);
+        assert_eq!(split_recipients(" a@x ,\tb@y\n"), ["a@x", "b@y"]);
+        assert_eq!(
+            split_recipients(r#""Doe, John" <j@x.com>, Bob <b@y>"#),
+            [r#""Doe, John" <j@x.com>"#, "Bob <b@y>"]
+        );
+        // An unclosed quote takes the rest, commas and all.
+        assert_eq!(
+            split_recipients(r#""A, B <a@x>, c@y"#),
+            [r#""A, B <a@x>, c@y"#]
+        );
+        // A backslash does not escape a quote.
+        assert_eq!(
+            split_recipients(r#""A\", B" <a@x>"#),
+            [r#""A\""#, r#"B" <a@x>"#]
+        );
+        assert_eq!(
+            split_recipients("a@x,\u{feff}b@y\u{85}"),
+            ["a@x", "b@y\u{85}"]
+        );
+    }
+
+    #[test]
+    fn the_to_line_says_to_me_when_the_account_is_a_recipient() {
+        assert_eq!(
+            recipients_label("me@example.com", "me@example.com"),
+            "To 自分"
+        );
+        assert_eq!(
+            recipients_label("Me <ME@Example.com>", "me@EXAMPLE.com"),
+            "To 自分"
+        );
+        assert_eq!(
+            recipients_label("Bob <b@y>, Me <me@example.com>", "me@example.com"),
+            "To 自分"
+        );
+        // The comma inside the quotes does not make a recipient of the account's address.
+        assert_eq!(
+            recipients_label(r#""x, me@example.com" <q@y>"#, "me@example.com"),
+            "To x, me@example.com"
+        );
+    }
+
+    #[test]
+    fn the_to_line_lists_the_names_else_the_addresses() {
+        assert_eq!(recipients_label("", "me@example.com"), "");
+        assert_eq!(recipients_label(" , ", "me@example.com"), "");
+        assert_eq!(recipients_label("b@y", "me@example.com"), "To b@y");
+        assert_eq!(
+            recipients_label(
+                r#""Doe, John" <j@x.com>, <c@z>, d@w, Eve <e@v>"#,
+                "me@example.com"
+            ),
+            "To Doe, John, c@z, d@w, Eve"
+        );
+        // A name with no address still names the recipient, and an empty account matches an empty address only.
+        assert_eq!(recipients_label("Bob <>", "me@example.com"), "To Bob");
+        assert_eq!(recipients_label("Bob <>", ""), "To 自分");
     }
 }

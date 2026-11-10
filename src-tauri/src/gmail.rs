@@ -26,7 +26,7 @@ use crate::images::{
     cid_refs, image_mime, inline_data_uri, references_to, replace_cids, run_limited, wanted_images,
     CidRef, InlineImage, UriCache, FETCH_TIMEOUT, MAX_INLINE_IMAGES,
 };
-use crate::mail_address::split_address;
+use crate::mail_address::{recipients_label, split_address};
 
 const THREADS_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
@@ -209,8 +209,14 @@ pub struct MessageDetail {
     /// Gmail's message ID. The frontend finds the message's images by it.
     id: String,
     from: String,
+    /// The name of `from` (`Name <addr>`); empty when it has none.
+    from_name: String,
+    /// The address of `from`.
+    from_address: String,
     /// The To header as sent; empty when the message has none.
     to: String,
+    /// The To line the header shows: "To 自分" when the account that reads the thread is a recipient, else the recipients' names; empty with no To.
+    to_label: String,
     #[cfg_attr(test, ts(type = "number"))]
     date_ms: i64,
     /// Gmail's own summary of the message, HTML-escaped.
@@ -264,8 +270,8 @@ fn collect_text(p: &Payload, html: &mut Vec<String>, plain: &mut Vec<String>) {
 }
 
 impl MessageDetail {
-    /// HTML wins unless `prefer_plain` is set and a plain-text part exists.
-    fn new(m: &Message, prefer_plain: bool) -> Self {
+    /// HTML wins unless `prefer_plain` is set and a plain-text part exists. `account` is the one that reads the thread.
+    fn new(m: &Message, prefer_plain: bool, account: &str) -> Self {
         let (mut html, mut plain) = (Vec::new(), Vec::new());
         collect_text(&m.payload, &mut html, &mut plain);
         let is_html = !html.is_empty() && !(prefer_plain && !plain.is_empty());
@@ -277,11 +283,16 @@ impl MessageDetail {
             .filter(|h| h.name.eq_ignore_ascii_case("Authentication-Results"))
             .map(|h| h.value.as_str())
             .collect();
+        let sender = split_address(&from);
+        let to = header(&m.payload, "To");
         Self {
             id: m.id.clone(),
             authenticated: authenticated(&results, &from),
             from,
-            to: header(&m.payload, "To"),
+            from_name: sender.name,
+            from_address: sender.address,
+            to_label: recipients_label(&to, account),
+            to,
             date_ms: m.internal_date.parse().unwrap_or(0),
             snippet: m.snippet.clone(),
             html: is_html,
@@ -295,11 +306,11 @@ impl MessageDetail {
 }
 
 impl ThreadDetail {
-    fn new(t: &Thread, prefer_plain: bool) -> Self {
+    fn new(t: &Thread, prefer_plain: bool, account: &str) -> Self {
         let mut messages: Vec<_> = t
             .messages
             .iter()
-            .map(|m| MessageDetail::new(m, prefer_plain))
+            .map(|m| MessageDetail::new(m, prefer_plain, account))
             .collect();
         messages.sort_by_key(|m| m.date_ms);
         Self {
@@ -1314,7 +1325,7 @@ pub async fn fetch_thread(
     let Some(t) = get_thread(dir, auth, account, id).await? else {
         return Ok(None);
     };
-    let mut detail = ThreadDetail::new(&t, prefer_plain);
+    let mut detail = ThreadDetail::new(&t, prefer_plain, account);
     // A text consumer (prefer_plain, the MCP server) gets no image data.
     if !prefer_plain {
         let refs = thread_cid_refs(&detail);
@@ -1827,8 +1838,9 @@ mod tests {
 
     #[test]
     fn thread_detail_is_unread_when_any_message_is() {
-        let unread =
-            |labels: &[&[&str]]| ThreadDetail::new(&thread_with_labels("t", labels), false).unread;
+        let unread = |labels: &[&[&str]]| {
+            ThreadDetail::new(&thread_with_labels("t", labels), false, "acc").unread
+        };
         assert!(unread(&[&["INBOX"], &["INBOX", "UNREAD"]]));
         assert!(!unread(&[&["INBOX"], &["INBOX"]]));
         assert!(!unread(&[]));
@@ -1890,7 +1902,7 @@ mod tests {
                 part("b", json!({"attachmentId": "att-b", "size": 3})),
                 part("c", json!({"attachmentId": "att-c", "size": 3}))]}}]}))
         .unwrap();
-        let detail = ThreadDetail::new(&t, false);
+        let detail = ThreadDetail::new(&t, false, "acc");
         let cache = InlineCache::default();
         cache.put(
             INLINE_CACHE_BYTES,
@@ -1926,7 +1938,7 @@ mod tests {
                 {"mimeType": "image/png", "headers": [{"name": "Content-ID", "value": "<a@x>"}],
                  "body": {"attachmentId": "att", "size": 3}}]}}]}))
         .unwrap();
-        let mut detail = ThreadDetail::new(&t, false);
+        let mut detail = ThreadDetail::new(&t, false, "acc");
         let refs = thread_cid_refs(&detail);
         detail.pending_images =
             find_cid_images(&InlineCache::default(), "acc", &t, &detail, &refs).1;
@@ -1966,6 +1978,43 @@ mod tests {
         let value = serde_json::to_value(&d).unwrap();
         assert_eq!(value["messages"][0]["to"], d.messages[0].to);
         assert_eq!(value["messages"][0]["snippet"], d.messages[0].snippet);
+    }
+
+    #[test]
+    fn message_carries_the_sender_and_the_to_line_for_the_reading_account() {
+        let t: Thread = serde_json::from_value(
+            json!({"id": "t", "messages": [{"id": "m", "internalDate": "1",
+            "payload": {"mimeType": "text/plain",
+                "headers": [{"name": "From", "value": "\"Doe, John\" <j@example.com>"},
+                            {"name": "To", "value": "Me <ME@example.com>, B <b@example.com>"}],
+                "body": {"data": "AAAA"}}}]}),
+        )
+        .unwrap();
+        let line = |account: &str| {
+            ThreadDetail::new(&t, false, account).messages[0]
+                .to_label
+                .clone()
+        };
+        assert_eq!(line("me@example.com"), "To 自分");
+        assert_eq!(line("b@example.com"), "To 自分");
+        assert_eq!(line("c@example.com"), "To Me, B");
+        let d = ThreadDetail::new(&t, false, "c@example.com");
+        let value = serde_json::to_value(&d).unwrap();
+        assert_eq!(value["messages"][0]["fromName"], "Doe, John");
+        assert_eq!(value["messages"][0]["fromAddress"], "j@example.com");
+        assert_eq!(value["messages"][0]["toLabel"], "To Me, B");
+        let none = detail(
+            json!({"id": "t", "messages": [{"id": "m", "internalDate": "1",
+            "payload": {"mimeType": "text/plain", "body": {"data": "AAAA"}}}]}),
+        );
+        assert_eq!(
+            (
+                none.messages[0].from_name.as_str(),
+                none.messages[0].from_address.as_str(),
+                none.messages[0].to_label.as_str()
+            ),
+            ("", "", "")
+        );
     }
 
     #[test]
@@ -2088,7 +2137,11 @@ mod tests {
     }
 
     fn detail(json: serde_json::Value) -> ThreadDetail {
-        ThreadDetail::new(&serde_json::from_value::<Thread>(json).unwrap(), false)
+        ThreadDetail::new(
+            &serde_json::from_value::<Thread>(json).unwrap(),
+            false,
+            "me@example.com",
+        )
     }
 
     // "こんにちは" in ISO-2022-JP
@@ -2119,6 +2172,9 @@ mod tests {
             vec![MessageDetail {
                 id: String::new(),
                 from: "A <a@example.com>".into(),
+                from_name: "A".into(),
+                from_address: "a@example.com".into(),
+                to_label: String::new(),
                 date_ms: 1,
                 html: false,
                 body: "こんにちは".into(),
@@ -2148,7 +2204,7 @@ mod tests {
             "internalDate": "1",
             "payload": {"mimeType": "multipart/alternative", "parts": parts}}]}))
         .unwrap();
-        ThreadDetail::new(&thread, true)
+        ThreadDetail::new(&thread, true, "acc")
             .messages
             .into_iter()
             .map(|m| (m.html, m.body))
