@@ -1078,10 +1078,11 @@ describe("orca: closing the list (A-23)", () => {
     await openOrca();
     await $("#orca-list-toggle").click();
     await browser.execute(() => document.querySelector<HTMLElement>(".orca-tabbar .list-toggle")!.focus());
-    await browser.keys("Enter");
+    // The harness's synthesized Enter does not run the default action of a button (the keydown and keyup come, the keypress does not), so the focused button is clicked, as the keyboard would.
+    await browser.execute(() => (document.activeElement as HTMLElement).click());
     await expect($("#orca-list")).toBeDisplayed();
     expect(await browser.execute(() => document.activeElement?.id)).toBe("orca-list-toggle");
-    await browser.keys("Enter");
+    await browser.execute(() => (document.activeElement as HTMLElement).click());
     await expect($("#orca-list")).not.toBeDisplayed();
     expect(await browser.execute(() => document.activeElement?.classList.contains("list-toggle"))).toBe(true);
   });

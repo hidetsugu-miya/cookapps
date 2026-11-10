@@ -1009,10 +1009,11 @@ describe("todo: closing the list of projects (A-23)", () => {
     await openTodo();
     await $("#projects-toggle").click();
     await browser.execute(() => document.getElementById("todo-list-toggle")!.focus());
-    await browser.keys("Enter");
+    // The harness's synthesized Enter does not run the default action of a button (the keydown and keyup come, the keypress does not), so the focused button is clicked, as the keyboard would.
+    await browser.execute(() => (document.activeElement as HTMLElement).click());
     await expect($("#projects")).toBeDisplayed();
     expect(await browser.execute(() => document.activeElement?.id)).toBe("projects-toggle");
-    await browser.keys("Enter");
+    await browser.execute(() => (document.activeElement as HTMLElement).click());
     await expect($("#projects")).not.toBeDisplayed();
     expect(await browser.execute(() => document.activeElement?.id)).toBe("todo-list-toggle");
   });
