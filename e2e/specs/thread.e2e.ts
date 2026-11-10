@@ -200,6 +200,8 @@ describe("thread AI summary", () => {
       ...older,
       id: "m2",
       from: "Bob <bob@example.com>",
+      fromName: "Bob",
+      fromAddress: "bob@example.com",
       dateMs: older.dateMs + 600_000,
       html: true,
       body: "<style>p { color: red }</style><p>Newest</p><script>x()</script><p>reply&nbsp;here</p>text<div>next</div><table><tr><td>100</td><td>200</td></tr></table>",

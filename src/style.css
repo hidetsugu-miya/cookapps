@@ -257,6 +257,10 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .arrival-text b, .arrival-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .arrival-subject { font-size: calc(13px * var(--fs)); color: var(--muted); }
 .arrival-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+/* The Slack cards (S-17): the name and the channel on one line, the sender's avatar with the workspace's dot as the list draws it. */
+.arrival-who { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.arrival-who b { flex: none; max-width: 60%; }
+.arrival-channel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
 #todo { flex: 1; min-height: 0; display: flex; }
 #projects { width: 220px; flex: none; border-right: 1px solid var(--line); padding: 20px 12px; box-sizing: border-box; overflow-y: auto; }
 #projects h3 { font-size: calc(12px * var(--fs)); color: #888; font-weight: normal; margin: 16px 8px 4px; }
@@ -339,8 +343,11 @@ button.review-chip:hover { background: var(--hover); }
 .scrim.modal { align-items: center; justify-content: center; }
 /* A menu or the due popover opened from the modal lies over its dimmed part. */
 .scrim.modal ~ .menu { z-index: 16; }
-.draft { display: grid; grid-template-columns: minmax(0, 1fr); width: min(720px, calc(100% - 48px)); height: min(560px, calc(100% - 48px)); overflow: hidden; border-radius: 12px; background: #fff; box-shadow: 0 16px 40px rgba(0, 0, 0, .25); }
+.draft { display: grid; grid-template-columns: minmax(0, 1fr) 340px; width: min(1060px, calc(100% - 48px)); height: min(560px, calc(100% - 48px)); overflow: hidden; border-radius: 12px; background: #fff; box-shadow: 0 16px 40px rgba(0, 0, 0, .25); }
 .draft:focus { outline: none; }
+.draft-chat { grid-column: 2; min-height: 0; border-left: 1px solid var(--line); }
+#draft-chat .composer-foot { justify-content: flex-end; }
+#draft-chat .chat-ai { white-space: pre-wrap; }
 .draft-todo { display: grid; grid-template-columns: minmax(0, 1fr) 220px; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .draft-head { grid-column: 1 / 3; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 20px; border-bottom: 1px solid var(--line); font-size: calc(12px * var(--fs)); color: #555; }
 .draft-src { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1039,10 +1046,11 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .ho-form .text-btn.primary { flex: none; height: 44px; padding: 0 20px; border-radius: 22px; font: inherit; }
 .ho-form .text-btn.primary:disabled { opacity: .4; cursor: default; }
 .ho-form .text-btn.primary:disabled:hover { background: var(--accent); filter: none; }
-/* A-10: the images attached to an instruction, above the composer; a file dragged over the pane or the terminal outlines it. */
+/* A-10: the files attached to an instruction, above the composer (an image as a thumbnail, any other file by its name); a file dragged over the pane or the terminal outlines it. */
 .attachments { display: flex; flex-wrap: wrap; gap: 8px; }
 .attachment { position: relative; width: 64px; height: 64px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; overflow: hidden; }
 .attachment img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.attachment .attachment-name { box-sizing: border-box; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; width: 100%; padding: 24px 6px 4px; overflow: hidden; overflow-wrap: anywhere; font-size: calc(11px * var(--fs)); line-height: 1.25; color: var(--ink-soft); }
 .attachment .icon-btn { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%; background: rgba(255, 255, 255, .85); }
 .attachment .icon-btn svg { width: 12px; height: 12px; }
 .dropping { outline: 2px dashed var(--accent); outline-offset: -2px; }

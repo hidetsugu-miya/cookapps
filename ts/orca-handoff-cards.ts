@@ -4,7 +4,7 @@ import type { HandoffKind } from "./bindings/HandoffKind";
 import type { MessageDetail } from "./bindings/MessageDetail";
 import type { TaskItem } from "./bindings/TaskItem";
 import type { ThreadMessage } from "./bindings/ThreadMessage";
-import { formatDetailDate, senderName } from "./format.js";
+import { formatDetailDate } from "./format.js";
 import { mailText } from "./mail-text.js";
 import { slackMs } from "./slack-view.js";
 import { dueLabel } from "./todo-data.js";
@@ -23,7 +23,7 @@ const chars = (text: string) => [...text].length;
 export function mailCard(subject: string, messages: MessageDetail[]): HandoffCard {
   const body = messages.map((m) => `差出人: ${m.from}\n日時: ${formatDetailDate(m.dateMs)}\n\n${mailText(m)}`).join("\n\n----\n\n");
   const last = messages[messages.length - 1];
-  return { kind: "mail", title: subject || "(件名なし)", meta: `${last ? senderName(last.from) : "不明"} ・ 本文 ${chars(body)} 字`, body };
+  return { kind: "mail", title: subject || "(件名なし)", meta: `${last ? last.fromName || last.fromAddress : "不明"} ・ 本文 ${chars(body)} 字`, body };
 }
 
 // The thread as the screen shows it (and as S-7 sends it to Claude): the sender's name, the time and the text of each message.

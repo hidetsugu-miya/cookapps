@@ -15,6 +15,7 @@ import { itemRow } from "./settings.js";
 import { refreshSlackCompose } from "./slack-compose.js";
 import { refreshSlackThread } from "./slack-thread.js";
 import { updateAddMode } from "./todo-add.js";
+import { refreshDraftChat } from "./todo-draft.js";
 import { promptRow, refreshPrompt } from "./todo-prompt.js";
 import { setClaudeReady, showError } from "./view.js";
 
@@ -174,6 +175,7 @@ function applyClaude(next: Claude | null) {
   refreshPrompt();
   refreshSlackCompose();
   refreshSlackThread();
+  refreshDraftChat();
 }
 
 // The model and effort of each purpose of the `claude -p` calls (A-2) as the selects show them; null until read.
@@ -235,11 +237,12 @@ function modelBlock() {
 
 // The two selects under a Claude pane's request field, without a frame: the model and effort of the pane's purpose, the same values as the settings'.
 // The prompt screen's pane (the prompt conversation) and the Slack thread's pane (the Slack thread conversation) have them.
-const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["reply-model", "slackReply"]];
+// The Todo draft modal's pane (S-18) has them for the Slack summary's purpose; the modal is not always open, so a slot that is not in the page is skipped.
+const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["reply-model", "slackReply"], ["draft-model", "slackSummary"]];
 
 function redrawModelSlot(id: string) {
   const purpose = MODEL_SLOTS.find(([slot]) => slot === id)![1];
-  $(id).replaceChildren(...(modelSettings === null ? [] : purposeSelects(purpose, "")));
+  $(id)?.replaceChildren(...(modelSettings === null ? [] : purposeSelects(purpose, "")));
 }
 
 // Every select drawn, on the settings screen and on the prompt screen.

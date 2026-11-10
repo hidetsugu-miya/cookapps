@@ -46,6 +46,7 @@ import type { TimelineMessage } from "../ts/bindings/TimelineMessage";
 import type { TimelineReply } from "../ts/bindings/TimelineReply";
 import type { UnreadReplies } from "../ts/bindings/UnreadReplies";
 import type { Todo } from "../ts/bindings/Todo";
+import type { TodoDraftEdit } from "../ts/bindings/TodoDraftEdit";
 import type { TodoPrompt } from "../ts/bindings/TodoPrompt";
 import type { Week } from "../ts/bindings/Week";
 import type { Workspace } from "../ts/bindings/Workspace";
@@ -198,7 +199,19 @@ export const threadDetail = (subject: string, body: string, unread: boolean): Th
   subject,
   unread,
   messages: [
-    { id: "m1", from: "Alice <alice@example.com>", to: account, dateMs: Date.now() - 60_000, snippet: body, html: false, body, authenticated: false },
+    {
+      id: "m1",
+      from: "Alice <alice@example.com>",
+      fromName: "Alice",
+      fromAddress: "alice@example.com",
+      to: account,
+      toLabel: "To 自分",
+      dateMs: Date.now() - 60_000,
+      snippet: body,
+      html: false,
+      body,
+      authenticated: false,
+    },
   ],
 });
 
@@ -394,6 +407,18 @@ export const claudeSettings: ClaudeSettings = {
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
 export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };
+
+// What `claude_edit_todo_draft` answers when Claude proposes a shorter name for `slackSummary` and leaves the description alone.
+export const todoDraftEdit: TodoDraftEdit = {
+  reply: "名前を短くします",
+  content: "Reply to vendor",
+  description: null,
+  contentDiff: [
+    { kind: "del", text: "Reply to the vendor" },
+    { kind: "ins", text: "Reply to vendor" },
+  ],
+  descriptionDiff: [],
+};
 
 // What `claude_edit_todo_prompt` answers when Claude proposes changing the line "Default body" to "Better body".
 export const promptEdit: PromptEdit = {
@@ -755,16 +780,18 @@ export async function waitForOpens(times = 1) {
 
 // A one-pixel PNG.
 export const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-export type GivenFile = { name: string; type: string; base64: string };
+// `bytes` makes a file of that many zero bytes in the page, for a file too large to give as base64.
+export type GivenFile = { name: string; type: string; base64: string; bytes?: number };
 export const image = (name = "shot.png"): GivenFile => ({ name, type: "image/png", base64: PNG });
 export const note: GivenFile = { name: "notes.txt", type: "text/plain", base64: btoa("hello") };
+export const huge: GivenFile = { name: "big.bin", type: "application/octet-stream", base64: "", bytes: 20 * 1024 * 1024 + 1 };
 
 // Dispatches `kind` ("paste", "dragover" or "drop") on the element at `selector` ("document" is the page) carrying `files`, as the clipboard or the pointer would (the event objects hold plain stand-ins for the clipboard and the transfer,
 // which WKWebView builds only from a real gesture). Answers whether the page cancelled the event.
 export const fire = (kind: "paste" | "dragover" | "drop", selector: string, files: GivenFile[]) =>
   browser.execute(
     (k, sel, given) => {
-      const list = given.map((g) => new File([Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0))], g.name, { type: g.type }));
+      const list = given.map((g) => new File([g.bytes === undefined ? Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0)) : new Uint8Array(g.bytes)], g.name, { type: g.type }));
       const event = new Event(k, { bubbles: true, cancelable: true });
       const transfer = { files: list, types: list.length ? ["Files"] : ["text/plain"], dropEffect: "none", getData: () => "" };
       Object.defineProperty(event, k === "paste" ? "clipboardData" : "dataTransfer", { value: transfer });

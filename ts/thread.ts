@@ -1,7 +1,7 @@
 // The thread detail view: the messages of the open thread, their folding, and the buttons of its header.
 import type { MessageDetail } from "./bindings/MessageDetail";
 import { $, span } from "./dom.js";
-import { avatarColor, formatDate, formatDetailDate, initials, recipientsLabel, senderName, splitAddress, unescapeHtml } from "./format.js";
+import { avatarColor, formatDate, formatDetailDate, initials, unescapeHtml } from "./format.js";
 import { PERSON_SVG } from "./icons.js";
 import { dismiss } from "./arrivals.js";
 import { applySync, load, removeRow } from "./inbox.js";
@@ -42,8 +42,7 @@ let openCount = 0;
 
 // The header of an open message: avatar, sender, recipients and date. A div, so the address can be selected;
 // when the message can be folded it acts as a button (`message` adds the click).
-function openHead(m: MessageDetail, account: string, foldable: boolean) {
-  const { name, address } = splitAddress(m.from);
+function openHead(m: MessageDetail, foldable: boolean) {
   const head = document.createElement("div");
   head.className = "msg-head";
   if (foldable) {
@@ -53,17 +52,16 @@ function openHead(m: MessageDetail, account: string, foldable: boolean) {
   const avatar = span("msg-avatar", "");
   avatar.innerHTML = PERSON_SVG;
   const who = span("who", "");
-  who.append(span("name", name || address));
-  if (name) who.append(" ", span("addr", `<${address}>`));
-  const to = recipientsLabel(m.to, account);
-  if (to) who.append(span("to", to));
+  who.append(span("name", m.fromName || m.fromAddress));
+  if (m.fromName) who.append(" ", span("addr", `<${m.fromAddress}>`));
+  if (m.toLabel) who.append(span("to", m.toLabel));
   head.append(avatar, who, span("when", formatDetailDate(m.dateMs)));
   return head;
 }
 
 // The one line an earlier message of a thread is folded to: small avatar, sender, snippet and date.
 function foldedHead(m: MessageDetail) {
-  const name = senderName(m.from);
+  const name = m.fromName || m.fromAddress;
   const head = document.createElement("button");
   head.className = "msg-head folded";
   const avatar = span("avatar", initials(name));
@@ -76,9 +74,9 @@ function foldedHead(m: MessageDetail) {
 
 // `ctx` is the open thread's.
 // `folded` starts the message as one line; the head toggles it. A thread's only message has no toggle.
-function message(m: MessageDetail, ctx: ThreadCtx, account: string, folded: boolean, foldable: boolean) {
+function message(m: MessageDetail, ctx: ThreadCtx, folded: boolean, foldable: boolean) {
   const article = document.createElement("article");
-  const open = openHead(m, account, foldable);
+  const open = openHead(m, foldable);
   const body = document.createElement("div");
   body.className = "msg-body";
   article.append(open, body);
@@ -172,17 +170,16 @@ const ACTIONS = ["thread-summary", "thread-slack", "thread-todo", "thread-orca",
 
 // What the detail view holds until the thread arrives: the sender the list row has (none for a thread opened from Todo with no row),
 // and in the body's place a note and gray lines. The body is returned, so a failure can take its place.
-function loadingMessage(from: string | undefined) {
+function loadingMessage(fromName = "", fromAddress = "") {
   const article = document.createElement("article");
   const head = document.createElement("div");
   head.className = "msg-head";
   const avatar = span("msg-avatar", "");
   avatar.innerHTML = PERSON_SVG;
   const who = span("who", "");
-  if (from) {
-    const { name, address } = splitAddress(from);
-    who.append(span("name", name || address));
-    if (name) who.append(" ", span("addr", `<${address}>`));
+  if (fromName || fromAddress) {
+    who.append(span("name", fromName || fromAddress));
+    if (fromName) who.append(" ", span("addr", `<${fromAddress}>`));
   }
   head.append(avatar, who);
   const body = document.createElement("div");
@@ -201,7 +198,7 @@ function loadingMessage(from: string | undefined) {
 
 // `thread` is the row's item (or just the ids, for a thread opened from Todo with no row): its subject and sender are shown at once, and the body once Gmail answers.
 export async function openThread(
-  { id, account, subject, from }: { id: string; account: string; subject?: string; from?: string },
+  { id, account, subject, fromName, fromAddress }: { id: string; account: string; subject?: string; fromName?: string; fromAddress?: string },
   li: HTMLLIElement | null,
   origin: "mail" | "todo" = "mail",
 ) {
@@ -213,7 +210,7 @@ export async function openThread(
   loading.current = { id, account };
   threadOrigin = origin;
   clearSummary();
-  const { article, body } = loadingMessage(from);
+  const { article, body } = loadingMessage(fromName, fromAddress);
   $("thread-subject").textContent = subject === undefined ? "" : subject || "(件名なし)";
   $("messages").replaceChildren(article);
   show("thread");
@@ -247,7 +244,7 @@ export async function openThread(
     // Newest first. Only the latest message (the first) is open when the thread has several.
     const several = t.messages.length > 1;
     $("messages").replaceChildren(
-      ...[...t.messages].reverse().map((m, i) => message(m, ctx, account, several && i > 0, several)),
+      ...[...t.messages].reverse().map((m, i) => message(m, ctx, several && i > 0, several)),
     );
     // A Todo still being made from the thread opened before keeps its button until it ends.
     for (const button of ACTIONS) {
