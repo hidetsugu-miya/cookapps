@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.60.0
+
+A-23 (new): the window has no title bar, and every screen reaches the top edge of the window (#314). The close, minimize and zoom buttons of macOS sit on the top of the green icon column, whose icons start below them. The band at the top of each screen (the headers of the mail list, of a thread, of the Todo screen and of the Slack screens, the bar of the calendar, the heading of the settings, the header of the Orca list and the tab bars of the Orca work pane) moves the window when an empty place of it is dragged, and a double press zooms it, as the title bar did.
+
+A-23: the list of projects of the Orca screen and of the Todo screen can be closed (#318, #322). The button at the left end of the list's header closes it, and the work pane or the task list takes its width; the button then moves to the left of the tab bar (Orca) or of the heading (Todo), and pressing it opens the list again. The bell and the reload of the Orca screen are hidden with the list, and Cmd+J opens a closed list first. The state is not saved: the app starts with the lists open.
+
+A-16: the two items of the menu of the plus of the Orca work pane have an icon instead of a green dot (#377): Claude's for 「Claude を起動」 and a terminal's for 「ターミナルを開く」.
+
+T-1: the chip of the parent task above the name of a subtask starts at the left edge of the task's checkbox, and the parent's round checkbox in it is a little smaller (#406).
+
 ## v0.59.1
 
 A-9: the project menu of the 「Orca に渡す」 pane has a search field at its top (#405). What is typed narrows the projects to those whose name holds it, with case ignored. ↓ and ↑ move through the rows, Enter picks one, and Escape closes the menu. The menu fits the window and its rows scroll, so a long list of projects no longer runs past the screen.
