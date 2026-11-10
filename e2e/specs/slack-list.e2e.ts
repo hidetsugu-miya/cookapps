@@ -1725,9 +1725,9 @@ describe("slack list: the popups for a new Slack message (S-17)", () => {
     await expect($("#nav-slack .nav-count")).toHaveText("1");
   });
 
-  // One read that finds `arrived` (the rows hold them, newest first); the reads after it find nothing new, as Rust gives a message in one answer only.
-  async function arrive(arrived: TimelineMessage[], extra: Parameters<typeof timeline>[1] = {}) {
-    const rows = [...arrived, ...base()];
+  // One read that finds `arrived` (the rows hold them, newest first, then `unread`, the messages of earlier reads that are still unread); the reads after it find nothing new, as Rust gives a message in one answer only.
+  async function arrive(arrived: TimelineMessage[], extra: Parameters<typeof timeline>[1] = {}, unread: TimelineMessage[] = []) {
+    const rows = [...arrived, ...unread, ...base()];
     const read = await mock("slack_timeline", timeline(rows, { arrived, refreshSecs: 300, ...extra }));
     await emitEvent("slack-timeline-dirty");
     await waitForCalls(read);
@@ -1892,7 +1892,7 @@ describe("slack list: the popups for a new Slack message (S-17)", () => {
     expect(stack[1]).toContain("first");
     expect(stack[2]).toContain("second");
     // A fourth card makes the oldest go, the mail card here.
-    await arrive([fresh(3, "third")]);
+    await arrive([fresh(3, "third")], {}, [fresh(2, "second"), fresh(1, "first")]);
     await browser.waitUntil(async () => (await cards()).every((t) => !t.includes("Lunch plan")));
     const after = await cards();
     expect(after).toHaveLength(3);

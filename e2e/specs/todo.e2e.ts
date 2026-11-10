@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettings, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, todoDraftEdit, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettings, comment, connection, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, todoDraftEdit, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -420,21 +420,43 @@ describe("todo", () => {
       await expect($("#draft-model select[data-kind=model]")).toHaveValue("sonnet");
       await expect($("#draft-model select[data-kind=effort]")).toHaveValue("medium");
       const save = await mock("claude_model_settings_save", { ...claudeSettings, slackSummary: { model: "opus", effort: "medium" } });
-      await $("#draft-model select[data-kind=model]").selectByAttribute("value", "opus");
+      // Sets the select as the user does (value, then change); the real WebView's select popup is not driven (todo-prompt.e2e.ts does the same).
+      await browser.execute(
+        (id) => {
+          if (!window.__e2e_once__(id)) return;
+          const select = document.querySelector<HTMLSelectElement>("#draft-model select[data-kind=model]")!;
+          select.value = "opus";
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        onceId(),
+      );
       const [saved] = await waitForCalls(save);
       expect(saved).toEqual({ purpose: "slackSummary", model: "opus" });
       await expect($("#draft-chat-note")).not.toBeDisplayed();
     });
 
-    it("turns the request field off and says so when Claude is not connected", async () => {
-      await openTodo(claudeMissing);
-      await mock("todoist_summarize_slack", slackSummary);
-      await $("#todo-add-input").setValue(slackMessageUrl);
-      await $("#todo-add-button").click();
-      await $("#todo-draft").waitForExist();
+    // Claude must be usable for the summary to open the modal, so the state changes after it: on the settings screen, reached from the prompt screen while the modal is off the screen.
+    it("turns the request field off and says so when Claude is disconnected while the modal is off the screen, and back on when it is connected again", async () => {
+      await openSummaryCard();
+      await expect($("#draft-chat-note")).not.toBeDisplayed();
+      await $("#todo-draft .draft-prompt").click();
+      await $("#nav-settings").click();
+      await $("#settings-tab-claude").click();
+      await mock("claude_connection", connection("subscription", claudeMissing, { state: "none" }));
+      await $("#claude-recheck").click();
+      await $("#nav-todo").click();
+      await $("#todo-draft").waitForDisplayed();
       await expect($("#draft-chat-note")).toBeDisplayed();
       await expect($("#draft-input")).toBeDisabled();
       await expect($("#draft-send")).toBeDisabled();
+      await $("#todo-draft .draft-prompt").click();
+      await $("#nav-settings").click();
+      await mock("claude_connection", connection("subscription", claudeReady, { state: "none" }));
+      await $("#claude-recheck").click();
+      await $("#nav-todo").click();
+      await $("#todo-draft").waitForDisplayed();
+      await expect($("#draft-chat-note")).not.toBeDisplayed();
+      await expect($("#draft-input")).toBeEnabled();
     });
   });
 
@@ -526,7 +548,9 @@ describe("todo", () => {
     await openSummaryCard();
     await $("#todo-draft .draft-name").setValue("My own name");
     await $("#todo-draft .draft-prompt").click();
-    await expect($("#todo-draft")).not.toExist();
+    // The modal stays in the page, off the screen, and the screen behind it is not inert.
+    await expect($("#todo-draft")).not.toBeDisplayed();
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#sidebar, #content")].some((el) => el.inert))).toBe(false);
     await expect($("#prompt")).toBeDisplayed();
     await expect($("#todo")).not.toBeDisplayed();
     await expect($("#nav-settings")).toHaveAttribute("aria-current", "page");

@@ -81,6 +81,8 @@ export function resumeDraft() {
   open.shown = true;
   for (const el of open.behind) el.inert = true;
   open.scrim.hidden = false;
+  // Claude may have been connected or disconnected on the settings screen meanwhile.
+  chat.refresh();
   open.scrim.querySelector<HTMLElement>(".draft")!.focus();
 }
 
