@@ -120,13 +120,16 @@ describe("todo", () => {
     await $("#todo-draft .draft-name").setValue("My own name");
     const data = todoData();
     data.tasks[0].content = "Write report v2";
-    await mock("todoist_load", data);
+    const load = await mock("todoist_load", data);
     await browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
-    await browser.waitUntil(async () => String(await $("#todo-list").getProperty("textContent")).includes("Write report v2"));
+    await waitForCalls(load);
     await expect($("#todo-draft")).toBeDisplayed();
     await expect($("#todo-draft .draft-name")).toHaveValue("My own name");
     await expect($("#todo-back")).toBeDisplayed();
     await expect($("#todo-list")).not.toBeDisplayed();
+    // The list under the page took the new data: it shows when the page is left.
+    await $("#todo-back").click();
+    await waitForText("#todo-list", "Write report v2");
   });
 
   it("puts the name and description on the left and the project, date and labels beside them, with 破棄 at the left and the + at the right of the foot", async () => {
