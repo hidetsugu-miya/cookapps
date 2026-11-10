@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.58.2
+
+A-20: the 「フォント」 tab of the settings has three more places (#385, #386, #387). 「アプリ全体」 chooses the family and the size of everything that has no place of its own (the settings screen, the side menu, the popups and the tooltips), and its family is also used by a screen whose own family is 「システム標準」. 「Orca 作業スペース（チャットとファイル）」 chooses them for the tab strip, the chat panes, the file pane and the heading of the editor of the Orca screen. 「等幅の文字」 chooses the family of the monospace text (code, the body of a plain-text mail, prompts and diffs); its size follows the screen it is in. Nothing looks different until a choice is made.
+
+A-18: the editor of the Orca screen shows line numbers at the left of the text (#378). They take the font of the editor, follow the vertical scroll, and are not selected or copied.
+
 ## v0.58.1
 
 S-5, S-6, S-11: a mention of a Slack user group (`<!subteam^…>`, or a `usergroup` element) is shown as `@handle` instead of `@不明` (#351, #352). The handle is read with `usergroups.list`, disabled groups included, once for each workspace and then every hour (five minutes after a failure), and is kept in memory only. To show the names, add the User Token Scope `usergroups:read` to the Slack app and enter the token again; without it the mention stays `@不明`, as before.
