@@ -2,12 +2,13 @@
 # Tells a run whether it may start something new (issues.md). The run stops itself with this; nothing kills the process.
 # Usage: nightly-limit.sh issue {n} [--taken {a,b,...}], or nightly-limit.sh proposal
 # issue {n}: may issue #n be started, when the issues {a,b,...} are already in hand in this run?
-#   No when the unit rule says so. Exit 3. A unit is a Release PR of its own: one point:8 issue, or all the `solo` parts (the label `issue-plan` gives the parts of a point:8 issue it split) of one milestone.
+#   In a night run (NIGHTLY_DEADLINE_EPOCH is set) no when the unit rule says so. Exit 3. A unit is a Release PR of its own: one point:8 issue, or all the `solo` parts (the label `issue-plan` gives the parts of a point:8 issue it split) of one milestone.
 #   The parts of one unit start together in a night; an issue that is not in the unit, and a part of another unit, do not start with it, before it or after it.
-#   In a night run (NIGHTLY_DEADLINE_EPOCH is set) also no once the deadline has passed (exit 1), and no when the points of the issues in hand and of #n add up to more than 10 (exit 3; a smaller issue may still fit).
+#   A session of the owner has no unit rule (issues.md): it may bundle issues of any units.
+#   In a night run also no once the deadline has passed (exit 1), and no when the points of the issues in hand and of #n add up to more than 10 (exit 3; a smaller issue may still fit).
 # proposal: may a new candidate of improvement-proposal be started? No once the deadline (23:00) has passed.
 # Exit 0: yes. Exit 1: no, the deadline has passed (stdout says why). Exit 3: no, #n does not fit the points (stdout says why). Exit 2: wrong usage, or an issue without a point label.
-# nightly.sh sets NIGHTLY_DEADLINE_EPOCH for the runs it starts. A session of the owner has none, so it is never limited in time or in points.
+# nightly.sh sets NIGHTLY_DEADLINE_EPOCH for the runs it starts. A session of the owner has none, so it is never limited in time, in points or by the unit rule.
 # The points of an issue are its `point:*` label, read with gh. Checking by hand: NIGHTLY_NOW_EPOCH replaces the current time, NIGHTLY_DEADLINE_EPOCH may be set by hand,
 # and NIGHTLY_POINTS_LIST (lines of "{issue number} {points} [{unit}]"; unit is `i{n}` for a point:8 issue, `m:{milestone}` for a `solo` part, and absent for any other issue) replaces the labels read with gh.
 set -u
@@ -72,11 +73,12 @@ if [ "$kind" = issue ]; then
       other_taken="$t"
     fi
   done
-  if [ "$mine_unit" = "-" ] && [ -n "$unit_taken" ]; then
+  if [ -z "${NIGHTLY_DEADLINE_EPOCH:-}" ]; then
+    : # a session: no unit rule
+  elif [ "$mine_unit" = "-" ] && [ -n "$unit_taken" ]; then
     echo "no: #${unit_taken}（単独の単位: point:8 か solo の部品）がこの回にあります。単位でない #${n} は一緒に始めません"
     exit 3
-  fi
-  if [ "$mine_unit" != "-" ] && [ -n "$other_taken" ]; then
+  elif [ "$mine_unit" != "-" ] && [ -n "$other_taken" ]; then
     echo "no: #${n} は単独の単位（point:8 か solo の部品）で、単独で Release PR になります。この回にはすでにその単位でない #${other_taken} があるので、始めません"
     exit 3
   fi

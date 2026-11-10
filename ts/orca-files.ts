@@ -1,6 +1,6 @@
-// The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted, with what git ignores marked); this module draws it and takes the presses.
-// A folder is read when it is opened (each time), and the reload button reads the root and the open folders again, one after the other. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
-// The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one).
+// The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`); this module draws the folder at once, marks the ignored entries when the answer comes, and takes the presses.
+// A folder is read the first time it is opened and drawn from what was read after that, and the reload button reads the root and then the open folders again, side by side (at most `reads()` at a time). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, tag } from "./dom.js";
@@ -63,15 +63,36 @@ function drawSoon() {
   });
 }
 
+// Marks the entries of `read`, the folder `dir` as it was listed, that git ignores, and takes the mark off the ones it does not name (`read` may hold the marks of the earlier listing, `readDir`). It is asked after the folder is drawn, and an answer that fails leaves `read` as it is. The answer is dropped when the tree is another worktree's by then, or the folder was read again.
+async function markIgnored(here: FilesContext, mine: number, dir: string, read: OrcaDir) {
+  let paths: string[];
+  try {
+    paths = await invoke("orca_files_ignored", { path: here.path, paths: read.entries.map((e) => e.path), environment: here.target });
+  } catch {
+    return;
+  }
+  const listing = listings.get(dir);
+  if (mine !== generation || listing?.dir !== read || (paths.length === 0 && !read.entries.some((e) => e.ignored))) return;
+  const ignored = new Set(paths);
+  listings.set(dir, { ...listing, dir: { ...read, entries: read.entries.map((e) => ({ ...e, ignored: ignored.has(e.path) })) } });
+  version++;
+  drawSoon();
+}
+
 async function readDir(dir: string) {
   const here = context;
   if (here === null) return;
   const mine = generation;
   const held = listings.get(dir);
+  // What a folder that the list marked as ignored holds is ignored too, and Rust does not ask git for it.
+  const inherited = ignoredDir(dir);
   listings.set(dir, { dir: held?.dir ?? null, error: null, busy: true });
   let next: Listing;
   try {
-    next = { dir: await invoke("orca_files_list", { path: here.path, dir, ignored: ignoredDir(dir), environment: here.target }), error: null, busy: false };
+    const read = await invoke("orca_files_list", { path: here.path, dir, ignored: inherited, environment: here.target });
+    // The entries that the earlier listing marked as ignored keep the mark until the answer of git replaces it, so that a reload does not blink it away.
+    const was = new Set(held?.dir?.entries.filter((e) => e.ignored).map((e) => e.path));
+    next = { dir: inherited || was.size === 0 ? read : { ...read, entries: read.entries.map((e) => (was.has(e.path) ? { ...e, ignored: true } : e)) }, error: null, busy: false };
   } catch (e) {
     next = { dir: held?.dir ?? null, error: String(e), busy: false };
   }
@@ -79,15 +100,27 @@ async function readDir(dir: string) {
   listings.set(dir, next);
   version++;
   drawSoon();
+  if (!inherited && next.dir !== null && next.error === null && next.dir.entries.length > 0) void markIgnored(here, mine, dir, next.dir);
 }
 
-// Reads the root and the folders that are open again, one at a time (each read is a connection of its own); another worktree's tree ends it.
+// How many folders the reload button reads at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).
+const reads = (here: FilesContext) => (here.target === null ? 16 : 8);
+
+// Reads the root, and when it is read the folders that are open again, side by side. The root goes first alone, so that the check of the worktree that its read may start is done once, not once for each folder read at the same time. A folder that was read and is closed is dropped, so that it is read when it is opened next. Another worktree's tree ends it.
 async function reload() {
+  const here = context;
+  if (here === null) return;
   const mine = generation;
-  for (const dir of ["", ...expanded]) {
-    if (mine !== generation) return;
-    await readDir(dir);
-  }
+  const queue = [...expanded];
+  for (const dir of [...listings.keys()]) if (dir !== "" && !queue.includes(dir)) listings.delete(dir);
+  await readDir("");
+  const worker = async () => {
+    for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
+      if (mine !== generation) return;
+      await readDir(dir);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
 }
 
 function toggleDir(path: string) {
@@ -97,7 +130,14 @@ function toggleDir(path: string) {
     draw();
   } else {
     expanded.add(path);
-    void readDir(path);
+    const held = listings.get(path);
+    // A folder that was read is drawn from what was read (the reload button reads it again); one that is being read is waited for.
+    if (held !== undefined && (held.busy || (held.dir !== null && held.error === null))) {
+      version++;
+      draw();
+    } else {
+      void readDir(path);
+    }
   }
 }
 

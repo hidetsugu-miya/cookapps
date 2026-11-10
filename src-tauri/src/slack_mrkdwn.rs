@@ -9,7 +9,7 @@ use ts_rs::TS;
 
 use crate::slack::{emojify, pieces, token_text, unescape, url_len, Piece};
 
-/// Looks a user up by ID, as `plain_text` does for a mention.
+/// Looks a user or a user group up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 /// A run of text with one style. `code` is an inline code: its text is drawn as it is, with no link made of an address in it.

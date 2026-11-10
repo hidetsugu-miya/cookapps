@@ -63,7 +63,7 @@ class Points(unittest.TestCase):
 
 
 class Ordering(unittest.TestCase):
-    def test_the_basis_is_importance_then_fewer_points_then_older(self):
+    def test_the_basis_is_the_tier_then_importance_low_last_then_fewer_points_then_older(self):
         a = mk(1, ["point:3"], created="2026-11-01T00:00:01Z")
         b = mk(2, ["point:1"], created="2026-11-01T00:00:02Z")
         c = mk(3, ["point:1", "importance:high"], created="2026-11-01T00:00:03Z")
@@ -71,6 +71,13 @@ class Ordering(unittest.TestCase):
         e = mk(5, ["point:1"], created="2026-11-01T00:00:00Z")
         self.assertEqual(numbers(pr.base_order([a, b, c, d, e])), [3, 5, 2, 1, 4])
         self.assertEqual(pr.base_order([]), [])
+
+    def test_importance_low_goes_after_no_label_in_the_same_tier_but_a_quick_bug_still_goes_first(self):
+        low = mk(1, ["point:1", "importance:low"], created="2026-11-01T00:00:01Z")
+        plain = mk(2, ["point:5"], created="2026-11-01T00:00:02Z")
+        low_bug = mk(3, ["bug", "point:2", "importance:low"], created="2026-11-01T00:00:03Z")
+        self.assertEqual(numbers(pr.base_order([low, plain, low_bug])), [3, 2, 1])
+        self.assertEqual(pr.tier(low), pr.tier(plain))
 
     def test_bugs_of_1_2_and_3_points_go_first_but_not_those_of_5_and_8(self):
         a = mk(1, ["point:1"], created="2026-11-01T00:00:01Z")
@@ -81,13 +88,38 @@ class Ordering(unittest.TestCase):
         f = mk(6, ["bug", "point:1"], created="2026-11-01T00:00:06Z")
         self.assertEqual(numbers(pr.base_order([a, b, c, d, e, f])), [6, 5, 4, 1, 3, 2])
 
-    def test_urgent_issues_go_before_quick_bugs_and_the_rest(self):
+    def test_urgent_issues_go_before_the_rest_and_a_quick_bug_goes_first_in_its_tier(self):
         a = mk(1, ["point:2"])
         b = mk(2, ["bug", "point:2"])
         c = mk(3, ["urgency:high", "point:5"])
         d = mk(4, ["urgency:high", "bug", "point:2"])
         e = mk(5, ["urgency:high", "point:1"])
-        self.assertEqual(numbers(pr.base_order([a, b, c, d, e])), [5, 4, 3, 2, 1])
+        self.assertEqual(numbers(pr.base_order([a, b, c, d, e])), [4, 5, 3, 2, 1])
+
+    def test_the_four_tiers_are_urgency_then_importance(self):
+        low_low = mk(1, ["point:1"])
+        low_high = mk(2, ["importance:high", "point:5"])
+        high_low = mk(3, ["urgency:high", "point:8"])
+        high_high = mk(4, ["urgency:high", "importance:high", "point:8"])
+        self.assertEqual([pr.tier(i) for i in (high_high, high_low, low_high, low_low)], [0, 1, 2, 3])
+        self.assertEqual(numbers(pr.base_order([low_low, low_high, high_low, high_high])), [4, 3, 2, 1])
+        self.assertEqual(pr.tier(mk(5, ["importance:low"])), pr.tier(mk(6)))
+        self.assertEqual(pr.tier(mk(7, ["urgency:high", "importance:low"])), pr.tier(mk(8, ["urgency:high"])))
+
+    def test_a_quick_bug_does_not_leave_its_tier(self):
+        bug = mk(1, ["bug", "point:1"])
+        important = mk(2, ["importance:high", "point:8"])
+        urgent_ = mk(3, ["urgency:high", "point:8"])
+        self.assertEqual(numbers(pr.base_order([bug, important, urgent_])), [3, 2, 1])
+        # in its own tier it goes first
+        plain = mk(4, ["point:1"])
+        self.assertEqual(numbers(pr.base_order([plain, bug])), [1, 4])
+
+    def test_a_blocker_of_a_higher_tier_is_taken_across_the_tiers(self):
+        blocker = mk(1, ["point:8"])
+        urgent_ = mk(2, ["urgency:high", "importance:high", "point:2"], blocked=[1])
+        other = mk(3, ["importance:high", "point:1"])
+        self.assertEqual(numbers(pr.base_order([other, blocker, urgent_])), [1, 2, 3])
 
     def test_a_quick_bug_takes_its_free_blocker_with_it(self):
         a = mk(1, ["point:3"])
@@ -165,7 +197,7 @@ class Validation(unittest.TestCase):
         free = [mk(1), mk(2, ["bug", "point:2"]), mk(3)]
         states = {1: "open", 2: "open", 3: "open"}
         problems = pr.validate_plan({"order": [1, 2, 3]}, free, [], states)
-        self.assertEqual(problems, ["order: #2 is a bug of 1, 2 or 3 points but is placed after #1"])
+        self.assertEqual(problems, ["order: #2 is a bug of 1, 2 or 3 points but is placed after #1, which is not one, in the same tier"])
         self.assertEqual(pr.validate_plan({"order": [2, 1, 3]}, free, [], states), [])
 
     def test_bugs_of_1_2_and_3_points_must_come_first_but_not_those_of_5_and_8(self):
@@ -184,12 +216,41 @@ class Validation(unittest.TestCase):
         states = {1: "open", 2: "open", 3: "open"}
         self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "blocked_by": {"2": [1]}}, free, [], states), [])
         problems = pr.validate_plan({"order": [3, 1, 2], "blocked_by": {"2": [1]}}, free, [], states)
-        self.assertTrue(any("#2 has urgency:high but is placed after #3" in p for p in problems))
+        self.assertEqual(
+            [p for p in problems if "placed after" in p],
+            ["order: #2 (urgency high, importance low) is placed after #3 (urgency low, importance low)"],
+        )
 
-    def test_quick_bug_may_follow_urgent_issues_only(self):
-        free = [mk(1, ["urgency:high"]), mk(2, ["bug", "point:2"]), mk(3)]
-        states = {1: "open", 2: "open", 3: "open"}
-        self.assertEqual(pr.validate_plan({"order": [1, 2, 3]}, free, [], states), [])
+    def test_quick_bug_may_follow_issues_of_a_higher_tier_only(self):
+        free = [mk(1, ["urgency:high"]), mk(2, ["importance:high"]), mk(3, ["bug", "point:2"]), mk(4)]
+        states = {n: "open" for n in range(1, 5)}
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4]}, free, [], states), [])
+        problems = pr.validate_plan({"order": [1, 2, 4, 3]}, free, [], states)
+        self.assertEqual(problems, ["order: #3 is a bug of 1, 2 or 3 points but is placed after #4, which is not one, in the same tier"])
+
+    def test_the_four_tiers_must_keep_their_order(self):
+        free = [mk(1, ["urgency:high", "importance:high"]), mk(2, ["urgency:high"]), mk(3, ["importance:high"]), mk(4)]
+        states = {n: "open" for n in range(1, 5)}
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3, 4]}, free, [], states), [])
+        problems = pr.validate_plan({"order": [1, 3, 2, 4]}, free, [], states)
+        self.assertEqual(problems, ["order: #2 (urgency high, importance low) is placed after #3 (urgency low, importance high)"])
+        problems = pr.validate_plan({"order": [4, 3, 2, 1]}, free, [], states)
+        self.assertEqual(len(problems), 3)  # one for each of the three higher tiers
+
+    def test_a_small_bug_of_a_low_tier_does_not_pass_an_issue_of_a_higher_tier(self):
+        free = [mk(1, ["importance:high", "point:8"]), mk(2, ["bug", "point:1"])]
+        states = {1: "open", 2: "open"}
+        self.assertEqual(pr.validate_plan({"order": [1, 2]}, free, [], states), [])
+        problems = pr.validate_plan({"order": [2, 1]}, free, [], states)
+        self.assertEqual(problems, ["order: #1 (urgency low, importance high) is placed after #2 (urgency low, importance low)"])
+
+    def test_a_blocker_may_stand_before_an_issue_of_a_higher_tier_than_its_own(self):
+        free = [mk(1), mk(2, ["urgency:high", "importance:high"], blocked=[1]), mk(3, ["importance:high"])]
+        states = {n: "open" for n in range(1, 4)}
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "blocked_by": {"2": [1]}}, free, [], states), [])
+        # the blocker is needed by an earlier issue, so it may also stand before a later issue of a middle tier
+        free = [mk(1), mk(2, ["urgency:high", "importance:high"], blocked=[1]), mk(3, ["urgency:high"])]
+        self.assertEqual(pr.validate_plan({"order": [1, 2, 3], "blocked_by": {"2": [1]}}, free, [], states), [])
 
     def test_cycle(self):
         problems = self.check({"order": [32, 50, 42, 33], "blocked_by": {"32": [50], "50": [32]}})
@@ -305,6 +366,33 @@ class Next(unittest.TestCase):
         out = pr.build_next(issues, set(), frozenset(), None)
         self.assertEqual(out["start"], [])
         self.assertIn("point:8", out["stop"])
+
+    def test_a_session_has_no_unit_rule(self):
+        issues = [mk(1, ["point:8"]), mk(2, ["point:3", "solo"], milestone="Slack thread"), mk(3, ["point:2"]), waiting(4, ["point:2"])]
+        out = pr.build_next(issues, set(), frozenset(), None, night=False)
+        self.assertEqual(sorted(i["number"] for i in out["start"]), [1, 2, 3])
+        self.assertEqual(out["waits_for_release"], [])
+        self.assertIsNone(out["stop"])
+        self.assertEqual([w["number"] for w in out["waiting"]], [4])
+
+    def test_a_session_is_not_stopped_by_a_point_8_change_that_waits_for_the_owner(self):
+        for held in (waiting(2, ["point:8"]), waiting(2, ["point:3", "solo"])):
+            out = pr.build_next([mk(1, ["point:2"]), held], set(), frozenset(), None, night=False)
+            self.assertEqual([i["number"] for i in out["start"]], [1])
+            self.assertIsNone(out["stop"])
+        out = pr.build_next([mk(1, ["point:2"]), waiting(2, ["point:8"])], set(), frozenset(), None)
+        self.assertEqual(out["start"], [])
+
+    def test_the_issues_the_plan_lacks_come_last_by_tier_then_quick_bug_then_points(self):
+        issues = [
+            mk(1, ["point:1"]),
+            mk(2, ["bug", "point:1"]),
+            mk(3, ["importance:high", "point:5"]),
+            mk(4, ["urgency:high", "point:8"]),
+            mk(5, ["point:3"]),
+        ]
+        out = pr.build_next(issues, set(), frozenset(), None)
+        self.assertEqual([i["number"] for i in out["start"]], [4, 3, 2, 1, 5])
 
     def test_nothing_open(self):
         out = pr.build_next([], set(), frozenset(), None)
@@ -885,11 +973,13 @@ class NightlyLimit(unittest.TestCase):
         self.assertIn("10", text)
         self.assertEqual(self.run_limit("issue", "16", "--taken", "11,12")[0], 0)
 
-    def test_a_session_has_no_time_or_points_limit_but_the_unit_rule_stands(self):
+    def test_a_session_has_no_time_points_or_unit_limit(self):
         self.assertEqual(self.run_limit("issue", "3", "--taken", "5,9,10", deadline=None)[0], 0)
-        self.assertEqual(self.run_limit("issue", "8", "--taken", "1", deadline=None)[0], 3)
+        self.assertEqual(self.run_limit("issue", "8", "--taken", "1", deadline=None)[0], 0)
         self.assertEqual(self.run_limit("issue", "12", "--taken", "11", deadline=None)[0], 0)
-        self.assertEqual(self.run_limit("issue", "12", "--taken", "1", deadline=None)[0], 3)
+        self.assertEqual(self.run_limit("issue", "12", "--taken", "1", deadline=None)[0], 0)
+        self.assertEqual(self.run_limit("issue", "1", "--taken", "11,15", deadline=None)[0], 0)
+        self.assertEqual(self.run_limit("issue", "77", deadline=None)[0], 2)
 
     def test_an_issue_without_a_point_label_is_refused(self):
         self.assertEqual(self.run_limit("issue", "77")[0], 2)

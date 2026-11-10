@@ -310,6 +310,7 @@ pub fn run() {
             orca_stream::orca_stream_input,
             orca_panes::orca_panes,
             orca_files::orca_files_list,
+            orca_files::orca_files_ignored,
             orca_files::orca_file_read,
             orca_files::orca_file_write,
             orca_files::orca_file_download,

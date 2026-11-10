@@ -73,6 +73,7 @@ const answers = {
   orca_terminal_input: null,
   orca_open_url: null,
   orca_attach_file: { text: "/work/example/.orca/drops/image.png ", bracketed: true },
+  orca_files_ignored: [],
   // A-20: the fonts of the screens are read at the start (the first values), and this Mac has three families; a spec that presses a select mocks `font_settings_set`.
   font_settings: {
     mail: { family: null, size: 14, ghostty: false },

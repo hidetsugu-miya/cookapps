@@ -14,7 +14,7 @@ use url::Url;
 use crate::slack::{emojify, mention_ids, plain_text, unescape, UNKNOWN_NAME};
 use crate::slack_mrkdwn::{parse, plain, rich_plain, Rich};
 
-/// Looks a user up by ID, as `plain_text` does for a mention.
+/// Looks a user or a user group up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 /// A button. Without `url` it cannot be pressed and the screen shows its name only.
@@ -325,7 +325,7 @@ fn inline(elements: &Value, name_of: NameOf) -> String {
                 }
             }
             "user" => format!("@{}", name(&e["user_id"])),
-            "usergroup" => format!("@{UNKNOWN_NAME}"),
+            "usergroup" => format!("@{}", name(&e["usergroup_id"])),
             "channel" => format!("#{UNKNOWN_NAME}"),
             "broadcast" => format!("@{}", e["range"].as_str().unwrap_or_default()),
             "emoji" => emojify(&format!(":{}:", e["name"].as_str().unwrap_or_default())),
@@ -993,6 +993,36 @@ mod tests {
         )
         .0;
         assert_eq!(list, vec![section("hi @Alice and @不明")]);
+    }
+
+    #[test]
+    fn a_user_group_mention_gets_its_handle_or_unknown() {
+        let names = |id: &str| (id == "S1").then(|| "design".to_owned());
+        let text = |t: &str| {
+            message_blocks(
+                &json!([{"type": "section", "text": {"type": "mrkdwn", "text": t}}]),
+                false,
+                &names,
+            )
+            .0
+        };
+        assert_eq!(
+            text("hi <!subteam^S1> and <!subteam^S2>"),
+            vec![section("hi @design and @不明")]
+        );
+        let rich = json!([{"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": [
+            {"type": "usergroup", "usergroup_id": "S1"},
+            {"type": "text", "text": " "},
+            {"type": "usergroup", "usergroup_id": "S2"}
+        ]}]}]);
+        assert_eq!(
+            message_blocks(&rich, true, &names).0,
+            vec![section("@design @不明")]
+        );
+        assert_eq!(
+            message_blocks(&rich, true, &|_| None).0,
+            vec![section("@不明 @不明")]
+        );
     }
 
     #[test]

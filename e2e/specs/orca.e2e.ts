@@ -2883,7 +2883,7 @@ describe("orca: files and editor (A-18)", () => {
   const zsh = "orca:term_example-app_zsh";
   const pane = (id: string, tabs: string[], selected = tabs[0]): PaneNode => ({ kind: "pane", id, tabs, selected });
   const layout = (root: PaneNode, focus: string): PaneLayout => ({ root, focus });
-  // The entries of the folder `dir`: [name, is a folder, ignored by git].
+  // The entries of the folder `dir`: [name, is a folder, ignored by git]. Rust lists a folder with no entry marked unless the folder itself is ignored (the third is then true); the marks of the others come from `orca_files_ignored`.
   const dirOf = (dir: string, entries: [string, boolean, boolean?][]): OrcaDir => ({
     entries: entries.map(([name, isDirectory, ignored = false]) => ({ name, path: dir === "" ? name : `${dir}/${name}`, isDirectory, ignored })),
     total: entries.length,
@@ -2891,10 +2891,13 @@ describe("orca: files and editor (A-18)", () => {
   const root = () =>
     dirOf("", [
       ["src", true],
-      ["target", true, true],
+      ["target", true],
       ["a.rs", false],
-      ["b.log", false, true],
+      ["b.log", false],
     ]);
+  // What `orca_files_ignored` answers for the root.
+  const rootIgnored = ["target", "b.log"];
+  const isIgnored = (path: string) => browser.execute((p) => document.querySelector<HTMLElement>(`.orca-file[data-path="${p}"]`)?.dataset.ignored, path);
   const text = (content: string, signature = "sig-1", language = "plaintext", highlight: string | null = null): OrcaFileText => ({ content, crlf: false, signature, language, highlight });
   const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
   const names = () => textsOf("#orca-files-tree .orca-file-name");
@@ -2915,7 +2918,7 @@ describe("orca: files and editor (A-18)", () => {
 
   // The app with the example-app project selected, its Claude session the selected tab, the file pane open and its root read.
   async function openFiles(fixtures: Record<string, unknown> = {}, value = orcaOverview(sample(), worktrees())) {
-    await openOrca(value, { orca_terminal_read: ["$"], orca_files_list: root(), editor_settings: { autosaveMs: 100 }, ...fixtures });
+    await openOrca(value, { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: rootIgnored, editor_settings: { autosaveMs: 100 }, ...fixtures });
     await project("example-app").click();
     await expect(selectedTab()).toBeDisplayed();
     await filesToggle().click();
@@ -3138,14 +3141,20 @@ describe("orca: files and editor (A-18)", () => {
     expect(await toggleBoxes()).toHaveLength(1);
   });
 
-  it("shows the heading of the selected session's worktree, reads its root, and draws the folders first with the ignored ones in italics", async () => {
-    await openFiles();
+  it("shows the heading of the selected session's worktree, reads its root, and draws the folders first, with the ignored ones in italics once git has answered", async () => {
+    await openFiles({ orca_files_ignored: holds });
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
     await waitForCount("#orca-files-tree .orca-file", 4);
     expect(await callsOf("orca_files_list")).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
-    const kinds = await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-file")].map((e) => [e.dataset.kind, e.dataset.ignored]));
-    expect(kinds).toEqual([["dir", "false"], ["dir", "true"], ["file", "false"], ["file", "true"]]);
+    // The folder is drawn while git has not answered: nothing is marked yet, and the question is the entries of the list in its order.
+    expect(await waitForCalls("orca_files_ignored")).toEqual([{ path: "/work/example-app", paths: ["src", "target", "a.rs", "b.log"], environment: null }]);
+    const kinds = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-file")].map((e) => [e.dataset.kind, e.dataset.ignored]));
+    expect(await kinds()).toEqual([["dir", "false"], ["dir", "false"], ["file", "false"], ["file", "false"]]);
+    await release("orca_files_ignored", rootIgnored);
+    await browser.waitUntil(async () => (await isIgnored("b.log")) === "true", { timeoutMsg: "the ignored mark never came" });
+    expect(await kinds()).toEqual([["dir", "false"], ["dir", "true"], ["file", "false"], ["file", "true"]]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
     const look = await browser.execute(() => {
       const style = (path: string) => getComputedStyle(document.querySelector(`.orca-file[data-path="${path}"] .orca-file-name`)!);
       const row = (path: string) => getComputedStyle(document.querySelector(`.orca-file[data-path="${path}"]`)!);
@@ -3154,7 +3163,17 @@ describe("orca: files and editor (A-18)", () => {
     expect(look).toEqual({ plain: "normal", ignored: "italic", plainOpacity: "1", ignoredOpacity: "0.55" });
   });
 
-  it("reads a folder when it is pressed, shows its entries under it, and reads it again each time it is opened", async () => {
+  it("marks nothing when git cannot answer, and shows no message for it", async () => {
+    await openFiles({ orca_files_ignored: rejects("Orca に接続できません") });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await waitForCalls("orca_files_ignored");
+    await browser.pause(300);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+    expect(await isIgnored("target")).toBe("false");
+    expect(await count("#orca-files-tree .orca-file-note")).toBe(0);
+  });
+
+  it("reads a folder when it is pressed the first time, and draws it from what was read when it is opened again", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     const list = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
@@ -3168,11 +3187,14 @@ describe("orca: files and editor (A-18)", () => {
     await row("src").click();
     await expect(row("src")).toHaveAttribute("aria-expanded", "false");
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
-    expect(await callsOf(list)).toHaveLength(1);
+    // Opened again, it is drawn at once from the list that is held: neither the folder nor its marks are asked for again.
+    const marks = await mock("orca_files_ignored", ["src/lib"]);
     await row("src").click();
-    await waitForCalls(list, 2);
-    await waitForCount("#orca-files-tree .orca-file", 6);
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
     expect(await names()).toEqual(["src", "lib", "main.rs", "target", "a.rs", "b.log"]);
+    await browser.pause(300);
+    expect(await callsOf(list)).toHaveLength(1);
+    expect(await callsOf(marks)).toEqual([]);
   });
 
   it("reads the root and the open folders again with the reload button", async () => {
@@ -3191,36 +3213,144 @@ describe("orca: files and editor (A-18)", () => {
     ]);
   });
 
-  it("reads the root and the open folders again one at a time", async () => {
+  it("reads the root alone first, then the open folders again side by side, not one after the other", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await mock("orca_files_list", dirOf("src", [["lib", true]]));
     await row("src").click();
     await waitForCount("#orca-files-tree .orca-file", 5);
+    await mock("orca_files_list", dirOf("src/lib", [["x", false]]));
+    await row("src/lib").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
     const list = await mock("orca_files_list", holds);
     await $("#orca-files-reload").click();
-    await waitForCalls(list, 1);
+    // Only the root is on its way while it has not been answered.
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
     await browser.pause(300);
-    expect(await callsOf(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
-    await release(list, dirOf("", [["src", true], ["target", true, true]]));
-    expect(await waitForCalls(list, 2)).toEqual([
+    expect(await callsOf(list)).toHaveLength(1);
+    await release(list, dirOf("", [["src", true], ["target", true]]));
+    // Both folders are on their way while neither has been answered.
+    expect(await waitForCalls(list, 3)).toEqual([
       { path: "/work/example-app", dir: "", ignored: false, environment: null },
       { path: "/work/example-app", dir: "src", ignored: false, environment: null },
+      { path: "/work/example-app", dir: "src/lib", ignored: false, environment: null },
     ]);
     await release(list, dirOf("src", [["lib", true]]));
+    await release(list, dirOf("src/lib", [["y", false]]));
+    await browser.waitUntil(async () => (await names()).join() === "src,lib,y,target", { timeoutMsg: "the reads never drew" });
+  });
+
+  it("reads at most 16 folders at once, after the root, when the reload button is pressed", async () => {
+    const folders = Array.from({ length: 17 }, (_, i) => `d${i}`);
+    await openFiles({ orca_files_list: dirOf("", folders.map((f) => [f, true])) });
+    await waitForCount("#orca-files-tree .orca-file", 17);
+    for (const f of folders) {
+      const list = await mock("orca_files_list", dirOf(f, [["x", false]]));
+      await row(f).click();
+      await waitForCalls(list);
+    }
+    await waitForCount("#orca-files-tree .orca-file", 34);
+    const list = await mock("orca_files_list", holds);
+    await $("#orca-files-reload").click();
+    await waitForCalls(list);
+    await browser.pause(300);
+    expect(await callsOf(list)).toHaveLength(1);
+    await release(list, dirOf("", folders.map((f) => [f, true])));
+    await waitForCalls(list, 17);
+    await browser.pause(300);
+    expect(await callsOf(list)).toHaveLength(17);
+    // One answer frees one place, and the last folder is read.
+    await release(list, dirOf("d0", [["x", false]]));
+    expect(await waitForCalls(list, 18)).toHaveLength(18);
+  });
+
+  it("keeps the ignored marks through a reload until git answers, and keeps them when git cannot", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await browser.waitUntil(async () => (await isIgnored("b.log")) === "true", { timeoutMsg: "the ignored mark never came" });
+    const marks = await mock("orca_files_ignored", holds);
+    await $("#orca-files-reload").click();
+    await waitForCalls(marks);
+    await browser.pause(300);
+    expect(await isIgnored("b.log")).toBe("true");
+    expect(await isIgnored("target")).toBe("true");
+    expect(await isIgnored("a.rs")).toBe("false");
+    // The answer replaces the marks: b.log is no longer named.
+    await release(marks, ["target"]);
+    await browser.waitUntil(async () => (await isIgnored("b.log")) === "false", { timeoutMsg: "the answer never replaced the marks" });
+    expect(await isIgnored("target")).toBe("true");
+    // An answer that fails leaves the kept marks.
+    const failing = await mock("orca_files_ignored", rejects("Orca に接続できません"));
+    await $("#orca-files-reload").click();
+    await waitForCalls(failing);
+    await browser.pause(300);
+    expect(await isIgnored("target")).toBe("true");
+  });
+
+  it("reads a folder that was closed again after the reload button, because the reload dropped it", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 5);
+    await row("src").click();
+    await expect(row("src")).toHaveAttribute("aria-expanded", "false");
+    const list = await mock("orca_files_list", dirOf("", [["src", true], ["target", true]]));
+    await $("#orca-files-reload").click();
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await browser.waitUntil(async () => (await names()).join() === "src,target", { timeoutMsg: "the root never drew" });
+    const inner = await mock("orca_files_list", dirOf("src", [["new.rs", false]]));
+    await row("src").click();
+    expect(await waitForCalls(inner)).toEqual([{ path: "/work/example-app", dir: "src", ignored: false, environment: null }]);
+    await browser.waitUntil(async () => (await names()).join() === "src,new.rs,target", { timeoutMsg: "the folder was not read again" });
   });
 
   it("does not ask for the ignore marks of a folder that the list marked as ignored", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
+    await browser.waitUntil(async () => (await isIgnored("target")) === "true", { timeoutMsg: "the ignored mark never came" });
+    const marks = await mock("orca_files_ignored", []);
     const list = await mock("orca_files_list", dirOf("target", [["debug", true, true]]));
     await row("target").click();
     expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "target", ignored: true, environment: null }]);
     await waitForCount("#orca-files-tree .orca-file", 5);
+    expect(await isIgnored("target/debug")).toBe("true");
     // A folder in it is ignored as well, and is read as one.
     const inner = await mock("orca_files_list", dirOf("target/debug", [["x", false, true]]));
     await row("target/debug").click();
     expect(await waitForCalls(inner)).toEqual([{ path: "/work/example-app", dir: "target/debug", ignored: true, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    await browser.pause(300);
+    expect(await callsOf(marks)).toEqual([]);
+  });
+
+  it("asks for the ignore marks of a folder that is opened, after it is drawn", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const marks = await mock("orca_files_ignored", ["src/gen.rs"]);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["gen.rs", false]]));
+    await row("src").click();
+    expect(await waitForCalls(marks)).toEqual([{ path: "/work/example-app", paths: ["src/lib", "src/gen.rs"], environment: null }]);
+    await browser.waitUntil(async () => (await isIgnored("src/gen.rs")) === "true", { timeoutMsg: "the ignored mark never came" });
+    expect(await isIgnored("src/lib")).toBe("false");
+  });
+
+  it("drops the ignore marks that come after another worktree's tree took the place", async () => {
+    const value = orcaOverview(sample(), [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" })], {
+      terminals: [orcaTerminal("example-app", "zsh", { path: "/work/example-app-b", branch: "feat/b" })],
+    });
+    await openFiles({ orca_files_ignored: holds }, value);
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await waitForCalls("orca_files_ignored");
+    const list = await mock("orca_files_list", dirOf("", [["target", true]]));
+    await tabOf(zsh).$(".orca-tab-btn").click();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/b");
+    await waitForCalls(list);
+    await browser.waitUntil(async () => (await names()).join() === "target", { timeoutMsg: "the tree of the other worktree never showed" });
+    // The answer for the first worktree comes now, and names a path the new tree has too.
+    await release("orca_files_ignored", ["target"]);
+    await browser.pause(300);
+    expect(await isIgnored("target")).toBe("false");
   });
 
   it("shows another worktree's tree, and its name, when another tab is selected", async () => {

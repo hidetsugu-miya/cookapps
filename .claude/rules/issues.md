@@ -76,7 +76,7 @@ Bad:  a bug looks serious to the agent -> the agent adds urgency:high (rate its 
 
 `importance:high` and `importance:low` are put by whoever reads the issue first, with the reason as a one-line comment; no label means normal. Do not change a label the owner set (at the owner's instruction, 2026-11-06; Discussion #136).
 A bug that stops use or loses data is `importance:high`.
-Importance orders the issues that are not urgent, and a waiting bug with `importance:high` is told to the owner at once, as an urgent change is ("Keep one Release PR open while changes wait" below).
+Importance orders the issues within each level of urgency (the four tiers of "Order every issue" below), and a waiting bug with `importance:high` is told to the owner at once, as an urgent change is ("Keep one Release PR open while changes wait" below).
 
 ```text
 Good: #150 loses the saved Todo on a failed sync -> importance:high, with "データを失う" as the comment
@@ -96,23 +96,26 @@ Bad:  add status:doing and status:merged, and keep them in step with the pull re
 ### Order every issue, and give a feature its own milestone, with `issue-plan`
 
 A milestone is a feature, not a version: it is named for the feature ("Orca files"), and a closed one is a feature that has been released (at the owner's instruction, 2026-11-09; Discussion #293). Only a `point:5` or `point:8` issue starts one. A milestone named for a version (`v0.56.0`) is the old mechanism: it is not a mark of anything, and `plan-release.py migrate` retires it once (it takes the milestone off the open issues of less than 5 points and closes the empty ones).
-`issue-plan` splits such an issue into issues of `point:3` or less, puts them in the milestone, and closes the large issue as not planned with a comment that lists the parts. When the large issue is `point:8`, it gives every part the label `solo`, so that the parts keep the rule of a `point:8` change ("Run `issue-dev`" and "Keep one Release PR open" below). An issue that cannot be split into parts that merge one by one stays one issue and is alone in its milestone.
+`issue-plan` splits such an issue into issues of `point:3` or less, puts them in the milestone, and closes the large issue as not planned with a comment that lists the parts. When the large issue is `point:8`, it gives every part the label `solo`, so that the parts keep the rule of a `point:8` change in the night run ("Run `issue-dev`" and "Keep one Release PR open" below). An issue that cannot be split into parts that merge one by one stays one issue and is alone in its milestone.
 An issue of `point:3` or less that belongs to no feature has no milestone. A milestone does not decide the order, a version or the release.
 `plan-release.py close` closes a milestone once all its issues are closed and released.
 Every open issue is ordered, `needs:owner` included: it waits unstarted. `release-planner` decides the order from how the issues relate, and `plan-release.py` checks it against the hard rules below and saves it; `issue-dev` takes the issues from the front.
 The hard rules of the order are checked by `plan-release.py`, which refuses a plan that breaks one (at the owner's instruction, 2026-11-06; Discussion #136):
 - Issues in progress and waiting for a release (fixed) stay at the front and do not move.
 - An issue comes after the issues it depends on.
-- An issue with `urgency:high` goes ahead of every issue that is not urgent, except its own blockers.
-- A bug of 1, 2 or 3 points (`bug` with `point:1`, `point:2` or `point:3`) comes next, after the urgent ones, again except its blockers, so that a quick fix is done first (at the owner's instruction, 2026-11-07). A bug of 5 or 8 points is not moved forward.
+- An issue is in one of four tiers, by urgency first and then importance: (1) `urgency:high` and `importance:high`, (2) `urgency:high` only, (3) `importance:high` only, (4) neither. A label that is missing is low, so `importance:low` and no label are the same tier. An issue goes ahead of every issue of a lower tier, except its own blockers, which may stand in any tier (at the owner's instruction, 2026-11-07; #173).
+- Inside a tier, a bug of 1, 2 or 3 points (`bug` with `point:1`, `point:2` or `point:3`) comes first, again except its blockers, so that a quick fix is done first (at the owner's instruction, 2026-11-07). A bug of 5 or 8 points is not moved forward. The rule works inside the tier and does not carry a small bug past an issue of a higher tier: the bugs that stop use or lose data have `importance:high`, so a small bug without it does less harm (decided by the agent, 2026-11-09, at the owner's leave; #173).
 
-Everything else is `release-planner`'s judgment, with this as the basis: urgency, then importance, then fewer points first (1 < 2 < 3 < 5 < 8), then the older issue first. The issues of one milestone stay together when that costs nothing in priority. Where it moves an issue ahead of an older one, it writes the reason.
-An issue the saved plan lacks goes behind those it has, urgent ones first, then the bugs of 1, 2 or 3 points, then by that basis (`plan-release.py next`).
+Everything else is `release-planner`'s judgment, with this as the basis: the tier, then a bug of 1, 2 or 3 points, then an issue without `importance:low` before one with it (the tier counts the two alike, and the order within the tier does not), then fewer points first (1 < 2 < 3 < 5 < 8), then the older issue first. The issues of one milestone stay together when that costs nothing in priority. Where it moves an issue ahead of an older one, it writes the reason.
+An issue the saved plan lacks goes behind those it has, in that basis (`plan-release.py next`).
 The reorder (`issue-plan`) runs when an issue is created or its `needs:owner` is removed (the hook says so), and at the start of every `issue-dev` run. The run first splits every issue of `point:5` or `point:8` that `plan-release.py unsplit` prints (open, no `needs:owner`, not in hand, and no milestone named for a feature: the mark of a split issue, or of one kept whole), so an issue made or released on the GitHub screen is split before it is taken, and then places the issues. There is no separate schedule for it.
 The plan saved by the last `apply` is `.claude/plan.json` of the main checkout. Plan only the owner's issues.
 
 ```text
 Good: #50 depends on #42 -> the planner puts it after #42, and `next` lists #42 first
+Good: an issue with `importance:high` and no urgency, and a bug of 1 point with no label -> the issue of 5 points comes first, because its tier is higher
+Good: two bugs with no labels, of 1 point and of 3 points, and a feature of 1 point -> the two bugs come first, then the feature
+Bad:  a bug of 1 point with no label goes ahead of an issue with `importance:high`, because it is a quick bug
 Good: S-12 is a point:8 issue that splits into three issues of 3, 3 and 2 points -> milestone "Slack thread", three issues in it, each with `solo`, and #12 is closed as not planned with their list
 Bad:  gh issue create alone, and the issue is not in the order
 Bad:  a milestone is named v0.56.0, as a forecast of a version
@@ -158,15 +161,18 @@ A run lasts 3 hours at most. `nightly.sh` hands the run the end of its 3 hours a
 A run takes the issues in the order of the plan (`plan-release.py next`, `start`) until their points reach 10 (at the owner's instruction, 2026-11-09; Discussion #293). `nightly-limit.sh` decides it from the `point:*` labels: exit 3 means that issue does not fit, and a smaller issue further down may still be tried; exit 1 means the 3 hours are over, and nothing more starts.
 The run does all its issues in the one worktree (`worktree.md`), on one branch, as commits, and opens one pull request for them (`Closes #a` and `Closes #b` in its body); `review.md` runs once, on the range of that pull request.
 When the limit stops a run, the issue in hand stays as it is, and the hand-over says where.
-A `point:8` change is a release of its own, and so is the set of the parts that `issue-plan` made from one (every issue with the label `solo` in one milestone). Call either a unit: a `point:8` issue is one unit, and the `solo` parts of one milestone are one unit.
+In the night run, a `point:8` change is a release of its own, and so is the set of the parts that `issue-plan` made from one (every issue with the label `solo` in one milestone). Call either a unit: a `point:8` issue is one unit, and the `solo` parts of one milestone are one unit.
 The parts of a unit start only when no change waits for the release, and they may all be in the same run and the same pull request. An issue that is not in the unit, and a part of another unit, are not in that run. Nothing new starts after the merge of a part until the owner has merged the Release PR that carries the unit alone (at the owner's instruction, 2026-11-09; Discussion #293). The parts a run did not reach wait for the next run, which starts them by the same rule once the owner has merged that Release PR.
+The unit rule is for the night run only (`nightly.sh issue-dev`, which sets `NIGHTLY_DEADLINE_EPOCH`; `plan-release.py next` and `nightly-limit.sh` read it) (at the owner's instruction, 2026-11-10). A session of the owner has no unit rule: the issues the owner names may be of any units, in one pull request and one Release PR, and `plan-release.py next` neither holds back a `point:8` issue or a `solo` part nor stops for a unit that waits.
 The run does not release. After it has merged its pull request it prepares the Release PR ("Keep one Release PR open while changes wait" below), and at its start it does what the owner's merge left to do ("After the owner merges the Release PR").
 A run leaves alone what a session of the owner may hold: the worktree when it is in use (`use-worktree.sh` says so), and an issue that an open pull request closes, unless the previous hand-over lists it as the run's own (`plan-release.py next --mine`).
 
 ```text
 Good: the 00:30 run takes #41 (3), #42 (2) and #44 (3), the next issue is 3 points -> nightly-limit.sh says exit 3 -> it tries a 2-point issue, and one pull request closes them all
 Good: the worktree is in use by a session's branch with uncommitted changes or unpushed commits -> the run touches nothing and says so in the hand-over
+Good: the owner says "do #41, a `solo` part, and #42 together" in a session -> one pull request closes both, and one Release PR carries them
 Bad:  the 00:30 run starts a fourth issue because 3 hours are not over, with 11 points in hand
+Bad:  the 00:30 run starts #42 in the same night as the `solo` parts of #41, because a session once bundled them
 Bad:  the 00:30 run merges the Release PR because the change is urgent (it notifies the owner instead)
 ```
 
@@ -245,7 +251,7 @@ The 00:30 run looks at it after it has merged its own pull request, and a sessio
 Its title is `release: v{version}`, and its body holds the changes, the digit and why, and whether `README.md` needed anything. The owner decides when to merge, so the body holds no decision to wait or to release.
 The preparer runs `run-ci.sh` and `run-e2e.sh` on the HEAD of `release/next` and pushes it with `post-checks.sh` before it ends, so that the owner can merge at once; the push stops without their records (`testing.md`).
 When `urgent` is true (a waiting change or the Release PR has `urgency:high`, or a waiting bug has `importance:high`), the preparer sends a push notification (Claude Code's PushNotification) as soon as the Release PR is ready, saying that it is urgent and giving its URL (at the owner's instruction, 2026-11-09; Discussion #293). It does not merge the Release PR.
-A unit (a `point:8` issue, or the `solo` parts of one milestone) is a Release PR of its own: its parts start only when nothing waits, and nothing new starts, the rest of the unit included, until the owner has merged its Release PR (`plan-release.py next` says `stop`).
+In the night run, a unit (a `point:8` issue, or the `solo` parts of one milestone) is a Release PR of its own: its parts start only when nothing waits, and nothing new starts, the rest of the unit included, until the owner has merged its Release PR (`plan-release.py next` says `stop`). A session of the owner does not keep a unit apart (at the owner's instruction, 2026-11-10; "Run `issue-dev` once a day at 00:30" above).
 Merged Release PRs are the release history.
 
 ```text

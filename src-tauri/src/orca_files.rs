@@ -1,5 +1,6 @@
 //! A-18: the files of a worktree on the Orca screen: the list of its folders, and the text of a file read and saved by the editor.
 //! The calls are Orca's runtime (`files.readDir`, `files.read`, `files.writeIfUnchanged`, `git.checkIgnored`), on this machine over its unix socket and on a paired server over its WebSocket (the connection of A-10).
+//! The folder is answered from `files.readDir` alone, and what git ignores is asked after it (`orca_files_ignored`, `git.checkIgnored`), as Orca's own window does.
 //! They are not a public interface of Orca: this was read in the `app.asar` of Orca 1.4.253 and tried on this machine's Orca. A token is in no log line, no error text and no return value, and the text of a file is in no log line.
 //!
 //! A file is saved with `files.writeIfUnchanged`: Orca writes only when the disk still holds the text that was read, by a signature of it (`disk_signature`, the one of Orca's `disk-baseline-signature.js`), and answers `diskConflict` when it does not, so a file changed elsewhere is never overwritten.
@@ -26,7 +27,7 @@ use ts_rs::TS;
 use crate::{
     accounts::write_synced,
     auth::config_dir,
-    orca::worktree_host,
+    orca::{forget_worktree_host, worktree_host, worktree_host_cached},
     orca_attach::{worktree_params, Rpc},
     orca_chat::{CallError, Connection},
     orca_language::{detect_language, highlight_name},
@@ -41,7 +42,7 @@ const AUTOSAVE_STEP: i64 = 100;
 const AUTOSAVE_DEFAULT: u32 = 1000;
 /// The most entries one `files.readDir` answers (Orca's page limit).
 pub(crate) const LIST_LIMIT: usize = 5000;
-/// The most paths one `git.checkIgnored` takes.
+/// The most paths one `git.checkIgnored` takes. `orca_files_ignored` takes as many as one list holds (`LIST_LIMIT`) and sends them in chunks of this size.
 const IGNORE_CHUNK: usize = 2000;
 /// The most bytes of a file the editor opens or saves. Orca reads 512 KiB at most, and a larger frame closes the WebSocket of a paired server (it takes 1 MiB), so a text is kept well under both.
 const MAX_TEXT: usize = 384 * 1024;
@@ -230,16 +231,8 @@ pub(crate) fn parse_dir(result: &Value, dir: &str) -> Result<(Vec<OrcaFileEntry>
     Ok((entries, total))
 }
 
-/// Marks the entries whose path `git.checkIgnored` answered (an array of the paths it ignores).
-fn mark_ignored(entries: &mut [OrcaFileEntry], ignored: &HashSet<String>) {
-    for entry in entries {
-        entry.ignored = ignored.contains(&entry.path);
-    }
-}
-
-/// The paths of `entries` that git ignores. A failed check (a folder that is no repository) marks nothing: the list is still the list.
-async fn ignored_of(rpc: &mut impl Rpc, path: &str, entries: &[OrcaFileEntry]) -> HashSet<String> {
-    let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+/// The paths of `paths` that git ignores, in the order they were asked in. A failed check (a folder that is no repository) marks nothing: the list is still the list. Only a path that was asked for can be answered.
+async fn ignored_in(rpc: &mut impl Rpc, path: &str, paths: &[String]) -> Vec<String> {
     let mut ignored = HashSet::new();
     for chunk in paths.chunks(IGNORE_CHUNK) {
         let Ok(answer) = rpc
@@ -260,7 +253,19 @@ async fn ignored_of(rpc: &mut impl Rpc, path: &str, entries: &[OrcaFileEntry]) -
                 .map(|p| p.trim_end_matches('/').to_owned()),
         );
     }
-    ignored
+    paths
+        .iter()
+        .filter(|p| ignored.contains(p.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// The paths `orca_files_ignored` is asked about: as many as a list holds at most, each a path inside the worktree (the checks of a file's path).
+fn check_ignore_paths(paths: &[String]) -> Result<(), String> {
+    if paths.len() > LIST_LIMIT {
+        return Err(format!("一度に調べられるのは {LIST_LIMIT} 件までです"));
+    }
+    paths.iter().try_for_each(|p| check_relative(p, false))
 }
 
 /// The message of a failed read of the files.
@@ -276,7 +281,7 @@ fn reason(error: CallError) -> String {
     }
 }
 
-/// `ignored` is whether git ignores the folder `dir` itself: what it holds is then ignored too, and `git.checkIgnored` is not asked.
+/// The entries of `dir`, from `files.readDir` alone. `ignored` is whether git ignores the folder `dir` itself: what it holds is then ignored too, and every entry is marked so. Otherwise no entry is marked, and `orca_files_ignored` is asked after it.
 async fn list(rpc: &mut impl Rpc, path: &str, dir: &str, ignored: bool) -> Result<OrcaDir, String> {
     let answer = rpc
         .call(
@@ -293,9 +298,6 @@ async fn list(rpc: &mut impl Rpc, path: &str, dir: &str, ignored: bool) -> Resul
     sort_entries(&mut entries);
     if ignored {
         entries.iter_mut().for_each(|e| e.ignored = true);
-    } else {
-        let ignored = ignored_of(rpc, path, &entries).await;
-        mark_ignored(&mut entries, &ignored);
     }
     Ok(OrcaDir { entries, total })
 }
@@ -671,7 +673,7 @@ fn check_host(host_id: &str) -> Result<(), String> {
     }
 }
 
-/// The `hostId` of the worktree at `path` (one of the target's list read just now), which a file call is made on.
+/// The `hostId` of the worktree at `path` (one of the target's list read just now), which a file call is made on. A save and a download ask the target's list each time.
 async fn host_of(path: &str, environment: Option<&str>) -> Result<String, String> {
     let (path, environment) = (path.to_owned(), environment.map(str::to_owned));
     let host_id = tokio::task::spawn_blocking(move || worktree_host(&path, environment.as_deref()))
@@ -681,7 +683,30 @@ async fn host_of(path: &str, environment: Option<&str>) -> Result<String, String
     Ok(host_id)
 }
 
-/// The entries of the folder `dir` of the worktree at `path` (A-18). The worktree's own folder is the empty `dir`. `ignored` is whether the list marked `dir` as ignored.
+/// `host_of` for the reads (the list, the ignore marks and the text of a file): the worktree is confirmed against the target's list once, and believed for a while after (`worktree_host_cached`). The path is held to the same checks, and an SSH host is refused the same.
+async fn cached_host_of(path: &str, environment: Option<&str>) -> Result<String, String> {
+    let (path, environment) = (path.to_owned(), environment.map(str::to_owned));
+    let host_id =
+        tokio::task::spawn_blocking(move || worktree_host_cached(&path, environment.as_deref()))
+            .await
+            .map_err(|e| e.to_string())??;
+    check_host(&host_id)?;
+    Ok(host_id)
+}
+
+/// A failed call made with a worktree that was believed makes the next call confirm it again.
+fn forgetting<T>(
+    result: Result<T, String>,
+    path: &str,
+    environment: Option<&str>,
+) -> Result<T, String> {
+    if result.is_err() {
+        forget_worktree_host(path, environment);
+    }
+    result
+}
+
+/// The entries of the folder `dir` of the worktree at `path` (A-18). The worktree's own folder is the empty `dir`. `ignored` is whether the list marked `dir` as ignored. No entry is marked otherwise: `orca_files_ignored` answers that.
 #[tauri::command]
 pub async fn orca_files_list(
     path: String,
@@ -690,9 +715,26 @@ pub async fn orca_files_list(
     environment: Option<String>,
 ) -> Result<OrcaDir, String> {
     check_relative(&dir, true)?;
-    host_of(&path, environment.as_deref()).await?;
-    let mut connection = Connection::open(environment).await?;
-    list(&mut connection, &path, &dir, ignored).await
+    cached_host_of(&path, environment.as_deref()).await?;
+    let read = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        list(&mut connection, &path, &dir, ignored).await
+    };
+    forgetting(read.await, &path, environment.as_deref())
+}
+
+/// Which of `paths` (entries of one list, relative to the worktree at `path`) git ignores (A-18). It is asked after the list is drawn. A check that fails answers none; a worktree that is not one of the target's list, and a path that is not inside the worktree, are refused as for the list.
+#[tauri::command]
+pub async fn orca_files_ignored(
+    path: String,
+    paths: Vec<String>,
+    environment: Option<String>,
+) -> Result<Vec<String>, String> {
+    check_ignore_paths(&paths)?;
+    cached_host_of(&path, environment.as_deref()).await?;
+    let opened = Connection::open(environment.clone()).await;
+    let mut connection = forgetting(opened, &path, environment.as_deref())?;
+    Ok(ignored_in(&mut connection, &path, &paths).await)
 }
 
 /// The text of the file `relative` of the worktree at `path`, for the editor (A-18).
@@ -703,9 +745,12 @@ pub async fn orca_file_read(
     environment: Option<String>,
 ) -> Result<OrcaFileText, String> {
     check_relative(&relative, false)?;
-    host_of(&path, environment.as_deref()).await?;
-    let mut connection = Connection::open(environment).await?;
-    read(&mut connection, &path, &relative).await
+    cached_host_of(&path, environment.as_deref()).await?;
+    let opened = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        read(&mut connection, &path, &relative).await
+    };
+    forgetting(opened.await, &path, environment.as_deref())
 }
 
 /// Saves the text of the editor over the file it was read from, if the disk still holds what was read (`signature`), and answers what happened (A-18). It is not tried again: a failure carries its message.
@@ -984,23 +1029,8 @@ mod tests {
         assert!(parse_dir(&json!("x"), "").is_err());
     }
 
-    #[test]
-    fn what_git_ignores_is_marked() {
-        let mut entries = vec![
-            entry("node_modules", true),
-            entry("src", true),
-            entry("a.log", false),
-        ];
-        let ignored: HashSet<String> = ["node_modules", "a.log"].map(String::from).into();
-        mark_ignored(&mut entries, &ignored);
-        assert_eq!(
-            entries.iter().map(|e| e.ignored).collect::<Vec<_>>(),
-            [true, false, true]
-        );
-    }
-
     #[tokio::test]
-    async fn a_folder_is_listed_sorted_and_marked() {
+    async fn a_folder_is_listed_sorted_with_one_call_and_no_mark() {
         let mut orca = fake(vec![
             (
                 "files.readDir",
@@ -1010,26 +1040,40 @@ mod tests {
                     {"name": "src", "isDirectory": true},
                 ], "total": 3, "hasMore": false})),
             ),
-            // Git echoes a folder with or without its slash.
             ("git.checkIgnored", Ok(json!(["lib/target/", "lib/b.log"]))),
         ]);
         let dir = list(&mut orca, "/work/a", "lib", false).await.unwrap();
         assert_eq!(names(&dir.entries), ["src", "target", "b.log"]);
-        assert_eq!(
-            dir.entries.iter().map(|e| e.ignored).collect::<Vec<_>>(),
-            [false, true, true]
-        );
+        assert!(dir.entries.iter().all(|e| !e.ignored));
         assert_eq!(dir.total, 3);
+        // The list does not wait for git: it is the only call.
         assert_eq!(
-            orca.calls[0],
-            (
+            orca.calls,
+            [(
                 "files.readDir".to_owned(),
                 json!({"worktree": "path:/work/a", "relativePath": "lib", "limit": 5000})
-            )
+            )]
         );
+    }
+
+    #[tokio::test]
+    async fn what_git_ignores_is_asked_after_the_list_and_answered_in_the_order_asked() {
+        let mut orca = fake(vec![(
+            "git.checkIgnored",
+            // Git echoes a folder with or without its slash, and may answer a path that was not asked.
+            Ok(json!(["lib/target/", "lib/b.log", "other"])),
+        )]);
+        let asked: Vec<String> = ["lib/src", "lib/target", "lib/b.log"]
+            .map(String::from)
+            .into();
+        let found = ignored_in(&mut orca, "/work/a", &asked).await;
+        assert_eq!(found, ["lib/target", "lib/b.log"]);
         assert_eq!(
-            orca.calls[1].1,
-            json!({"worktree": "path:/work/a", "paths": ["lib/src", "lib/target", "lib/b.log"]})
+            orca.calls,
+            [(
+                "git.checkIgnored".to_owned(),
+                json!({"worktree": "path:/work/a", "paths": ["lib/src", "lib/target", "lib/b.log"]})
+            )]
         );
     }
 
@@ -1050,44 +1094,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_ignore_check_still_gives_the_list() {
-        let mut orca = fake(vec![
-            (
-                "files.readDir",
-                Ok(json!([{"name": "a", "isDirectory": false}])),
-            ),
-            (
-                "git.checkIgnored",
-                Err(("Orca がエラーを返しました", "not a git repository")),
-            ),
-        ]);
-        let dir = list(&mut orca, "/work/a", "", false).await.unwrap();
-        assert_eq!(dir.entries, vec![entry("a", false)]);
+    async fn a_failed_ignore_check_marks_nothing() {
+        let mut orca = fake(vec![(
+            "git.checkIgnored",
+            Err(("Orca がエラーを返しました", "not a git repository")),
+        )]);
+        let asked = vec!["a".to_owned()];
+        assert!(ignored_in(&mut orca, "/work/a", &asked).await.is_empty());
     }
 
     #[tokio::test]
     async fn the_paths_to_check_go_in_chunks() {
-        let entries: Vec<Value> = (0..IGNORE_CHUNK + 1)
-            .map(|i| json!({"name": format!("f{i}"), "isDirectory": false}))
-            .collect();
-        let mut orca = fake(vec![
-            (
-                "files.readDir",
-                Ok(json!({"entries": entries, "total": IGNORE_CHUNK + 1})),
-            ),
-            ("git.checkIgnored", Ok(json!(["f0"]))),
-        ]);
-        let dir = list(&mut orca, "/work/a", "", false).await.unwrap();
-        let checks: Vec<&Value> = orca
-            .calls
-            .iter()
-            .filter(|(m, _)| m == "git.checkIgnored")
-            .map(|(_, p)| &p["paths"])
-            .collect();
+        let asked: Vec<String> = (0..IGNORE_CHUNK + 1).map(|i| format!("f{i}")).collect();
+        let mut orca = fake(vec![("git.checkIgnored", Ok(json!(["f0"])))]);
+        let found = ignored_in(&mut orca, "/work/a", &asked).await;
+        let checks: Vec<&Value> = orca.calls.iter().map(|(_, p)| &p["paths"]).collect();
         assert_eq!(checks.len(), 2);
         assert_eq!(checks[0].as_array().unwrap().len(), IGNORE_CHUNK);
         assert_eq!(checks[1].as_array().unwrap().len(), 1);
-        assert_eq!(dir.entries.iter().filter(|e| e.ignored).count(), 1);
+        assert_eq!(found, ["f0"]);
+    }
+
+    #[test]
+    fn the_paths_to_check_are_inside_the_worktree_and_not_more_than_a_list() {
+        let ok: Vec<String> = ["a", "src/main.rs"].map(String::from).into();
+        assert!(check_ignore_paths(&ok).is_ok());
+        assert!(check_ignore_paths(&[]).is_ok());
+        for bad in ["", "/etc", "../x", "a/../b", "a//b", "a/", "a\nb"] {
+            assert!(check_ignore_paths(&[bad.to_owned()]).is_err(), "{bad:?}");
+        }
+        // One bad path among good ones refuses all.
+        assert!(check_ignore_paths(&["a".to_owned(), "..".to_owned()]).is_err());
+        let most: Vec<String> = (0..LIST_LIMIT).map(|i| format!("f{i}")).collect();
+        assert!(check_ignore_paths(&most).is_ok());
+        let more: Vec<String> = (0..=LIST_LIMIT).map(|i| format!("f{i}")).collect();
+        assert!(check_ignore_paths(&more).is_err());
+    }
+
+    #[test]
+    fn an_ssh_host_is_refused_whether_or_not_it_was_believed() {
+        assert!(check_host("local").is_ok());
+        assert!(check_host("ssh:lab").is_err());
     }
 
     #[tokio::test]
