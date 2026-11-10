@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.59.0
+
+T-7 (new): the Todo screen has a Claude pane at its right (#327, #328, #333, #334). The speech-bubble button of the header (「Claude に相談」) opens and closes it, in the list and in a task's detail, and it shares its place with the 「Orca に渡す」 pane: only one of the two is open. Ask in words, such as 「年末まで週 2 件ずつ」, and Claude answers with cards of proposed tasks, each with a name, a date and a project. Nothing is written to Todoist until 「追加」 is pressed on a card; the name, the date and the project can be changed on the card first, and 「却下」 closes it. Asking again sends the cards as they are now, so Claude can change its own proposals. The request, the conversation, today's date and the names of the Todoist projects are sent to Anthropic. The model and effort of this conversation are 「Todo の相談」 in the Claude tab of the settings (A-2). The add field of the Todo screen no longer shows an example.
+
+A-9: the 「Orca に渡す」 pane hands a mail, a Slack thread or a Todo over only after an agreement with Claude (#394 to #399). Choose the destination (this Mac or a saved environment), the project and the worktree: the project's own folder, or 「新規作成」, which makes a new worktree under a name Claude proposes and you can change. Write the instruction and press 「要約する」: Claude answers with what is to be implemented, 「直す」 asks it to change the summary, and 「この内容で Orca に渡す」 starts a new session with the agreed summary and the original content as a quotation. The pane no longer lists the running sessions or sends to one, and the card no longer has 「送る内容を読む」; a further instruction to the session that was started is as before. The instruction, the content and the conversation are sent to Anthropic for the summary. Its model and effort are 「Orca に渡す要約」 in the Claude tab of the settings (A-2).
+
+S-2, S-18: the Todo draft made from a Slack message opens as a page of the Todo screen instead of a modal (#400). The back button at the left of its header drops the draft, as the ✕ did, and the ✕ is gone.
+
 ## v0.58.3
 
 A-13: the text of the Orca terminals is no wider than in Orca itself (#390). The terminals named the system's monospace font first, whose letters are wider than Menlo's, so a line was longer and each Japanese character had a wider gap after it. They now name the fonts in Orca's own order (SF Mono, then Menlo), so a Mac draws them with the same font as Orca.
