@@ -52,7 +52,7 @@ import type { Workspace } from "./bindings/Workspace";
 import type { WorkspaceIcon } from "./bindings/WorkspaceIcon";
 
 // Where a handoff to Orca goes (A-9): a new session in a worktree, or the terminal of a running one. Rust checks both against Orca's list.
-export type HandoffDestination = { kind: "new"; path: string } | { kind: "existing"; handle: string };
+export type HandoffDestination = { kind: "new"; path: string };
 // What is handed over: the card's kind, title and plain text.
 export interface HandoffContext {
   kind: HandoffKind;

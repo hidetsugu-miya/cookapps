@@ -1,17 +1,17 @@
 // Handing the open mail, Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
-// Before a send it has the destination (a new session in a worktree, or a running session), the card with the content (taken off with ×) and the instruction; nothing is sent until the user presses the button.
+// Before a send it has the destination (a new session in a worktree), the card with the content (taken off with ×) and the instruction; nothing is sent until the user presses the button.
 // After a send it shows that session: its header, its history (orca-chat.ts) and a composer for more instructions. The prompt is composed in Rust (`orca_handoff`).
 // A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the session each item was handed to, and the worktree last chosen.
 import type { AttachedFile } from "./bindings/AttachedFile";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
 import { tag } from "./dom.js";
-import { CHEVRON_SVG, CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
+import { CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
 import { type HandoffDestination, invoke } from "./ipc.js";
 import { closeChat, isChatOwner, makeChatView, openChat, setChatWorking, type ChatView } from "./orca-chat.js";
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
-import { elapsed, GROUP_LABELS, GROUP_STATUS, heldOrca, noticeOf, openInOrca, openWorktreeDialog, refreshOrca, STATUS_LABELS, statusIcon, worktreeLabel } from "./orca.js";
+import { elapsed, heldOrca, noticeOf, openInOrca, openWorktreeDialog, refreshOrca, STATUS_LABELS, worktreeLabel } from "./orca.js";
 
 // The item a pane is for: a key that is the same while the same mail, thread or task is shown, and the content to hand over, built when the pane is opened.
 export interface HandoffItem {
@@ -53,7 +53,6 @@ let ticking = false;
 // While a session is shown, the list is read again this often (for its header).
 const POLL_MS = 10_000;
 const KIND_ICONS = { mail: MAIL_SVG, slack: SLACK_SVG, todo: TODO_SVG } as const;
-const GROUPS = ["waiting", "working", "done"] as const;
 
 // The text of a send: the instruction, then the path of each file on a line of its own after a blank line; only the paths when the instruction is blank.
 const withFiles = (text: string, files: AttachedFile[]) => {
@@ -80,10 +79,6 @@ export class HandoffPane {
   private keys: Record<string, string> = {};
   private card: HandoffCard | null = null;
   private removed = false;
-  // The text of the card is open (A-9): it stays open while the card is drawn again, and is closed by another item.
-  private cardOpen = false;
-  // "new" or the handle of the running session picked.
-  private dest = "new";
   // The keys of the items whose post is on its way, and the message of the last failed post of each item. They belong to the item, so a switch of the item loses neither.
   private sending = new Set<string>();
   private errors = new Map<string, string>();
@@ -99,12 +94,10 @@ export class HandoffPane {
   private chatKey: string | null = null;
   private el: {
     notice: HTMLElement;
-    fresh?: HTMLElement;
     chip?: HTMLButtonElement;
-    rows?: HTMLElement;
     cardBox?: HTMLElement;
     strip: HTMLElement;
-    card?: { title: HTMLElement; meta: HTMLElement; body: HTMLElement; toggle: HTMLButtonElement };
+    card?: { title: HTMLElement; meta: HTMLElement };
     target?: HTMLElement;
     sessionTitle?: HTMLElement;
     note?: HTMLElement;
@@ -154,8 +147,6 @@ export class HandoffPane {
     if (key !== this.itemKey) {
       this.itemKey = key;
       this.removed = false;
-      this.cardOpen = false;
-      this.dest = "new";
       // The card is built when the pane opens (the form is drawn), not for each item that goes by.
       this.card = null;
       this.open = key !== null && (this.host.forced === true || sessions.has(key));
@@ -306,34 +297,26 @@ export class HandoffPane {
     head.hidden = this.host.forced === true;
     const notice = tag("div", "ho-notice");
     const fresh = tag("div", "ho-new");
-    const pick = tag("button", "ho-new-btn", "新しいセッション");
-    pick.type = "button";
-    pick.onclick = () => {
-      this.dest = "new";
-      this.update();
-    };
     const chip = tag("button", "review-chip ho-chip");
     chip.type = "button";
     chip.setAttribute("aria-haspopup", "dialog");
     chip.onclick = () =>
       openWorktreeDialog(chip, this.overview?.worktrees ?? [], chosenPath, (path) => {
         chosenPath = path;
-        this.dest = "new";
         this.update();
         this.el?.input.focus();
       });
-    fresh.append(pick, chip);
-    const rows = tag("div", "ho-rows");
+    fresh.append(chip);
     const scroll = tag("div", "ho-scroll");
     // An environment of Orca (not this machine) is named by the heading, as the status label of the Orca screen names it.
     const label = tag("p", "ho-label", "送り先");
     const target = tag("span", "ho-target");
     label.append(target);
-    scroll.append(notice, label, fresh, rows);
+    scroll.append(notice, label, fresh);
     const main = tag("div", "ho-main");
     main.append(head, scroll);
     const foot = this.foot();
-    this.el = { notice, fresh, chip, rows, target, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
+    this.el = { notice, chip, target, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
     this.restoreDraft(foot.input);
@@ -373,9 +356,7 @@ export class HandoffPane {
     if (!this.el) return;
     this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice());
     if (this.mode() === "form") {
-      const rows = (this.overview?.rows ?? []).filter((r) => r.handle !== null);
-      const minute = Math.floor(Date.now() / 60_000);
-      this.part("dest", [this.dest, chosenPath, this.overview?.target, this.overview?.worktrees, rows, minute], () => this.drawDest());
+      this.part("dest", [chosenPath, this.overview?.target, this.overview?.worktrees], () => this.drawDest());
       this.drawCard();
     } else {
       const s = this.session()!;
@@ -413,47 +394,18 @@ export class HandoffPane {
     this.el!.notice.replaceChildren(...(text ? [row] : []));
   }
 
-  // The chip, and the running sessions that can take a send, in the groups of the Orca screen.
+  // The name of the environment beside the heading, and the chip with the worktree chosen.
   private drawDest() {
-    const { fresh, chip, rows, target } = this.el!;
+    const { chip, target } = this.el!;
     target!.textContent = this.overview?.target ?? "";
     const worktrees = this.overview?.worktrees ?? [];
     if (chosenPath !== null && !worktrees.some((w) => w.path === chosenPath)) chosenPath = null;
     const chosen = worktrees.find((w) => w.path === chosenPath);
     chip!.textContent = chosen ? worktreeLabel(chosen) : worktrees.length ? "worktree を選ぶ" : "worktree がありません";
     chip!.disabled = worktrees.length === 0;
-    const usable = (this.overview?.rows ?? []).filter((r) => r.handle !== null);
-    if (this.dest !== "new" && !usable.some((r) => r.handle === this.dest)) this.dest = "new";
-    fresh!.querySelector("button")!.setAttribute("aria-pressed", String(this.dest === "new"));
-    const now = Date.now();
-    const nodes: HTMLElement[] = [];
-    for (const group of GROUPS) {
-      const list = usable.filter((r) => r.group === group);
-      if (!list.length) continue;
-      const heading = tag("h3", "ho-group");
-      heading.append(statusIcon(GROUP_STATUS[group], GROUP_LABELS[group]), GROUP_LABELS[group], tag("span", "ho-count", String(list.length)));
-      nodes.push(heading);
-      for (const r of list) {
-        const row = tag("button", "ho-row");
-        row.type = "button";
-        row.dataset.handle = r.handle!;
-        row.setAttribute("aria-pressed", String(this.dest === r.handle));
-        const top = tag("span", "ho-row-top");
-        top.append(tag("span", "ho-row-title", r.line || "（題名なし）"), tag("span", "ho-row-time", elapsed(r.atMs, now, r.group === "done")));
-        row.append(top, tag("span", "ho-row-sub", `${r.repo} ・ ${r.branch}`));
-        row.onclick = () => {
-          this.dest = r.handle!;
-          this.update();
-          this.el?.input.focus();
-        };
-        nodes.push(row);
-      }
-    }
-    rows!.replaceChildren(...nodes);
   }
 
-  // The card with the content to hand over, until it is taken off. Its text can be opened to read exactly what the command will get as `context.body`.
-  // The nodes are kept while the card changes: only their text is set, so an open text stays open and keeps its scroll position and selection.
+  // The card with the content to hand over, until it is taken off. The nodes are kept while the card changes: only their text is set.
   private drawCard() {
     const card = this.removed ? null : this.card;
     if (!this.el || this.cardDrawn === card) return;
@@ -482,34 +434,14 @@ export class HandoffPane {
           this.el?.input.focus();
         };
         row.append(icon, text, off);
-        const toggle = tag("button", "orca-ctx-btn ho-card-toggle");
-        toggle.type = "button";
-        const chevron = tag("span", "orca-chev");
-        chevron.innerHTML = CHEVRON_SVG;
-        toggle.append(chevron, tag("span", "", "送る内容を読む"));
-        const body = tag("div", "ho-card-body");
-        toggle.onclick = () => {
-          this.cardOpen = !this.cardOpen;
-          this.showCardBody();
-        };
-        node.append(row, toggle, body);
+        node.append(row);
         box.replaceChildren(node);
-        el.card = { title, meta, body, toggle };
+        el.card = { title, meta };
       }
       const ui = el.card;
       if (ui.title.textContent !== card.title) ui.title.textContent = card.title;
       if (ui.meta.textContent !== card.meta) ui.meta.textContent = card.meta;
-      // Set only when it changed: setting it again would drop the selection.
-      if (ui.body.textContent !== card.body) ui.body.textContent = card.body;
-      this.showCardBody();
     }
-  }
-
-  private showCardBody() {
-    const ui = this.el?.card;
-    if (!ui) return;
-    ui.toggle.setAttribute("aria-expanded", String(this.cardOpen));
-    ui.body.hidden = !this.cardOpen;
   }
 
   // The header of a session: "{repo} ・ {branch}", and its state with the time. Until the list holds the session (a new one) it says it is being checked.
@@ -533,12 +465,11 @@ export class HandoffPane {
     const el = this.el;
     if (!el) return;
     const s = this.session();
-    const existing = this.dest !== "new";
-    el.send.textContent = s || existing ? "送る" : "起動する";
+    el.send.textContent = s ? "送る" : "起動する";
     el.input.disabled = this.busy;
-    el.input.placeholder = s || existing ? "追加の指示を書く" : "起動するエージェントへの指示を書く";
+    el.input.placeholder = s ? "追加の指示を書く" : "起動するエージェントへの指示を書く";
     // A session with no terminal can be read but takes no post; a new one needs a worktree.
-    const target = s ? (s.handle ?? this.rowOf(s)?.handle ?? null) !== null : existing || chosenPath !== null;
+    const target = s ? (s.handle ?? this.rowOf(s)?.handle ?? null) !== null : chosenPath !== null;
     const hasFiles = this.itemKey !== null && (attached.get(this.itemKey)?.length ?? 0) > 0;
     el.send.disabled = this.busy || this.overview?.state === "missing" || !(el.input.value.trim() || hasFiles) || !target;
     const error = this.itemKey === null ? "" : (this.errors.get(this.itemKey) ?? "");
@@ -553,9 +484,7 @@ export class HandoffPane {
     if (this.itemKey === null) return;
     sessions.delete(this.itemKey);
     this.errors.delete(this.itemKey);
-    this.dest = "new";
     this.removed = false;
-    this.cardOpen = false;
     // The form is drawn again, and takes the content then.
     this.card = null;
     this.open = this.host.forced === true;
@@ -573,30 +502,24 @@ export class HandoffPane {
     if (!text.trim() && !files.length) return;
     const environment = this.overview?.target ?? null;
     const known = sessions.get(key);
-    const picked = this.overview?.rows.find((r) => r.handle !== null && r.handle === this.dest);
     const path = chosenPath;
     const handle = known ? (known.handle ?? this.rowOf(known)?.handle ?? null) : null;
-    if (known ? handle === null : this.dest === "new" ? path === null : !picked) return;
+    if (known ? handle === null : path === null) return;
     const card = this.removed ? null : this.card;
     this.sending.add(key);
     this.errors.delete(key);
     this.updateSend();
     try {
       // The files go into the worktree of the session first, and their paths into the text.
-      const worktree = known ? known.path : picked ? picked.path : path!;
+      const worktree = known ? known.path : path!;
       const body = files.length ? withFiles(text, await uploadAttachments(files, worktree, known ? known.environment : environment)) : text;
       if (known) {
         await invoke("orca_send", { handle: handle!, text: body, environment: known.environment });
       } else {
-        const destination: HandoffDestination = picked ? { kind: "existing", handle: picked.handle! } : { kind: "new", path: path! };
+        const destination: HandoffDestination = { kind: "new", path: path! };
         const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
         const started = await invoke("orca_handoff", { destination, instruction: body, context, environment });
-        sessions.set(
-          key,
-          picked
-            ? { path: picked.path, paneKey: picked.paneKey, handle: started.handle ?? picked.handle, environment, seen: true }
-            : { path: path!, paneKey: started.paneKey, handle: started.handle, environment, seen: false },
-        );
+        sessions.set(key, { path: path!, paneKey: started.paneKey, handle: started.handle, environment, seen: false });
       }
       el.input.value = "";
       // Only the files sent: one added while the send ran (still being read when it began) stays.

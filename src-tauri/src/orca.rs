@@ -116,12 +116,11 @@ pub struct OrcaStarted {
     pub handle: Option<String>,
 }
 
-/// Where a handoff goes (A-9): a new session in a worktree, or the terminal of a running one.
+/// Where a handoff goes (A-9): a new session in a worktree.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum OrcaDestination {
     New { path: String },
-    Existing { handle: String },
 }
 
 /// A terminal of Orca that runs no Claude (a shell, or another agent), in a worktree that is listed (A-8). The screen shows it as a tab and mirrors it.
@@ -1220,7 +1219,7 @@ pub(crate) fn forget_worktree_host(path: &str, environment: Option<&str>) {
     worktree_hosts().forget(environment, path);
 }
 
-/// Hands the content to a new session or a running one (A-9): the prompt is composed here, then the launch or the send of A-6 runs once with its checks.
+/// Hands the content to a new session (A-9): the prompt is composed here, then the launch of A-6 runs once with its checks.
 fn handoff(
     destination: &OrcaDestination,
     instruction: &str,
@@ -1228,16 +1227,8 @@ fn handoff(
     environment: Option<&str>,
 ) -> Result<OrcaStarted, String> {
     let text = compose(instruction, context)?;
-    match destination {
-        OrcaDestination::New { path } => launch(path, Some(&text), environment),
-        OrcaDestination::Existing { handle } => {
-            send(handle, &text, environment)?;
-            Ok(OrcaStarted {
-                pane_key: None,
-                handle: Some(handle.clone()),
-            })
-        }
-    }
+    let OrcaDestination::New { path } = destination;
+    launch(path, Some(&text), environment)
 }
 
 /// Closes the tab of an Orca terminal. A terminal that is already closed (`terminal_handle_stale`) is a success; `ptyKilled` is not looked at.
@@ -1411,7 +1402,7 @@ pub async fn orca_terminal_create(
     blocking(move || open_terminal(&path, environment.as_deref())).await?
 }
 
-/// A-9: starts a session in a worktree, or posts to a running one, with the instruction and, when `context` is given, the content quoted as data.
+/// A-9: starts a session in a worktree with the instruction and, when `context` is given, the content quoted as data.
 #[tauri::command]
 pub async fn orca_handoff(
     destination: OrcaDestination,
@@ -2195,47 +2186,32 @@ mod tests {
     }
 
     #[test]
-    fn a_handoff_destination_is_new_or_existing() {
+    fn a_handoff_destination_is_a_new_session() {
         let new: OrcaDestination =
             serde_json::from_value(json!({"kind": "new", "path": "/w"})).unwrap();
         assert_eq!(new, OrcaDestination::New { path: "/w".into() });
-        let old: OrcaDestination =
-            serde_json::from_value(json!({"kind": "existing", "handle": "term_1"})).unwrap();
-        assert_eq!(
-            old,
-            OrcaDestination::Existing {
-                handle: "term_1".into()
-            }
-        );
-        assert!(serde_json::from_value::<OrcaDestination>(json!({"kind": "other"})).is_err());
+        assert!(serde_json::from_value::<OrcaDestination>(
+            json!({"kind": "existing", "handle": "term_1"})
+        )
+        .is_err());
     }
 
     #[test]
     fn a_handoff_refuses_a_blank_instruction_before_it_runs_anything() {
-        for destination in [
-            OrcaDestination::New { path: "/w".into() },
-            OrcaDestination::Existing {
-                handle: "term_1".into(),
-            },
-        ] {
-            assert_eq!(
-                handoff(&destination, " \n", None, None).unwrap_err(),
-                "指示を書いてください"
-            );
-        }
+        let destination = OrcaDestination::New { path: "/w".into() };
+        assert_eq!(
+            handoff(&destination, " \n", None, None).unwrap_err(),
+            "指示を書いてください"
+        );
     }
 
     #[test]
-    fn a_handoff_checks_its_destination_like_a_post() {
+    fn a_handoff_checks_its_destination_like_a_launch() {
         let context = HandoffContext {
             kind: crate::orca_handoff::HandoffKind::Todo,
             title: "t".into(),
             body: "b".into(),
         };
-        let bad_handle = OrcaDestination::Existing {
-            handle: "--x".into(),
-        };
-        assert!(handoff(&bad_handle, "i", Some(&context), None).is_err());
         let bad_path = OrcaDestination::New {
             path: "relative".into(),
         };
