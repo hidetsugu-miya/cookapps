@@ -442,10 +442,10 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .label-pop button svg { width: 16px; height: 16px; flex: none; }
 .label-pop button { flex: none; }
 /* The parent chip: a checkbox that completes the parent, beside the button that opens it (a button may hold no checkbox). */
-#todo-detail .parent-chip { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: calc(100% - 66px); margin: 0 0 4px 50px; padding: 3px 6px; border-radius: 8px; background: var(--hover); }
+#todo-detail .parent-chip { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: calc(100% - 32px); margin: 0 0 4px 16px; padding: 3px 6px; border-radius: 8px; background: var(--hover); }
 #todo-detail .parent-chip:hover { background: var(--soft); }
-#todo-detail .parent-chip .check { width: 16px; height: 16px; flex: none; }
-#todo-detail .parent-chip .check:hover::after, #todo-detail .parent-chip .check:checked::after { width: 4px; height: 7px; margin-top: -1px; }
+#todo-detail .parent-chip .check { width: 14px; height: 14px; flex: none; }
+#todo-detail .parent-chip .check:hover::after, #todo-detail .parent-chip .check:checked::after { width: 4px; height: 6px; margin-top: -1px; }
 #todo-detail .parent-link { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; font-size: calc(12px * var(--fs)); text-align: left; cursor: pointer; }
 #todo-detail .parent-link:focus-visible { outline: 2px solid var(--accent); }
 #todo-detail .parent-link svg { width: 14px; height: 14px; flex: none; }
