@@ -32,7 +32,8 @@ const CLEAR = "\x1b[2J\x1b[3J\x1b[H";
 const OSC52_LIMIT = 128 * 1024;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
-const DEFAULT_FONT = "ui-monospace, Menlo, monospace";
+// Orca's own list (1.4.254): it names SF Mono, which most Macs do not have as a font, so both draw with Menlo there. `ui-monospace` is the real SF Mono in WKWebView, whose cells are wider.
+const DEFAULT_FONT = '"SF Mono", Menlo, Monaco, monospace';
 const DEFAULT_FONT_SIZE = 13;
 // Ghostty's `font-thicken`: the weight between regular and bold (a font without it draws regular).
 const THICK_WEIGHT = 500;
