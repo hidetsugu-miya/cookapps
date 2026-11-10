@@ -215,11 +215,14 @@ describe("settings: Slack", () => {
     await expect($("#slack-workspaces button.status")).not.toExist();
   });
 
-  it("lists the optional scopes (users:read, files:read, channels:write, groups:write) with the other scopes in the setup hint", async () => {
+  it("lists the optional scopes (users:read, files:read, channels:write, groups:write, usergroups:read) with the other scopes in the setup hint", async () => {
     await openSettings([], claudeMissing, "slack");
     await $("#slack-help").click();
     const scopes = await $$('[role="dialog"][aria-label="Slack の接続方法"] .scopes code').map((code) => code.getText());
-    expect(scopes).toEqual(["chat:write", "channels:read", "groups:read", "channels:history", "groups:history", "im:history", "mpim:history", "users:read", "files:read", "channels:write", "groups:write"]);
+    expect(scopes).toEqual(["chat:write", "channels:read", "groups:read", "channels:history", "groups:history", "im:history", "mpim:history", "users:read", "files:read", "channels:write", "groups:write", "usergroups:read"]);
+    // The sentence on the optional scopes names it as well, outside the list.
+    const named = await $$('[role="dialog"][aria-label="Slack の接続方法"] code').map((code) => code.getText());
+    expect(named.filter((name) => name === "usergroups:read")).toHaveLength(2);
   });
 
   it("asks before disconnecting: キャンセル sends nothing, 解除 calls slack_remove_workspace", async () => {

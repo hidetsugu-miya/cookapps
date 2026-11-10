@@ -152,8 +152,8 @@ def parse_stream(text):
 # ---- pure: queue ----
 
 def base_key(i):
-    """The basis of the order (issues.md): the tier, then a bug of 1, 2 or 3 points first, then fewer points first, then the older issue first."""
-    return (tier(i), not quick_bug(i), points(i) or 99, i.created_at, i.number)
+    """The basis of the order (issues.md): the tier, then a bug of 1, 2 or 3 points first, then an issue without `importance:low` before one with it, then fewer points first, then the older issue first."""
+    return (tier(i), not quick_bug(i), importance(i) == "low", points(i) or 99, i.created_at, i.number)
 
 
 def base_order(free):

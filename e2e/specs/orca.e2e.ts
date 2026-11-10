@@ -3213,25 +3213,34 @@ describe("orca: files and editor (A-18)", () => {
     ]);
   });
 
-  it("reads the root and the open folders again side by side, not one after the other", async () => {
+  it("reads the root alone first, then the open folders again side by side, not one after the other", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await mock("orca_files_list", dirOf("src", [["lib", true]]));
     await row("src").click();
     await waitForCount("#orca-files-tree .orca-file", 5);
+    await mock("orca_files_list", dirOf("src/lib", [["x", false]]));
+    await row("src/lib").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
     const list = await mock("orca_files_list", holds);
     await $("#orca-files-reload").click();
-    // Both reads are on their way while neither has been answered.
-    expect(await waitForCalls(list, 2)).toEqual([
+    // Only the root is on its way while it has not been answered.
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await browser.pause(300);
+    expect(await callsOf(list)).toHaveLength(1);
+    await release(list, dirOf("", [["src", true], ["target", true]]));
+    // Both folders are on their way while neither has been answered.
+    expect(await waitForCalls(list, 3)).toEqual([
       { path: "/work/example-app", dir: "", ignored: false, environment: null },
       { path: "/work/example-app", dir: "src", ignored: false, environment: null },
+      { path: "/work/example-app", dir: "src/lib", ignored: false, environment: null },
     ]);
-    await release(list, dirOf("", [["src", true], ["target", true]]));
     await release(list, dirOf("src", [["lib", true]]));
-    await browser.waitUntil(async () => (await names()).join() === "src,lib,target", { timeoutMsg: "the reads never drew" });
+    await release(list, dirOf("src/lib", [["y", false]]));
+    await browser.waitUntil(async () => (await names()).join() === "src,lib,y,target", { timeoutMsg: "the reads never drew" });
   });
 
-  it("reads at most 16 folders at once when the reload button is pressed", async () => {
+  it("reads at most 16 folders at once, after the root, when the reload button is pressed", async () => {
     const folders = Array.from({ length: 17 }, (_, i) => `d${i}`);
     await openFiles({ orca_files_list: dirOf("", folders.map((f) => [f, true])) });
     await waitForCount("#orca-files-tree .orca-file", 17);
@@ -3243,12 +3252,39 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-files-tree .orca-file", 34);
     const list = await mock("orca_files_list", holds);
     await $("#orca-files-reload").click();
-    await waitForCalls(list, 16);
+    await waitForCalls(list);
     await browser.pause(300);
-    expect(await callsOf(list)).toHaveLength(16);
-    // One answer frees one place, and the last folder is read.
+    expect(await callsOf(list)).toHaveLength(1);
     await release(list, dirOf("", folders.map((f) => [f, true])));
-    expect(await waitForCalls(list, 17)).toHaveLength(17);
+    await waitForCalls(list, 17);
+    await browser.pause(300);
+    expect(await callsOf(list)).toHaveLength(17);
+    // One answer frees one place, and the last folder is read.
+    await release(list, dirOf("d0", [["x", false]]));
+    expect(await waitForCalls(list, 18)).toHaveLength(18);
+  });
+
+  it("keeps the ignored marks through a reload until git answers, and keeps them when git cannot", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await browser.waitUntil(async () => (await isIgnored("b.log")) === "true", { timeoutMsg: "the ignored mark never came" });
+    const marks = await mock("orca_files_ignored", holds);
+    await $("#orca-files-reload").click();
+    await waitForCalls(marks);
+    await browser.pause(300);
+    expect(await isIgnored("b.log")).toBe("true");
+    expect(await isIgnored("target")).toBe("true");
+    expect(await isIgnored("a.rs")).toBe("false");
+    // The answer replaces the marks: b.log is no longer named.
+    await release(marks, ["target"]);
+    await browser.waitUntil(async () => (await isIgnored("b.log")) === "false", { timeoutMsg: "the answer never replaced the marks" });
+    expect(await isIgnored("target")).toBe("true");
+    // An answer that fails leaves the kept marks.
+    const failing = await mock("orca_files_ignored", rejects("Orca に接続できません"));
+    await $("#orca-files-reload").click();
+    await waitForCalls(failing);
+    await browser.pause(300);
+    expect(await isIgnored("target")).toBe("true");
   });
 
   it("reads a folder that was closed again after the reload button, because the reload dropped it", async () => {

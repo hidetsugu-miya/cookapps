@@ -4762,13 +4762,15 @@ pub async fn slack_timeline(
         Some((team, token, user))
     })
     .collect();
-    lookup_users(&http, &state.timeline, wanted).await;
     let teams = watch_tokens
         .iter()
         .filter(|(_, token)| !token.is_empty())
         .map(|(team, token)| (team.to_string(), token.to_string()))
         .collect();
-    lookup_groups(API_URL, &http, &state.timeline, teams).await;
+    tokio::join!(
+        lookup_users(&http, &state.timeline, wanted),
+        lookup_groups(API_URL, &http, &state.timeline, teams),
+    );
 
     let messages = timeline_messages(&state.timeline, &workspaces, &picked.top);
     let watched = watched_messages(&state.timeline, &workspaces, &rows);
@@ -5318,9 +5320,11 @@ pub async fn slack_thread(
     .into_iter()
     .map(|user| (team_id.clone(), token.clone(), user))
     .collect();
-    lookup_users(auth.http(), &state.timeline, wanted).await;
     let teams = vec![(team_id.clone(), token.clone())];
-    lookup_groups(API_URL, auth.http(), &state.timeline, teams).await;
+    tokio::join!(
+        lookup_users(auth.http(), &state.timeline, wanted),
+        lookup_groups(API_URL, auth.http(), &state.timeline, teams),
+    );
 
     let name_of = |id: &str| state.timeline.name_of(&team_id, id);
     let messages = pages

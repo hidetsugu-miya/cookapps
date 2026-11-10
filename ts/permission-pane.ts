@@ -24,7 +24,8 @@ export const OPTIONAL_KINDS: Record<string, string> = {
   "channels:write": "公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
   "groups:write": "非公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
 };
-export const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", ...HISTORY_SCOPES, ...Object.keys(OPTIONAL_KINDS)];
+// `usergroups:read` is optional as well, but it is not in `OPTIONAL_KINDS`: settings does not show it as lacking.
+export const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", ...HISTORY_SCOPES, ...Object.keys(OPTIONAL_KINDS), "usergroups:read"];
 
 // The Slack apps page (a link the default browser opens, by Rust's on_navigation) and a scope list with its copy button.
 export function appsLink() {

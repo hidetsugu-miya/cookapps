@@ -63,14 +63,21 @@ class Points(unittest.TestCase):
 
 
 class Ordering(unittest.TestCase):
-    def test_the_basis_is_the_tier_then_fewer_points_then_older_and_importance_low_is_no_label(self):
+    def test_the_basis_is_the_tier_then_importance_low_last_then_fewer_points_then_older(self):
         a = mk(1, ["point:3"], created="2026-11-01T00:00:01Z")
         b = mk(2, ["point:1"], created="2026-11-01T00:00:02Z")
         c = mk(3, ["point:1", "importance:high"], created="2026-11-01T00:00:03Z")
         d = mk(4, ["point:1", "importance:low"], created="2026-11-01T00:00:04Z")
         e = mk(5, ["point:1"], created="2026-11-01T00:00:00Z")
-        self.assertEqual(numbers(pr.base_order([a, b, c, d, e])), [3, 5, 2, 4, 1])
+        self.assertEqual(numbers(pr.base_order([a, b, c, d, e])), [3, 5, 2, 1, 4])
         self.assertEqual(pr.base_order([]), [])
+
+    def test_importance_low_goes_after_no_label_in_the_same_tier_but_a_quick_bug_still_goes_first(self):
+        low = mk(1, ["point:1", "importance:low"], created="2026-11-01T00:00:01Z")
+        plain = mk(2, ["point:5"], created="2026-11-01T00:00:02Z")
+        low_bug = mk(3, ["bug", "point:2", "importance:low"], created="2026-11-01T00:00:03Z")
+        self.assertEqual(numbers(pr.base_order([low, plain, low_bug])), [3, 2, 1])
+        self.assertEqual(pr.tier(low), pr.tier(plain))
 
     def test_bugs_of_1_2_and_3_points_go_first_but_not_those_of_5_and_8(self):
         a = mk(1, ["point:1"], created="2026-11-01T00:00:01Z")
