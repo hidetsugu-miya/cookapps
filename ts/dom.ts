@@ -32,5 +32,11 @@ export const onEnter = (input: HTMLInputElement, action: () => void) => {
   };
 };
 
+// The matcher of a search field (A-9, A-19): the text, trimmed, as a regular expression with its special characters escaped, so that a "." or a "(" matches itself, and case ignored. Null while the text is blank (no search). The capture group serves `split` (the bold letters of the Orca list).
+export function partMatcher(text: string): RegExp | null {
+  const needle = text.trim();
+  return needle === "" ? null : new RegExp(`(${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "i");
+}
+
 // Whether this is macOS: Cmd is the shortcut key there, Ctrl elsewhere.
 export const isMac = /Mac/.test(navigator.platform);

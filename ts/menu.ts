@@ -1,5 +1,5 @@
 // The menu under a button: a list to pick from, or any node (the due popover, the Slack destination picker). One at a time.
-import { composing, tag } from "./dom.js";
+import { composing, partMatcher, tag } from "./dom.js";
 
 // The menu under `anchor`; one at a time, closed by a pick, a click elsewhere, or Escape.
 let menuEl: HTMLElement | null = null;
@@ -45,10 +45,17 @@ export interface MenuItem {
   pick: () => unknown;
 }
 
-export function openMenu(anchor: Element, items: MenuItem[]) {
+export interface MenuOptions {
+  // A field at the top of the menu that narrows the rows to those whose label holds the text (A-9): its `aria-label`, and the line shown when no row matches.
+  search?: { label: string; empty: string };
+}
+
+export function openMenu(anchor: Element, items: MenuItem[], options: MenuOptions = {}) {
   const menu = tag("div", "menu");
   menu.setAttribute("role", "menu");
-  for (const item of items) {
+  // With a search field the rows scroll in `list` and the field stays above them.
+  const list = options.search ? tag("div", "menu-list") : menu;
+  const rows = items.map((item) => {
     const b = tag("button");
     b.setAttribute("role", "menuitem");
     b.setAttribute("aria-current", String(item.current));
@@ -65,10 +72,59 @@ export function openMenu(anchor: Element, items: MenuItem[]) {
       closeMenu();
       item.pick();
     };
-    menu.append(b);
+    list.append(b);
+    return { item, b };
+  });
+  if (!options.search) {
+    showMenu(anchor, menu);
+    menu.querySelector("button")!.focus();
+    return;
   }
+  const input = tag("input", "menu-search");
+  input.type = "text";
+  input.placeholder = "検索";
+  input.setAttribute("aria-label", options.search.label);
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  const none = tag("div", "menu-empty", options.search.empty);
+  none.hidden = true;
+  list.append(none);
+  menu.classList.add("menu-searchable");
+  menu.append(input, list);
+  // The rows the text leaves, and the one the keys are on (the first, until a key moves it; a change of the text puts it on the first again).
+  let shown = rows;
+  let at = 0;
+  const mark = (scroll: boolean) => {
+    for (const r of rows) delete r.b.dataset.cursor;
+    const on = shown[at];
+    if (!on) return;
+    on.b.dataset.cursor = "true";
+    if (scroll) on.b.scrollIntoView({ block: "nearest" });
+  };
+  input.oninput = () => {
+    const re = partMatcher(input.value);
+    shown = rows.filter((r) => re === null || re.test(r.item.label));
+    for (const r of rows) r.b.hidden = !shown.includes(r);
+    none.hidden = shown.length > 0;
+    at = 0;
+    mark(true);
+  };
+  input.onkeydown = (e) => {
+    if (composing(e)) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      at = Math.min(shown.length - 1, Math.max(0, at + (e.key === "ArrowDown" ? 1 : -1)));
+      mark(true);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      shown[at]?.b.click();
+    }
+  };
   showMenu(anchor, menu);
-  menu.querySelector("button")!.focus();
+  // The width stays while the rows shrink, so that the menu does not jump under the pointer.
+  menu.style.minWidth = `${menu.offsetWidth}px`;
+  mark(false);
+  input.focus();
 }
 
 export function initMenu() {
