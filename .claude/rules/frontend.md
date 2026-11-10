@@ -206,7 +206,7 @@ Bad:  paragraphs of steps and scopes shown above the input
 A placeholder or a line of text that explains what to type, gives an example, or says what a button does is help text, and a screen shows none (at the owner's instruction, 2026-11-08).
 A placeholder that only names the field (`API トークン`, `スレッドに返信`) is not help text.
 Where a card has the `?` hint, steps and notes go there; anywhere else they are left out.
-The existing help text (such as `src/index.html:139`) goes when its screen is next changed.
+The existing help text (such as `src/index.html:390`) goes when its screen is next changed.
 
 ```text
 Good: an empty request field in the Claude pane, with the send button beside it

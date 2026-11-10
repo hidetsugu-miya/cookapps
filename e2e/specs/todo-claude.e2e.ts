@@ -315,7 +315,7 @@ describe("todo Claude pane", () => {
           { role: "user", text: "出して" },
           {
             role: "assistant",
-            text: "案です\n- 請求書を今日送る（日付: 今日、プロジェクト: Work）\n- 牛乳を買う（日付: 15:00、プロジェクト: インボックス）\n- メモを整理する（日付: なし、プロジェクト: インボックス）",
+            text: `案です\n- 請求書を今日送る（日付: ${today}、プロジェクト: Work）\n- 牛乳を買う（日付: ${today} 15:00、プロジェクト: インボックス）\n- メモを整理する（日付: なし、プロジェクト: インボックス）`,
           },
         ],
         instruction: "もっと短く",
@@ -332,7 +332,7 @@ describe("todo Claude pane", () => {
       {
         history: [
           { role: "user", text: "今週のやることを出して" },
-          { role: "assistant", text: "案です\n- 請求書を送る（日付: 今日、プロジェクト: Work）" },
+          { role: "assistant", text: `案です\n- 請求書を送る（日付: ${today}、プロジェクト: Work）` },
         ],
         instruction: "ありがとう",
       },

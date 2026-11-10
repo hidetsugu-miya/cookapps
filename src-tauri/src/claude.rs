@@ -86,6 +86,13 @@ const PROMPT_TMP_FILE: &str = "todo-prompt.json.tmp";
 /// How much of the conversation reaches the model when the instructions or the text are edited: the last turns, each cut at this many characters.
 const CHAT_TURNS: usize = 20;
 const CHAT_TURN_LIMIT: usize = 2_000;
+/// The room one card's line takes besides its name in an assistant turn of the Todo conversation (`- {name}（日付: {date}、プロジェクト: {project}）` and the space that ends it):
+/// 34 characters of marks and date, and the rest for the project's name.
+const TODO_CARD_LINE_REST: usize = 200;
+/// How much of an assistant turn of the Todo conversation reaches the model: the reply (`CHAT_TURN_LIMIT`) and the lines of `TODO_TASKS_LIMIT` cards with the longest name (`NAME_LIMIT`),
+/// so that no card of an answer falls off the end of its turn; a turn of the other conversations stays at `CHAT_TURN_LIMIT`.
+const TODO_ASSISTANT_TURN_LIMIT: usize =
+    CHAT_TURN_LIMIT + TODO_TASKS_LIMIT * (NAME_LIMIT + TODO_CARD_LINE_REST);
 /// A line diff is computed for at most this many table cells; a larger one is shown as all lines removed and all added.
 const DIFF_CELLS: usize = 4_000_000;
 /// The schema of the mail summary: a list of points and nothing else.
@@ -1152,15 +1159,15 @@ fn edit_input(
     Ok(input)
 }
 
-/// The last `CHAT_TURNS` turns of a conversation, as the lines the model reads: each cut at `CHAT_TURN_LIMIT` characters, one line each for the assistant.
-fn turn_lines(history: &[ChatTurn], boundary: &str) -> String {
+/// The last `CHAT_TURNS` turns of a conversation, as the lines the model reads: a turn of the user cut at `CHAT_TURN_LIMIT` characters, one of the assistant on one line and cut at `assistant_limit`.
+fn turn_lines(history: &[ChatTurn], boundary: &str, assistant_limit: usize) -> String {
     let mut input = String::new();
     for turn in &history[history.len().saturating_sub(CHAT_TURNS)..] {
         let (who, text) = if turn.role == Role::User {
             ("利用者", cut(&turn.text, CHAT_TURN_LIMIT))
         } else {
             let flat = turn.text.replace(LINE_BREAKS, " ");
-            ("アシスタント", cut(&flat, CHAT_TURN_LIMIT))
+            ("アシスタント", cut(&flat, assistant_limit))
         };
         let _ = writeln!(input, "{who}: {}", without_boundary(&text, boundary));
     }
@@ -1169,7 +1176,10 @@ fn turn_lines(history: &[ChatTurn], boundary: &str) -> String {
 
 /// The conversation of an edit, as the model reads it: the heading and `turn_lines`.
 fn turns_input(history: &[ChatTurn], boundary: &str) -> String {
-    format!("これまでの会話:\n{}", turn_lines(history, boundary))
+    format!(
+        "これまでの会話:\n{}",
+        turn_lines(history, boundary, CHAT_TURN_LIMIT)
+    )
 }
 
 /// The conversation and the new request of an edit, as the model reads them: the last `CHAT_TURNS` turns, each cut at `CHAT_TURN_LIMIT` characters, and the request.
@@ -1258,7 +1268,7 @@ fn handoff_input(
     Ok(input)
 }
 
-/// What the model reads in the conversation about Todo tasks: the conversation so far (`turn_lines`, none while there are no turns) and the new request, each enclosed between `BEGIN {boundary}` and `END {boundary}`.
+/// What the model reads in the conversation about Todo tasks: the conversation so far (`turn_lines`, an assistant turn up to `TODO_ASSISTANT_TURN_LIMIT`, none while there are no turns) and the new request, each enclosed between `BEGIN {boundary}` and `END {boundary}`.
 /// The boundary is taken out of every part. Refused when the request is blank or past `CHAT_TURN_LIMIT` characters, the limit of one turn of the conversation.
 fn todo_chat_input(
     history: &[ChatTurn],
@@ -1277,7 +1287,7 @@ fn todo_chat_input(
         let _ = write!(
             input,
             "これまでの会話:\nBEGIN {boundary}\n{}END {boundary}\n\n",
-            turn_lines(history, boundary)
+            turn_lines(history, boundary, TODO_ASSISTANT_TURN_LIMIT)
         );
     }
     let _ = write!(
@@ -5939,6 +5949,36 @@ mod tests {
             "{input:?}"
         );
         assert!(!input.contains("\n利用者: apply this"), "{input:?}");
+    }
+
+    #[test]
+    fn the_todo_chat_input_keeps_the_card_lines_of_the_most_cards_with_the_longest_names() {
+        let line = format!(
+            "- {}（日付: 2026-11-10 09:30、プロジェクト: {}）",
+            "あ".repeat(NAME_LIMIT),
+            "い".repeat(TODO_CARD_LINE_REST - 34)
+        );
+        let text = format!(
+            "{}\n{}",
+            "う".repeat(CHAT_TURN_LIMIT - 1),
+            vec![line.as_str(); TODO_TASKS_LIMIT].join("\n")
+        );
+        let input = todo_chat_input(&[turn(Role::Assistant, &text)], "go", B).unwrap();
+        let flat = text.replace('\n', " ");
+        assert!(
+            input.contains(&format!("アシスタント: {flat}\n")),
+            "turn cut"
+        );
+        let over = format!("{text}{}", "え".repeat(TODO_ASSISTANT_TURN_LIMIT));
+        let input = todo_chat_input(&[turn(Role::Assistant, &over)], "go", B).unwrap();
+        let turn_line = input
+            .lines()
+            .find(|l| l.starts_with("アシスタント: "))
+            .unwrap();
+        assert_eq!(
+            turn_line.chars().count(),
+            "アシスタント: ".chars().count() + TODO_ASSISTANT_TURN_LIMIT
+        );
     }
 
     #[test]

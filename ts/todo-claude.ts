@@ -153,12 +153,12 @@ function cards(tasks: TodoTaskProposal[]) {
   return box;
 }
 
-// What Claude is told of an earlier answer's tasks, as the cards show them now: a line each with the name, the date and the project; a rejected one is left out.
+// What Claude is told of an earlier answer's tasks, as the cards hold them now: a line each with the name, the date as the card holds it (`YYYY-MM-DD` with ` HH:MM`, not the label the chip shows) and the project; a rejected one is left out.
 function tasksText(tasks: TodoTaskProposal[]) {
   return tasks
     .map(stateOf)
     .filter((s) => s.status !== "rejected")
-    .map((s) => `- ${s.content}（日付: ${dueText(s) || "なし"}、プロジェクト: ${projectName(shownProject(s))}）`)
+    .map((s) => `- ${s.content}（日付: ${s.due || "なし"}、プロジェクト: ${projectName(shownProject(s))}）`)
     .join("\n");
 }
 
