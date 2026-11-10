@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.60.1
+
+M-1: the inbox reads all accounts at once, and the threads of each account without waiting for groups of ten, so it loads faster with several accounts (#411).
+
+M-7: the automatic sync asks every account at once, so the new rows and the new mail cards of one account no longer wait for the others (#415).
+
+A-6, A-9: the Orca screen reads the lists of this Mac together with the saved environments, and a hand-over to a new worktree no longer checks the environments and the worktree list a second time (#413).
+
+A-8, A-11: the terminal of this Mac on the Orca screen, and the answers to Claude's questions in the history, are read and typed over Orca's own connection instead of starting Orca's command each second, which uses less CPU (#412).
+
 ## v0.60.0
 
 A-23 (new): the window has no title bar, and every screen reaches the top edge of the window (#314). The close, minimize and zoom buttons of macOS sit on the top of the green icon column, whose icons start below them. The band at the top of each screen (the headers of the mail list, of a thread, of the Todo screen and of the Slack screens, the bar of the calendar, the heading of the settings, the header of the Orca list and the tab bars of the Orca work pane) moves the window when an empty place of it is dragged, and a double press zooms it, as the title bar did.
