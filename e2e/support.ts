@@ -9,6 +9,7 @@ import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
 import type { FontSettings } from "../ts/bindings/FontSettings";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
+import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
 import type { OrcaChatEvent } from "../ts/bindings/OrcaChatEvent";
@@ -403,6 +404,7 @@ export const claudeSettings: ClaudeSettings = {
   promptChat: { model: "sonnet", effort: "medium" },
   proofread: { model: "sonnet", effort: "medium" },
   slackReply: { model: "sonnet", effort: "high" },
+  orcaHandoff: { model: "sonnet", effort: "medium" },
 };
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
@@ -805,3 +807,6 @@ export const fire = (kind: "paste" | "dragover" | "drop", selector: string, file
     selector,
     files,
   );
+
+// What `claude_summarize_handoff` answers (A-9): the points of "what to implement", and the name proposed for a new worktree (none by default).
+export const handoffSummary = (points: string[], worktreeName: string | null = null): HandoffSummary => ({ points, worktreeName });

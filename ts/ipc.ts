@@ -20,6 +20,7 @@ import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
 import type { HandoffKind } from "./bindings/HandoffKind";
+import type { HandoffSummary } from "./bindings/HandoffSummary";
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileText } from "./bindings/OrcaFileText";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
@@ -51,8 +52,8 @@ import type { Week } from "./bindings/Week";
 import type { Workspace } from "./bindings/Workspace";
 import type { WorkspaceIcon } from "./bindings/WorkspaceIcon";
 
-// Where a handoff to Orca goes (A-9): a new session in a worktree, or the terminal of a running one. Rust checks both against Orca's list.
-export type HandoffDestination = { kind: "new"; path: string } | { kind: "existing"; handle: string };
+// Where a handoff to Orca goes (A-9): a new session in a worktree. Rust checks it against Orca's list.
+export type HandoffDestination = { kind: "new"; path: string };
 // What is handed over: the card's kind, title and plain text.
 export interface HandoffContext {
   kind: HandoffKind;
@@ -199,6 +200,9 @@ export interface Commands {
   // Claude's fix of a Todo proposal made from a Slack message: the same conversation, for the name and the description (`content`, `description`) instead of the instructions; each part is null with no lines when it is left alone.
   // The model and effort are those of `slackSummary`. Nothing is saved, not even the request.
   claude_edit_todo_draft: { args: { content: string; description: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoDraftEdit };
+  // A-9: Claude's summary of "what to implement" from the instruction of a handoff, and a proposed name for a new worktree (`worktreeName` is null when it gave none that Orca would take). `context` is quoted to Claude as data, never followed.
+  // `history` is the conversation so far (the summaries as assistant turns, the requests to fix them as user turns) and `revision` the new request to fix the summary (null for the first summary). The model and effort are those of `orcaHandoff`. Nothing is saved.
+  claude_summarize_handoff: { args: { instruction: string; context: HandoffContext | null; history: { role: "user" | "assistant"; text: string }[]; revision: string | null }; result: HandoffSummary };
   // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions. Nothing is saved.
   claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
@@ -208,6 +212,9 @@ export interface Commands {
   // `scope` "full" reads the saved environments and resolves the target (the saved one; with no file saved yet the first environment, else this machine; a saved environment that is gone, or a file that cannot be used while an environment is saved, is a failed read that picks nothing, with the environments listed so the owner can choose again),
   // "screen" reads the agents and their terminals of `target` (the one the screen holds), and "badge" only the agents, for the count (no terminals, so no handles). With "screen" and "badge", and when `environment list` itself failed, `known` is false and `target` and `environments` are not the answer: the screen keeps the ones it had.
   orca_overview: { args: { scope: "full" | "screen" | "badge"; target: string | null }; result: OrcaOverview };
+  // A-9: the lists of the destination the side pane chose (null: this machine, else a saved environment's name, checked against the saved ones; one that is not saved is a failed read). It reads the agents and their terminals, the worktrees and the projects like "screen", with `environments` filled, and does not touch the target the Orca screen holds.
+  // `force` is false only for the poll of a shown session: for the destination checked just before, the saved environments are not asked for again and `environments` is empty.
+  orca_destination: { args: { environment: string | null; force: boolean }; result: OrcaOverview };
   // Saves the target: a saved environment's name, or null for this machine.
   orca_set_target: { args: { environment: string | null }; result: null };
   // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.
@@ -216,9 +223,10 @@ export interface Commands {
   orca_start: { args: { path: string; environment: string | null }; result: OrcaStarted };
   // A-16: opens a plain terminal in the worktree at `path` (the plus of the work pane). The answer names its `handle` (`paneKey` is always null). Never run twice.
   orca_terminal_create: { args: { path: string; environment: string | null }; result: OrcaStarted };
-  // A-9: starts a session in a worktree, or posts to a running one, with the instruction and, when `context` is not null, the content quoted as data after it. Never run twice.
-  // For a running session the answer has only its `handle`.
-  orca_handoff: { args: { destination: HandoffDestination; instruction: string; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
+  // A-9: makes a new worktree named `name` in the project `project` (an `OrcaProject.key` of the destination's list, checked against it; the name is one plain line, trimmed) of the destination (null: this machine, else a saved environment's name). The answer is the new worktree's absolute path. Never run twice.
+  orca_worktree_create: { args: { project: string; name: string; environment: string | null }; result: string };
+  // A-9: starts a session in a worktree with the summary the owner agreed to (`points`), the text of each file attached to it (`files`, A-10) and, when `context` is not null, the content quoted as data after them. Never run twice.
+  orca_handoff: { args: { destination: HandoffDestination; points: string[]; files: string[]; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
   // Reads the history of the session in the pane `paneKey` of the worktree `path` (A-7) and sends it to `channel` (an `OrcaChatEvent` at a time) until it is closed or another is opened; only one session is read.
   orca_chat_open: { args: { environment: string | null; path: string; paneKey: string; channel: unknown }; result: null };
   orca_chat_close: { args: undefined; result: null };

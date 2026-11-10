@@ -39,7 +39,7 @@ export const GROUP_STATUS: Record<OrcaRow["group"], OrcaStatus> = { waiting: "qu
 const ASK_SVG = svgOf('<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>');
 const ACTIVITY_SVG = svgOf('<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>');
 const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
-const THIS_MACHINE = "このマシン";
+export const THIS_MACHINE = "このマシン";
 const SHOWN_MS = 10_000;
 const HIDDEN_MS = 60_000;
 
@@ -803,6 +803,15 @@ export async function refreshOrca(force: boolean) {
   // A streamed list is what Orca holds now.
   if (!streaming()) await load(view?.state === "ready" ? "screen" : "full", force);
   return view;
+}
+
+// Reads the lists of one destination for the side pane (A-9), whatever target the Orca screen holds, and changes nothing of the screen. A `force` false (the poll of a shown session) does not ask for the saved environments again. A read that threw is a failed one.
+export async function readDestination(environment: string | null, force: boolean): Promise<OrcaOverview> {
+  try {
+    return await invoke("orca_destination", { environment, force });
+  } catch (e) {
+    return { state: "failed", message: String(e), target: environment, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: false };
+  }
 }
 
 // Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the selection as it is.

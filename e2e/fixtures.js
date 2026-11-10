@@ -63,6 +63,7 @@ const answers = {
   slack_file_images: {},
   // No orca command: the Orca screen reads once and stops.
   orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: true },
+  orca_destination: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: false },
   orca_chat_open: null,
   orca_chat_close: null,
   orca_chat_older: null,
@@ -110,7 +111,7 @@ const answers = {
   fetch_images: {},
   claude_status: { state: "missing" },
   claude_model_settings: Object.fromEntries(
-    ["slackSummary", "mailSummary", "promptChat", "proofread", "slackReply"].map((purpose) => [purpose, { model: "sonnet", effort: purpose === "slackReply" ? "high" : "medium" }]),
+    ["slackSummary", "mailSummary", "promptChat", "proofread", "slackReply", "orcaHandoff"].map((purpose) => [purpose, { model: "sonnet", effort: purpose === "slackReply" ? "high" : "medium" }]),
   ),
   claude_todo_prompt: { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false },
   app_info: { version: "1.2.3", updatable: true },

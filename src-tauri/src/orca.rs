@@ -20,7 +20,7 @@ use crate::{
     accounts::write_synced,
     auth::config_dir,
     orca_chat::check_pane_key,
-    orca_handoff::{compose, HandoffContext},
+    orca_handoff::{agreed_instruction, compose, HandoffContext},
     orca_stream::{clamp_viewport, OrcaViewport},
 };
 
@@ -116,12 +116,11 @@ pub struct OrcaStarted {
     pub handle: Option<String>,
 }
 
-/// Where a handoff goes (A-9): a new session in a worktree, or the terminal of a running one.
+/// Where a handoff goes (A-9): a new session in a worktree.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum OrcaDestination {
     New { path: String },
-    Existing { handle: String },
 }
 
 /// A terminal of Orca that runs no Claude (a shell, or another agent), in a worktree that is listed (A-8). The screen shows it as a tab and mirrors it.
@@ -637,6 +636,14 @@ fn created_of(result: &Value) -> OrcaStarted {
     }
 }
 
+/// The path of the worktree `orca worktree create` made: `result.worktree.path`, which must be an absolute path.
+fn created_worktree_path_of(result: &Value) -> Result<String, String> {
+    text_of(&result["worktree"], "path")
+        .filter(|path| check_path(path).is_ok())
+        .map(str::to_owned)
+        .ok_or_else(|| "Orca が新しい worktree の場所を答えませんでした".into())
+}
+
 /// The `result` of the CLI's JSON (`{ok, result, error: {code, message}}`), or the error's message. The exit code is not looked at: a failure prints JSON too.
 fn parse_output(out: &str) -> Result<Value, String> {
     let out = out.trim();
@@ -803,6 +810,32 @@ fn check_worktree(worktrees: &[OrcaWorktree], path: &str) -> Result<(), String> 
     }
 }
 
+/// The project of a new worktree must be a repository of this machine or the saved environment in the list read just now (`ssh:` hosts are not repositories).
+fn check_project(ps: &Value, project: &str) -> Result<(), String> {
+    if !project.starts_with("ssh:") && live_worktrees(ps).any(|(_, key)| key == project) {
+        Ok(())
+    } else {
+        Err("worktree を作るプロジェクトが見つかりません。一覧を読み直してください".into())
+    }
+}
+
+/// The name of a new worktree, trimmed: one line with no control character, no path separator, not `.` or `..`, and not starting with `-` (an option).
+pub(crate) fn check_worktree_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("worktree の名前を入力してください".into());
+    }
+    if name.starts_with('-')
+        || matches!(name, "." | "..")
+        || name
+            .chars()
+            .any(|c| c.is_control() || c == '/' || c == '\\')
+    {
+        return Err("worktree の名前に使えない文字が含まれています".into());
+    }
+    Ok(name)
+}
+
 /// A send the terminal did not take (`result.send.accepted` false) is a failure although the CLI answered `ok`.
 pub(crate) fn check_accepted(result: &Value) -> Result<(), String> {
     if result["send"]["accepted"] == false {
@@ -903,6 +936,21 @@ fn create_args(path: &str, environment: Option<&str>) -> Vec<String> {
     with_environment(args, environment)
 }
 
+/// A new worktree in the repository `project` (A-9): independent of any worktree (`--no-parent`), because the CLI would otherwise record the caller's context as its parent. `--repo=id:` takes the repository id the list holds; `--project` takes a project id or a display name, which the list does not hold.
+fn create_worktree_args(project: &str, name: &str, environment: Option<&str>) -> Vec<String> {
+    with_environment(
+        vec![
+            "worktree".into(),
+            "create".into(),
+            format!("--repo=id:{project}"),
+            format!("--name={name}"),
+            "--no-parent".into(),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
 // ---- running the CLI ----
 
 enum RunError {
@@ -982,14 +1030,20 @@ fn message_of(e: RunError) -> String {
     }
 }
 
+fn failed_overview(
+    message: String,
+    target: Option<String>,
+    environments: Vec<String>,
+) -> OrcaOverview {
+    OrcaOverview {
+        message,
+        target,
+        environments,
+        ..OrcaOverview::empty(OrcaState::Failed)
+    }
+}
+
 fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview {
-    let failed =
-        |message: String, target: Option<String>, environments: Vec<String>| OrcaOverview {
-            message,
-            target,
-            environments,
-            ..OrcaOverview::empty(OrcaState::Failed)
-        };
     // Only a full read asks for the environments and resolves the target; the others use the one the screen holds.
     let (target, environments, known) = if scope == OrcaScope::Full {
         let saved = load_target(dir);
@@ -1000,18 +1054,28 @@ fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview 
             Err(RunError::Failed(message)) => {
                 return OrcaOverview {
                     known: false,
-                    ..failed(message, None, Vec::new())
+                    ..failed_overview(message, None, Vec::new())
                 }
             }
         };
         worktree_hosts().retain_environments(&environments);
         match resolve_target(&saved, &environments) {
             Ok(target) => (target, environments, true),
-            Err(message) => return failed(message, saved_name(&saved), environments),
+            Err(message) => return failed_overview(message, saved_name(&saved), environments),
         }
     } else {
         (held, Vec::new(), false)
     };
+    read_overview(target, environments, known, scope)
+}
+
+/// The lists of `target` (the agents with their terminals, the worktrees, the projects), drawn as `scope` asks.
+fn read_overview(
+    target: Option<String>,
+    environments: Vec<String>,
+    known: bool,
+    scope: OrcaScope,
+) -> OrcaOverview {
     let (ps, terminals) = read_lists(target.as_deref(), scope != OrcaScope::Badge);
     match (ps, terminals) {
         (Ok(ps), Ok(terminals)) => {
@@ -1042,9 +1106,72 @@ fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview 
         }
         (Err(RunError::Failed(message)), _) | (_, Err(RunError::Failed(message))) => OrcaOverview {
             known,
-            ..failed(message, target, environments)
+            ..failed_overview(message, target, environments)
         },
     }
+}
+
+/// A-9: the saved environments when `environment` (`None`: this machine) may be read, else the overview that says why not. A name that is not among the saved ones is refused before it reaches the CLI.
+fn destination_check(
+    environment: Option<&str>,
+    listed: Result<Vec<String>, RunError>,
+) -> Result<Vec<String>, Box<OrcaOverview>> {
+    let environments = match listed {
+        Ok(environments) => environments,
+        Err(RunError::Missing) => return Err(Box::new(OrcaOverview::empty(OrcaState::Missing))),
+        Err(RunError::Failed(message)) => {
+            return Err(Box::new(failed_overview(
+                message,
+                environment.map(str::to_owned),
+                Vec::new(),
+            )))
+        }
+    };
+    match environment.map(|name| check_environment(name, &environments)) {
+        Some(Err(message)) => Err(Box::new(failed_overview(
+            message,
+            environment.map(str::to_owned),
+            environments,
+        ))),
+        _ => Ok(environments),
+    }
+}
+
+/// A-9: the destination (`None` outer: none yet; `None` inner: this machine) whose name `destination_overview` last checked against the saved environments, in memory only.
+static CHECKED_DESTINATION: Mutex<Option<Option<String>>> = Mutex::new(None);
+
+/// True when the saved environments need not be asked for again: the poll of a shown session (`force` false) of the destination checked just before. The first read of a destination and a read after a choice or a send (`force`) always check.
+fn already_checked(last: &Option<Option<String>>, environment: Option<&str>, force: bool) -> bool {
+    !force && last.as_ref().is_some_and(|l| l.as_deref() == environment)
+}
+
+/// A-9: the lists of the destination the pane chose, whatever the Orca screen holds. The target saved for the screen is not read or changed.
+/// The saved environments are asked for (and the name checked against them) unless `already_checked`; then the answer holds none.
+fn destination_overview(environment: Option<&str>, force: bool) -> OrcaOverview {
+    let mut last = CHECKED_DESTINATION
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let environments = if already_checked(&last, environment, force) {
+        Vec::new()
+    } else {
+        match destination_check(environment, read_environments()) {
+            Ok(environments) => {
+                *last = Some(environment.map(str::to_owned));
+                environments
+            }
+            Err(view) => {
+                *last = None;
+                return *view;
+            }
+        }
+    };
+    drop(last);
+    read_overview(
+        environment.map(str::to_owned),
+        environments,
+        false,
+        OrcaScope::Screen,
+    )
 }
 
 /// Checks `environment` against the saved ones (nothing is asked for this machine).
@@ -1123,6 +1250,16 @@ fn launch(
 fn open_terminal(path: &str, environment: Option<&str>) -> Result<OrcaStarted, String> {
     check_start(path, environment)?;
     write(&create_args(path, environment)).map(|result| created_of(&result))
+}
+
+/// Makes a new worktree named `name` in the project `project` of the target (A-9), once, and gives its path. The name and the environment are validated, and the project must be in the list read just before; otherwise nothing is made.
+fn create_worktree(project: &str, name: &str, environment: Option<&str>) -> Result<String, String> {
+    let name = check_worktree_name(name)?;
+    check_listed(environment)?;
+    let (ps, _) = read_lists(environment, false);
+    check_project(&ps.map_err(message_of)?, project)?;
+    let result = write(&create_worktree_args(project, name, environment))?;
+    created_worktree_path_of(&result)
 }
 
 /// What a launch and a new terminal check before they run: the path is absolute, the environment is a saved one, and the path is a worktree of the list read just now.
@@ -1220,24 +1357,17 @@ pub(crate) fn forget_worktree_host(path: &str, environment: Option<&str>) {
     worktree_hosts().forget(environment, path);
 }
 
-/// Hands the content to a new session or a running one (A-9): the prompt is composed here, then the launch or the send of A-6 runs once with its checks.
+/// Hands the content to a new session (A-9): the prompt is composed here from the summary the user agreed to (`points`), the attached files and the content, then the launch of A-6 runs once with its checks.
 fn handoff(
     destination: &OrcaDestination,
-    instruction: &str,
+    points: &[String],
+    files: &[String],
     context: Option<&HandoffContext>,
     environment: Option<&str>,
 ) -> Result<OrcaStarted, String> {
-    let text = compose(instruction, context)?;
-    match destination {
-        OrcaDestination::New { path } => launch(path, Some(&text), environment),
-        OrcaDestination::Existing { handle } => {
-            send(handle, &text, environment)?;
-            Ok(OrcaStarted {
-                pane_key: None,
-                handle: Some(handle.clone()),
-            })
-        }
-    }
+    let text = compose(&agreed_instruction(points, files)?, context)?;
+    let OrcaDestination::New { path } = destination;
+    launch(path, Some(&text), environment)
 }
 
 /// Closes the tab of an Orca terminal. A terminal that is already closed (`terminal_handle_stale`) is a success; `ptyKilled` is not looked at.
@@ -1376,6 +1506,16 @@ pub async fn orca_overview(
     Ok(view)
 }
 
+/// A-9: the lists of the destination the side pane chose (`None`: this machine, else a saved environment's name, which is checked against the saved ones). It does not touch the target the Orca screen holds.
+/// `force` is false only for the poll of a shown session, which skips the check (and the saved environments in the answer) for the destination it checked just before.
+#[tauri::command]
+pub async fn orca_destination(
+    environment: Option<String>,
+    force: bool,
+) -> Result<OrcaOverview, String> {
+    blocking(move || destination_overview(environment.as_deref(), force)).await
+}
+
 /// Saves the Orca to talk to: a saved environment's name, or `None` for this machine.
 #[tauri::command]
 pub async fn orca_set_target(
@@ -1411,18 +1551,30 @@ pub async fn orca_terminal_create(
     blocking(move || open_terminal(&path, environment.as_deref())).await?
 }
 
-/// A-9: starts a session in a worktree, or posts to a running one, with the instruction and, when `context` is given, the content quoted as data.
+/// A-9: makes a new worktree named `name` in the project `project` (a repository key of the list) of the destination, and answers its path. Never run twice.
+#[tauri::command]
+pub async fn orca_worktree_create(
+    project: String,
+    name: String,
+    environment: Option<String>,
+) -> Result<String, String> {
+    blocking(move || create_worktree(&project, &name, environment.as_deref())).await?
+}
+
+/// A-9: starts a session in a worktree with the summary the user agreed to (`points`), the text of each attached file (`files`, A-10) and, when `context` is given, the content quoted as data.
 #[tauri::command]
 pub async fn orca_handoff(
     destination: OrcaDestination,
-    instruction: String,
+    points: Vec<String>,
+    files: Vec<String>,
     context: Option<HandoffContext>,
     environment: Option<String>,
 ) -> Result<OrcaStarted, String> {
     blocking(move || {
         handoff(
             &destination,
-            &instruction,
+            &points,
+            &files,
             context.as_ref(),
             environment.as_deref(),
         )
@@ -2064,6 +2216,58 @@ mod tests {
     }
 
     #[test]
+    fn a_destination_is_read_only_when_it_is_this_machine_or_a_saved_environment() {
+        let saved = || Ok(vec!["Studio".to_owned(), "Lab".to_owned()]);
+        assert_eq!(destination_check(None, saved()).unwrap(), ["Studio", "Lab"]);
+        assert_eq!(
+            destination_check(Some("Lab"), saved()).unwrap(),
+            ["Studio", "Lab"]
+        );
+        // A name that is not saved is refused, and the saved ones stay in the answer so the pane can choose again.
+        for name in ["lab", "--json", ""] {
+            let view = destination_check(Some(name), saved()).unwrap_err();
+            assert_eq!(view.state, OrcaState::Failed);
+            assert_eq!(view.target.as_deref(), Some(name));
+            assert_eq!(view.environments, ["Studio", "Lab"]);
+            assert!(view.message.contains("保存されていない接続先"));
+        }
+    }
+
+    #[test]
+    fn only_the_poll_of_the_destination_checked_just_before_skips_the_check() {
+        let lab = Some(Some("Lab".to_owned()));
+        let here = Some(None);
+        assert!(already_checked(&lab, Some("Lab"), false));
+        assert!(already_checked(&here, None, false));
+        // The first read, a read after a choice or a send, and another destination are checked.
+        assert!(!already_checked(&None, Some("Lab"), false));
+        assert!(!already_checked(&None, None, false));
+        assert!(!already_checked(&lab, Some("Lab"), true));
+        assert!(!already_checked(&lab, Some("Studio"), false));
+        assert!(!already_checked(&lab, None, false));
+        assert!(!already_checked(&here, Some("Lab"), false));
+    }
+
+    #[test]
+    fn a_destination_whose_environments_cannot_be_listed_is_not_read() {
+        let missing = destination_check(Some("Studio"), Err(RunError::Missing)).unwrap_err();
+        assert_eq!(missing.state, OrcaState::Missing);
+        let failed = destination_check(
+            Some("Studio"),
+            Err(RunError::Failed("応答がありません".into())),
+        )
+        .unwrap_err();
+        assert_eq!(failed.state, OrcaState::Failed);
+        assert_eq!(failed.message, "応答がありません");
+        assert_eq!(failed.target.as_deref(), Some("Studio"));
+        // This machine needs no environment, but the list is still asked for, so the pane can offer them.
+        let this_machine =
+            destination_check(None, Err(RunError::Failed("応答がありません".into()))).unwrap_err();
+        assert_eq!(this_machine.state, OrcaState::Failed);
+        assert_eq!(this_machine.target, None);
+    }
+
+    #[test]
     fn the_read_arguments() {
         assert_eq!(
             ps_args(None),
@@ -2164,6 +2368,105 @@ mod tests {
     }
 
     #[test]
+    fn a_new_worktree_is_made_in_the_repository_with_no_parent_and_no_shell() {
+        assert_eq!(
+            create_worktree_args("repo1", "fix-login", None),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--no-parent",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            create_worktree_args("repo1", "fix-login", Some("Studio")),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--no-parent",
+                "--json",
+                "--environment=Studio"
+            ]
+        );
+        // A name with blanks or quotes stays one argument, joined to its flag.
+        assert_eq!(
+            create_worktree_args("repo1", "fix the \"login\"", None)[3],
+            "--name=fix the \"login\""
+        );
+    }
+
+    #[test]
+    fn the_project_of_a_new_worktree_is_a_repository_of_the_list_read_just_now() {
+        let ps = json!({"worktrees": [
+            {"path": "/work/a", "repoId": "repo1", "repo": "a"},
+            {"path": "/work/b", "repoId": "repo2", "repo": "b", "isArchived": true},
+            {"path": "/ssh/c", "repoId": "repo3", "hostId": "ssh-1", "repo": "c"},
+        ]});
+        assert!(check_project(&ps, "repo1").is_ok());
+        for bad in [
+            "repo2",
+            "repo3",
+            "ssh:ssh-1",
+            "",
+            "--json",
+            "repo1 ",
+            "unknown",
+        ] {
+            assert!(check_project(&ps, bad).is_err(), "{bad}");
+        }
+        assert!(check_project(&json!({"worktrees": []}), "repo1").is_err());
+        assert!(check_project(&Value::Null, "repo1").is_err());
+    }
+
+    #[test]
+    fn the_name_of_a_new_worktree_is_one_plain_line_that_is_no_option_or_path() {
+        assert_eq!(check_worktree_name("fix-login").unwrap(), "fix-login");
+        assert_eq!(
+            check_worktree_name("  ログインを直す 2  ").unwrap(),
+            "ログインを直す 2"
+        );
+        // A dash inside is fine; one at the start is an option.
+        assert_eq!(check_worktree_name("a-b").unwrap(), "a-b");
+        for bad in [
+            "", "   ", "-fix", "  --json", "a/b", "a\\b", "/abs", ".", "..", "a\nb", "a\tb",
+            "a\0b", "a\u{7f}b", "a\u{85}b",
+        ] {
+            assert!(check_worktree_name(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_reply_of_a_new_worktree_names_its_path() {
+        let out = r#"{"ok": true, "result": {"worktree": {"id": "repo1::/work/fix-login", "path": "/work/fix-login", "branch": "refs/heads/fix-login"}, "warnings": []}}"#;
+        assert_eq!(
+            created_worktree_path_of(&parse_output(out).unwrap()).unwrap(),
+            "/work/fix-login"
+        );
+        // A reply without a usable absolute path is an error: nothing can be started in it.
+        for odd in [
+            Value::Null,
+            json!({}),
+            json!({"worktree": null}),
+            json!({"worktree": {}}),
+            json!({"worktree": {"path": ""}}),
+            json!({"worktree": {"path": "   "}}),
+            json!({"worktree": {"path": "work/relative"}}),
+            json!({"worktree": {"path": ["/work/a"]}}),
+            json!({"path": "/work/a"}),
+        ] {
+            assert!(created_worktree_path_of(&odd).is_err(), "{odd}");
+        }
+        // A failure reply is the CLI's message, not a path.
+        let failed =
+            r#"{"ok": false, "error": {"code": "invalid_argument", "message": "No ready setup"}}"#;
+        assert_eq!(parse_output(failed).unwrap_err(), "No ready setup");
+    }
+
+    #[test]
     fn a_launch_reply_names_its_pane_and_terminal() {
         let reply = json!({"outcome": {"kind": "terminal", "handle": "term_abc-1", "paneKey": "tab1:leaf2"}});
         assert_eq!(
@@ -2195,51 +2498,36 @@ mod tests {
     }
 
     #[test]
-    fn a_handoff_destination_is_new_or_existing() {
+    fn a_handoff_destination_is_a_new_session() {
         let new: OrcaDestination =
             serde_json::from_value(json!({"kind": "new", "path": "/w"})).unwrap();
         assert_eq!(new, OrcaDestination::New { path: "/w".into() });
-        let old: OrcaDestination =
-            serde_json::from_value(json!({"kind": "existing", "handle": "term_1"})).unwrap();
+        assert!(serde_json::from_value::<OrcaDestination>(
+            json!({"kind": "existing", "handle": "term_1"})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn a_handoff_refuses_a_summary_with_no_point_before_it_runs_anything() {
+        let destination = OrcaDestination::New { path: "/w".into() };
         assert_eq!(
-            old,
-            OrcaDestination::Existing {
-                handle: "term_1".into()
-            }
+            handoff(&destination, &[" \n".into()], &[], None, None).unwrap_err(),
+            "要約がありません"
         );
-        assert!(serde_json::from_value::<OrcaDestination>(json!({"kind": "other"})).is_err());
     }
 
     #[test]
-    fn a_handoff_refuses_a_blank_instruction_before_it_runs_anything() {
-        for destination in [
-            OrcaDestination::New { path: "/w".into() },
-            OrcaDestination::Existing {
-                handle: "term_1".into(),
-            },
-        ] {
-            assert_eq!(
-                handoff(&destination, " \n", None, None).unwrap_err(),
-                "指示を書いてください"
-            );
-        }
-    }
-
-    #[test]
-    fn a_handoff_checks_its_destination_like_a_post() {
+    fn a_handoff_checks_its_destination_like_a_launch() {
         let context = HandoffContext {
             kind: crate::orca_handoff::HandoffKind::Todo,
             title: "t".into(),
             body: "b".into(),
         };
-        let bad_handle = OrcaDestination::Existing {
-            handle: "--x".into(),
-        };
-        assert!(handoff(&bad_handle, "i", Some(&context), None).is_err());
         let bad_path = OrcaDestination::New {
             path: "relative".into(),
         };
-        assert!(handoff(&bad_path, "i", Some(&context), None)
+        assert!(handoff(&bad_path, &["i".into()], &[], Some(&context), None)
             .unwrap_err()
             .contains("worktree"));
     }
