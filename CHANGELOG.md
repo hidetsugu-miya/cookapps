@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.58.0
+
+S-17 (new): a read of the Slack list that finds new unread messages shows a card for each at the bottom right, in the same stack as the cards for new mail (#349, #350). The card has the sender, the channel and the text, and the buttons 「既読にする」, 「ウォッチ」 and 「スレッドを開く」. Nothing is shown for the first read after the start, for a message already read or for a watched thread, and no OS notification is used.
+
+S-18 (new): the modal of the Todo draft made from a Slack message has a Claude pane at its right (#329). Ask Claude to change the name or the description of the draft, read the change as a diff, and press 「適用」 to put it into the draft or 「却下」 to leave it as it is. The request is optional, and the Slack message itself is not sent to Claude.
+
+A-10: a file of any kind, not only an image, can be pasted or dropped on an Orca terminal and on the 「Orca に渡す」 pane (#324). The file is put in `.orca/drops/` of the worktree under its own name (a taken name gets ` copy` added) and its path reaches Claude. A file up to 20 MiB is taken. The pane shows an image as a thumbnail and any other file by its name.
+
+No change in what the app does: the sender and the 「To 自分」 of a mail are decided in Rust (#316, #319, #321).
+
 ## v0.57.1
 
 S-2: the Todo draft made from a Slack message opens in a modal instead of a card above the list. The name and the description are on the left, and the project, the date and the labels on the right, as in the detail of a task. 「破棄」 is at the bottom left and the add button at the bottom right (#326).
