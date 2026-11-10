@@ -103,8 +103,8 @@ export function openMenu(anchor: Element, items: MenuItem[], options: MenuOption
   };
   input.oninput = () => {
     const re = partMatcher(input.value);
-    shown = rows.filter((r) => re === null || re.test(r.item.label));
-    for (const r of rows) r.b.hidden = !shown.includes(r);
+    for (const r of rows) r.b.hidden = re !== null && !re.test(r.item.label);
+    shown = rows.filter((r) => !r.b.hidden);
     none.hidden = shown.length > 0;
     at = 0;
     mark(true);
