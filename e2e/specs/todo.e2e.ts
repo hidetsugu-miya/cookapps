@@ -26,6 +26,11 @@ describe("todo", () => {
     await expect($("#todo-list")).toHaveText(expect.stringContaining("Plan trip"));
   });
 
+  it("makes the header of the list a place to drag the window by", async () => {
+    await openTodo();
+    await expect($("#todo-body > header")).toHaveAttribute("data-tauri-drag-region", "deep");
+  });
+
   it("has no placeholder in the add field", async () => {
     await openTodo();
     await expect($("#todo-add-input")).not.toHaveAttribute("placeholder");

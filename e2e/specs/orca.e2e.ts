@@ -227,6 +227,16 @@ describe("orca", () => {
     await expect($("#orca-target")).not.toBeDisplayed();
   });
 
+  it("makes the header of the list, the bar of a pane and the bar of the file pane a place to drag the window by", async () => {
+    await openOrca();
+    await expect($("#orca-header")).toHaveAttribute("data-tauri-drag-region");
+    await expect($(".orca-tabbar")).toHaveAttribute("data-tauri-drag-region");
+    await expect($("#orca-files-bar")).toHaveAttribute("data-tauri-drag-region");
+    // The bell and the reload stay buttons that take the press.
+    await expect($("#orca-bell")).not.toHaveAttribute("data-tauri-drag-region");
+    await expect($("#orca-refresh")).not.toHaveAttribute("data-tauri-drag-region");
+  });
+
   it("counts nothing while the agents only work", async () => {
     await openWorking(orcaOverview([working("example-app"), working("example-api")], worktrees()));
     await expectCount(0);

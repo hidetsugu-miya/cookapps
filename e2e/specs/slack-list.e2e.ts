@@ -123,6 +123,11 @@ describe("slack list", () => {
     for (const date of await rowTexts(".feed-date")) expect(date).toMatch(/^(\d{1,2}:\d{2}|\d{1,2}月\d{1,2}日)$/);
   });
 
+  it("makes the header a place to drag the window by", async () => {
+    await openList();
+    await expect($("#slack-header")).toHaveAttribute("data-tauri-drag-region", "deep");
+  });
+
   it("stretches one real button over a row, with the text cut at two lines, and the button that hides its channel beside it, not in it", async () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);

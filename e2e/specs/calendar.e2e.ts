@@ -23,6 +23,11 @@ describe("calendar", () => {
     await expect($("#cal-allday .cal-chip")).toHaveText("Holiday");
   });
 
+  it("makes the bar above the week a place to drag the window by", async () => {
+    await openCalendar();
+    await expect($("#cal-bar")).toHaveAttribute("data-tauri-drag-region", "deep");
+  });
+
   it("marks tentative and unanswered events", async () => {
     await boot({ inbox: inbox(), calendar_week: weekOfToday() });
     await $("#nav-calendar").click();

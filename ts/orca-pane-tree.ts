@@ -67,6 +67,7 @@ function newPane(id: string): PaneEl {
   const el = tag("div", "orca-pane");
   el.dataset.pane = id;
   const tabbar = tag("div", "orca-tabbar");
+  tabbar.setAttribute("data-tauri-drag-region", "");
   const strip = tag("div", "orca-tabs");
   strip.setAttribute("role", "tablist");
   strip.setAttribute("aria-label", "セッション");

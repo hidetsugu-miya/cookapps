@@ -27,6 +27,16 @@ describe("sidebar", () => {
     await expect($(".tooltip")).not.toBeDisplayed();
   });
 
+  it("starts the icons below the traffic lights, and is a place to drag the window by", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady });
+    await expect($("#sidebar")).toHaveAttribute("data-tauri-drag-region");
+    // The traffic lights sit at the top of the column (trafficLightPosition y 20, 14px high); the first icon starts under them.
+    const top = await browser.execute(() => document.getElementById("nav-mail")!.getBoundingClientRect().top);
+    expect(top).toBeGreaterThanOrEqual(40);
+    // A press on an icon is not a drag.
+    await expect($("#nav-mail")).not.toHaveAttribute("data-tauri-drag-region");
+  });
+
   for (const [name, status] of [
     ["Claude Code is missing", claudeMissing],
     ["Claude is logged out", claudeLoggedOut],

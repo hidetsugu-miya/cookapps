@@ -36,6 +36,13 @@ describe("settings: Google", () => {
     await expect($("#google-accounts button")).not.toExist();
   });
 
+  it("makes the heading and the tabs a place to drag the window by, and the tabs stay pressable", async () => {
+    await openSettings([]);
+    await expect($("#settings-head")).toHaveAttribute("data-tauri-drag-region", "deep");
+    await openTab("calendar");
+    await expect($("#settings-tab-calendar")).toHaveAttribute("aria-selected", "true");
+  });
+
   it("warns on an account that needs a login", async () => {
     await boot({ inbox: { ...inbox(), needsLogin: [account] }, slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
     await $("#nav-settings").click();
