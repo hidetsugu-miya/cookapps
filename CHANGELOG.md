@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.58.1
+
+S-5, S-6, S-11: a mention of a Slack user group (`<!subteam^…>`, or a `usergroup` element) is shown as `@handle` instead of `@不明` (#351, #352). The handle is read with `usergroups.list`, disabled groups included, once for each workspace and then every hour (five minutes after a failure), and is kept in memory only. To show the names, add the User Token Scope `usergroups:read` to the Slack app and enter the token again; without it the mention stays `@不明`, as before.
+
+A-18: the file list of the Orca screen is faster (#361, #362, #363). Opening a folder no longer starts a check each time, the list is drawn first and the gray italics of the files git ignores follow it, and a folder that was read is not read again when it is opened again (a file added or removed on the disk shows after the reload button), and the reload button reads the folders side by side.
+
+No change in what the app does: the tools used to develop it changed how the order of the issues and the nightly runs are decided (#173).
+
 ## v0.58.0
 
 S-17 (new): a read of the Slack list that finds new unread messages shows a card for each at the bottom right, in the same stack as the cards for new mail (#349, #350). The card has the sender, the channel and the text, and the buttons 「既読にする」, 「ウォッチ」 and 「スレッドを開く」. Nothing is shown for the first read after the start, for a message already read or for a watched thread, and no OS notification is used.
