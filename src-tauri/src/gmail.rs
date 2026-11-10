@@ -15,7 +15,6 @@ use serde::{
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
-use tokio::task::JoinSet;
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -802,7 +801,7 @@ struct AccountInbox {
     history_id: String,
 }
 
-/// threads.get(metadata) for each ID, in chunks. A `None` thread means 404: it no longer exists.
+/// threads.get(metadata) for each ID, at most `CONCURRENCY` in flight. A `None` thread means 404: it no longer exists.
 /// `Ok(None)` means the token was rejected with 401.
 async fn get_threads(
     http: &reqwest::Client,
@@ -810,12 +809,11 @@ async fn get_threads(
     ids: &[String],
     retries: usize,
 ) -> Result<Option<Vec<(String, Option<Thread>)>>, ApiError> {
-    let mut out = Vec::with_capacity(ids.len());
-    for chunk in ids.chunks(CONCURRENCY) {
-        let mut set = JoinSet::new();
-        for id in chunk {
+    let jobs: Vec<_> = ids
+        .iter()
+        .map(|id| {
             let (http, token, id) = (http.clone(), token.to_owned(), id.clone());
-            set.spawn(async move {
+            async move {
                 let url = format!("{THREADS_URL}/{id}");
                 let res = send_json::<Thread>(
                     &http,
@@ -828,16 +826,21 @@ async fn get_threads(
                 )
                 .await;
                 (id, res)
-            });
-        }
-        while let Some(joined) = set.join_next().await {
-            let (id, res) = joined.map_err(|e| e.to_string())?;
-            match res {
-                Ok(Some(thread)) => out.push((id, Some(thread))),
-                Ok(None) => return Ok(None),
-                Err(e) if e.status == Some(404) => out.push((id, None)),
-                Err(e) => return Err(e),
             }
+        })
+        .collect();
+    let done = run_limited(jobs, CONCURRENCY).await;
+    // `run_limited` drops a panicked task, and a thread missing for that reason would be drawn as gone.
+    if done.len() != ids.len() {
+        return Err("threads.get の処理が中断されました".into());
+    }
+    let mut out = Vec::with_capacity(ids.len());
+    for (id, res) in done {
+        match res {
+            Ok(Some(thread)) => out.push((id, Some(thread))),
+            Ok(None) => return Ok(None),
+            Err(e) if e.status == Some(404) => out.push((id, None)),
+            Err(e) => return Err(e),
         }
     }
     Ok(Some(out))
@@ -875,34 +878,35 @@ async fn account_threads(
     account: &str,
     retries: usize,
 ) -> Result<Option<AccountInbox>, ApiError> {
-    // Read before the list: changes landing in between are replayed by the next sync, which is harmless.
-    let Some(profile) = send_json_refreshing_with::<Profile>(
-        dir,
-        auth,
-        account,
-        retries,
-        Method::GET,
-        PROFILE_URL,
-        &[],
-        None,
-    )
-    .await?
-    else {
+    // Read with the list, not after it: changes landing in between are replayed by the next sync, which is harmless.
+    // Both are awaited, and `profile` is judged first, as when they were read one after the other.
+    let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
+    let (profile, list) = tokio::join!(
+        send_json_refreshing_with::<Profile>(
+            dir,
+            auth,
+            account,
+            retries,
+            Method::GET,
+            PROFILE_URL,
+            &[],
+            None,
+        ),
+        send_json_refreshing_with::<ThreadList>(
+            dir,
+            auth,
+            account,
+            retries,
+            Method::GET,
+            THREADS_URL,
+            &list_query,
+            None,
+        ),
+    );
+    let Some(profile) = profile? else {
         return Ok(None);
     };
-    let list_query = [("labelIds", "INBOX"), ("maxResults", "50")];
-    let Some(list) = send_json_refreshing_with::<ThreadList>(
-        dir,
-        auth,
-        account,
-        retries,
-        Method::GET,
-        THREADS_URL,
-        &list_query,
-        None,
-    )
-    .await?
-    else {
+    let Some(list) = list? else {
         return Ok(None);
     };
     let ids: Vec<_> = list.threads.into_iter().map(|t| t.id).collect();
@@ -928,8 +932,19 @@ pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox,
         .map_err(|e| log_failure(command, "-", e))?;
     let (mut lists, mut needs_login, mut failed, mut history_ids) =
         (Vec::new(), Vec::new(), HashMap::new(), HashMap::new());
-    for account in &accounts {
-        match account_threads(dir, auth, account, MAX_RETRIES).await {
+    // The accounts are read at once (each has its own limit at Gmail), and judged in the order of `accounts`.
+    let handles: Vec<_> = accounts
+        .iter()
+        .map(|account| {
+            let (dir, auth, account) = (dir.to_owned(), auth.clone(), account.clone());
+            tokio::spawn(async move { account_threads(&dir, &auth, &account, MAX_RETRIES).await })
+        })
+        .collect();
+    for (account, handle) in accounts.iter().zip(handles) {
+        let result = handle
+            .await
+            .map_err(|e| log_failure(command, "-", e.to_string()))?;
+        match result {
             Ok(Some(loaded)) => {
                 lists.push(loaded.threads);
                 history_ids.insert(account.clone(), loaded.history_id);
