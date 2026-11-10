@@ -2361,6 +2361,20 @@ describe("orca: images on a terminal (A-10)", () => {
     expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app_zsh", text: `${dropped("example-app")} ` }]);
   });
 
+  it("types the text of a file whose answer is not bracketed as it is, and pastes a bracketed one, in a terminal that asked for the bracketed paste", async () => {
+    await openStream();
+    await sendTerm({ kind: "output", data: "\x1b[?2004h" });
+    const attach = await mock("orca_attach_file", { text: `'${dropped("example-app", "notes.txt")}' `, bracketed: false });
+    const input = await mock("orca_stream_input", null);
+    await fire("paste", shown, [image("notes.txt")]);
+    await waitForCalls(attach);
+    expect(await inputs(input)).toEqual([`'${dropped("example-app", "notes.txt")}' `]);
+    await mock("orca_attach_file", attached("example-app"));
+    await fire("paste", shown, [image()]);
+    await browser.waitUntil(async () => (await inputs(input)).length === 2, { timeoutMsg: "the bracketed paste never went" });
+    expect((await inputs(input))[1]).toBe(`\x1b[200~${dropped("example-app")} \x1b[201~`);
+  });
+
   it("does not type the path in another terminal when the tab changed while the image went", async () => {
     await openStream();
     const attach = await mock("orca_attach_file", holds);

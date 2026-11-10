@@ -360,6 +360,17 @@ async function sendKeys(instance: Instance) {
 
 // ---- images (A-10) ----
 
+// The texts of the files in order, the neighbours that go the same way (`bracketed`) joined into one.
+function runsOf(files: { text: string; bracketed: boolean }[]) {
+  const runs: { text: string; bracketed: boolean }[] = [];
+  for (const f of files) {
+    const last = runs[runs.length - 1];
+    if (last && last.bracketed === f.bracketed) last.text += f.text;
+    else runs.push({ text: f.text, bracketed: f.bracketed });
+  }
+  return runs;
+}
+
 // Puts the images pasted or dropped on the terminal shown in its worktree and types their paths in it, as Orca's own terminal does. A file that is not an image is refused with the message.
 async function attach(host: HTMLElement, files: File[]) {
   const instance = shownInstances().find((i) => i.host === host);
@@ -369,8 +380,16 @@ async function attach(host: HTMLElement, files: File[]) {
   if (!images.length) return;
   try {
     const files = await uploadAttachments(images, instance.source.path, instance.source.environment);
-    // The paths go only to the terminal the images were put on.
-    if (instance.host === host) instance.term.paste(files.map((f) => f.text).join(""));
+    // The paths go only to the terminal the images were put on. An image path is a paste (a program that asked for the bracketed paste gets it as one); any other file is typed as it is, by the same route as the keys.
+    if (instance.host === host) {
+      for (const run of runsOf(files)) {
+        if (run.bracketed) instance.term.paste(run.text);
+        else {
+          instance.pending += run.text;
+          sendKeys(instance);
+        }
+      }
+    }
   } catch (e) {
     onError(e);
   }

@@ -2,6 +2,8 @@
 //! under its own name, and the screen types the path of the file in the terminal, or adds it to the instruction, so Claude reads the file from that path.
 //! The `files.*` calls are not a public interface of Orca: this was written against Orca 1.4.248, and the names and the typed text follow Orca 1.4.253. A token is in no log line, no error text and no return value; the file is in no log line either.
 
+use std::collections::HashSet;
+
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -11,6 +13,7 @@ use ts_rs::TS;
 use crate::{
     orca::{check_path, worktree_host},
     orca_chat::{CallError, Connection},
+    orca_files::{parse_dir, LIST_LIMIT},
 };
 
 /// The most a file may be, in bytes of the decoded file.
@@ -83,14 +86,20 @@ fn decode(data: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// The file name from the name the screen gave (a value from outside): kept as it is, but it must be one name in the folder: not empty, not `.` or `..`, with no `/`, `\` or control character (NUL included), and at most 255 bytes.
+/// A character a name or a path may not hold: a control character (NUL included), or a bidirectional formatting character (U+200E and U+200F, U+202A to U+202E, U+2066 to U+2069), which would make the terminal show another name than the file's.
+fn is_refused_char(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// The file name from the name the screen gave (a value from outside): kept as it is, but it must be one name in the folder: not empty, not `.` or `..`, with no `/`, `\`, control character (NUL included) or bidirectional formatting character, and at most 255 bytes.
 fn check_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name == "." || name == ".." {
         return Err("ファイル名に使えない名前です".into());
     }
     if name
         .chars()
-        .any(|c| c == '/' || c == '\\' || c.is_control())
+        .any(|c| c == '/' || c == '\\' || is_refused_char(c))
     {
         return Err("ファイル名に使えない文字が含まれています".into());
     }
@@ -160,9 +169,9 @@ fn quote_posix(path: &str) -> String {
 }
 
 /// What the screen types for the file at `path`: an image is a backslash-escaped path and a bracketed paste, any other file a quoted path typed as it is, each followed by one blank.
-/// A path with a control character is refused, for it would end the line or the command.
+/// A path with a control or bidirectional formatting character is refused, for a control character would end the line or the command and the other would make the terminal show another path.
 fn typed_text(path: &str, image: bool) -> Result<AttachedFile, String> {
-    if path.chars().any(char::is_control) {
+    if path.chars().any(is_refused_char) {
         return Err("ファイルの保存先に使えない文字が含まれています".into());
     }
     let word = if image {
@@ -251,18 +260,42 @@ async fn write_chunk(
     .map(|_| ())
 }
 
-/// The first name from `name` that `.orca/drops/` does not hold: `name`, else `{stem} copy{ext}`, `{stem} copy 2{ext}`, and so on (`numbered`), each looked for with one `files.stat`.
-async fn free_name(rpc: &mut impl Rpc, path: &str, name: &str) -> Result<String, String> {
+/// The first name from `name` that is not in `taken`: `name`, else `{stem} copy{ext}`, `{stem} copy 2{ext}`, and so on (`numbered`).
+fn first_free(taken: &HashSet<String>, name: &str) -> Result<String, String> {
     for n in 0..=COPIES {
         let candidate = numbered(name, n)?;
-        if !exists(rpc, path, &format!("{DROPS}/{candidate}")).await? {
+        if !taken.contains(&candidate) {
             return Ok(candidate);
         }
     }
     Err("同じ名前のファイルが多すぎます".into())
 }
 
-/// Puts `bytes` in `.orca/drops/` of the worktree at `path` under `name` (checked by `placed_name`), or the first free name of `free_name` when that exists, and gives the absolute path of the file.
+/// The names `.orca/drops/` holds, from one `files.readDir`. A folder that is not there yet (`ENOENT`) holds none; any other failure is the upload's.
+/// A name taken after this read, or beyond the page of the answer, is refused by `files.commitUpload`, so nothing is overwritten.
+async fn taken_names(rpc: &mut impl Rpc, path: &str) -> Result<HashSet<String>, String> {
+    match rpc
+        .call(
+            "files.readDir",
+            worktree_params(
+                path,
+                None,
+                json!({"relativePath": DROPS, "limit": LIST_LIMIT}),
+            ),
+        )
+        .await
+    {
+        Ok(answer) => Ok(parse_dir(&answer, DROPS)?
+            .0
+            .into_iter()
+            .map(|e| e.name)
+            .collect()),
+        Err(e) if is_missing(&e) => Ok(HashSet::new()),
+        Err(e) => Err(reason(e)),
+    }
+}
+
+/// Puts `bytes` in `.orca/drops/` of the worktree at `path` under `name` (checked by `placed_name`), or the first free name of `first_free` (against the one `taken_names` read) when that exists, and gives the absolute path of the file.
 /// The file is written in chunks to a temporary name (`.orca-upload-{random}`, one of its own and short whatever the name is) and copied to its name, which fails when the name exists, so a file is never overwritten; the temporary file goes in every case.
 /// `.orca/drops/.gitignore` (`*`) is written first when it is missing, so the files do not show as changes, and a failure of that is ignored.
 async fn upload(
@@ -277,7 +310,7 @@ async fn upload(
     if !exists(rpc, path, &ignore).await? {
         let _ = write_chunk(rpc, path, host_id, &ignore, b"*\n", false).await;
     }
-    let name = free_name(rpc, path, name).await?;
+    let name = first_free(&taken_names(rpc, path).await?, name)?;
     let temporary = format!("{DROPS}/.orca-upload-{random}");
     let sent = send_and_commit(
         rpc,
@@ -417,6 +450,22 @@ mod tests {
                     "Orca がエラーを返しました（runtime_error）",
                     "ENOENT: no such file",
                 )),
+                "files.readDir" => {
+                    let names: Vec<Value> = self
+                        .files
+                        .iter()
+                        .filter_map(|f| f.strip_prefix(".orca/drops/"))
+                        .map(|n| json!({"name": n, "isDirectory": false}))
+                        .collect();
+                    if names.is_empty() {
+                        Err(error(
+                            "Orca がエラーを返しました（runtime_error）",
+                            "ENOENT: no such directory",
+                        ))
+                    } else {
+                        Ok(json!({"entries": names, "total": names.len(), "hasMore": false}))
+                    }
+                }
                 _ => Ok(json!({"ok": true})),
             }
         }
@@ -539,6 +588,12 @@ mod tests {
             "a\u{1b}[0m",
             "a\u{7f}",
             "a\u{85}b",
+            "a\u{200e}b",
+            "a\u{200f}b",
+            "a\u{202a}b",
+            "a\u{202e}b",
+            "a\u{2066}b",
+            "a\u{2069}b",
             &"a".repeat(NAME_MAX + 1),
             &"あ".repeat(NAME_MAX / 3 + 1),
         ] {
@@ -667,7 +722,15 @@ mod tests {
         assert!(image.text.ends_with("png ") && !image.text.ends_with("  "));
         assert!(file.text.ends_with("' ") && !file.text.ends_with("  "));
         for image in [true, false] {
-            for bad in ["/a\nb/x.png", "/a\rb", "/a\tb", "/a\0b", "/a\u{1b}[0m"] {
+            for bad in [
+                "/a\nb/x.png",
+                "/a\rb",
+                "/a\tb",
+                "/a\0b",
+                "/a\u{1b}[0m",
+                "/a\u{202e}b",
+                "/a\u{2067}b",
+            ] {
                 assert!(typed_text(bad, image).is_err(), "{bad:?}");
             }
         }
@@ -706,7 +769,7 @@ mod tests {
             [
                 "files.stat",
                 "files.writeBase64Chunk",
-                "files.stat",
+                "files.readDir",
                 "files.writeBase64Chunk",
                 "files.writeBase64Chunk",
                 "files.writeBase64Chunk",
@@ -728,7 +791,9 @@ mod tests {
         );
         assert_eq!(call(1)["append"], false);
         assert_eq!(call(1)["expectedExecutionHostId"], "local");
-        assert_eq!(call(2)["relativePath"], ".orca/drops/shot.png");
+        assert_eq!(call(2)["relativePath"], ".orca/drops");
+        assert_eq!(call(2)["worktree"], "path:/work/a");
+        assert_eq!(call(2)["limit"], LIST_LIMIT);
         // Chunks of the temporary file: the first creates it, the others append.
         let temporary = ".orca/drops/.orca-upload-r4nd";
         let sizes: Vec<(usize, bool)> = (3..6)
@@ -774,7 +839,7 @@ mod tests {
             methods(&fake),
             [
                 "files.stat",
-                "files.stat",
+                "files.readDir",
                 "files.writeBase64Chunk",
                 "files.commitUpload",
                 "files.delete"
@@ -806,12 +871,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_taken_name_is_numbered_with_one_stat_for_each_try() {
+    async fn a_taken_name_is_numbered_from_one_read_of_the_folder() {
         let mut fake = with_files(&[".orca/drops/.gitignore", ".orca/drops/shot.png"]);
         let file = run(&mut fake, b"abc").await.unwrap();
         assert_eq!(file, "/work/a/.orca/drops/shot copy.png");
-        let stats = |fake: &Fake| methods(fake).iter().filter(|m| **m == "files.stat").count();
-        assert_eq!(stats(&fake), 3);
+        let count =
+            |fake: &Fake, method: &str| methods(fake).iter().filter(|m| **m == method).count();
+        assert_eq!(
+            (count(&fake, "files.stat"), count(&fake, "files.readDir")),
+            (1, 1)
+        );
         let commit = fake
             .calls
             .iter()
@@ -833,7 +902,57 @@ mod tests {
             run(&mut fake, b"abc").await.unwrap(),
             "/work/a/.orca/drops/shot copy 3.png"
         );
-        assert_eq!(stats(&fake), 5);
+        assert_eq!(
+            (count(&fake, "files.stat"), count(&fake, "files.readDir")),
+            (1, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_folder_that_is_not_there_yet_holds_no_name() {
+        let mut fake = Fake::default();
+        assert_eq!(
+            run(&mut fake, b"abc").await.unwrap(),
+            "/work/a/.orca/drops/shot.png"
+        );
+        assert!(methods(&fake).contains(&"files.commitUpload"));
+    }
+
+    #[tokio::test]
+    async fn a_read_of_the_folder_that_fails_for_another_reason_is_the_uploads_failure() {
+        let mut fake = with_files(&[".orca/drops/.gitignore"]);
+        fake.fail.push((
+            "files.readDir",
+            0,
+            error("Orca がエラーを返しました（forbidden）", "no"),
+        ));
+        let failed = run(&mut fake, b"abc").await.unwrap_err();
+        assert!(failed.contains("forbidden"));
+        assert!(!methods(&fake).contains(&"files.commitUpload"));
+    }
+
+    #[test]
+    fn the_first_name_the_folder_does_not_hold_is_chosen() {
+        let taken = |names: &[&str]| {
+            names
+                .iter()
+                .map(|n| (*n).to_owned())
+                .collect::<HashSet<_>>()
+        };
+        assert_eq!(first_free(&taken(&[]), "a.png").unwrap(), "a.png");
+        assert_eq!(
+            first_free(&taken(&["a.png"]), "a.png").unwrap(),
+            "a copy.png"
+        );
+        assert_eq!(
+            first_free(&taken(&["a.png", "a copy.png"]), "a.png").unwrap(),
+            "a copy 2.png"
+        );
+        // A gap is filled: the first free one, not the one after the last.
+        assert_eq!(
+            first_free(&taken(&["a.png", "a copy 2.png"]), "a.png").unwrap(),
+            "a copy.png"
+        );
     }
 
     #[tokio::test]
@@ -864,6 +983,11 @@ mod tests {
             .unwrap();
         assert_eq!(file, format!("/work/a/.orca/drops/{name}"));
         for (m, params) in &fake.calls {
+            // The read of the folder names the folder itself.
+            if m == "files.readDir" {
+                assert_eq!(params["relativePath"], ".orca/drops");
+                continue;
+            }
             for key in ["relativePath", "tempRelativePath", "finalRelativePath"] {
                 if let Some(path) = params[key].as_str() {
                     assert!(path.starts_with(".orca/drops/"), "{m} {path}");

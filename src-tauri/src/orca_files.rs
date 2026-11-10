@@ -40,7 +40,7 @@ const AUTOSAVE_MAX: i64 = 3000;
 const AUTOSAVE_STEP: i64 = 100;
 const AUTOSAVE_DEFAULT: u32 = 1000;
 /// The most entries one `files.readDir` answers (Orca's page limit).
-const LIST_LIMIT: usize = 5000;
+pub(crate) const LIST_LIMIT: usize = 5000;
 /// The most paths one `git.checkIgnored` takes.
 const IGNORE_CHUNK: usize = 2000;
 /// The most bytes of a file the editor opens or saves. Orca reads 512 KiB at most, and a larger frame closes the WebSocket of a paired server (it takes 1 MiB), so a text is kept well under both.
@@ -203,7 +203,7 @@ fn sort_entries(entries: &mut [OrcaFileEntry]) {
 }
 
 /// The entries of an answer of `files.readDir` (the bare array of an old Orca, or a page `{entries, total, hasMore}`) in `dir`, and how many the folder holds. An entry with no usable name is left out.
-fn parse_dir(result: &Value, dir: &str) -> Result<(Vec<OrcaFileEntry>, u32), String> {
+pub(crate) fn parse_dir(result: &Value, dir: &str) -> Result<(Vec<OrcaFileEntry>, u32), String> {
     let list = result
         .as_array()
         .or_else(|| result["entries"].as_array())

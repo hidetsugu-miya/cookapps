@@ -3062,32 +3062,46 @@ fn arrivals(
     known: impl Fn(&Raw) -> bool,
     unread: impl Fn(&Raw) -> bool,
 ) -> (Vec<Raw>, ArrivalMarks) {
-    let mut next: ArrivalMarks = HashMap::new();
-    for m in held.iter().filter(|m| known(m)) {
-        let key = ts_key(&m.ts);
-        let mark = next
-            .entry((m.team_id.clone(), m.channel.clone()))
-            .or_default();
-        *mark = (*mark).max(key);
+    // What each channel needs is decided once: whether its position is `known`, its mark of the last read, and the newest `ts` held.
+    struct Channel {
+        known: bool,
+        before: Option<(u64, u64)>,
+        newest: (u64, u64),
     }
-    if let Some(prev) = prev {
-        for (channel, mark) in &mut next {
-            if let Some(before) = prev.get(channel) {
-                *mark = (*mark).max(*before);
-            }
-        }
+    let mut channels: HashMap<(&str, &str), Channel> = HashMap::new();
+    for m in held {
+        let channel = channels
+            .entry((m.team_id.as_str(), m.channel.as_str()))
+            .or_insert_with(|| Channel {
+                known: known(m),
+                before: prev
+                    .and_then(|prev| prev.get(&(m.team_id.clone(), m.channel.clone())).copied()),
+                newest: (0, 0),
+            });
+        channel.newest = channel.newest.max(ts_key(&m.ts));
     }
-    let arrived = prev.map_or_else(Vec::new, |prev| {
+    let next: ArrivalMarks = channels
+        .iter()
+        .filter(|(_, c)| c.known)
+        .map(|((team, channel), c)| {
+            let mark = c.before.map_or(c.newest, |before| c.newest.max(before));
+            (((*team).to_owned(), (*channel).to_owned()), mark)
+        })
+        .collect();
+    let arrived = if prev.is_none() {
+        Vec::new()
+    } else {
         held.iter()
             .filter(|m| {
-                prev.get(&(m.team_id.clone(), m.channel.clone()))
-                    .is_some_and(|before| ts_key(&m.ts) > *before)
+                channels[&(m.team_id.as_str(), m.channel.as_str())]
+                    .before
+                    .is_some_and(|before| ts_key(&m.ts) > before)
             })
             .filter(|m| unread(m))
             .take(UNREAD_MAX)
             .cloned()
             .collect()
-    });
+    };
     (arrived, next)
 }
 
