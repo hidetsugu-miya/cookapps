@@ -1406,14 +1406,46 @@ describe("settings: fonts (the Font tab, A-20)", () => {
       return { size: style.fontSize, family: style.fontFamily };
     }, selector);
   const rootVar = (name: string) => browser.execute((n) => document.documentElement.style.getPropertyValue(n), name);
+  // The family (quotes left out) of the element `selector` finds in `html`, made for the check: a screen that draws it is not open.
+  const familyOfNew = (html: string, selector: string) =>
+    browser.execute(
+      (h, sel) => {
+        const holder = document.createElement("div");
+        holder.innerHTML = h;
+        document.body.append(holder);
+        const family = getComputedStyle(holder.querySelector(sel)!).fontFamily;
+        holder.remove();
+        return family.replace(/"/g, "");
+      },
+      html,
+      selector,
+    );
+  // The body of a text mail (`.plain`), and the code in a popup.
+  const plainFamily = () => familyOfNew('<div class="plain">text</div>', ".plain");
+  const codeFamily = () => familyOfNew('<div class="pop"><code>x</code></div>', "code");
   const options = (id: string) => browser.execute((i) => [...(document.getElementById(i) as HTMLSelectElement).options].map((o) => o.textContent), id);
   const selectedText = (id: string) => browser.execute((i) => (document.getElementById(i) as HTMLSelectElement).selectedOptions[0]!.textContent, id);
 
   it("has a card with a row for each place, in the order of the screens", async () => {
     await openFontTab();
-    expect(await textsOf("#font-items .item-name")).toEqual(["メール", "カレンダー", "Todo", "Todo", "Slack", "Orca", "Orca", "Orca"]);
-    expect(await textsOf("#font-items .item-meta")).toEqual(["画面全体", "画面全体", "プロジェクト一覧", "作業スペース", "画面全体", "プロジェクト一覧", "作業スペース（ターミナル）", "エディタ"]);
-    expect(await count("#font-items select")).toBe(16);
+    expect(await textsOf("#font-items .item-name")).toEqual(["アプリ全体", "メール", "カレンダー", "Todo", "Todo", "Slack", "Orca", "Orca", "Orca", "Orca", "等幅の文字"]);
+    expect(await textsOf("#font-items .item-meta")).toEqual([
+      "設定、メニュー、ポップアップ",
+      "画面全体",
+      "画面全体",
+      "プロジェクト一覧",
+      "作業スペース",
+      "画面全体",
+      "プロジェクト一覧",
+      "作業スペース（チャットとファイル）",
+      "作業スペース（ターミナル）",
+      "エディタ",
+      "書体のみ",
+    ]);
+    // A family and a size for every row, but the monospace text: it has a family only.
+    expect(await count("#font-items select")).toBe(21);
+    expect(await count("#font-mono-size")).toBe(0);
+    expect(await count("#font-mono-family")).toBe(1);
     expect(await callsOf("font_settings")).toEqual([null]);
     expect(await callsOf("font_families")).toEqual([null]);
     expect(await callsOf("font_settings_set")).toEqual([]);
@@ -1424,6 +1456,7 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     expect(await options("font-mail-family")).toEqual(["システム標準", "Hiragino Sans", "Menlo", "Times New Roman"]);
     expect(await options("font-orca-work-family")).toEqual(["システム標準", "Ghostty の設定に従う", "Hiragino Sans", "Menlo", "Times New Roman"]);
     expect(await options("font-editor-family")).toEqual(["システム標準", "Hiragino Sans", "Menlo", "Times New Roman"]);
+    for (const id of ["font-app-family", "font-orca-pane-family", "font-mono-family"]) expect(await options(id)).toEqual(["システム標準", "Hiragino Sans", "Menlo", "Times New Roman"]);
   });
 
   it("offers the sizes 8 to 32 px, and the half size the editor has", async () => {
@@ -1557,6 +1590,124 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     expect(await waitForCalls(set)).toEqual([{ area: "editor", family: null, size: 16, ghostty: false }]);
     await browser.waitUntil(async () => (await rootVar("--editor-size")) === "16px");
     expect(await rootVar("--editor-family")).toBe('"Menlo", ui-monospace, Menlo, monospace');
+  });
+
+  it("puts no variable on the root while the app, the pane of Orca and the monospace text have their first values", async () => {
+    await openFontTab();
+    for (const name of ["--ff-app", "--fs-app", "--ff-orca-pane", "--fs-orca-pane", "--ff-mono"]) expect(await rootVar(name)).toBe("");
+    expect((await fontOf("body")).size).toBe("14px");
+    expect((await fontOf("#orca-work")).size).toBe("14px");
+    expect((await fontOf("#orca-files")).size).toBe("14px");
+    // The first family of the app, and the monospace stack as it was.
+    expect((await fontOf("body")).family.replace(/"/g, "")).toBe("-apple-system, sans-serif");
+    expect(await plainFamily()).toBe("HackGen Console NF no U+3000, ui-monospace, Menlo, monospace");
+    expect(await selectedText("font-app-family")).toBe("システム標準");
+    expect(await selectedText("font-app-size")).toBe("14 px");
+    expect(await selectedText("font-orca-pane-size")).toBe("14 px");
+  });
+
+  it("sends the family chosen for the whole app, and draws the places at the system's family with it too", async () => {
+    await openFontTab({ font_settings: fontSettings({ mail: { family: "Hiragino Sans", size: 16, ghostty: false } }) });
+    const set = await mock("font_settings_set", fontSettings({ app: { family: "Menlo", size: 14, ghostty: false }, mail: { family: "Hiragino Sans", size: 16, ghostty: false } }));
+    await chooseOption("font-app-family", "family:Menlo");
+    expect(await waitForCalls(set)).toEqual([{ area: "app", family: "Menlo", size: 14, ghostty: false }]);
+    await browser.waitUntil(async () => (await fontOf("body")).family.includes("Menlo"), { timeoutMsg: "the app never took the family" });
+    expect(await rootVar("--ff-app")).toBe('"Menlo", -apple-system, sans-serif');
+    // A place at the system's family follows it; a place with a family of its own keeps it.
+    expect((await fontOf("#calendar")).family).toContain("Menlo");
+    expect((await fontOf("#orca-list")).family).toContain("Menlo");
+    expect((await fontOf("#orca-work")).family).toContain("Menlo");
+    expect((await fontOf("#mail-area")).family).toContain("Hiragino Sans");
+    expect(await selectedText("font-app-family")).toBe("Menlo");
+  });
+
+  it("sends the size chosen for the whole app, and draws only the parts outside the places with it", async () => {
+    await openFontTab({ font_settings: fontSettings({ slack: { family: null, size: 16, ghostty: false } }) });
+    const set = await mock("font_settings_set", fontSettings({ app: { family: null, size: 21, ghostty: false }, slack: { family: null, size: 16, ghostty: false } }));
+    await chooseOption("font-app-size", "21");
+    expect(await waitForCalls(set)).toEqual([{ area: "app", family: null, size: 21, ghostty: false }]);
+    await browser.waitUntil(async () => (await fontOf("body")).size === "21px", { timeoutMsg: "the app never took the size" });
+    expect(await rootVar("--fs-app")).toBe("1.5");
+    // The hint of a row (12px of its own) is outside the places: 12 * 21 / 14.
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#font-items .item-meta")!).fontSize)).toBe("18px");
+    // The places keep their own sizes: the first 14 px, and the one chosen.
+    for (const selector of ["#mail-area", "#calendar", "#projects", "#todo-body", "#orca-list", "#orca-work", "#orca-files"]) expect((await fontOf(selector)).size).toBe("14px");
+    expect((await fontOf("#slack-list")).size).toBe("16px");
+  });
+
+  it("keeps the settings inside the window at the largest size of the whole app", async () => {
+    await openFontTab({ font_settings: fontSettings({ app: { family: null, size: 32, ghostty: false } }) });
+    await browser.waitUntil(async () => (await fontOf("body")).size === "32px", { timeoutMsg: "the app never took the size" });
+    const overflow = await browser.execute(() => {
+      const settings = document.getElementById("settings")!;
+      return settings.scrollWidth - settings.clientWidth;
+    });
+    expect(overflow).toBeLessThanOrEqual(0);
+    await expect($("#font-app-size")).toBeDisplayed();
+    await expect($("#font-mono-family")).toBeDisplayed();
+  });
+
+  it("sends the family and size chosen for the chat and the files of the work pane of Orca, and draws them at once", async () => {
+    await openFontTab();
+    const set = await mock("font_settings_set", fontSettings({ orcaPane: { family: "Menlo", size: 21, ghostty: false } }));
+    await chooseOption("font-orca-pane-family", "family:Menlo");
+    expect(await waitForCalls(set)).toEqual([{ area: "orcaPane", family: "Menlo", size: 14, ghostty: false }]);
+    await browser.waitUntil(async () => (await fontOf("#orca-work")).size === "21px", { timeoutMsg: "the pane never took the size" });
+    expect(await rootVar("--ff-orca-pane")).toBe('"Menlo", var(--ff-base)');
+    expect(await rootVar("--fs-orca-pane")).toBe("1.5");
+    for (const selector of ["#orca-work", "#orca-files"]) {
+      expect((await fontOf(selector)).family).toContain("Menlo");
+      expect((await fontOf(selector)).size).toBe("21px");
+    }
+    // The list of projects keeps its own.
+    expect((await fontOf("#orca-list")).size).toBe("14px");
+    expect((await fontOf("#orca-list")).family).not.toContain("Menlo");
+    // The file pane's heading is 12px of its own: 12 * 21 / 14.
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("orca-files-title")!).fontSize)).toBe("18px");
+  });
+
+  it("sends the family of the monospace text with no size that counts, and puts it in front of the stacks", async () => {
+    await openFontTab();
+    const set = await mock("font_settings_set", fontSettings({ mono: { family: "Menlo", size: 14, ghostty: false } }));
+    await chooseOption("font-mono-family", "family:Menlo");
+    expect(await waitForCalls(set)).toEqual([{ area: "mono", family: "Menlo", size: 14, ghostty: false }]);
+    await browser.waitUntil(async () => (await rootVar("--ff-mono")) !== "", { timeoutMsg: "the monospace never took the family" });
+    expect(await rootVar("--ff-mono")).toBe('"Menlo",');
+    // The text of a mail keeps the face that leaves out U+3000 after the family chosen.
+    expect(await plainFamily()).toBe("Menlo, HackGen Console NF no U+3000, ui-monospace, Menlo, monospace");
+    expect(await codeFamily()).toBe("Menlo, ui-monospace, monospace");
+    // Nothing else takes it, and no size is set for it.
+    expect(await rootVar("--fs-mono")).toBe("");
+    expect((await fontOf("body")).family).not.toContain("Menlo");
+    expect(await count("#font-mono-size")).toBe(0);
+    await expect($("#font-mono-family")).toBeEnabled();
+    expect(await selectedText("font-mono-family")).toBe("Menlo");
+  });
+
+  it("goes back to the monospace stacks as they were when the system's is chosen", async () => {
+    await openFontTab({ font_settings: fontSettings({ mono: { family: "Menlo", size: 14, ghostty: false } }) });
+    await browser.waitUntil(async () => (await rootVar("--ff-mono")) === '"Menlo",');
+    const set = await mock("font_settings_set", fontSettings());
+    await chooseOption("font-mono-family", "own");
+    expect(await waitForCalls(set)).toEqual([{ area: "mono", family: null, size: 14, ghostty: false }]);
+    await browser.waitUntil(async () => (await rootVar("--ff-mono")) === "", { timeoutMsg: "the monospace never went back" });
+    expect(await plainFamily()).toBe("HackGen Console NF no U+3000, ui-monospace, Menlo, monospace");
+    expect(await codeFamily()).toBe("ui-monospace, monospace");
+  });
+
+  it("applies the saved choice of the new places at the start", async () => {
+    await boot({
+      inbox: inbox(),
+      slack_load: slackLoad,
+      slack_check: checked([]),
+      claude_status: claudeMissing,
+      font_settings: fontSettings({ app: { family: "Menlo", size: 18, ghostty: false }, orcaPane: { family: null, size: 16, ghostty: false }, mono: { family: "Hiragino Sans", size: 14, ghostty: false } }),
+    });
+    await browser.waitUntil(async () => (await fontOf("body")).size === "18px", { timeoutMsg: "the app never took the size" });
+    expect((await fontOf("body")).family).toContain("Menlo");
+    expect((await fontOf("#orca-work")).size).toBe("16px");
+    expect(await rootVar("--ff-mono")).toBe('"Hiragino Sans",');
+    expect(await rootVar("--ff-orca-pane")).toBe("");
   });
 
   it("shows the message of a failed save and puts the choice held back", async () => {

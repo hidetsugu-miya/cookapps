@@ -2154,6 +2154,41 @@ describe("orca: the fonts of the screens (A-20)", () => {
     expect(await browser.execute(() => getComputedStyle(document.getElementById("orca-work")!).fontSize)).toBe("14px");
     expect(await browser.execute(() => getComputedStyle(document.getElementById("orca-list")!).fontFamily)).toContain("Menlo");
   });
+
+  // The family and the size (in pixels) the page draws the element `id` with.
+  const drawn = (id: string) =>
+    browser.execute((i) => {
+      const style = getComputedStyle(document.getElementById(i)!);
+      return { size: style.fontSize, family: style.fontFamily };
+    }, id);
+  const rootVar = (name: string) => browser.execute((n) => document.documentElement.style.getPropertyValue(n), name);
+
+  it("draws the chat and the file pane with the family and size chosen for the pane, apart from the project list and the terminals", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { font_settings: fontSettings({ orcaPane: { family: "Menlo", size: 21, ghostty: false } }) });
+    await browser.waitUntil(async () => (await drawn("orca-work")).size === "21px", { timeoutMsg: "the work pane never took the size" });
+    expect((await drawn("orca-work")).family).toContain("Menlo");
+    expect(await drawn("orca-files")).toEqual(await drawn("orca-work"));
+    // The heading of the file pane is 12px of its own: 12 * 21 / 14.
+    expect((await drawn("orca-files-title")).size).toBe("18px");
+    expect(await drawn("orca-list")).toMatchObject({ size: "14px" });
+    expect((await drawn("orca-list")).family).not.toContain("Menlo");
+  });
+
+  it("puts no variable on the root for the work pane while none is chosen", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()));
+    expect((await drawn("orca-work")).size).toBe("14px");
+    expect((await drawn("orca-files")).size).toBe("14px");
+    expect(await rootVar("--ff-orca-pane")).toBe("");
+    expect(await rootVar("--fs-orca-pane")).toBe("");
+  });
+
+  it("draws the work pane with the family of the whole app when none is chosen for it, and not its size", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { font_settings: fontSettings({ app: { family: "Menlo", size: 20, ghostty: false } }) });
+    await browser.waitUntil(async () => (await drawn("orca-work")).family.includes("Menlo"), { timeoutMsg: "the work pane never took the family of the app" });
+    // The size of the whole app does not reach a place.
+    expect((await drawn("orca-work")).size).toBe("14px");
+    expect((await drawn("orca-list")).family).toContain("Menlo");
+  });
 });
 
 describe("orca: the terminal colors (A-14, A-15)", () => {
@@ -2964,6 +2999,16 @@ describe("orca: files and editor (A-18)", () => {
     expect((await area()).family).toContain("Menlo");
   });
 
+  it("draws the heading of the editor with the family and size chosen for the work pane, and the text with those of the editor (A-20)", async () => {
+    await openFiles({ font_settings: fontSettings({ orcaPane: { family: "Menlo", size: 21, ghostty: false } }) });
+    await openA();
+    const head = () => browser.execute(() => ({ size: getComputedStyle(document.querySelector(".orca-edit-head")!).fontSize, family: getComputedStyle(document.querySelector(".orca-edit-head")!).fontFamily }));
+    // The heading is 12px of its own: 12 * 21 / 14.
+    await browser.waitUntil(async () => (await head()).size === "18px", { timeoutMsg: "the heading never took the size" });
+    expect((await head()).family).toContain("Menlo");
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize)).toBe("12.5px");
+  });
+
   it("draws the text of the editor with the first font while none is chosen", async () => {
     await openFiles();
     await openA();
@@ -3032,6 +3077,135 @@ describe("orca: files and editor (A-18)", () => {
     });
     const moved = await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-hl code")!.style.transform);
     expect(moved.replace(/\s/g, "")).toBe("translate(0px,-48px)");
+  });
+
+  // A-18: the numbers of the lines, in a box at the left of the text (`.orca-edit-gutter`, one text node of the numbers in lines).
+  const numbers = () => browser.execute(() => document.querySelector(".orca-edit-nums")!.textContent!.split("\n"));
+  const countTo = (n: number) => Array.from({ length: n }, (_, i) => String(i + 1));
+  const gutterWidth = () => browser.execute(() => document.querySelector(".orca-edit-gutter")!.getBoundingClientRect().width);
+  // The textarea's value set to `value`, as a deletion would.
+  const setText = (value: string) =>
+    browser.execute(
+      (v, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+        area.value = v;
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+      value,
+      onceId(),
+    );
+
+  it("numbers the lines of the text from 1, one number for each line, in the font of the text and in a fainter color (A-18)", async () => {
+    await openFiles();
+    await openA("fn main() {\n    run();\n}\n");
+    // The empty line after the last line break is a line of the textarea, and has its number.
+    expect(await numbers()).toEqual(["1", "2", "3", "4"]);
+    const look = await browser.execute(() => {
+      const g = getComputedStyle(document.querySelector(".orca-edit-gutter")!);
+      const a = getComputedStyle(document.querySelector(".orca-edit-area")!);
+      const h = getComputedStyle(document.querySelector(".orca-edit-hl code")!);
+      return { gutter: [g.fontFamily, g.fontSize, g.lineHeight, g.color, g.textAlign], area: [a.fontFamily, a.fontSize, a.lineHeight, a.color], code: h.color };
+    });
+    expect(look.gutter.slice(0, 3)).toEqual(look.area.slice(0, 3));
+    expect(look.gutter[4]).toBe("right");
+    expect(look.gutter[3]).not.toBe(look.code);
+    expect(look.gutter[3]).toBe("rgb(90, 107, 98)");
+  });
+
+  it("numbers the lines with the family and size chosen for the editor (A-18, A-20)", async () => {
+    await openFiles({ font_settings: fontSettings({ editor: { family: "Menlo", size: 18, ghostty: false }, orcaWork: { family: null, size: 13, ghostty: false } }) });
+    await openA("a\nb\n");
+    await browser.waitUntil(async () => (await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-gutter")!).fontSize)) === "18px", { timeoutMsg: "the numbers never took the size" });
+    const font = await browser.execute(() => ({ gutter: getComputedStyle(document.querySelector(".orca-edit-gutter")!).fontFamily, area: getComputedStyle(document.querySelector(".orca-edit-area")!).fontFamily }));
+    expect(font.gutter).toContain("Menlo");
+    expect(font.gutter).toBe(font.area);
+  });
+
+  it("keeps the numbers in step with the lines as they are typed and deleted, and widens the box with the digits (A-18)", async () => {
+    await openFiles();
+    await openA("1\n2\n3\n4\n5\n6\n7\n8\n");
+    expect(await numbers()).toEqual(countTo(9));
+    const narrow = await gutterWidth();
+    await type("9\n");
+    await browser.waitUntil(async () => (await numbers()).length === 10, { timeoutMsg: "the numbers never grew" });
+    expect(await numbers()).toEqual(countTo(10));
+    expect(await gutterWidth()).toBeGreaterThan(narrow);
+    await setText("1\n2\n3\n");
+    await browser.waitUntil(async () => (await numbers()).length === 4, { timeoutMsg: "the numbers never shrank" });
+    expect(await numbers()).toEqual(countTo(4));
+    expect(await gutterWidth()).toBe(narrow);
+    // Typing inside a line changes no number.
+    await setText("1\n2x\n3\n");
+    expect(await numbers()).toEqual(countTo(4));
+    // An empty text is one line.
+    await setText("");
+    await browser.waitUntil(async () => (await numbers()).length === 1, { timeoutMsg: "the numbers never came back to one" });
+    expect(await numbers()).toEqual(["1"]);
+  });
+
+  it("numbers a long text, and one line more at a key (A-18)", async () => {
+    await openFiles();
+    await openA("x\n".repeat(5000));
+    expect(await numbers()).toEqual(countTo(5001));
+    await type("y\n");
+    await browser.waitUntil(async () => (await numbers()).length === 5002, { timeoutMsg: "the numbers never grew" });
+    expect(await numbers()).toEqual(countTo(5002));
+  });
+
+  it("moves the numbers with the vertical scroll of the text and not with the horizontal one (A-18)", async () => {
+    await openFiles();
+    await openA(`${"x".repeat(400)}\n`.repeat(200));
+    const before = await browser.execute(() => document.querySelector(".orca-edit-gutter")!.getBoundingClientRect().left);
+    await browser.execute(() => {
+      const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+      area.scrollTop = 48;
+      area.scrollLeft = 60;
+      area.dispatchEvent(new Event("scroll"));
+    });
+    const moved = await browser.execute(() => {
+      const nums = document.querySelector<HTMLElement>(".orca-edit-nums")!;
+      return { transform: nums.style.transform, left: document.querySelector(".orca-edit-gutter")!.getBoundingClientRect().left, numsLeft: nums.getBoundingClientRect().left };
+    });
+    expect(moved.transform.replace(/\s/g, "")).toBe("translateY(-48px)");
+    expect(moved.left).toBe(before);
+    expect(moved.numsLeft).toBe(before);
+    // The first number of the rows still in view sits on the line of the text it numbers: the text is 48 px up, and so are the numbers.
+    const rows = await browser.execute(() => {
+      const nums = document.querySelector(".orca-edit-nums")!.getBoundingClientRect();
+      const gutter = document.querySelector(".orca-edit-gutter")!.getBoundingClientRect();
+      return { up: gutter.top - nums.top };
+    });
+    expect(rows.up).toBe(48);
+  });
+
+  it("forwards the wheel over the numbers to the text (A-18)", async () => {
+    await openFiles();
+    await openA("x\n".repeat(300));
+    await browser.execute((once) => {
+      if (!window.__e2e_once__(once)) return;
+      document.querySelector(".orca-edit-gutter")!.dispatchEvent(new WheelEvent("wheel", { deltaY: 64, bubbles: true, cancelable: true }));
+    }, onceId());
+    await browser.waitUntil(async () => (await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.scrollTop)) === 64, { timeoutMsg: "the text never scrolled" });
+    expect(await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-nums")!.style.transform.replace(/\s/g, ""))).toBe("translateY(-64px)");
+  });
+
+  it("keeps the numbers out of the selection, the copy and the reading aloud, and out of the textarea (A-18)", async () => {
+    await openFiles();
+    await openA("alpha\nbeta\n");
+    const gutter = await browser.execute(() => {
+      const g = document.querySelector<HTMLElement>(".orca-edit-gutter")!;
+      const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
+      area.focus();
+      area.select();
+      return { hidden: g.getAttribute("aria-hidden"), userSelect: getComputedStyle(g).getPropertyValue("-webkit-user-select"), inArea: area.contains(g), selected: area.value.slice(area.selectionStart, area.selectionEnd), value: area.value };
+    });
+    expect(gutter.hidden).toBe("true");
+    expect(gutter.userSelect).toBe("none");
+    expect(gutter.inArea).toBe(false);
+    // What a copy of the text takes is the text and nothing of the numbers.
+    expect(gutter.selected).toBe("alpha\nbeta\n");
+    expect(gutter.value).toBe("alpha\nbeta\n");
   });
 
   it("colors a long text after it is read, and draws it again with the typed line within the wait (A-21)", async () => {

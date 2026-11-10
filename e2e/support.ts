@@ -668,14 +668,17 @@ export const chooseTheme = (slot: "light" | "dark", name: string) =>
 
 // A-20: what `font_settings` and `font_settings_set` answer: the first values, with the given places changed.
 export const fontSettings = (parts: Partial<FontSettings> = {}): FontSettings => ({
+  app: { family: null, size: 14, ghostty: false },
   mail: { family: null, size: 14, ghostty: false },
   calendar: { family: null, size: 14, ghostty: false },
   todoList: { family: null, size: 14, ghostty: false },
   todoWork: { family: null, size: 14, ghostty: false },
   slack: { family: null, size: 14, ghostty: false },
   orcaList: { family: null, size: 14, ghostty: false },
+  orcaPane: { family: null, size: 14, ghostty: false },
   orcaWork: { family: null, size: 13, ghostty: true },
   editor: { family: null, size: 12.5, ghostty: false },
+  mono: { family: null, size: 14, ghostty: false },
   ...parts,
 });
 

@@ -12,14 +12,17 @@ import { showError } from "./view.js";
 
 // The rows: the area, the name of its screen, and the place on the screen.
 const ROWS: [FontArea, string, string][] = [
+  ["app", "アプリ全体", "設定、メニュー、ポップアップ"],
   ["mail", "メール", "画面全体"],
   ["calendar", "カレンダー", "画面全体"],
   ["todoList", "Todo", "プロジェクト一覧"],
   ["todoWork", "Todo", "作業スペース"],
   ["slack", "Slack", "画面全体"],
   ["orcaList", "Orca", "プロジェクト一覧"],
+  ["orcaPane", "Orca", "作業スペース（チャットとファイル）"],
   ["orcaWork", "Orca", "作業スペース（ターミナル）"],
   ["editor", "Orca", "エディタ"],
+  ["mono", "等幅の文字", "書体のみ"],
 ];
 
 // The sizes to choose from, in pixels; a size Rust holds between them (12.5) is added to the select that holds it.
@@ -28,6 +31,8 @@ const SIZES = Array.from({ length: 25 }, (_, i) => i + 8);
 const TEXT_SIZE = 14;
 // The families the app draws with when none is chosen (the editor's is monospace).
 const EDITOR_FALLBACK = "ui-monospace, Menlo, monospace";
+// What the app's own family is (the root's `--ff-base` of `src/style.css`): the family chosen for the whole app goes in front of it.
+const APP_FALLBACK = "-apple-system, sans-serif";
 
 // The values of the family select: the app's own, Ghostty's (the work space of Orca only), or a family (the name after the prefix).
 const OWN = "own";
@@ -55,6 +60,9 @@ function apply(next: FontSettings) {
     if (area === "editor") {
       set("--editor-family", pick.family && `${JSON.stringify(pick.family)}, ${EDITOR_FALLBACK}`);
       set("--editor-size", `${pick.size}px`);
+    } else if (area === "mono") {
+      // The family and a comma: `src/style.css` puts it in front of each monospace stack. The mono place has no size.
+      set("--ff-mono", pick.family && `${JSON.stringify(pick.family)},`);
     } else if (area === "orcaWork") {
       const key = pick.ghostty ? "ghostty" : JSON.stringify([pick.family, pick.size]);
       if (key !== terminalKey) {
@@ -63,7 +71,7 @@ function apply(next: FontSettings) {
       }
     } else {
       const name = kebab(area);
-      set(`--ff-${name}`, pick.family && `${JSON.stringify(pick.family)}, var(--ff-base)`);
+      set(`--ff-${name}`, pick.family && `${JSON.stringify(pick.family)}, ${area === "app" ? APP_FALLBACK : "var(--ff-base)"}`);
       set(`--fs-${name}`, pick.size === TEXT_SIZE ? null : String(pick.size / TEXT_SIZE));
     }
   }
@@ -107,7 +115,9 @@ function row([area, screen, place]: (typeof ROWS)[number]) {
   const who = tag("div", "who");
   who.append(tag("div", "item-name", screen), tag("div", "item-meta", place));
   const item = tag("div", "item");
-  item.append(who, familySelect(area, pick), sizeSelect(area, pick));
+  item.append(who, familySelect(area, pick));
+  // The monospace text takes the size of the screen it is on, so its row has no size to choose.
+  if (area !== "mono") item.append(sizeSelect(area, pick));
   return item;
 }
 
@@ -121,7 +131,7 @@ async function choose(area: FontArea, familyChoice: string, size: number) {
   const held = settings[area];
   const ghostty = familyChoice === GHOSTTY;
   const family = ghostty ? held.family : familyChoice.startsWith(FAMILY) ? familyChoice.slice(FAMILY.length) : null;
-  const focusId = idOf(area, familyChoice === familyValue(area, held) ? "size" : "family");
+  const focusId = idOf(area, area !== "mono" && familyChoice === familyValue(area, held) ? "size" : "family");
   saving = true;
   $("error").hidden = true;
   // The selects wait; they are drawn again once, when the save has ended.
@@ -147,11 +157,14 @@ export function initFontSettings() {
         "フォント",
         [
           ["画面ごとに、書体と文字の大きさを選びます。選ぶとすぐ画面に反映し、設定のフォルダに保存します"],
+          ["「アプリ全体」は、設定画面、サイドメニュー、ポップアップ、ツールチップなど、画面ごとの場所に入らない部分です。画面ごとの書体が「システム標準」のときは、この書体を使います。大きさは、画面ごとの場所には効きません"],
           ["メール、カレンダー、Slack は画面全体で 1 組です。Todo と Orca は、左のプロジェクト一覧と右の作業スペースを別々に選びます"],
           ["書体は、この Mac に入っているものから選びます。「システム標準」は、cookapps が初めから使う書体です"],
           ["大きさは 8 から 32 ピクセルです。標準は 14 ピクセルで、画面の文字は、選んだ大きさとの比で大きく、または小さくなります"],
-          ["Orca の作業スペースは、ターミナルの書体と大きさです。「Ghostty の設定に従う」を選ぶと、取り込んだ Ghostty の書体と大きさを使います。大きさは選べません"],
+          ["Orca の「作業スペース（ターミナル）」は、ターミナルの書体と大きさです。「Ghostty の設定に従う」を選ぶと、取り込んだ Ghostty の書体と大きさを使います。大きさは選べません"],
+          ["Orca の「作業スペース（チャットとファイル）」は、作業スペースのタブの並び、チャット、ファイル欄、エディタの見出しです。ターミナルとエディタの本文は、次の二つで選びます"],
           ["Orca のエディタは、ファイルを開いたときの文字の書体と大きさで、ターミナルとは別に選びます"],
+          ["「等幅の文字」は、コード、プロンプト、差分、テキスト形式のメールの本文などの書体だけを選びます。大きさは、置かれた画面に従います。ターミナルとエディタの本文には効きません"],
         ],
         "書体の名前は、この Mac が持つ一覧だけを使います。外の書体は読み込みません",
       ),

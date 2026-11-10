@@ -1,15 +1,16 @@
 :root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
-/* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. */
-:root { --ff-base: -apple-system, sans-serif; --fs: 1; }
-body { font-family: var(--ff-base); font-size: 14px; margin: 0; display: flex; }
+/* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
+:root { --ff-base: var(--ff-app, -apple-system, sans-serif); --fs: var(--fs-app, 1); }
+body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0; display: flex; }
 #mail-header, #inbox-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #todo-body, #todo-handoff { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #slack-list, #slack-thread, #slack-compose { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-list { --fs: var(--fs-orca-list, 1); font-family: var(--ff-orca-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#orca-work, #orca-files { --fs: var(--fs-orca-pane, 1); font-family: var(--ff-orca-pane, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 #sidebar { width: 64px; flex: none; background: var(--side); display: flex; flex-direction: column; align-items: center; padding-top: 16px; gap: 8px; }
@@ -163,7 +164,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .msg-fail { display: block; font-size: calc(13px * var(--fs)); color: var(--warn); overflow-wrap: anywhere; }
 /* HackGen draws U+3000 as a dotted box, so this face leaves it out; the next font in `.plain` draws it as a blank of full width. */
 @font-face { font-family: "HackGen Console NF no U+3000"; src: local("HackGen Console NF Regular"), local("HackGenConsoleNF-Regular"), local("HackGen Console NF"); unicode-range: U+0-2FFF, U+3001-10FFFF; }
-.plain { white-space: pre-wrap; overflow-wrap: anywhere; font-family: "HackGen Console NF no U+3000", ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
+.plain { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--ff-mono, ) "HackGen Console NF no U+3000", ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); }
 .plain a { color: var(--accent); }
 #messages iframe { display: block; width: 100%; border: 0; }
 /* The images switch is one small line of text above the body, its button drawn as a link. */
@@ -484,7 +485,7 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .md ul { list-style: disc; }
 #todo-detail .md ul, #todo-detail .md ol { padding-left: 22px; }
 #todo-detail .md a { color: var(--accent); }
-#todo-detail .md code { padding: 1px 4px; border-radius: 4px; background: var(--code); font-family: ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
+#todo-detail .md code { padding: 1px 4px; border-radius: 4px; background: var(--code); font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
 #todo-detail .md pre { padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 6px; background: var(--code); overflow-x: auto; }
 #todo-detail .md pre code { padding: 0; background: none; }
 #todo-detail .md blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
@@ -558,7 +559,7 @@ a.c-file:hover { background: var(--hover); }
 #settings { flex: 1; min-height: 0; overflow-y: auto; padding: 0 32px 32px; }
 #settings-head { position: sticky; top: 0; z-index: 1; margin: 0 -32px 20px; padding: 20px 32px 0; background: #fff; }
 #settings h1 { margin-bottom: 10px; font-size: calc(20px * var(--fs)); }
-#settings-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--chip-line); }
+#settings-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--chip-line); }
 .tab { position: relative; height: 38px; margin-bottom: -1px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: inherit; font-size: calc(13px * var(--fs)); cursor: pointer; }
 .tab:hover { color: var(--accent); }
 .tab[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
@@ -579,7 +580,7 @@ a.c-file:hover { background: var(--hover); }
 .day-picks .text-btn { width: 40px; padding: 0; }
 .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 20px; border-top: 1px solid var(--line); }
 .item .who { flex: 1; min-width: 0; }
-.item select, .card-add select, .model-grid select { height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; font: inherit; color: #333; }
+.item select, .card-add select, .model-grid select { min-height: 32px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; font: inherit; color: #333; }
 .item select:focus, .card-add select:focus, .model-grid select:focus { outline: 2px solid var(--accent); border-color: transparent; }
 /* The Claude tab holds three cards (the connection, the model and effort of the four purposes, the prompt), and the Orca tab two (the terminal colors, Ghostty's settings), so their panels are no card themselves. */
 .model-note { padding: 0 20px 4px; }
@@ -635,7 +636,7 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 :is(.pop, .pane) .text-btn svg { width: 13px; height: 13px; }
 :is(.pop, .pane) .foot { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line); color: #666; font-size: calc(12px * var(--fs)); }
 :is(.pop, .pane) .foot svg { width: 14px; height: 14px; flex: none; }
-:is(.pop, .pane) code, .item-meta code, .ghostty-report code { padding: 1px 5px; border-radius: 4px; background: var(--code); font-family: ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
+:is(.pop, .pane) code, .item-meta code, .ghostty-report code { padding: 1px 5px; border-radius: 4px; background: var(--code); font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
 
 .pop p { margin: 0 0 12px; }
 /* The update popup (ts/update.ts): bottom right, the icon and the text above, the buttons at the right below. */
@@ -684,7 +685,7 @@ button.status:hover { filter: brightness(.95); }
 #prompt-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
 .prompt-label { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: calc(12px * var(--fs)); color: #666; }
 .prompt-label svg { width: 13px; height: 13px; }
-#prompt-fixed, #prompt-fixed-after, #prompt-body, .chat-diff { font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+#prompt-fixed, #prompt-fixed-after, #prompt-body, .chat-diff { font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 #prompt-fixed, #prompt-fixed-after { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--code); color: #555; }
 .prompt-body-box { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #prompt-body, #slack-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
@@ -905,8 +906,12 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-state[data-state="changed"], .orca-edit-state[data-state="missing"], .orca-edit-state[data-state="not-utf8"], .orca-edit-state[data-state="error"] { color: var(--warn); }
 .orca-edit .orca-empty { margin: 0; padding: 48px 24px; }
 /* A-21: the editor is two layers of the same text. The textarea is on top with its text transparent (the caret and the selection show), and under it a `pre` carries the same text in colors, moved by the scroll of the textarea; both take the same font, padding and line height, so the letters sit on one another. */
-.orca-edit-body { position: relative; flex: 1; min-height: 0; background: var(--surface); }
-.orca-edit-area, .orca-edit-hl code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; tab-size: 2; white-space: pre; letter-spacing: normal; }
+.orca-edit-body { position: relative; flex: 1; min-height: 0; display: flex; background: var(--surface); }
+/* A numbers box at the left (as wide as its widest number) and the two layers of the text beside it. The numbers take the font of the text, are not selected, and follow the vertical scroll only. */
+.orca-edit-gutter { flex: none; overflow: hidden; box-sizing: border-box; border-right: 1px solid var(--line); background: var(--surface); color: var(--muted); text-align: right; user-select: none; -webkit-user-select: none; }
+.orca-edit-nums { padding: 8px 8px 8px 12px; white-space: pre; }
+.orca-edit-text { position: relative; flex: 1; min-width: 0; }
+.orca-edit-area, .orca-edit-gutter, .orca-edit-hl code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; tab-size: 2; white-space: pre; letter-spacing: normal; }
 .orca-edit-area { position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; color: transparent; caret-color: CanvasText; overflow: auto; resize: none; outline: none; }
 .orca-edit-area::selection { background: var(--hl-select); }
 .orca-edit-hl { position: absolute; inset: 0; margin: 0; overflow: hidden; pointer-events: none; }
@@ -942,7 +947,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-assistant ul { list-style: disc; }
 .orca-assistant ul, .orca-assistant ol { padding-left: 22px; }
 .orca-assistant a { color: var(--accent); }
-.orca-assistant code { padding: 1px 4px; border-radius: 4px; background: var(--code); font-family: ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
+.orca-assistant code { padding: 1px 4px; border-radius: 4px; background: var(--code); font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
 .orca-assistant pre { padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 12px; background: var(--code); overflow-x: auto; }
 .orca-assistant pre code { padding: 0; background: none; }
 .orca-assistant blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
@@ -966,7 +971,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-ctx-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .orca-ctx-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .orca-ctx-text { margin-top: 6px; padding: 8px 10px; max-height: 240px; overflow: auto; border-radius: 8px; background: #fff; font-size: calc(12.5px * var(--fs)); white-space: pre-wrap; overflow-wrap: anywhere; }
-.orca-tool-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); color: #444; user-select: text; -webkit-user-select: text; }
+.orca-tool-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); color: #444; user-select: text; -webkit-user-select: text; }
 .orca-tool-call { white-space: pre-wrap; overflow-wrap: anywhere; }
 .orca-question { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .orca-question-text { font-weight: 600; }
@@ -1176,8 +1181,8 @@ a.icon-btn { text-decoration: none; }
 .st-text a { color: var(--accent); }
 .st-quote { margin: 3px 0 0; padding-left: 12px; border-left: 3px solid var(--chip-line); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .st-quote a { color: var(--accent); }
-.st-text code, .st-quote code, .st-ctx-t code { padding: 1px 5px; border: 1px solid var(--code-line); border-radius: 8px; background: var(--code); font-family: ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
-.st-pre { margin: 3px 0 0; padding: 8px 12px; border: 1px solid var(--code-line); border-radius: 12px; background: var(--code); overflow-x: auto; font-family: ui-monospace, monospace; font-size: calc(12px * var(--fs)); line-height: 1.5; white-space: pre; user-select: text; -webkit-user-select: text; }
+.st-text code, .st-quote code, .st-ctx-t code { padding: 1px 5px; border: 1px solid var(--code-line); border-radius: 8px; background: var(--code); font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
+.st-pre { margin: 3px 0 0; padding: 8px 12px; border: 1px solid var(--code-line); border-radius: 12px; background: var(--code); overflow-x: auto; font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); line-height: 1.5; white-space: pre; user-select: text; -webkit-user-select: text; }
 .st-pre code { font: inherit; }
 .st-sep { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .st-sep::after { content: ""; flex: 1; border-top: 1px solid var(--line); }

@@ -1,4 +1,4 @@
-// The editor of the Orca screen (A-18): a file of a worktree opened as a tab of the work pane, in a textarea with its text drawn in colors under it (A-21). Rust reads and saves the text (`orca_file_read`, `orca_file_write`), decides whether a save went through and names the language to color it by; this module draws and takes the typing.
+// The editor of the Orca screen (A-18): a file of a worktree opened as a tab of the work pane, in a textarea with its text drawn in colors under it (A-21) and the numbers of its lines at its left. Rust reads and saves the text (`orca_file_read`, `orca_file_write`), decides whether a save went through and names the language to color it by; this module draws and takes the typing.
 // A file is saved by itself: once the typing has stopped for the time of the settings, the text goes to Rust with the signature of the text that was read, and Orca writes only if the disk still holds it.
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
@@ -47,6 +47,10 @@ interface EditorFile {
   area: HTMLTextAreaElement;
   // The layer under the textarea that carries the same text in colors.
   code: HTMLElement;
+  // The numbers of the lines, one text node ("1\n2\n…") that grows and shrinks at its end with the line count (`lines`), in the box at the left of the text that follows the vertical scroll.
+  nums: Text;
+  numbers: HTMLElement;
+  lines: number;
   state: HTMLElement;
   note: HTMLElement;
 }
@@ -122,9 +126,29 @@ function repaint(f: EditorFile) {
   else drawLater(f, f.area.value.length <= COLOR_NOW_MAX ? nextFrame : afterColorWait);
 }
 
-// The layer under the textarea follows the scroll of the textarea.
+// The layer under the textarea follows the scroll of the textarea, and the numbers follow its vertical scroll.
 function followScroll(f: EditorFile) {
   f.code.style.transform = `translate(${-f.area.scrollLeft}px, ${-f.area.scrollTop}px)`;
+  f.numbers.style.transform = `translateY(${-f.area.scrollTop}px)`;
+}
+
+// Brings the numbers to the line count of the textarea: only the numbers that came or went are written, the rest of the text is left as it is.
+function numberLines(f: EditorFile) {
+  const text = f.area.value;
+  let n = 1;
+  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) n++;
+  if (n === f.lines) return;
+  if (n > f.lines) {
+    let more = "";
+    for (let i = f.lines + 1; i <= n; i++) more += `\n${i}`;
+    f.nums.appendData(more);
+  } else {
+    const data = f.nums.data;
+    let end = data.length;
+    for (let i = f.lines; i > n; i--) end = data.lastIndexOf("\n", end - 1);
+    f.nums.deleteData(end, data.length - end);
+  }
+  f.lines = n;
 }
 
 function clearTimer(f: EditorFile) {
@@ -181,6 +205,7 @@ async function load(f: EditorFile) {
     f.area.value = text.content;
     f.highlight = text.highlight;
     paint(f);
+    numberLines(f);
     f.crlf = text.crlf;
     f.signature = text.signature;
     f.read = "ready";
@@ -190,7 +215,7 @@ async function load(f: EditorFile) {
     f.note.textContent = String(e);
     f.note.hidden = false;
     f.area.hidden = true;
-    f.area.parentElement!.hidden = true;
+    f.area.closest<HTMLElement>(".orca-edit-body")!.hidden = true;
   }
   changed();
 }
@@ -212,12 +237,21 @@ function create(id: string, target: string | null, project: string, path: string
   const layer = tag("pre", "orca-edit-hl");
   layer.setAttribute("aria-hidden", "true");
   layer.append(code);
+  const text = tag("div", "orca-edit-text");
+  text.append(layer, area);
+  const nums = document.createTextNode("1");
+  const numbers = tag("div", "orca-edit-nums");
+  numbers.append(nums);
+  const gutter = tag("div", "orca-edit-gutter");
+  gutter.setAttribute("aria-hidden", "true");
+  gutter.append(numbers);
   const body = tag("div", "orca-edit-body");
-  body.append(layer, area);
+  body.append(gutter, text);
   el.append(head, note, body);
-  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, el, area, code, state, note };
+  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, el, area, code, nums, numbers, lines: 1, state, note };
   area.oninput = () => {
     repaint(f);
+    numberLines(f);
     if (!f.dirty) {
       f.dirty = true;
       changed();
@@ -225,6 +259,10 @@ function create(id: string, target: string | null, project: string, path: string
     schedule(f);
   };
   area.onscroll = () => followScroll(f);
+  // The wheel over the numbers scrolls the text, as it does over the text.
+  gutter.onwheel = (e) => {
+    area.scrollTop += e.deltaY;
+  };
   return f;
 }
 

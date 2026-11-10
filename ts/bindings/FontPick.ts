@@ -2,6 +2,7 @@
 
 /**
  * The font of one place: the family (`None` is the app's own) and the size in pixels.
+ * The place `Mono` has no size of its own: its `size` is the text size and never changes.
  * `ghostty` is true only for the work space of Orca (the terminals): they then draw with the family and size of Ghostty's import (A-13), and `family` and `size` wait for the choice to be changed.
  */
 export type FontPick = { family: string | null, size: number, ghostty: boolean, };
