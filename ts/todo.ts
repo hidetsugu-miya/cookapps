@@ -11,7 +11,9 @@ import { currentScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { todoCard } from "./orca-handoff-cards.js";
 import { initSplit } from "./split.js";
+import { initTodoClaude, openedTodoClaude } from "./todo-claude.js";
 import { renderDetail } from "./todo-detail.js";
+import { discardDraft, draftOpen } from "./todo-draft.js";
 import { loadedComments } from "./todo-comments.js";
 import { editingField, projectName, projectOf, recountTodo, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
@@ -23,24 +25,45 @@ const TODO_REFRESH_MS = 10 * 1000;
 // The pane that hands the open task to Orca (A-9).
 let handoff: HandoffPane;
 
+// The right pane is either the one that hands the open task to Orca or Claude's (T-7), never both; they share the divider and its width.
+// `claudeOpen` is what the owner chose: the pane is shown while the list or a task is, and comes back after the page of a draft or the token form.
+let orcaOpen = false;
+let claudeOpen = false;
+let claudeUsable = false;
+
+function layoutPanes() {
+  const claude = claudeOpen && claudeUsable;
+  $("todo-claude").hidden = !claude;
+  $("todo-claude-btn").hidden = !claudeUsable;
+  $("todo-claude-btn").setAttribute("aria-pressed", String(claude));
+  $("todo-handoff").hidden = !orcaOpen;
+  $("todo-orca").setAttribute("aria-pressed", String(orcaOpen));
+  $("todo-split").hidden = !orcaOpen && !claude;
+  $("todo-split").setAttribute("aria-label", claude ? "Claude の幅" : "Orca の幅");
+}
+
 // Follows the open task: another task, or none, changes what the pane shows, and the card takes the task as it is now.
 export function syncTodoHandoff() {
   handoff.sync();
   handoff.refreshCard();
 }
 
-// Which part the Todo screen shows: the token form, the task list, or one task.
-export function todoMode(mode: "token" | "list" | "detail") {
+// Which part the Todo screen shows: the token form, the task list, one task, or the page of a draft (S-2).
+export function todoMode(mode: "token" | "list" | "detail" | "draft") {
   $("todo-token").hidden = mode !== "token";
   $("projects").hidden = mode === "token";
   $("todo-add").hidden = mode !== "list";
   $("todo-pending").hidden = mode !== "list";
   $("todo-list").hidden = mode !== "list";
   $("todo-detail").hidden = mode !== "detail";
-  $("todo-back").hidden = mode !== "detail";
+  $("todo-back").hidden = mode !== "detail" && mode !== "draft";
+  $("todo-main").classList.toggle("drafting", mode === "draft");
+  document.getElementById("todo-draft")?.toggleAttribute("hidden", mode !== "draft");
   $("todo-prompt").hidden = mode !== "list";
   $("todo-more").hidden = mode !== "detail";
   $("todo-orca").hidden = mode !== "detail";
+  claudeUsable = mode === "list" || mode === "detail";
+  layoutPanes();
   // A redraw of the same task keeps its menu open; another task or another part closes it.
   if (moreMenu && (mode !== "detail" || todoState.open !== moreMenu.id)) closeMoreMenu();
 }
@@ -68,7 +91,11 @@ export function renderTodo() {
   todoState.undrawn = false;
   if (!projectOf(todoState.view) && todoState.view !== "today" && todoState.view !== "inbox") todoState.view = "today";
   renderProjects();
-  if (todoState.open) renderDetail();
+  // An open draft stays whatever the refresh brings; only its own back button and 破棄 close it.
+  if (draftOpen()) {
+    todoMode("draft");
+    $("todo-title").textContent = "Todo の案";
+  } else if (todoState.open) renderDetail();
   else renderList();
 }
 
@@ -279,12 +306,22 @@ export function initTodo() {
           };
     },
     onOpen: (open) => {
-      $("todo-handoff").hidden = !open;
-      $("todo-split").hidden = !open;
-      $("todo-orca").setAttribute("aria-pressed", String(open));
+      orcaOpen = open;
+      if (open) claudeOpen = false;
+      layoutPanes();
     },
   });
   $("todo-orca").onclick = () => handoff.toggle();
+  initTodoClaude();
+  const toggleClaude = (open: boolean) => {
+    claudeOpen = open;
+    // The Orca pane closes first, and its close lays out the panes with the choice already made.
+    if (open) handoff.close();
+    layoutPanes();
+    if (open) openedTodoClaude();
+  };
+  $("todo-claude-btn").onclick = () => toggleClaude(!claudeOpen);
+  $("todo-claude-close").onclick = () => toggleClaude(false);
   // 380px at first (the CSS holds that as the least); the divider widens it up to half of the screen.
   initSplit($("todo"), $("todo-split"), { initial: 0, min: 0, max: 0.5 });
   // The document's pointerdown closes an open menu before the click, so whether this press found it open is read before that.
@@ -297,6 +334,7 @@ export function initTodo() {
     else openMoreMenu();
   };
   $("todo-back").onclick = () => {
+    if (draftOpen()) return discardDraft();
     todoState.open = null;
     renderTodo();
     handoff.sync();

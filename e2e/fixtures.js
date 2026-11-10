@@ -111,7 +111,7 @@ const answers = {
   fetch_images: {},
   claude_status: { state: "missing" },
   claude_model_settings: Object.fromEntries(
-    ["slackSummary", "mailSummary", "promptChat", "proofread", "slackReply", "orcaHandoff"].map((purpose) => [purpose, { model: "sonnet", effort: purpose === "slackReply" ? "high" : "medium" }]),
+    ["slackSummary", "mailSummary", "promptChat", "proofread", "slackReply", "orcaHandoff", "todoChat"].map((purpose) => [purpose, { model: "sonnet", effort: purpose === "slackReply" ? "high" : "medium" }]),
   ),
   claude_todo_prompt: { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false },
   app_info: { version: "1.2.3", updatable: true },

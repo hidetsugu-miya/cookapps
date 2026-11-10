@@ -21,6 +21,7 @@ import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
 import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
+import type { TodoChatReply } from "./bindings/TodoChatReply";
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileText } from "./bindings/OrcaFileText";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
@@ -107,6 +108,8 @@ export interface Commands {
     args: { url: string; content: string; description: string; due: string; projectId?: string | null; today: boolean };
     result: string | null;
   };
+  // One task from a proposal of Claude: its name, its date (YYYY-MM-DD or YYYY-MM-DD HH:MM) and its project, as given.
+  todoist_add_task: { args: { content: string; due?: string | null; projectId?: string | null }; result: boolean | null };
   todoist_set_done: { args: { id: string; done: boolean }; result: boolean | null };
   todoist_update: {
     args: { id: string; content?: string; description?: string; dueString?: string; labels?: string[] };
@@ -203,6 +206,9 @@ export interface Commands {
   // A-9: Claude's summary of "what to implement" from the instruction of a handoff, and a proposed name for a new worktree (`worktreeName` is null when it gave none that Orca would take). `context` is quoted to Claude as data, never followed.
   // `history` is the conversation so far (the summaries as assistant turns, the requests to fix them as user turns) and `revision` the new request to fix the summary (null for the first summary). The model and effort are those of `orcaHandoff`. Nothing is saved.
   claude_summarize_handoff: { args: { instruction: string; context: HandoffContext | null; history: { role: "user" | "assistant"; text: string }[]; revision: string | null }; result: HandoffSummary };
+  // Claude's answer to a request about Todo tasks: a short reply and the tasks it proposes (name, date `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, project ID; a project or a date that is not valid is null, and a task with a bad date or name is not returned). Nothing is created in Todoist.
+  // `history` is the conversation so far and `instruction` the new request. The Todoist projects of the last load are sent from Rust. The model and effort are those of `todoChat`. Nothing is saved.
+  claude_chat_todo: { args: { history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoChatReply };
   // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions. Nothing is saved.
   claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),

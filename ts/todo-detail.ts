@@ -80,7 +80,7 @@ export interface DueEdit {
 // A one-off due date is written "2026-11-02 12:00", which Todoist reads back as is; a repeat keeps Todoist's text, which a date cannot hold.
 // The text in the field is confirmed by Enter or by a click elsewhere that closes the popover (what was typed is not lost); Escape cancels it.
 // A picked day keeps the time typed in the field ("15:00", "15時", "明日 午後3時", "2026-11-06 15:00"; `typedTime`), else the time the due date had.
-// The task's detail, the Slack summary card and the draft modal all open it; what is done with the new text is theirs.
+// The task's detail, the Slack summary card and the draft page all open it; what is done with the new text is theirs.
 export function openDueEditor(anchor: Element, e: DueEdit) {
   const pop = tag("div", "menu due-pop");
   const input = tag("input", "chip-input");
@@ -147,7 +147,7 @@ export function openProjectMenu(anchor: Element, t: TaskItem) {
   openProjectPicker(anchor, t.projectId, (id) => id !== t.projectId && moveTask(t.id, id));
 }
 
-// A field of the side pane: its label over the value, a button that opens the menu or popover that changes it. The draft modal of the Slack summary (todo-draft.ts) uses it too.
+// A field of the side pane: its label over the value, a button that opens the menu or popover that changes it. The draft page of the Slack summary (todo-draft.ts) uses it too.
 export function field(label: string, value: HTMLElement) {
   const f = tag("div", "field");
   f.append(tag("div", "field-label", label), value);

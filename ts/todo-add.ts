@@ -1,4 +1,4 @@
-// The Todo screen's add field: Quick Add, or a Slack message link summarised by Claude and confirmed in a modal (todo-draft.ts); and a task made from a mail.
+// The Todo screen's add field: Quick Add, or a Slack message link summarised by Claude and confirmed on a page (todo-draft.ts); and a task made from a mail.
 import { getClaude } from "./claude.js";
 import type { Summary } from "./bindings/Summary";
 import { $, composing, isMac, tag } from "./dom.js";
@@ -10,7 +10,7 @@ import { getSlackWorkspaces, loadSlackWorkspaces } from "./slack-workspaces.js";
 import { toast } from "./toast.js";
 import { inboxOf, projectName, projectOf, todoState, viewProjectId } from "./todo-data.js";
 import { openDueEditor, openProjectPicker } from "./todo-detail.js";
-import { draftOpen, type DraftHooks, openDraft, resumeDraft } from "./todo-draft.js";
+import { draftOpen, type DraftHooks, openDraft } from "./todo-draft.js";
 import { openPrompt } from "./todo-prompt.js";
 import { todoCall } from "./todo-write.js";
 import { loadTodo } from "./todo.js";
@@ -72,11 +72,8 @@ let adding = false;
 // What the add field's button and hint last showed; the list's redraw calls updateAddMode every 10 seconds.
 let shownAddMode: { summarize: boolean; hint: string; adding: boolean } | null = null;
 export function updateAddMode() {
-  // A draft hidden by the prompt screen comes back, and one that was ready while another screen was shown opens, once the Todo screen is shown again.
-  if (currentScreen() === "todo") {
-    resumeDraft();
-    openNextDraft();
-  }
+  // A draft that was ready while another screen was shown opens once the Todo screen is shown again.
+  if (currentScreen() === "todo") openNextDraft();
   const { summarize, hint } = addMode();
   if (shownAddMode?.summarize === summarize && shownAddMode.hint === hint && shownAddMode.adding === adding) return;
   shownAddMode = { summarize, hint, adding };
@@ -95,7 +92,7 @@ export function updateAddMode() {
 }
 
 // What the confirmation of a summary needs to know about the message it came from: the link, its host, and where the task goes.
-// The Todo add field confirms it in the modal of todo-draft.ts, and the Slack thread on the card below.
+// The Todo add field confirms it on the page of todo-draft.ts, and the Slack thread on the card below.
 export interface ReviewJob {
   url: string;
   host: string | null;
@@ -120,9 +117,9 @@ export const addSlackTodo = (job: ReviewJob, content: string, description: strin
 // `el` is the row drawn for it: a row is replaced alone, so a row being typed in keeps its focus when another one changes.
 interface PendingAdd extends ReviewJob {
   failed: string | null;
-  // Set when Claude has answered; the draft modal then asks the user to confirm it.
+  // Set when Claude has answered; the draft page then asks the user to confirm it.
   summary: Summary | null;
-  // Whether the draft modal was opened for it; its row is then gone.
+  // Whether the draft page was opened for it; its row is then gone.
   opened: boolean;
   el: HTMLElement | null;
 }
@@ -151,16 +148,16 @@ function removePending(job: PendingAdd) {
   job.el?.remove();
 }
 
-// A summary that waits for the draft modal, which is open for another one or cannot open on this screen.
+// A summary that waits for the draft page, which is open for another one or cannot open on this screen.
 function readyRow(job: PendingAdd) {
   const row = tag("div", "pending");
   row.append(tag("span", "sp", "Todo の案ができました"), tag("span", "pending-channel", job.host ?? ""));
   return row;
 }
 
-// Opens the draft modal for the first summary that waits for it, when no draft is open and the Todo screen is shown.
+// Opens the draft page for the first summary that waits for it, when no draft is open, the Todo screen is shown and it is on the list (not on a task, nor on the token form).
 function openNextDraft() {
-  if (draftOpen() || currentScreen() !== "todo") return;
+  if (draftOpen() || currentScreen() !== "todo" || todoState.open !== null || todoState.todo === null) return;
   const job = pendingAdds.find((j) => j.summary && !j.opened);
   if (!job?.summary) return;
   job.opened = true;
@@ -188,7 +185,7 @@ function failedRow(job: PendingAdd) {
   return row;
 }
 
-// The draft modal of the Todo add field: it goes away when dropped or added (the next waiting one opens), and the list is read again after an add.
+// The draft page of the Todo add field: it goes away when dropped or added (the next waiting one opens), and the list is read again after an add.
 const draftHooks = (job: PendingAdd): DraftHooks => ({
   remove: () => {
     removePending(job);
@@ -328,7 +325,7 @@ export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks)
   return card;
 }
 
-// Sends the Slack link to Rust, which reads the message and has Claude summarise it. The field is free at once; a row above the list shows that it is on its way, and the result opens in the draft modal.
+// Sends the Slack link to Rust, which reads the message and has Claude summarise it. The field is free at once; a row above the list shows that it is on its way, and the result opens on the draft page.
 function addFromSlack(url: string) {
   const input = $<HTMLInputElement>("todo-add-input");
   // Like Quick Add: in "今日" the task goes to the inbox, due today unless the user gives a date.
