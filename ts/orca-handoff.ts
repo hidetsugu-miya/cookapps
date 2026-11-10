@@ -198,7 +198,8 @@ export class HandoffPane {
     const item = this.host.current();
     const key = item?.key ?? null;
     if (key !== this.itemKey) {
-      if (this.itemKey !== null) dropIdleForm(this.itemKey);
+      // A form whose summary is on its way is kept: the answer is written into it.
+      if (this.itemKey !== null && !this.asking.has(this.itemKey)) dropIdleForm(this.itemKey);
       this.itemKey = key;
       this.removed = false;
       // The card is built when the pane opens (the form is drawn), not for each item that goes by.
