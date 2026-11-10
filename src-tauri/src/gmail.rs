@@ -15,6 +15,7 @@ use serde::{
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
+use tokio::task::JoinSet;
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -802,48 +803,58 @@ struct AccountInbox {
 }
 
 /// threads.get(metadata) for each ID, at most `CONCURRENCY` in flight. A `None` thread means 404: it no longer exists.
-/// `Ok(None)` means the token was rejected with 401.
+/// `Ok(None)` means the token was rejected with 401. The first 401 or error other than 404 stops the rest, which are aborted.
+/// The results come in the order they finish.
 async fn get_threads(
     http: &reqwest::Client,
     token: &str,
     ids: &[String],
     retries: usize,
 ) -> Result<Option<Vec<(String, Option<Thread>)>>, ApiError> {
-    let jobs: Vec<_> = ids
-        .iter()
-        .map(|id| {
-            let (http, token, id) = (http.clone(), token.to_owned(), id.clone());
-            async move {
-                let url = format!("{THREADS_URL}/{id}");
-                let res = send_json::<Thread>(
-                    &http,
-                    Method::GET,
-                    &token,
-                    &url,
-                    &METADATA_QUERY,
-                    None,
-                    retries,
-                )
-                .await;
-                (id, res)
-            }
-        })
-        .collect();
-    let done = run_limited(jobs, CONCURRENCY).await;
-    // `run_limited` drops a panicked task, and a thread missing for that reason would be drawn as gone.
-    if done.len() != ids.len() {
-        return Err("threads.get の処理が中断されました".into());
-    }
-    let mut out = Vec::with_capacity(ids.len());
-    for (id, res) in done {
+    let mut jobs = ids.iter().map(|id| {
+        let (http, token, id) = (http.clone(), token.to_owned(), id.clone());
+        async move {
+            let url = format!("{THREADS_URL}/{id}");
+            let res = send_json::<Thread>(
+                &http,
+                Method::GET,
+                &token,
+                &url,
+                &METADATA_QUERY,
+                None,
+                retries,
+            )
+            .await;
+            (id, res)
+        }
+    });
+    let (mut set, mut out) = (JoinSet::new(), Vec::with_capacity(ids.len()));
+    loop {
+        while set.len() < CONCURRENCY {
+            let Some(job) = jobs.next() else { break };
+            set.spawn(job);
+        }
+        let Some(done) = set.join_next().await else {
+            return Ok(Some(out));
+        };
+        // A panicked task is an error: a thread missing for that reason would be drawn as gone.
+        let Ok((id, res)) = done else {
+            set.abort_all();
+            return Err("threads.get の処理が中断されました".into());
+        };
         match res {
             Ok(Some(thread)) => out.push((id, Some(thread))),
-            Ok(None) => return Ok(None),
+            Ok(None) => {
+                set.abort_all();
+                return Ok(None);
+            }
             Err(e) if e.status == Some(404) => out.push((id, None)),
-            Err(e) => return Err(e),
+            Err(e) => {
+                set.abort_all();
+                return Err(e);
+            }
         }
     }
-    Ok(Some(out))
 }
 
 /// `get_threads` with the account's token; a 401 (expired mid-run) refreshes it and fetches once more.
