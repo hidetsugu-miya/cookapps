@@ -50,6 +50,8 @@ interface EditorFile {
   // The numbers of the lines, one text node ("1\n2\n…") that grows and shrinks at its end with the line count (`lines`), in the box at the left of the text that follows the vertical scroll.
   nums: Text;
   numbers: HTMLElement;
+  // The box of the numbers: its width is set (in `ch`) when the number of digits of the last number changes.
+  gutter: HTMLElement;
   lines: number;
   state: HTMLElement;
   note: HTMLElement;
@@ -120,10 +122,10 @@ function paint(f: EditorFile) {
   }
 }
 
-// At each key: the text is drawn again once a frame, or, for a long text, at most once in COLOR_WAIT_MS with the old layer kept till then.
-function repaint(f: EditorFile) {
+// At each key, with the text of the textarea (read once by the caller): the text is drawn again once a frame, or, for a long text, at most once in COLOR_WAIT_MS with the old layer kept till then.
+function repaint(f: EditorFile, text: string) {
   if (!f.highlight) draw(f);
-  else drawLater(f, f.area.value.length <= COLOR_NOW_MAX ? nextFrame : afterColorWait);
+  else drawLater(f, text.length <= COLOR_NOW_MAX ? nextFrame : afterColorWait);
 }
 
 // The layer under the textarea follows the scroll of the textarea, and the numbers follow its vertical scroll.
@@ -132,9 +134,8 @@ function followScroll(f: EditorFile) {
   f.numbers.style.transform = `translateY(${-f.area.scrollTop}px)`;
 }
 
-// Brings the numbers to the line count of the textarea: only the numbers that came or went are written, the rest of the text is left as it is.
-function numberLines(f: EditorFile) {
-  const text = f.area.value;
+// Brings the numbers to the line count of `text`, the value of the textarea: only the numbers that came or went are written, the rest of the text is left as it is. The box is as wide as the digits of the last number, set when their count changes.
+function numberLines(f: EditorFile, text: string) {
   let n = 1;
   for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) n++;
   if (n === f.lines) return;
@@ -148,6 +149,8 @@ function numberLines(f: EditorFile) {
     for (let i = f.lines; i > n; i--) end = data.lastIndexOf("\n", end - 1);
     f.nums.deleteData(end, data.length - end);
   }
+  const digits = String(n).length;
+  if (digits !== String(f.lines).length) f.gutter.style.setProperty("--digits", String(digits));
   f.lines = n;
 }
 
@@ -205,7 +208,7 @@ async function load(f: EditorFile) {
     f.area.value = text.content;
     f.highlight = text.highlight;
     paint(f);
-    numberLines(f);
+    numberLines(f, f.area.value);
     f.crlf = text.crlf;
     f.signature = text.signature;
     f.read = "ready";
@@ -248,10 +251,11 @@ function create(id: string, target: string | null, project: string, path: string
   const body = tag("div", "orca-edit-body");
   body.append(gutter, text);
   el.append(head, note, body);
-  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, el, area, code, nums, numbers, lines: 1, state, note };
+  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, el, area, code, nums, numbers, gutter, lines: 1, state, note };
   area.oninput = () => {
-    repaint(f);
-    numberLines(f);
+    const value = area.value;
+    repaint(f, value);
+    numberLines(f, value);
     if (!f.dirty) {
       f.dirty = true;
       changed();
@@ -259,9 +263,10 @@ function create(id: string, target: string | null, project: string, path: string
     schedule(f);
   };
   area.onscroll = () => followScroll(f);
-  // The wheel over the numbers scrolls the text, as it does over the text.
+  // The wheel over the numbers scrolls the text, as it does over the text: by pixels, by lines (the line height of the text) or by pages (the height of the textarea), as the event counts.
   gutter.onwheel = (e) => {
-    area.scrollTop += e.deltaY;
+    const unit = e.deltaMode === 1 ? Number.parseFloat(getComputedStyle(area).lineHeight) : e.deltaMode === 2 ? area.clientHeight : 1;
+    area.scrollTop += e.deltaY * unit;
   };
   return f;
 }

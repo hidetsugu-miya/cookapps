@@ -3009,6 +3009,34 @@ describe("orca: files and editor (A-18)", () => {
     expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize)).toBe("12.5px");
   });
 
+  it("keeps the text of the tab bar, the tabs, the file pane's heading and the editor's heading inside their boxes at the largest size of the work pane (A-20)", async () => {
+    await openFiles({ font_settings: fontSettings({ orcaPane: { family: null, size: 32, ghostty: false } }) });
+    await openA();
+    await browser.waitUntil(async () => (await browser.execute(() => getComputedStyle(document.getElementById("orca-work")!).fontSize)) === "32px", { timeoutMsg: "the work pane never took the size" });
+    const outside = await browser.execute(() => {
+      const pairs: [string, string][] = [
+        [".orca-tabbar", ".orca-tab"],
+        [".orca-tab", ".orca-tab-title"],
+        ["#orca-files-head", "#orca-files-title"],
+        [".orca-edit-head", ".orca-edit-path"],
+        [".orca-edit-head", ".orca-edit-state"],
+      ];
+      const found: string[] = [];
+      let checked = 0;
+      for (const [box, text] of pairs) {
+        for (const t of document.querySelectorAll(`${box} ${text}`)) {
+          const b = t.closest(box)!.getBoundingClientRect();
+          const r = t.getBoundingClientRect();
+          checked++;
+          if (r.height > 0 && (r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5)) found.push(`${text} in ${box}`);
+        }
+      }
+      return { found, checked };
+    });
+    expect(outside.checked).toBeGreaterThanOrEqual(5);
+    expect(outside.found).toEqual([]);
+  });
+
   it("draws the text of the editor with the first font while none is chosen", async () => {
     await openFiles();
     await openA();
