@@ -636,6 +636,14 @@ fn created_of(result: &Value) -> OrcaStarted {
     }
 }
 
+/// The path of the worktree `orca worktree create` made: `result.worktree.path`, which must be an absolute path.
+fn created_worktree_path_of(result: &Value) -> Result<String, String> {
+    text_of(&result["worktree"], "path")
+        .filter(|path| check_path(path).is_ok())
+        .map(str::to_owned)
+        .ok_or_else(|| "Orca が新しい worktree の場所を答えませんでした".into())
+}
+
 /// The `result` of the CLI's JSON (`{ok, result, error: {code, message}}`), or the error's message. The exit code is not looked at: a failure prints JSON too.
 fn parse_output(out: &str) -> Result<Value, String> {
     let out = out.trim();
@@ -802,6 +810,32 @@ fn check_worktree(worktrees: &[OrcaWorktree], path: &str) -> Result<(), String> 
     }
 }
 
+/// The project of a new worktree must be a repository of this machine or the saved environment in the list read just now (`ssh:` hosts are not repositories).
+fn check_project(ps: &Value, project: &str) -> Result<(), String> {
+    if !project.starts_with("ssh:") && live_worktrees(ps).any(|(_, key)| key == project) {
+        Ok(())
+    } else {
+        Err("worktree を作るプロジェクトが見つかりません。一覧を読み直してください".into())
+    }
+}
+
+/// The name of a new worktree, trimmed: one line with no control character, no path separator, not `.` or `..`, and not starting with `-` (an option).
+fn check_worktree_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("worktree の名前を入力してください".into());
+    }
+    if name.starts_with('-')
+        || matches!(name, "." | "..")
+        || name
+            .chars()
+            .any(|c| c.is_control() || c == '/' || c == '\\')
+    {
+        return Err("worktree の名前に使えない文字が含まれています".into());
+    }
+    Ok(name)
+}
+
 /// A send the terminal did not take (`result.send.accepted` false) is a failure although the CLI answered `ok`.
 pub(crate) fn check_accepted(result: &Value) -> Result<(), String> {
     if result["send"]["accepted"] == false {
@@ -900,6 +934,21 @@ fn create_args(path: &str, environment: Option<&str>) -> Vec<String> {
     let mut args = args_of(&["terminal", "create", "--worktree"]);
     args.extend([format!("path:{path}"), "--json".into()]);
     with_environment(args, environment)
+}
+
+/// A new worktree in the repository `project` (A-9): independent of any worktree (`--no-parent`), because the CLI would otherwise record the caller's context as its parent. `--repo=id:` takes the repository id the list holds; `--project` takes a project id or a display name, which the list does not hold.
+fn create_worktree_args(project: &str, name: &str, environment: Option<&str>) -> Vec<String> {
+    with_environment(
+        vec![
+            "worktree".into(),
+            "create".into(),
+            format!("--repo=id:{project}"),
+            format!("--name={name}"),
+            "--no-parent".into(),
+            "--json".into(),
+        ],
+        environment,
+    )
 }
 
 // ---- running the CLI ----
@@ -1177,6 +1226,16 @@ fn launch(
 fn open_terminal(path: &str, environment: Option<&str>) -> Result<OrcaStarted, String> {
     check_start(path, environment)?;
     write(&create_args(path, environment)).map(|result| created_of(&result))
+}
+
+/// Makes a new worktree named `name` in the project `project` of the target (A-9), once, and gives its path. The name and the environment are validated, and the project must be in the list read just before; otherwise nothing is made.
+fn create_worktree(project: &str, name: &str, environment: Option<&str>) -> Result<String, String> {
+    let name = check_worktree_name(name)?;
+    check_listed(environment)?;
+    let (ps, _) = read_lists(environment, false);
+    check_project(&ps.map_err(message_of)?, project)?;
+    let result = write(&create_worktree_args(project, name, environment))?;
+    created_worktree_path_of(&result)
 }
 
 /// What a launch and a new terminal check before they run: the path is absolute, the environment is a saved one, and the path is a worktree of the list read just now.
@@ -1461,6 +1520,16 @@ pub async fn orca_terminal_create(
     environment: Option<String>,
 ) -> Result<OrcaStarted, String> {
     blocking(move || open_terminal(&path, environment.as_deref())).await?
+}
+
+/// A-9: makes a new worktree named `name` in the project `project` (a repository key of the list) of the destination, and answers its path. Never run twice.
+#[tauri::command]
+pub async fn orca_worktree_create(
+    project: String,
+    name: String,
+    environment: Option<String>,
+) -> Result<String, String> {
+    blocking(move || create_worktree(&project, &name, environment.as_deref())).await?
 }
 
 /// A-9: starts a session in a worktree with the instruction and, when `context` is given, the content quoted as data.
@@ -2250,6 +2319,105 @@ mod tests {
         ] {
             assert_eq!(created_of(&odd), OrcaStarted::default(), "{odd}");
         }
+    }
+
+    #[test]
+    fn a_new_worktree_is_made_in_the_repository_with_no_parent_and_no_shell() {
+        assert_eq!(
+            create_worktree_args("repo1", "fix-login", None),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--no-parent",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            create_worktree_args("repo1", "fix-login", Some("Studio")),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--no-parent",
+                "--json",
+                "--environment=Studio"
+            ]
+        );
+        // A name with blanks or quotes stays one argument, joined to its flag.
+        assert_eq!(
+            create_worktree_args("repo1", "fix the \"login\"", None)[3],
+            "--name=fix the \"login\""
+        );
+    }
+
+    #[test]
+    fn the_project_of_a_new_worktree_is_a_repository_of_the_list_read_just_now() {
+        let ps = json!({"worktrees": [
+            {"path": "/work/a", "repoId": "repo1", "repo": "a"},
+            {"path": "/work/b", "repoId": "repo2", "repo": "b", "isArchived": true},
+            {"path": "/ssh/c", "repoId": "repo3", "hostId": "ssh-1", "repo": "c"},
+        ]});
+        assert!(check_project(&ps, "repo1").is_ok());
+        for bad in [
+            "repo2",
+            "repo3",
+            "ssh:ssh-1",
+            "",
+            "--json",
+            "repo1 ",
+            "unknown",
+        ] {
+            assert!(check_project(&ps, bad).is_err(), "{bad}");
+        }
+        assert!(check_project(&json!({"worktrees": []}), "repo1").is_err());
+        assert!(check_project(&Value::Null, "repo1").is_err());
+    }
+
+    #[test]
+    fn the_name_of_a_new_worktree_is_one_plain_line_that_is_no_option_or_path() {
+        assert_eq!(check_worktree_name("fix-login").unwrap(), "fix-login");
+        assert_eq!(
+            check_worktree_name("  ログインを直す 2  ").unwrap(),
+            "ログインを直す 2"
+        );
+        // A dash inside is fine; one at the start is an option.
+        assert_eq!(check_worktree_name("a-b").unwrap(), "a-b");
+        for bad in [
+            "", "   ", "-fix", "  --json", "a/b", "a\\b", "/abs", ".", "..", "a\nb", "a\tb",
+            "a\0b", "a\u{7f}b", "a\u{85}b",
+        ] {
+            assert!(check_worktree_name(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_reply_of_a_new_worktree_names_its_path() {
+        let out = r#"{"ok": true, "result": {"worktree": {"id": "repo1::/work/fix-login", "path": "/work/fix-login", "branch": "refs/heads/fix-login"}, "warnings": []}}"#;
+        assert_eq!(
+            created_worktree_path_of(&parse_output(out).unwrap()).unwrap(),
+            "/work/fix-login"
+        );
+        // A reply without a usable absolute path is an error: nothing can be started in it.
+        for odd in [
+            Value::Null,
+            json!({}),
+            json!({"worktree": null}),
+            json!({"worktree": {}}),
+            json!({"worktree": {"path": ""}}),
+            json!({"worktree": {"path": "   "}}),
+            json!({"worktree": {"path": "work/relative"}}),
+            json!({"worktree": {"path": ["/work/a"]}}),
+            json!({"path": "/work/a"}),
+        ] {
+            assert!(created_worktree_path_of(&odd).is_err(), "{odd}");
+        }
+        // A failure reply is the CLI's message, not a path.
+        let failed =
+            r#"{"ok": false, "error": {"code": "invalid_argument", "message": "No ready setup"}}"#;
+        assert_eq!(parse_output(failed).unwrap_err(), "No ready setup");
     }
 
     #[test]
