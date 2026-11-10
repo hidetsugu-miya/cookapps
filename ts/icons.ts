@@ -42,3 +42,4 @@ export const DELETE_SVG = svgOf('<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path 
 export const FILE_SVG = svgOf('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>');
 export const CLIP_SVG = svgOf('<path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>');
 export const SEND_SVG = svgOf('<path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>');
+export const SIDEBAR_SVG = svgOf('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>');
