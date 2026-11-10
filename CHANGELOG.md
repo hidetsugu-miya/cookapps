@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.57.1
+
+S-2: the Todo draft made from a Slack message opens in a modal instead of a card above the list. The name and the description are on the left, and the project, the date and the labels on the right, as in the detail of a task. 「破棄」 is at the bottom left and the add button at the bottom right (#326).
+
+A-22, A-18: the menu of a row in the file pane of the Orca screen shows an icon for each item instead of a green dot (#359).
+
+No change in what the app shows yet, as groundwork for coming features: the sender's name and address of a mail row are split in Rust (#315), a reload of the Slack list tells which unread messages are new (#348), a file attached to Orca can be of any kind and keeps its name on the Rust side (#323), and a command lets Claude revise a Todo draft (#325).
+
 ## v0.57.0
 
 A-22 (new): a file in the file pane of the Orca screen (A-18) can be downloaded to this Mac. Right-click the file, choose 「ダウンロード」 and pick the place in the save dialog (#317, #320). It works for a file of a saved environment too.
