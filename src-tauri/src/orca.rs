@@ -820,7 +820,7 @@ fn check_project(ps: &Value, project: &str) -> Result<(), String> {
 }
 
 /// The name of a new worktree, trimmed: one line with no control character, no path separator, not `.` or `..`, and not starting with `-` (an option).
-fn check_worktree_name(name: &str) -> Result<&str, String> {
+pub(crate) fn check_worktree_name(name: &str) -> Result<&str, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("worktree の名前を入力してください".into());

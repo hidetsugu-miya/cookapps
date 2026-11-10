@@ -20,6 +20,7 @@ import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
 import type { HandoffKind } from "./bindings/HandoffKind";
+import type { HandoffSummary } from "./bindings/HandoffSummary";
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileText } from "./bindings/OrcaFileText";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
@@ -199,6 +200,9 @@ export interface Commands {
   // Claude's fix of a Todo proposal made from a Slack message: the same conversation, for the name and the description (`content`, `description`) instead of the instructions; each part is null with no lines when it is left alone.
   // The model and effort are those of `slackSummary`. Nothing is saved, not even the request.
   claude_edit_todo_draft: { args: { content: string; description: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoDraftEdit };
+  // A-9: Claude's summary of "what to implement" from the instruction of a handoff, and a proposed name for a new worktree (`worktreeName` is null when it gave none that Orca would take). `context` is quoted to Claude as data, never followed.
+  // `history` is the conversation so far (the summaries as assistant turns, the requests to fix them as user turns) and `revision` the new request to fix the summary (null for the first summary). The model and effort are those of `orcaHandoff`. Nothing is saved.
+  claude_summarize_handoff: { args: { instruction: string; context: HandoffContext | null; history: { role: "user" | "assistant"; text: string }[]; revision: string | null }; result: HandoffSummary };
   // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions. Nothing is saved.
   claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),

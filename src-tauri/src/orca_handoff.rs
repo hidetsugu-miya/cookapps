@@ -114,6 +114,17 @@ fn neutralize(body: &str) -> String {
     out
 }
 
+/// The content as quoted data: the line that says the block is data, and the block with the title and the body cleaned so that neither can end it.
+/// A Claude call that reads the content (`claude::claude_summarize_handoff`) quotes it the same way.
+pub(crate) fn quoted(context: &HandoffContext) -> String {
+    format!(
+        "{QUOTED_LINE}\n{OPEN}{}{TITLE_ATTR}{}{OPEN_END}{}\n{CLOSE}",
+        context.kind.name(),
+        escape_attr(&context.title),
+        neutralize(&without_hidden(context.body.trim())),
+    )
+}
+
 /// The prompt of a handoff: the instruction alone when the card was taken off, else the instruction, the line that says the block is data, and the block.
 pub fn compose(instruction: &str, context: Option<&HandoffContext>) -> Result<String, String> {
     if instruction.trim().is_empty() {
@@ -122,13 +133,7 @@ pub fn compose(instruction: &str, context: Option<&HandoffContext>) -> Result<St
     let Some(context) = context else {
         return Ok(instruction.to_owned());
     };
-    let text = format!(
-        "{}\n\n{QUOTED_LINE}\n{OPEN}{}{TITLE_ATTR}{}{OPEN_END}{}\n{CLOSE}",
-        instruction.trim_end(),
-        context.kind.name(),
-        escape_attr(&context.title),
-        neutralize(&without_hidden(context.body.trim())),
-    );
+    let text = format!("{}\n\n{}", instruction.trim_end(), quoted(context));
     if text.chars().count() > TEXT_LIMIT {
         return Err(format!(
             "指示と渡す内容を合わせて {TEXT_LIMIT} 文字までです。渡す内容を外すか、短くしてください"
