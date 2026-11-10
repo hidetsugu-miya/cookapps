@@ -12,7 +12,7 @@ Usage:
 
 `snapshot` prints the open issues the planner orders. `apply` leaves out of the plan the closed issues and the fixed ones (stderr says which), writes the
 `blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
-`start` lists the issues a run may begin, in the order of the plan. `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
+`start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run). `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
 (open, no `needs:owner`, not in hand, and no milestone named for a feature; a milestone named for a version is no mark): `issue-plan` applies its step 3 to each before it orders.
 `migrate` is run once after the milestones named for versions are retired: it takes such a milestone off the open issues of less than 5 points and closes the ones left empty (it splits nothing). `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
 the tag that is due after a merge (the workflow tags at the merge, so it shows only until it has, or when it did not), and the release whose follow-up is open (its tag exists, and the issues are not commented yet). `close` closes the milestones (a milestone is a feature, not a version) whose issues are all done and released.
@@ -90,13 +90,14 @@ ALL_POINTS = ("point:1", "point:2", "point:3", "point:5", "point:8")
 
 
 def quick_bug(issue):
-    """A bug of 1, 2 or 3 points goes to the front of the queue; a bug of 5 or 8 points does not."""
+    """A bug of 1, 2 or 3 points goes to the front of its tier; a bug of 5 or 8 points does not."""
     return has(issue, "bug") and any(has(issue, label) for label in QUICK_POINTS)
 
 
 def solo(issue):
     """A member of a unit that is a release of its own: an issue of 8 points, or a part (`solo`) of a point:8 issue that `issue-plan` split.
-    The unit is that one point:8 issue, or all the `solo` parts of one milestone; `nightly-limit.sh` keeps a unit apart from everything else in a night."""
+    The unit is that one point:8 issue, or all the `solo` parts of one milestone. Only the night run keeps a unit apart from everything else (issues.md):
+    `nightly-limit.sh` and `build_next` do so when NIGHTLY_DEADLINE_EPOCH is set, and a session of the owner does not."""
     return has(issue, "point:8") or has(issue, "solo")
 
 
@@ -106,6 +107,16 @@ def urgent(issue):
 
 def importance(issue):
     return "high" if has(issue, "importance:high") else "low" if has(issue, "importance:low") else "normal"
+
+
+def tier(issue):
+    """The tier of the order (issues.md), 0 first: urgency high and importance high, urgency high only, importance high only, neither.
+    A label that is missing is low, and `importance:low` is the same as none."""
+    return (0 if urgent(issue) else 2) + (0 if has(issue, "importance:high") else 1)
+
+
+def tier_label(issue):
+    return f"urgency {'high' if urgent(issue) else 'low'}, importance {'high' if tier(issue) % 2 == 0 else 'low'}"
 
 
 def points(issue):
@@ -140,17 +151,13 @@ def parse_stream(text):
 
 # ---- pure: queue ----
 
-IMPORTANCE_RANK = {"high": 0, "normal": 1, "low": 2}
-
-
 def base_key(i):
-    """The basis of the order (issues.md): importance, then fewer points first, then the older issue first."""
-    return (IMPORTANCE_RANK[importance(i)], points(i) or 99, i.created_at, i.number)
+    """The basis of the order (issues.md): the tier, then a bug of 1, 2 or 3 points first, then fewer points first, then the older issue first."""
+    return (tier(i), not quick_bug(i), points(i) or 99, i.created_at, i.number)
 
 
 def base_order(free):
-    """The order the planner starts from: the urgent issues first, then the quick bugs, then the rest, each by `base_key`.
-    An urgent issue or a quick bug that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
+    """The order the planner starts from: by `base_key`. An issue that waits for free issues takes them (and theirs, through the chain) with it, each before the issue that waits for it."""
     ordered = sorted(free, key=base_key)
     rank = {i.number: k for k, i in enumerate(ordered)}
     by_number = {i.number: i for i in ordered}
@@ -165,11 +172,9 @@ def base_order(free):
             take(by_number[b])
         lead.append(i)
 
-    for front in (urgent, quick_bug):
-        for i in ordered:
-            if front(i):
-                take(i)
-    return lead + [i for i in ordered if i.number not in taken]
+    for i in ordered:
+        take(i)
+    return lead
 
 
 def is_waiting(i):
@@ -252,12 +257,12 @@ def validate_plan(plan, free, fixed, states):
             elif state == "open" and b not in free_by and b not in fixed_nums:
                 problems.append(f"blocked_by: #{n} names #{b}, which is open but not planned")
 
-    # An urgent issue comes before every other issue, then a quick bug (a bug of 1, 2 or 3 points) comes before every other issue but the urgent ones.
-    # The issues that block it, or an earlier issue of its kind, may stand before it.
+    # An issue comes before every issue of a lower tier (urgency, then importance), and a bug of 1, 2 or 3 points comes before every other issue of its tier.
+    # The issues that block it, or that block an earlier issue, may stand before it.
     def front(member, allowed, message):
         needed = set()
         for k, n in enumerate(order):
-            if n not in free_by or not member(free_by[n]):
+            if n not in free_by:
                 continue
             todo = [n]
             while todo:
@@ -265,15 +270,22 @@ def validate_plan(plan, free, fixed, states):
                     if b not in needed and b in free_by:
                         needed.add(b)
                         todo.append(b)
-            late = next((m for m in order[:k] if m in free_by and not allowed(free_by[m]) and m not in needed), None)
+            if not member(free_by[n]):
+                continue
+            late = next((m for m in order[:k] if m in free_by and not allowed(free_by[m], free_by[n]) and m not in needed), None)
             if late is not None:
                 problems.append(message(n, late))
 
-    front(urgent, urgent, lambda n, late: f"order: #{n} has urgency:high but is placed after #{late}")
+    for t in range(3):
+        front(
+            lambda i, t=t: tier(i) == t,
+            lambda m, n: tier(m) <= tier(n),
+            lambda n, late: f"order: #{n} ({tier_label(free_by[n])}) is placed after #{late} ({tier_label(free_by[late])})",
+        )
     front(
         quick_bug,
-        lambda i: quick_bug(i) or urgent(i),
-        lambda n, late: f"order: #{n} is a bug of 1, 2 or 3 points but is placed after #{late}",
+        lambda m, n: quick_bug(m) or tier(m) != tier(n),
+        lambda n, late: f"order: #{n} is a bug of 1, 2 or 3 points but is placed after #{late}, which is not one, in the same tier",
     )
 
     # cycle
@@ -409,13 +421,14 @@ def migration(issues, milestones):
     return {"clear": clear, "close": close}
 
 
-def build_next(issues, pr_closing, mine=frozenset(), plan=None):
+def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
     """What a run does with the open issues. One worktree and one branch carry the run, so there is no parallel set: `start` is the queue.
     `mine`: the issues the previous hand-over lists as this run's own; they are `in_progress` (continue them first).
     `held`: an open pull request of the owner closes the issue and it is not `mine`: someone else's work, left alone.
-    `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last: urgent, quick bugs, then `base_key`).
-    An issue with needs:owner, one with an open blocker, and a member of a solo unit (point:8, or a `solo` part) while a change waits for the release are left out.
-    `stop` says why `start` is empty on purpose: a change of a solo unit waits for the owner's merge, and nothing new begins before it (the rest of its unit included).
+    `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last, by `base_key`).
+    An issue with needs:owner, and one with an open blocker, are left out. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
+    (point:8, or a `solo` part) is left out too while a change waits for the release. A session of the owner has no unit rule (issues.md): it may bundle issues of any units.
+    `stop` says why `start` is empty on purpose: a change of a solo unit waits for the owner's merge, and nothing new begins before it (the rest of its unit included); the night run only.
     `waiting` are the changes that wait for the release."""
     position = plan_positions(plan)
     waiting = release_changes(issues)
@@ -426,7 +439,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None):
     def start_key(i):
         if i.number in position:
             return (0, position[i.number], (), 0)
-        return (1, 0, (not urgent(i), not quick_bug(i), *base_key(i)), i.number)
+        return (1, 0, base_key(i), i.number)
 
     out = {
         "start": [],
@@ -448,11 +461,11 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None):
             out["needs_owner"].append(brief(i))
         elif i.blocked_by:
             out["blocked"].append({"number": i.number, "title": i.title, "blocked_by": sorted(i.blocked_by)})
-        elif solo(i) and waiting:
+        elif night and solo(i) and waiting:
             out["waits_for_release"].append(i.number)
         else:
             startable.append(i)
-    if any(solo(i) for i in waiting):
+    if night and any(solo(i) for i in waiting):
         out["stop"] = "a point:8 change (or a part of one, labelled solo) waits for the owner to merge the Release PR; start nothing new"
         return out
     startable.sort(key=start_key)
@@ -787,7 +800,7 @@ def cmd_next(args):
     state = load_state()
     mine = {int(n) for n in args.mine.replace(" ", "").split(",") if n}
     plan = read_plan(saved_plan_path())
-    print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, plan), ensure_ascii=False, indent=2))
+    print(json.dumps(build_next(list(state.issues.values()), state.pr_closing, mine, plan, night=bool(os.environ.get("NIGHTLY_DEADLINE_EPOCH"))), ensure_ascii=False, indent=2))
 
 
 def cmd_unsplit(args):
