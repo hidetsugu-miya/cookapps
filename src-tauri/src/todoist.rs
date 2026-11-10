@@ -706,6 +706,39 @@ fn slack_task_body(
     Ok(body)
 }
 
+/// The body of `POST /tasks` for a task the user confirmed from a proposal of Claude (the Todo pane): its name, its date and its project, exactly as given.
+/// The name goes to `content`, which Todoist does not read for dates (Quick Add would), and the date to `due_string` only in the plain forms of `is_plain_due`.
+/// A blank date or project means none. A name past `CONTENT_LIMIT` characters, a date of another form and a project not in `projects` are refused, not cut or dropped.
+fn proposal_task_body(
+    content: &str,
+    due: Option<&str>,
+    project_id: Option<&str>,
+    projects: &[(String, String)],
+) -> Result<Value, String> {
+    let content = content.trim();
+    if content.is_empty() {
+        return Err("タスクの名前を入力してください".into());
+    }
+    if content.chars().count() > CONTENT_LIMIT {
+        return Err(format!(
+            "タスクの名前が長すぎます（{CONTENT_LIMIT} 文字まで）"
+        ));
+    }
+    let mut body = json!({ "content": content });
+    if let Some(due) = due.map(str::trim).filter(|d| !d.is_empty()) {
+        if !is_plain_due(due) {
+            return Err("日付は YYYY-MM-DD か YYYY-MM-DD HH:MM の形で指定してください".into());
+        }
+        body["due_string"] = due.into();
+    }
+    if let Some(project) = project_id.map(str::trim).filter(|p| !p.is_empty()) {
+        let id = claude::known_project(Some(project.to_owned()), projects)
+            .ok_or("プロジェクトが見つかりません")?;
+        body["project_id"] = id.into();
+    }
+    Ok(body)
+}
+
 fn due_of<Tz: TimeZone>(tz: &Tz, due: &Option<ApiDue>) -> Option<Due> {
     let due = due.as_ref()?;
     let (date, time) = parse_due(tz, &due.date)?;
@@ -1510,6 +1543,29 @@ pub async fn todoist_add_from_slack(
     .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let created = request(&auth, &state, command, Method::POST, "/tasks", Some(body)).await?;
     Ok(created.map(|_| content.trim().to_owned()))
+}
+
+/// Adds one task from a proposal the user confirmed (the Todo pane): `content` is its name, `due` its date (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, none for no date)
+/// and `project_id` the ID of a project of the last load (none for the inbox). Unlike `todoist_add`, nothing in the name is read as a date.
+/// `None` means a token is needed and nothing was created; the screen reloads the list afterwards, as for any change.
+#[tauri::command]
+pub async fn todoist_add_task(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    content: String,
+    due: Option<String>,
+    project_id: Option<String>,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_add_task";
+    let body = proposal_task_body(
+        &content,
+        due.as_deref(),
+        project_id.as_deref(),
+        &state.projects(),
+    )
+    .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let created = request(&auth, &state, command, Method::POST, "/tasks", Some(body)).await?;
+    Ok(created.map(|_| true))
 }
 
 /// Completes (`close`) or reopens a task.
@@ -3476,6 +3532,106 @@ mod tests {
             CONTENT_LIMIT
         );
         assert_eq!(body(" a ", "", "", None, false).unwrap()["content"], "a");
+    }
+
+    fn listed() -> Vec<(String, String)> {
+        vec![("P1".into(), "仕事".into()), ("P2".into(), "家".into())]
+    }
+
+    fn task_body(content: &str, due: Option<&str>, project: Option<&str>) -> Result<Value, String> {
+        proposal_task_body(content, due, project, &listed())
+    }
+
+    #[test]
+    fn a_proposed_task_is_made_as_given() {
+        assert_eq!(
+            task_body(" 見積もりを送る ", Some("2026-11-15 09:30"), Some("P2")),
+            Ok(json!({
+                "content": "見積もりを送る",
+                "due_string": "2026-11-15 09:30",
+                "project_id": "P2",
+            }))
+        );
+        assert_eq!(
+            task_body("a", Some(" 2026-11-15 "), None),
+            Ok(json!({ "content": "a", "due_string": "2026-11-15" }))
+        );
+    }
+
+    #[test]
+    fn a_proposed_task_without_a_date_or_project_sends_only_its_name() {
+        let only = Ok(json!({ "content": "a" }));
+        assert_eq!(task_body("a", None, None), only);
+        assert_eq!(task_body("a", Some("  "), Some("")), only);
+    }
+
+    #[test]
+    fn a_date_word_in_the_name_is_left_in_the_name() {
+        // Todoist reads `due_string` only; Quick Add would take "明日" out of the name and make it the date.
+        let body = task_body("明日 15時 に会議 every day", None, None).unwrap();
+        assert_eq!(body["content"], "明日 15時 に会議 every day");
+        assert!(body.get("due_string").is_none());
+    }
+
+    #[test]
+    fn a_proposed_task_without_a_name_is_refused() {
+        for empty in ["", "  ", "\n"] {
+            assert_eq!(
+                task_body(empty, None, None),
+                Err("タスクの名前を入力してください".into()),
+                "{empty:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_proposed_task_name_past_the_limit_is_refused_and_the_limit_is_kept() {
+        let long = "あ".repeat(CONTENT_LIMIT + 1);
+        assert_eq!(
+            task_body(&format!(" {long} "), None, None),
+            Err(format!(
+                "タスクの名前が長すぎます（{CONTENT_LIMIT} 文字まで）"
+            ))
+        );
+        let edge = "あ".repeat(CONTENT_LIMIT);
+        assert_eq!(task_body(&edge, None, None).unwrap()["content"], edge);
+    }
+
+    #[test]
+    fn a_proposed_task_date_must_be_a_plain_date_or_date_and_time() {
+        for due in [
+            "tomorrow",
+            "every day",
+            "2026-11-01T15:00",
+            "2026-13-01",
+            "2026-11-01 25:00",
+            "2026-1-5",
+        ] {
+            assert_eq!(
+                task_body("a", Some(due), None),
+                Err("日付は YYYY-MM-DD か YYYY-MM-DD HH:MM の形で指定してください".into()),
+                "{due}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_proposed_task_project_must_be_one_of_the_list() {
+        for project in ["P9", "仕事", "p1"] {
+            assert_eq!(
+                task_body("a", None, Some(project)),
+                Err("プロジェクトが見つかりません".into()),
+                "{project}"
+            );
+        }
+        assert_eq!(
+            task_body("a", None, Some(" P1 ")).unwrap()["project_id"],
+            "P1"
+        );
+        assert_eq!(
+            proposal_task_body("a", None, Some("P1"), &[]),
+            Err("プロジェクトが見つかりません".into())
+        );
     }
 
     #[test]

@@ -235,6 +235,7 @@ pub fn run() {
             todoist::todoist_task_from_mail,
             todoist::todoist_summarize_slack,
             todoist::todoist_add_from_slack,
+            todoist::todoist_add_task,
             todoist::todoist_set_done,
             todoist::todoist_update,
             todoist::todoist_picked_due,

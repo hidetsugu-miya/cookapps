@@ -108,6 +108,8 @@ export interface Commands {
     args: { url: string; content: string; description: string; due: string; projectId?: string | null; today: boolean };
     result: string | null;
   };
+  // One task from a proposal of Claude: its name, its date (YYYY-MM-DD or YYYY-MM-DD HH:MM) and its project, as given.
+  todoist_add_task: { args: { content: string; due?: string | null; projectId?: string | null }; result: boolean | null };
   todoist_set_done: { args: { id: string; done: boolean }; result: boolean | null };
   todoist_update: {
     args: { id: string; content?: string; description?: string; dueString?: string; labels?: string[] };
