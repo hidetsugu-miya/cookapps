@@ -19,8 +19,9 @@ import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
-import { CHEVRON_SVG, CLAUDE_SVG, FILE_SVG, svgOf } from "./icons.js";
+import { CHEVRON_SVG, CLAUDE_SVG, FILE_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { initOrcaChat } from "./orca-chat.js";
@@ -66,6 +67,8 @@ let loading = false;
 let lastTry = 0;
 // The list pane shows the projects, or (the bell pressed) the working agents; the projects come first and the choice is kept in memory.
 let working = false;
+// Whether the list of projects is open (A-23): held in memory only, so the screen is open again when the app starts.
+let listOpen = true;
 // The text of the search field (A-19): the list shows the projects and SSH hosts whose name holds it (blank: all of them), and the row the keys are on is `cursor` (a key; one the list does not show leaves the first).
 let query = "";
 let cursor: string | null = null;
@@ -568,6 +571,7 @@ function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled:
     editor: tab?.kind === "file",
     plusDisabled,
     filesShown: filesShown(),
+    listOpen,
   };
   return { kind: "pane", pane };
 }
@@ -577,7 +581,7 @@ function drawWork(tabs: Tab[]) {
   syncLayout(tabs);
   const layout = currentLayout();
   const plusDisabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
-  const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, editor: false, plusDisabled, filesShown: filesShown() } };
+  const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, editor: false, plusDisabled, filesShown: filesShown(), listOpen } };
   paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled, (id) => findTab(view?.target ?? null, projectKey!, tabs, id)) : empty);
   drawStarted();
 }
@@ -1027,8 +1031,8 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
 // The plus (A-16): a menu of "Claude を起動" and "ターミナルを開く", which start in a worktree of the project (or SSH host) selected in the list pane.
 function openStartMenu(anchor: Element) {
   if (view === null || projectKey === null) return;
-  const item = (label: string, kind: StartKind) => ({ label, color: "var(--accent)", current: false, pick: () => chooseWorktree(anchor, kind) });
-  openMenu(anchor, [item("Claude を起動", "claude"), item("ターミナルを開く", "terminal")]);
+  const item = (label: string, icon: string, kind: StartKind) => ({ label, color: "var(--accent)", icon, current: false, pick: () => chooseWorktree(anchor, kind) });
+  openMenu(anchor, [item("Claude を起動", CLAUDE_SVG, "claude"), item("ターミナルを開く", TERMINAL_SVG, "terminal")]);
 }
 
 // A project with one worktree starts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there).
@@ -1076,6 +1080,21 @@ function toggleFilesAndDraw() {
   }
 }
 
+// Closes the list of projects with its divider, or opens it again (A-23). The divider's ratio is kept, so the list opens at the width it had.
+// The pressed button is hidden by it, so the focus goes on to the button that is shown now.
+function toggleList() {
+  const focused = document.activeElement?.classList.contains("list-toggle") ?? false;
+  listOpen = !listOpen;
+  $("orca-list").hidden = !listOpen;
+  $("orca-split").hidden = !listOpen;
+  drawListToggle($("orca-list-toggle"), listOpen);
+  draw();
+  if (focused) {
+    const shown = [...document.querySelectorAll<HTMLElement>(".list-toggle")].find((b) => b.offsetParent !== null);
+    shown?.focus({ preventScroll: true });
+  }
+}
+
 // ---- the search field (A-19) ----
 
 const searchInput = () => $<HTMLInputElement>("orca-search-input");
@@ -1097,6 +1116,7 @@ function clearSearch() {
 // ⌘J: the field takes the focus with its text selected. The working view has no field, so it gives way to the projects.
 function focusSearch() {
   working = false;
+  if (!listOpen) toggleList();
   draw();
   searchInput().focus();
   searchInput().select();
@@ -1164,6 +1184,10 @@ export function initOrca() {
     refresh();
   });
   initSearch();
+  const toggle = listToggle("プロジェクト一覧", toggleList);
+  toggle.id = "orca-list-toggle";
+  drawListToggle(toggle, listOpen);
+  $("orca-header").prepend(toggle);
   $("orca-refresh").onclick = () => load("full", true);
   $("orca-bell").onclick = () => {
     working = !working;
@@ -1176,6 +1200,7 @@ export function initOrca() {
       openStartMenu(anchor);
     },
     files: toggleFilesAndDraw,
+    list: toggleList,
     focus: focusPane,
     move: (tab, pane, edge) => runPaneOp({ kind: "move", tab, pane, edge }),
     menu: openTabMenu,

@@ -27,6 +27,16 @@ describe("sidebar", () => {
     await expect($(".tooltip")).not.toBeDisplayed();
   });
 
+  it("starts the icons below the traffic lights, and is a place to drag the window by", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady });
+    await expect($("#sidebar")).toHaveAttribute("data-tauri-drag-region");
+    // The traffic lights sit at the top of the column (trafficLightPosition y 20, 14px high); the first icon starts under them.
+    const top = await browser.execute(() => document.getElementById("nav-mail")!.getBoundingClientRect().top);
+    expect(top).toBeGreaterThanOrEqual(40);
+    // A press on an icon is not a drag.
+    await expect($("#nav-mail")).not.toHaveAttribute("data-tauri-drag-region");
+  });
+
   for (const [name, status] of [
     ["Claude Code is missing", claudeMissing],
     ["Claude is logged out", claudeLoggedOut],
@@ -221,6 +231,24 @@ describe("sidebar", () => {
     await expect(popup()).not.toBeDisplayed();
     await expect($("#nav-settings .nav-dot")).not.toBeDisplayed();
     await expect($("#nav-settings")).toHaveAttribute("aria-label", "設定");
+  });
+});
+
+// A-23: only the screens with a list at the side (Todo, Orca) have the button that closes it.
+describe("sidebar: the button that closes a list (A-23)", () => {
+  const shown = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>(".list-toggle")].filter((b) => b.offsetParent !== null).length);
+
+  it("shows none on the mail, calendar, Slack and settings screens", async () => {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady });
+    for (const nav of ["#nav-mail", "#nav-calendar", "#nav-slack", "#nav-settings"]) {
+      await $(nav).click();
+      await expect($(nav)).toHaveAttribute("aria-current", "page");
+      expect(await shown()).toBe(0);
+    }
+    // Todo has one, so the count above is not a count of nothing.
+    await $("#nav-todo").click();
+    await expect($("#projects-toggle")).toBeDisplayed();
+    expect(await shown()).toBe(1);
   });
 });
 

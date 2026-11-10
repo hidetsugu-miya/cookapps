@@ -76,6 +76,11 @@ describe("todo prompt screen", () => {
     await expect($("#nav-settings")).toHaveAttribute("aria-current", "page");
   });
 
+  it("makes the header a place to drag the window by", async () => {
+    await openPrompt();
+    await expect($("#prompt > header")).toHaveAttribute("data-tauri-drag-region", "deep");
+  });
+
   it("returns to the Claude tab it was opened from, not to Google", async () => {
     await openPrompt();
     await $("#prompt-back").click();

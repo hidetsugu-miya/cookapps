@@ -22,6 +22,18 @@ describe("thread", () => {
     await waitForCount("#unread-threads li", 1);
   });
 
+  it("makes the header of the thread a place to drag the window by, and keeps its buttons pressable", async () => {
+    await mock("thread", threadDetail("First unread", "Hello from Alice", true));
+    await mock("set_read", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
+    await expect($("#mail-header")).toBeDisplayed();
+    await expect($("#mail-header")).toHaveAttribute("data-tauri-drag-region", "deep");
+    await expect($("#back")).not.toHaveAttribute("data-tauri-drag-region");
+    await $("#back").click();
+    await expect($("#threads")).toBeDisplayed();
+  });
+
   it("opens a read thread without marking it read", async () => {
     const open = await mock("thread", threadDetail("Already read", "Old news", false));
     const setRead = await mock("set_read", true);

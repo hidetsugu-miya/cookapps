@@ -78,7 +78,9 @@ export function renderProjects() {
     }
     lines.push(line);
   }
+  // The button that closes the list (A-23) is the list's first child and stays.
   $("projects").replaceChildren(
+    ...$("projects").querySelectorAll(":scope > .list-toggle"),
     projectButton("inbox", INBOX_SVG, "インボックス", counts.get(inbox?.id as string) ?? 0),
     projectButton("today", DAY_SVG, "今日", today),
     tag("h3", "", "プロジェクト"),

@@ -2,6 +2,9 @@
 import type { Info } from "../../ts/bindings/Info";
 import type { OrcaRow } from "../../ts/bindings/OrcaRow";
 import type { TaskItem } from "../../ts/bindings/TaskItem";
+import type { HandoffSummary } from "../../ts/bindings/HandoffSummary";
+import type { OrcaWorktree } from "../../ts/bindings/OrcaWorktree";
+import type { ThreadDetail } from "../../ts/bindings/ThreadDetail";
 import type { ThreadItem } from "../../ts/bindings/ThreadItem";
 import type { TimelineMessage } from "../../ts/bindings/TimelineMessage";
 import type { Todo } from "../../ts/bindings/Todo";
@@ -60,7 +63,12 @@ async function shot(name: string) {
 
 const WORK = "aoi.sato@example.com";
 const HOME = "aoi.sato@example.org";
-const mail = (id: string, account: string, from: string, subject: string, snippet: string, dateMs: number, unread: boolean): ThreadItem => ({ id, account, from, subject, snippet, dateMs, unread });
+// The name and the address of a `Name <addr>` sender, as Rust splits them (`fromName`, `fromAddress`): the rows and the thread draw these, not `from`.
+const sender = (from: string) => {
+  const [, fromName, fromAddress] = /^(.*) <(.*)>$/.exec(from)!;
+  return { from, fromName, fromAddress };
+};
+const mail = (id: string, account: string, from: string, subject: string, snippet: string, dateMs: number, unread: boolean): ThreadItem => ({ id, account, ...sender(from), subject, snippet, dateMs, unread });
 
 const threads = (): ThreadItem[] => [
   mail("a1", WORK, "田中 蓮 <ren.tanaka@example.com>", "請求書の金額が画面と合わない件", "お疲れさまです。10 月分の請求書について、お客さまから金額が画面と違うとのお問い合わせがありました。", minutesAgo(18), true),
@@ -81,14 +89,15 @@ const threads = (): ThreadItem[] => [
 
 const inboxOf = () => ({ accounts: [WORK, HOME], threads: threads(), needsLogin: [], failed: {}, historyIds: { [WORK]: "100", [HOME]: "200" } });
 
-const invoiceThread = () => ({
+const invoiceThread = (): ThreadDetail => ({
   subject: "請求書の金額が画面と合わない件",
   unread: true,
   messages: [
     {
       id: "m0",
-      from: "鈴木 陽菜 <hina.suzuki@example.com>",
+      ...sender("鈴木 陽菜 <hina.suzuki@example.com>"),
       to: "ren.tanaka@example.com",
+      toLabel: "To 田中 蓮",
       dateMs: minutesAgo(64),
       snippet: "経理の鈴木です。お客さまから請求書の金額についてお問い合わせをいただきました。",
       html: false,
@@ -97,8 +106,9 @@ const invoiceThread = () => ({
     },
     {
       id: "m00",
-      from: "田中 蓮 <ren.tanaka@example.com>",
+      ...sender("田中 蓮 <ren.tanaka@example.com>"),
       to: "hina.suzuki@example.com",
+      toLabel: "To 鈴木 陽菜",
       dateMs: minutesAgo(41),
       snippet: "承知しました。同じ条件のお客さまがいないか調べて、開発にも共有します。",
       html: false,
@@ -107,8 +117,9 @@ const invoiceThread = () => ({
     },
     {
       id: "m1",
-      from: "田中 蓮 <ren.tanaka@example.com>",
+      ...sender("田中 蓮 <ren.tanaka@example.com>"),
       to: WORK,
+      toLabel: "To 自分",
       dateMs: minutesAgo(18),
       snippet: "お疲れさまです。",
       html: false,
@@ -133,12 +144,23 @@ const specs: Spec[] = [
 ];
 const rows = () =>
   specs.map(([repo, branch, line, extra], i) => orcaRow(repo, branch, line, { handle: `term_${i}`, paneKey: `tab_${i}:leaf_1`, path: path(repo, branch), atMs: minutesAgo(extra.minutes ?? 2) - 5_000, ...extra }));
-const worktreeList = () => [
-  ...specs.map(([repo, branch]) => ({ path: path(repo, branch), repo, branch, projectKey: `proj_${repo}` })),
-  { path: path("billing-api", "main"), repo: "billing-api", branch: "main", projectKey: "proj_billing-api" },
-  { path: path("shop-web", "main"), repo: "shop-web", branch: "main", projectKey: "proj_shop-web" },
-  ...["auth-service", "notify-worker", "data-batch", "ops-scripts", "landing-page"].map((repo) => ({ path: path(repo, "main"), repo, branch: "main", projectKey: `proj_${repo}` })),
+// The worktree of `main` is the project's own folder (`isMain`), which a handoff without 新規作成 starts in (A-9).
+const worktreeOf = (repo: string, branch: string): OrcaWorktree => ({ path: path(repo, branch), repo, branch, projectKey: `proj_${repo}`, isMain: branch === "main" });
+const worktreeList = (): OrcaWorktree[] => [
+  ...specs.map(([repo, branch]) => worktreeOf(repo, branch)),
+  ...["billing-api", "shop-web", "mobile-api", "admin-console", "design-docs", "auth-service", "notify-worker", "data-batch", "ops-scripts", "landing-page"].map((repo) => worktreeOf(repo, "main")),
 ];
+// What Claude answers for the instruction of the handoff photo (`claude_summarize_handoff`, A-9).
+const INSTRUCTION = "この差額の原因を調べて、直してください。同じ条件のお客さまがほかにいないかも確かめてください。";
+const handoffPoints: HandoffSummary = {
+  points: [
+    "10 月分の請求書の金額が、画面の請求額より 1,200 円多くなる原因を調べる",
+    "割引クーポンを使ったお客さまの請求書に、割引が反映されるように直す",
+    "同じ条件のお客さま 14 件のほかに、影響を受けた請求書がないか確かめる",
+    "割引クーポンがある場合の請求書の金額のテストを足す",
+  ],
+  worktreeName: "fix-invoice-coupon",
+};
 // The target is a saved environment, so that its list and its terminal are streamed (A-12) and the terminal has colors.
 const ENVIRONMENT = "build-server";
 const streamOverview = () => orcaOverview([], [], { target: ENVIRONMENT, environments: [ENVIRONMENT], ssh: [orcaSsh("s1", "staging"), orcaSsh("s2", "ops-bastion")] });
@@ -405,10 +427,15 @@ describe("readme shots", () => {
     await expect($("#thread-subject")).toHaveText("請求書の金額が画面と合わない件");
     await $("#thread-orca").click();
     await expect($("#mail-handoff")).toBeDisplayed();
-    await waitForCount("#mail-handoff .ho-row", specs.length);
-    await $("#mail-handoff .ho-chip").click();
-    await $(`.orca-dest-pop button[data-path="${path("billing-api", "main")}"]`).click();
-    await $("#mail-handoff textarea").setValue("この差額の原因を調べて、直してください。同じ条件のお客さまがほかにいないかも確かめてください。");
+    // The list of Orca is read when the pane opens: the project chip is enabled once the projects are in.
+    await expect($("#mail-handoff .ho-project")).toBeEnabled();
+    await $("#mail-handoff .ho-project").click();
+    await $('//div[@role="menu"]//button[normalize-space(.)="billing-api"]').click();
+    const ask = await mock("claude_summarize_handoff", handoffPoints);
+    await $("#mail-handoff textarea").setValue(INSTRUCTION);
+    await $("#mail-handoff .ho-form .text-btn.primary").click();
+    await waitForCalls(ask);
+    await expect($("#mail-handoff .ho-agree")).toBeEnabled();
     await shot("handoff");
   });
 

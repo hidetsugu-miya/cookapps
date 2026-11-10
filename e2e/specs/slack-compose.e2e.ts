@@ -67,6 +67,11 @@ describe("slack compose screen", () => {
     await expect($("#nav-mail")).toHaveAttribute("aria-current", "page");
   });
 
+  it("makes the header a place to drag the window by", async () => {
+    await openCompose();
+    await expect($("#slack-compose > header")).toHaveAttribute("data-tauri-drag-region", "deep");
+  });
+
   it("asks for the workspace in settings and stays on the mail when there is none", async () => {
     await boot({ inbox: inbox(), claude_status: claudeReady });
     await waitForCount("#unread-threads li", 2);

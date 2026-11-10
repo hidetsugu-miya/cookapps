@@ -53,6 +53,11 @@ describe("slack thread", () => {
     await expect($("#slack-list")).not.toBeDisplayed();
   });
 
+  it("makes the header a place to drag the window by", async () => {
+    await openDetail();
+    await expect($("#st-head")).toHaveAttribute("data-tauri-drag-region", "deep");
+  });
+
   it("opens the thread of a reply sent to the channel by the timestamp of its thread", async () => {
     const reply = timelineMessage(reply1, "Bob Example", "dev", "Looks fine to me.", { threadTs: root });
     const read = await openDetail({}, base(), [reply]);

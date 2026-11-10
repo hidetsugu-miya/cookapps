@@ -38,6 +38,11 @@ describe("inbox", () => {
     await expect($("#read-threads")).toHaveText(expect.stringContaining("Already read"));
   });
 
+  it("makes the header of the list a place to drag the window by", async () => {
+    await expect($("#inbox-header")).toBeDisplayed();
+    await expect($("#inbox-header")).toHaveAttribute("data-tauri-drag-region", "deep");
+  });
+
   it("archives a row through the archive command", async () => {
     const archive = await mock("archive", true);
     const row = rowOf("unread-threads", "First unread");
