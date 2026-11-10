@@ -157,7 +157,7 @@ describe("orca handoff", () => {
     await expect($("#mail-split")).toHaveAttribute("aria-label", "Orca の幅");
     await listRead(MAIL);
     // The chips of a new session run destination, project, worktree (no project chosen yet, so the worktree waits), and no running session is listed.
-    expect(await textsOf(`${MAIL.pane} .ho-new button`)).toEqual(["このマシン", "プロジェクトを選ぶ", "default"]);
+    expect(await textsOf(`${MAIL.pane} .ho-new button:not([hidden])`)).toEqual(["このマシン", "プロジェクトを選ぶ", "default"]);
     await expect($(`${MAIL.pane} .ho-project`)).toHaveAttribute("aria-label", "プロジェクト");
     await expect($(`${MAIL.pane} .ho-worktree`)).toBeDisabled();
     await expect($(`${MAIL.pane} .ho-name`)).not.toBeDisplayed();
