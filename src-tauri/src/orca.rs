@@ -599,7 +599,7 @@ pub fn ssh_targets_of(result: &Value) -> Vec<OrcaSshTarget> {
         .collect()
 }
 
-/// The lines of `orca terminal read --screen` (its `result`): `terminal.tail`, an array of lines with no colors.
+/// The lines of a screen read (`orca terminal read --screen` or `terminal.read` with `screen: true`; its `result`): `terminal.tail`, an array of lines with no colors.
 pub fn screen_lines_of(result: &Value) -> Vec<String> {
     result["terminal"]["tail"]
         .as_array()
@@ -607,6 +607,19 @@ pub fn screen_lines_of(result: &Value) -> Vec<String> {
         .flatten()
         .filter_map(|l| l.as_str().map(str::to_owned))
         .collect()
+}
+
+/// The params of `terminal.read` for the screen: what `orca terminal read --screen` sends (`screen: true`), so the lines are the rendered screen and not the accumulated output.
+fn screen_params(handle: &str) -> Value {
+    serde_json::json!({"terminal": handle, "screen": true})
+}
+
+/// The lines of a `terminal.read` answered over the socket. An Orca that ignores `screen` answers the accumulated output with no `source`, which the CLI refuses to present as a screen (`incompatible_runtime`), and so does this.
+fn screen_of(result: &Value) -> Result<Vec<String>, String> {
+    if result["terminal"]["source"].is_null() {
+        return Err("この Orca は画面の読みに対応していません。Orca を更新してください".into());
+    }
+    Ok(screen_lines_of(result))
 }
 
 /// Whether the CLI's output says the terminal was already closed (`terminal_handle_stale`): closing it again is a success.
@@ -1273,16 +1286,34 @@ pub(crate) fn check_target(handle: &str, environment: Option<&str>) -> Result<()
     )
 }
 
-/// A-11: the lines on the screen of the session `handle`, read without the mirror's check of the handle (the caller checked it).
-pub(crate) fn read_screen(handle: &str, environment: Option<&str>) -> Result<Vec<String>, String> {
-    call(&screen_args(handle, environment), READ_TIMEOUT)
-        .map(|result| screen_lines_of(&result))
-        .map_err(message_of)
+/// A call of this machine's Orca over its unix socket from a thread of `blocking`, so no CLI process is started.
+fn local_blocking(method: &str, params: Value) -> Result<Value, String> {
+    tokio::runtime::Handle::current().block_on(crate::orca_chat::local_call(method, params))
 }
 
-/// A-11: one key typed into the session `handle` (no Enter), through the CLI like the keys of a mirror of a saved environment. Only digits and Tab come here, so no secret is in the arguments.
+/// The lines on the screen of a terminal: of this machine over its unix socket (`terminal.read`), of a saved environment through the CLI. The handle was checked by the caller.
+fn read_lines(handle: &str, environment: Option<&str>) -> Result<Vec<String>, String> {
+    match environment {
+        None => local_blocking("terminal.read", screen_params(handle))
+            .and_then(|result| screen_of(&result)),
+        Some(_) => call(&screen_args(handle, environment), READ_TIMEOUT)
+            .map(|result| screen_lines_of(&result))
+            .map_err(message_of),
+    }
+}
+
+/// A-11: the lines on the screen of the session `handle`, read without the mirror's check of the handle (the caller checked it).
+pub(crate) fn read_screen(handle: &str, environment: Option<&str>) -> Result<Vec<String>, String> {
+    read_lines(handle, environment)
+}
+
+/// A-11: one key typed into the session `handle` (no Enter): over the unix socket for this machine, like the keys of its mirror, and through the CLI for a saved environment. Only digits and Tab come here, so no secret is in the arguments.
 pub(crate) fn press_key(handle: &str, key: &str, environment: Option<&str>) -> Result<(), String> {
-    write(&input_args(handle, key, environment)).map(|_| ())
+    match environment {
+        None => local_blocking("terminal.send", input_params(handle, key, "cookapps", None))
+            .and_then(|result| check_accepted(&result)),
+        Some(_) => write(&input_args(handle, key, environment)).map(|_| ()),
+    }
 }
 
 /// Starts Claude in the worktree at `path`, with `prompt` as its first prompt when there is one (A-9; the Orca screen starts it with none).
@@ -1463,15 +1494,10 @@ fn check_mirrored(mirror: &OrcaMirror, handle: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The lines on the screen of a terminal of this machine. Read once a second while its tab is shown, so the list is read only the first time.
+/// The lines on the screen of a terminal of this machine, over the unix socket (no CLI process is started). Read once a second while its tab is shown, so the list is read only the first time.
 fn screen(mirror: &OrcaMirror, handle: &str) -> Result<Vec<String>, String> {
     check_mirrored(mirror, handle)?;
-    call(&screen_args(handle, None), READ_TIMEOUT)
-        .map(|result| screen_lines_of(&result))
-        .map_err(|e| {
-            mirror.forget(handle);
-            message_of(e)
-        })
+    read_lines(handle, None).inspect_err(|_| mirror.forget(handle))
 }
 
 /// The params of `terminal.send`, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed. `client` names this app (A-12 gives the id its stream subscribed with). With a `viewport` (the pane's size, A-12) the send claims that size again, as Orca's own screen does at every key.
@@ -3181,6 +3207,22 @@ mod tests {
         assert_eq!(screen_lines_of(&result), ["$ ls", "", "a b"]);
         assert!(screen_lines_of(&Value::Null).is_empty());
         assert!(screen_lines_of(&json!({"terminal": {"tail": "x"}})).is_empty());
+    }
+
+    #[test]
+    fn the_socket_read_asks_for_the_screen_and_refuses_a_stream() {
+        assert_eq!(
+            screen_params("term_1"),
+            json!({"terminal": "term_1", "screen": true})
+        );
+        let screen = json!({"terminal": {"source": "screen", "tail": ["$ ls", "a"]}});
+        assert_eq!(
+            screen_of(&screen),
+            Ok(vec!["$ ls".to_owned(), "a".to_owned()])
+        );
+        // An Orca that ignores `screen` answers the accumulated output with no source.
+        assert!(screen_of(&json!({"terminal": {"tail": ["old output"]}})).is_err());
+        assert!(screen_of(&Value::Null).is_err());
     }
 
     #[test]
