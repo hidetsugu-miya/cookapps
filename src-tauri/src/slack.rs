@@ -702,9 +702,21 @@ async fn call_scoped_retrying(
     payload: Payload<'_>,
     retries: usize,
 ) -> Result<(Value, Option<String>), SlackError> {
+    call_scoped_at(API_URL, http, token, method, payload, retries).await
+}
+
+/// `call_scoped_retrying` to the Web API at `api_url` (a local address in the tests).
+async fn call_scoped_at(
+    api_url: &str,
+    http: &reqwest::Client,
+    token: &str,
+    method: &str,
+    payload: Payload<'_>,
+    retries: usize,
+) -> Result<(Value, Option<String>), SlackError> {
     let mut attempt = 0;
     loop {
-        let req = http.post(format!("{API_URL}/{method}")).bearer_auth(token);
+        let req = http.post(format!("{api_url}/{method}")).bearer_auth(token);
         let req = match &payload {
             Payload::Json(body) => req.json(body),
             Payload::Form(params) => req.form(params),
@@ -1659,6 +1671,9 @@ struct Raw {
 /// (team, user) -> when it was asked, and what Slack said (`None`: it could not say).
 type UserCache = HashMap<(String, String), (Instant, Option<SlackUser>)>;
 
+/// team -> when `usergroups.list` was asked, and the handle of each user group by ID (`None`: it could not say).
+type GroupCache = HashMap<String, (Instant, Option<HashMap<String, String>>)>;
+
 /// A workspace's channels -> when each was read and the messages that read listed.
 type History = HashMap<String, (Instant, Vec<Raw>)>;
 /// (team, channel) -> the same, for every workspace.
@@ -1718,6 +1733,8 @@ struct ThreadEntry {
 #[derive(Default)]
 struct TimelineCache {
     users: Mutex<UserCache>,
+    /// The user groups of each workspace (`usergroups.list`), for the mentions of a group.
+    groups: Mutex<GroupCache>,
     /// (team, channel) -> when its last read was and the messages that read listed, which stand in for a channel that is not read now.
     history: Mutex<TeamsHistory>,
     /// team -> until when Slack's rate limit stops its timeline reads.
@@ -1749,6 +1766,7 @@ struct TimelineCache {
 impl TimelineCache {
     fn forget(&self, team_id: &str) {
         self.users.lock().unwrap().retain(|(t, _), _| t != team_id);
+        self.groups.lock().unwrap().remove(team_id);
         self.history
             .lock()
             .unwrap()
@@ -1917,6 +1935,33 @@ impl TimelineCache {
             (team_id.to_owned(), user.to_owned()),
             (Instant::now(), found),
         );
+    }
+
+    /// The name a mention of `id` draws: a user's name, else the handle of the user group.
+    fn name_of(&self, team_id: &str, id: &str) -> Option<String> {
+        self.user(team_id, id)
+            .map(|u| u.name)
+            .or_else(|| self.group_handle(team_id, id))
+    }
+
+    fn group_handle(&self, team_id: &str, group: &str) -> Option<String> {
+        let groups = self.groups.lock().unwrap();
+        groups.get(team_id)?.1.as_ref()?.get(group).cloned()
+    }
+
+    /// Whether Slack should be asked about the workspace's user groups: it never was, or the answer is old.
+    fn needs_groups(&self, team_id: &str) -> bool {
+        let groups = self.groups.lock().unwrap();
+        groups
+            .get(team_id)
+            .is_none_or(|(at, found)| !user_fresh(at.elapsed(), found.is_some()))
+    }
+
+    fn put_groups(&self, team_id: &str, found: Option<HashMap<String, String>>) {
+        self.groups
+            .lock()
+            .unwrap()
+            .insert(team_id.to_owned(), (Instant::now(), found));
     }
 
     /// The workspace's remembered channels.
@@ -3205,7 +3250,8 @@ pub(crate) fn unescape(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// The text of one `<…>`: a mention (`<@U1>` as `@name`, `@不明` when no name is known), a channel (`<#C1|name>` as `#name`), a broadcast (`<!here>` as `@here`),
+/// The text of one `<…>`: a mention (`<@U1>` as `@name`, `@不明` when no name is known), a user group (`<!subteam^S1>` as `@handle`, `@不明` when no handle is known),
+/// a channel (`<#C1|name>` as `#name`), a broadcast (`<!here>` as `@here`),
 /// a link (`<https://a|label>` as `label (https://a)`, `<https://a|https://a>` and `<https://a>` as `https://a`).
 pub(crate) fn token_text(token: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
     let (target, label) = match token.split_once('|') {
@@ -3231,7 +3277,10 @@ pub(crate) fn token_text(token: &str, name_of: &dyn Fn(&str) -> Option<String>) 
             ("date", None) => String::new(),
             (_, Some(label)) if label.starts_with('@') || label.starts_with('#') => unescape(label),
             (_, Some(label)) => format!("@{}", unescape(label)),
-            ("subteam", None) => format!("@{UNKNOWN_NAME}"),
+            ("subteam", None) => {
+                let name = command.split('^').nth(1).and_then(name_of);
+                format!("@{}", name.unwrap_or_else(|| UNKNOWN_NAME.to_owned()))
+            }
             (base, None) => format!("@{base}"),
         };
     }
@@ -3599,6 +3648,75 @@ async fn fetch_user(http: &reqwest::Client, token: &str, team_id: &str, id: &str
 /// Whether an `x-oauth-scopes` header (`None`: not known) says the token lacks `users:read`.
 fn lacks_users_read(scopes: Option<&str>) -> bool {
     scopes.is_some_and(|s| !missing_scopes(s, &["users:read"]).is_empty())
+}
+
+/// Whether an `x-oauth-scopes` header (`None`: not known) says the token lacks `usergroups:read`.
+fn lacks_usergroups_read(scopes: Option<&str>) -> bool {
+    scopes.is_some_and(|s| !missing_scopes(s, &["usergroups:read"]).is_empty())
+}
+
+/// The handle of each user group by ID in a `usergroups.list` reply; a group with no usable ID or handle is left out.
+fn groups_of(reply: &Value) -> HashMap<String, String> {
+    reply["usergroups"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|g| {
+            let id = g["id"].as_str().filter(|id| valid_channel(id))?;
+            Some((id.to_owned(), first_name(&[&g["handle"]])?))
+        })
+        .collect()
+}
+
+/// Asks Slack for the user groups of a workspace (`usergroups.list`, the disabled ones too: old messages mention them).
+/// `None` when Slack could not say. Without `usergroups:read` every call fails alike: that is the token's state, not worth a line.
+async fn fetch_groups(
+    api_url: &str,
+    http: &reqwest::Client,
+    token: &str,
+    team_id: &str,
+) -> Option<HashMap<String, String>> {
+    let form = [("include_disabled", "true".to_owned())];
+    match call_scoped_at(
+        api_url,
+        http,
+        token,
+        "usergroups.list",
+        Payload::Form(&form),
+        MAX_RETRIES,
+    )
+    .await
+    {
+        Ok((reply, _)) => Some(groups_of(&reply)),
+        Err(e) if e.code.as_deref() == Some("missing_scope") => None,
+        Err(e) => {
+            log_failure("slack_usergroups", team_id, e);
+            None
+        }
+    }
+}
+
+/// Asks about the user groups of the `(team, token)` entries of `wanted` that the cache has no fresh answer for, and keeps the answers.
+/// A workspace whose token is known to lack `usergroups:read` (from the scopes its last read saw) is not asked.
+async fn lookup_groups(
+    api_url: &str,
+    http: &reqwest::Client,
+    cache: &Arc<TimelineCache>,
+    wanted: Vec<(String, String)>,
+) {
+    let jobs = wanted
+        .into_iter()
+        .filter(|(team, _)| {
+            cache.needs_groups(team) && !lacks_usergroups_read(cache.scopes(team).as_deref())
+        })
+        .map(|(team, token)| {
+            let (api_url, http, cache) = (api_url.to_owned(), http.clone(), Arc::clone(cache));
+            async move {
+                let found = fetch_groups(&api_url, &http, &token, &team).await;
+                cache.put_groups(&team, found);
+            }
+        });
+    run_limited(jobs, USER_CONCURRENCY).await;
 }
 
 /// The first `max` of `items` that Slack should be asked about (`needs`), so that the ones the cache already answers do not use up the share.
@@ -4293,7 +4411,7 @@ fn message_of(
         .user
         .as_deref()
         .and_then(|u| cache.user(&raw.team_id, u));
-    let name_of = |id: &str| cache.user(&raw.team_id, id).map(|u| u.name);
+    let name_of = |id: &str| cache.name_of(&raw.team_id, id);
     Some(timeline_message(raw, workspace, user, &name_of, unread))
 }
 
@@ -4312,7 +4430,7 @@ fn unread_replies_of(cache: &TimelineCache, unread: &ThreadUnread) -> UnreadRepl
                     .user
                     .as_deref()
                     .and_then(|u| cache.user(&raw.team_id, u));
-                let name_of = |id: &str| cache.user(&raw.team_id, id).map(|u| u.name);
+                let name_of = |id: &str| cache.name_of(&raw.team_id, id);
                 timeline_reply(raw, user, &name_of)
             })
             .collect(),
@@ -4645,6 +4763,12 @@ pub async fn slack_timeline(
     })
     .collect();
     lookup_users(&http, &state.timeline, wanted).await;
+    let teams = watch_tokens
+        .iter()
+        .filter(|(_, token)| !token.is_empty())
+        .map(|(team, token)| (team.to_string(), token.to_string()))
+        .collect();
+    lookup_groups(API_URL, &http, &state.timeline, teams).await;
 
     let messages = timeline_messages(&state.timeline, &workspaces, &picked.top);
     let watched = watched_messages(&state.timeline, &workspaces, &rows);
@@ -5195,8 +5319,10 @@ pub async fn slack_thread(
     .map(|user| (team_id.clone(), token.clone(), user))
     .collect();
     lookup_users(auth.http(), &state.timeline, wanted).await;
+    let teams = vec![(team_id.clone(), token.clone())];
+    lookup_groups(API_URL, auth.http(), &state.timeline, teams).await;
 
-    let name_of = |id: &str| state.timeline.user(&team_id, id).map(|u| u.name);
+    let name_of = |id: &str| state.timeline.name_of(&team_id, id);
     let messages = pages
         .iter()
         .map(|m| {
@@ -7180,6 +7306,152 @@ mod tests {
             ),
             "<🎉> :tada: (https://a.example/:tada:) @:fire: 🔥"
         );
+    }
+
+    #[test]
+    fn a_user_group_mention_draws_its_handle_or_unknown() {
+        let groups = |id: &str| (id == "S1").then(|| "design".to_owned());
+        assert_eq!(token_text("!subteam^S1", &groups), "@design");
+        assert_eq!(token_text("!subteam^S2", &groups), "@不明");
+        // A label is what Slack drew, and is kept as it is.
+        assert_eq!(token_text("!subteam^S1|@old-name", &groups), "@old-name");
+        assert_eq!(
+            plain_text("hi <!subteam^S1> and <!subteam^S2> and <@S1>", &groups),
+            "hi @design and @不明 and @design"
+        );
+        assert_eq!(plain_text("<!subteam^S1>", &|_| None), "@不明");
+    }
+
+    #[test]
+    fn the_handles_are_read_from_a_usergroups_list_reply() {
+        let reply = json!({"ok": true, "usergroups": [
+            {"id": "S1", "handle": " design ", "name": "Design Team"},
+            {"id": "S2", "handle": "  "},
+            {"id": "S3"},
+            {"id": "s4", "handle": "lower"},
+            {"handle": "no-id"}
+        ]});
+        assert_eq!(
+            groups_of(&reply),
+            HashMap::from([("S1".to_owned(), "design".to_owned())])
+        );
+        assert!(groups_of(&json!({"ok": true})).is_empty());
+    }
+
+    #[test]
+    fn a_mention_is_named_by_the_user_first_and_then_by_the_group() {
+        let cache = TimelineCache::default();
+        assert_eq!(cache.name_of("T1", "S1"), None);
+        cache.put_groups("T1", Some(HashMap::from([("S1".into(), "design".into())])));
+        cache.put_user(
+            "T1",
+            "U1",
+            Some(SlackUser {
+                name: "Alice".into(),
+                icon_url: None,
+            }),
+        );
+        assert_eq!(cache.name_of("T1", "S1").as_deref(), Some("design"));
+        assert_eq!(cache.name_of("T1", "U1").as_deref(), Some("Alice"));
+        // The groups of another workspace, and a group Slack could not list, name nobody.
+        assert_eq!(cache.name_of("T2", "S1"), None);
+        cache.put_groups("T1", None);
+        assert_eq!(cache.name_of("T1", "S1"), None);
+        cache.put_groups("T1", Some(HashMap::from([("S1".into(), "design".into())])));
+        cache.forget("T1");
+        assert_eq!(cache.name_of("T1", "S1"), None);
+    }
+
+    #[test]
+    fn the_groups_are_asked_again_after_the_user_ttl_and_a_failure_sooner() {
+        let cache = TimelineCache::default();
+        assert!(cache.needs_groups("T1"));
+        cache.put_groups("T1", Some(HashMap::new()));
+        assert!(!cache.needs_groups("T1"));
+        cache.put_groups("T1", None);
+        assert!(!cache.needs_groups("T1"));
+        assert!(user_fresh(USER_MISS_TTL - Duration::from_secs(1), false));
+        assert!(!user_fresh(USER_MISS_TTL, false));
+        assert!(user_fresh(USER_MISS_TTL, true));
+    }
+
+    #[test]
+    fn a_token_without_usergroups_read_is_known_from_its_scopes() {
+        assert!(lacks_usergroups_read(Some("channels:read,users:read")));
+        assert!(lacks_usergroups_read(Some("")));
+        assert!(!lacks_usergroups_read(Some("users:read, usergroups:read")));
+        assert!(!lacks_usergroups_read(None));
+    }
+
+    /// Answers one request on a local port with `body` as a Slack JSON reply; returns the address and the request it got.
+    fn serve_reply(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        (url, handle)
+    }
+
+    fn ask_groups(url: &str, cache: &Arc<TimelineCache>) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(lookup_groups(
+                url,
+                &reqwest::Client::new(),
+                cache,
+                vec![("T1".to_owned(), "xoxp-token".to_owned())],
+            ));
+    }
+
+    #[test]
+    fn the_groups_a_workspace_lists_name_its_mentions() {
+        let (url, server) = serve_reply(
+            r#"{"ok":true,"usergroups":[{"id":"S1","handle":"design","name":"Design Team"}]}"#,
+        );
+        let cache = Arc::new(TimelineCache::default());
+        ask_groups(&url, &cache);
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /usergroups.list "), "{request}");
+        assert!(request.contains("include_disabled=true"), "{request}");
+        assert!(!cache.needs_groups("T1"));
+        let name_of = |id: &str| cache.name_of("T1", id);
+        assert_eq!(
+            plain_text("<!subteam^S1> <!subteam^S9>", &name_of),
+            "@design @不明"
+        );
+    }
+
+    #[test]
+    fn a_token_without_usergroups_read_leaves_the_mention_unknown_and_is_not_asked_again() {
+        let (url, server) = serve_reply(
+            r#"{"ok":false,"error":"missing_scope","needed":"usergroups:read","provided":"users:read"}"#,
+        );
+        let cache = Arc::new(TimelineCache::default());
+        ask_groups(&url, &cache);
+        server.join().unwrap();
+        assert_eq!(
+            plain_text("<!subteam^S1>", &|id| cache.name_of("T1", id)),
+            "@不明"
+        );
+        // The answer is kept as a miss, so the next read does not ask at once.
+        assert!(!cache.needs_groups("T1"));
+        // A token whose scopes are known to lack it is not asked at all: nothing listens at this address.
+        let cache = Arc::new(TimelineCache::default());
+        cache.put_scopes("T1", "channels:read,users:read");
+        ask_groups("http://127.0.0.1:1", &cache);
+        assert!(cache.needs_groups("T1"));
     }
 
     #[test]
