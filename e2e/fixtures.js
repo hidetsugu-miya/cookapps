@@ -48,7 +48,7 @@ const answers = {
   todoist_comments: [],
   todoist_picked_due: null,
   slack_load: { workspaces: [], recent: [] },
-  slack_timeline: { messages: [], watched: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, unreadTotal: 0, markableChannels: 0, unreadThreads: 0 },
+  slack_timeline: { messages: [], watched: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, unreadTotal: 0, markableChannels: 0, unreadThreads: 0, arrived: [] },
   slack_mark_read: true,
   slack_mark_all_read: { marked: 0, failed: 0 },
   slack_watch: true,
@@ -72,7 +72,7 @@ const answers = {
   orca_terminal_read: [],
   orca_terminal_input: null,
   orca_open_url: null,
-  orca_attach_image: "/work/example/.orca/drops/image.png",
+  orca_attach_file: { text: "/work/example/.orca/drops/image.png ", bracketed: true },
   // A-20: the fonts of the screens are read at the start (the first values), and this Mac has three families; a spec that presses a select mocks `font_settings_set`.
   font_settings: {
     mail: { family: null, size: 14, ghostty: false },

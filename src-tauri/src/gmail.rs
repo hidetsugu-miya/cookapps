@@ -26,6 +26,7 @@ use crate::images::{
     cid_refs, image_mime, inline_data_uri, references_to, replace_cids, run_limited, wanted_images,
     CidRef, InlineImage, UriCache, FETCH_TIMEOUT, MAX_INLINE_IMAGES,
 };
+use crate::mail_address::split_address;
 
 const THREADS_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
@@ -126,6 +127,12 @@ pub struct ThreadItem {
     /// Email address of the account the thread belongs to.
     account: String,
     from: String,
+    /// The name of `from` (`Name <addr>`); empty when it has none. Kept files from before it was added lack it: `fill_sender` fills it.
+    #[serde(default)]
+    from_name: String,
+    /// The address of `from`. Empty in a kept file from before it was added, like `from_name`.
+    #[serde(default)]
+    from_address: String,
     subject: String,
     snippet: String,
     #[cfg_attr(test, ts(type = "number"))]
@@ -150,12 +157,16 @@ impl ThreadItem {
     fn new(t: Thread, account: &str) -> Self {
         let first = t.messages.first();
         let last = t.messages.last();
+        let from = last.map(|m| header(&m.payload, "From")).unwrap_or_default();
+        let sender = split_address(&from);
         Self {
             account: account.to_owned(),
             subject: first
                 .map(|m| header(&m.payload, "Subject"))
                 .unwrap_or_default(),
-            from: last.map(|m| header(&m.payload, "From")).unwrap_or_default(),
+            from,
+            from_name: sender.name,
+            from_address: sender.address,
             date_ms: last.and_then(|m| m.internal_date.parse().ok()).unwrap_or(0),
             unread: t
                 .messages
@@ -163,6 +174,15 @@ impl ThreadItem {
                 .any(|m| m.label_ids.iter().any(|l| l == "UNREAD")),
             id: t.id,
             snippet: t.snippet,
+        }
+    }
+
+    /// Splits `from` into the name and the address when a kept file from before they were added left both empty.
+    fn fill_sender(&mut self) {
+        if self.from_name.is_empty() && self.from_address.is_empty() {
+            let sender = split_address(&self.from);
+            self.from_name = sender.name;
+            self.from_address = sender.address;
         }
     }
 }
@@ -952,9 +972,11 @@ pub async fn inbox(app: AppHandle, auth: State<'_, Auth>) -> Result<Inbox, Strin
 #[tauri::command]
 pub async fn inbox_cached(app: AppHandle) -> Option<Inbox> {
     let dir = config_dir(&app).ok()?;
-    tokio::task::spawn_blocking(move || disk_cache::load(&dir, CACHE_FILE))
+    let mut inbox: Inbox = tokio::task::spawn_blocking(move || disk_cache::load(&dir, CACHE_FILE))
         .await
-        .ok()?
+        .ok()??;
+    inbox.threads.iter_mut().for_each(ThreadItem::fill_sender);
+    Some(inbox)
 }
 
 #[derive(Deserialize, Default)]
@@ -1544,6 +1566,8 @@ mod tests {
             id: id.into(),
             account: account.into(),
             from: String::new(),
+            from_name: String::new(),
+            from_address: String::new(),
             subject: String::new(),
             snippet: String::new(),
             date_ms,
@@ -1668,6 +1692,8 @@ mod tests {
                 id: "t1".into(),
                 account: "me@example.com".into(),
                 from: "Bob <b@example.com>".into(),
+                from_name: "Bob".into(),
+                from_address: "b@example.com".into(),
                 subject: "Hello".into(),
                 snippet: "latest reply".into(),
                 date_ms: 2000,
@@ -1682,8 +1708,29 @@ mod tests {
         let item = item(json, "me@example.com");
         assert_eq!(item.subject, "");
         assert_eq!(item.from, "");
+        assert_eq!(
+            (item.from_name.as_str(), item.from_address.as_str()),
+            ("", "")
+        );
         assert_eq!(item.date_ms, 0);
         assert!(!item.unread);
+    }
+
+    #[test]
+    fn a_kept_thread_from_before_the_sender_was_split_is_read_and_filled() {
+        let kept = r#"{"id":"t1","account":"me@example.com","from":"\"Bob B\" <b@example.com>","subject":"s","snippet":"x","dateMs":1,"unread":true}"#;
+        let mut item: ThreadItem = serde_json::from_str(kept).unwrap();
+        assert_eq!(
+            (item.from_name.as_str(), item.from_address.as_str()),
+            ("", "")
+        );
+        item.fill_sender();
+        assert_eq!(item.from_name, "Bob B");
+        assert_eq!(item.from_address, "b@example.com");
+        // A kept thread that has them is left as it is.
+        item.from_name = "Kept".into();
+        item.fill_sender();
+        assert_eq!(item.from_name, "Kept");
     }
 
     #[test]

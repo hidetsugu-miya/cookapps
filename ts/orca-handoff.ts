@@ -2,6 +2,7 @@
 // Before a send it has the destination (a new session in a worktree, or a running session), the card with the content (taken off with ×) and the instruction; nothing is sent until the user presses the button.
 // After a send it shows that session: its header, its history (orca-chat.ts) and a composer for more instructions. The prompt is composed in Rust (`orca_handoff`).
 // A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the session each item was handed to, and the worktree last chosen.
+import type { AttachedFile } from "./bindings/AttachedFile";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
 import { tag } from "./dom.js";
@@ -55,7 +56,10 @@ const KIND_ICONS = { mail: MAIL_SVG, slack: SLACK_SVG, todo: TODO_SVG } as const
 const GROUPS = ["waiting", "working", "done"] as const;
 
 // The text of a send: the instruction, then the path of each image on a line of its own after a blank line; only the paths when the instruction is blank.
-const withImages = (text: string, paths: string[]) => (text.trim() ? [text.trimEnd(), "", ...paths] : paths).join("\n");
+const withImages = (text: string, files: AttachedFile[]) => {
+  const paths = files.map((f) => f.text.trimEnd());
+  return (text.trim() ? [text.trimEnd(), "", ...paths] : paths).join("\n");
+};
 
 function iconButton(label: string, svg: string, className = "icon-btn") {
   const button = tag("button", className);

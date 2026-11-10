@@ -173,6 +173,8 @@ export const thread = (id: string, subject: string, unread: boolean): ThreadItem
   id,
   account,
   from: "Alice <alice@example.com>",
+  fromName: "Alice",
+  fromAddress: "alice@example.com",
   subject,
   snippet: `${subject} snippet`,
   dateMs: Date.now() - 60_000,
@@ -468,7 +470,7 @@ export const watchedMessage = (ts: string, name: string, channelName: string, te
 };
 
 // What `slack_timeline` answers; `unreadTotal` is the number of unread messages and unread replies given unless `extra` says another (it counts the messages held, not only the ones listed),
-// `markableChannels` the channels of the unread messages given, `unreadThreads` the rows with unread replies. `watched` is empty unless `extra` gives it.
+// `markableChannels` the channels of the unread messages given, `unreadThreads` the rows with unread replies. `watched` and `arrived` are empty unless `extra` gives them.
 export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({
   messages,
   watched: [],
@@ -479,6 +481,7 @@ export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> =
   unreadTotal: messages.filter((m) => m.unread).length + messages.reduce((n, m) => n + (m.unreadReplies?.share ?? 0), 0),
   markableChannels: new Set(messages.filter((m) => m.unread).map((m) => `${m.teamId}/${m.channel}`)).size,
   unreadThreads: messages.filter((m) => m.unreadReplies).length,
+  arrived: [],
   ...extra,
 });
 

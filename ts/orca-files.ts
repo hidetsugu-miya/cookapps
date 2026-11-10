@@ -4,7 +4,7 @@
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, tag } from "./dom.js";
-import { CHEVRON_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
+import { CHEVRON_SVG, COPY_PATH_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { toast } from "./toast.js";
@@ -115,10 +115,10 @@ async function download(here: FilesContext, relative: string) {
 function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
   if (here === null) return;
-  const item = (label: string, pick: () => unknown) => ({ label, color: "var(--accent)", current: false, pick });
-  const copy = (label: string, text: string, done: string) => item(label, () => void copyText(text, done));
+  const item = (label: string, icon: string, pick: () => unknown) => ({ label, color: "var(--accent)", icon, current: false, pick });
+  const copy = (label: string, text: string, done: string) => item(label, COPY_PATH_SVG, () => void copyText(text, done));
   const items = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
-  if (!isDirectory) items.push(item("ダウンロード", () => void download(here, relative)));
+  if (!isDirectory) items.push(item("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)));
   openMenu(anchor, items);
 }
 

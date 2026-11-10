@@ -335,6 +335,32 @@ button.review-chip:hover { background: var(--hover); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .text-btn.primary .spin { border-color: var(--accent-dim); border-top-color: #fff; }
 .review-add { display: inline-flex; align-items: center; gap: 6px; }
+/* The modal of Claude's draft of a Todo (ts/todo-draft.ts): the draft on the left like the task detail, project, date and labels beside it. A Claude pane is a second column of .draft. */
+.scrim.modal { align-items: center; justify-content: center; }
+/* A menu or the due popover opened from the modal lies over its dimmed part. */
+.scrim.modal ~ .menu { z-index: 16; }
+.draft { display: grid; grid-template-columns: minmax(0, 1fr); width: min(720px, calc(100% - 48px)); height: min(560px, calc(100% - 48px)); overflow: hidden; border-radius: 12px; background: #fff; box-shadow: 0 16px 40px rgba(0, 0, 0, .25); }
+.draft:focus { outline: none; }
+.draft-todo { display: grid; grid-template-columns: minmax(0, 1fr) 220px; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.draft-head { grid-column: 1 / 3; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 20px; border-bottom: 1px solid var(--line); font-size: calc(12px * var(--fs)); color: #555; }
+.draft-src { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-src svg { width: 13px; height: 13px; flex: none; color: var(--slack); }
+.draft-grow { flex: 1; }
+.draft-prompt { font-size: calc(12px * var(--fs)); }
+.draft-main { grid-column: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 16px 20px; overflow-y: auto; }
+#todo-draft .name.draft-name { flex: none; }
+.draft-desc { flex: 1; min-height: 120px; box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; color: #333; line-height: 1.6; resize: none; }
+.draft-desc:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.draft-link { font-size: calc(12px * var(--fs)); color: #777; overflow-wrap: anywhere; }
+.draft-omitted, .draft-target-cut { font-size: calc(12px * var(--fs)); color: var(--warn); }
+.draft-err { margin: 0; }
+.draft .detail-side { grid-column: 2; align-self: stretch; overflow-y: auto; border-radius: 0; border-left: 1px solid var(--line); }
+.draft-foot { grid-column: 1 / 3; display: flex; align-items: center; padding: 12px 20px; border-top: 1px solid var(--line); }
+.draft-add { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.draft-add:hover:not(:disabled) { filter: brightness(1.1); }
+.draft-add:disabled { opacity: .6; cursor: default; }
+.draft-add svg { width: 20px; height: 20px; }
+.draft-add .spin { border-color: var(--accent-dim); border-top-color: #fff; }
 #todo-token { max-width: 520px; margin: 32px auto; }
 #todo-token .row { display: flex; gap: 8px; }
 #todo-token-note { color: #b00020; }
@@ -421,9 +447,9 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .parent-link .pl-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #todo-detail .head { display: flex; gap: 14px; align-items: flex-start; padding: 4px 16px 0; }
 #todo-detail .head .check { margin-top: 4px; }
-#todo-detail .name { flex: 1; font-size: calc(18px * var(--fs)); font-weight: bold; border: 0; padding: 2px 4px; border-radius: 6px; font-family: inherit; }
-#todo-detail .name:hover { background: var(--hover); }
-#todo-detail .name:focus { outline: 2px solid var(--accent); background: #fff; }
+#todo-detail .name, #todo-draft .name { flex: 1; font-size: calc(18px * var(--fs)); font-weight: bold; border: 0; padding: 2px 4px; border-radius: 6px; font-family: inherit; }
+#todo-detail .name:hover, #todo-draft .name:hover { background: var(--hover); }
+#todo-detail .name:focus, #todo-draft .name:focus { outline: 2px solid var(--accent); background: #fff; }
 .chip-input { box-sizing: border-box; height: 28px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 14px; font: inherit; font-size: calc(12px * var(--fs)); }
 .due-pop { gap: 8px; padding: 8px; width: 232px; }
 .due-pop .chip-input { width: 100%; }
