@@ -15,6 +15,7 @@ import { itemRow } from "./settings.js";
 import { refreshSlackCompose } from "./slack-compose.js";
 import { refreshSlackThread } from "./slack-thread.js";
 import { updateAddMode } from "./todo-add.js";
+import { refreshDraftChat } from "./todo-draft.js";
 import { promptRow, refreshPrompt } from "./todo-prompt.js";
 import { setClaudeReady, showError } from "./view.js";
 
@@ -174,6 +175,7 @@ function applyClaude(next: Claude | null) {
   refreshPrompt();
   refreshSlackCompose();
   refreshSlackThread();
+  refreshDraftChat();
 }
 
 // The model and effort of each purpose of the `claude -p` calls (A-2) as the selects show them; null until read.

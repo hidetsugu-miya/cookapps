@@ -12,7 +12,7 @@ import { loading, openThread, opened } from "./thread.js";
 // A card goes by itself after this long; the pointer or the focus on it holds it, and it counts again when they leave.
 const SHOW_MS = 10000;
 // The newest cards; an older one makes room (its thread stays in the list, unread).
-const MAX_CARDS = 3;
+export const MAX_CARDS = 3;
 
 let stack: HTMLElement;
 // The cards on screen by "account/id".

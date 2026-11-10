@@ -14,6 +14,7 @@ import {
   count,
   fire,
   holds,
+  huge,
   image,
   inbox,
   mock,
@@ -1149,20 +1150,18 @@ describe("orca handoff: attached files (A-10)", () => {
     expect(await callsOf(attach)).toEqual([{ path: "/work/example-app", name: "notes.txt", data: btoa("hello"), environment: null }]);
   });
 
-  it("shows the message of Rust for a file over 20 MiB, keeping the text and the file", async () => {
+  it("refuses a file over 20 MiB with the message when it is taken, keeping the text, without calling the command", async () => {
     await openMail();
-    const attach = await mock("orca_attach_file", rejects("ファイルは 20 MiB までです"));
+    const attach = await mock("orca_attach_file", attached("example-app"));
     const handoff = await mock("orca_handoff", started);
     await openPane(MAIL);
     await chooseWorktree(MAIL, "/work/example-app");
     await field(MAIL).setValue("見て");
-    await paste(note);
-    await waitForCount(`${MAIL.pane} .attachment`, 1);
-    await sendButton(MAIL).click();
-    await waitForCalls(attach);
+    await paste(huge);
     await expect($(`${MAIL.pane} .ho-form .pending.fail`)).toHaveText("ファイルは 20 MiB までです");
     await expect(field(MAIL)).toHaveValue("見て");
-    expect(await thumbs()).toBe(1);
+    expect(await thumbs()).toBe(0);
+    expect(await callsOf(attach)).toEqual([]);
     expect(await callsOf(handoff)).toEqual([]);
   });
 

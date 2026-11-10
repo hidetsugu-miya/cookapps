@@ -67,6 +67,11 @@ function close() {
   (opener?.isConnected ? opener : $("todo-add-input")).focus();
 }
 
+// Draws the conversation's pane again when a draft is open (Claude was connected or disconnected meanwhile).
+export function refreshDraftChat() {
+  if (live) chat.refresh();
+}
+
 // The scrim stays in the page, hidden, because the conversation's pane is found by its ids.
 function hide() {
   if (!open?.shown) return;
@@ -204,6 +209,7 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
     if (live!.saving) return;
     if (!name.value.trim()) return name.focus();
     live!.saving = true;
+    chat.refresh();
     drop.disabled = add.disabled = closeButton.disabled = true;
     add.replaceChildren(tag("span", "spin"));
     add.setAttribute("aria-label", "追加中");
@@ -217,6 +223,7 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
       error.textContent = `追加できませんでした: ${e}`;
       error.hidden = false;
       live!.saving = false;
+      chat.refresh();
       drop.disabled = add.disabled = closeButton.disabled = false;
       add.innerHTML = PLUS_SVG;
       showProject();

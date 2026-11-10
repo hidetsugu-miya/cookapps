@@ -780,16 +780,18 @@ export async function waitForOpens(times = 1) {
 
 // A one-pixel PNG.
 export const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-export type GivenFile = { name: string; type: string; base64: string };
+// `bytes` makes a file of that many zero bytes in the page, for a file too large to give as base64.
+export type GivenFile = { name: string; type: string; base64: string; bytes?: number };
 export const image = (name = "shot.png"): GivenFile => ({ name, type: "image/png", base64: PNG });
 export const note: GivenFile = { name: "notes.txt", type: "text/plain", base64: btoa("hello") };
+export const huge: GivenFile = { name: "big.bin", type: "application/octet-stream", base64: "", bytes: 20 * 1024 * 1024 + 1 };
 
 // Dispatches `kind` ("paste", "dragover" or "drop") on the element at `selector` ("document" is the page) carrying `files`, as the clipboard or the pointer would (the event objects hold plain stand-ins for the clipboard and the transfer,
 // which WKWebView builds only from a real gesture). Answers whether the page cancelled the event.
 export const fire = (kind: "paste" | "dragover" | "drop", selector: string, files: GivenFile[]) =>
   browser.execute(
     (k, sel, given) => {
-      const list = given.map((g) => new File([Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0))], g.name, { type: g.type }));
+      const list = given.map((g) => new File([g.bytes === undefined ? Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0)) : new Uint8Array(g.bytes)], g.name, { type: g.type }));
       const event = new Event(k, { bubbles: true, cancelable: true });
       const transfer = { files: list, types: list.length ? ["Files"] : ["text/plain"], dropEffect: "none", getData: () => "" };
       Object.defineProperty(event, k === "paste" ? "clipboardData" : "dataTransfer", { value: transfer });

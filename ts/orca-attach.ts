@@ -17,6 +17,9 @@ export interface Attachment {
   uploaded: Map<string, AttachedFile>;
 }
 
+// The most a file may be (the same limit as orca_attach.rs): a larger file is refused before it is read.
+const MAX_FILE = 20 * 1024 * 1024;
+
 let lastId = 0;
 // The elements that take files: a file dragged anywhere else is refused.
 const zones = new Set<HTMLElement>();
@@ -27,6 +30,7 @@ const inZone = (target: EventTarget | null) => [...zones].some((zone) => zone.co
 function read(file: File): Promise<Attachment> {
   const image = file.type.startsWith("image/");
   const name = file.name || (image ? "image" : "file");
+  if (file.size > MAX_FILE) return Promise.reject(new Error(`ファイルは ${MAX_FILE / 1024 / 1024} MiB までです`));
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve({ id: ++lastId, name, image, url: String(reader.result), uploaded: new Map() });

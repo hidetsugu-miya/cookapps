@@ -372,6 +372,21 @@ describe("todo", () => {
       await expect($("#todo-draft .draft-name")).toHaveValue("Reply to the vendor");
     });
 
+    it("cannot apply a change while the Todo is being added, and can again when the add failed", async () => {
+      await openSummaryCard();
+      await mock("claude_edit_todo_draft", todoDraftEdit);
+      const addFromSlack = await mock("todoist_add_from_slack", holds);
+      await askClaude("名前を短く");
+      await waitForCount("#draft-log .chat-diff", 1);
+      await expect($("#draft-log .diff-foot .text-btn.primary")).toBeEnabled();
+      await $("#todo-draft .draft-add").click();
+      await waitForCalls(addFromSlack);
+      await expect($("#draft-log .diff-foot .text-btn.primary")).toBeDisabled();
+      await release(addFromSlack, rejects("todoist failed"));
+      await expect($("#todo-draft .draft-err")).toBeDisplayed();
+      await expect($("#draft-log .diff-foot .text-btn.primary")).toBeEnabled();
+    });
+
     it("sends the conversation so far with the next request, and forgets it when the modal is closed", async () => {
       await openSummaryCard();
       const edit = await mock("claude_edit_todo_draft", todoDraftEdit);
@@ -444,6 +459,8 @@ describe("todo", () => {
       await $("#settings-tab-claude").click();
       await mock("claude_connection", connection("subscription", claudeMissing, { state: "none" }));
       await $("#claude-recheck").click();
+      // The pane follows at once, also while the modal is off the screen.
+      await browser.waitUntil(async () => !(await $("#draft-chat-note").getProperty("hidden")));
       await $("#nav-todo").click();
       await $("#todo-draft").waitForDisplayed();
       await expect($("#draft-chat-note")).toBeDisplayed();

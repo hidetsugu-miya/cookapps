@@ -11,6 +11,7 @@ import type { TimelineMessage } from "./bindings/TimelineMessage";
 import type { TimelineReply } from "./bindings/TimelineReply";
 import type { Workspace } from "./bindings/Workspace";
 import { renderWorkspaceTray } from "./accounts.js";
+import { MAX_CARDS } from "./arrivals.js";
 import { announceSlackArrival, dismissSlackArrival, pruneSlackArrivals, slackKey } from "./arrivals-slack.js";
 import { $, tag } from "./dom.js";
 import { formatDate } from "./format.js";
@@ -628,7 +629,7 @@ function drawPending() {
 // Draws the list's parts when the list is on screen; it is drawn from what is held when it is shown (`revealSlackList`).
 function draw() {
   // The popups of messages that are not unread rows any more go, whichever screen is shown.
-  if (timeline) pruneSlackArrivals(new Set(timeline.messages.filter((m) => m.unread).map(slackKey)), answers);
+  if (timeline) pruneSlackArrivals(() => new Set(timeline!.messages.filter((m) => m.unread).map(slackKey)), answers);
   if ($("slack-list").hidden) return;
   drawHeader();
   drawPending();
@@ -638,9 +639,12 @@ function draw() {
 
 // Shows a popup for each unread message the answer found new (S-17), the oldest first so that the newest is at the bottom. Rust gives a message in one answer only, so every answer is announced, also one that is passed over (`held` false): its popups wait for the answer that follows it.
 // The buttons do what a row's do: the check reads the message (only when that changes something), the bookmark watches its thread, and the text button opens the thread, on the Slack screen, as pressing the row does.
+// The icons of the newest cards (the stack holds MAX_CARDS) are fetched in one call after them.
 function announceArrived(next: Timeline, held: boolean) {
+  const announced: TimelineMessage[] = [];
   for (const m of [...next.arrived].reverse()) {
     if (isSlackThreadShown(m)) continue;
+    announced.push(m);
     announceSlackArrival(m, held ? answers : answers + 1, {
       read: readable(m, next) ? () => readOne(m) : null,
       watch: () => watchThread(m),
@@ -651,6 +655,7 @@ function announceArrived(next: Timeline, held: boolean) {
       },
     });
   }
+  if (announced.length) loadIcons(announced.slice(-MAX_CARDS).map((m) => m.iconUrl));
 }
 
 // Reads the list. `cached` asks Rust to make it again from what it holds, with no call to Slack (after a channel was hidden or put back): it is not a read of Slack, so it does not move `lastTry`.
@@ -702,7 +707,7 @@ function adoptWorkspaces(list: Workspace[]) {
   workspaces = list;
   setSlackWorkspaces(list);
   if (!list.length) {
-    pruneSlackArrivals(new Set(), Infinity);
+    pruneSlackArrivals(() => new Set(), Infinity);
     timeline = null;
     loadError = null;
     unreadCount = 0;

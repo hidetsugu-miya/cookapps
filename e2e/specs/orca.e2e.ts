@@ -16,6 +16,7 @@ import {
   fontSettings,
   ghosttyImport,
   holds,
+  huge,
   image,
   inbox,
   isoDate,
@@ -2327,13 +2328,13 @@ describe("orca: files on a terminal (A-10)", () => {
     expect(await waitForCalls(input)).toEqual([{ handle: "term_example-app_zsh", text: `'${dropped("example-app", "notes.txt")}' ` }]);
   });
 
-  it("shows the message of Rust for a file over 20 MiB and types nothing", async () => {
+  it("refuses a file over 20 MiB with the message, without reading it or calling the command, and types nothing", async () => {
     await openMirror();
-    const attach = await mock("orca_attach_file", rejects("ファイルは 20 MiB までです"));
+    const attach = await mock("orca_attach_file", attachedNote("example-app"));
     const input = await mock("orca_terminal_input", null);
-    await fire("drop", area, [note]);
-    await waitForCalls(attach);
+    await fire("drop", area, [huge]);
     await expect($("#error")).toHaveText("ファイルは 20 MiB までです");
+    expect(await callsOf(attach)).toEqual([]);
     expect(await callsOf(input)).toEqual([]);
   });
 
