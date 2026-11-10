@@ -28,6 +28,7 @@ export function show(view: View) {
   $("settings").hidden = view !== "settings";
   $("prompt").hidden = view !== "prompt";
   $("slack-compose").hidden = view !== "slack";
+  $("slack-screen").hidden = view !== "slack-list" && view !== "slack-thread";
   $("slack-list").hidden = view !== "slack-list";
   $("slack-thread").hidden = view !== "slack-thread";
   $("orca").hidden = view !== "orca";

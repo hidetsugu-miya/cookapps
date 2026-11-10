@@ -1,4 +1,4 @@
-// The Slack screen's list (S-5, S-8, S-13, S-14, S-15): under a fixed header, the unread messages (past the channel's read position in Slack; the first 10 of up to 20, the rest behind a button) of the joined channels of every workspace, with the threads with unread replies, newest first,
+// The Slack screen's list (S-5, S-8, S-13, S-14, S-15) and its side menu (S-19, slack-side.ts): the side menu's "未読メッセージ" shows the unread section and "ウォッチ" the watch section, one at a time. Under a fixed header, the unread messages (past the channel's read position in Slack; the first 10 of up to 20, the rest behind a button) of the joined channels of every workspace, with the threads with unread replies, newest first,
 // above the watched threads. A message that is read leaves the list unless its thread is watched or has unread replies. A row draws what the thread draws of the message (slack-blocks.ts, slack-rich.ts), with no image.
 // A row opens the thread (slack-thread.ts) and sets the channel's read position to it; the buttons on a row read it without opening the thread (S-15), keep its channel off the list (S-9) and watch or let go of its thread (S-13), and its toggle folds its unread replies (S-14).
 // The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only.
@@ -18,6 +18,7 @@ import { formatDate } from "./format.js";
 import { BOOKMARK_SVG, CHECK_SVG, CHEVRON_SVG, DOT_SVG, EYE_OFF_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
+import { drawSlackSide, type SlackSection } from "./slack-side.js";
 import { attachmentNode, blocksNode } from "./slack-blocks.js";
 import { richNodes } from "./slack-rich.js";
 import { getSlackWorkspaces, setSlackWorkspaces, slackListVersion } from "./slack-workspaces.js";
@@ -68,6 +69,8 @@ let unreadOpen = false;
 const closedThreads = new Set<string>();
 // Where the list was scrolled to (it is hidden while a thread or another screen is shown, which forgets the position).
 let listScroll = 0;
+// The section the side menu chose (S-19); it stays through redraws, a thread and other screens.
+let section: SlackSection = "unread";
 
 const feed = () => $("slack-feed");
 
@@ -131,7 +134,7 @@ function itemOf(m: TimelineMessage, key: string) {
   // The key of the row with a suffix: a redraw gives the focus back to the button too.
   hide.dataset.key = `${key}/hide`;
   hide.innerHTML = EYE_OFF_SVG;
-  hide.onclick = () => hideChannel(m);
+  hide.onclick = () => hideChannel(m.teamId, m.channel, m.channelName);
   const bookmark = tag("button", watched ? "icon-btn feed-watch on" : "icon-btn feed-watch");
   bookmark.type = "button";
   bookmark.setAttribute("aria-label", watched ? "ウォッチを外す" : "ウォッチする");
@@ -144,6 +147,27 @@ function itemOf(m: TimelineMessage, key: string) {
 
 function drawBadge() {
   setNavCount("nav-slack", unreadCount, "Slack", "未読", undefined, BADGE_CAP);
+  drawSide();
+}
+
+// The side menu (S-19), while the Slack screen is shown (the list or a thread).
+function drawSide() {
+  if ($("slack-screen").hidden) return;
+  drawSlackSide({ section, unread: unreadCount, workspaces: timeline?.side ?? [] }, { choose: chooseSection, hide: hideChannel });
+}
+
+// Takes `n` off the unread number of a channel in the side menu, for what the screen moves to read at once (the next read of the cache has the number itself).
+function lowerSide(teamId: string, channel: string, n: number) {
+  const held = timeline?.side.find((w) => w.teamId === teamId)?.channels.find((c) => c.id === channel);
+  if (held) held.unread = Math.max(0, held.unread - n);
+}
+
+// The side menu chose a section: the list shows it, also when a thread is shown (as its back button does).
+function chooseSection(next: SlackSection) {
+  if (next === section && !$("slack-list").hidden) return;
+  if (next !== section) listScroll = 0;
+  section = next;
+  revealSlackList();
 }
 
 // What a row's unread replies add to the badge (Rust's `share`).
@@ -153,6 +177,7 @@ const threadKeyOf = (m: TimelineMessage) => `${m.teamId}/${m.channel}/${m.ts}`;
 // Takes rows that went from the list out of what is held for the badge and for "すべて既読にする".
 function dropReplies(rows: TimelineMessage[]) {
   if (!timeline) return;
+  for (const m of rows) lowerSide(m.teamId, m.channel, replyShare(m));
   unreadCount = Math.max(0, unreadCount - rows.reduce((n, m) => n + replyShare(m), 0));
   timeline.unreadThreads = Math.max(0, timeline.unreadThreads - rows.filter((m) => m.unreadReplies).length);
 }
@@ -164,6 +189,7 @@ function dropChannel(teamId: string, channel: string) {
   unreadCount = Math.max(0, unreadCount - timeline.messages.filter((m) => gone(m) && m.unread).length);
   dropReplies(timeline.messages.filter(gone));
   timeline.messages = timeline.messages.filter((m) => !gone(m));
+  for (const w of timeline.side) if (w.teamId === teamId) w.channels = w.channels.filter((c) => c.id !== channel);
   drawBadge();
   draw();
 }
@@ -184,10 +210,9 @@ async function saveHidden(command: "slack_hide_channel" | "slack_unhide_channel"
   }
 }
 
-// Keeps the channel off the list: its rows go at once, Rust saves it, and the notice offers to undo it.
-// The list is made again from Rust's cache, which asks Slack nothing (rows that fill the place come from the messages held); on a failed save the rows come back the same way.
-async function hideChannel(m: TimelineMessage) {
-  const { teamId, channel, channelName } = m;
+// Keeps the channel off the list, from a row (S-9) or from the side menu (S-19): its rows and its place in the side menu go at once, Rust saves it, and the notice offers to undo it.
+// The list is made again from Rust's cache, which asks Slack nothing (rows that fill the place come from the messages held); on a failed save the rows and the channel come back the same way.
+async function hideChannel(teamId: string, channel: string, channelName: string) {
   dropChannel(teamId, channel);
   if (await saveHidden("slack_hide_channel", teamId, channel)) toast(`#${channelName} を一覧に出さないようにしました`, { label: "元に戻す", run: () => unhideChannel(teamId, channel) });
   load(true);
@@ -361,6 +386,7 @@ function markRead(m: TimelineMessage): Promise<unknown> | undefined {
   for (const x of timeline.messages) if (moves(x)) x.unread = false;
   m.unread = false;
   unreadCount = Math.max(0, unreadCount - moved);
+  lowerSide(m.teamId, m.channel, moved);
   drawBadge();
   // A read that is on its way may answer with the old position (the rows would be unread again): once Rust has the new one, the list is made again from its cache, without waiting for the next period.
   const during = isLoading();
@@ -509,6 +535,8 @@ async function markAllRead() {
   timeline.messages = timeline.messages.filter((m) => m.unread && !canWrite(m.teamId));
   timeline.markableChannels = 0;
   timeline.unreadThreads = 0;
+  // The channels of a workspace that can write the position are read now; in the others only the replies are.
+  for (const w of timeline.side) if (canWrite(w.teamId)) for (const c of w.channels) c.unread = 0;
   drawBadge();
   draw();
   const done = await guarded(() => invoke("slack_mark_all_read"));
@@ -570,10 +598,11 @@ function emptyNode() {
 
 // Draws the rows where they are: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
-  const messages = timeline?.messages ?? [];
-  const watched = timeline?.watched ?? [];
+  // The side menu's section: the other one is not drawn.
+  const messages = section === "unread" ? (timeline?.messages ?? []) : [];
+  const watched = section === "watch" ? (timeline?.watched ?? []) : [];
   forgetClosedThreads();
-  const key = JSON.stringify([messages, watched, [...closedThreads], unreadOpen, loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], timeline?.missing.map((x) => [x.teamId, x.scopes]) ?? [], new Date().toDateString()]);
+  const key = JSON.stringify([section, messages, watched, [...closedThreads], unreadOpen, loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], timeline?.missing.map((x) => [x.teamId, x.scopes]) ?? [], new Date().toDateString()]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -630,6 +659,7 @@ function drawPending() {
 function draw() {
   // The popups of messages that are not unread rows any more go, whichever screen is shown.
   if (timeline) pruneSlackArrivals(() => new Set(timeline!.messages.filter((m) => m.unread).map(slackKey)), answers);
+  drawSide();
   if ($("slack-list").hidden) return;
   drawHeader();
   drawPending();

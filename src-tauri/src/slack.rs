@@ -112,6 +112,8 @@ pub struct Recent {
 pub struct Channel {
     id: String,
     name: String,
+    /// A private channel (`is_private` of `users.conversations`).
+    private: bool,
 }
 
 /// What a pasted Slack link points at.
@@ -270,6 +272,7 @@ fn channels_of(reply: &Value) -> Vec<Channel> {
             valid_channel(id).then(|| Channel {
                 id: id.to_owned(),
                 name: name.to_owned(),
+                private: c["is_private"].as_bool().unwrap_or(false),
             })
         })
         .collect()
@@ -1580,6 +1583,31 @@ pub struct Timeline {
     /// Empty for the first read after the start, for a channel this read is the first to know the read position of, and for the messages of a watched thread (S-13).
     /// The same message is in the answer once: a read from the cache (`cached: true`) decides it as a full read does.
     arrived: Vec<TimelineMessage>,
+    /// The side menu (S-19): the joined channels of each workspace, from the lists kept (no new call to Slack), the ones kept off the list (S-9) left out.
+    side: Vec<SideWorkspace>,
+}
+
+/// A channel of the side menu (S-19). `unread` is the unread messages held for it and the unread replies of its threads, as the badge counts them.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct SideChannel {
+    id: String,
+    name: String,
+    private: bool,
+    unread: u32,
+}
+
+/// A workspace's heading in the side menu (S-19) and its channels by name.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct SideWorkspace {
+    team_id: String,
+    team: String,
+    channels: Vec<SideChannel>,
 }
 
 /// An attached file of a thread's message. `thumb_url` is set only for an image Slack serves a 360px preview of;
@@ -2199,6 +2227,72 @@ fn visible_messages(all: Vec<Raw>, hidden: &[Hidden]) -> Vec<Raw> {
 /// How many of `messages` are unread.
 fn count_unread(messages: &[Raw], unread: impl Fn(&Raw) -> bool) -> u32 {
     u32::try_from(messages.iter().filter(|m| unread(m)).count()).unwrap_or(u32::MAX)
+}
+
+/// The unread count of each channel of the workspace `team` (S-19), by ID: its unread messages among `held` and the share of its threads with unread replies, as the badge counts them.
+fn unread_by_channel(
+    team: &str,
+    held: &[Raw],
+    threads: &[UnreadThread],
+    unread: impl Fn(&Raw) -> bool,
+) -> HashMap<String, u32> {
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for m in held.iter().filter(|m| m.team_id == team && unread(m)) {
+        let n = counts.entry(m.channel.clone()).or_insert(0);
+        *n = n.saturating_add(1);
+    }
+    for t in threads.iter().filter(|t| t.key.0 == team) {
+        let n = counts.entry(t.key.1.clone()).or_insert(0);
+        *n = n.saturating_add(t.unread.share());
+    }
+    counts
+}
+
+/// The channels of one workspace for the side menu (S-19): the ones not in `hidden`, by name (letters of either case together), with their unread counts.
+fn side_channels(
+    list: &[Channel],
+    hidden: &HashSet<String>,
+    unread: &HashMap<String, u32>,
+) -> Vec<SideChannel> {
+    let mut channels: Vec<SideChannel> = list
+        .iter()
+        .filter(|c| !hidden.contains(&c.id))
+        .map(|c| SideChannel {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            private: c.private,
+            unread: unread.get(&c.id).copied().unwrap_or(0),
+        })
+        .collect();
+    channels.sort_by_cached_key(|c| (c.name.to_lowercase(), c.id.clone()));
+    channels
+}
+
+/// The side menu (S-19) from the channel lists kept (a workspace with none yet has no entry), the channels kept off the list, and the messages and threads the list is made of.
+fn side_menu(
+    channels: &ChannelCache,
+    workspaces: &[Workspace],
+    hidden: &[Hidden],
+    held: &[Raw],
+    threads: &[UnreadThread],
+    unread: impl Fn(&Raw) -> bool,
+) -> Vec<SideWorkspace> {
+    workspaces
+        .iter()
+        .filter_map(|w| {
+            let list = channels
+                .lock()
+                .unwrap()
+                .get(&w.team_id)
+                .map(|(_, list)| list.clone())?;
+            let counts = unread_by_channel(&w.team_id, held, threads, &unread);
+            Some(SideWorkspace {
+                team_id: w.team_id.clone(),
+                team: w.team.clone(),
+                channels: side_channels(&list, &hidden_of(hidden, &w.team_id), &counts),
+            })
+        })
+        .collect()
 }
 
 /// A thread the user watches (S-13): `ts` is the thread's own message, `seen_ts` the newest reply the user had seen when they last opened it (the thread's own `ts` when it had none).
@@ -4018,6 +4112,7 @@ async fn check_watched(
                     name: kept_channel_name(channels, &team, &key.1)
                         .unwrap_or_else(|| key.1.clone()),
                     id: key.1.clone(),
+                    private: false,
                 };
                 let own = cache.own_user(&team);
                 let read = watch_read_of(&reply, &team, &channel, &key.2, own.as_deref());
@@ -4099,6 +4194,7 @@ async fn check_threads(
                     name: kept_channel_name(channels, &team, &key.1)
                         .unwrap_or_else(|| key.1.clone()),
                     id: key.1.clone(),
+                    private: false,
                 };
                 let own = cache.own_user(&team).unwrap_or_default();
                 let read = thread_read_of(&reply, &team, &channel, &key.2, &own);
@@ -4487,6 +4583,9 @@ fn cached_timeline(
     let unchecked = unchecked_watch_rows(&rows)
         + never_checked_threads(&thread_candidates(cache, &held, &threads, watched));
     let arrived = cache.take_arrivals(&held, watched);
+    let side = side_menu(channels, workspaces, hidden, &held, &threads, |m| {
+        unread_by_cache(cache, m)
+    });
     let picked = pick_timeline(cache, held, watched, threads);
     let (mut pending, mut largest) = (0, 0);
     for w in workspaces {
@@ -4513,6 +4612,7 @@ fn cached_timeline(
         markable_channels: picked.markable_channels,
         unread_threads: picked.unread_threads,
         arrived: arrived_messages(cache, workspaces, &arrived),
+        side,
     }
 }
 
@@ -4731,6 +4831,9 @@ pub async fn slack_timeline(
             &watched,
         ));
     let arrived = state.timeline.take_arrivals(&all, &watched);
+    let side = side_menu(&state.channels, &workspaces, &hidden, &all, &threads, |m| {
+        unread_by_cache(&state.timeline, m)
+    });
     let picked = pick_timeline(&state.timeline, all, &watched, threads);
 
     // Names: the senders and the people the rows and their unread replies draw, once each, in the order the list shows them.
@@ -4787,6 +4890,7 @@ pub async fn slack_timeline(
         markable_channels: picked.markable_channels,
         unread_threads: picked.unread_threads,
         arrived: arrived_messages(&state.timeline, &workspaces, &arrived),
+        side,
     })
 }
 
@@ -4976,6 +5080,7 @@ pub async fn slack_watch(
                 name: kept_channel_name(&state.channels, &team_id, &channel)
                     .unwrap_or_else(|| channel.clone()),
                 id: channel.clone(),
+                private: false,
             };
             let own = state.timeline.own_user(&team_id);
             let read = watch_read_of(&reply, &team_id, &named, &ts, own.as_deref());
@@ -5656,11 +5761,13 @@ mod tests {
             vec![
                 Channel {
                     id: "C1".into(),
-                    name: "general".into()
+                    name: "general".into(),
+                    private: false
                 },
                 Channel {
                     id: "G4".into(),
-                    name: "secret".into()
+                    name: "secret".into(),
+                    private: true
                 }
             ]
         );
@@ -6218,6 +6325,7 @@ mod tests {
         Channel {
             id: id.into(),
             name: format!("name {id}"),
+            private: false,
         }
     }
 
@@ -6239,6 +6347,69 @@ mod tests {
 
     fn ids(list: &[Channel]) -> Vec<&str> {
         list.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn the_side_menu_lists_the_channels_by_name_without_the_hidden_ones() {
+        let named = |id: &str, name: &str, private: bool| Channel {
+            id: id.into(),
+            name: name.into(),
+            private,
+        };
+        let list = vec![
+            named("C1", "release", false),
+            named("G2", "Ops", true),
+            named("C3", "announce", false),
+            named("C4", "dev", false),
+            named("C5", "ops", false),
+        ];
+        let hidden = HashSet::from(["C4".to_owned()]);
+        let unread = HashMap::from([("G2".to_owned(), 3), ("C3".to_owned(), 1)]);
+        let side = side_channels(&list, &hidden, &unread);
+        // Either case sorts together, and the same name goes by the ID; the hidden channel is not there.
+        assert_eq!(
+            side.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            ["C3", "C5", "G2", "C1"]
+        );
+        let ops = &side[2];
+        assert_eq!(
+            (ops.name.as_str(), ops.private, ops.unread),
+            ("Ops", true, 3)
+        );
+        assert!(side.iter().filter(|c| c.id != "G2").all(|c| !c.private));
+        // A channel with no count is read.
+        assert_eq!(side[3].unread, 0);
+        assert_eq!(side_channels(&[], &hidden, &unread), vec![]);
+    }
+
+    #[test]
+    fn the_side_menu_counts_unread_messages_and_replies_of_the_workspace_by_channel() {
+        let held = vec![raw("C1", "5.1"), raw("C1", "4.1"), raw("C2", "3.1"), {
+            let mut other = raw("C1", "6.1");
+            other.team_id = "T2".into();
+            other
+        }];
+        let thread = |channel: &str, count: u32, uncounted: bool| UnreadThread {
+            key: ("T1".into(), channel.into(), "1.1".into()),
+            parent: raw(channel, "1.1"),
+            unread: ThreadUnread {
+                count,
+                uncounted,
+                replies: vec![],
+                newest: "9.1".into(),
+            },
+        };
+        let threads = vec![thread("C2", 2, false), thread("C3", 7, true)];
+        let counts = unread_by_channel("T1", &held, &threads, |m| m.ts != "4.1");
+        // The read message and the other workspace's are not counted; a thread that cannot be counted counts 1.
+        assert_eq!(
+            counts,
+            HashMap::from([
+                ("C1".to_owned(), 1),
+                ("C2".to_owned(), 3),
+                ("C3".to_owned(), 1)
+            ])
+        );
     }
 
     #[test]

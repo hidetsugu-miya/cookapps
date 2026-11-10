@@ -42,6 +42,8 @@ import type { ThreadFile } from "../ts/bindings/ThreadFile";
 import type { ThreadItem } from "../ts/bindings/ThreadItem";
 import type { ThreadMessage } from "../ts/bindings/ThreadMessage";
 import type { HiddenChannel } from "../ts/bindings/HiddenChannel";
+import type { SideChannel } from "../ts/bindings/SideChannel";
+import type { SideWorkspace } from "../ts/bindings/SideWorkspace";
 import type { Timeline } from "../ts/bindings/Timeline";
 import type { TimelineMessage } from "../ts/bindings/TimelineMessage";
 import type { TimelineReply } from "../ts/bindings/TimelineReply";
@@ -447,7 +449,7 @@ export const proofreadEdit: PromptEdit = {
 };
 
 // What `slack_channels` answers: the channels of the workspace `workspace`.
-export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general" }];
+export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general", private: false }];
 
 // What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by. `missingOptional` is the same for users:read, files:read, channels:write and groups:write.
 export const checked = (missingScopes: string[] | null, missingOptional: string[] | null = []): Checked => ({ ...workspace, missingScopes, missingOptional });
@@ -498,7 +500,7 @@ export const watchedMessage = (ts: string, name: string, channelName: string, te
 };
 
 // What `slack_timeline` answers; `unreadTotal` is the number of unread messages and unread replies given unless `extra` says another (it counts the messages held, not only the ones listed),
-// `markableChannels` the channels of the unread messages given, `unreadThreads` the rows with unread replies. `watched` and `arrived` are empty unless `extra` gives them.
+// `markableChannels` the channels of the unread messages given, `unreadThreads` the rows with unread replies. `watched`, `arrived` and `side` (the side menu) are empty unless `extra` gives them.
 export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({
   messages,
   watched: [],
@@ -510,8 +512,14 @@ export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> =
   markableChannels: new Set(messages.filter((m) => m.unread).map((m) => `${m.teamId}/${m.channel}`)).size,
   unreadThreads: messages.filter((m) => m.unreadReplies).length,
   arrived: [],
+  side: [],
   ...extra,
 });
+
+// A channel of the side menu (S-19) of the workspace `team`: `channel` is its ID, `extra` overrides any field.
+export const sideChannel = (channel: string, name: string, extra: Partial<SideChannel> = {}): SideChannel => ({ id: channel, name, private: false, unread: 0, ...extra });
+// A workspace of the side menu with its channels in the order given (Rust sorts them by name).
+export const sideWorkspace = (channels: SideChannel[], extra: Partial<SideWorkspace> = {}): SideWorkspace => ({ teamId: workspace.teamId, team: workspace.team, channels, ...extra });
 
 // A channel kept off the Slack list (`slack_hidden_list`); `name` is the channel's ID when its name is not known.
 export const hiddenChannel = (channel: string, name: string, extra: Partial<HiddenChannel> = {}): HiddenChannel => ({ teamId: workspace.teamId, team: workspace.team, channel, name, ...extra });
