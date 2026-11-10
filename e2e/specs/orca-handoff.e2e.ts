@@ -205,6 +205,149 @@ describe("orca handoff", () => {
     await expect($(`${MAIL.pane} .ho-name`)).not.toBeDisplayed();
   });
 
+  describe("the search field of the project menu", () => {
+    const project = (name: string) => ({ key: `proj_${name}`, name, status: "idle" as const, sessions: 0, atMs: 0 });
+    const NAMES = ["example-app", "Example-API", "my.service", "node(core)", "billing"];
+    const search = () => $(".menu .menu-search");
+    // The labels of the rows the menu draws now, and the one the keys are on.
+    const rowsShown = () => browser.execute(() => [...document.querySelectorAll(".menu [role=menuitem]")].filter((b) => !(b as HTMLElement).hidden).map((b) => b.textContent?.trim() ?? ""));
+    const cursorRow = () => browser.execute(() => [...document.querySelectorAll('.menu [data-cursor="true"]')].map((b) => b.textContent?.trim() ?? ""));
+
+    async function openProjects(names = NAMES) {
+      await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { projects: names.map(project) }) });
+      await openPane(MAIL);
+      // The click of the WebDriver gives the focus back to the chip after the handler ran (it sends no mousedown), so the chip is clicked from the page here to see where the menu puts the focus.
+      await browser.execute(() => (document.querySelector("#mail-handoff .ho-project") as HTMLElement).click());
+      await expect(search()).toBeDisplayed();
+    }
+
+    it("has a field named プロジェクトを検索 that takes the focus when the menu opens, with all the rows drawn and the first one under the keys", async () => {
+      await openProjects();
+      await expect(search()).toHaveAttribute("aria-label", "プロジェクトを検索");
+      await expect(search()).toHaveAttribute("placeholder", "検索");
+      expect(await browser.execute(() => document.activeElement === document.querySelector(".menu .menu-search"))).toBe(true);
+      expect(await rowsShown()).toEqual(NAMES);
+      expect(await cursorRow()).toEqual(["example-app"]);
+      await expect($(".menu .menu-empty")).not.toBeDisplayed();
+    });
+
+    it("keeps the rows whose name holds the text, with case ignored and the text trimmed, and all of them when it is blank", async () => {
+      await openProjects();
+      await search().setValue("EXAMPLE");
+      expect(await rowsShown()).toEqual(["example-app", "Example-API"]);
+      await search().setValue("  api ");
+      expect(await rowsShown()).toEqual(["Example-API"]);
+      await search().setValue("   ");
+      expect(await rowsShown()).toEqual(NAMES);
+    });
+
+    it("takes a character of a regular expression as itself", async () => {
+      await openProjects();
+      await search().setValue(".");
+      expect(await rowsShown()).toEqual(["my.service"]);
+      await search().setValue("(");
+      expect(await rowsShown()).toEqual(["node(core)"]);
+      await search().setValue("e.*");
+      expect(await rowsShown()).toEqual([]);
+    });
+
+    it("says 一致するプロジェクトがありません, as a line and not a button, when no row matches", async () => {
+      await openProjects();
+      await search().setValue("zzz");
+      expect(await rowsShown()).toEqual([]);
+      await expect($(".menu .menu-empty")).toHaveText("一致するプロジェクトがありません");
+      expect(await browser.execute(() => document.querySelector(".menu .menu-empty")!.tagName)).toBe("DIV");
+      expect(await cursorRow()).toEqual([]);
+      // Enter has no row to pick: the menu stays and nothing is chosen.
+      await browser.keys("Enter");
+      await expect(search()).toBeDisplayed();
+      await search().setValue("billing");
+      expect(await rowsShown()).toEqual(["billing"]);
+      await expect($(".menu .menu-empty")).not.toBeDisplayed();
+    });
+
+    it("moves the cursor row with Down and Up along the rows shown, stops at the ends, and puts it on the first row again when the text changes", async () => {
+      await openProjects();
+      await browser.keys("ArrowUp");
+      expect(await cursorRow()).toEqual(["example-app"]);
+      await browser.keys("ArrowDown");
+      expect(await cursorRow()).toEqual(["Example-API"]);
+      for (let i = 0; i < 6; i++) await browser.keys("ArrowDown");
+      expect(await cursorRow()).toEqual(["billing"]);
+      await browser.keys("ArrowUp");
+      expect(await cursorRow()).toEqual(["node(core)"]);
+      await search().setValue("e");
+      expect(await rowsShown()).toEqual(["example-app", "Example-API", "my.service", "node(core)"]);
+      expect(await cursorRow()).toEqual(["example-app"]);
+      await browser.keys("ArrowDown");
+      await browser.keys("ArrowDown");
+      expect(await cursorRow()).toEqual(["my.service"]);
+    });
+
+    it("picks the cursor row with Enter: the menu closes and the chip shows the project", async () => {
+      await openProjects();
+      await search().setValue("example");
+      await browser.keys("ArrowDown");
+      await browser.keys("Enter");
+      await expect($(".menu")).not.toExist();
+      expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["Example-API"]);
+      // A click on a row still picks it.
+      await $(`${MAIL.pane} .ho-project`).click();
+      await $('//div[@role="menu"]//button[normalize-space(.)="billing"]').click();
+      expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["billing"]);
+    });
+
+    it("closes with Escape", async () => {
+      await openProjects();
+      await search().setValue("ex");
+      await browser.keys("Escape");
+      await expect($(".menu")).not.toExist();
+      expect(await browser.execute(() => document.querySelector("#mail-handoff .ho-project")!.hasAttribute("aria-expanded"))).toBe(false);
+    });
+
+    it("fits the window with the field in view, scrolls the rows inside the menu, and keeps its place while the rows shrink", async () => {
+      await openProjects(Array.from({ length: 80 }, (_, i) => `example-project-${String(i).padStart(2, "0")}`));
+      const geometry = () =>
+        browser.execute(() => {
+          const menu = document.querySelector(".menu")!.getBoundingClientRect();
+          const field = document.querySelector(".menu .menu-search")!.getBoundingClientRect();
+          const list = document.querySelector(".menu .menu-list") as HTMLElement;
+          return { top: menu.top, left: menu.left, width: menu.width, bottom: menu.bottom, fieldTop: field.top, fieldBottom: field.bottom, scrolls: list.scrollHeight > list.clientHeight, inner: innerHeight };
+        });
+      const before = await geometry();
+      expect(before.bottom).toBeLessThanOrEqual(before.inner);
+      expect(before.scrolls).toBe(true);
+      // Scroll the rows to the end: the field does not scroll away.
+      await browser.execute(() => {
+        const list = document.querySelector(".menu .menu-list") as HTMLElement;
+        list.scrollTop = list.scrollHeight;
+      });
+      const scrolled = await geometry();
+      expect(scrolled.fieldTop).toBe(before.fieldTop);
+      expect(scrolled.fieldBottom).toBeLessThanOrEqual(scrolled.bottom);
+      await search().setValue("project-7");
+      expect(await rowsShown()).toHaveLength(10);
+      const after = await geometry();
+      expect(after.top).toBe(before.top);
+      expect(after.left).toBe(before.left);
+      expect(after.width).toBe(before.width);
+      expect(after.scrolls).toBe(false);
+    });
+
+    it("is in no other menu of the pane", async () => {
+      await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { projects: NAMES.map(project), environments: ["Studio"] }) });
+      await openPane(MAIL);
+      await $(`${MAIL.pane} .ho-destination`).click();
+      expect(await textsOf(".menu [role=menuitem]")).toEqual(["このマシン", "Studio"]);
+      await expect($(".menu .menu-search")).not.toExist();
+      await browser.keys("Escape");
+      await chooseProject(MAIL, "example-app");
+      await $(`${MAIL.pane} .ho-worktree`).click();
+      expect(await textsOf(".menu [role=menuitem]")).toEqual(["default ・ feat/a", "新規作成"]);
+      await expect($(".menu .menu-search")).not.toExist();
+    });
+  });
+
   it("asks Claude to summarise the instruction with the content as data, and hands over the summary agreed to with the content as arguments of one command", async () => {
     await openMail();
     const handoff = await mock("orca_handoff", started);

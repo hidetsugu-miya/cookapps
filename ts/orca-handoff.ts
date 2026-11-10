@@ -437,6 +437,7 @@ export class HandoffPane {
             this.el?.input.focus();
           },
         })),
+        { search: { label: "プロジェクトを検索", empty: "一致するプロジェクトがありません" } },
       );
     const chip = tag("button", "review-chip ho-chip ho-worktree");
     chip.type = "button";

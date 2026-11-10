@@ -550,6 +550,13 @@ a.c-file:hover { background: var(--hover); }
 .menu { position: fixed; z-index: 10; overflow-y: auto; min-width: 160px; padding: 4px; border: 1px solid var(--chip-line); border-radius: 10px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; }
 .menu button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+.menu-searchable { box-sizing: border-box; overflow: hidden; }
+.menu-search { flex: none; box-sizing: border-box; width: 100%; height: 28px; margin: 0 0 4px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; outline: 0; background: var(--surface); font: inherit; color: inherit; }
+.menu-search:focus { border-color: var(--accent); }
+.menu-list { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.menu-list button { flex: none; }
+.menu-list button[data-cursor="true"] { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.menu-empty { padding: 6px 10px; color: var(--muted); }
 .menu button[aria-current="true"] { font-weight: bold; }
 .menu[role="menu"] button svg { width: 16px; height: 16px; flex: none; }
 

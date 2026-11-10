@@ -18,7 +18,7 @@ import type { OrcaTerminal } from "./bindings/OrcaTerminal";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
-import { $, composing, isMac, tag } from "./dom.js";
+import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { CHEVRON_SVG, CLAUDE_SVG, FILE_SVG, svgOf } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
@@ -430,9 +430,9 @@ function projectRows(): { local: ProjectRow[]; hosts: ProjectRow[] } {
   return { local, hosts };
 }
 
-// The search text (A-19), trimmed, and as a regular expression with its special characters escaped, so that a "." or a "(" matches itself. A match is a case-folded part of a name. The expression is made once for each drawing (null while nothing is typed); its capture group serves `split` below.
+// The search text (A-19), trimmed, and as a regular expression (`partMatcher` of dom.ts: special characters escaped, a case-folded part of a name). The expression is made once for each drawing (null while nothing is typed); its capture group serves `split` below.
 const needle = () => query.trim();
-const matcher = () => (needle() === "" ? null : new RegExp(`(${needle().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "i"));
+const matcher = () => partMatcher(query);
 
 // A name with the letters that match the search text in bold (`split` with a capture group puts the matches at the odd places).
 function nameNodes(name: string, re: RegExp | null): (string | HTMLElement)[] {
