@@ -566,6 +566,9 @@ describe("orca", () => {
     await expect($(".orca-plus")).toBeEnabled();
     await pressPlus();
     expect(await textsOf('.menu[role="menu"] button')).toEqual([CLAUDE, TERMINAL]);
+    // Each item draws its own icon in place of the dot.
+    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     await expect($(".orca-plus")).toHaveAttribute("aria-expanded", "true");
     // Escape closes it, and nothing was started.
     await browser.keys("Escape");

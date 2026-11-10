@@ -19,7 +19,7 @@ import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
-import { CHEVRON_SVG, CLAUDE_SVG, FILE_SVG, svgOf } from "./icons.js";
+import { CHEVRON_SVG, CLAUDE_SVG, FILE_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
@@ -1027,8 +1027,8 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
 // The plus (A-16): a menu of "Claude を起動" and "ターミナルを開く", which start in a worktree of the project (or SSH host) selected in the list pane.
 function openStartMenu(anchor: Element) {
   if (view === null || projectKey === null) return;
-  const item = (label: string, kind: StartKind) => ({ label, color: "var(--accent)", current: false, pick: () => chooseWorktree(anchor, kind) });
-  openMenu(anchor, [item("Claude を起動", "claude"), item("ターミナルを開く", "terminal")]);
+  const item = (label: string, icon: string, kind: StartKind) => ({ label, color: "var(--accent)", icon, current: false, pick: () => chooseWorktree(anchor, kind) });
+  openMenu(anchor, [item("Claude を起動", CLAUDE_SVG, "claude"), item("ターミナルを開く", TERMINAL_SVG, "terminal")]);
 }
 
 // A project with one worktree starts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there).
