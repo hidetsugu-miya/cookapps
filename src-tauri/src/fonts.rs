@@ -35,17 +35,21 @@ static SAVING: Mutex<()> = Mutex::new(());
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub enum FontArea {
+    App,
     Mail,
     Calendar,
     TodoList,
     TodoWork,
     Slack,
     OrcaList,
+    OrcaPane,
     OrcaWork,
     Editor,
+    Mono,
 }
 
 /// The font of one place: the family (`None` is the app's own) and the size in pixels.
+/// The place `Mono` has no size of its own: its `size` is the text size and never changes.
 /// `ghostty` is true only for the work space of Orca (the terminals): they then draw with the family and size of Ghostty's import (A-13), and `family` and `size` wait for the choice to be changed.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -63,14 +67,17 @@ pub struct FontPick {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct FontSettings {
+    pub app: FontPick,
     pub mail: FontPick,
     pub calendar: FontPick,
     pub todo_list: FontPick,
     pub todo_work: FontPick,
     pub slack: FontPick,
     pub orca_list: FontPick,
+    pub orca_pane: FontPick,
     pub orca_work: FontPick,
     pub editor: FontPick,
+    pub mono: FontPick,
 }
 
 fn pick(size: f64, ghostty: bool) -> FontPick {
@@ -84,14 +91,17 @@ fn pick(size: f64, ghostty: bool) -> FontPick {
 impl Default for FontSettings {
     fn default() -> Self {
         Self {
+            app: pick(SIZE_TEXT, false),
             mail: pick(SIZE_TEXT, false),
             calendar: pick(SIZE_TEXT, false),
             todo_list: pick(SIZE_TEXT, false),
             todo_work: pick(SIZE_TEXT, false),
             slack: pick(SIZE_TEXT, false),
             orca_list: pick(SIZE_TEXT, false),
+            orca_pane: pick(SIZE_TEXT, false),
             orca_work: pick(SIZE_TERMINAL, true),
             editor: pick(SIZE_EDITOR, false),
+            mono: pick(SIZE_TEXT, false),
         }
     }
 }
@@ -99,14 +109,17 @@ impl Default for FontSettings {
 impl FontSettings {
     fn pick_mut(&mut self, area: FontArea) -> &mut FontPick {
         match area {
+            FontArea::App => &mut self.app,
             FontArea::Mail => &mut self.mail,
             FontArea::Calendar => &mut self.calendar,
             FontArea::TodoList => &mut self.todo_list,
             FontArea::TodoWork => &mut self.todo_work,
             FontArea::Slack => &mut self.slack,
             FontArea::OrcaList => &mut self.orca_list,
+            FontArea::OrcaPane => &mut self.orca_pane,
             FontArea::OrcaWork => &mut self.orca_work,
             FontArea::Editor => &mut self.editor,
+            FontArea::Mono => &mut self.mono,
         }
     }
 }
@@ -154,14 +167,21 @@ fn load_settings(dir: &Path) -> FontSettings {
         pick_from(saved.and_then(|v| v.get(key)), default, follow)
     };
     FontSettings {
+        app: of("app", &first.app, false),
         mail: of("mail", &first.mail, false),
         calendar: of("calendar", &first.calendar, false),
         todo_list: of("todoList", &first.todo_list, false),
         todo_work: of("todoWork", &first.todo_work, false),
         slack: of("slack", &first.slack, false),
         orca_list: of("orcaList", &first.orca_list, false),
+        orca_pane: of("orcaPane", &first.orca_pane, false),
         orca_work: of("orcaWork", &first.orca_work, true),
         editor: of("editor", &first.editor, false),
+        // The mono place has no size: whatever the file holds, it keeps the text size.
+        mono: FontPick {
+            size: first.mono.size,
+            ..of("mono", &first.mono, false)
+        },
     }
 }
 
@@ -175,7 +195,7 @@ fn save_settings(dir: &Path, settings: &FontSettings) -> Result<(), String> {
         .map_err(|e| format!("{} を書けません: {e}", path.display()))
 }
 
-/// The settings with the pick of `area` changed. The family must be one of `installed`, or the one the place holds; the size is brought into its range; only the work space of Orca may follow Ghostty.
+/// The settings with the pick of `area` changed. The family must be one of `installed`, or the one the place holds; the size is brought into its range (the place `Mono` keeps the size it holds, whatever is sent); only the work space of Orca may follow Ghostty.
 fn set_pick(
     settings: &FontSettings,
     area: FontArea,
@@ -192,7 +212,10 @@ fn set_pick(
     }
     let mut next = settings.clone();
     // The family this place holds already is kept, even if this Mac has lost it since: the size of the place can still change.
-    let held = next.pick_mut(area).family.clone();
+    let (held, held_size) = {
+        let pick = next.pick_mut(area);
+        (pick.family.clone(), pick.size)
+    };
     let family = match family {
         None => None,
         Some(raw) => Some(
@@ -203,7 +226,11 @@ fn set_pick(
     };
     *next.pick_mut(area) = FontPick {
         family,
-        size: clamp_size(size),
+        size: if area == FontArea::Mono {
+            held_size
+        } else {
+            clamp_size(size)
+        },
         ghostty,
     };
     Ok(next)
@@ -313,12 +340,15 @@ mod tests {
     fn the_first_values_are_the_sizes_the_screens_have_had() {
         let d = FontSettings::default();
         for p in [
+            &d.app,
             &d.mail,
             &d.calendar,
             &d.todo_list,
             &d.todo_work,
             &d.slack,
             &d.orca_list,
+            &d.orca_pane,
+            &d.mono,
         ] {
             assert_eq!(
                 *p,
@@ -448,7 +478,8 @@ mod tests {
             .map(String::as_str)
             .collect();
         let mut expected = vec![
-            "mail", "calendar", "todoList", "todoWork", "slack", "orcaList", "orcaWork", "editor",
+            "app", "mail", "calendar", "todoList", "todoWork", "slack", "orcaList", "orcaPane",
+            "orcaWork", "editor", "mono",
         ];
         let mut got = keys.clone();
         got.sort_unstable();
@@ -457,6 +488,10 @@ mod tests {
         assert_eq!(
             value["orcaWork"],
             serde_json::json!({"family": null, "size": 13.0, "ghostty": true})
+        );
+        assert_eq!(
+            value["mono"],
+            serde_json::json!({"family": null, "size": 14.0, "ghostty": false})
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -555,6 +590,142 @@ mod tests {
         std::fs::write(dir.join("font-settings.json"), text).unwrap();
         assert!(!load_settings(&dir).orca_work.ghostty);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_from_before_the_three_places_reads_with_their_first_values() {
+        let dir = temp_dir("old-file");
+        let text = r#"{
+            "mail": {"family": "Menlo", "size": 16, "ghostty": false},
+            "orcaWork": {"family": null, "size": 13, "ghostty": true},
+            "editor": {"family": null, "size": 12.5, "ghostty": false}
+        }"#;
+        std::fs::write(dir.join("font-settings.json"), text).unwrap();
+        let got = load_settings(&dir);
+        let first = FontSettings::default();
+        assert_eq!(got.app, first.app);
+        assert_eq!(got.orca_pane, first.orca_pane);
+        assert_eq!(got.mono, first.mono);
+        assert_eq!(got.mail.family.as_deref(), Some("Menlo"));
+        // The new places start as the app's own family and 14 px, and the mono place has no family chosen.
+        for p in [&got.app, &got.orca_pane, &got.mono] {
+            assert_eq!(
+                *p,
+                FontPick {
+                    family: None,
+                    size: 14.0,
+                    ghostty: false
+                }
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_new_places_are_read_from_the_file_and_mended_like_the_others() {
+        let dir = temp_dir("new-places");
+        let text = r#"{
+            "app": {"family": "Hiragino Sans", "size": 18, "ghostty": true},
+            "orcaPane": {"family": " Menlo ", "size": 99},
+            "mono": {"family": "Menlo", "size": 30, "ghostty": true}
+        }"#;
+        std::fs::write(dir.join("font-settings.json"), text).unwrap();
+        let got = load_settings(&dir);
+        // Only the work space of Orca follows Ghostty.
+        assert_eq!(
+            got.app,
+            FontPick {
+                family: Some("Hiragino Sans".into()),
+                size: 18.0,
+                ghostty: false
+            }
+        );
+        assert_eq!(
+            got.orca_pane,
+            FontPick {
+                family: Some("Menlo".into()),
+                size: 32.0,
+                ghostty: false
+            }
+        );
+        // The mono place keeps its family, and its size is the text size whatever the file holds.
+        assert_eq!(
+            got.mono,
+            FontPick {
+                family: Some("Menlo".into()),
+                size: 14.0,
+                ghostty: false
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_mono_place_takes_a_family_and_keeps_its_size() {
+        let installed = names(&["Menlo"]);
+        let base = FontSettings::default();
+        for sent in [20.0, 8.0, 99.0, 12.5] {
+            let got = set_pick(
+                &base,
+                FontArea::Mono,
+                Some("Menlo"),
+                sent,
+                false,
+                &installed,
+            )
+            .unwrap();
+            assert_eq!(
+                got.mono,
+                FontPick {
+                    family: Some("Menlo".into()),
+                    size: 14.0,
+                    ghostty: false
+                },
+                "{sent}"
+            );
+        }
+        // The family is checked as in every place, and the other places stay.
+        assert!(set_pick(
+            &base,
+            FontArea::Mono,
+            Some("Comic Neue"),
+            14.0,
+            false,
+            &installed
+        )
+        .is_err());
+        let got = set_pick(
+            &base,
+            FontArea::Mono,
+            Some("Menlo"),
+            20.0,
+            false,
+            &installed,
+        )
+        .unwrap();
+        assert_eq!(got.app, base.app);
+        assert_eq!(got.editor, base.editor);
+        // Back to the app's own.
+        let got = set_pick(&got, FontArea::Mono, None, 20.0, false, &installed).unwrap();
+        assert_eq!(got.mono, base.mono);
+    }
+
+    #[test]
+    fn the_app_and_the_pane_of_orca_take_a_size_like_the_screens() {
+        let installed = names(&["Menlo"]);
+        let base = FontSettings::default();
+        let got = set_pick(&base, FontArea::App, Some("Menlo"), 16.2, false, &installed).unwrap();
+        assert_eq!(
+            got.app,
+            FontPick {
+                family: Some("Menlo".into()),
+                size: 16.0,
+                ghostty: false
+            }
+        );
+        let got = set_pick(&base, FontArea::OrcaPane, None, 100.0, false, &installed).unwrap();
+        assert_eq!(got.orca_pane.size, 32.0);
+        assert_eq!(got.orca_work, base.orca_work);
     }
 
     #[test]
@@ -715,13 +886,16 @@ mod tests {
     fn only_the_work_space_of_orca_may_follow_ghostty() {
         let base = FontSettings::default();
         for area in [
+            FontArea::App,
             FontArea::Mail,
             FontArea::Calendar,
             FontArea::TodoList,
             FontArea::TodoWork,
             FontArea::Slack,
             FontArea::OrcaList,
+            FontArea::OrcaPane,
             FontArea::Editor,
+            FontArea::Mono,
         ] {
             let err = set_pick(&base, area, None, 14.0, true, &[]).unwrap_err();
             assert!(err.contains("Ghostty"), "{area:?}: {err}");
@@ -760,14 +934,17 @@ mod tests {
     fn every_area_is_set_in_its_own_place() {
         let installed = names(&["Menlo"]);
         let areas = [
+            FontArea::App,
             FontArea::Mail,
             FontArea::Calendar,
             FontArea::TodoList,
             FontArea::TodoWork,
             FontArea::Slack,
             FontArea::OrcaList,
+            FontArea::OrcaPane,
             FontArea::OrcaWork,
             FontArea::Editor,
+            FontArea::Mono,
         ];
         for (i, area) in areas.into_iter().enumerate() {
             let mut got = set_pick(
@@ -799,6 +976,15 @@ mod tests {
         assert_eq!(area, FontArea::TodoList);
         let area: FontArea = serde_json::from_str("\"orcaWork\"").unwrap();
         assert_eq!(area, FontArea::OrcaWork);
+        for (name, want) in [
+            ("app", FontArea::App),
+            ("orcaPane", FontArea::OrcaPane),
+            ("mono", FontArea::Mono),
+        ] {
+            let got: FontArea = serde_json::from_str(&format!("\"{name}\"")).unwrap();
+            assert_eq!(got, want);
+        }
+        assert!(serde_json::from_str::<FontArea>("\"orca_pane\"").is_err());
         assert!(serde_json::from_str::<FontArea>("\"todo_list\"").is_err());
         assert!(serde_json::from_str::<FontArea>("\"sidebar\"").is_err());
     }

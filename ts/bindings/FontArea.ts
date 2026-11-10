@@ -3,4 +3,4 @@
 /**
  * A place of a screen that has a font of its own.
  */
-export type FontArea = "mail" | "calendar" | "todoList" | "todoWork" | "slack" | "orcaList" | "orcaWork" | "editor";
+export type FontArea = "app" | "mail" | "calendar" | "todoList" | "todoWork" | "slack" | "orcaList" | "orcaPane" | "orcaWork" | "editor" | "mono";

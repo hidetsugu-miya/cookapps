@@ -4,4 +4,4 @@ import type { FontPick } from "./FontPick";
 /**
  * The fonts of every place.
  */
-export type FontSettings = { mail: FontPick, calendar: FontPick, todoList: FontPick, todoWork: FontPick, slack: FontPick, orcaList: FontPick, orcaWork: FontPick, editor: FontPick, };
+export type FontSettings = { app: FontPick, mail: FontPick, calendar: FontPick, todoList: FontPick, todoWork: FontPick, slack: FontPick, orcaList: FontPick, orcaPane: FontPick, orcaWork: FontPick, editor: FontPick, mono: FontPick, };
