@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.59.1
+
+A-9: the project menu of the 「Orca に渡す」 pane has a search field at its top (#405). What is typed narrows the projects to those whose name holds it, with case ignored. ↓ and ↑ move through the rows, Enter picks one, and Escape closes the menu. The menu fits the window and its rows scroll, so a long list of projects no longer runs past the screen.
+
 ## v0.59.0
 
 T-7 (new): the Todo screen has a Claude pane at its right (#327, #328, #333, #334). The speech-bubble button of the header (「Claude に相談」) opens and closes it, in the list and in a task's detail, and it shares its place with the 「Orca に渡す」 pane: only one of the two is open. Ask in words, such as 「年末まで週 2 件ずつ」, and Claude answers with cards of proposed tasks, each with a name, a date and a project. Nothing is written to Todoist until 「追加」 is pressed on a card; the name, the date and the project can be changed on the card first, and 「却下」 closes it. Asking again sends the cards as they are now, so Claude can change its own proposals. The request, the conversation, today's date and the names of the Todoist projects are sent to Anthropic. The model and effort of this conversation are 「Todo の相談」 in the Claude tab of the settings (A-2). The add field of the Todo screen no longer shows an example.
