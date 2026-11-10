@@ -301,12 +301,20 @@ async function syncAll() {
   const seq = loadSeq;
   let failure: unknown = null;
   try {
-    for (const [account, startHistoryId] of [...historyIds]) {
+    // The accounts are synced at once: each one has its own Gmail limits and backoff, so none needs to wait for another.
+    const accounts = [...historyIds];
+    const results = await Promise.allSettled(
+      accounts.map(([account, startHistoryId]) => invoke("sync", { account, startHistoryId })),
+    );
+    for (const [i, result] of results.entries()) {
+      if (result.status === "rejected") {
+        failure = result.reason;
+        continue;
+      }
+      // A load that started meanwhile redraws everything from a newer state.
+      if (seq !== loadSeq || loading) return;
       try {
-        const r = await invoke("sync", { account, startHistoryId });
-        // A load that started meanwhile redraws everything from a newer state.
-        if (seq !== loadSeq || loading) return;
-        applySync(account, r);
+        applySync(accounts[i][0], result.value);
       } catch (e) {
         failure = e;
       }
