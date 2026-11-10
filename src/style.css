@@ -7,7 +7,7 @@ body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0
 #mail-header, #inbox-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
-#todo-body, #todo-handoff { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#todo-body, #todo-handoff, #todo-claude { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #slack-list, #slack-thread, #slack-compose { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-list { --fs: var(--fs-orca-list, 1); font-family: var(--ff-orca-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-work, #orca-files { --fs: var(--fs-orca-pane, 1); font-family: var(--ff-orca-pane, var(--ff-base)); font-size: calc(14px * var(--fs)); }
@@ -282,7 +282,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .proj svg { width: 18px; height: 18px; flex: none; }
 .pdot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 #todo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-#todo-prompt { color: var(--claude); }
+#todo-prompt, #todo-claude-btn { color: var(--claude); }
 #todo-main { flex: 1; overflow-y: auto; padding: 8px 24px 32px 32px; }
 #todo-add { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 #todo-add input, #todo-token input { flex: 1; height: 36px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 18px; font: inherit; }
@@ -726,6 +726,15 @@ button.status:hover { filter: brightness(.95); }
 .chat-clear:disabled, .chat-send:disabled { opacity: .4; cursor: default; }
 .chat-clear:disabled:hover { background: #fff; }
 .chat-send:disabled:hover { background: var(--accent); filter: none; }
+/* T-7: the Claude pane of the Todo screen. It takes the place of the Orca pane (the same divider and width); its reply keeps line breaks, the send button sits at the right of the row of the model and effort, and the proposed tasks are cards under the reply. */
+#todo-claude .chat-ai { white-space: pre-wrap; }
+#todo-claude .chat-head .icon-btn { flex: none; width: 28px; height: 28px; }
+#todo-claude .chat-head .icon-btn svg { color: inherit; }
+#todo-claude .composer-foot { justify-content: flex-end; }
+#todo-claude .chat-model { margin: 0 auto 0 0; }
+.chat-tasks { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.chat-task { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.chat-task-name { font-weight: bold; }
 .chat-clear { margin-left: auto; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; font-size: calc(12px * var(--fs)); font-weight: normal; }
 
 /* The Slack compose screen: the text to post on the left, a divider the user drags, and the conversation with Claude on the right.
@@ -1010,7 +1019,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
 /* The mail's pane is 37% wide, at least 400px; the Todo's is 380px (wider when dragged); the Slack tab keeps the width of the Claude pane, at least 400px. */
 #mail-handoff { min-width: 400px; }
-#todo-handoff { width: clamp(380px, var(--chat-w, 0%), 50%); }
+#todo-handoff, #todo-claude { width: clamp(380px, var(--chat-w, 0%), 50%); }
 #slack-thread.assist-orca { grid-template-columns: minmax(0, 1fr) auto max(400px, clamp(33.3333%, var(--chat-w, 33.3333%), 50%)); }
 .ho-pane.ho-slack { display: contents; }
 .ho-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }

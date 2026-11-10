@@ -1,10 +1,15 @@
-// The conversation with Claude that edits a text, shared by the Todo prompt screen (S-3), the Slack compose screen (S-4) and the Slack thread (S-7):
+// The conversation with Claude that edits a text, shared by the Todo prompt screen (S-3), the Slack compose screen (S-4), the Slack thread (S-7), the Todo draft page (S-18) and the Todo screen's Claude pane (T-7):
 // the log with its diff cards, the request field that grows with its text, and the clear button. A proposal is applied to the owner's text, and the owner decides what to do with it.
+// The Todo pane proposes tasks, not a change of a text: its answers carry `tasks`, which `cards` draws under the reply.
 // The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-form` and `-chat-note`, and `-keys` unless `keyHint` is false.
 import type { DiffLine } from "./bindings/DiffLine";
 import type { PromptEdit } from "./bindings/PromptEdit";
+import type { TodoTaskProposal } from "./bindings/TodoTaskProposal";
 import { getClaude } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
+
+// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`) or proposed tasks.
+export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[] };
 
 export interface ChatTurnPayload {
   role: "user" | "assistant";
@@ -20,7 +25,9 @@ export interface ChatConfig {
   // Puts an applied proposal into the text.
   apply: (text: string) => void;
   // Asks Claude about `text` with the conversation so far and the new request. Nothing is saved.
-  ask: (text: string, history: ChatTurnPayload[], instruction: string) => Promise<PromptEdit>;
+  ask: (text: string, history: ChatTurnPayload[], instruction: string) => Promise<ChatAnswer>;
+  // Draws the tasks an answer proposes, under its reply; without it `tasks` is not drawn.
+  cards?: (tasks: TodoTaskProposal[]) => HTMLElement;
   // The conversation changed: the owner draws what follows from it, and calls `refresh`.
   changed: () => void;
   // True while the owner's text must not be replaced (a proposal cannot be applied then).
@@ -44,6 +51,7 @@ export interface Turn {
   // An error shown in the conversation; it is not part of what Claude is sent.
   failed?: boolean;
   proposal?: Proposal;
+  tasks?: TodoTaskProposal[];
 }
 
 // The oldest turns are dropped past this many; Claude is sent the last SENT_TURNS (the same as Rust's CHAT_TURNS).
@@ -121,6 +129,7 @@ export function createChat(cfg: ChatConfig) {
     if (t.role === "user") return tag("div", "chat-user", t.text);
     const node = tag("div", "chat-ai", t.text);
     if (t.proposal) node.append(diffCard(t.proposal));
+    if (t.tasks?.length && cfg.cards) node.append(cfg.cards(t.tasks));
     return node;
   }
 
@@ -181,6 +190,7 @@ export function createChat(cfg: ChatConfig) {
         role: "assistant",
         text: answer.reply,
         proposal: answer.body === null ? undefined : { body: answer.body, diff: answer.diff, base: body, state: "open" },
+        tasks: answer.tasks,
       };
     } catch (e) {
       turn = { role: "assistant", text: `送れませんでした: ${e}`, failed: true };

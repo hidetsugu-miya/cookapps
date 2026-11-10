@@ -235,6 +235,13 @@ export class HandoffPane {
     this.sync();
   }
 
+  // Closes the pane because another pane of the host's screen takes its place.
+  close() {
+    if (!this.open) return;
+    this.open = false;
+    this.sync();
+  }
+
   // The content of the item changed (a thread was read, a task was edited): the card shows the new one until it is sent or taken off.
   refreshCard() {
     if (!this.open || this.itemKey === null || this.mode() !== "form" || this.removed || !this.item) return;
