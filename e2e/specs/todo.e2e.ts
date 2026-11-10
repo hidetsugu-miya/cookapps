@@ -26,6 +26,12 @@ describe("todo", () => {
     await expect($("#todo-list")).toHaveText(expect.stringContaining("Plan trip"));
   });
 
+  it("has no placeholder in the add field", async () => {
+    await openTodo();
+    await expect($("#todo-add-input")).not.toHaveAttribute("placeholder");
+    await expect($("#todo-add-input")).toHaveAttribute("aria-label", "タスクを追加");
+  });
+
   it("adds the typed text through todoist_add", async () => {
     await openTodo();
     const add = await mock("todoist_add", true);

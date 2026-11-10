@@ -735,6 +735,8 @@ button.status:hover { filter: brightness(.95); }
 .chat-tasks { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .chat-task { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .chat-task-name { font-weight: bold; }
+.chat-task-done { color: var(--accent); }
+.chat-task .review-chip:disabled, .chat-task .review-name:disabled, .chat-task .text-btn:disabled { opacity: .5; cursor: default; }
 .chat-clear { margin-left: auto; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; font-size: calc(12px * var(--fs)); font-weight: normal; }
 
 /* The Slack compose screen: the text to post on the left, a divider the user drags, and the conversation with Claude on the right.

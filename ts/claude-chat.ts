@@ -28,6 +28,8 @@ export interface ChatConfig {
   ask: (text: string, history: ChatTurnPayload[], instruction: string) => Promise<ChatAnswer>;
   // Draws the tasks an answer proposes, under its reply; without it `tasks` is not drawn.
   cards?: (tasks: TodoTaskProposal[]) => HTMLElement;
+  // The lines (one per task) that tell Claude what an earlier answer proposed; they are added to that answer's text in the history it is sent, because the cards are not text. Without it only the text is sent.
+  tasksText?: (tasks: TodoTaskProposal[]) => string;
   // The conversation changed: the owner draws what follows from it, and calls `refresh`.
   changed: () => void;
   // True while the owner's text must not be replaced (a proposal cannot be applied then).
@@ -173,7 +175,10 @@ export function createChat(cfg: ChatConfig) {
     const history = turns
       .filter((t) => !t.failed)
       .slice(-SENT_TURNS)
-      .map(({ role, text }) => ({ role, text }));
+      .map(({ role, text, tasks }) => {
+        const lines = tasks?.length ? cfg.tasksText?.(tasks) : "";
+        return { role, text: lines ? `${text}\n${lines}` : text };
+      });
     if (fixed === undefined) {
       input.value = "";
       growInput();

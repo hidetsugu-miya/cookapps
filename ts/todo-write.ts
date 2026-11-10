@@ -26,7 +26,7 @@ function scheduleTodoReload(withDone: boolean) {
 }
 
 // The commands todoCall sends: they answer true or false, or null when a token is needed.
-type Write = "todoist_add" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_create_label" | "todoist_move" | "todoist_move_under" | "todoist_delete";
+type Write = "todoist_add" | "todoist_add_task" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_create_label" | "todoist_move" | "todoist_move_under" | "todoist_delete";
 const send = invoke as (command: Write, args: unknown) => Promise<boolean | null>;
 
 // Runs a change, then reloads whether it worked or not, so the screen shows what Todoist has.
@@ -34,12 +34,14 @@ const send = invoke as (command: Write, args: unknown) => Promise<boolean | null
 // A load sent before a change started or ended is dropped (todoSeq): it could hold the state from before the change.
 // A null answer (a token is needed) shows up in that reload. Returns the command's answer: null when it failed or a token is needed.
 // `redraw` false (a name saved on blur) keeps the screen: a redraw there would drop the click or focus move that ended the edit.
+// `fail` takes a failed call's error in place of the error line of the screen (the card of the Claude pane shows its own).
 export async function todoCall<C extends Write>(
   command: C,
   args: Commands[C]["args"],
   control?: HTMLInputElement | HTMLButtonElement | null,
   apply?: () => void,
   redraw = true,
+  fail: (e: unknown) => void = showError,
 ) {
   $("error").hidden = true;
   if (control) control.disabled = true;
@@ -59,7 +61,7 @@ export async function todoCall<C extends Write>(
     }
     answer = await send(command, args);
   } catch (e) {
-    showError(e);
+    fail(e);
   } finally {
     todoState.writes--;
     todoState.seq++;
