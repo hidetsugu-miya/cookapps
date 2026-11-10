@@ -655,7 +655,7 @@ fn task_without_due(created: &Value) -> Option<String> {
 }
 
 /// Whether the model's `due` is `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`. Anything else (`every day`) would be read by Todoist as words, and could make the task recur.
-fn is_plain_due(due: &str) -> bool {
+pub(crate) fn is_plain_due(due: &str) -> bool {
     match due.len() {
         10 => NaiveDate::parse_from_str(due, "%Y-%m-%d").is_ok(),
         16 => NaiveDateTime::parse_from_str(due, "%Y-%m-%d %H:%M").is_ok(),
@@ -892,6 +892,11 @@ pub struct TodoistState {
 }
 
 impl TodoistState {
+    /// The projects (ID and name, in tree order) of the last load; empty until one.
+    pub(crate) fn projects(&self) -> Arc<Vec<(String, String)>> {
+        Arc::clone(&self.projects.lock().unwrap())
+    }
+
     /// The token: the copy in memory, else the keychain's (read off the async threads). `None` means none is stored.
     async fn token(&self) -> Result<Option<String>, String> {
         let mut cached = self.token.lock().await;

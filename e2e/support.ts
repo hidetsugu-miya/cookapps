@@ -405,6 +405,7 @@ export const claudeSettings: ClaudeSettings = {
   proofread: { model: "sonnet", effort: "medium" },
   slackReply: { model: "sonnet", effort: "high" },
   orcaHandoff: { model: "sonnet", effort: "medium" },
+  todoChat: { model: "sonnet", effort: "medium" },
 };
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.

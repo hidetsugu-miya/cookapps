@@ -285,6 +285,7 @@ pub fn run() {
             claude::claude_edit_todo_prompt,
             claude::claude_edit_todo_draft,
             claude::claude_summarize_handoff,
+            claude::claude_chat_todo,
             claude::claude_proofread_slack,
             claude::claude_chat_thread,
             orca::orca_overview,
