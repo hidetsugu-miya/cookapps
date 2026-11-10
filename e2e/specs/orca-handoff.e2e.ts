@@ -895,7 +895,7 @@ describe("orca handoff", () => {
     await $(`${MAIL.pane} .ho-destination`).click();
     expect(await textsOf(".menu [role=menuitem]")).toEqual(["このマシン", "Studio", "Lab"]);
     await $('//div[@role="menu"]//button[normalize-space(.)="Lab"]').click();
-    expect(await waitForCalls(destination)).toEqual([{ environment: "Lab" }]);
+    expect(await waitForCalls(destination)).toEqual([{ environment: "Lab", force: true }]);
     // The projects are the destination's, and the one chosen for the old destination is dropped.
     await browser.waitUntil(async () => (await textsOf(`${MAIL.pane} .ho-destination`))[0] === "Lab", { timeoutMsg: "the destination was not shown" });
     await expect($(`${MAIL.pane} .ho-project`)).toBeEnabled();
@@ -918,7 +918,7 @@ describe("orca handoff", () => {
     await openPane(MAIL);
     await $(`${MAIL.pane} .ho-destination`).click();
     await $('//div[@role="menu"]//button[normalize-space(.)="このマシン"]').click();
-    expect(await waitForCalls(destination)).toEqual([{ environment: null }]);
+    expect(await waitForCalls(destination)).toEqual([{ environment: null, force: true }]);
     await browser.waitUntil(async () => (await textsOf(`${MAIL.pane} .ho-destination`))[0] === "このマシン", { timeoutMsg: "the destination was not shown" });
   });
 

@@ -52,7 +52,7 @@ import type { Week } from "./bindings/Week";
 import type { Workspace } from "./bindings/Workspace";
 import type { WorkspaceIcon } from "./bindings/WorkspaceIcon";
 
-// Where a handoff to Orca goes (A-9): a new session in a worktree, or the terminal of a running one. Rust checks both against Orca's list.
+// Where a handoff to Orca goes (A-9): a new session in a worktree. Rust checks it against Orca's list.
 export type HandoffDestination = { kind: "new"; path: string };
 // What is handed over: the card's kind, title and plain text.
 export interface HandoffContext {
@@ -213,7 +213,8 @@ export interface Commands {
   // "screen" reads the agents and their terminals of `target` (the one the screen holds), and "badge" only the agents, for the count (no terminals, so no handles). With "screen" and "badge", and when `environment list` itself failed, `known` is false and `target` and `environments` are not the answer: the screen keeps the ones it had.
   orca_overview: { args: { scope: "full" | "screen" | "badge"; target: string | null }; result: OrcaOverview };
   // A-9: the lists of the destination the side pane chose (null: this machine, else a saved environment's name, checked against the saved ones; one that is not saved is a failed read). It reads the agents and their terminals, the worktrees and the projects like "screen", with `environments` filled, and does not touch the target the Orca screen holds.
-  orca_destination: { args: { environment: string | null }; result: OrcaOverview };
+  // `force` is false only for the poll of a shown session: for the destination checked just before, the saved environments are not asked for again and `environments` is empty.
+  orca_destination: { args: { environment: string | null; force: boolean }; result: OrcaOverview };
   // Saves the target: a saved environment's name, or null for this machine.
   orca_set_target: { args: { environment: string | null }; result: null };
   // Sends `text` and Enter to the terminal `handle`; `environment` is the target the screen shows. Never run twice.

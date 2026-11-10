@@ -805,10 +805,10 @@ export async function refreshOrca(force: boolean) {
   return view;
 }
 
-// Reads the lists of one destination for the side pane (A-9), whatever target the Orca screen holds, and changes nothing of the screen. A read that threw is a failed one.
-export async function readDestination(environment: string | null): Promise<OrcaOverview> {
+// Reads the lists of one destination for the side pane (A-9), whatever target the Orca screen holds, and changes nothing of the screen. A `force` false (the poll of a shown session) does not ask for the saved environments again. A read that threw is a failed one.
+export async function readDestination(environment: string | null, force: boolean): Promise<OrcaOverview> {
   try {
-    return await invoke("orca_destination", { environment });
+    return await invoke("orca_destination", { environment, force });
   } catch (e) {
     return { state: "failed", message: String(e), target: environment, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: false };
   }

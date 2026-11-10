@@ -72,7 +72,7 @@ fn is_hidden_char(c: char) -> bool {
         || matches!(c, '\u{e0000}'..='\u{e007f}')
 }
 
-fn without_hidden(text: &str) -> String {
+pub(crate) fn without_hidden(text: &str) -> String {
     text.chars().filter(|c| !is_hidden_char(*c)).collect()
 }
 

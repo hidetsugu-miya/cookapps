@@ -1137,17 +1137,41 @@ fn destination_check(
     }
 }
 
+/// A-9: the destination (`None` outer: none yet; `None` inner: this machine) whose name `destination_overview` last checked against the saved environments, in memory only.
+static CHECKED_DESTINATION: Mutex<Option<Option<String>>> = Mutex::new(None);
+
+/// True when the saved environments need not be asked for again: the poll of a shown session (`force` false) of the destination checked just before. The first read of a destination and a read after a choice or a send (`force`) always check.
+fn already_checked(last: &Option<Option<String>>, environment: Option<&str>, force: bool) -> bool {
+    !force && last.as_ref().is_some_and(|l| l.as_deref() == environment)
+}
+
 /// A-9: the lists of the destination the pane chose, whatever the Orca screen holds. The target saved for the screen is not read or changed.
-fn destination_overview(environment: Option<&str>) -> OrcaOverview {
-    match destination_check(environment, read_environments()) {
-        Ok(environments) => read_overview(
-            environment.map(str::to_owned),
-            environments,
-            false,
-            OrcaScope::Screen,
-        ),
-        Err(view) => *view,
-    }
+/// The saved environments are asked for (and the name checked against them) unless `already_checked`; then the answer holds none.
+fn destination_overview(environment: Option<&str>, force: bool) -> OrcaOverview {
+    let mut last = CHECKED_DESTINATION
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let environments = if already_checked(&last, environment, force) {
+        Vec::new()
+    } else {
+        match destination_check(environment, read_environments()) {
+            Ok(environments) => {
+                *last = Some(environment.map(str::to_owned));
+                environments
+            }
+            Err(view) => {
+                *last = None;
+                return *view;
+            }
+        }
+    };
+    drop(last);
+    read_overview(
+        environment.map(str::to_owned),
+        environments,
+        false,
+        OrcaScope::Screen,
+    )
 }
 
 /// Checks `environment` against the saved ones (nothing is asked for this machine).
@@ -1483,9 +1507,13 @@ pub async fn orca_overview(
 }
 
 /// A-9: the lists of the destination the side pane chose (`None`: this machine, else a saved environment's name, which is checked against the saved ones). It does not touch the target the Orca screen holds.
+/// `force` is false only for the poll of a shown session, which skips the check (and the saved environments in the answer) for the destination it checked just before.
 #[tauri::command]
-pub async fn orca_destination(environment: Option<String>) -> Result<OrcaOverview, String> {
-    blocking(move || destination_overview(environment.as_deref())).await
+pub async fn orca_destination(
+    environment: Option<String>,
+    force: bool,
+) -> Result<OrcaOverview, String> {
+    blocking(move || destination_overview(environment.as_deref(), force)).await
 }
 
 /// Saves the Orca to talk to: a saved environment's name, or `None` for this machine.
@@ -2203,6 +2231,21 @@ mod tests {
             assert_eq!(view.environments, ["Studio", "Lab"]);
             assert!(view.message.contains("保存されていない接続先"));
         }
+    }
+
+    #[test]
+    fn only_the_poll_of_the_destination_checked_just_before_skips_the_check() {
+        let lab = Some(Some("Lab".to_owned()));
+        let here = Some(None);
+        assert!(already_checked(&lab, Some("Lab"), false));
+        assert!(already_checked(&here, None, false));
+        // The first read, a read after a choice or a send, and another destination are checked.
+        assert!(!already_checked(&None, Some("Lab"), false));
+        assert!(!already_checked(&None, None, false));
+        assert!(!already_checked(&lab, Some("Lab"), true));
+        assert!(!already_checked(&lab, Some("Studio"), false));
+        assert!(!already_checked(&lab, None, false));
+        assert!(!already_checked(&here, Some("Lab"), false));
     }
 
     #[test]

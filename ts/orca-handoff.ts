@@ -73,6 +73,12 @@ function formOf(key: string) {
   return form;
 }
 
+// A form that holds nothing the owner made (no request to Claude, no choice of the worktree): it is the default one, so it is not kept.
+function dropIdleForm(key: string) {
+  const form = forms.get(key);
+  if (form && !form.fresh && form.name === "" && !form.named && form.instruction === "" && form.turns.length === 0 && form.points === null && !form.open) forms.delete(key);
+}
+
 // By item key, in memory only: leaving and coming back to the item shows its session again.
 const sessions = new Map<string, Session>();
 // The instruction of an item whose send failed while another item was in view: it is put back in the field of its own item.
@@ -128,6 +134,8 @@ export class HandoffPane {
   private cardDrawn: HandoffCard | null | undefined;
   private overview: OrcaOverview | null = null;
   private readSeq = 0;
+  // The `readSeq` of the read of a destination's own lists that is on its way, else 0: the poll of a shown session does not start another while it is.
+  private destReading = 0;
   private lastRead = 0;
   private chat: ChatView;
   private chatKey: string | null = null;
@@ -190,6 +198,7 @@ export class HandoffPane {
     const item = this.host.current();
     const key = item?.key ?? null;
     if (key !== this.itemKey) {
+      if (this.itemKey !== null) dropIdleForm(this.itemKey);
       this.itemKey = key;
       this.removed = false;
       // The card is built when the pane opens (the form is drawn), not for each item that goes by.
@@ -269,6 +278,7 @@ export class HandoffPane {
 
   // Reads the list of Orca: forced when the pane opens and after a send, and not while another read is on its way when it is the poll of a shown session.
   private async reload(force: boolean) {
+    if (!force && this.destReading !== 0) return;
     const seq = ++this.readSeq;
     this.lastRead = Date.now();
     const overview = await this.read(force);
@@ -285,7 +295,13 @@ export class HandoffPane {
       const screen = await refreshOrca(force);
       if (want === undefined || screen?.target === want) return screen;
     }
-    return readDestination(want ?? null);
+    const seq = this.readSeq;
+    this.destReading = seq;
+    try {
+      return await readDestination(want ?? null, force);
+    } finally {
+      if (this.destReading === seq) this.destReading = 0;
+    }
   }
 
   // The destination is chosen: the project of the old one is dropped, and the lists of the new one are read.
@@ -498,6 +514,12 @@ export class HandoffPane {
     this.restoreDraft(foot.input);
     this.host.root.replaceChildren(main, foot.foot);
     foot.input.focus();
+  }
+
+  // The text of a failed request or post goes back to its item: to the field when the item is in view and the field is empty (it was built again if the owner left and came back), else it waits for its own item.
+  private keepText(key: string, text: string) {
+    if (this.itemKey !== key) drafts.set(key, text);
+    else if (this.el && !this.el.input.value) this.el.input.value = text;
   }
 
   // Puts back the instruction of this item whose send failed while another item was in view.
@@ -777,8 +799,7 @@ export class HandoffPane {
       if (this.itemKey === key && this.el) this.el.input.value = "";
     } catch (e) {
       this.errors.set(key, String(e));
-      // Another item is in view: its field is not this one, so the text waits for its own item.
-      if (this.itemKey !== key) drafts.set(key, text);
+      this.keepText(key, text);
     } finally {
       this.asking.delete(key);
     }
@@ -854,8 +875,7 @@ export class HandoffPane {
       this.lastRead = 0;
     } catch (e) {
       this.errors.set(key, String(e));
-      // Another item is in view: its field is not this one, so the text waits for its own item.
-      if (this.itemKey !== key) drafts.set(key, text);
+      this.keepText(key, text);
     } finally {
       this.sending.delete(key);
     }

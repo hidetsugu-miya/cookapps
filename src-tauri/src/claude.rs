@@ -1362,7 +1362,7 @@ fn worktree_name_of(raw: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The answer of `claude -p --output-format json` with `HANDOFF_SCHEMA`. The points are trimmed, put on one line each, and the blank ones left out;
+/// The answer of `claude -p --output-format json` with `HANDOFF_SCHEMA`. The points have their hidden characters taken out (as `orca_handoff::agreed_instruction` does, so the screen shows what Orca gets), are trimmed, put on one line each, and the blank ones left out;
 /// none left is refused, and so are points that together pass `PROMPT_LIMIT` characters (they go on to Orca). The worktree name is cleaned by `worktree_name_of`, and `None` when it cannot be.
 fn parse_handoff(out: &str) -> Result<HandoffSummary, SummaryError> {
     let answer = read_answer(out)?;
@@ -1372,7 +1372,12 @@ fn parse_handoff(out: &str) -> Result<HandoffSummary, SummaryError> {
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .map(|s| s.replace(LINE_BREAKS, " ").trim().to_owned())
+        .map(|s| {
+            crate::orca_handoff::without_hidden(s)
+                .replace(LINE_BREAKS, " ")
+                .trim()
+                .to_owned()
+        })
         .filter(|s| !s.is_empty())
         .collect();
     if points.is_empty() {
@@ -5541,6 +5546,17 @@ mod tests {
                 points: vec!["ログインを直す".into(), "テストを足す する".into()],
                 worktree_name: Some("fix-login".into()),
             })
+        );
+    }
+
+    #[test]
+    fn a_handoff_answer_has_no_hidden_characters_in_its_points() {
+        let out = draft_answer(json!({
+            "points": ["ログ\u{200b}イン\u{202e}を直す", "\u{2066}\u{feff}", "テスト\u{7}を足す"],
+        }));
+        assert_eq!(
+            parse_handoff(&out).unwrap().points,
+            ["ログインを直す", "テストを足す"]
         );
     }
 
