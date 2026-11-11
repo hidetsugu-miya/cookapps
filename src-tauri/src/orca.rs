@@ -174,7 +174,10 @@ pub struct OrcaSshTarget {
 pub struct OrcaWorktree {
     pub path: String,
     pub repo: String,
+    /// Orca's name of the worktree (`displayName`): it is fixed when the worktree is made with a name, so it can differ from the git branch.
     pub branch: String,
+    /// The git branch the worktree is on (`branch` of `orca worktree ps` without `refs/heads/`; empty when it is detached or not given), which the heading of the file pane makes a button (A-25).
+    pub git_branch: String,
     /// The project the worktree belongs to (`OrcaProject::key`; empty when it has none), which the plus of the work pane narrows the worktrees by (A-16).
     pub project_key: String,
     /// Whether it is the repository's own folder (`isMainWorktree` of Orca), which the file pane shows for a project with no tab (A-18).
@@ -439,6 +442,14 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
     rows.into_iter().map(|(_, row)| row).collect()
 }
 
+/// The git branch of a worktree of `orca worktree ps`: its `branch` (`refs/heads/{name}`) without the prefix; empty for a detached HEAD, a missing `branch` or a ref that is not a local branch.
+fn git_branch_of(worktree: &Value) -> String {
+    text_of(worktree, "branch")
+        .and_then(|b| b.strip_prefix("refs/heads/"))
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// Every worktree of `orca worktree ps` (its `result`) that has a path, in the CLI's order.
 pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
     ps["worktrees"]
@@ -450,6 +461,7 @@ pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
                 path: text_of(w, "path")?.to_owned(),
                 repo: text_of(w, "repo").unwrap_or_default().to_owned(),
                 branch: text_of(w, "displayName").unwrap_or_default().to_owned(),
+                git_branch: git_branch_of(w),
                 project_key: project_key_of(w).unwrap_or_default(),
                 is_main: w["isMainWorktree"] == true,
             })
@@ -2088,10 +2100,12 @@ mod tests {
     #[test]
     fn every_worktree_with_a_path_is_a_launch_target() {
         let doc = json!({"worktrees": [
-            {"path": "/work/a", "repo": "a", "repoId": "repo-a", "displayName": "main", "isMainWorktree": true, "agents": []},
+            {"path": "/work/a", "repo": "a", "repoId": "repo-a", "displayName": "main", "branch": "refs/heads/main", "isMainWorktree": true, "agents": []},
             {"repo": "no-path", "displayName": "x"},
-            {"path": "/work/b", "repo": "b"},
-            {"path": "/ssh/c", "repo": "c", "repoId": "repo-c", "hostId": "box", "displayName": "dev"},
+            {"path": "/work/b", "repo": "b", "branch": ""},
+            {"path": "/ssh/c", "repo": "c", "repoId": "repo-c", "hostId": "box", "displayName": "dev", "branch": "refs/heads/feat/dev"},
+            {"path": "/work/d", "repo": "d", "displayName": "fix-login", "branch": "refs/heads/feat/x"},
+            {"path": "/work/e", "repo": "e", "displayName": "e", "branch": "HEAD"},
         ]});
         // Each carries the key of its project (A-16): the repository on this machine, `ssh:{hostId}` on a host, empty when a repository has no id.
         assert_eq!(
@@ -2101,6 +2115,7 @@ mod tests {
                     path: "/work/a".into(),
                     repo: "a".into(),
                     branch: "main".into(),
+                    git_branch: "main".into(),
                     project_key: "repo-a".into(),
                     is_main: true
                 },
@@ -2108,6 +2123,7 @@ mod tests {
                     path: "/work/b".into(),
                     repo: "b".into(),
                     branch: String::new(),
+                    git_branch: String::new(),
                     project_key: String::new(),
                     is_main: false
                 },
@@ -2115,7 +2131,26 @@ mod tests {
                     path: "/ssh/c".into(),
                     repo: "c".into(),
                     branch: "dev".into(),
+                    git_branch: "feat/dev".into(),
                     project_key: "ssh:box".into(),
+                    is_main: false
+                },
+                // A worktree made with a name keeps it as `displayName`, so the git branch is read from `branch`.
+                OrcaWorktree {
+                    path: "/work/d".into(),
+                    repo: "d".into(),
+                    branch: "fix-login".into(),
+                    git_branch: "feat/x".into(),
+                    project_key: String::new(),
+                    is_main: false
+                },
+                // A `branch` that is not `refs/heads/...` is not a local branch.
+                OrcaWorktree {
+                    path: "/work/e".into(),
+                    repo: "e".into(),
+                    branch: "e".into(),
+                    git_branch: String::new(),
+                    project_key: String::new(),
                     is_main: false
                 },
             ]

@@ -11,7 +11,7 @@ import { openBranchDialog } from "./orca-branch.js";
 import { toast } from "./toast.js";
 import { copyText, showError } from "./view.js";
 
-// The worktree shown (the selected tab's, else the selected project's main one), with the name its heading shows ("{repo} ・ {branch}"). `branch` is the end of that name that the heading makes a button (A-25), null where it stays text (an SSH host's, or a worktree the list does not hold); `project` is the key of the project of the worktree.
+// The worktree shown (the selected tab's, else the selected project's main one), with the name its heading shows ("{repo} ・ {branch}"). `branch` is the git branch of the worktree, which the heading makes a button (A-25), null where it stays text (an SSH host's, a worktree the list does not hold, or one on no branch); `project` is the key of the project of the worktree.
 export interface FilesContext {
   target: string | null;
   path: string;
@@ -246,20 +246,22 @@ function openBranches(anchor: Element) {
   });
 }
 
-// Draws the heading: the name, and its branch as a button when it has one.
+// Draws the heading: the name, and the git branch as a button when it has one. The branch is the end of the name when Orca's name of the worktree is the branch, else it follows the name.
 function drawTitle() {
   const key = JSON.stringify([context?.label, context?.branch]);
   if (key === drawnTitle) return;
   drawnTitle = key;
   const title = $("orca-files-title");
-  if (context === null || context.branch === null || !context.label.endsWith(context.branch)) {
+  if (context === null || context.branch === null) {
     title.textContent = context?.label ?? "";
     return;
   }
   const button = tag("button", "orca-branch-btn", context.branch);
   button.type = "button";
   button.onclick = () => openBranches(button);
-  title.replaceChildren(context.label.slice(0, context.label.length - context.branch.length), button);
+  const separator = " ・ ";
+  const named = context.label.endsWith(separator + context.branch);
+  title.replaceChildren(named ? context.label.slice(0, context.label.length - context.branch.length) : `${context.label}${separator}`, button);
 }
 
 // Draws the pane, unless it is what is drawn already.

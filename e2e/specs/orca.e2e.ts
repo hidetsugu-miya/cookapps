@@ -4453,6 +4453,29 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#error")).not.toBeDisplayed();
   });
 
+  it("makes the git branch the button when Orca's name of the worktree differs from it, and shows the new branch after a switch (A-25)", async () => {
+    // A worktree made with a name keeps that name as `displayName` after a switch; the button follows the git branch.
+    const named = (gitBranch: string) =>
+      orcaOverview([orcaRow("example-app", "fix-login", "Write the docs", { minutes: 2 }), ...sample().slice(1)], [orcaWorktree("example-app", "fix-login", { gitBranch }), orcaWorktree("example-api", "main")]);
+    await openFiles(branchFixtures(), named("feat/a"));
+    await expect($("#orca-files-title")).toHaveText("example-app ・ fix-login ・ feat/a");
+    await expect(branchButton()).toHaveText("feat/a");
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    await mock("orca_overview", named("feat/c"));
+    await branchPick("local", "feat/c").click();
+    expect(await waitForCalls("orca_switch_branch")).toEqual([{ path: "/work/example-app", kind: "local", name: "feat/c", environment: null }]);
+    await expect(branchButton()).toHaveText("feat/c");
+    await expect($("#orca-files-title")).toHaveText("example-app ・ fix-login ・ feat/c");
+  });
+
+  it("leaves the heading as text for a worktree on no git branch (A-25)", async () => {
+    await openFiles(branchFixtures(), orcaOverview(sample(), [orcaWorktree("example-app", "feat/a", { gitBranch: "" }), orcaWorktree("example-api", "main")]));
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
+    expect(await count("#orca-files-title button")).toBe(0);
+    expect(await callsOf("orca_local_branches")).toEqual([]);
+  });
+
   it("switches to a remote branch with its name as Orca lists it (A-25)", async () => {
     await openBranches();
     await waitForCount(".orca-dest-pop .orca-branch-row", 5);

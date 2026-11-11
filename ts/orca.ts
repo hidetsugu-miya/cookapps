@@ -654,9 +654,9 @@ function filesWorktree(tabs: Tab[]): { path: string; label: string } | null {
 function drawFiles(tabs: Tab[]) {
   const worktree = filesWorktree(tabs);
   const target = view?.target ?? null;
-  // The branch of the heading is a button (A-25) for a worktree of the list, except an SSH host's, whose branches Rust does not read.
+  // The branch of the heading is a button (A-25) for a worktree of the list that is on a git branch, except an SSH host's, whose branches Rust does not read. It is the git branch, not Orca's name of the worktree.
   const listed = worktree === null ? undefined : view?.worktrees.find((w) => w.path === worktree.path);
-  const branch = listed !== undefined && listed.branch !== "" && worktree?.label === worktreeLabel(listed) && !projectKey?.startsWith("ssh:") ? listed.branch : null;
+  const branch = listed !== undefined && listed.gitBranch !== "" && worktree?.label === worktreeLabel(listed) && !projectKey?.startsWith("ssh:") ? listed.gitBranch : null;
   syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label, project: projectKey ?? "", branch }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
 }
 
