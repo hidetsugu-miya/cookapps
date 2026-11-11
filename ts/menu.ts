@@ -42,6 +42,8 @@ export interface MenuItem {
   depth?: number;
   // A small label at the right end of the row.
   tag?: string;
+  // A second line under the label (A-9: the branch under the name of a worktree); the search matches it too.
+  sub?: string;
   pick: () => unknown;
 }
 
@@ -66,7 +68,12 @@ export function openMenu(anchor: Element, items: MenuItem[], options: MenuOption
       b.append(dot);
     }
     if (item.depth) b.style.paddingLeft = `${10 + item.depth * 16}px`;
-    b.append(item.label);
+    if (item.sub) {
+      b.classList.add("menu-two-line");
+      const text = tag("span", "menu-text");
+      text.append(tag("span", "menu-main", item.label), tag("span", "menu-sub", item.sub));
+      b.append(text);
+    } else b.append(item.label);
     if (item.tag) b.append(tag("span", "tag", item.tag));
     b.onclick = () => {
       closeMenu();
@@ -103,7 +110,7 @@ export function openMenu(anchor: Element, items: MenuItem[], options: MenuOption
   };
   input.oninput = () => {
     const re = partMatcher(input.value);
-    for (const r of rows) r.b.hidden = re !== null && !re.test(r.item.label);
+    for (const r of rows) r.b.hidden = re !== null && !re.test(r.item.label) && !(r.item.sub !== undefined && re.test(r.item.sub));
     shown = rows.filter((r) => !r.b.hidden);
     none.hidden = shown.length > 0;
     at = 0;

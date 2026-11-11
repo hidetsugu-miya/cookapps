@@ -1,11 +1,12 @@
 // Handing the open mail, Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
-// Before a hand-over it has the destination (the Orca to talk to, the project, and the worktree of a new session: the project's own folder, or a new one made then), the card with the content (taken off with ×) and a conversation with Claude:
+// Before a hand-over it has the destination (the Orca to talk to, the project, and the worktree of a new session: one of the project's worktrees, its own folder first, or a new one made then, with its name, the ref it starts from and its branch), the card with the content (taken off with ×) and a conversation with Claude:
 // the instruction is summarised into "what to implement" (`claude_summarize_handoff`), the owner fixes the summary in the field below, and nothing goes to Orca until "この内容で Orca に渡す" is pressed. Once there is a summary the three choices fold into one chip.
 // After a hand-over it shows that session: its header, its history (orca-chat.ts) and a composer for more instructions. The prompt is composed in Rust (`orca_handoff`).
 // A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the conversation of each item and the session it was handed to, and the destination and the project last chosen.
 import type { AttachedFile } from "./bindings/AttachedFile";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
+import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import { getClaude, showPurposeSlot } from "./claude.js";
 import type { ChatTurnPayload } from "./claude-chat.js";
 import { composing, isMac, tag } from "./dom.js";
@@ -14,6 +15,7 @@ import { type HandoffDestination, invoke } from "./ipc.js";
 import { closeChat, isChatOwner, makeChatView, openChat, setChatWorking, type ChatView } from "./orca-chat.js";
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
+import { openBranchList, type BranchSource, type PickedBranch } from "./orca-branch.js";
 import { openMenu } from "./menu.js";
 import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, THIS_MACHINE, worktreeLabel } from "./orca.js";
 
@@ -50,6 +52,14 @@ interface Form {
   fresh: boolean;
   name: string;
   named: boolean;
+  // The project the choices below were made for (a choice of another project does not carry over), and the existing worktree chosen (its path; null: the project's own folder).
+  project: string | null;
+  worktree: string | null;
+  // For a worktree to make: the ref it starts from (null: Orca's default), and the branch it gets: a new one, named in `branch` (blank: Orca names it), or an existing one picked in `existing`.
+  base: string | null;
+  branchMode: "new" | "existing";
+  branch: string;
+  existing: PickedBranch | null;
   // What the first summary was made from, the turns since (a summary is an assistant turn with its points, a request to fix it a user turn; the first user turn is `instruction`), and the summary now in force.
   instruction: string;
   turns: Turn[];
@@ -65,7 +75,7 @@ const forms = new Map<string, Form>();
 function formOf(key: string) {
   let form = forms.get(key);
   if (!form) {
-    form = { fresh: false, name: "", named: false, instruction: "", turns: [], points: null, open: false };
+    form = { fresh: false, name: "", named: false, project: null, worktree: null, base: null, branchMode: "new", branch: "", existing: null, instruction: "", turns: [], points: null, open: false };
     forms.set(key, form);
   }
   return form;
@@ -74,7 +84,7 @@ function formOf(key: string) {
 // A form that holds nothing the owner made (no request to Claude, no choice of the worktree): it is the default one, so it is not kept.
 function dropIdleForm(key: string) {
   const form = forms.get(key);
-  if (form && !form.fresh && form.name === "" && !form.named && form.instruction === "" && form.turns.length === 0 && form.points === null && !form.open) forms.delete(key);
+  if (form && !form.fresh && form.name === "" && !form.named && form.worktree === null && form.base === null && form.branchMode === "new" && form.branch === "" && form.existing === null && form.instruction === "" && form.turns.length === 0 && form.points === null && !form.open) forms.delete(key);
 }
 
 // By item key, in memory only: leaving and coming back to the item shows its session again.
@@ -85,8 +95,8 @@ const drafts = new Map<string, string>();
 const attached = new Map<string, Attachment[]>();
 // The project chosen for a new session (`OrcaProject.key`), kept for the next handoff.
 let chosenProject: string | null = null;
-// The worktree a send of an item made and did not finish with (the files or the launch failed after it): a send again with the same project, name and destination uses it instead of making another.
-const made = new Map<string, { project: string; name: string; environment: string | null; path: string }>();
+// The worktree a send of an item made and did not finish with (the files or the launch failed after it): a send again with the same project, name, branch, base and destination uses it instead of making another.
+const made = new Map<string, { project: string; name: string; branch: string | null; base: string | null; environment: string | null; path: string }>();
 // The Orca the panes talk to (a saved environment's name, null for this machine), kept for the next handoff. Undefined until one is chosen: the panes then follow the target of the Orca screen, which a choice here never changes.
 let chosenDest: string | null | undefined;
 const panes = new Set<HandoffPane>();
@@ -150,6 +160,12 @@ export class HandoffPane {
     destChip?: HTMLButtonElement;
     projectChip?: HTMLButtonElement;
     name?: HTMLInputElement;
+    freshBox?: HTMLElement;
+    base?: HTMLButtonElement;
+    modeNew?: HTMLButtonElement;
+    modeExisting?: HTMLButtonElement;
+    branchName?: HTMLInputElement;
+    existingChip?: HTMLButtonElement;
     sessionTitle?: HTMLElement;
     note?: HTMLElement;
     error: HTMLElement;
@@ -441,20 +457,38 @@ export class HandoffPane {
     chip.type = "button";
     chip.setAttribute("aria-label", "worktree");
     chip.setAttribute("aria-haspopup", "menu");
-    chip.onclick = () =>
+    chip.onclick = () => {
+      const form = this.form();
+      const picked = this.pickedWorktree();
       openMenu(
         chip,
-        [false, true].map((isNew) => ({
-          label: isNew ? NEW_WORKTREE : this.defaultLabel(),
-          color: "var(--accent)",
-          current: isNew === this.form().fresh,
-          pick: () => {
-            this.form().fresh = isNew;
-            this.update();
-            (isNew ? this.el?.name : this.el?.input)?.focus();
+        [
+          ...this.projectWorktrees().map((w) => ({
+            label: worktreeName(w),
+            sub: w.gitBranch || undefined,
+            color: "var(--accent)",
+            current: !form.fresh && w.path === picked?.path,
+            pick: () => {
+              form.fresh = false;
+              form.worktree = w.path;
+              this.update();
+              this.el?.input.focus();
+            },
+          })),
+          {
+            label: NEW_WORKTREE,
+            color: "var(--accent)",
+            current: form.fresh,
+            pick: () => {
+              form.fresh = true;
+              this.update();
+              this.el?.name?.focus();
+            },
           },
-        })),
+        ],
+        { search: { label: "worktree を検索", empty: "一致する worktree がありません" } },
       );
+    };
     // The name of the worktree to make; Rust checks it. The proposal of Claude is put in it with the summary, unless the owner wrote one (A-9).
     const name = tag("input", "ho-name");
     name.setAttribute("aria-label", "worktree の名前");
@@ -466,7 +500,81 @@ export class HandoffPane {
       form.named = name.value.trim() !== "";
       this.updateSend();
     };
-    name.hidden = true;
+    // The frame of a worktree to make, under the chips: its name, the ref it starts from and its branch (A-9).
+    const base = tag("button", "review-chip ho-chip ho-base");
+    base.type = "button";
+    base.setAttribute("aria-label", "作成元");
+    base.setAttribute("aria-haspopup", "dialog");
+    base.onclick = () => {
+      const form = this.form();
+      const source = this.branchSource();
+      if (!source) return;
+      openBranchList(base, source, {
+        current: (_kind, branch) => form.base === branch,
+        refuseInUse: false,
+        pickCurrent: true,
+        top: {
+          label: "既定",
+          current: form.base === null,
+          pick: () => {
+            form.base = null;
+            this.update();
+          },
+        },
+        pick: (b) => {
+          form.base = b.name;
+          this.update();
+        },
+      });
+    };
+    const mode = (existing: boolean) => {
+      const b = tag("button", "review-chip ho-chip", existing ? "既存のブランチ" : "新しいブランチ");
+      b.type = "button";
+      b.onclick = () => {
+        this.form().branchMode = existing ? "existing" : "new";
+        this.update();
+      };
+      return b;
+    };
+    const modeNew = mode(false);
+    const modeExisting = mode(true);
+    const seg = tag("div", "ho-seg");
+    seg.append(modeNew, modeExisting);
+    // A new branch: its name, blank for the name Orca gives. An existing one: picked from the branches, those another worktree has checked out refused.
+    const branchName = tag("input", "ho-branch");
+    branchName.setAttribute("aria-label", "ブランチの名前");
+    branchName.autocomplete = "off";
+    branchName.spellcheck = false;
+    branchName.oninput = () => {
+      this.form().branch = branchName.value;
+      this.updateSend();
+    };
+    const existingChip = tag("button", "review-chip ho-chip ho-existing");
+    existingChip.type = "button";
+    existingChip.setAttribute("aria-label", "既存のブランチ");
+    existingChip.setAttribute("aria-haspopup", "dialog");
+    existingChip.onclick = () => {
+      const form = this.form();
+      const source = this.branchSource();
+      if (!source) return;
+      openBranchList(existingChip, source, {
+        current: (kind, branch) => form.existing?.kind === kind && form.existing.name === branch,
+        refuseInUse: true,
+        pickCurrent: true,
+        pick: (b) => {
+          form.existing = b;
+          this.update();
+        },
+      });
+    };
+    const field = (title: string, ...controls: HTMLElement[]) => {
+      const row = tag("div", "ho-field");
+      row.append(tag("span", "ho-field-title", title), ...controls);
+      return row;
+    };
+    const freshBox = tag("div", "ho-fresh");
+    freshBox.append(field("名前", name), field("作成元", base), field("ブランチ", seg, branchName, existingChip));
+    freshBox.hidden = true;
     // After a summary the three choices are this one chip; pressing it opens them again.
     const line = tag("button", "review-chip ho-chip ho-line");
     line.type = "button";
@@ -476,10 +584,10 @@ export class HandoffPane {
       this.form().open = true;
       this.update();
     };
-    fresh.append(line, destChip, projectChip, chip, name);
+    fresh.append(line, destChip, projectChip, chip);
     const scroll = tag("div", "ho-scroll");
     const talk = tag("div", "ho-talk");
-    scroll.append(notice, fresh, talk);
+    scroll.append(notice, fresh, freshBox, talk);
     const main = tag("div", "ho-main");
     main.append(head, scroll);
     const foot = this.foot();
@@ -494,7 +602,7 @@ export class HandoffPane {
       this.submit();
     };
     foot.form.append(model);
-    this.el = { notice, chip, line, talk, claudeNote, destChip, projectChip, name, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
+    this.el = { notice, chip, line, talk, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
     this.restoreDraft(foot.input);
@@ -542,7 +650,8 @@ export class HandoffPane {
     this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice());
     if (this.mode() === "form") {
       const form = this.form();
-      this.part("dest", [chosenProject, form.fresh, form.name, form.points !== null, form.open, this.destination(), this.environments(), this.overview?.projects, this.overview?.worktrees], () => this.drawDest());
+      this.settle(form);
+      this.part("dest", [chosenProject, form.fresh, form.name, form.worktree, form.base, form.branchMode, form.branch, form.existing, form.points !== null, form.open, this.destination(), this.environments(), this.overview?.projects, this.overview?.worktrees], () => this.drawDest());
       this.part("talk", [form.turns, this.itemKey !== null && this.asking.has(this.itemKey)], () => this.drawTalk());
       this.drawCard();
     } else {
@@ -581,25 +690,49 @@ export class HandoffPane {
     this.el!.notice.replaceChildren(...(text ? [row] : []));
   }
 
-  // The project's own folder (its main worktree) in the list, which a send without 新規作成 starts in.
-  private defaultWorktree() {
-    return chosenProject === null ? undefined : this.overview?.worktrees.find((w) => w.projectKey === chosenProject && w.isMain);
+  // The worktrees of the project chosen, its own folder (`isMain`) first.
+  private projectWorktrees() {
+    const all = chosenProject === null ? [] : (this.overview?.worktrees ?? []).filter((w) => w.projectKey === chosenProject);
+    return [...all.filter((w) => w.isMain), ...all.filter((w) => !w.isMain)];
   }
 
-  // The label of the project's own folder: "default", and the branch checked out there now.
-  private defaultLabel() {
-    const main = this.defaultWorktree();
-    return main ? `default ・ ${main.branch}` : "default";
+  // The worktree a send without 新規作成 starts in: the one chosen in the list, else the project's own folder.
+  private pickedWorktree() {
+    const list = this.projectWorktrees();
+    const path = this.form().worktree;
+    return list.find((w) => w.path === path) ?? list.find((w) => w.isMain);
   }
 
-  // True when a new session can start with what is chosen: a project, and its own folder or a worktree to make.
+  // The label of the worktree chip: "{name} ・ {branch}", "default" alone while none is in the list.
+  private worktreeChip() {
+    const w = this.pickedWorktree();
+    return w ? [worktreeName(w), w.gitBranch].filter(Boolean).join(" ・ ") : "default";
+  }
+
+  // Where the branches of a new worktree are read from: a worktree of the project (its own folder first) and the project's key.
+  private branchSource(): BranchSource | undefined {
+    const first = this.projectWorktrees()[0];
+    return first && chosenProject !== null ? { target: this.destination(), path: first.path, repo: chosenProject } : undefined;
+  }
+
+  // The choices of a worktree belong to the project they were made in: another project clears them.
+  private settle(form: Form) {
+    if (form.project === chosenProject) return;
+    form.project = chosenProject;
+    form.worktree = null;
+    form.base = null;
+    form.existing = null;
+  }
+
+  // True when a new session can start with what is chosen: a project, and a worktree of it, or one to make (with the existing branch picked when that is the branch asked for).
   private target(form: Form) {
-    return chosenProject !== null && (form.fresh || this.defaultWorktree() !== undefined);
+    if (chosenProject === null) return false;
+    return form.fresh ? form.branchMode === "new" || form.existing !== null : this.pickedWorktree() !== undefined;
   }
 
-  // The chips with the destination (this machine, or the saved environment), the project and the worktree chosen, and the name of a new worktree; or, once there is a summary and the choices are complete, the one chip that holds them.
+  // The chips with the destination (this machine, or the saved environment), the project and the worktree chosen, and the frame of a new worktree; or, once there is a summary and the choices are complete, the one chip that holds them.
   private drawDest() {
-    const { chip, destChip, projectChip, name, line } = this.el!;
+    const { chip, destChip, projectChip, name, line, freshBox, base, modeNew, modeExisting, branchName, existingChip } = this.el!;
     const form = this.form();
     const destination = this.destination();
     destChip!.textContent = destination ?? THIS_MACHINE;
@@ -611,17 +744,28 @@ export class HandoffPane {
     const chosen = projects.find((p) => p.key === chosenProject);
     projectChip!.textContent = chosen ? chosen.name : projects.length ? "プロジェクトを選ぶ" : "プロジェクトがありません";
     projectChip!.disabled = projects.length === 0;
-    chip!.textContent = form.fresh ? NEW_WORKTREE : this.defaultLabel();
+    chip!.textContent = form.fresh ? NEW_WORKTREE : this.worktreeChip();
     chip!.disabled = chosen === undefined;
     if (name!.value !== form.name) name!.value = form.name;
+    // The branch: a new one is named in the field, an existing one is picked, and then the ref it starts from is not used.
+    const existing = form.branchMode === "existing";
+    base!.textContent = form.base ?? "既定";
+    base!.disabled = existing || this.branchSource() === undefined;
+    modeNew!.setAttribute("aria-pressed", String(!existing));
+    modeExisting!.setAttribute("aria-pressed", String(existing));
+    if (branchName!.value !== form.branch) branchName!.value = form.branch;
+    branchName!.hidden = existing;
+    existingChip!.hidden = !existing;
+    existingChip!.textContent = form.existing?.name ?? "ブランチを選ぶ";
+    existingChip!.disabled = this.branchSource() === undefined;
     // The choices stay open while they are not complete, until the next summary: a project chosen then does not fold them before the worktree is chosen.
     if (form.points !== null && !this.target(form)) form.open = true;
     const folded = form.points !== null && !form.open;
-    const worktree = form.fresh ? [NEW_WORKTREE, form.name.trim()].filter(Boolean).join(" ・ ") : this.defaultLabel();
+    const worktree = form.fresh ? [NEW_WORKTREE, form.name.trim()].filter(Boolean).join(" ・ ") : this.worktreeChip();
     line!.textContent = [destChip!.textContent, chosen?.name, worktree].filter(Boolean).join(" ・ ");
     line!.hidden = !folded;
     for (const node of [destChip!, projectChip!, chip!]) node.hidden = folded;
-    name!.hidden = !form.fresh || folded;
+    freshBox!.hidden = !form.fresh || folded;
   }
 
   // The conversation: what the owner asked and Claude's summaries (the latest with the button that hands it over), and the line that Claude is thinking.
@@ -761,11 +905,16 @@ export class HandoffPane {
   }
 
   // Makes the worktree of a new session with `orca_worktree_create` and gives its path (Rust checks the name). One that an earlier send of the item made with the same project, name and destination is used again, so a retry after a later failure makes none twice.
-  private async makeWorktree(key: string, project: string, name: string, environment: string | null) {
+  private async makeWorktree(key: string, form: Form, project: string, environment: string | null) {
+    const { name } = form;
+    // A new branch is named in the field (blank: Orca names it); an existing one is the branch the worktree gets, and then no ref to start from is passed.
+    const existing = form.branchMode === "existing" && form.existing !== null;
+    const branch = existing ? form.existing!.localName : form.branch.trim() || null;
+    const base = existing ? null : form.base;
     const earlier = made.get(key);
-    if (earlier && earlier.project === project && earlier.name === name && earlier.environment === environment) return earlier.path;
-    const path = await invoke("orca_worktree_create", { project, name, branch: null, base: null, environment });
-    made.set(key, { project, name, environment, path });
+    if (earlier && earlier.project === project && earlier.name === name && earlier.branch === branch && earlier.base === base && earlier.environment === environment) return earlier.path;
+    const path = await invoke("orca_worktree_create", { project, name, branch, base, environment });
+    made.set(key, { project, name, branch, base, environment, path });
     return path;
   }
 
@@ -824,15 +973,16 @@ export class HandoffPane {
     const points = form.points;
     const environment = this.destination();
     const project = chosenProject;
-    const own = this.defaultWorktree()?.path ?? null;
-    if (points === null || project === null || (!form.fresh && own === null)) return;
+    this.settle(form);
+    const own = this.pickedWorktree()?.path ?? null;
+    if (points === null || project === null || !this.target(form)) return;
     const files = attached.get(key) ?? [];
     const card = this.removed ? null : this.card;
     this.sending.add(key);
     this.errors.delete(key);
     this.update();
     try {
-      const worktree = form.fresh ? await this.makeWorktree(key, project, form.name, environment) : own!;
+      const worktree = form.fresh ? await this.makeWorktree(key, form, project, environment) : own!;
       const uploaded = files.length ? await uploadAttachments(files, worktree, environment) : [];
       const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
       const destination: HandoffDestination = { kind: "new", path: worktree };
@@ -892,6 +1042,9 @@ export class HandoffPane {
     }
   }
 }
+
+// The name of a worktree in the lists: "default" for the project's own folder, else Orca's name of it.
+const worktreeName = (w: OrcaWorktree) => (w.isMain ? "default" : w.branch || w.gitBranch || w.repo);
 
 // The Orca icon, a node each time.
 function orcaIcon() {

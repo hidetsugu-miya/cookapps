@@ -125,6 +125,16 @@ async function chooseNewWorktree(screen: Screen) {
   await $('//div[@role="menu"]//button[normalize-space(.)="新規作成"]').click();
 }
 
+// The rows of the open menu as "{name} / {branch}" for a worktree (two lines) and the label alone for any other row, those the search leaves.
+const menuRows = () =>
+  browser.execute(() =>
+    [...document.querySelectorAll(".menu [role=menuitem]")]
+      .filter((b) => !(b as HTMLElement).hidden)
+      .map((b) => [...b.querySelectorAll(".menu-main, .menu-sub")].map((e) => e.textContent).join(" / ") || (b.textContent?.trim() ?? "")),
+  );
+// The row of the worktree named `name` in the open menu.
+const worktreeRow = (name: string) => $(`//div[@role="menu"]//button[.//span[@class="menu-main" and normalize-space(.)="${name}"]]`);
+
 // What `claude_summarize_handoff` answers by default, and the arguments `orca_handoff` and `claude_summarize_handoff` are called with.
 const POINTS = ["請求書の金額を直す", "テストを足す"];
 type Handed = { destination: unknown; points: string[]; files: string[]; context: { kind: string; title: string; body: string } | null; environment: string | null };
@@ -192,17 +202,178 @@ describe("orca handoff", () => {
     expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["example-api"]);
     // The branch is the one checked out in the project's folder now.
     await $(`${MAIL.pane} .ho-worktree`).click();
-    expect(await textsOf(".menu [role=menuitem]")).toEqual(["default ・ main", "新規作成"]);
-    await expect($('//div[@role="menu"]//button[normalize-space(.)="default ・ main"]')).toHaveAttribute("aria-current", "true");
+    expect(await menuRows()).toEqual(["default / main", "新規作成"]);
+    await expect(worktreeRow("default")).toHaveAttribute("aria-current", "true");
     await $('//div[@role="menu"]//button[normalize-space(.)="新規作成"]').click();
     expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["新規作成"]);
+    await expect($(`${MAIL.pane} .ho-fresh`)).toBeDisplayed();
     await expect($(`${MAIL.pane} .ho-name`)).toBeDisplayed();
     await expect($(`${MAIL.pane} .ho-name`)).toHaveAttribute("aria-label", "worktree の名前");
     expect(await browser.execute(() => (document.querySelector("#mail-handoff .ho-name") as HTMLInputElement).placeholder)).toBe("");
     // Back to the project's own folder hides the name again.
     await $(`${MAIL.pane} .ho-worktree`).click();
-    await $('//div[@role="menu"]//button[normalize-space(.)="default ・ main"]').click();
+    await worktreeRow("default").click();
     await expect($(`${MAIL.pane} .ho-name`)).not.toBeDisplayed();
+    await expect($(`${MAIL.pane} .ho-fresh`)).not.toBeDisplayed();
+  });
+
+  it("lists the worktrees of the project with the branch under the name, the own folder first and 新規作成 last, narrows them by name or branch, and hands over in the one chosen", async () => {
+    const list = [orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b", branch: "fix-b" }), ...worktrees()];
+    await openMail({ orca_overview: orcaOverview(sample(), list) });
+    const handoff = await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseProject(MAIL, "example-app");
+    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["default ・ feat/a"]);
+    await $(`${MAIL.pane} .ho-worktree`).click();
+    expect(await menuRows()).toEqual(["default / feat/a", "fix-b / feat/b", "新規作成"]);
+    await expect($(".menu .menu-search")).toHaveAttribute("aria-label", "worktree を検索");
+    // The search holds the name or the branch, as the menu of the projects does.
+    await $(".menu .menu-search").setValue("feat/");
+    expect(await menuRows()).toEqual(["default / feat/a", "fix-b / feat/b"]);
+    await $(".menu .menu-search").setValue("zzz");
+    expect(await menuRows()).toEqual([]);
+    await expect($(".menu .menu-empty")).toHaveText("一致する worktree がありません");
+    await $(".menu .menu-search").setValue("fix");
+    expect(await menuRows()).toEqual(["fix-b / feat/b"]);
+    await worktreeRow("fix-b").click();
+    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["fix-b ・ feat/b"]);
+    await expect($(`${MAIL.pane} .ho-fresh`)).not.toBeDisplayed();
+    await $(`${MAIL.pane} .ho-worktree`).click();
+    await expect(worktreeRow("fix-b")).toHaveAttribute("aria-current", "true");
+    await browser.keys("Escape");
+    await summarize(MAIL, "やって");
+    await agreeButton(MAIL).click();
+    const [call] = (await waitForCalls(handoff)) as Handed[];
+    expect(call.destination).toEqual({ kind: "new", path: "/work/example-app-b" });
+  });
+
+  it("clears the worktree chosen when the project changes", async () => {
+    const list = [orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b", branch: "fix-b" }), ...worktrees()];
+    await openMail({ orca_overview: orcaOverview(sample(), list) });
+    await openPane(MAIL);
+    await chooseProject(MAIL, "example-app");
+    await $(`${MAIL.pane} .ho-worktree`).click();
+    await worktreeRow("fix-b").click();
+    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["fix-b ・ feat/b"]);
+    await chooseProject(MAIL, "example-api");
+    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["default ・ main"]);
+    await chooseProject(MAIL, "example-app");
+    expect(await textsOf(`${MAIL.pane} .ho-worktree`)).toEqual(["default ・ feat/a"]);
+  });
+
+  describe("the frame of a worktree to make", () => {
+    const BRANCHES = [
+      { name: "feat/a", current: true, inUse: true },
+      { name: "main", current: false, inUse: true },
+      { name: "feat/c", current: false, inUse: false },
+    ];
+    const REMOTES = [{ name: "origin/feat/d", localName: "feat/d" }];
+    const dialogRows = () => textsOf(".orca-dest-pop .orca-branch-row");
+    const branchRow = (name: string) => $(`.orca-dest-pop .orca-branch-row[data-name="${name}"]`);
+
+    // The pane at 新規作成, with the branches the lists answer.
+    async function openFresh() {
+      await openMail();
+      await mock("orca_local_branches", BRANCHES);
+      await mock("orca_remote_branches", REMOTES);
+      await openPane(MAIL);
+      await chooseProject(MAIL, "example-app");
+      await chooseNewWorktree(MAIL);
+    }
+
+    it("shows the name, the ref and the branch under headings, with the defaults", async () => {
+      await openFresh();
+      expect(await textsOf(`${MAIL.pane} .ho-fresh .ho-field-title`)).toEqual(["名前", "作成元", "ブランチ"]);
+      expect(await textsOf(`${MAIL.pane} .ho-base`)).toEqual(["既定"]);
+      await expect($(`${MAIL.pane} .ho-base`)).toHaveAttribute("aria-label", "作成元");
+      expect(await textsOf(`${MAIL.pane} .ho-seg button`)).toEqual(["新しいブランチ", "既存のブランチ"]);
+      expect(await browser.execute(() => [...document.querySelectorAll("#mail-handoff .ho-seg button")].map((b) => b.getAttribute("aria-pressed")))).toEqual(["true", "false"]);
+      await expect($(`${MAIL.pane} .ho-branch`)).toBeDisplayed();
+      await expect($(`${MAIL.pane} .ho-branch`)).toHaveAttribute("aria-label", "ブランチの名前");
+      expect(await browser.execute(() => (document.querySelector("#mail-handoff .ho-branch") as HTMLInputElement).placeholder)).toBe("");
+      await expect($(`${MAIL.pane} .ho-existing`)).not.toBeDisplayed();
+    });
+
+    it("picks the ref to start from in the list of branches, 既定 first and none refused, and passes it with the name of the new branch to orca_worktree_create", async () => {
+      await openFresh();
+      const create = await mock("orca_worktree_create", "/work/example-app-fix-invoice");
+      const handoff = await mock("orca_handoff", started);
+      await $(`${MAIL.pane} .ho-base`).click();
+      await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+      expect(await dialogRows()).toEqual(["既定", "feat/a", "main", "feat/c", "origin/feat/d"]);
+      expect(await count(".orca-dest-pop .orca-branch-row:disabled")).toBe(0);
+      expect(await callsOf("orca_local_branches")).toEqual([{ path: "/work/example-app", environment: null }]);
+      expect(await callsOf("orca_remote_branches")).toEqual([{ path: "/work/example-app", repo: "proj_example-app", query: "", environment: null }]);
+      await branchRow("origin/feat/d").click();
+      expect(await textsOf(`${MAIL.pane} .ho-base`)).toEqual(["origin/feat/d"]);
+      await $(`${MAIL.pane} .ho-name`).setValue("fix-invoice");
+      await $(`${MAIL.pane} .ho-branch`).setValue(" feat/invoice ");
+      await summarize(MAIL, "請求書を直して");
+      await agreeButton(MAIL).click();
+      expect(await waitForCalls(create)).toEqual([{ project: "proj_example-app", name: "fix-invoice", branch: "feat/invoice", base: "origin/feat/d", environment: null }]);
+      await waitForCalls(handoff);
+    });
+
+    it("goes back to 既定 with the first row of the list", async () => {
+      await openFresh();
+      await $(`${MAIL.pane} .ho-base`).click();
+      await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+      await branchRow("feat/c").click();
+      expect(await textsOf(`${MAIL.pane} .ho-base`)).toEqual(["feat/c"]);
+      await $(`${MAIL.pane} .ho-base`).click();
+      await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+      await expect(branchRow("feat/c")).toHaveAttribute("aria-current", "true");
+      await $(".orca-dest-pop .orca-branch-row").click();
+      expect(await textsOf(`${MAIL.pane} .ho-base`)).toEqual(["既定"]);
+    });
+
+    it("leaves the name of the branch to Orca when its field is blank", async () => {
+      await openFresh();
+      const create = await mock("orca_worktree_create", "/work/example-app-x");
+      await mock("orca_handoff", started);
+      await $(`${MAIL.pane} .ho-name`).setValue("x");
+      await $(`${MAIL.pane} .ho-branch`).setValue("   ");
+      await summarize(MAIL, "やって");
+      await agreeButton(MAIL).click();
+      expect(await waitForCalls(create)).toEqual([{ project: "proj_example-app", name: "x", branch: null, base: null, environment: null }]);
+    });
+
+    it("picks an existing branch with the ones another worktree has checked out refused, disables the ref, and passes the local name of the branch with no ref", async () => {
+      await openFresh();
+      const create = await mock("orca_worktree_create", "/work/example-app-x");
+      await mock("orca_handoff", started);
+      await $(`${MAIL.pane} .ho-base`).click();
+      await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+      await branchRow("feat/c").click();
+      await $(`${MAIL.pane} .ho-seg button:nth-of-type(2)`).click();
+      expect(await browser.execute(() => [...document.querySelectorAll("#mail-handoff .ho-seg button")].map((b) => b.getAttribute("aria-pressed")))).toEqual(["false", "true"]);
+      await expect($(`${MAIL.pane} .ho-base`)).toBeDisabled();
+      await expect($(`${MAIL.pane} .ho-branch`)).not.toBeDisplayed();
+      await expect($(`${MAIL.pane} .ho-existing`)).toHaveText("ブランチを選ぶ");
+      await expect($(`${MAIL.pane} .ho-existing`)).toHaveAttribute("aria-label", "既存のブランチ");
+      await $(`${MAIL.pane} .ho-name`).setValue("x");
+      await summarize(MAIL, "やって");
+      // No branch is picked yet, so nothing is handed over.
+      await expect(agreeButton(MAIL)).toBeDisabled();
+      await $(`${MAIL.pane} .ho-existing`).click();
+      await waitForCount(".orca-dest-pop .orca-branch-row", 4);
+      expect(await dialogRows()).toEqual(["feat/a", "main", "feat/c", "origin/feat/d"]);
+      expect(await textsOf(".orca-dest-pop .orca-branch-row:disabled")).toEqual(["feat/a", "main"]);
+      await branchRow("origin/feat/d").click();
+      expect(await textsOf(`${MAIL.pane} .ho-existing`)).toEqual(["origin/feat/d"]);
+      await expect(agreeButton(MAIL)).toBeEnabled();
+      await agreeButton(MAIL).click();
+      expect(await waitForCalls(create)).toEqual([{ project: "proj_example-app", name: "x", branch: "feat/d", base: null, environment: null }]);
+    });
+
+    it("keeps the choices of the frame while the other kind of branch is shown", async () => {
+      await openFresh();
+      await $(`${MAIL.pane} .ho-branch`).setValue("feat/new");
+      await $(`${MAIL.pane} .ho-seg button:nth-of-type(2)`).click();
+      await $(`${MAIL.pane} .ho-seg button:nth-of-type(1)`).click();
+      await expect($(`${MAIL.pane} .ho-branch`)).toHaveValue("feat/new");
+      await expect($(`${MAIL.pane} .ho-base`)).toBeEnabled();
+    });
   });
 
   describe("the search field of the project menu", () => {
@@ -334,7 +505,7 @@ describe("orca handoff", () => {
       expect(after.scrolls).toBe(false);
     });
 
-    it("is in no other menu of the pane", async () => {
+    it("is in the menu of the worktrees too, and not in the menu of the destination", async () => {
       await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { projects: NAMES.map(project), environments: ["Studio"] }) });
       await openPane(MAIL);
       await $(`${MAIL.pane} .ho-destination`).click();
@@ -343,8 +514,8 @@ describe("orca handoff", () => {
       await browser.keys("Escape");
       await chooseProject(MAIL, "example-app");
       await $(`${MAIL.pane} .ho-worktree`).click();
-      expect(await textsOf(".menu [role=menuitem]")).toEqual(["default ・ feat/a", "新規作成"]);
-      await expect($(".menu .menu-search")).not.toExist();
+      expect(await menuRows()).toEqual(["default / feat/a", "新規作成"]);
+      await expect($(".menu .menu-search")).toHaveAttribute("aria-label", "worktree を検索");
     });
   });
 

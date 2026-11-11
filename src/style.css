@@ -559,6 +559,9 @@ a.c-file:hover { background: var(--hover); }
 .menu-list button[data-cursor="true"] { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .menu-empty { padding: 6px 10px; color: var(--muted); }
 .menu button[aria-current="true"] { font-weight: bold; }
+.menu .menu-two-line { height: auto; min-height: 32px; padding-top: 4px; padding-bottom: 4px; }
+.menu-text { display: flex; flex-direction: column; min-width: 0; }
+.menu-sub { font-size: calc(12px * var(--fs)); font-weight: normal; color: var(--muted); }
 .menu[role="menu"] button svg { width: 16px; height: 16px; flex: none; }
 
 /* Settings: a tab per service, and its card (head, connected rows, add row). The heading and the tabs stay at the top (the underline of the tabs is the only divider) while the card scrolls under them. */
@@ -1096,8 +1099,14 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .ho-new { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-radius: 12px; }
 .ho-chip { height: 26px; padding: 0 10px; border-radius: 13px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ho-chip:disabled { opacity: .6; cursor: default; }
-.ho-name { box-sizing: border-box; flex: 1 1 8em; min-width: 0; height: 26px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 13px; background: var(--surface); font: inherit; }
-.ho-name:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.ho-name, .ho-branch { box-sizing: border-box; flex: none; width: 100%; min-width: 0; height: 26px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 13px; background: var(--surface); font: inherit; }
+.ho-name:focus, .ho-branch:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.ho-fresh { display: flex; flex-direction: column; gap: 12px; margin: 0 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.ho-field { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.ho-field > :not(.ho-field-title) { max-width: 100%; }
+.ho-field-title { font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--muted); }
+.ho-seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.ho-seg .ho-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .ho-line { flex: 1 1 100%; text-align: left; }
 .ho-talk { display: flex; flex-direction: column; gap: 12px; padding: 4px 4px 0; }
 .ho-talk:empty { display: none; }
