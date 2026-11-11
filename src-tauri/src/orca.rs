@@ -469,15 +469,15 @@ pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
         .collect()
 }
 
-/// The `hostId` Orca names for the worktree at `path` in `orca worktree ps` (its `result`); `None` when the worktree or its `hostId` is absent (A-10 sends a file there, and Orca wants this id with it).
-fn host_id_of(ps: &Value, path: &str) -> Option<String> {
-    ps["worktrees"]
+/// The `hostId` Orca names for the worktree at `path` in `orca worktree ps` (its `result`), and its project key (`project_key_of`, empty when a repository has no id); `None` when the worktree or its `hostId` is absent (A-10 sends a file there, and Orca wants this id with it).
+fn confirmed_of(ps: &Value, path: &str) -> Option<(String, String)> {
+    let worktree = ps["worktrees"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|w| text_of(w, "path") == Some(path))
-        .and_then(|w| text_of(w, "hostId"))
-        .map(str::to_owned)
+        .find(|w| text_of(w, "path") == Some(path))?;
+    let host_id = text_of(worktree, "hostId")?.to_owned();
+    Some((host_id, project_key_of(worktree).unwrap_or_default()))
 }
 
 /// The names of the saved environments of `orca environment list` (its `result`): an entry is a name, or an object with a `name` (else an `id`).
@@ -1374,19 +1374,27 @@ fn check_start(path: &str, environment: Option<&str>) -> Result<(), String> {
 
 /// The `hostId` of the worktree at `path` of the target's list read just now (A-10): the path must be in it.
 pub(crate) fn worktree_host(path: &str, environment: Option<&str>) -> Result<String, String> {
+    worktree_confirmation(path, environment).map(|(host_id, _)| host_id)
+}
+
+/// The `hostId` and the project key of the worktree at `path` of the target's list read just now: the path must be in it.
+fn worktree_confirmation(
+    path: &str,
+    environment: Option<&str>,
+) -> Result<(String, String), String> {
     check_path(path)?;
     check_listed(environment)?;
     let (ps, _) = read_lists(environment, false);
     let ps = ps.map_err(message_of)?;
     check_worktree(&worktrees_of(&ps), path)?;
-    host_id_of(&ps, path).ok_or_else(|| "Orca が worktree のホストを答えませんでした".into())
+    confirmed_of(&ps, path).ok_or_else(|| "Orca が worktree のホストを答えませんでした".into())
 }
 
-/// The worktrees that were confirmed to be in a target's list, with their `hostId`, so that the files of A-18 do not start `orca worktree ps` at every read of a folder.
+/// The worktrees that were confirmed to be in a target's list, with their `hostId` and project key, so that the files of A-18 do not start `orca worktree ps` at every read of a folder.
 /// An entry is for one path of one target (`None`: this machine, else the name of a saved environment) and is compared exactly, as the list is. It is believed for `HOST_TTL` only, and it leaves when Orca's list read by the screen no longer holds the worktree (`sync`), when the environment is no longer a saved one (`retain_environments`), and when a call made with it failed (`forget`).
 #[derive(Default)]
 pub(crate) struct WorktreeHosts {
-    entries: HashMap<(Option<String>, String), (String, Instant)>,
+    entries: HashMap<(Option<String>, String), (String, String, Instant)>,
 }
 
 impl WorktreeHosts {
@@ -1394,30 +1402,39 @@ impl WorktreeHosts {
         (environment.map(str::to_owned), path.to_owned())
     }
 
-    /// The `hostId` confirmed for `path` of the target at `now`, if the confirmation is not older than `HOST_TTL`.
-    fn get(&self, environment: Option<&str>, path: &str, now: Instant) -> Option<String> {
-        let (host_id, at) = self.entries.get(&Self::key(environment, path))?;
-        (now.saturating_duration_since(*at) < HOST_TTL).then(|| host_id.clone())
+    /// The `hostId` and the project key confirmed for `path` of the target at `now`, if the confirmation is not older than `HOST_TTL`.
+    fn get(&self, environment: Option<&str>, path: &str, now: Instant) -> Option<(String, String)> {
+        let (host_id, project, at) = self.entries.get(&Self::key(environment, path))?;
+        (now.saturating_duration_since(*at) < HOST_TTL).then(|| (host_id.clone(), project.clone()))
     }
 
-    fn put(&mut self, environment: Option<&str>, path: &str, host_id: &str, now: Instant) {
-        self.entries
-            .insert(Self::key(environment, path), (host_id.to_owned(), now));
+    fn put(
+        &mut self,
+        environment: Option<&str>,
+        path: &str,
+        confirmed: (&str, &str),
+        now: Instant,
+    ) {
+        self.entries.insert(
+            Self::key(environment, path),
+            (confirmed.0.to_owned(), confirmed.1.to_owned(), now),
+        );
     }
 
     fn forget(&mut self, environment: Option<&str>, path: &str) {
         self.entries.remove(&Self::key(environment, path));
     }
 
-    /// Brings the entries of the target in step with a list of `orca worktree ps` (its `result`) just read: a worktree that is not in it leaves, and one that is takes the `hostId` the list names. The time of an entry is not renewed: only a read that was made for the entry confirms it.
+    /// Brings the entries of the target in step with a list of `orca worktree ps` (its `result`) just read: a worktree that is not in it leaves, and one that is takes the `hostId` and the project the list names. The time of an entry is not renewed: only a read that was made for the entry confirms it.
     fn sync(&mut self, environment: Option<&str>, ps: &Value) {
         self.entries.retain(|(env, path), entry| {
             if env.as_deref() != environment {
                 return true;
             }
-            match host_id_of(ps, path) {
-                Some(host_id) => {
+            match confirmed_of(ps, path) {
+                Some((host_id, project)) => {
                     entry.0 = host_id;
+                    entry.1 = project;
                     true
                 }
                 None => false,
@@ -1440,18 +1457,18 @@ fn worktree_hosts() -> std::sync::MutexGuard<'static, WorktreeHosts> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-/// `worktree_host` for the reads of A-18: the answer of an earlier one for the same path of the same target is used for `HOST_TTL`, so a folder is not read after a start of the CLI. Nothing is believed that the target's list did not hold when it was asked: the path is checked as it is by `worktree_host`, and the cache holds only what that returned.
+/// `worktree_host` for the reads of A-18, with the project key of the worktree: the answer of an earlier one for the same path of the same target is used for `HOST_TTL`, so a folder is not read after a start of the CLI. Nothing is believed that the target's list did not hold when it was asked: the path is checked as it is by `worktree_confirmation`, and the cache holds only what that returned.
 pub(crate) fn worktree_host_cached(
     path: &str,
     environment: Option<&str>,
-) -> Result<String, String> {
+) -> Result<(String, String), String> {
     check_path(path)?;
-    if let Some(host_id) = worktree_hosts().get(environment, path, Instant::now()) {
-        return Ok(host_id);
+    if let Some(confirmed) = worktree_hosts().get(environment, path, Instant::now()) {
+        return Ok(confirmed);
     }
-    let host_id = worktree_host(path, environment)?;
-    worktree_hosts().put(environment, path, &host_id, Instant::now());
-    Ok(host_id)
+    let (host_id, project) = worktree_confirmation(path, environment)?;
+    worktree_hosts().put(environment, path, (&host_id, &project), Instant::now());
+    Ok((host_id, project))
 }
 
 /// Throws away what was confirmed for `path` of the target: a call made with it failed, so the next one asks the list again.
@@ -2234,6 +2251,7 @@ mod tests {
 
     #[test]
     fn the_host_of_a_worktree_is_the_host_id_orca_names() {
+        let host_id_of = |ps: &Value, path: &str| confirmed_of(ps, path).map(|c| c.0);
         let ps = json!({"worktrees": [
             {"path": "/work/a", "hostId": "local"},
             {"path": "/work/b", "hostId": "ssh:lab"},
@@ -2250,15 +2268,48 @@ mod tests {
     }
 
     #[test]
+    fn the_project_of_a_confirmed_worktree_is_its_key_in_the_list() {
+        let ps = json!({"worktrees": [
+            {"path": "/work/a", "hostId": "local", "repoId": "repo-1"},
+            {"path": "/work/b", "hostId": "lab"},
+            {"path": "/work/c", "hostId": "local"},
+        ]});
+        let of = |path| confirmed_of(&ps, path);
+        assert_eq!(of("/work/a"), Some(("local".into(), "repo-1".into())));
+        assert_eq!(of("/work/b"), Some(("lab".into(), "ssh:lab".into())));
+        assert_eq!(of("/work/c"), Some(("local".into(), String::new())));
+        assert_eq!(of("/work/x"), None);
+        let t0 = Instant::now();
+        let mut hosts = WorktreeHosts::default();
+        hosts.put(None, "/work/a", ("local", "repo-0"), t0);
+        assert_eq!(
+            hosts.get(None, "/work/a", t0),
+            Some(("local".into(), "repo-0".into()))
+        );
+        // A list read again names the project now, and the cache takes it.
+        hosts.sync(None, &ps);
+        assert_eq!(
+            hosts.get(None, "/work/a", t0),
+            Some(("local".into(), "repo-1".into()))
+        );
+    }
+
+    #[test]
     fn a_confirmed_worktree_is_believed_for_its_target_and_path_until_the_time_is_up() {
         let t0 = Instant::now();
         let mut hosts = WorktreeHosts::default();
         assert_eq!(hosts.get(None, "/work/a", t0), None);
-        hosts.put(None, "/work/a", "local", t0);
-        hosts.put(Some("Studio"), "/work/a", "env-1", t0);
-        assert_eq!(hosts.get(None, "/work/a", t0).as_deref(), Some("local"));
+        hosts.put(None, "/work/a", ("local", "repo"), t0);
+        hosts.put(Some("Studio"), "/work/a", ("env-1", "repo"), t0);
         assert_eq!(
-            hosts.get(Some("Studio"), "/work/a", t0).as_deref(),
+            hosts.get(None, "/work/a", t0).map(|c| c.0).as_deref(),
+            Some("local")
+        );
+        assert_eq!(
+            hosts
+                .get(Some("Studio"), "/work/a", t0)
+                .map(|c| c.0)
+                .as_deref(),
             Some("env-1")
         );
         // Another target, and a path that differs in any way, is not the one confirmed.
@@ -2267,7 +2318,10 @@ mod tests {
             assert_eq!(hosts.get(None, other, t0), None, "{other}");
         }
         let almost = t0 + HOST_TTL - Duration::from_millis(1);
-        assert_eq!(hosts.get(None, "/work/a", almost).as_deref(), Some("local"));
+        assert_eq!(
+            hosts.get(None, "/work/a", almost).map(|c| c.0).as_deref(),
+            Some("local")
+        );
         assert_eq!(hosts.get(None, "/work/a", t0 + HOST_TTL), None);
         assert_eq!(hosts.get(None, "/work/a", t0 + HOST_TTL * 2), None);
     }
@@ -2276,8 +2330,8 @@ mod tests {
     fn a_failed_call_makes_the_worktree_be_confirmed_again() {
         let t0 = Instant::now();
         let mut hosts = WorktreeHosts::default();
-        hosts.put(None, "/work/a", "local", t0);
-        hosts.put(Some("Studio"), "/work/a", "env-1", t0);
+        hosts.put(None, "/work/a", ("local", "repo"), t0);
+        hosts.put(Some("Studio"), "/work/a", ("env-1", "repo"), t0);
         hosts.forget(None, "/work/a");
         assert_eq!(hosts.get(None, "/work/a", t0), None);
         assert!(hosts.get(Some("Studio"), "/work/a", t0).is_some());
@@ -2287,39 +2341,51 @@ mod tests {
     fn a_list_read_again_drops_the_worktrees_it_lacks_and_renews_no_time() {
         let t0 = Instant::now();
         let mut hosts = WorktreeHosts::default();
-        hosts.put(None, "/work/a", "local", t0);
-        hosts.put(None, "/work/b", "local", t0);
-        hosts.put(None, "/work/c", "local", t0);
-        hosts.put(Some("Studio"), "/work/b", "env-1", t0);
+        hosts.put(None, "/work/a", ("local", "repo"), t0);
+        hosts.put(None, "/work/b", ("local", "repo"), t0);
+        hosts.put(None, "/work/c", ("local", "repo"), t0);
+        hosts.put(Some("Studio"), "/work/b", ("env-1", "repo"), t0);
         let ps = json!({"worktrees": [
             {"path": "/work/a", "hostId": "local"},
             {"path": "/work/b", "hostId": "ssh:lab"},
             {"path": "/work/c"},
         ]});
         hosts.sync(None, &ps);
-        assert_eq!(hosts.get(None, "/work/a", t0).as_deref(), Some("local"));
+        assert_eq!(
+            hosts.get(None, "/work/a", t0).map(|c| c.0).as_deref(),
+            Some("local")
+        );
         // The host the list names now is the one believed, a worktree with no host is not.
-        assert_eq!(hosts.get(None, "/work/b", t0).as_deref(), Some("ssh:lab"));
+        assert_eq!(
+            hosts.get(None, "/work/b", t0).map(|c| c.0).as_deref(),
+            Some("ssh:lab")
+        );
         assert_eq!(hosts.get(None, "/work/c", t0), None);
         // The list of this machine says nothing of another target's entries.
         assert_eq!(
-            hosts.get(Some("Studio"), "/work/b", t0).as_deref(),
+            hosts
+                .get(Some("Studio"), "/work/b", t0)
+                .map(|c| c.0)
+                .as_deref(),
             Some("env-1")
         );
         // The time is the confirmation's own: the list does not extend it.
         assert_eq!(hosts.get(None, "/work/a", t0 + HOST_TTL), None);
         hosts.sync(Some("Studio"), &json!({"worktrees": []}));
         assert_eq!(hosts.get(Some("Studio"), "/work/b", t0), None);
-        assert_eq!(hosts.get(None, "/work/b", t0).as_deref(), Some("ssh:lab"));
+        assert_eq!(
+            hosts.get(None, "/work/b", t0).map(|c| c.0).as_deref(),
+            Some("ssh:lab")
+        );
     }
 
     #[test]
     fn an_environment_that_is_no_longer_saved_loses_its_worktrees() {
         let t0 = Instant::now();
         let mut hosts = WorktreeHosts::default();
-        hosts.put(None, "/work/a", "local", t0);
-        hosts.put(Some("Studio"), "/work/a", "env-1", t0);
-        hosts.put(Some("Lab"), "/work/a", "env-2", t0);
+        hosts.put(None, "/work/a", ("local", "repo"), t0);
+        hosts.put(Some("Studio"), "/work/a", ("env-1", "repo"), t0);
+        hosts.put(Some("Lab"), "/work/a", ("env-2", "repo"), t0);
         hosts.retain_environments(&["Studio".to_owned()]);
         assert!(hosts.get(None, "/work/a", t0).is_some());
         assert!(hosts.get(Some("Studio"), "/work/a", t0).is_some());

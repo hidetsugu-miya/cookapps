@@ -4372,7 +4372,10 @@ describe("orca: files and editor (A-18)", () => {
     ...extra,
   });
   const branchButton = () => $("#orca-files-title .orca-branch-btn");
-  const branchRows = () => textsOf(".orca-dest-pop .orca-branch-row");
+  // The rows the filter leaves in view: it hides the others and keeps them in the page.
+  const shownRows = (selector = ".orca-dest-pop .orca-branch-row") =>
+    browser.execute((s) => [...document.querySelectorAll<HTMLElement>(s)].filter((e) => !e.hidden).map((e) => e.textContent?.trim() ?? ""), selector);
+  const branchRows = () => shownRows();
   const branchPick = (kind: string, name: string) => $(`.orca-dest-pop .orca-branch-row[data-kind="${kind}"][data-name="${name}"]`);
   const branchStates = () => browser.execute(() => [...document.querySelectorAll<HTMLButtonElement>(".orca-dest-pop .orca-branch-row")].map((b) => [b.dataset.kind, b.dataset.name, b.getAttribute("aria-current"), b.disabled]));
   // The file pane open on example-app and the list of branches opened under the button of the heading.
@@ -4420,16 +4423,39 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount(".orca-dest-pop .orca-branch-row", 5);
     const search = await mock("orca_remote_branches", [remote("origin/feat/d")]);
     await $('.orca-dest-pop input[aria-label="ブランチを絞り込む"]').setValue("feat");
-    expect(await textsOf('.orca-dest-pop .orca-branch-row[data-kind="local"]')).toEqual(["feat/a", "feat/c"]);
+    expect(await shownRows('.orca-dest-pop .orca-branch-row[data-kind="local"]')).toEqual(["feat/a", "feat/c"]);
+    // The rows are hidden, not made again.
+    expect(await count(".orca-dest-pop .orca-branch-row")).toBe(5);
     await browser.waitUntil(async () => (await callsOf(search)).length > 0, { timeoutMsg: "the remote branches were never asked for" });
     await browser.pause(500);
     expect(await callsOf(search)).toEqual([{ path: "/work/example-app", repo: "proj_example-app", query: "feat", environment: null }]);
     expect(await branchRows()).toEqual(["feat/a", "feat/c", "origin/feat/d"]);
     await $('.orca-dest-pop input[aria-label="ブランチを絞り込む"]').setValue("zzz");
     await expect($(".orca-dest-pop .empty")).toBeDisplayed();
-    expect(await textsOf(".orca-dest-pop .empty")).toEqual(["該当するブランチがありません", "該当するブランチがありません"]);
+    expect(await shownRows(".orca-dest-pop .empty")).toEqual(["該当するブランチがありません", "該当するブランチがありません"]);
     expect(await branchRows()).toEqual([]);
     await browser.waitUntil(async () => ((await callsOf(search)).at(-1) as { query: string } | undefined)?.query === "zzz", { timeoutMsg: "the new text was never asked for" });
+  });
+
+  it("asks for the remote branches of the last text once the one in flight is answered, and not while it is (A-25)", async () => {
+    await openBranches();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const search = await mock("orca_remote_branches", holds);
+    const input = $('.orca-dest-pop input[aria-label="ブランチを絞り込む"]');
+    await input.setValue("f");
+    await waitForCalls(search);
+    // Typed while the first is waiting: nothing more is sent until it is answered.
+    await input.setValue("fe");
+    await browser.pause(600);
+    await input.setValue("fea");
+    await browser.pause(600);
+    expect((await callsOf(search)).map((c) => (c as { query: string }).query)).toEqual(["f"]);
+    await release(search, [remote("origin/feat/d")]);
+    expect(((await waitForCalls(search, 2)).at(-1) as { query: string }).query).toBe("fea");
+    await release(search, [remote("origin/feat/d")]);
+    await browser.waitUntil(async () => (await branchRows()).includes("origin/feat/d"), { timeoutMsg: "the answer was never drawn" });
+    await browser.pause(300);
+    expect(await callsOf(search)).toHaveLength(2);
   });
 
   it("switches to a local branch with the worktree, the kind and the name, then reads the tree and the list of Orca again and keeps the open files (A-25)", async () => {

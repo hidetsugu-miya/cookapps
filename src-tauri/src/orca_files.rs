@@ -993,13 +993,32 @@ async fn host_of(path: &str, environment: Option<&str>) -> Result<String, String
 
 /// `host_of` for the reads (the list, the ignore marks and the text of a file): the worktree is confirmed against the target's list once, and believed for a while after (`worktree_host_cached`). The path is held to the same checks, and an SSH host is refused the same.
 async fn cached_host_of(path: &str, environment: Option<&str>) -> Result<String, String> {
+    cached_host_and_project_of(path, environment)
+        .await
+        .map(|(host_id, _)| host_id)
+}
+
+/// `cached_host_of` with the project key (`OrcaProject::key`) of the worktree, as the same confirmation holds it.
+async fn cached_host_and_project_of(
+    path: &str,
+    environment: Option<&str>,
+) -> Result<(String, String), String> {
     let (path, environment) = (path.to_owned(), environment.map(str::to_owned));
-    let host_id =
+    let (host_id, project) =
         tokio::task::spawn_blocking(move || worktree_host_cached(&path, environment.as_deref()))
             .await
             .map_err(|e| e.to_string())??;
     check_host(&host_id)?;
-    Ok(host_id)
+    Ok((host_id, project))
+}
+
+/// The repository asked for must be the project of the worktree: the remote branches are read from the repository, and a worktree of another project must not stand for it.
+fn check_same_repo(project: &str, repo: &str) -> Result<(), String> {
+    if project == repo {
+        Ok(())
+    } else {
+        Err("worktree とプロジェクトが合いません。一覧を読み直してください".into())
+    }
 }
 
 /// A failed call made with a worktree that was believed makes the next call confirm it again.
@@ -1094,7 +1113,7 @@ pub async fn orca_local_branches(
     forgetting(asked.await, &path, environment.as_deref())
 }
 
-/// The remote branches whose names hold `query`, at most 50, of the repository `repo` (`OrcaProject::key`) of the worktree at `path`. The worktree must be one of the target's list, as for the list.
+/// The remote branches whose names hold `query`, at most 50, of the repository `repo` (`OrcaProject::key`) of the worktree at `path`. The worktree must be one of the target's list, as for the list, and `repo` its project.
 #[tauri::command]
 pub async fn orca_remote_branches(
     path: String,
@@ -1104,7 +1123,8 @@ pub async fn orca_remote_branches(
 ) -> Result<Vec<OrcaRemoteBranch>, String> {
     check_repo(&repo)?;
     check_query(&query)?;
-    cached_host_of(&path, environment.as_deref()).await?;
+    let (_, project) = cached_host_and_project_of(&path, environment.as_deref()).await?;
+    check_same_repo(&project, &repo)?;
     let asked = async {
         let mut connection = Connection::open(environment.clone()).await?;
         remote_branches(&mut connection, &repo, &query).await
@@ -1675,6 +1695,17 @@ mod tests {
         }
         for bad in ["a\nb", "a\0b", &"a".repeat(MAX_QUERY + 1)] {
             assert!(check_query(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_repository_asked_for_must_be_the_project_of_the_worktree() {
+        assert!(check_same_repo("repo-1", "repo-1").is_ok());
+        for (project, repo) in [("repo-1", "repo-2"), ("", "repo-1"), ("repo-1", "Repo-1")] {
+            assert!(
+                check_same_repo(project, repo).is_err(),
+                "{project:?} {repo:?}"
+            );
         }
     }
 

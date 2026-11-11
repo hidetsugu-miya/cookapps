@@ -6,8 +6,8 @@ import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, tag } from "./dom.js";
 import { CHEVRON_SVG, COPY_PATH_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { closeMenu, openMenu } from "./menu.js";
-import { openBranchDialog } from "./orca-branch.js";
+import { openMenu } from "./menu.js";
+import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
 import { toast } from "./toast.js";
 import { copyText, showError } from "./view.js";
 
@@ -289,7 +289,7 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
     expanded.clear();
     version++;
     // A list of branches is of the worktree that was shown.
-    closeMenu();
+    closeBranchDialog();
   }
   context = next;
   if (shown && context !== null && !listings.has("")) void readDir("");
