@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.62.0
+
+A-24 (new): right-clicking a file in the Orca file pane shows "差分を表示", which opens a tab in the work pane with the differences between the file at HEAD and the file on the disk, uncommitted changes included (#462, #463). HEAD is on the left and the disk on the right, with the line numbers between them; a button switches to one column with the removed and added lines one above the other, and back. The text is colored by its language as in the editor, buttons move to the previous and next change, and the head shows the number of changes and a button to read the file again.
+
 ## v0.61.1
 
 A-23: the traffic lights at the top left of the window are no longer cut by the edge of the window (#421). They are where macOS itself puts them, and the green icon column is 14px wider so that the three fit on it.
