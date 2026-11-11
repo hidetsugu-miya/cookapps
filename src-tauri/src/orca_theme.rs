@@ -26,7 +26,7 @@ use crate::{
     accounts::write_synced,
     auth::config_dir,
     ghostty::{PaletteColor, TerminalColors},
-    orca_chat::orca_dir,
+    orca_link::orca_dir,
 };
 
 const SELECTION_FILE: &str = "terminal-theme.json";

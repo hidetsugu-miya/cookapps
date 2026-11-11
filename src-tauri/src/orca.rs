@@ -19,7 +19,6 @@ use ts_rs::TS;
 use crate::{
     accounts::write_synced,
     auth::config_dir,
-    orca_chat::check_pane_key,
     orca_handoff::{compose, handoff_instruction, HandoffContext},
     orca_stream::{clamp_viewport, OrcaViewport},
 };
@@ -94,9 +93,9 @@ pub struct OrcaRow {
     pub at_ms: i64,
     /// The terminal that takes a send; `None` when it was not found (the row can be read but takes no post).
     pub handle: Option<String>,
-    /// The agent's pane (`{tabId}:{leafId}`), which finds its session for the history (A-7); `None` when the agent has none.
+    /// The agent's pane (`{tabId}:{leafId}`), which names its tab (A-12); `None` when the agent has none.
     pub pane_key: Option<String>,
-    /// The worktree's path, which the history asks Orca for the worktree's tabs.
+    /// The worktree's path.
     pub path: String,
     /// The latest action: `{tool}: {first line of its input}`, else the first line of the last answer, else empty (A-8).
     pub activity: String,
@@ -112,7 +111,7 @@ pub struct OrcaRow {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct OrcaStarted {
-    /// The agent's pane (`{tabId}:{leafId}`), which finds its history (A-7).
+    /// The agent's pane (`{tabId}:{leafId}`), which names its tab (A-12).
     pub pane_key: Option<String>,
     /// The terminal that takes the next send.
     pub handle: Option<String>,
@@ -782,6 +781,20 @@ pub(crate) fn check_handle(handle: &str) -> Result<(), String> {
     }
 }
 
+/// A pane is `{tabId}:{leafId}`; nothing else is accepted, and a key is never put in a command line.
+fn check_pane_key(pane_key: &str) -> Result<(), String> {
+    if !pane_key.is_empty()
+        && pane_key.chars().count() <= 256
+        && pane_key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '_' | '-'))
+    {
+        Ok(())
+    } else {
+        Err("エージェントの場所が正しくありません".into())
+    }
+}
+
 pub(crate) fn check_path(path: &str) -> Result<(), String> {
     if Path::new(path).is_absolute() {
         Ok(())
@@ -967,7 +980,7 @@ fn input_args(handle: &str, text: &str, environment: Option<&str>) -> Vec<String
     with_environment(args, environment)
 }
 
-/// Always Claude: the history of A-7 reads only Claude's sessions. A session started from the Orca screen (A-12) has no first prompt: the user types it in the terminal.
+/// Always Claude. A session started from the Orca screen (A-12) has no first prompt: the user types it in the terminal.
 fn launch_args(path: &str, prompt: Option<&str>, environment: Option<&str>) -> Vec<String> {
     let mut args = args_of(&["agent", "launch", "--agent", "claude"]);
     args.extend([
@@ -1322,20 +1335,9 @@ fn send(handle: &str, text: &str, environment: Option<&str>) -> Result<(), Strin
     write(&send_args(handle, text, environment)).map(|_| ())
 }
 
-/// A-11: the handle must be a row of the list the target gives just now, the environment a saved one.
-pub(crate) fn check_target(handle: &str, environment: Option<&str>) -> Result<(), String> {
-    check_handle(handle)?;
-    check_listed(environment)?;
-    let (ps, terminals) = read_lists(environment, true);
-    check_session(
-        &rows_of(&ps.map_err(message_of)?, &terminals.map_err(message_of)?),
-        handle,
-    )
-}
-
 /// A call of this machine's Orca over its unix socket from a thread of `blocking`, so no CLI process is started.
 fn local_blocking(method: &str, params: Value) -> Result<Value, String> {
-    tokio::runtime::Handle::current().block_on(crate::orca_chat::local_call(method, params))
+    tokio::runtime::Handle::current().block_on(crate::orca_link::local_call(method, params))
 }
 
 /// The lines on the screen of a terminal: of this machine over its unix socket (`terminal.read`), of a saved environment through the CLI. The handle was checked by the caller.
@@ -1346,20 +1348,6 @@ fn read_lines(handle: &str, environment: Option<&str>) -> Result<Vec<String>, St
         Some(_) => call(&screen_args(handle, environment), READ_TIMEOUT)
             .map(|result| screen_lines_of(&result))
             .map_err(message_of),
-    }
-}
-
-/// A-11: the lines on the screen of the session `handle`, read without the mirror's check of the handle (the caller checked it).
-pub(crate) fn read_screen(handle: &str, environment: Option<&str>) -> Result<Vec<String>, String> {
-    read_lines(handle, environment)
-}
-
-/// A-11: one key typed into the session `handle` (no Enter): over the unix socket for this machine, like the keys of its mirror, and through the CLI for a saved environment. Only digits and Tab come here, so no secret is in the arguments.
-pub(crate) fn press_key(handle: &str, key: &str, environment: Option<&str>) -> Result<(), String> {
-    match environment {
-        None => local_blocking("terminal.send", input_params(handle, key, "cookapps", None))
-            .and_then(|result| check_accepted(&result)),
-        Some(_) => write(&input_args(handle, key, environment)).map(|_| ()),
     }
 }
 
@@ -1666,7 +1654,7 @@ fn check_input(
 
 /// The SSH hosts of this machine's Orca, from its runtime (not a public interface: it was written against Orca 1.4.248). A failure is an empty list.
 pub(crate) async fn local_ssh_targets() -> Vec<OrcaSshTarget> {
-    crate::orca_chat::local_call("ssh.listEditableTargets", serde_json::json!({}))
+    crate::orca_link::local_call("ssh.listEditableTargets", serde_json::json!({}))
         .await
         .map(|result| ssh_targets_of(&result))
         .unwrap_or_default()
@@ -1815,7 +1803,7 @@ pub async fn orca_terminal_read(
     blocking(move || screen(&mirror, &handle, environment.as_deref())).await?
 }
 
-/// Types `text` into the terminal `handle` as it is: of this machine over its unix socket (`terminal.send`), so the keys are in no argument of a process; of the saved environment `environment` through the CLI (`orca terminal send`, as A-11 does), where they are.
+/// Types `text` into the terminal `handle` as it is: of this machine over its unix socket (`terminal.send`), so the keys are in no argument of a process; of the saved environment `environment` through the CLI (`orca terminal send`), where they are.
 #[tauri::command]
 pub async fn orca_terminal_input(
     mirror: tauri::State<'_, OrcaMirror>,
@@ -1834,7 +1822,7 @@ pub async fn orca_terminal_input(
         blocking(move || check_input(&mirror, &handle, environment.as_deref(), &text)).await??;
     }
     let sent = match environment.clone() {
-        None => crate::orca_chat::local_call(
+        None => crate::orca_link::local_call(
             "terminal.send",
             input_params(&handle, &text, "cookapps", None),
         )
@@ -2353,6 +2341,16 @@ mod tests {
             "term_é", "xterm_1",
         ] {
             assert!(check_handle(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_pane_key_has_only_the_characters_of_an_id() {
+        for ok in ["tabA:leaf1", "a1b2c3d4-e5f6-7890:leaf_2", &"a".repeat(256)] {
+            assert!(check_pane_key(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "a b", "a;b", "a/b", "--x y", "é", &"a".repeat(257)] {
+            assert!(check_pane_key(bad).is_err(), "{bad}");
         }
     }
 

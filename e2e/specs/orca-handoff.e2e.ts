@@ -892,10 +892,8 @@ describe("orca handoff", () => {
     await expect($(`${MAIL.pane} [aria-label="Orca の画面で開く"]`)).toBeDisplayed();
     await expect($(`${MAIL.pane} [aria-label="閉じる"]`)).toBeDisplayed();
     expect(await count(`${MAIL.pane} .ho-card`)).toBe(0);
-    // The history and the field of more instructions are not drawn: the terminal of the session is, mirrored from this machine.
+    // The field of more instructions is not drawn: the terminal of the session is, mirrored from this machine.
     expect(await count(`${MAIL.pane} textarea:not(.xterm-helper-textarea)`)).toBe(0);
-    expect(await count(`${MAIL.pane} .orca-user`)).toBe(0);
-    expect(await callsOf("orca_chat_open")).toEqual([]);
     await expect($(`${MAIL.pane} .ho-term`)).toBeDisplayed();
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new" });
     await browser.waitUntil(async () => (await termText(MAIL)).includes("原因を調べて"), { timeoutMsg: "the screen of the session never showed" });
@@ -1322,7 +1320,6 @@ describe("orca handoff", () => {
   });
 });
 
-// The history of a session (A-7) and the answer to a question in it (A-11), as the side pane draws them: the Orca screen shows terminals only (A-12).
 describe("orca handoff: attached files (A-10)", () => {
   const dropped = (repo: string, name = "shot.png") => `/work/${repo}/.orca/drops/${name}`;
   // What `orca_attach_file` answers for an image: the path with its blank, to be pasted as a bracketed paste.

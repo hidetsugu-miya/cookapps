@@ -12,8 +12,8 @@ use ts_rs::TS;
 
 use crate::{
     orca::{check_path, worktree_host},
-    orca_chat::{CallError, Connection},
     orca_files::{parse_dir, LIST_LIMIT},
+    orca_link::{CallError, Connection},
 };
 
 /// The most a file may be, in bytes of the decoded file.

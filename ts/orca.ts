@@ -24,7 +24,6 @@ import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
-import { initOrcaChat } from "./orca-chat.js";
 import { closeDiff, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, filesOf, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
 import { filesShown, initOrcaFiles, syncFiles, toggleFiles } from "./orca-files.js";
@@ -1220,8 +1219,6 @@ function initSearch() {
 }
 
 export function initOrca() {
-  // The history of A-7 is read only by the side pane of A-9 now; it still pauses with the window.
-  initOrcaChat();
   initOrcaTerminal(showError);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });

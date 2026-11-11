@@ -238,19 +238,10 @@ export interface Commands {
   orca_worktree_create: { args: { project: string; name: string; branch: string | null; base: string | null; environment: string | null }; result: string };
   // A-9: starts a session in a worktree with the instruction the owner wrote (`instruction`), the text of each file attached to it (`files`, A-10), the summary of the content (`summary`, empty without the content) and, when `context` is not null, the content quoted as data after them. Never run twice.
   orca_handoff: { args: { destination: HandoffDestination; instruction: string; files: string[]; summary: string[]; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
-  // Reads the history of the session in the pane `paneKey` of the worktree `path` (A-7) and sends it to `channel` (an `OrcaChatEvent` at a time) until it is closed or another is opened; only one session is read.
-  orca_chat_open: { args: { environment: string | null; path: string; paneKey: string; channel: unknown }; result: null };
-  orca_chat_close: { args: undefined; result: null };
-  // Reads the page of older messages of the session that is read; they arrive as an `items` event.
-  orca_chat_older: { args: undefined; result: null };
-  // Pauses (`true`, the window is hidden) or resumes the periodic reads of the session that is read; the connection and what is held stay.
-  orca_chat_pause: { args: { paused: boolean }; result: null };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. A terminal that is already closed is a success.
   orca_close: { args: { handle: string; environment: string | null }; result: null };
-  // A-11: answers the questions of a Claude session that waits (the picks are 0-based indexes into `options`), by typing digits and Tab into its terminal `handle` one key at a time, each only when the screen shows what it is for. Not tried again: a failure carries its message.
-  orca_answer: { args: { handle: string; questions: { text: string; multi: boolean; options: string[]; picks: number[] }[]; environment: string | null }; result: null };
   // The lines on the screen of the terminal `handle` (a Claude session's or a plain one) of this machine, or of the saved environment `environment` when given, for the mirror (no colors).
   orca_terminal_read: { args: { handle: string; environment?: string }; result: string[] };
   // Types `text` into the terminal `handle` of this machine, or of the saved environment `environment` when given, as it is (no Enter is added).

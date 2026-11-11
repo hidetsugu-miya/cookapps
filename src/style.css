@@ -1013,64 +1013,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-term-box { position: absolute; inset: 8px 8px 8px 12px; }
 .orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }
 body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
-.orca-user { align-self: flex-end; max-width: 80%; padding: 8px 12px; border-radius: 12px; background: var(--soft); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-.orca-assistant { padding: 8px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-.orca-assistant > :first-child { margin-top: 0; }
-.orca-assistant > :last-child { margin-bottom: 0; }
-.orca-assistant p, .orca-assistant ul, .orca-assistant ol, .orca-assistant pre, .orca-assistant blockquote { margin: 0 0 8px; }
-.orca-assistant h1, .orca-assistant h2, .orca-assistant h3 { margin: 12px 0 6px; font-size: calc(15px * var(--fs)); white-space: normal; }
-.orca-assistant ul { list-style: disc; }
-.orca-assistant ul, .orca-assistant ol { padding-left: 22px; }
-.orca-assistant a { color: var(--accent); }
-.orca-assistant code { padding: 1px 4px; border-radius: 4px; background: var(--code); font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
-.orca-assistant pre { padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 12px; background: var(--code); overflow-x: auto; }
-.orca-assistant pre code { padding: 0; background: none; }
-.orca-assistant blockquote { padding-left: 10px; border-left: 3px solid var(--chip-line); color: #666; }
-.orca-assistant table { margin: 0 0 8px; border-collapse: collapse; }
-.orca-assistant th, .orca-assistant td { padding: 4px 8px; border: 1px solid var(--chip-line); }
-.orca-tools { align-self: flex-start; max-width: 100%; display: flex; flex-direction: column; gap: 6px; margin-block: -8px; }
-.orca-tools-btn { align-self: flex-start; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: calc(12px * var(--fs)); color: var(--muted); cursor: pointer; }
-.orca-tools-btn:hover { color: var(--ink-soft); }
-.orca-tools-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
-.orca-chev { display: inline-flex; transition: transform .1s; }
-.orca-chev svg { width: 16px; height: 16px; }
-.orca-tools-btn .orca-chev svg { width: 14px; height: 14px; }
-.orca-tools-btn[aria-expanded="true"] .orca-chev, .orca-ctx-btn[aria-expanded="true"] .orca-chev { transform: rotate(90deg); }
-/* A content handed to Orca (A-9) is folded into one line inside the user's bubble; it opens to the text. */
-.orca-user-text { white-space: pre-wrap; }
-.orca-user-text + .orca-ctx { margin-top: 6px; }
-.orca-ctx-btn { display: flex; align-items: center; gap: 4px; max-width: 100%; padding: 0; border: 0; background: none; font: inherit; font-size: calc(12px * var(--fs)); color: var(--accent-text); cursor: pointer; }
-.orca-ctx-btn:hover { text-decoration: underline; }
-.orca-ctx-btn .orca-chev svg { width: 14px; height: 14px; }
-.orca-ctx-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.orca-ctx-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.orca-ctx-text { margin-top: 6px; padding: 8px 10px; max-height: 240px; overflow: auto; border-radius: 8px; background: #fff; font-size: calc(12.5px * var(--fs)); white-space: pre-wrap; overflow-wrap: anywhere; }
-.orca-tool-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); color: #444; user-select: text; -webkit-user-select: text; }
-.orca-tool-call { white-space: pre-wrap; overflow-wrap: anywhere; }
-.orca-question { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-.orca-question-text { font-weight: 600; }
-.orca-question-options { display: flex; flex-direction: column; gap: 4px; padding-left: 22px; list-style: disc; }
-.orca-question-label { font-weight: 600; }
-.orca-question-desc { margin-left: 8px; color: var(--muted); }
-.orca-question-answer { color: var(--accent); }
-.orca-question-waiting { color: var(--warn); }
-/* A question that waits for an answer (A-11): the choices are buttons, marked with a circle (one pick) or a square (several). */
-.orca-pick { background: var(--bar); }
-.orca-pick-options { display: flex; flex-direction: column; gap: 4px; }
-.orca-pick-option { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 12px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.orca-pick-option:disabled { cursor: default; }
-.orca-pick-option[aria-pressed="true"] { border-color: var(--accent); background: var(--soft); }
-.orca-pick-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.orca-pick-mark { flex: none; box-sizing: border-box; display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: 1px solid var(--muted); border-radius: 50%; background: var(--surface); }
-.orca-pick-option.multi .orca-pick-mark { border-radius: 4px; }
-.orca-pick-option[aria-pressed="true"] .orca-pick-mark { border-color: var(--accent); }
-.orca-pick-option:not(.multi)[aria-pressed="true"] .orca-pick-mark { border-width: 5px; }
-.orca-pick-option.multi[aria-pressed="true"] .orca-pick-mark { background: var(--accent); }
-.orca-pick-mark svg { display: none; width: 12px; height: 12px; stroke: var(--on-accent); stroke-width: 2; }
-.orca-pick-option[aria-pressed="true"] .orca-pick-mark svg { display: block; }
-.orca-pick-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
-.orca-pick-send:disabled { opacity: .4; cursor: default; }
-.orca-pick-send:disabled:hover { background: var(--accent); filter: none; }
 .orca-dest-pop { width: 320px; max-height: calc(100vh - 32px); padding: 8px; gap: 8px; }
 .orca-dest-pop input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--chip-line); border-radius: 8px; font: inherit; }
 .orca-dest-pop input:focus { outline: 2px solid var(--accent); border-color: transparent; }

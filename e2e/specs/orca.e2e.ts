@@ -534,10 +534,8 @@ describe("orca", () => {
     expect(await count(".orca-tabs .orca-tab")).toBe(0);
     await expect($(".orca-term")).not.toBeDisplayed();
     await expect($(".orca-empty")).toHaveText("プロジェクトを選んでください");
-    // No composer and no history on this screen.
+    // No composer on this screen.
     expect(await count("#orca-input")).toBe(0);
-    expect(await count("#orca-chat")).toBe(0);
-    expect(await callsOf("orca_chat_open")).toEqual([]);
   });
 
   it("selects a row with a click and shows its tab as a terminal, mirrored from this machine", async () => {
@@ -549,9 +547,8 @@ describe("orca", () => {
     await expect($(".orca-term")).toBeDisplayed();
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_example-app" });
     await browser.waitUntil(async () => (await screenText()).includes("Write the docs"), { timeoutMsg: "the screen of the session never showed" });
-    // This machine has no stream, and no history is read.
+    // This machine has no stream.
     expect(await callsOf("orca_stream_terminal")).toEqual([]);
-    expect(await callsOf("orca_chat_open")).toEqual([]);
     // Another row takes the selection and its terminal.
     await mock("orca_terminal_read", ["$"]);
     await select("example-lib");

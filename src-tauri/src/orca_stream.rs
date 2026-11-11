@@ -1,4 +1,4 @@
-//! A-12: the Orca screen's stream from a saved environment (a paired server), over the end-to-end encrypted WebSocket of A-7.
+//! A-12: the Orca screen's stream from a saved environment (a paired server), over the end-to-end encrypted WebSocket of `orca_link`.
 //! The list of sessions comes from `session.tabs.subscribeAll`, named by `worktree.ps`, which is read once when the connection opens and again only when a worktree it did not list appears;
 //! each terminal shown (one for each pane of the work pane, A-17) comes from its own `terminal.subscribe` (its size from `terminal.updateViewport`), and the keys go with `terminal.send`.
 //! Nothing is read again by a clock. None of these methods is a public interface of Orca: they were checked on Orca 1.4.249. Nothing is stored here.
@@ -26,7 +26,7 @@ use crate::{
         check_accepted, check_handle, check_keys, input_params, plain_terminals_of, projects_of,
         rows_of, text_of, worktrees_of, OrcaProject, OrcaRow, OrcaTerminal, OrcaWorktree,
     },
-    orca_chat::{backoff, connect_environment, reason_of, result_of, WsLink},
+    orca_link::{backoff, connect_environment, reason_of, result_of, WsLink},
 };
 
 /// `worktree.ps` is asked for this many worktrees, as the CLI's read of A-6.
@@ -869,8 +869,8 @@ mod tests {
     use super::*;
     use crate::{
         orca::{OrcaGroup, OrcaStatus},
-        orca_chat::ws_testing::{bind, FakeDesktop},
         orca_e2ee::testing::Desktop,
+        orca_link::ws_testing::{bind, FakeDesktop},
     };
 
     fn ps() -> Value {
