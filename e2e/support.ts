@@ -506,7 +506,10 @@ export const unreadChannelsOf = (messages: TimelineMessage[]): UnreadChannel[] =
   for (const m of messages) {
     if (!m.unread && !m.unreadReplies) continue;
     let c = channels.find((x) => x.teamId === m.teamId && x.channel === m.channel);
-    if (!c) channels.push((c = { teamId: m.teamId, channel: m.channel, messages: 0, to: null, threads: [] }));
+    if (!c) {
+      c = { teamId: m.teamId, channel: m.channel, messages: 0, to: null, threads: [] };
+      channels.push(c);
+    }
     if (m.unread) {
       c.messages += 1;
       if (c.to === null || Number(m.ts) > Number(c.to)) c.to = m.ts;
