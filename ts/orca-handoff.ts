@@ -1,9 +1,8 @@
 // Handing the open mail, Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
 // Before a hand-over it is a form from the top down: the destination (the Orca to talk to, the project, and the worktree of a new session: one of the project's worktrees, its own folder first, or a new one made then, with its name, the ref it starts from and its branch), the card with the content (taken off with ×) and the field for the instruction, which fills the height that is left and has the arrow button "Orca に渡す" at its bottom right.
 // The instruction is handed over as it was written; the content of the card is summarised by Claude (`claude_summarize_handoff`) when the arrow is pressed, and the summary goes with the instruction.
-// After a hand-over it shows that session: its header, its history (orca-chat.ts) and a composer for more instructions. The prompt is composed in Rust (`orca_handoff`).
+// After a hand-over it shows that session: its header and its terminal (A-12, orca-terminal.ts), which takes the keys as the terminal of the Orca screen does, until the pane is closed. The prompt is composed in Rust (`orca_handoff`).
 // A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the conversation of each item and the session it was handed to, and the destination and the project last chosen.
-import type { AttachedFile } from "./bindings/AttachedFile";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
@@ -11,12 +10,12 @@ import { getClaude } from "./claude.js";
 import { composing, isMac, tag } from "./dom.js";
 import { ARROW_UP_SVG, CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
 import { type HandoffDestination, invoke } from "./ipc.js";
-import { closeChat, isChatOwner, makeChatView, openChat, setChatWorking, type ChatView } from "./orca-chat.js";
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
 import { openBranchList, type BranchSource, type PickedBranch } from "./orca-branch.js";
 import { openMenu } from "./menu.js";
-import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, THIS_MACHINE, worktreeLabel } from "./orca.js";
+import { hideTerminals, showTerminals, type TermSource } from "./orca-terminal.js";
+import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, streamsEnvironment, THIS_MACHINE, worktreeLabel } from "./orca.js";
 
 // The item a pane is for: a key that is the same while the same mail, thread or task is shown, and the content to hand over, built when the pane is opened.
 export interface HandoffItem {
@@ -37,7 +36,7 @@ export interface HandoffHost {
   onOpen: (open: boolean) => void;
 }
 
-// The session an item was handed to: where it runs, how its history is found and which terminal takes the next send. `environment` is the target at the time.
+// The session an item was handed to: where it runs and which terminal it shows. `environment` is the target at the time.
 interface Session {
   path: string;
   paneKey: string | null;
@@ -96,12 +95,8 @@ let ticking = false;
 const POLL_MS = 10_000;
 const NEW_WORKTREE = "新規作成";
 const KIND_ICONS = { mail: MAIL_SVG, slack: SLACK_SVG, todo: TODO_SVG } as const;
-
-// The text of a send: the instruction, then the path of each file on a line of its own after a blank line; only the paths when the instruction is blank.
-const withFiles = (text: string, files: AttachedFile[]) => {
-  const paths = files.map((f) => f.text.trimEnd());
-  return (text.trim() ? [text.trimEnd(), "", ...paths] : paths).join("\n");
-};
+// The number of the next pane, which names it as the owner of its terminal.
+let paneSeq = 0;
 
 function iconButton(label: string, svg: string, className = "icon-btn") {
   const button = tag("button", className);
@@ -135,8 +130,13 @@ export class HandoffPane {
   // The `readSeq` of the read of a destination's own lists that is on its way, else 0: the poll of a shown session does not start another while it is.
   private destReading = 0;
   private lastRead = 0;
-  private chat: ChatView;
-  private chatKey: string | null = null;
+  // Names the pane as the owner of the terminal it shows (orca-terminal.ts).
+  private owner = `handoff-${++paneSeq}`;
+  // The element that takes the files dropped or pasted before a hand-over: it stays, and the form is drawn in it. After it the terminal takes them (A-10).
+  private formMain = tag("div", "ho-main ho-whole");
+  // The parts of the session shown: its notice, its header, the note for a session whose terminal cannot be shown, and the host of the terminal.
+  private sess: { notice: HTMLElement; title: HTMLElement; note: HTMLElement; term: HTMLElement } | null = null;
+  // The parts of the form shown.
   private el: {
     notice: HTMLElement;
     chip?: HTMLButtonElement;
@@ -153,8 +153,6 @@ export class HandoffPane {
     modeExisting?: HTMLButtonElement;
     branchName?: HTMLInputElement;
     existingChip?: HTMLButtonElement;
-    sessionTitle?: HTMLElement;
-    note?: HTMLElement;
     error: HTMLElement;
     input: HTMLTextAreaElement;
     send: HTMLButtonElement;
@@ -162,10 +160,7 @@ export class HandoffPane {
 
   constructor(host: HandoffHost) {
     this.host = host;
-    this.chat = makeChatView(tag("div", "ho-chat"), tag("div", "ho-items"), tag("button", "text-btn ho-older", "以前の履歴を読む"), tag("div", "ho-chat-status"), () => this.answerTarget());
-    this.chat.older.hidden = true;
-    this.chat.box.append(this.chat.older, this.chat.list);
-    listenForFiles(host.root, (files) => this.addFiles(files));
+    listenForFiles(this.formMain, (files) => this.addFiles(files));
     panes.add(this);
     if (!ticking) {
       ticking = true;
@@ -185,13 +180,6 @@ export class HandoffPane {
 
   private rowOf(s: Session): OrcaRow | undefined {
     return this.overview?.rows.find((r) => (s.paneKey !== null && r.paneKey === s.paneKey) || (s.handle !== null && r.handle === s.handle));
-  }
-
-  // The terminal an answer to a question of the history goes to (A-11): that of the session shown, resolved as the next send is.
-  private answerTarget() {
-    const s = this.session();
-    const handle = s ? (s.handle ?? this.rowOf(s)?.handle ?? null) : null;
-    return s && handle !== null ? { handle, environment: s.environment } : null;
   }
 
   // The pane follows the host: another item (or none) in view changes what it shows, and a session already handed to the item is shown again.
@@ -214,7 +202,7 @@ export class HandoffPane {
       this.lastOpen = this.open;
       this.host.onOpen(this.open);
     }
-    this.syncChat();
+    this.syncTerminal();
     if (this.open && this.lastRead === 0) this.reload(true);
   }
 
@@ -302,7 +290,7 @@ export class HandoffPane {
     if (seq !== this.readSeq || !this.open) return;
     this.overview = overview;
     this.update();
-    this.syncChat();
+    this.syncTerminal();
   }
 
   // The list of the screen when the destination is its target (also a stream, A-12), else a read of the destination alone.
@@ -331,19 +319,25 @@ export class HandoffPane {
     this.reload(true);
   }
 
-  // The read of the history belongs to this pane only while it shows a session in view; otherwise it is let go (a read that another owner took is not touched).
-  private syncChat() {
+  // Where the terminal of a session comes from, or null when it cannot be shown: the session has no terminal (the launch named none and the list has none), or it runs on a saved environment whose stream is not the one the Orca screen holds (A-12). This machine's terminal is mirrored.
+  private sourceOf(s: Session): TermSource | null {
+    const handle = s.handle ?? this.rowOf(s)?.handle ?? null;
+    if (handle === null) return null;
+    if (s.environment === null) return { kind: "mirror", handle, path: s.path, environment: null };
+    return streamsEnvironment(s.environment) ? { kind: "stream", handle, path: s.path, environment: s.environment } : null;
+  }
+
+  // The terminal belongs to this pane while it shows a session that is in view (the window shown, the pane on the screen); otherwise its stream or reads are let go. Without a terminal the note says so.
+  private syncTerminal() {
     const s = this.open ? this.session() : undefined;
-    const paneKey = s ? this.paneKeyOf(s) : null;
-    if (!s || paneKey === null) {
-      this.chatKey = null;
-      closeChat(this.chat);
-      return;
+    const sess = this.sess;
+    const source = s ? this.sourceOf(s) : null;
+    if (sess) {
+      sess.term.hidden = source === null;
+      sess.note.hidden = source !== null;
     }
-    const want = JSON.stringify([s.environment, s.path, paneKey]);
-    if (this.chatKey === want && isChatOwner(this.chat)) return;
-    this.chatKey = want;
-    openChat(this.chat, s.environment, s.path, paneKey, this.rowOf(s)?.group === "working");
+    if (!sess || !source || document.hidden || sess.term.getClientRects().length === 0) return hideTerminals(this.owner);
+    showTerminals([{ id: source.handle, source, host: sess.term }], source.handle, this.owner);
   }
 
   // The pane of the session: the one the launch named, else the one of its row in the list.
@@ -358,6 +352,7 @@ export class HandoffPane {
       if (this.drawn) this.host.root.replaceChildren();
       this.drawn = "";
       this.el = null;
+      this.sess = null;
       return;
     }
     const signature = `${this.mode()}/${this.itemKey}`;
@@ -379,7 +374,7 @@ export class HandoffPane {
     draw();
   }
 
-  // The parts both modes have: the form with its message, the files attached, the field of the instruction and the arrow button that sends it.
+  // The parts of the form: the form with its message, the files attached, the field of the instruction and the arrow button that sends it.
   private parts() {
     const form = tag("form", "ho-form");
     const error = tag("p", "pending fail");
@@ -398,7 +393,7 @@ export class HandoffPane {
     input.oninput = () => this.updateSend();
     form.onsubmit = (e) => {
       e.preventDefault();
-      this.submit();
+      this.handOver();
     };
     return { form, error, cardBox, strip, input, send };
   }
@@ -573,45 +568,39 @@ export class HandoffPane {
     parts.input.onkeydown = (e) => {
       if (e.key !== "Enter" || composing(e) || !(isMac ? e.metaKey : e.ctrlKey)) return;
       e.preventDefault();
-      this.submit();
+      this.handOver();
     };
     // The field takes the height that is left, and the arrow is over its bottom right corner.
     const compose = tag("div", "ho-compose");
     compose.append(parts.input, parts.send);
     parts.form.classList.add("ho-fill");
     parts.form.append(notice, fresh, freshBox, claudeNote, parts.error, parts.cardBox, parts.strip, compose);
-    const main = tag("div", "ho-main ho-whole");
-    main.append(head, parts.form);
+    this.formMain.replaceChildren(head, parts.form);
+    this.sess = null;
     this.el = { notice, chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: parts.cardBox, strip: parts.strip, error: parts.error, input: parts.input, send: parts.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
     this.restoreDraft(parts.input);
-    this.host.root.replaceChildren(main);
+    this.host.root.replaceChildren(this.formMain);
   }
 
+  // The session: its header, and the terminal under it (or the note while the terminal cannot be shown).
   private buildSession() {
-    const sessionTitle = tag("div", "ho-session-title");
+    const title = tag("div", "ho-session-title");
     const open = iconButton("Orca の画面で開く", OPEN_SVG);
     open.onclick = () => openInOrca(this.session() ? this.paneKeyOf(this.session()!) : null);
     const close = iconButton("閉じる", CLOSE_SVG);
     close.onclick = () => this.forget();
     const head = tag("div", "ho-head ho-session-head");
-    head.append(sessionTitle, open, close);
+    head.append(title, open, close);
     const notice = tag("div", "ho-notice");
-    const note = tag("p", "ho-note", "セッションを始めました。履歴は Orca の画面で見られます。");
-    const main = tag("div", "ho-main");
-    main.append(head, notice, this.chat.status, this.chat.box, note);
-    const parts = this.parts();
-    parts.input.rows = 2;
-    const composer = tag("div", "composer");
-    composer.append(parts.input, parts.send);
-    parts.form.append(parts.error, parts.strip, composer);
-    const foot = tag("div", "ho-foot");
-    foot.append(parts.form);
-    this.el = { notice, sessionTitle, note, strip: parts.strip, error: parts.error, input: parts.input, send: parts.send };
-    this.restoreDraft(parts.input);
-    this.host.root.replaceChildren(main, foot);
-    parts.input.focus();
+    const note = tag("p", "ho-note", "セッションを始めました。画面は Orca で見られます。");
+    const term = tag("div", "ho-term");
+    const main = tag("div", "ho-main ho-whole");
+    main.append(head, notice, term, note);
+    this.el = null;
+    this.sess = { notice, title, note, term };
+    this.host.root.replaceChildren(main);
   }
 
   // The text of a failed request or post goes back to its item: to the field when the item is in view and the field is empty (it was built again if the owner left and came back), else it waits for its own item.
@@ -629,19 +618,21 @@ export class HandoffPane {
   }
 
   private update() {
-    if (!this.el) return;
-    this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice());
-    if (this.mode() === "form") {
-      const form = this.form();
-      this.settle(form);
-      this.part("dest", [chosenProject, form.fresh, form.name, form.worktree, form.base, form.branchMode, form.branch, form.existing, this.destination(), this.environments(), this.overview?.projects, this.overview?.worktrees], () => this.drawDest());
-      this.drawCard();
-    } else {
-      const s = this.session()!;
+    if (this.sess) {
+      const s = this.session();
+      if (!s) return;
       const row = this.rowOf(s);
       if (row) s.seen = true;
+      this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice(this.sess!.notice));
       this.part("session", [s, row, this.overview?.state, this.overview?.worktrees, Math.floor(Date.now() / 60_000)], () => this.drawSessionHead());
+      return;
     }
+    if (!this.el) return;
+    this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice(this.el!.notice));
+    const form = this.form();
+    this.settle(form);
+    this.part("dest", [chosenProject, form.fresh, form.name, form.worktree, form.base, form.branchMode, form.branch, form.existing, this.destination(), this.environments(), this.overview?.projects, this.overview?.worktrees], () => this.drawDest());
+    this.drawCard();
     const key = this.itemKey;
     const files = key === null ? [] : (attached.get(key) ?? []);
     this.part("attachments", files.map((a) => a.id), () =>
@@ -665,11 +656,11 @@ export class HandoffPane {
     this.update();
   }
 
-  private drawNotice() {
+  private drawNotice(box: HTMLElement) {
     const text = noticeOf(this.overview);
     const row = tag("div", this.overview?.state === "failed" ? "pending fail" : "pending");
     row.append(tag("span", "sp", text ?? ""));
-    this.el!.notice.replaceChildren(...(text ? [row] : []));
+    box.replaceChildren(...(text ? [row] : []));
   }
 
   // The worktrees of the project chosen, its own folder (`isMain`) first.
@@ -786,18 +777,15 @@ export class HandoffPane {
   // The header of a session: "{repo} ・ {branch}", and its state with the time. Until the list holds the session (a new one) it says it is being checked.
   private drawSessionHead() {
     const s = this.session();
-    const el = this.el;
-    if (!s || !el?.sessionTitle) return;
+    const sess = this.sess;
+    if (!s || !sess) return;
     const row = this.rowOf(s);
     const worktree = this.overview?.worktrees.find((w) => w.path === s.path);
     const name = row ? `${row.repo} ・ ${row.branch}` : worktree ? worktreeLabel(worktree) : s.path;
     const time = row ? elapsed(row.atMs, Date.now(), row.group === "done") : "";
     // Until its row is in the list a new session is being checked; once it was there and a ready list lacks it, it has ended.
     const state = row ? [STATUS_LABELS[row.status], time].filter(Boolean).join(" ・ ") : s.seen && this.overview?.state === "ready" ? "終了" : "確認中";
-    el.sessionTitle!.replaceChildren(tag("span", "ho-session-name", name), tag("span", "ho-session-state", state));
-    el.note!.hidden = this.paneKeyOf(s) !== null;
-    this.chat.box.hidden = this.paneKeyOf(s) === null;
-    setChatWorking(this.chat, row?.group === "working");
+    sess.title.replaceChildren(tag("span", "ho-session-name", name), tag("span", "ho-session-state", state));
   }
 
   private claudeReady() {
@@ -807,28 +795,13 @@ export class HandoffPane {
   private updateSend() {
     const el = this.el;
     if (!el) return;
-    const s = this.session();
-    // The arrow is named for what it does.
-    const name = (label: string) => {
-      if (el.send.getAttribute("aria-label") !== label) el.send.setAttribute("aria-label", label);
-    };
-    const hasFiles = this.itemKey !== null && (attached.get(this.itemKey)?.length ?? 0) > 0;
-    if (s) {
-      name("送る");
-      el.input.disabled = this.busy;
-      // A session with no terminal can be read but takes no post.
-      const target = (s.handle ?? this.rowOf(s)?.handle ?? null) !== null;
-      el.send.disabled = this.busy || this.overview?.state === "missing" || !(el.input.value.trim() || hasFiles) || !target;
-    } else {
-      // Before a hand-over the field is the instruction. Nothing goes to Orca without one, a project, and its own folder or a worktree to make; and Claude summarises the card, so it must be usable while the card is there. The arrow stops while the hand-over is on its way, and so while the summary is made.
-      const form = this.form();
-      const needsClaude = !this.removed && this.card !== null;
-      const ready = !needsClaude || this.claudeReady();
-      name("Orca に渡す");
-      el.input.disabled = this.busy;
-      el.send.disabled = this.busy || !ready || this.overview?.state === "missing" || !el.input.value.trim() || !this.target(form);
-      el.claudeNote!.hidden = ready;
-    }
+    // Before a hand-over the field is the instruction. Nothing goes to Orca without one, a project, and its own folder or a worktree to make; and Claude summarises the card, so it must be usable while the card is there. The arrow stops while the hand-over is on its way, and so while the summary is made.
+    const form = this.form();
+    const needsClaude = !this.removed && this.card !== null;
+    const ready = !needsClaude || this.claudeReady();
+    el.input.disabled = this.busy;
+    el.send.disabled = this.busy || !ready || this.overview?.state === "missing" || !el.input.value.trim() || !this.target(form);
+    el.claudeNote!.hidden = ready;
     const error = this.itemKey === null ? "" : (this.errors.get(this.itemKey) ?? "");
     el.error.hidden = !error;
     el.error.textContent = error;
@@ -861,12 +834,6 @@ export class HandoffPane {
     const path = await invoke("orca_worktree_create", { project, name, branch, base, environment });
     made.set(key, { project, name, branch, base, environment, path });
     return path;
-  }
-
-  // The press of the button in the field: the hand-over, or a post to the session after it.
-  private submit() {
-    if (this.session()) this.sendMore();
-    else this.handOver();
   }
 
   // Hands the instruction over as it was written: Claude summarises the content first when the card is there (a failure ends it before anything starts), then the worktree is made when 新規作成 is chosen (a failure ends it before anything starts), the files go into the worktree of the session, and the session starts once with the instruction, the paths of the files, the summary and the content.
@@ -905,41 +872,6 @@ export class HandoffPane {
     } catch (e) {
       this.errors.set(key, String(e));
       this.keepText(key, instruction);
-    } finally {
-      this.sending.delete(key);
-    }
-    if (this.itemKey === key) {
-      this.sync();
-      this.update();
-      this.el?.input.focus();
-    }
-  }
-
-  // A post to the session shown: more instructions, with the files attached to the field. It is never tried again, and a failure keeps the text.
-  private async sendMore() {
-    const el = this.el;
-    const key = this.itemKey;
-    const known = this.session();
-    if (!el || key === null || !known || this.busy) return;
-    const text = el.input.value;
-    const files = attached.get(key) ?? [];
-    if (!text.trim() && !files.length) return;
-    const handle = known.handle ?? this.rowOf(known)?.handle ?? null;
-    if (handle === null) return;
-    this.sending.add(key);
-    this.errors.delete(key);
-    this.updateSend();
-    try {
-      const body = files.length ? withFiles(text, await uploadAttachments(files, known.path, known.environment)) : text;
-      await invoke("orca_send", { handle, text: body, environment: known.environment });
-      el.input.value = "";
-      const left = (attached.get(key) ?? []).filter((a) => !files.includes(a));
-      if (left.length) attached.set(key, left);
-      else attached.delete(key);
-      this.lastRead = 0;
-    } catch (e) {
-      this.errors.set(key, String(e));
-      this.keepText(key, text);
     } finally {
       this.sending.delete(key);
     }

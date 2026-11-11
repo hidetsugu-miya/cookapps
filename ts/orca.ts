@@ -709,7 +709,7 @@ function adopt(read: OrcaOverview) {
   // A terminal that left Orca's list leaves the tabs, with its screen.
   if (!keep && view.state === "ready") {
     const held = liveHandles();
-    pruneTerminals((handle) => held.has(handle));
+    pruneTerminals((handle, source) => source.environment !== view?.target || held.has(handle));
   }
   if (view.state === "ready") forgetGone();
   claimStarted();
@@ -842,6 +842,9 @@ function refresh() {
 
 // The last read, for a side pane to draw at once while it reads again.
 export const heldOrca = () => view;
+
+// Whether the stream of the list is that of the saved environment `environment`: only then can a pane of A-9 stream the terminal of a session on it (A-12).
+export const streamsEnvironment = (environment: string) => streaming() && view?.target === environment;
 
 // Reads the list for a side pane (the agents with their terminals, and the worktrees), whatever screen is shown, and gives what is held after it. `force` starts the read although another is on its way (the first read of a pane and the read after a send); the poll of a shown session does not. The first read of the app asks for the target too.
 export async function refreshOrca(force: boolean) {

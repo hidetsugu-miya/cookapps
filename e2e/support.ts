@@ -12,8 +12,6 @@ import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
-import type { OrcaChatEvent } from "../ts/bindings/OrcaChatEvent";
-import type { OrcaChatItem } from "../ts/bindings/OrcaChatItem";
 import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
 import type { OrcaProject } from "../ts/bindings/OrcaProject";
 import type { OrcaRow } from "../ts/bindings/OrcaRow";
@@ -767,47 +765,6 @@ const deliver = (command: string, event: unknown, nth: number) =>
 // A-12: an event of the stream of the list (`orca_stream_open`), and of the terminal shown (`orca_stream_terminal`).
 export const sendStream = (event: OrcaStreamEvent, nth = -1) => deliver("orca_stream_open", event, nth);
 export const sendTerm = (event: OrcaTermEvent, nth = -1) => deliver("orca_stream_terminal", event, nth);
-
-// The session history (A-7): the items the screen draws, and the delivery of an event to the channel the screen gave `orca_chat_open` (the last one, or the `nth` counting from 0).
-export const chatUser = (id: string, text: string, context: Extract<OrcaChatItem, { kind: "user" }>["context"] = null): OrcaChatItem => ({ kind: "user", id, text, context });
-export const chatAssistant = (id: string, text: string): OrcaChatItem => ({ kind: "assistant", id, text });
-export const chatTools = (id: string, summary: string, calls: [string, string][], runningSummary: string | null = null): OrcaChatItem => ({
-  kind: "tools",
-  id,
-  summary,
-  runningSummary,
-  calls: calls.map(([name, detail]) => ({ name, detail })),
-});
-export const chatQuestion = (id: string, answer: string | null, waiting: boolean, multi = false): OrcaChatItem => ({
-  kind: "question",
-  id,
-  questions: [{ text: "Which one?", options: [{ label: "First", description: "the first way" }, { label: "Second", description: "" }], multi, answer }],
-  waiting,
-});
-// A question with several parts (A-11): each is `[text, multi, labels]`, without an answer.
-export const chatQuestions = (id: string, waiting: boolean, parts: [string, boolean, string[]][]): OrcaChatItem => ({
-  kind: "question",
-  id,
-  questions: parts.map(([text, multi, labels]) => ({ text, multi, options: labels.map((label) => ({ label, description: "" })), answer: null })),
-  waiting,
-});
-export const chatItems = (items: OrcaChatItem[], start = 0, hasMore = false): OrcaChatEvent => ({ kind: "items", start, items, hasMore });
-export const chatStatus = (state: "connecting" | "live" | "reconnecting" | "unavailable", message = ""): OrcaChatEvent => ({ kind: "status", state, message });
-
-// The arguments of every `orca_chat_open` so far, with the channel (an object that cannot cross the driver) as `true`.
-export const chatOpens = () =>
-  browser.execute(() => {
-    const calls = (window as unknown as { __e2e_calls__: Record<string, { environment: string | null; path: string; paneKey: string; channel?: unknown }[]> }).__e2e_calls__.orca_chat_open ?? [];
-    return calls.map((c) => ({ ...c, channel: !!c.channel }));
-  });
-
-export const sendChat = (event: OrcaChatEvent, nth = -1) => deliver("orca_chat_open", event, nth);
-
-// Waits until `orca_chat_open` was called `times` times; the calls are read with `chatOpens`.
-export async function waitForOpens(times = 1) {
-  await browser.waitUntil(async () => (await chatOpens()).length >= times, { timeoutMsg: `orca_chat_open was not called ${times} time(s)` });
-  return chatOpens();
-}
 
 // ---- files pasted or dropped (A-10) ----
 
