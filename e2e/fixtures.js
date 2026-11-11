@@ -50,6 +50,7 @@ const answers = {
   slack_load: { workspaces: [], recent: [] },
   slack_timeline: { messages: [], watched: [], failed: [], missing: [], refreshSecs: 120, pendingChannels: 0, unreadTotal: 0, unreadChannels: [], arrived: [], side: [] },
   slack_mark_read: true,
+  slack_channel_history: [],
   slack_watch: true,
   slack_unwatch: null,
   slack_watch_seen: true,

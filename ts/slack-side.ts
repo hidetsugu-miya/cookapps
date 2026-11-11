@@ -1,6 +1,6 @@
 // The Slack screen's side menu (S-19): a column at the left of the list and of the thread, like the Orca screen's list of projects.
 // The two sections of the list ("未読メッセージ" with the number of unread messages, "ウォッチ"), and under them each workspace's joined channels by name, bold when unread.
-// A channel shows the button that keeps it off the list (S-9) while it is hovered or has the focus. Pressing a channel does nothing yet.
+// A channel shows the button that keeps it off the list (S-9) while it is hovered or has the focus. Pressing a channel opens its history (S-20) and the channel stays pressed.
 // Drawing only: what is held and what each press does belong to slack-list.ts. It is drawn again only when what it shows changes, and the focus stays.
 import type { SideWorkspace } from "./bindings/SideWorkspace";
 import { $, tag } from "./dom.js";
@@ -14,11 +14,14 @@ export interface SideState {
   section: SlackSection;
   // The unread messages (the Slack button's badge counts them too).
   unread: number;
+  // The channel whose history is shown (S-20), as `{teamId}/{channel}`; none while a section is.
+  channel: string | null;
   workspaces: SideWorkspace[];
 }
 
 export interface SideActions {
   choose: (section: SlackSection) => void;
+  open: (teamId: string, team: string, channel: SideWorkspace["channels"][number]) => void;
   hide: (teamId: string, channel: string, name: string) => void;
 }
 
@@ -38,20 +41,22 @@ function modeButton(section: SlackSection, state: SideState, actions: SideAction
   const button = tag("button", "slack-side-mode");
   button.type = "button";
   button.dataset.key = section;
-  button.setAttribute("aria-pressed", String(state.section === section));
+  button.setAttribute("aria-pressed", String(state.channel === null && state.section === section));
   button.append(iconOf(section === "unread" ? MAIL_SVG : BOOKMARK_SVG), tag("span", "slack-side-name", section === "unread" ? "未読メッセージ" : "ウォッチ"));
   if (section === "unread" && state.unread > 0) button.append(countOf(state.unread));
   button.onclick = () => actions.choose(section);
   return button;
 }
 
-// A channel: a button with its mark (# or a lock), its name and its unread number, and beside it (not in it: a button is not put in a button) the one that keeps it off the list.
-function channelNode(teamId: string, c: SideWorkspace["channels"][number], actions: SideActions) {
+// A channel: a button (pressed while its history is shown) with its mark (# or a lock), its name and its unread number, and beside it (not in it: a button is not put in a button) the one that keeps it off the list.
+function channelNode(state: SideState, w: SideWorkspace, c: SideWorkspace["channels"][number], actions: SideActions) {
+  const teamId = w.teamId;
   const item = tag("div", "slack-side-item");
   const button = tag("button", c.unread > 0 ? "slack-side-btn unread" : "slack-side-btn");
   button.type = "button";
   button.dataset.key = `${teamId}/${c.id}`;
-  button.setAttribute("aria-pressed", "false");
+  button.setAttribute("aria-pressed", String(state.channel === `${teamId}/${c.id}`));
+  button.onclick = () => actions.open(teamId, w.team, c);
   button.append(iconOf(c.private ? LOCK_SVG : HASH_SVG), tag("span", "slack-side-name", c.name));
   if (c.unread > 0) button.append(countOf(c.unread));
   const hide = tag("button", "icon-btn slack-side-hide");
@@ -84,7 +89,7 @@ export function drawSlackSide(state: SideState, actions: SideActions) {
     modeButton("unread", state, actions),
     modeButton("watch", state, actions),
     ...(groups.length ? [tag("div", "slack-side-sep")] : []),
-    ...groups.flatMap((w) => [groupNode(w), ...w.channels.map((c) => channelNode(w.teamId, c, actions))]),
+    ...groups.flatMap((w) => [groupNode(w), ...w.channels.map((c) => channelNode(state, w, c, actions))]),
   );
   box.scrollTop = top;
   const target = focused ? box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`) : null;

@@ -1418,6 +1418,8 @@ const THREAD_SEEN_MAX: usize = 500;
 const INFO_BUDGET: usize = 40;
 /// Messages `conversations.history` is asked for per channel.
 const HISTORY_LIMIT: &str = "20";
+/// Messages of a channel's history (S-20) that one read asks `conversations.history` for.
+const CHANNEL_HISTORY_LIMIT: &str = "50";
 /// Channels of one workspace whose history is read at the same time.
 const HISTORY_CONCURRENCY: usize = 4;
 /// The most channels of one workspace whose `conversations.history` one read asks for (Tier 3 allows about 50 a minute).
@@ -3207,6 +3209,20 @@ fn raw_from(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
         has_files: m["files"].as_array().is_some_and(|f| !f.is_empty()),
         source: Arc::new(thread_slim(m)),
     })
+}
+
+/// The messages of a `conversations.history` answer for a channel's history (S-20): the listed ones (`is_listed`), oldest first, none twice.
+fn history_rows(reply: &Value, team_id: &str, channel: &Channel) -> Vec<Raw> {
+    let mut rows = newest_first(
+        reply["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| raw_of(team_id, channel, m))
+            .collect(),
+    );
+    rows.reverse();
+    rows
 }
 
 /// `all` newest first by `ts` as a number, without a message listed twice (the same team, channel and `ts`).
@@ -5396,6 +5412,74 @@ pub async fn slack_thread(
         messages,
         truncated: more,
     })
+}
+
+/// The newest `CHANNEL_HISTORY_LIMIT` messages of a channel the workspace's user has joined (S-20), oldest first, drawn as the rows of the list are, with the names of their senders.
+/// It reads `conversations.history` of that one channel and changes no read position. `unread` is false for every message: the history is not the unread list.
+#[tauri::command]
+pub async fn slack_channel_history(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    state: State<'_, SlackState>,
+    team_id: String,
+    channel: String,
+) -> Result<Vec<TimelineMessage>, String> {
+    let command = "slack_channel_history";
+    if token_key(&team_id).is_err() || !valid_channel(&channel) {
+        return Err(log_failure(command, &team_id, BAD_TARGET));
+    }
+    let workspaces = load_workspaces(&config_dir(&app)?)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    let workspace = workspaces
+        .iter()
+        .find(|w| w.team_id == team_id)
+        .ok_or_else(|| log_failure(command, &team_id, NO_WORKSPACE))?;
+    // The side menu lists the channels from this cache, so the channel is held; a name that is not held cannot be given.
+    let known = state
+        .channels
+        .lock()
+        .unwrap()
+        .get(&team_id)
+        .and_then(|(_, list)| list.iter().find(|c| c.id == channel).cloned())
+        .ok_or_else(|| log_failure(command, &team_id, "チャンネルが見つかりません"))?;
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    let form = [
+        ("channel", channel.clone()),
+        ("limit", CHANNEL_HISTORY_LIMIT.to_owned()),
+    ];
+    let reply = call(
+        auth.http(),
+        &token,
+        "conversations.history",
+        Payload::Form(&form),
+    )
+    .await
+    .map_err(|e| log_failure(command, &team_id, read_error(e, &workspace.team)))?;
+    let rows = history_rows(&reply, &team_id, &known);
+
+    let mut seen = HashSet::new();
+    let wanted: Vec<(String, String, String)> = needing_lookup(
+        rows.iter()
+            .flat_map(people_of)
+            .filter(|user| seen.insert(user.clone())),
+        |user| state.timeline.needs_lookup(&team_id, user),
+        USER_LOOKUPS,
+    )
+    .into_iter()
+    .map(|user| (team_id.clone(), token.clone(), user))
+    .collect();
+    let teams = vec![(team_id.clone(), token.clone())];
+    tokio::join!(
+        lookup_users(auth.http(), &state.timeline, wanted),
+        lookup_groups(API_URL, auth.http(), &state.timeline, teams),
+    );
+    Ok(rows
+        .iter()
+        .filter_map(|raw| message_of(&state.timeline, &workspaces, raw, false))
+        .collect())
 }
 
 /// Posts `text` as a reply in the thread `thread_ts` of `channel`, as S-1 posts (the same checks, `unfurl_*` off, the same Japanese errors).
@@ -9077,5 +9161,40 @@ mod tests {
         let kept_off = [hidden("T1", "C1")];
         assert!(list(&kept_off, &[]).arrived.is_empty());
         assert!(list(&[], &[]).arrived.is_empty());
+    }
+
+    #[test]
+    fn a_channels_history_is_oldest_first_with_only_the_listed_messages_once_each() {
+        let post =
+            |ts: &str, text: &str| json!({"type": "message", "ts": ts, "user": "U1", "text": text});
+        let mut joined = post("12.000001", "joined");
+        joined["subtype"] = json!("channel_join");
+        let mut broadcast = post("13.000001", "also in the channel");
+        broadcast["subtype"] = json!("thread_broadcast");
+        broadcast["thread_ts"] = json!("9.000001");
+        let reply = json!({"ok": true, "messages": [
+            broadcast,
+            post("11.000001", "b"),
+            joined,
+            post("11.000001", "b"),
+            post("9.000001", "a"),
+            post("10.000001", "   "),
+        ]});
+        let rows = history_rows(&reply, "T1", &channel("C1"));
+        let seen: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|r| (r.ts.as_str(), r.text.as_str()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("9.000001", "a"),
+                ("11.000001", "b"),
+                ("13.000001", "also in the channel")
+            ]
+        );
+        assert_eq!(rows[2].thread_ts.as_deref(), Some("9.000001"));
+        assert_eq!(rows[0].channel_name, "name C1");
+        assert!(history_rows(&json!({"ok": true}), "T1", &channel("C1")).is_empty());
     }
 }

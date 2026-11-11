@@ -42,6 +42,7 @@ import type { Target } from "./bindings/Target";
 import type { TerminalThemes } from "./bindings/TerminalThemes";
 import type { ThemeSelection } from "./bindings/ThemeSelection";
 import type { Timeline } from "./bindings/Timeline";
+import type { TimelineMessage } from "./bindings/TimelineMessage";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import type { Todo } from "./bindings/Todo";
 import type { TodoDraftEdit } from "./bindings/TodoDraftEdit";
@@ -168,6 +169,8 @@ export interface Commands {
   slack_thread_seen: { args: { teamId: string; channel: string; ts: string; latestTs: string }; result: boolean };
   // The whole thread starting at `ts`, oldest first. For a reply pass its `threadTs`, not its own `ts`.
   slack_thread: { args: { teamId: string; channel: string; ts: string }; result: SlackThread };
+  // The newest messages of a joined channel (S-20), oldest first, drawn as the list's rows (`unread` false); it changes no read position.
+  slack_channel_history: { args: { teamId: string; channel: string }; result: TimelineMessage[] };
   // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched).
   slack_reply: { args: { teamId: string; channel: string; threadTs: string; text: string }; result: boolean };
   // The attached images (a thread file's `thumbUrl`) as data: URIs by URL; the token goes to files.slack.com only. What cannot be fetched is not in the map.

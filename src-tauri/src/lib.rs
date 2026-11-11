@@ -265,6 +265,7 @@ pub fn run() {
             slack::slack_hide_channel,
             slack::slack_unhide_channel,
             slack::slack_thread,
+            slack::slack_channel_history,
             slack::slack_reply,
             slack::slack_file_images,
             slack::slack_icons,
