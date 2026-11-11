@@ -14,6 +14,7 @@ pub mod orca;
 pub mod orca_answer;
 pub mod orca_attach;
 pub mod orca_chat;
+pub mod orca_diff;
 pub mod orca_e2ee;
 pub mod orca_files;
 pub mod orca_handoff;
@@ -320,6 +321,7 @@ pub fn run() {
             orca_files::orca_file_read,
             orca_files::orca_file_write,
             orca_files::orca_file_download,
+            orca_files::orca_file_diff,
             orca_files::editor_settings,
             orca_files::editor_settings_set,
             fonts::font_settings,

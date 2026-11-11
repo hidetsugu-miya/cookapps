@@ -6,6 +6,7 @@
 //! A file is saved with `files.writeIfUnchanged`: Orca writes only when the disk still holds the text that was read, by a signature of it (`disk_signature`, the one of Orca's `disk-baseline-signature.js`), and answers `diskConflict` when it does not, so a file changed elsewhere is never overwritten.
 //! The text goes through a textarea, which turns CRLF into LF and cannot hold a lone CR, so only a file with no CR or with a CRLF at every line end is opened (`line_ending`), and a CRLF file is written back with CRLF.
 //! The time of the automatic save is saved in `editor-settings.json` in the app config directory.
+//! The difference of a file from HEAD (A-24, `orca_file_diff`) is Orca's `git.diff` (`staged` false, `compareAgainstHead` true): the text at HEAD and the text in the working tree, which `orca_diff.rs` turns into rows.
 //! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
 
 use std::{
@@ -30,6 +31,7 @@ use crate::{
     orca::{forget_worktree_host, worktree_host, worktree_host_cached},
     orca_attach::{worktree_params, Rpc},
     orca_chat::{CallError, Connection},
+    orca_diff::{diff_rows, lines_of, OrcaDiffChange, OrcaDiffRow},
     orca_language::{detect_language, highlight_name},
 };
 
@@ -56,6 +58,7 @@ const MAX_NAME: usize = 255;
 const TEMP_AFFIX: usize = 1 + 4 + 5;
 /// How many names of a temporary file are tried before the download gives up.
 const TEMP_TRIES: u32 = 1000;
+const DIFF_TOO_LARGE: &str = "差分が大きすぎて表示できません";
 const NOT_LISTED: &str = "ファイルの一覧を読めません";
 
 // ---- what the screen gets ----
@@ -90,6 +93,21 @@ pub struct OrcaFileText {
     pub content: String,
     pub crlf: bool,
     pub signature: String,
+    pub language: String,
+    pub highlight: Option<String>,
+}
+
+/// The difference of a file from HEAD for the diff tab (A-24): the lines of HEAD and of the working tree (LF, no line end; the rows hold the numbers of the lines), the rows of the side by side view and of the inline view, the blocks of changes, and the language of the file as `OrcaFileText` has it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaFileDiff {
+    pub old_lines: Vec<String>,
+    pub new_lines: Vec<String>,
+    pub side: Vec<OrcaDiffRow>,
+    pub inline: Vec<OrcaDiffRow>,
+    pub changes: Vec<OrcaDiffChange>,
     pub language: String,
     pub highlight: Option<String>,
 }
@@ -274,6 +292,8 @@ fn reason(error: CallError) -> String {
         "ファイルが見つかりません".into()
     } else if error.detail == "binary_file" {
         "バイナリのファイルは開けません".into()
+    } else if error.detail == "diff_too_large" {
+        DIFF_TOO_LARGE.into()
     } else if error.detail == "invalid_relative_path" {
         "ファイルの場所が正しくありません".into()
     } else {
@@ -372,6 +392,69 @@ async fn read(rpc: &mut impl Rpc, path: &str, relative: &str) -> Result<OrcaFile
         .await
         .map_err(reason)?;
     parse_text(&answer, relative)
+}
+
+// ---- the diff ----
+
+/// The diff tab's data from an answer of `git.diff`: the text at HEAD against the text in the working tree. An answer for a binary file, one Orca marks as too large to draw, a side the editor would not take (over `MAX_TEXT`) or a side that is not UTF-8 is refused with the reason, and no text is returned. A file that is not in the working tree any more (`modifiedDeleted`) is its HEAD text against nothing, and one that git does not know has no text at HEAD.
+fn parse_diff(result: &Value, relative: &str) -> Result<OrcaFileDiff, String> {
+    let marked = |key: &str| !matches!(result[key], Value::Null | Value::Bool(false));
+    if result["kind"] == "binary"
+        || marked("originalIsBinary")
+        || marked("modifiedIsBinary")
+        || marked("isImage")
+    {
+        return Err("バイナリのファイルの差分は表示できません".into());
+    }
+    if marked("tooLarge") || marked("largeDiffRenderLimit") {
+        return Err(DIFF_TOO_LARGE.into());
+    }
+    let deleted = result["modifiedDeleted"] == true;
+    let old = result["originalContent"]
+        .as_str()
+        .ok_or("差分を読めません")?;
+    let new = match result["modifiedContent"].as_str() {
+        Some(new) => new,
+        None if deleted => "",
+        None => return Err("差分を読めません".into()),
+    };
+    if old.len() > MAX_TEXT || new.len() > MAX_TEXT {
+        return Err(format!(
+            "{} KiB を超えるファイルの差分は表示できません",
+            MAX_TEXT / 1024
+        ));
+    }
+    // Orca decodes bytes that are not UTF-8 into U+FFFD.
+    if old.contains('\u{FFFD}') || new.contains('\u{FFFD}') {
+        return Err("UTF-8 ではないファイルの差分は表示できません".into());
+    }
+    let (old_lines, new_lines) = (lines_of(old), lines_of(new));
+    let rows = diff_rows(&old_lines, &new_lines);
+    let language = detect_language(relative, if new.is_empty() { old } else { new });
+    let texts = |lines: Vec<(String, bool)>| lines.into_iter().map(|(text, _)| text).collect();
+    Ok(OrcaFileDiff {
+        old_lines: texts(old_lines),
+        new_lines: texts(new_lines),
+        side: rows.side,
+        inline: rows.inline,
+        changes: rows.changes,
+        language: language.to_owned(),
+        highlight: highlight_name(language).map(str::to_owned),
+    })
+}
+
+/// Asks Orca for the file's text at HEAD and in the working tree.
+async fn git_diff(rpc: &mut impl Rpc, path: &str, relative: &str) -> Result<Value, String> {
+    rpc.call(
+        "git.diff",
+        worktree_params(
+            path,
+            None,
+            json!({"filePath": relative, "staged": false, "compareAgainstHead": true}),
+        ),
+    )
+    .await
+    .map_err(reason)
 }
 
 /// What Orca answered to `files.writeIfUnchanged`: `{ok: false, diskConflict}` is a refusal, anything else (`{ok: true}`, `{ok: true, unchanged: true}` for the same text, or an old host's empty answer) a write.
@@ -751,6 +834,25 @@ pub async fn orca_file_read(
         read(&mut connection, &path, &relative).await
     };
     forgetting(opened.await, &path, environment.as_deref())
+}
+
+/// The difference of the file `relative` of the worktree at `path` from HEAD, for the diff tab (A-24). The comparison runs off the async threads, because it is work for the processor.
+#[tauri::command]
+pub async fn orca_file_diff(
+    path: String,
+    relative: String,
+    environment: Option<String>,
+) -> Result<OrcaFileDiff, String> {
+    check_relative(&relative, false)?;
+    cached_host_of(&path, environment.as_deref()).await?;
+    let asked = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        git_diff(&mut connection, &path, &relative).await
+    };
+    let answer = forgetting(asked.await, &path, environment.as_deref())?;
+    tokio::task::spawn_blocking(move || parse_diff(&answer, &relative))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Saves the text of the editor over the file it was read from, if the disk still holds what was read (`signature`), and answers what happened (A-18). It is not tried again: a failure carries its message.
@@ -1288,6 +1390,111 @@ mod tests {
         assert_eq!(
             read(&mut orca, "/work/a", "a").await.unwrap_err(),
             "Orca に接続できません"
+        );
+    }
+
+    #[test]
+    fn a_diff_is_head_against_the_working_tree() {
+        let got = parse_diff(
+            &json!({"kind": "text", "originalContent": "a\nb\n", "modifiedContent": "a\nc\n",
+                "originalIsBinary": false, "modifiedIsBinary": false}),
+            "src/main.rs",
+        )
+        .unwrap();
+        assert_eq!(got.old_lines, vec!["a", "b"]);
+        assert_eq!(got.new_lines, vec!["a", "c"]);
+        assert_eq!(got.side.len(), 2);
+        assert_eq!(got.changes.len(), 1);
+        assert_eq!(got.language, "rust");
+        assert_eq!(got.highlight.as_deref(), Some("rust"));
+    }
+
+    #[test]
+    fn a_diff_of_a_new_file_or_a_deleted_one_has_a_side_with_no_line() {
+        let added = parse_diff(
+            &json!({"kind": "text", "originalContent": "", "modifiedContent": "x\n"}),
+            "a.rs",
+        )
+        .unwrap();
+        assert!(added.old_lines.is_empty());
+        assert_eq!(added.side.len(), 1);
+        let gone = parse_diff(
+            &json!({"kind": "text", "originalContent": "x\ny\n", "modifiedContent": "", "modifiedDeleted": true}),
+            "a.rs",
+        )
+        .unwrap();
+        assert!(gone.new_lines.is_empty());
+        assert_eq!(gone.side.len(), 2);
+        assert_eq!(gone.language, "rust");
+        let no_text = parse_diff(
+            &json!({"kind": "text", "originalContent": "x\n", "modifiedDeleted": true}),
+            "a.rs",
+        )
+        .unwrap();
+        assert!(no_text.new_lines.is_empty());
+    }
+
+    #[test]
+    fn a_diff_that_cannot_be_drawn_is_refused_with_the_reason() {
+        let text = json!({"originalContent": "a\n", "modifiedContent": "b\n"});
+        let with = |key: &str, value: Value| {
+            let mut answer = text.clone();
+            answer[key] = value;
+            parse_diff(&answer, "a.rs").unwrap_err()
+        };
+        let binary = "バイナリのファイルの差分は表示できません";
+        assert_eq!(with("kind", json!("binary")), binary);
+        assert_eq!(with("originalIsBinary", json!(true)), binary);
+        assert_eq!(with("modifiedIsBinary", json!(true)), binary);
+        assert_eq!(with("isImage", json!(true)), binary);
+        assert_eq!(with("tooLarge", json!(true)), DIFF_TOO_LARGE);
+        assert_eq!(with("largeDiffRenderLimit", json!(100_000)), DIFF_TOO_LARGE);
+        assert!(parse_diff(&json!({"tooLarge": false, "largeDiffRenderLimit": null, "originalContent": "", "modifiedContent": ""}), "a").is_ok());
+        let large = "384 KiB を超えるファイルの差分は表示できません";
+        assert_eq!(
+            with("originalContent", json!("a".repeat(MAX_TEXT + 1))),
+            large
+        );
+        assert_eq!(
+            with("modifiedContent", json!("a".repeat(MAX_TEXT + 1))),
+            large
+        );
+        let big = json!({"originalContent": "a".repeat(MAX_TEXT), "modifiedContent": "a".repeat(MAX_TEXT)});
+        assert!(parse_diff(&big, "a.txt").is_ok());
+        let not_utf8 = "UTF-8 ではないファイルの差分は表示できません";
+        assert_eq!(with("originalContent", json!("a\u{FFFD}")), not_utf8);
+        assert_eq!(with("modifiedContent", json!("a\u{FFFD}")), not_utf8);
+        assert_eq!(
+            parse_diff(&json!({"modifiedContent": ""}), "a").unwrap_err(),
+            "差分を読めません"
+        );
+        assert_eq!(
+            parse_diff(&json!({"originalContent": ""}), "a").unwrap_err(),
+            "差分を読めません"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_diff_asks_for_head_against_the_working_tree() {
+        let mut orca = fake(vec![("git.diff", Ok(json!({"kind": "text"})))]);
+        git_diff(&mut orca, "/work/a", "src/a.rs").await.unwrap();
+        assert_eq!(
+            orca.calls[0],
+            (
+                "git.diff".to_owned(),
+                json!({"worktree": "path:/work/a", "filePath": "src/a.rs", "staged": false, "compareAgainstHead": true})
+            )
+        );
+        let mut orca = fake(vec![(
+            "git.diff",
+            Err((
+                "Orca がエラーを返しました（runtime_error）",
+                "diff_too_large",
+            )),
+        )]);
+        assert_eq!(
+            git_diff(&mut orca, "/work/a", "a").await.unwrap_err(),
+            DIFF_TOO_LARGE
         );
     }
 
