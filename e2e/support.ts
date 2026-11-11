@@ -836,5 +836,5 @@ export const fire = (kind: "paste" | "dragover" | "drop", selector: string, file
     files,
   );
 
-// What `claude_summarize_handoff` answers (A-9): the points of "what to implement", and the name proposed for a new worktree (none by default).
-export const handoffSummary = (points: string[], worktreeName: string | null = null): HandoffSummary => ({ points, worktreeName });
+// What `claude_summarize_handoff` answers (A-9): the points of the summary of the content.
+export const handoffSummary = (points: string[]): HandoffSummary => ({ points });

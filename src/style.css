@@ -1107,15 +1107,6 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .ho-field-title { font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--muted); }
 .ho-seg { display: flex; flex-wrap: wrap; gap: 4px; }
 .ho-seg .ho-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.ho-line { flex: 1 1 100%; text-align: left; }
-.ho-talk { display: flex; flex-direction: column; gap: 12px; padding: 4px 4px 0; }
-.ho-talk:empty { display: none; }
-.ho-talk .pending { margin: 0; }
-.ho-points { margin: 0 0 8px; padding-left: 20px; }
-.ho-points li + li { margin-top: 4px; }
-.ho-agree { height: 32px; padding: 0 16px; border-radius: 16px; font: inherit; }
-.ho-agree:disabled { opacity: .4; cursor: default; }
-.ho-agree:disabled:hover { background: var(--accent); filter: none; }
 .ho-form .chat-note { padding: 0; border-top: 0; background: none; }
 .ho-form .chat-model { margin-top: 0; }
 .ho-foot { flex: none; min-width: 0; padding: 12px 16px 20px; border-top: 1px solid var(--line); background: var(--bar); }

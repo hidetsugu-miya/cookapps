@@ -209,9 +209,8 @@ export interface Commands {
   // Claude's fix of a Todo proposal made from a Slack message: the same conversation, for the name and the description (`content`, `description`) instead of the instructions; each part is null with no lines when it is left alone.
   // The model and effort are those of `slackSummary`. Nothing is saved, not even the request.
   claude_edit_todo_draft: { args: { content: string; description: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoDraftEdit };
-  // A-9: Claude's summary of "what to implement" from the instruction of a handoff, and a proposed name for a new worktree (`worktreeName` is null when it gave none that Orca would take). `context` is quoted to Claude as data, never followed.
-  // `history` is the conversation so far (the summaries as assistant turns, the requests to fix them as user turns) and `revision` the new request to fix the summary (null for the first summary). The model and effort are those of `orcaHandoff`. Nothing is saved.
-  claude_summarize_handoff: { args: { instruction: string; context: HandoffContext | null; history: { role: "user" | "assistant"; text: string }[]; revision: string | null }; result: HandoffSummary };
+  // A-9: Claude's summary of the content to hand over (the mail, the Slack thread or the Todo of the card), as points. `context` is quoted to Claude as data, never followed; the instruction the user wrote is not sent. The model and effort are those of `orcaHandoff`. Nothing is saved.
+  claude_summarize_handoff: { args: { context: HandoffContext }; result: HandoffSummary };
   // Claude's answer to a request about Todo tasks: a short reply and the tasks it proposes (name, date `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, project ID; a project or a date that is not valid is null, and a task with a bad date or name is not returned). Nothing is created in Todoist.
   // `history` is the conversation so far and `instruction` the new request. The Todoist projects of the last load are sent from Rust. The model and effort are those of `todoChat`. Nothing is saved.
   claude_chat_todo: { args: { history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoChatReply };
@@ -237,8 +236,8 @@ export interface Commands {
   orca_terminal_create: { args: { path: string; environment: string | null }; result: OrcaStarted };
   // A-9: makes a new worktree named `name` in the project `project` (an `OrcaProject.key` of the destination's list, checked against it; the name is one plain line, trimmed) of the destination (null: this machine, else a saved environment's name). The answer is the new worktree's absolute path. Never run twice.
   orca_worktree_create: { args: { project: string; name: string; branch: string | null; base: string | null; environment: string | null }; result: string };
-  // A-9: starts a session in a worktree with the summary the owner agreed to (`points`), the text of each file attached to it (`files`, A-10) and, when `context` is not null, the content quoted as data after them. Never run twice.
-  orca_handoff: { args: { destination: HandoffDestination; points: string[]; files: string[]; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
+  // A-9: starts a session in a worktree with the instruction the owner wrote (`instruction`), the text of each file attached to it (`files`, A-10), the summary of the content (`summary`, empty without the content) and, when `context` is not null, the content quoted as data after them. Never run twice.
+  orca_handoff: { args: { destination: HandoffDestination; instruction: string; files: string[]; summary: string[]; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
   // Reads the history of the session in the pane `paneKey` of the worktree `path` (A-7) and sends it to `channel` (an `OrcaChatEvent` at a time) until it is closed or another is opened; only one session is read.
   orca_chat_open: { args: { environment: string | null; path: string; paneKey: string; channel: unknown }; result: null };
   orca_chat_close: { args: undefined; result: null };

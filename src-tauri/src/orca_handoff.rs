@@ -1,4 +1,4 @@
-//! A-9: handing the open mail, Slack thread or Todo to Orca. Rust composes the prompt (the summary the user agreed to, then the content quoted as data in a `cookapps-context` block) and,
+//! A-9: handing the open mail, Slack thread or Todo to Orca. Rust composes the prompt (the instruction the user wrote, the paths of the attached files, the summary of the content, then the content quoted as data in a `cookapps-context` block) and,
 //! when the history of A-7 is reduced, finds that block again and folds it. Both are pure functions with unit tests; nothing here talks to Orca.
 
 use serde::{Deserialize, Serialize};
@@ -125,13 +125,25 @@ pub(crate) fn quoted(context: &HandoffContext) -> String {
     )
 }
 
-/// The header of the agreed summary in the instruction of a handoff.
-const AGREED_HEADER: &str = "実装すること:";
+/// The header of the summary of the content in the prompt of a handoff.
+const SUMMARY_HEADER: &str = "内容の要約:";
 
-/// The instruction of a handoff the user agreed to (A-9): the points of the summary as a list under a header, then the line of each attached file (A-10, the text Orca's upload answered) after a blank line.
-/// A point has its line breaks turned into blanks, its hidden characters taken out and its ends trimmed; a blank point and a blank file line are left out. Refused when no point is left.
-pub fn agreed_instruction(points: &[String], files: &[String]) -> Result<String, String> {
-    let points: Vec<String> = points
+/// The instruction of a handoff (A-9): what the user wrote as it is, then the line of each attached file (A-10, the text Orca's upload answered) after a blank line, then the points of the summary of the content as a list under a header after a blank line.
+/// A point has its line breaks turned into blanks, its hidden characters taken out and its ends trimmed; a blank point and a blank file line are left out. Refused when the instruction is blank.
+pub fn handoff_instruction(
+    instruction: &str,
+    files: &[String],
+    summary: &[String],
+) -> Result<String, String> {
+    if instruction.trim().is_empty() {
+        return Err("指示を書いてください".into());
+    }
+    let files: Vec<&str> = files
+        .iter()
+        .map(|f| f.trim_end())
+        .filter(|f| !f.is_empty())
+        .collect();
+    let points: Vec<String> = summary
         .iter()
         .map(|p| {
             without_hidden(p)
@@ -141,22 +153,21 @@ pub fn agreed_instruction(points: &[String], files: &[String]) -> Result<String,
         })
         .filter(|p| !p.is_empty())
         .collect();
-    if points.is_empty() {
-        return Err("要約がありません".into());
+    if files.is_empty() && points.is_empty() {
+        return Ok(instruction.to_owned());
     }
-    let mut text = AGREED_HEADER.to_owned();
-    for point in &points {
-        text.push_str("\n- ");
-        text.push_str(point);
-    }
-    let files: Vec<&str> = files
-        .iter()
-        .map(|f| f.trim_end())
-        .filter(|f| !f.is_empty())
-        .collect();
+    let mut text = instruction.trim_end().to_owned();
     if !files.is_empty() {
         text.push_str("\n\n");
         text.push_str(&files.join("\n"));
+    }
+    if !points.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(SUMMARY_HEADER);
+        for point in &points {
+            text.push_str("\n- ");
+            text.push_str(point);
+        }
     }
     Ok(text)
 }
@@ -251,58 +262,90 @@ mod tests {
     }
 
     #[test]
-    fn the_agreed_instruction_lists_the_points_then_the_files() {
-        let points = vec!["請求書の金額を直す".to_owned(), "テストを足す".to_owned()];
+    fn the_instruction_is_followed_by_the_files_then_the_summary() {
+        let summary = vec!["請求書の金額が違う".to_owned(), "返信が要る".to_owned()];
         let files = vec![
             "@/w/.orca/drops/a.png\n".to_owned(),
             "  ".to_owned(),
             "@/w/.orca/drops/b.png".to_owned(),
         ];
         assert_eq!(
-            agreed_instruction(&points, &[]).unwrap(),
-            "実装すること:\n- 請求書の金額を直す\n- テストを足す"
+            handoff_instruction("金額を直して\n", &[], &summary).unwrap(),
+            "金額を直して\n\n内容の要約:\n- 請求書の金額が違う\n- 返信が要る"
         );
         assert_eq!(
-            agreed_instruction(&points, &files).unwrap(),
-            "実装すること:\n- 請求書の金額を直す\n- テストを足す\n\n@/w/.orca/drops/a.png\n@/w/.orca/drops/b.png"
+            handoff_instruction("金額を直して", &files, &[]).unwrap(),
+            "金額を直して\n\n@/w/.orca/drops/a.png\n@/w/.orca/drops/b.png"
+        );
+        assert_eq!(
+            handoff_instruction("金額を直して", &files, &summary).unwrap(),
+            "金額を直して\n\n@/w/.orca/drops/a.png\n@/w/.orca/drops/b.png\n\n内容の要約:\n- 請求書の金額が違う\n- 返信が要る"
         );
     }
 
     #[test]
-    fn the_agreed_instruction_keeps_a_point_on_one_line_without_hidden_text() {
-        let points = vec![
+    fn the_instruction_is_passed_as_it_is_without_files_and_summary() {
+        assert_eq!(
+            handoff_instruction("  こう直して\n", &[], &[]).unwrap(),
+            "  こう直して\n"
+        );
+        // A summary or files that hold nothing add nothing.
+        assert_eq!(
+            handoff_instruction("a", &[" ".to_owned()], &[" \n".to_owned()]).unwrap(),
+            "a"
+        );
+    }
+
+    #[test]
+    fn a_summary_point_stays_on_one_line_without_hidden_text() {
+        let summary = vec![
             " a\nb\r\n- c\u{200b}d ".to_owned(),
             "  ".to_owned(),
             "e\u{202e}".to_owned(),
         ];
         assert_eq!(
-            agreed_instruction(&points, &[]).unwrap(),
-            "実装すること:\n- a b - cd\n- e"
+            handoff_instruction("i", &[], &summary).unwrap(),
+            "i\n\n内容の要約:\n- a b - cd\n- e"
         );
     }
 
     #[test]
-    fn the_agreed_instruction_is_refused_without_a_point() {
+    fn a_blank_instruction_is_refused_even_with_files_and_a_summary() {
+        for blank in ["", "  \n\t"] {
+            assert_eq!(
+                handoff_instruction(blank, &["@/w/a.png".to_owned()], &["a".to_owned()])
+                    .unwrap_err(),
+                "指示を書いてください"
+            );
+        }
+    }
+
+    #[test]
+    fn the_prompt_is_the_instruction_the_files_the_summary_and_the_quoted_content_in_that_order() {
+        let instruction = handoff_instruction(
+            "返信案を作って",
+            &["@/w/.orca/drops/a.png".to_owned()],
+            &["金額が違う".to_owned()],
+        )
+        .unwrap();
+        let text = compose(&instruction, Some(&context("本文"))).unwrap();
         assert_eq!(
-            agreed_instruction(&[], &["@/w/a.png".to_owned()]).unwrap_err(),
-            "要約がありません"
-        );
-        assert_eq!(
-            agreed_instruction(&[" \n".to_owned()], &[]).unwrap_err(),
-            "要約がありません"
+            text,
+            format!(
+                "返信案を作って\n\n@/w/.orca/drops/a.png\n\n内容の要約:\n- 金額が違う\n\n{QUOTED_LINE}\n<cookapps-context kind=\"mail\" title=\"請求書の金額が\">\n本文\n</cookapps-context>"
+            )
         );
     }
 
     #[test]
-    fn the_agreed_instruction_and_the_block_fold_back_to_their_parts() {
-        let points = vec!["a".to_owned(), "b".to_owned()];
+    fn the_instruction_with_its_summary_and_the_block_fold_back_to_their_parts() {
         let text = compose(
-            &agreed_instruction(&points, &[]).unwrap(),
+            &handoff_instruction("指示", &[], &["a".to_owned(), "b".to_owned()]).unwrap(),
             Some(&context("本文")),
         )
         .unwrap();
         let (instruction, folded) = fold(&text).unwrap();
-        assert_eq!(instruction, "実装すること:\n- a\n- b");
+        assert_eq!(instruction, "指示\n\n内容の要約:\n- a\n- b");
         assert_eq!(folded.text, "本文");
     }
 

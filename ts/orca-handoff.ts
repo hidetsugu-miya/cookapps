@@ -1,6 +1,6 @@
 // Handing the open mail, Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
-// Before a hand-over it has the destination (the Orca to talk to, the project, and the worktree of a new session: one of the project's worktrees, its own folder first, or a new one made then, with its name, the ref it starts from and its branch), the card with the content (taken off with ×) and a conversation with Claude:
-// the instruction is summarised into "what to implement" (`claude_summarize_handoff`), the owner fixes the summary in the field below, and nothing goes to Orca until "この内容で Orca に渡す" is pressed. Once there is a summary the three choices fold into one chip.
+// Before a hand-over it has the destination (the Orca to talk to, the project, and the worktree of a new session: one of the project's worktrees, its own folder first, or a new one made then, with its name, the ref it starts from and its branch), the card with the content (taken off with ×) and the field for the instruction.
+// The instruction is handed over as it was written; the content of the card is summarised by Claude (`claude_summarize_handoff`) when "Orca に渡す" is pressed, and the summary goes with the instruction.
 // After a hand-over it shows that session: its header, its history (orca-chat.ts) and a composer for more instructions. The prompt is composed in Rust (`orca_handoff`).
 // A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the conversation of each item and the session it was handed to, and the destination and the project last chosen.
 import type { AttachedFile } from "./bindings/AttachedFile";
@@ -8,7 +8,6 @@ import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import { getClaude, showPurposeSlot } from "./claude.js";
-import type { ChatTurnPayload } from "./claude-chat.js";
 import { composing, isMac, tag } from "./dom.js";
 import { CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
 import { type HandoffDestination, invoke } from "./ipc.js";
@@ -48,10 +47,9 @@ interface Session {
 
 // The conversation about handing an item over, and the choices of its worktree: by item key, so that they belong to the item while another is in view.
 interface Form {
-  // True when the worktree of a new session is to be made (the chip says 新規作成); false for the project's own folder. `name` is the field for it, and `named` says the owner wrote it (a later proposal of Claude does not replace it).
+  // True when the worktree of a new session is to be made (the chip says 新規作成); false for the project's own folder. `name` is the field for it.
   fresh: boolean;
   name: string;
-  named: boolean;
   // The project the choices below were made for (a choice of another project does not carry over), and the existing worktree chosen (its path; null: the project's own folder).
   project: string | null;
   worktree: string | null;
@@ -60,31 +58,22 @@ interface Form {
   branchMode: "new" | "existing";
   branch: string;
   existing: PickedBranch | null;
-  // What the first summary was made from, the turns since (a summary is an assistant turn with its points, a request to fix it a user turn; the first user turn is `instruction`), and the summary now in force.
-  instruction: string;
-  turns: Turn[];
-  points: string[] | null;
-  // True when the owner opened the choices again after a summary (they are folded into one chip until the next summary).
-  open: boolean;
-}
-interface Turn extends ChatTurnPayload {
-  points?: string[];
 }
 const forms = new Map<string, Form>();
 
 function formOf(key: string) {
   let form = forms.get(key);
   if (!form) {
-    form = { fresh: false, name: "", named: false, project: null, worktree: null, base: null, branchMode: "new", branch: "", existing: null, instruction: "", turns: [], points: null, open: false };
+    form = { fresh: false, name: "", project: null, worktree: null, base: null, branchMode: "new", branch: "", existing: null };
     forms.set(key, form);
   }
   return form;
 }
 
-// A form that holds nothing the owner made (no request to Claude, no choice of the worktree): it is the default one, so it is not kept.
+// A form that holds nothing the owner made (no choice of the worktree): it is the default one, so it is not kept.
 function dropIdleForm(key: string) {
   const form = forms.get(key);
-  if (form && !form.fresh && form.name === "" && !form.named && form.worktree === null && form.base === null && form.branchMode === "new" && form.branch === "" && form.existing === null && form.instruction === "" && form.turns.length === 0 && form.points === null && !form.open) forms.delete(key);
+  if (form && !form.fresh && form.name === "" && form.worktree === null && form.base === null && form.branchMode === "new" && form.branch === "" && form.existing === null) forms.delete(key);
 }
 
 // By item key, in memory only: leaving and coming back to the item shows its session again.
@@ -131,9 +120,8 @@ export class HandoffPane {
   private keys: Record<string, string> = {};
   private card: HandoffCard | null = null;
   private removed = false;
-  // The keys of the items whose hand-over (or follow-up) is on its way, and those whose summary is; and the message of the last failed post or summary of each item. They belong to the item, so a switch of the item loses none.
+  // The keys of the items whose hand-over (or follow-up) is on its way, and the message of the last failed hand-over or post of each item. They belong to the item, so a switch of the item loses none.
   private sending = new Set<string>();
-  private asking = new Set<string>();
   private errors = new Map<string, string>();
   // What the host was last told, and the minute the pane last drew.
   private lastOpen: boolean | null = null;
@@ -150,9 +138,6 @@ export class HandoffPane {
   private el: {
     notice: HTMLElement;
     chip?: HTMLButtonElement;
-    line?: HTMLButtonElement;
-    talk?: HTMLElement;
-    agree?: HTMLButtonElement;
     claudeNote?: HTMLElement;
     cardBox?: HTMLElement;
     strip: HTMLElement;
@@ -212,8 +197,7 @@ export class HandoffPane {
     const item = this.host.current();
     const key = item?.key ?? null;
     if (key !== this.itemKey) {
-      // A form whose summary is on its way is kept: the answer is written into it.
-      if (this.itemKey !== null && !this.asking.has(this.itemKey)) dropIdleForm(this.itemKey);
+      if (this.itemKey !== null) dropIdleForm(this.itemKey);
       this.itemKey = key;
       this.removed = false;
       // The card is built when the pane opens (the form is drawn), not for each item that goes by.
@@ -233,7 +217,7 @@ export class HandoffPane {
   }
 
   private get busy() {
-    return this.itemKey !== null && (this.sending.has(this.itemKey) || this.asking.has(this.itemKey));
+    return this.itemKey !== null && this.sending.has(this.itemKey);
   }
 
   private form() {
@@ -489,7 +473,7 @@ export class HandoffPane {
         { search: { label: "worktree を検索", empty: "一致する worktree がありません" } },
       );
     };
-    // The name of the worktree to make; Rust checks it. The proposal of Claude is put in it with the summary, unless the owner wrote one (A-9).
+    // The name of the worktree to make; Rust checks it (A-9).
     const name = tag("input", "ho-name");
     name.setAttribute("aria-label", "worktree の名前");
     name.autocomplete = "off";
@@ -497,7 +481,6 @@ export class HandoffPane {
     name.oninput = () => {
       const form = this.form();
       form.name = name.value;
-      form.named = name.value.trim() !== "";
       this.updateSend();
     };
     // The frame of a worktree to make, under the chips: its name, the ref it starts from and its branch (A-9).
@@ -575,23 +558,13 @@ export class HandoffPane {
     const freshBox = tag("div", "ho-fresh");
     freshBox.append(field("名前", name), field("作成元", base), field("ブランチ", seg, branchName, existingChip));
     freshBox.hidden = true;
-    // After a summary the three choices are this one chip; pressing it opens them again.
-    const line = tag("button", "review-chip ho-chip ho-line");
-    line.type = "button";
-    line.setAttribute("aria-label", "送り先、プロジェクト、worktree");
-    line.hidden = true;
-    line.onclick = () => {
-      this.form().open = true;
-      this.update();
-    };
-    fresh.append(line, destChip, projectChip, chip);
+    fresh.append(destChip, projectChip, chip);
     const scroll = tag("div", "ho-scroll");
-    const talk = tag("div", "ho-talk");
-    scroll.append(notice, fresh, freshBox, talk);
+    scroll.append(notice, fresh, freshBox);
     const main = tag("div", "ho-main");
     main.append(head, scroll);
     const foot = this.foot();
-    // Under the field, the model and effort of the summary, and the note while Claude cannot be used (as the Slack thread's conversation).
+    // Under the field, the model and effort of the summary of the content, and the note while Claude cannot be used and the card is there (as the Slack thread's conversation).
     const model = tag("div", "chat-model");
     const claudeNote = tag("p", "chat-note", "設定の Claude タブで接続すると、Claude に要約してもらえます");
     foot.form.prepend(claudeNote);
@@ -602,7 +575,7 @@ export class HandoffPane {
       this.submit();
     };
     foot.form.append(model);
-    this.el = { notice, chip, line, talk, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
+    this.el = { notice, chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
     this.restoreDraft(foot.input);
@@ -651,8 +624,7 @@ export class HandoffPane {
     if (this.mode() === "form") {
       const form = this.form();
       this.settle(form);
-      this.part("dest", [chosenProject, form.fresh, form.name, form.worktree, form.base, form.branchMode, form.branch, form.existing, form.points !== null, form.open, this.destination(), this.environments(), this.overview?.projects, this.overview?.worktrees], () => this.drawDest());
-      this.part("talk", [form.turns, this.itemKey !== null && this.asking.has(this.itemKey)], () => this.drawTalk());
+      this.part("dest", [chosenProject, form.fresh, form.name, form.worktree, form.base, form.branchMode, form.branch, form.existing, this.destination(), this.environments(), this.overview?.projects, this.overview?.worktrees], () => this.drawDest());
       this.drawCard();
     } else {
       const s = this.session()!;
@@ -730,9 +702,9 @@ export class HandoffPane {
     return form.fresh ? form.branchMode === "new" || form.existing !== null : this.pickedWorktree() !== undefined;
   }
 
-  // The chips with the destination (this machine, or the saved environment), the project and the worktree chosen, and the frame of a new worktree; or, once there is a summary and the choices are complete, the one chip that holds them.
+  // The chips with the destination (this machine, or the saved environment), the project and the worktree chosen, and the frame of a new worktree.
   private drawDest() {
-    const { chip, destChip, projectChip, name, line, freshBox, base, modeNew, modeExisting, branchName, existingChip } = this.el!;
+    const { chip, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip } = this.el!;
     const form = this.form();
     const destination = this.destination();
     destChip!.textContent = destination ?? THIS_MACHINE;
@@ -758,44 +730,7 @@ export class HandoffPane {
     existingChip!.hidden = !existing;
     existingChip!.textContent = form.existing?.name ?? "ブランチを選ぶ";
     existingChip!.disabled = this.branchSource() === undefined;
-    // The choices stay open while they are not complete, until the next summary: a project chosen then does not fold them before the worktree is chosen.
-    if (form.points !== null && !this.target(form)) form.open = true;
-    const folded = form.points !== null && !form.open;
-    const worktree = form.fresh ? [NEW_WORKTREE, form.name.trim()].filter(Boolean).join(" ・ ") : this.worktreeChip();
-    line!.textContent = [destChip!.textContent, chosen?.name, worktree].filter(Boolean).join(" ・ ");
-    line!.hidden = !folded;
-    for (const node of [destChip!, projectChip!, chip!]) node.hidden = folded;
-    freshBox!.hidden = !form.fresh || folded;
-  }
-
-  // The conversation: what the owner asked and Claude's summaries (the latest with the button that hands it over), and the line that Claude is thinking.
-  private drawTalk() {
-    const el = this.el!;
-    const form = this.form();
-    el.agree = undefined;
-    const nodes = form.turns.map((turn, i) => {
-      if (turn.role === "user") return tag("div", "chat-user", turn.text);
-      const node = tag("div", "chat-ai");
-      const list = tag("ul", "ho-points");
-      list.append(...(turn.points ?? []).map((point) => tag("li", "", point)));
-      node.append(list);
-      if (i === form.turns.length - 1) {
-        const agree = tag("button", "text-btn primary ho-agree", "この内容で Orca に渡す");
-        agree.type = "button";
-        agree.onclick = () => this.handOver();
-        node.append(agree);
-        el.agree = agree;
-      }
-      return node;
-    });
-    if (this.itemKey !== null && this.asking.has(this.itemKey)) {
-      const thinking = tag("div", "pending");
-      thinking.append(tag("span", "spin"), tag("span", "sp", "Claude が考えています…"));
-      nodes.push(thinking);
-    }
-    el.talk!.replaceChildren(...nodes);
-    const scroll = el.talk!.parentElement!;
-    scroll.scrollTop = scroll.scrollHeight;
+    freshBox!.hidden = !form.fresh;
   }
 
   // The card with the content to hand over, until it is taken off. The nodes are kept while the card changes: only their text is set.
@@ -824,6 +759,7 @@ export class HandoffPane {
         off.onclick = () => {
           this.removed = true;
           this.drawCard();
+          this.updateSend();
           this.el?.input.focus();
         };
         row.append(icon, text, off);
@@ -873,16 +809,14 @@ export class HandoffPane {
       const target = (s.handle ?? this.rowOf(s)?.handle ?? null) !== null;
       el.send.disabled = this.busy || this.overview?.state === "missing" || !(el.input.value.trim() || hasFiles) || !target;
     } else {
-      // Before a hand-over the field is the conversation with Claude: the instruction, then the requests to fix the summary.
+      // Before a hand-over the field is the instruction. Nothing goes to Orca without one, a project, and its own folder or a worktree to make; and Claude summarises the card, so it must be usable while the card is there.
       const form = this.form();
-      const ready = this.claudeReady();
-      set(el.send, form.points === null ? "要約する" : "直す");
-      el.input.setAttribute("aria-label", form.points === null ? "Orca への指示" : "要約の直し");
-      el.input.disabled = this.busy || !ready;
-      el.send.disabled = this.busy || !ready || !el.input.value.trim();
+      const needsClaude = !this.removed && this.card !== null;
+      const ready = !needsClaude || this.claudeReady();
+      set(el.send, "Orca に渡す");
+      el.input.disabled = this.busy;
+      el.send.disabled = this.busy || !ready || this.overview?.state === "missing" || !el.input.value.trim() || !this.target(form);
       el.claudeNote!.hidden = ready;
-      // Nothing goes to Orca without a summary, a project, and its own folder or a worktree to make.
-      if (el.agree) el.agree.disabled = this.busy || this.overview?.state === "missing" || !this.target(form);
     }
     const error = this.itemKey === null ? "" : (this.errors.get(this.itemKey) ?? "");
     el.error.hidden = !error;
@@ -918,75 +852,37 @@ export class HandoffPane {
     return path;
   }
 
-  // The press of the button in the field: a request to Claude before a hand-over, a post to the session after it.
+  // The press of the button in the field: the hand-over, or a post to the session after it.
   private submit() {
     if (this.session()) this.sendMore();
-    else this.ask();
+    else this.handOver();
   }
 
-  // Asks Claude for the summary of the instruction, or, when there is one, for a fix of it with the request in the field. The answer belongs to the item: it is kept for it while another is in view, and so is a failure (the text then waits for its own item).
-  private async ask() {
+  // Hands the instruction over as it was written: Claude summarises the content first when the card is there (a failure ends it before anything starts), then the worktree is made when 新規作成 is chosen (a failure ends it before anything starts), the files go into the worktree of the session, and the session starts once with the instruction, the paths of the files, the summary and the content.
+  private async handOver() {
     const el = this.el;
     const key = this.itemKey;
-    if (!el || key === null || this.busy || !this.claudeReady()) return;
-    const text = el.input.value.trim();
-    if (!text) return;
+    if (el === null || key === null || this.busy || this.session()) return;
     const form = this.form();
-    const fix = form.points !== null;
-    const card = this.removed ? null : this.card;
-    const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
-    const history = fix
-      ? form.turns
-          .slice(1)
-          .map(({ role, text }) => ({ role, text }))
-      : [];
-    this.asking.add(key);
-    this.errors.delete(key);
-    this.update();
-    try {
-      const summary = await invoke("claude_summarize_handoff", { instruction: fix ? form.instruction : text, context, history, revision: fix ? text : null });
-      if (!fix) form.instruction = text;
-      form.turns.push({ role: "user", text }, { role: "assistant", text: summary.points.map((point) => `- ${point}`).join("\n"), points: summary.points });
-      form.points = summary.points;
-      form.open = !this.target(form);
-      // The proposed name is put in the field unless the owner wrote one.
-      if (summary.worktreeName !== null && !form.named) form.name = summary.worktreeName;
-      if (this.itemKey === key && this.el) this.el.input.value = "";
-    } catch (e) {
-      this.errors.set(key, String(e));
-      this.keepText(key, text);
-    } finally {
-      this.asking.delete(key);
-    }
-    if (this.itemKey === key) {
-      this.sync();
-      this.update();
-      this.el?.input.focus();
-    }
-  }
-
-  // Hands the summary agreed to over: the worktree is made first when 新規作成 is chosen (a failure ends it before anything starts), the files go into the worktree of the session, and the session starts once with the summary, the paths of the files and the content.
-  private async handOver() {
-    const key = this.itemKey;
-    if (this.el === null || key === null || this.busy || this.session()) return;
-    const form = this.form();
-    const points = form.points;
+    const instruction = el.input.value;
     const environment = this.destination();
     const project = chosenProject;
     this.settle(form);
     const own = this.pickedWorktree()?.path ?? null;
-    if (points === null || project === null || !this.target(form)) return;
+    if (!instruction.trim() || project === null || !this.target(form)) return;
     const files = attached.get(key) ?? [];
     const card = this.removed ? null : this.card;
+    if (card && !this.claudeReady()) return;
     this.sending.add(key);
     this.errors.delete(key);
     this.update();
     try {
+      const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
+      const summary = context ? (await invoke("claude_summarize_handoff", { context })).points : [];
       const worktree = form.fresh ? await this.makeWorktree(key, form, project, environment) : own!;
       const uploaded = files.length ? await uploadAttachments(files, worktree, environment) : [];
-      const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
       const destination: HandoffDestination = { kind: "new", path: worktree };
-      const started = await invoke("orca_handoff", { destination, points, files: uploaded.map((f) => f.text), context, environment });
+      const started = await invoke("orca_handoff", { destination, instruction, files: uploaded.map((f) => f.text), summary, context, environment });
       sessions.set(key, { path: worktree, paneKey: started.paneKey, handle: started.handle, environment, seen: false });
       made.delete(key);
       forms.delete(key);
@@ -997,6 +893,7 @@ export class HandoffPane {
       this.lastRead = 0;
     } catch (e) {
       this.errors.set(key, String(e));
+      this.keepText(key, instruction);
     } finally {
       this.sending.delete(key);
     }
