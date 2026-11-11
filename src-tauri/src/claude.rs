@@ -1411,7 +1411,7 @@ fn parse_draft_edit(
     })
 }
 
-/// The answer of `claude -p --output-format json` with `HANDOFF_SCHEMA`. The points have their hidden characters taken out (as `orca_handoff::handoff_instruction` does, so what Orca gets is what was summarised), are trimmed, put on one line each, and the blank ones left out;
+/// The answer of `claude -p --output-format json` with `HANDOFF_SCHEMA`. The points have their hidden characters taken out (as `orca_handoff::compose` does, so what Orca gets is what was summarised), are trimmed, put on one line each, and the blank ones left out;
 /// none left is refused, and so are points that together pass `PROMPT_LIMIT` characters (they go on to Orca).
 fn parse_handoff(out: &str) -> Result<HandoffSummary, SummaryError> {
     let answer = read_answer(out)?;

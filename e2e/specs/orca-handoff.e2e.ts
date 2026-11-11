@@ -906,6 +906,27 @@ describe("orca handoff", () => {
     expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_new")).toBe(true);
   });
 
+  it("lets go of the mirror when the session that was in the list is missing from a ready one", async () => {
+    await openMail();
+    const handoff = await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseProject(MAIL, "example-app");
+    await write(MAIL, "原因を調べて");
+    await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
+    const read = await mock("orca_terminal_read", ["$ claude"]);
+    await sendButton(MAIL).click();
+    await waitForCalls(handoff);
+    await browser.waitUntil(async () => (await textsOf(`${MAIL.pane} .ho-session-state`))[0] === "作業中 ・ 1 分", { timeoutMsg: "the state of the session was not shown" });
+    await waitForCalls(read, 2);
+    // The terminal is gone from Orca: the next read of the list lacks the row.
+    await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await browser.waitUntil(async () => (await textsOf(`${MAIL.pane} .ho-session-state`))[0] === "終了", { timeout: 25000, timeoutMsg: "the session was not shown as ended" });
+    await expect($(`${MAIL.pane} .ho-note`)).toBeDisplayed();
+    const before = (await callsOf(read)).length;
+    await browser.pause(2500);
+    expect((await callsOf(read)).length).toBe(before);
+  });
+
   it("streams the terminal of a session at the saved environment the Orca screen streams", async () => {
     const studio = { target: "Studio", environments: ["Studio"] };
     await openMail({ orca_overview: orcaOverview(sample(), worktrees(), studio) });

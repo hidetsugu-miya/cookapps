@@ -321,7 +321,10 @@ export class HandoffPane {
 
   // Where the terminal of a session comes from, or null when it cannot be shown: the session has no terminal (the launch named none and the list has none). A saved environment that the Orca screen streams (A-12) is streamed; any other terminal, this machine's or a saved environment's, is mirrored.
   private sourceOf(s: Session): TermSource | null {
-    const handle = s.handle ?? this.rowOf(s)?.handle ?? null;
+    const row = this.rowOf(s);
+    // A session that was in the list and is missing from a ready one has ended (the header says so): its terminal is let go, or the mirror would read the list again every second.
+    if (!row && s.seen && this.overview?.state === "ready") return null;
+    const handle = s.handle ?? row?.handle ?? null;
     if (handle === null) return null;
     const kind = s.environment !== null && streamsEnvironment(s.environment) ? "stream" : "mirror";
     return { kind, handle, path: s.path, environment: s.environment };

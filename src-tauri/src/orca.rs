@@ -1513,7 +1513,7 @@ pub(crate) fn forget_worktree_host(path: &str, environment: Option<&str>) {
     worktree_hosts().forget(environment, path);
 }
 
-/// Hands the content to a new session (A-9): the prompt is composed here from the instruction the user wrote, the attached files, the summary of the content and the content, then the launch of A-6 runs once with its checks.
+/// Hands the content to a new session (A-9): the prompt is composed here from the instruction the user wrote, the attached files, the content with its summary inside the block, then the launch of A-6 runs once with its checks.
 fn handoff(
     destination: &OrcaDestination,
     instruction: &str,
@@ -1522,7 +1522,7 @@ fn handoff(
     context: Option<&HandoffContext>,
     environment: Option<&str>,
 ) -> Result<OrcaStarted, String> {
-    let text = compose(&handoff_instruction(instruction, files, summary)?, context)?;
+    let text = compose(&handoff_instruction(instruction, files)?, summary, context)?;
     let OrcaDestination::New { path } = destination;
     launch(path, Some(&text), environment)
 }
@@ -1763,7 +1763,7 @@ pub async fn orca_worktree_create(
     .await?
 }
 
-/// A-9: starts a session in a worktree with the instruction the user wrote (`instruction`), the text of each attached file (`files`, A-10), the summary of the content (`summary`, none without the content) and, when `context` is given, the content quoted as data.
+/// A-9: starts a session in a worktree with the instruction the user wrote (`instruction`), the text of each attached file (`files`, A-10), and, when `context` is given, the content quoted as data with the summary of it (`summary`) inside the block.
 #[tauri::command]
 pub async fn orca_handoff(
     destination: OrcaDestination,
