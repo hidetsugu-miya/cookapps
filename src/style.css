@@ -1218,7 +1218,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #reply-chat { grid-column: 3; }
 #st-body { min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 .chat-foot { display: flex; flex-direction: column; background: var(--bar); }
-#reply-chat .composer-foot, #st-reply .composer-foot { justify-content: flex-end; }
+#reply-chat .composer-foot, #st-reply .composer-foot, #sc-reply .composer-foot { justify-content: flex-end; }
 .icon-btn.chat-send-icon { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
 .icon-btn.chat-send-icon:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
 .chat-send-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -1280,5 +1280,5 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .st-note { margin: 0 24px 8px; padding: 8px 12px; border-radius: 12px; background: var(--soft); color: var(--ins); font-size: calc(13px * var(--fs)); }
 #st-note.pending { margin: 0 24px 8px; }
 #st-card .review { margin: 0 24px 10px; }
-#st-reply { flex: none; padding: 12px 24px 16px; border-top: 1px solid var(--line); }
-#st-error { margin: 0 0 8px; }
+#st-reply, #sc-reply { flex: none; padding: 12px 24px 16px; border-top: 1px solid var(--line); }
+#st-error, #sc-error { margin: 0 0 8px; }

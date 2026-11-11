@@ -171,6 +171,8 @@ export interface Commands {
   slack_thread: { args: { teamId: string; channel: string; ts: string }; result: SlackThread };
   // The newest messages of a joined channel (S-20), oldest first, drawn as the list's rows (`unread` false); it changes no read position.
   slack_channel_history: { args: { teamId: string; channel: string }; result: TimelineMessage[] };
+  // Posts `text` to a channel of the side menu (S-21) under the user's own name (the checks and the errors of `slack_post`; the recent destinations are not touched).
+  slack_channel_post: { args: { teamId: string; channel: string; text: string }; result: boolean };
   // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched).
   slack_reply: { args: { teamId: string; channel: string; threadTs: string; text: string }; result: boolean };
   // The attached images (a thread file's `thumbUrl`) as data: URIs by URL; the token goes to files.slack.com only. What cannot be fetched is not in the map.

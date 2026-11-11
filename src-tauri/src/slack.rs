@@ -5414,6 +5414,16 @@ pub async fn slack_thread(
     })
 }
 
+/// The channel of the workspace's channel list that the side menu is made of (`ChannelCache`), or none when it is not held (a channel the menu does not show).
+fn held_channel(state: &SlackState, team_id: &str, channel: &str) -> Option<Channel> {
+    state
+        .channels
+        .lock()
+        .unwrap()
+        .get(team_id)
+        .and_then(|(_, list)| list.iter().find(|c| c.id == channel).cloned())
+}
+
 /// The newest `CHANNEL_HISTORY_LIMIT` messages of a channel the workspace's user has joined (S-20), oldest first, drawn as the rows of the list are, with the names of their senders.
 /// It reads `conversations.history` of that one channel and changes no read position. `unread` is false for every message: the history is not the unread list.
 #[tauri::command]
@@ -5435,13 +5445,7 @@ pub async fn slack_channel_history(
         .iter()
         .find(|w| w.team_id == team_id)
         .ok_or_else(|| log_failure(command, &team_id, NO_WORKSPACE))?;
-    // The side menu lists the channels from this cache, so the channel is held; a name that is not held cannot be given.
-    let known = state
-        .channels
-        .lock()
-        .unwrap()
-        .get(&team_id)
-        .and_then(|(_, list)| list.iter().find(|c| c.id == channel).cloned())
+    let known = held_channel(&state, &team_id, &channel)
         .ok_or_else(|| log_failure(command, &team_id, "チャンネルが見つかりません"))?;
     let token = token_of(&team_id)
         .await
@@ -5480,6 +5484,24 @@ pub async fn slack_channel_history(
         .iter()
         .filter_map(|raw| message_of(&state.timeline, &workspaces, raw, false))
         .collect())
+}
+
+/// Posts `text` to a channel of the side menu (S-21) under the user's own name, as S-1 posts (the same checks of the text and the same Japanese errors, `unfurl_*` off).
+/// The channel must be one the workspace's channel list holds, as for its history; the recent destinations of S-1 are not touched. The text goes to Slack only here, on the user's click.
+#[tauri::command]
+pub async fn slack_channel_post(
+    auth: State<'_, Auth>,
+    state: State<'_, SlackState>,
+    team_id: String,
+    channel: String,
+    text: String,
+) -> Result<bool, String> {
+    let command = "slack_channel_post";
+    if token_key(&team_id).is_err() || held_channel(&state, &team_id, &channel).is_none() {
+        return Err(log_failure(command, &team_id, BAD_TARGET));
+    }
+    send_post(auth.http(), command, &team_id, &channel, None, &text).await?;
+    Ok(true)
 }
 
 /// Posts `text` as a reply in the thread `thread_ts` of `channel`, as S-1 posts (the same checks, `unfurl_*` off, the same Japanese errors).

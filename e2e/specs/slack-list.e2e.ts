@@ -2019,3 +2019,142 @@ describe("slack list: the popups for a new Slack message (S-17)", () => {
     expect([after[0], after[1], after[2]].map((t) => ["first", "second", "third"].find((w) => t.includes(w)))).toEqual(["first", "second", "third"]);
   });
 });
+
+// Posting to a channel (S-21).
+const field = () => $("#sc-input");
+const sendButton = () => $("#sc-send");
+// Cmd+Enter (Ctrl+Enter off macOS) in the field, sent as the key event the app listens for; plain Enter when `plain`.
+const pressPost = (plain = false) =>
+  browser.execute(
+    (id, p) => {
+      if (!window.__e2e_once__(id)) return;
+      const isMac = /Mac/.test(navigator.platform);
+      document.getElementById("sc-input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: !p && isMac, ctrlKey: !p && !isMac, bubbles: true, cancelable: true }));
+    },
+    onceId(),
+    plain,
+  );
+const channelEnd = () =>
+  browser.execute(() => {
+    const box = document.getElementById("sc-feed")!;
+    return { room: box.scrollHeight - box.clientHeight, left: box.scrollHeight - box.scrollTop - box.clientHeight };
+  });
+
+describe("slack list: posting to a channel (S-21)", () => {
+  async function openPost(messages = historySample()) {
+    await openList(timeline(unreadSample(), { side: sideSample() }));
+    await waitForCount("#slack-feed .feed-row", 3);
+    const history = await mock("slack_channel_history", messages);
+    await pressChannel();
+    await waitForCount("#sc-feed .feed-row", messages.length);
+    return history;
+  }
+
+  it("shows the field and a button under the history, with no placeholder, and the button off while the text is blank", async () => {
+    await openPost();
+    await expect(field()).toBeDisplayed();
+    await expect(sendButton()).toHaveText("投稿する");
+    await expect(field()).toHaveAttribute("rows", "3");
+    expect(await field().getAttribute("placeholder")).toBeNull();
+    await expect(sendButton()).toBeDisabled();
+    await field().setValue("  \n ");
+    await expect(sendButton()).toBeDisabled();
+    await field().setValue("Hello");
+    await expect(sendButton()).toBeEnabled();
+  });
+
+  it("posts with slack_channel_post on Cmd+Enter (Ctrl+Enter off macOS), empties the field and reads the history again", async () => {
+    const history = await openPost();
+    const post = await mock("slack_channel_post", true);
+    await field().setValue("Hello team");
+    await pressPost();
+    expect(await waitForCalls(post)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", text: "Hello team" }]);
+    await expect(field()).toHaveValue("");
+    await expect(sendButton()).toBeDisabled();
+    await waitForCalls(history, 2);
+    await expect($("#sc-error")).not.toBeDisplayed();
+  });
+
+  it("posts with the button 投稿する too, and takes plain Enter as a line break", async () => {
+    await openPost();
+    const post = await mock("slack_channel_post", true);
+    await field().setValue("First line");
+    await pressPost(true);
+    expect(await callsOf(post)).toEqual([]);
+    await sendButton().click();
+    expect((await waitForCalls(post))[0]).toEqual({ teamId: workspace.teamId, channel: "C0123ABCD", text: "First line" });
+  });
+
+  it("shows the message just posted at the newest end of the history", async () => {
+    await openPost(many(40).reverse());
+    expect((await channelEnd()).room).toBeGreaterThan(0);
+    await browser.execute(() => (document.getElementById("sc-feed")!.scrollTop = 0));
+    await mock("slack_channel_post", true);
+    await mock("slack_channel_history", [...many(40).reverse(), timelineMessage(slackTs(0), "Alice Example", "dev", "Hello team")]);
+    await field().setValue("Hello team");
+    await sendButton().click();
+    await waitForCount("#sc-feed .feed-row", 41);
+    await browser.waitUntil(async () => (await channelEnd()).left < 2);
+  });
+
+  it("shows a failed post above the field and keeps the text", async () => {
+    const history = await openPost();
+    await mock("slack_channel_post", rejects("投稿できません"));
+    await field().setValue("Keep me");
+    await sendButton().click();
+    await expect($("#sc-error")).toHaveText(expect.stringContaining("投稿できませんでした: 投稿できません"));
+    await expect(field()).toHaveValue("Keep me");
+    await expect(sendButton()).toBeEnabled();
+    await expect(field()).toBeEnabled();
+    expect(await callsOf(history)).toHaveLength(1);
+    await field().addValue("!");
+    await expect($("#sc-error")).not.toBeDisplayed();
+  });
+
+  it("locks the field and the button while the post is on its way, and posts nothing twice", async () => {
+    await openPost();
+    const post = await mock("slack_channel_post", holds);
+    await field().setValue("Wait for it");
+    await sendButton().click();
+    await waitForCalls(post);
+    await expect(field()).toBeDisabled();
+    await expect(sendButton()).toBeDisabled();
+    await browser.execute(() => document.getElementById("sc-send")!.click());
+    await pressPost();
+    expect(await callsOf(post)).toHaveLength(1);
+    await release(post, true);
+    await expect(field()).toBeEnabled();
+    await expect(field()).toHaveValue("");
+    expect(await callsOf(post)).toHaveLength(1);
+  });
+
+  it("keeps what is written for each channel in memory, also through a section", async () => {
+    await openPost();
+    await field().setValue("For dev");
+    await pressChannel("G2");
+    await expect(field()).toHaveValue("");
+    await field().setValue("For ops");
+    await pressChannel();
+    await expect(field()).toHaveValue("For dev");
+    await showWatch();
+    await pressChannel("G2");
+    await expect(field()).toHaveValue("For ops");
+  });
+
+  it("posts to the channel shown and not to the one left while a post is on its way", async () => {
+    await openPost();
+    const post = await mock("slack_channel_post", holds);
+    await field().setValue("Slow one");
+    await sendButton().click();
+    await waitForCalls(post);
+    await pressChannel("G2");
+    await expect(field()).toBeEnabled();
+    await field().setValue("Other");
+    await expect(sendButton()).toBeDisabled();
+    await release(post, true);
+    await expect($(".toast")).toHaveText("#dev に投稿しました");
+    await expect(sendButton()).toBeEnabled();
+    await pressChannel();
+    await expect(field()).toHaveValue("");
+  });
+});
