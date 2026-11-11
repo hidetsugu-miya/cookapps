@@ -63,7 +63,7 @@ const bootOrca = (fixtures: Record<string, unknown> = {}) =>
 // ---- the three screens ----
 
 const MAIL = { pane: "#mail-handoff", button: "#thread-orca" };
-const TODO = { pane: "#todo-handoff", button: "#todo-orca" };
+const TODO = { pane: "#todo-handoff", button: "#todo-tool-orca" };
 const SLACK = { pane: "#st-orca", button: "#reply-tab-orca" };
 type Screen = typeof MAIL;
 
@@ -111,7 +111,8 @@ async function openPane(screen: Screen) {
 }
 
 const field = (screen: Screen) => $(`${screen.pane} textarea`);
-const sendButton = (screen: Screen) => $(`${screen.pane} .ho-form .text-btn.primary`);
+// The arrow in the field of the instruction (its `aria-label` is "Orca に渡す" before a hand-over and "送る" after it).
+const sendButton = (screen: Screen) => $(`${screen.pane} .ho-form .chat-send`);
 
 // Picks the project named `name` in the menu of its chip: the worktree is then the project's own folder (default).
 async function chooseProject(screen: Screen, name: string) {
@@ -173,16 +174,78 @@ describe("orca handoff", () => {
     await expect($(`${MAIL.pane} [aria-label="渡す内容を外す"]`)).toBeDisplayed();
     expect(await count(`${MAIL.pane} .ho-card-toggle, ${MAIL.pane} .ho-card-body`)).toBe(0);
     await expect(field(MAIL)).toHaveAttribute("aria-label", "Orca への指示");
-    await expect(sendButton(MAIL)).toHaveText("Orca に渡す");
+    await expect(sendButton(MAIL)).toHaveAttribute("aria-label", "Orca に渡す");
     await expect(sendButton(MAIL)).toBeDisabled();
-    // Under the field, the model and effort of the summary of the content (the purpose orcaHandoff), and no note while Claude can be used.
-    await waitForCount(`${MAIL.pane} .chat-model select`, 2);
-    expect(await browser.execute(() => [...document.querySelectorAll("#mail-handoff .chat-model select")].map((s) => (s as HTMLSelectElement).value))).toEqual(["sonnet", "medium"]);
+    // No model and effort under the field, and no note while Claude can be used.
+    expect(await count(`${MAIL.pane} .chat-model, ${MAIL.pane} select`)).toBe(0);
     await expect($(`${MAIL.pane} .chat-note`)).not.toBeDisplayed();
     // The icon closes the pane again.
     await $(`${MAIL.pane} [aria-label="閉じる"]`).click();
     await expect($(MAIL.pane)).not.toBeDisplayed();
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("lays the form out from the top down, with the field filling the height that is left and the arrow at its bottom right", async () => {
+    await openMail();
+    await openPane(MAIL);
+    const box = await browser.execute((pane) => {
+      const rect = (selector: string) => {
+        const r = document.querySelector(`${pane} ${selector}`)!.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+      };
+      const area = document.getElementById("mail-area")!.getBoundingClientRect();
+      return { chips: rect(".ho-new"), card: rect(".ho-card"), field: rect("textarea"), arrow: rect(".ho-form .chat-send"), pane: rect(".ho-whole"), width: document.querySelector(pane)!.getBoundingClientRect().width / area.width };
+    }, MAIL.pane);
+    // Chips, then the card, then the field.
+    expect(box.chips.bottom).toBeLessThanOrEqual(box.card.top);
+    expect(box.card.bottom).toBeLessThanOrEqual(box.field.top);
+    // The field takes what is left: its bottom is near the pane's, and it is taller than the card.
+    expect(box.pane.bottom - box.field.bottom).toBeLessThan(40);
+    expect(box.field.bottom - box.field.top).toBeGreaterThan(100);
+    // The arrow is inside the field, at its bottom right.
+    expect(box.arrow.left).toBeGreaterThan(box.field.left);
+    expect(box.arrow.right).toBeLessThanOrEqual(box.field.right);
+    expect(box.field.bottom - box.arrow.bottom).toBeLessThan(20);
+    expect(box.field.right - box.arrow.right).toBeLessThan(20);
+    // The pane starts at 40% of the screen.
+    await expect($("#mail-split")).toHaveAttribute("aria-valuenow", "40");
+    expect(box.width).toBeGreaterThan(0.39);
+    expect(box.width).toBeLessThan(0.41);
+    // No button with words in the form (the summary and revise buttons are gone).
+    expect(await textsOf(`${MAIL.pane} .ho-form button:not(.review-chip):not(.icon-btn)`)).toEqual([]);
+  });
+
+  it("hands over with Cmd+Enter (Ctrl+Enter off macOS) as the arrow does, and not while the instruction is blank", async () => {
+    await openMail();
+    const handoff = await mock("orca_handoff", started);
+    await openPane(MAIL);
+    await chooseProject(MAIL, "example-app");
+    const ask = await write(MAIL, "");
+    const press = (composing = false) =>
+      browser.execute(
+        (pane, c) => {
+          const mac = /Mac/.test(navigator.platform);
+          const key = new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, isComposing: c, bubbles: true, cancelable: true });
+          document.querySelector(`${pane} textarea`)!.dispatchEvent(key);
+        },
+        MAIL.pane,
+        composing,
+      );
+    // Blank: nothing is asked or handed over.
+    await press();
+    await browser.pause(200);
+    expect(await callsOf(ask)).toHaveLength(0);
+    expect(await callsOf(handoff)).toHaveLength(0);
+    // The Enter that confirms an IME conversion sends nothing.
+    await field(MAIL).setValue("確定");
+    await press(true);
+    await browser.pause(200);
+    expect(await callsOf(handoff)).toHaveLength(0);
+    await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
+    await press();
+    const [call] = (await waitForCalls(handoff)) as Handed[];
+    expect(call.instruction).toBe("確定");
+    expect(call.summary).toEqual(POINTS);
   });
 
   it("lists the projects of the destination in the menu of the project chip, and the worktree menu offers the project's own folder and 新規作成", async () => {
@@ -521,7 +584,7 @@ describe("orca handoff", () => {
     const ask = await write(MAIL, "原因を調べて");
     // The field takes the instruction only, and the button waits for a project.
     await expect(field(MAIL)).toHaveAttribute("aria-label", "Orca への指示");
-    await expect(sendButton(MAIL)).toHaveText("Orca に渡す");
+    await expect(sendButton(MAIL)).toHaveAttribute("aria-label", "Orca に渡す");
     await expect(sendButton(MAIL)).toBeDisabled();
     await chooseProject(MAIL, "example-app");
     expect(await textsOf(`${MAIL.pane} .ho-project`)).toEqual(["example-app"]);
@@ -589,7 +652,7 @@ describe("orca handoff", () => {
     expect(await callsOf(create)).toHaveLength(0);
     expect(await callsOf(handoff)).toHaveLength(0);
     expect(await count(`${MAIL.pane} .ho-card`)).toBe(1);
-    await expect(sendButton(MAIL)).toHaveText("Orca に渡す");
+    await expect(sendButton(MAIL)).toHaveAttribute("aria-label", "Orca に渡す");
     await expect(sendButton(MAIL)).toBeEnabled();
     // Pressing again with the same text works, and the message goes.
     await write(MAIL, "原因を調べて");
@@ -853,7 +916,7 @@ describe("orca handoff", () => {
     // More instructions go to the session's terminal with the command of the Orca screen.
     const post = await mock("orca_send", null);
     await field(MAIL).setValue("続けて");
-    await expect(sendButton(MAIL)).toHaveText("送る");
+    await expect(sendButton(MAIL)).toHaveAttribute("aria-label", "送る");
     await sendButton(MAIL).click();
     expect(await waitForCalls(post)).toEqual([{ handle: "term_new", text: "続けて", environment: null }]);
     await expect(field(MAIL)).toHaveValue("");
@@ -1004,6 +1067,9 @@ describe("orca handoff", () => {
     await openPane(TODO);
     await expect($(TODO.button)).toHaveAttribute("aria-pressed", "true");
     await expect($("#todo-split")).toHaveAttribute("role", "separator");
+    // The pane is chosen by the icons of the right side, so it has no close icon of its own before a send; its title is the second row.
+    expect(await textsOf(`${TODO.pane} .ho-title`)).toEqual(["Orca に渡す"]);
+    await expect($(`${TODO.pane} .ho-head [aria-label="閉じる"]`)).not.toBeDisplayed();
     expect(await textsOf(`${TODO.pane} .ho-card-title`)).toEqual(["Write report"]);
     expect(await textsOf(`${TODO.pane} .ho-card-meta`)).toEqual(["説明なし ・ 今日"]);
     await chooseProject(TODO, "example-app");
@@ -1015,10 +1081,10 @@ describe("orca handoff", () => {
     expect(call.context!.title).toBe("Write report");
     expect(call.context!.body).toContain("タスク: Write report");
     expect(call.context!.body).toContain("プロジェクト: Work");
-    // Back to the list: the pane is gone, and the icon is only for the detail.
+    // Back to the list: the pane is gone (Claude's is back), and the icon waits for a task.
     await $("#todo-back").click();
     await expect($(TODO.pane)).not.toBeDisplayed();
-    await expect($(TODO.button)).not.toBeDisplayed();
+    await expect($(TODO.button)).toBeDisabled();
     // The same task again shows its session.
     await $("#todo-list li.task").click();
     await expect($(`${TODO.pane} .ho-session-name`)).toBeDisplayed();
@@ -1903,7 +1969,7 @@ describe("orca handoff: attached files (A-10)", () => {
         (document.querySelector(sendSelector) as HTMLElement).click();
       },
       MAIL.pane,
-      `${MAIL.pane} .ho-form .text-btn.primary`,
+      `${MAIL.pane} .ho-form .chat-send`,
       PNG,
     );
     await waitForCalls(handoff);

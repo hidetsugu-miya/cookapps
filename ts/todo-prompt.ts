@@ -4,7 +4,6 @@ import type { TodoPrompt } from "./bindings/TodoPrompt";
 import { createChat } from "./claude-chat.js";
 import { redrawPromptRow, showModelSlot } from "./claude.js";
 import { $, tag } from "./dom.js";
-import { CLAUDE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { setScreen, showPromptScreen } from "./nav.js";
 import { itemRow, settingsTab } from "./settings.js";
@@ -120,9 +119,6 @@ export async function openPrompt(from: Origin) {
 
 export function initPrompt() {
   $("prompt-back").onclick = () => setScreen(origin, settingsTab());
-  // The way in from the Todo screen's heading.
-  $("todo-prompt").innerHTML = CLAUDE_SVG;
-  $("todo-prompt").onclick = () => openPrompt("todo");
   $<HTMLTextAreaElement>("prompt-body").oninput = (e) => {
     draft = (e.currentTarget as HTMLTextAreaElement).value;
     $("prompt-error").hidden = true;

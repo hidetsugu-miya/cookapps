@@ -1,15 +1,15 @@
 // Handing the open mail, Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
-// Before a hand-over it has the destination (the Orca to talk to, the project, and the worktree of a new session: one of the project's worktrees, its own folder first, or a new one made then, with its name, the ref it starts from and its branch), the card with the content (taken off with ×) and the field for the instruction.
-// The instruction is handed over as it was written; the content of the card is summarised by Claude (`claude_summarize_handoff`) when "Orca に渡す" is pressed, and the summary goes with the instruction.
+// Before a hand-over it is a form from the top down: the destination (the Orca to talk to, the project, and the worktree of a new session: one of the project's worktrees, its own folder first, or a new one made then, with its name, the ref it starts from and its branch), the card with the content (taken off with ×) and the field for the instruction, which fills the height that is left and has the arrow button "Orca に渡す" at its bottom right.
+// The instruction is handed over as it was written; the content of the card is summarised by Claude (`claude_summarize_handoff`) when the arrow is pressed, and the summary goes with the instruction.
 // After a hand-over it shows that session: its header, its history (orca-chat.ts) and a composer for more instructions. The prompt is composed in Rust (`orca_handoff`).
 // A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the conversation of each item and the session it was handed to, and the destination and the project last chosen.
 import type { AttachedFile } from "./bindings/AttachedFile";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
-import { getClaude, showPurposeSlot } from "./claude.js";
+import { getClaude } from "./claude.js";
 import { composing, isMac, tag } from "./dom.js";
-import { CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
+import { ARROW_UP_SVG, CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
 import { type HandoffDestination, invoke } from "./ipc.js";
 import { closeChat, isChatOwner, makeChatView, openChat, setChatWorking, type ChatView } from "./orca-chat.js";
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
@@ -31,6 +31,8 @@ export interface HandoffHost {
   current: () => HandoffItem | null;
   // True when the pane is shown whenever the item is in view (the Slack tab): it has no title row before a send, and its close button only forgets the session.
   forced?: boolean;
+  // True when the pane has no way of its own to be closed (the Todo screen's right pane, which its icons choose): it has no close button before a send, and the close button of a session only forgets it.
+  stays?: boolean;
   // The pane opens or closes: the host shows or hides it and presses its button.
   onOpen: (open: boolean) => void;
 }
@@ -233,6 +235,15 @@ export class HandoffPane {
     this.sync();
   }
 
+  // Opens the pane for the item in view, unless it is open (a host whose icon only chooses the pane).
+  show() {
+    this.sync();
+    if (this.itemKey === null || this.open) return;
+    this.open = true;
+    this.lastRead = 0;
+    this.sync();
+  }
+
   // Closes the pane because another pane of the host's screen takes its place.
   close() {
     if (!this.open) return;
@@ -368,8 +379,8 @@ export class HandoffPane {
     draw();
   }
 
-  // The composer at the foot of the pane, for both modes.
-  private foot() {
+  // The parts both modes have: the form with its message, the files attached, the field of the instruction and the arrow button that sends it.
+  private parts() {
     const form = tag("form", "ho-form");
     const error = tag("p", "pending fail");
     error.setAttribute("role", "alert");
@@ -377,24 +388,19 @@ export class HandoffPane {
     const cardBox = tag("div", "ho-card-box");
     const strip = tag("div", "attachments");
     strip.hidden = true;
-    const box = tag("div", "composer");
     const input = tag("textarea", "chat-input");
     input.rows = 3;
     input.autocomplete = "off";
     input.spellcheck = false;
     input.setAttribute("aria-label", "Orca への指示");
-    const send = tag("button", "text-btn primary");
+    const send = iconButton("Orca に渡す", ARROW_UP_SVG, "icon-btn chat-send chat-send-icon");
     send.type = "submit";
     input.oninput = () => this.updateSend();
     form.onsubmit = (e) => {
       e.preventDefault();
       this.submit();
     };
-    box.append(input, send);
-    form.append(error, cardBox, strip, box);
-    const foot = tag("div", "ho-foot");
-    foot.append(form);
-    return { foot, form, error, cardBox, strip, input, send };
+    return { form, error, cardBox, strip, input, send };
   }
 
   private buildForm() {
@@ -404,6 +410,7 @@ export class HandoffPane {
       this.sync();
     };
     const head = tag("div", "ho-head");
+    close.hidden = this.host.stays === true;
     head.append(orcaIcon(), tag("span", "ho-title", "Orca に渡す"), close);
     // The tabs of the Slack thread name the pane, and the thread has nothing to close.
     head.hidden = this.host.forced === true;
@@ -559,28 +566,27 @@ export class HandoffPane {
     freshBox.append(field("名前", name), field("作成元", base), field("ブランチ", seg, branchName, existingChip));
     freshBox.hidden = true;
     fresh.append(destChip, projectChip, chip);
-    const scroll = tag("div", "ho-scroll");
-    scroll.append(notice, fresh, freshBox);
-    const main = tag("div", "ho-main");
-    main.append(head, scroll);
-    const foot = this.foot();
-    // Under the field, the model and effort of the summary of the content, and the note while Claude cannot be used and the card is there (as the Slack thread's conversation).
-    const model = tag("div", "chat-model");
+    // The note while Claude cannot be used and the card is there (as the Slack thread's conversation).
     const claudeNote = tag("p", "chat-note", "設定の Claude タブで接続すると、Claude に要約してもらえます");
-    foot.form.prepend(claudeNote);
+    const parts = this.parts();
     // Enter is a line break; Cmd+Enter (Ctrl+Enter off macOS) sends, unless it only confirms an IME conversion (as the other Claude conversations).
-    foot.input.onkeydown = (e) => {
+    parts.input.onkeydown = (e) => {
       if (e.key !== "Enter" || composing(e) || !(isMac ? e.metaKey : e.ctrlKey)) return;
       e.preventDefault();
       this.submit();
     };
-    foot.form.append(model);
-    this.el = { notice, chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: foot.cardBox, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
+    // The field takes the height that is left, and the arrow is over its bottom right corner.
+    const compose = tag("div", "ho-compose");
+    compose.append(parts.input, parts.send);
+    parts.form.classList.add("ho-fill");
+    parts.form.append(notice, fresh, freshBox, claudeNote, parts.error, parts.cardBox, parts.strip, compose);
+    const main = tag("div", "ho-main ho-whole");
+    main.append(head, parts.form);
+    this.el = { notice, chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: parts.cardBox, strip: parts.strip, error: parts.error, input: parts.input, send: parts.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
-    this.restoreDraft(foot.input);
-    this.host.root.replaceChildren(main, foot.foot);
-    showPurposeSlot(model, "orcaHandoff");
+    this.restoreDraft(parts.input);
+    this.host.root.replaceChildren(main);
   }
 
   private buildSession() {
@@ -595,13 +601,17 @@ export class HandoffPane {
     const note = tag("p", "ho-note", "セッションを始めました。履歴は Orca の画面で見られます。");
     const main = tag("div", "ho-main");
     main.append(head, notice, this.chat.status, this.chat.box, note);
-    const foot = this.foot();
-    foot.cardBox.hidden = true;
-    foot.input.rows = 2;
-    this.el = { notice, sessionTitle, note, strip: foot.strip, error: foot.error, input: foot.input, send: foot.send };
-    this.restoreDraft(foot.input);
-    this.host.root.replaceChildren(main, foot.foot);
-    foot.input.focus();
+    const parts = this.parts();
+    parts.input.rows = 2;
+    const composer = tag("div", "composer");
+    composer.append(parts.input, parts.send);
+    parts.form.append(parts.error, parts.strip, composer);
+    const foot = tag("div", "ho-foot");
+    foot.append(parts.form);
+    this.el = { notice, sessionTitle, note, strip: parts.strip, error: parts.error, input: parts.input, send: parts.send };
+    this.restoreDraft(parts.input);
+    this.host.root.replaceChildren(main, foot);
+    parts.input.focus();
   }
 
   // The text of a failed request or post goes back to its item: to the field when the item is in view and the field is empty (it was built again if the owner left and came back), else it waits for its own item.
@@ -798,22 +808,23 @@ export class HandoffPane {
     const el = this.el;
     if (!el) return;
     const s = this.session();
-    const set = (node: HTMLElement, text: string) => {
-      if (node.textContent !== text) node.textContent = text;
+    // The arrow is named for what it does.
+    const name = (label: string) => {
+      if (el.send.getAttribute("aria-label") !== label) el.send.setAttribute("aria-label", label);
     };
     const hasFiles = this.itemKey !== null && (attached.get(this.itemKey)?.length ?? 0) > 0;
     if (s) {
-      set(el.send, "送る");
+      name("送る");
       el.input.disabled = this.busy;
       // A session with no terminal can be read but takes no post.
       const target = (s.handle ?? this.rowOf(s)?.handle ?? null) !== null;
       el.send.disabled = this.busy || this.overview?.state === "missing" || !(el.input.value.trim() || hasFiles) || !target;
     } else {
-      // Before a hand-over the field is the instruction. Nothing goes to Orca without one, a project, and its own folder or a worktree to make; and Claude summarises the card, so it must be usable while the card is there.
+      // Before a hand-over the field is the instruction. Nothing goes to Orca without one, a project, and its own folder or a worktree to make; and Claude summarises the card, so it must be usable while the card is there. The arrow stops while the hand-over is on its way, and so while the summary is made.
       const form = this.form();
       const needsClaude = !this.removed && this.card !== null;
       const ready = !needsClaude || this.claudeReady();
-      set(el.send, "Orca に渡す");
+      name("Orca に渡す");
       el.input.disabled = this.busy;
       el.send.disabled = this.busy || !ready || this.overview?.state === "missing" || !el.input.value.trim() || !this.target(form);
       el.claudeNote!.hidden = ready;
@@ -833,7 +844,7 @@ export class HandoffPane {
     this.removed = false;
     // The form is drawn again, and takes the content then.
     this.card = null;
-    this.open = this.host.forced === true;
+    this.open = this.host.forced === true || this.host.stays === true;
     this.lastRead = 0;
     this.sync();
   }

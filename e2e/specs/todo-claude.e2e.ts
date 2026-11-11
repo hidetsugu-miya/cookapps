@@ -14,8 +14,8 @@ async function openTodo(claude: unknown = claudeReady) {
   await waitForCount("#todo-list li.task", 1);
 }
 
+// The pane is open from the start: the icon of the right side only chooses it again.
 const openPane = async () => {
-  await $("#todo-claude-btn").click();
   await expect($(pane)).toBeDisplayed();
 };
 
@@ -48,26 +48,45 @@ async function ask(text: string, reply: unknown, replies = 1) {
 }
 
 describe("todo Claude pane", () => {
-  it("opens and closes from its own button, apart from the ✳ of the summary prompt, and the divider says Claude", async () => {
+  it("is open from the start in a right side with the two icons, and has no close button and no ✳ of the summary prompt", async () => {
     await openTodo();
-    await expect($("#todo-claude-btn")).toHaveAttribute("aria-label", "Claude に相談");
-    await expect($("#todo-claude-btn")).toHaveAttribute("aria-pressed", "false");
-    await expect($("#todo-prompt")).toHaveAttribute("aria-label", "Todo の要約プロンプトを確認・編集");
-    await expect($(pane)).not.toBeDisplayed();
-    await expect($("#todo-split")).not.toBeDisplayed();
-    await openPane();
-    await expect($("#todo-claude-btn")).toHaveAttribute("aria-pressed", "true");
+    await expect($(pane)).toBeDisplayed();
     await expect($("#todo-split")).toBeDisplayed();
     await expect($("#todo-split")).toHaveAttribute("aria-label", "Claude の幅");
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-label", "Claude に相談");
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#todo-tool-orca")).toHaveAttribute("aria-label", "Orca に渡す");
+    await expect($("#todo-tool-orca")).toHaveAttribute("aria-pressed", "false");
     await expect($(`${pane} .chat-head`)).toHaveText(expect.stringContaining("Claude"));
-    await $("#todo-claude-btn").click();
-    await expect($(pane)).not.toBeDisplayed();
-    await expect($("#todo-split")).not.toBeDisplayed();
-    await expect($("#todo-claude-btn")).toHaveAttribute("aria-pressed", "false");
-    await openPane();
-    await $("#todo-claude-close").click();
-    await expect($(pane)).not.toBeDisplayed();
-    await expect($("#todo-split")).not.toBeDisplayed();
+    // The buttons that were in the header of the tasks, and the close icon of the pane, are gone.
+    expect(await count("#todo-prompt, #todo-claude-btn, #todo-orca, #todo-claude-close")).toBe(0);
+    // The first row: the two icons, at the right of the right side; the header of the tasks and this row are tinted the same and meet at the same line.
+    const rows = await browser.execute(() => {
+      const head = document.querySelector("#todo-body > header")!.getBoundingClientRect();
+      const tools = document.querySelector("#todo-tools")!.getBoundingClientRect();
+      const claude = document.querySelector("#todo-tool-claude")!.getBoundingClientRect();
+      const orca = document.querySelector("#todo-tool-orca")!.getBoundingClientRect();
+      const color = (s: string) => getComputedStyle(document.querySelector(s)!);
+      return {
+        level: Math.abs(head.bottom - tools.bottom) < 1,
+        right: tools.right - orca.right < 40 && claude.right <= orca.left,
+        same: color("#todo-body > header").backgroundColor === color("#todo-tools").backgroundColor && color("#todo-body > header").borderBottomColor === color("#todo-tools").borderBottomColor,
+        line: color("#todo-tools").borderBottomWidth,
+      };
+    });
+    expect(rows).toEqual({ level: true, right: true, same: true, line: "2px" });
+    // A click on Claude's icon keeps Claude's pane.
+    await $("#todo-tool-claude").click();
+    await expect($(pane)).toBeDisplayed();
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("starts the right side at 40% of the screen", async () => {
+    await openTodo();
+    await expect($("#todo-split")).toHaveAttribute("aria-valuenow", "40");
+    const ratio = await browser.execute(() => document.querySelector("#todo-side")!.getBoundingClientRect().width / document.querySelector("#todo")!.getBoundingClientRect().width);
+    expect(ratio).toBeGreaterThan(0.39);
+    expect(ratio).toBeLessThan(0.41);
   });
 
   it("has the request field with the model and effort of todoChat under it, and no help text", async () => {
@@ -85,49 +104,62 @@ describe("todo Claude pane", () => {
     expect(await browser.execute(() => document.querySelector("#todo-claude-send")!.getBoundingClientRect().left >= document.querySelector("#todo-claude-model")!.getBoundingClientRect().right)).toBe(true);
   });
 
-  it("is never open with the Orca pane: opening one closes the other", async () => {
+  it("is never shown with the Orca pane: the Orca icon waits for a task, and either icon chooses its pane", async () => {
     await openTodo();
-    await openPane();
-    // The Orca button is for a task's detail.
-    await expect($("#todo-orca")).not.toBeDisplayed();
+    // The Orca icon is for a task's detail.
+    await expect($("#todo-tool-orca")).toBeDisabled();
     await $("#todo-list li.task").click();
-    await expect($("#todo-orca")).toBeDisplayed();
+    await expect($("#todo-tool-orca")).toBeEnabled();
     await expect($(pane)).toBeDisplayed();
-    await $("#todo-orca").click();
+    await $("#todo-tool-orca").click();
     await expect($("#todo-handoff")).toBeDisplayed();
     await expect($(pane)).not.toBeDisplayed();
-    await expect($("#todo-claude-btn")).toHaveAttribute("aria-pressed", "false");
-    await expect($("#todo-orca")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#todo-tool-orca")).toHaveAttribute("aria-pressed", "true");
     await expect($("#todo-split")).toHaveAttribute("aria-label", "Orca の幅");
-    await $("#todo-claude-btn").click();
+    await $("#todo-tool-claude").click();
     await expect($(pane)).toBeDisplayed();
     await expect($("#todo-handoff")).not.toBeDisplayed();
-    await expect($("#todo-orca")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#todo-tool-orca")).toHaveAttribute("aria-pressed", "false");
     await expect($("#todo-split")).toBeDisplayed();
     await expect($("#todo-split")).toHaveAttribute("aria-label", "Claude の幅");
+    // Leaving the task puts Claude's pane back, and the Orca icon waits again.
+    await $("#todo-tool-orca").click();
+    await expect($("#todo-handoff")).toBeDisplayed();
+    await $("#todo-back").click();
+    await expect($(pane)).toBeDisplayed();
+    await expect($("#todo-handoff")).not.toBeDisplayed();
+    await expect($("#todo-tool-orca")).toBeDisabled();
   });
 
-  it("stays open between the list and a task, hides under the page of a draft and the token form, and comes back", async () => {
+  it("stays between the list and a task, hides under the page of a draft and the token form, and comes back", async () => {
     await openTodo();
-    await openPane();
     await $("#todo-list li.task").click();
     await expect($("#todo-back")).toBeDisplayed();
     await expect($(pane)).toBeDisplayed();
     await $("#todo-back").click();
     await expect($(pane)).toBeDisplayed();
-    // The page of a draft has a Claude pane of its own (S-18): this one and its button go.
+    // The page of a draft has a Claude pane of its own (S-18): this one and its icons go.
     await mock("todoist_summarize_slack", slackSummary);
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
     await $("#todo-draft").waitForExist();
     await expect($(pane)).not.toBeDisplayed();
     await expect($("#todo-split")).not.toBeDisplayed();
-    await expect($("#todo-claude-btn")).not.toBeDisplayed();
+    await expect($("#todo-tools")).not.toBeDisplayed();
     await $("#todo-back").click();
-    await expect($("#todo-claude-btn")).toBeDisplayed();
-    await expect($("#todo-claude-btn")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#todo-tools")).toBeDisplayed();
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
     await expect($(pane)).toBeDisplayed();
     await expect($("#todo-split")).toBeDisplayed();
+  });
+
+  it("is hidden under the token form", async () => {
+    await boot({ inbox: inbox(), todoist_load: null, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await expect($("#todo-token")).toBeDisplayed();
+    await expect($("#todo-tools")).not.toBeDisplayed();
+    await expect($("#todo-split")).not.toBeDisplayed();
   });
 
   it("calls claude_chat_todo with the request, and draws the reply and a card for each proposed task", async () => {
@@ -410,7 +442,7 @@ describe("todo Claude pane", () => {
     }, onceId());
     await waitForCount("#todo-list li.task", 2);
     await expect($(pane)).toBeDisplayed();
-    await expect($("#todo-claude-btn")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
     expect(await count(`${log} .chat-task`)).toBe(2);
     await expect($(`${log} .chat-user`)).toHaveText("出して");
   });

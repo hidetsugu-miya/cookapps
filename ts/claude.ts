@@ -250,16 +250,6 @@ function redrawModelSlot(id: string) {
   $(id)?.replaceChildren(...(modelSettings === null ? [] : purposeSelects(purpose, "")));
 }
 
-// The selects of a pane that makes its own slot (the Orca handoff pane of each screen), by the slot element and the purpose: they are drawn again when the settings are read.
-const ownSlots = new Map<HTMLElement, Purpose>();
-
-// Opens a slot a pane made itself: the settings are read the first time, and what was read is drawn if the slot is empty.
-export function showPurposeSlot(slot: HTMLElement, purpose: Purpose) {
-  ownSlots.set(slot, purpose);
-  if (modelSettings === null) loadModelSettings();
-  else if (slot.childElementCount === 0) slot.replaceChildren(...purposeSelects(purpose, ""));
-}
-
 // Every select drawn, on the settings screen and on the prompt screen.
 const modelSelects = () => [...document.querySelectorAll<HTMLSelectElement>("select[data-purpose]")];
 
@@ -314,11 +304,6 @@ export async function loadModelSettings() {
   modelSettings = read;
   redrawModels();
   for (const [id] of MODEL_SLOTS) redrawModelSlot(id);
-  for (const [slot, purpose] of ownSlots) {
-    // A pane draws its slot again each time its form is built: the ones that left the page are let go.
-    if (slot.isConnected) slot.replaceChildren(...purposeSelects(purpose, ""));
-    else ownSlots.delete(slot);
-  }
 }
 
 // The connection card: the rows, the key field, and the buttons that wait while a change or a read is on its way (or, for the key field, while the states are not known).
