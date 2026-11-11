@@ -56,9 +56,8 @@ export interface Turn {
   tasks?: TodoTaskProposal[];
 }
 
-// The oldest turns are dropped past this many; Claude is sent the last SENT_TURNS (the same as Rust's CHAT_TURNS).
+// The oldest turns are dropped past this many. Rust keeps the last CHAT_TURNS of what it is sent.
 const MAX_TURNS = 100;
-const SENT_TURNS = 20;
 
 export function createChat(cfg: ChatConfig) {
   const id = (name: string) => `${cfg.prefix}-${name}`;
@@ -174,7 +173,6 @@ export function createChat(cfg: ChatConfig) {
     if (!instruction || sending || body === null) return;
     const history = turns
       .filter((t) => !t.failed)
-      .slice(-SENT_TURNS)
       .map(({ role, text, tasks }) => {
         const lines = tasks?.length ? cfg.tasksText?.(tasks) : "";
         return { role, text: lines ? `${text}\n${lines}` : text };
