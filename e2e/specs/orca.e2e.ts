@@ -1,4 +1,6 @@
+import type { OrcaDiffRow } from "../../ts/bindings/OrcaDiffRow";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
+import type { OrcaFileDiff } from "../../ts/bindings/OrcaFileDiff";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
@@ -4027,14 +4029,14 @@ describe("orca: files and editor (A-18)", () => {
       onceId(),
     );
 
-  it("opens a menu of the two copies and the download on the right button of a file, and writes the path and the path from the worktree", async () => {
+  it("opens a menu of the two copies, the download and the diff on the right button of a file, and writes the path and the path from the worktree", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await stubClipboard();
     expect(await rightClickRow("a.rs")).toBe(true);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(3);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(4);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     await pickItem("パスのコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
@@ -4115,6 +4117,210 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCalls(download);
     await expect($("#error")).toHaveText("この PC にファイルを書けません: Permission denied");
     await expect($(".toast")).not.toBeDisplayed();
+  });
+
+  // A-24: the diff tab. Rust compares the two texts (`orca_file_diff`): the rows of both views and the blocks of changes; the page draws them and colors the text.
+  const row_ = (kind: OrcaDiffRow["kind"], old: number | null, nw: number | null): OrcaDiffRow => ({ kind, old, new: nw });
+  const diffOfA = (): OrcaFileDiff => ({
+    oldLines: ["fn main() {", "    old();", "}", "/* a", "b */"],
+    newLines: ["fn main() {", "    new();", "    more();", "}", "/* a", "b */", "// tail"],
+    side: [row_("same", 1, 1), row_("changed", 2, 2), row_("added", null, 3), row_("same", 3, 4), row_("same", 4, 5), row_("same", 5, 6), row_("added", null, 7)],
+    inline: [row_("same", 1, 1), row_("removed", 2, null), row_("added", null, 2), row_("added", null, 3), row_("same", 3, 4), row_("same", 4, 5), row_("same", 5, 6), row_("added", null, 7)],
+    changes: [
+      { side: 1, inline: 1 },
+      { side: 6, inline: 7 },
+    ],
+    language: "rust",
+    highlight: "rust",
+  });
+  const diffRows = () => count(".orca-diff-rows .odf-row");
+  const diffButton = (label: string) => $(`.orca-diff [aria-label="${label}"]`);
+  const diffCell = (row: number, cell: string) => browser.execute((r, c) => document.querySelectorAll(".orca-diff-rows .odf-row")[r].querySelector(c)!.textContent, row, cell);
+  async function openDiffOf(relative = "a.rs", value: unknown = diffOfA()) {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const diff = await mock("orca_file_diff", value);
+    expect(await rightClickRow(relative)).toBe(true);
+    await pickItem("差分を表示");
+    return diff;
+  }
+
+  it("opens the diff of a file from the menu of its row with the worktree, its path and the target, as a tab that is selected (A-24)", async () => {
+    const diff = await openDiffOf();
+    expect(await waitForCalls(diff)).toEqual([{ path: "/work/example-app", relative: "a.rs", environment: null }]);
+    await expect($(".menu")).not.toExist();
+    await expect(tabOf("diff:1")).toBeDisplayed();
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+    await expect(tabOf("diff:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect($(".orca-diff .orca-edit-path")).toHaveText("a.rs");
+    await expect($(".orca-diff-count")).toHaveText("変更 2 件");
+    expect(await diffRows()).toBe(7);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("draws HEAD on the left, the working tree on the right and the numbers between, with a blank where a side has no line (A-24)", async () => {
+    await openDiffOf();
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    await expect($(".orca-diff-rows")).toHaveAttribute("data-view", "side");
+    expect(await diffCell(1, ".old")).toBe("    old();");
+    expect(await diffCell(1, ".new")).toBe("    new();");
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(2) .odf-num")).toEqual(["2", "2"]);
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(3) .odf-num")).toEqual(["", "3"]);
+    expect(await diffCell(2, ".old")).toBe("");
+    expect(await diffCell(2, ".new")).toBe("    more();");
+    const kinds = await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-diff-rows .odf-row")].map((r) => r.dataset.kind));
+    expect(kinds).toEqual(["same", "changed", "added", "same", "same", "same", "added"]);
+    const colors = await browser.execute(() => {
+      const bg = (row: number, cell: string) => getComputedStyle(document.querySelectorAll(".orca-diff-rows .odf-row")[row].querySelector(cell)!).backgroundColor;
+      return { removed: bg(1, ".old"), added: bg(1, ".new"), blank: bg(2, ".old"), added2: bg(2, ".new"), same: bg(0, ".old") };
+    });
+    expect(colors.removed).toBe("rgb(255, 235, 233)");
+    expect(colors.added).toBe("rgb(218, 251, 225)");
+    expect(colors.added2).toBe(colors.added);
+    expect(colors.blank).toBe("rgb(246, 248, 250)");
+    expect(colors.same).toBe("rgba(0, 0, 0, 0)");
+  });
+
+  it("colors the text by the language, a token of several lines on each of its lines (A-24)", async () => {
+    await openDiffOf();
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(1) .old .hljs-keyword")).toEqual(["fn"]);
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(1) .new .hljs-keyword")).toEqual(["fn"]);
+    // The block comment starts on one line and ends on the next: both are comments.
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(5) .old .hljs-comment")).toEqual(["/* a"]);
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(6) .old .hljs-comment")).toEqual(["b */"]);
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(7) .new .hljs-comment")).toEqual(["// tail"]);
+  });
+
+  it("draws the text plain and escaped for a language with no grammar (A-24)", async () => {
+    const plain: OrcaFileDiff = { ...diffOfA(), oldLines: ["<b>x</b> &amp;"], newLines: ["<b>y</b>"], side: [row_("changed", 1, 1)], inline: [row_("removed", 1, null), row_("added", null, 1)], changes: [{ side: 0, inline: 0 }], language: "zig", highlight: null };
+    await openDiffOf("a.rs", plain);
+    await waitForCount(".orca-diff-rows .odf-row", 1);
+    expect(await diffCell(0, ".old")).toBe("<b>x</b> &amp;");
+    expect(await count(".orca-diff-rows b")).toBe(0);
+    expect(await count(".orca-diff-rows [class^='hljs-']")).toBe(0);
+  });
+
+  it("switches to one column with the marks and two columns of numbers, and back, with the button of the tab (A-24)", async () => {
+    await openDiffOf();
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    await expect(diffButton("1 列で表示")).toHaveAttribute("aria-pressed", "false");
+    await diffButton("1 列で表示").click();
+    await waitForCount(".orca-diff-rows .odf-row", 8);
+    await expect($(".orca-diff-rows")).toHaveAttribute("data-view", "inline");
+    await expect(diffButton("左右に並べて表示")).toHaveAttribute("aria-pressed", "true");
+    expect(await textsOf(".orca-diff-rows .odf-mark")).toEqual(["", "−", "+", "+", "", "", "", "+"]);
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(2) .odf-num")).toEqual(["2", ""]);
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(3) .odf-num")).toEqual(["", "2"]);
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(2) .odf-code")).toEqual(["old();"]);
+    expect(await textsOf(".orca-diff-rows .odf-row:nth-child(3) .odf-code")).toEqual(["new();"]);
+    const colors = await browser.execute(() => {
+      const bg = (row: number) => getComputedStyle(document.querySelectorAll(".orca-diff-rows .odf-row")[row].querySelector(".odf-code")!).backgroundColor;
+      return [bg(1), bg(2), bg(0)];
+    });
+    expect(colors).toEqual(["rgb(255, 235, 233)", "rgb(218, 251, 225)", "rgba(0, 0, 0, 0)"]);
+    expect(await count(".orca-diff-rows .odf-row:nth-child(2) .hljs-keyword, .orca-diff-rows .odf-row:nth-child(1) .hljs-keyword")).toBe(1);
+    expect(await callsOf("orca_file_diff")).toHaveLength(1);
+    await diffButton("左右に並べて表示").click();
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    await expect($(".orca-diff-rows")).toHaveAttribute("data-view", "side");
+  });
+
+  it("goes to the previous and the next block of changes, and counts them (A-24)", async () => {
+    // 200 rows, with a change at the second row and another at the 150th, so that the rows scroll.
+    const many = (): OrcaFileDiff => {
+      const lines = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`);
+      const side = lines.map((_, i) => row_(i === 1 || i === 149 ? "changed" : "same", i + 1, i + 1));
+      return { oldLines: lines, newLines: lines.map((l, i) => (i === 1 || i === 149 ? `${l} new` : l)), side, inline: side.flatMap((r) => (r.kind === "changed" ? [row_("removed", r.old, null), row_("added", null, r.new)] : [r])), changes: [{ side: 1, inline: 1 }, { side: 149, inline: 150 }], language: "plaintext", highlight: null };
+    };
+    await openDiffOf("a.rs", many());
+    await waitForCount(".orca-diff-rows .odf-row", 200);
+    await expect($(".orca-diff-count")).toHaveText("変更 2 件");
+    const view = () => browser.execute(() => {
+      const box = document.querySelector(".orca-diff-rows")!.getBoundingClientRect();
+      const r = document.querySelectorAll(".orca-diff-rows .odf-row")[149].getBoundingClientRect();
+      return { top: document.querySelector(".orca-diff-rows")!.scrollTop, visible: r.top >= box.top && r.bottom <= box.bottom };
+    });
+    await expect(diffButton("前の変更")).toBeDisabled();
+    await expect(diffButton("次の変更")).toBeEnabled();
+    expect((await view()).visible).toBe(false);
+    await diffButton("次の変更").click();
+    await browser.waitUntil(async () => (await view()).visible, { timeoutMsg: "the second change never came into view" });
+    await expect(diffButton("次の変更")).toBeDisabled();
+    await expect(diffButton("前の変更")).toBeEnabled();
+    await diffButton("前の変更").click();
+    await browser.waitUntil(async () => !(await view()).visible, { timeoutMsg: "the first change never came back" });
+    await expect(diffButton("前の変更")).toBeDisabled();
+  });
+
+  it("says there is no change for a file with none, and the buttons of the changes are off (A-24)", async () => {
+    const none: OrcaFileDiff = { ...diffOfA(), oldLines: ["a"], newLines: ["a"], side: [row_("same", 1, 1)], inline: [row_("same", 1, 1)], changes: [] };
+    await openDiffOf("a.rs", none);
+    await expect($(".orca-diff-count")).toHaveText("変更はありません");
+    await expect(diffButton("前の変更")).toBeDisabled();
+    await expect(diffButton("次の変更")).toBeDisabled();
+  });
+
+  it("shows the reason Rust gives in place of the diff (A-24)", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const diff = await mock("orca_file_diff", rejects("バイナリのファイルの差分は表示できません"));
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("差分を表示");
+    await waitForCalls(diff);
+    await expect($(".orca-diff .feed-empty")).toHaveText("バイナリのファイルの差分は表示できません");
+    await expect($(".orca-diff-rows")).not.toBeDisplayed();
+    await expect($(".orca-diff-count")).toHaveText("");
+    await expect(diffButton("1 列で表示")).toBeDisabled();
+    await expect(diffButton("次の変更")).toBeDisabled();
+    await expect($("#error")).not.toBeDisplayed();
+    // The reload button reads again, and draws the diff when it can.
+    await mock("orca_file_diff", diffOfA());
+    await diffButton("読み直す").click();
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    await expect($(".orca-diff .feed-empty")).not.toBeDisplayed();
+  });
+
+  it("reads the diff again with the reload button, and selects the tab instead of opening a second one for the same file (A-24)", async () => {
+    const diff = await openDiffOf();
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    await diffButton("読み直す").click();
+    expect(await waitForCalls(diff, 2)).toHaveLength(2);
+    await tabOf(claudeTab("example-app")).$(".orca-tab-btn").click();
+    await expect($(".orca-diff")).not.toExist();
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("差分を表示");
+    await browser.waitUntil(async () => (await callsOf("orca_file_diff")).length === 3, { timeoutMsg: "the diff was never read again" });
+    await expect(tabOf("diff:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+    await expect($(".orca-diff")).toBeDisplayed();
+    expect(await diffRows()).toBe(7);
+  });
+
+  it("opens the diff of another file as another tab, and closes a diff tab without asking Rust (A-24)", async () => {
+    await openDiffOf();
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    expect(await rightClickRow("b.log")).toBe(true);
+    await pickItem("差分を表示");
+    await expect(tabOf("diff:2")).toBeDisplayed();
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs", "b.log"]);
+    await expect($(".orca-diff .orca-edit-path")).toHaveText("b.log");
+    await tabOf("diff:2").$(".orca-tab-close").click();
+    await expect(tabOf("diff:2")).not.toExist();
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+  });
+
+  it("opens the diff of a file in an open folder with its path from the worktree (A-24)", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    const diff = await mock("orca_file_diff", diffOfA());
+    expect(await rightClickRow("src/main.rs")).toBe(true);
+    await pickItem("差分を表示");
+    expect(await waitForCalls(diff)).toEqual([{ path: "/work/example-app", relative: "src/main.rs", environment: null }]);
+    expect(await tabTitles()).toEqual(["Write the docs", "main.rs"]);
   });
 
   it("closes the menu of a row with Escape and writes nothing", async () => {
