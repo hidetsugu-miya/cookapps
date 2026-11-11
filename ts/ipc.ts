@@ -21,10 +21,13 @@ import type { Comment } from "./bindings/Comment";
 import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
 import type { TodoChatReply } from "./bindings/TodoChatReply";
+import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
 import type { OrcaFileText } from "./bindings/OrcaFileText";
+import type { OrcaLocalBranch } from "./bindings/OrcaLocalBranch";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
+import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "./bindings/OrcaSaved";
 import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaViewport } from "./bindings/OrcaViewport";
@@ -277,6 +280,12 @@ export interface Commands {
   orca_file_write: { args: { path: string; relative: string; content: string; crlf: boolean; signature: string; environment: string | null }; result: OrcaSaved };
   // A-24: the diff of the file `relative` of the worktree, HEAD against the working tree: the rows of both views, the blocks of changes and the language to color by.
   orca_file_diff: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileDiff };
+  // A-25: the local branches of the worktree at `path`, the current one first, each with whether another worktree has it checked out.
+  orca_local_branches: { args: { path: string; environment: string | null }; result: OrcaLocalBranch[] };
+  // A-25: the remote branches (at most 50) whose names hold `query`, of the project `repo` (`OrcaProject.key`) of the worktree at `path`.
+  orca_remote_branches: { args: { path: string; repo: string; query: string; environment: string | null }; result: OrcaRemoteBranch[] };
+  // A-25: switches the worktree at `path` to the local branch `name`, or to the remote one (`kind` "remote", `name` like `origin/feature/a`). Orca's refusal is the error's message; a `warning` comes with a switch that worked.
+  orca_switch_branch: { args: { path: string; kind: "local" | "remote"; name: string; environment: string | null }; result: OrcaBranchSwitched };
   // A-22: copies the file `relative` of the worktree to this PC, to the place picked in the save dialog that Rust opens (the page gives none). The name of the file saved, or null when the dialog was cancelled.
   orca_file_download: { args: { path: string; relative: string; environment: string | null }; result: string | null };
   // A-18: the settings of the editor: how long after the typing stops the file is saved.

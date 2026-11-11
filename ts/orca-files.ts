@@ -6,15 +6,18 @@ import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, tag } from "./dom.js";
 import { CHEVRON_SVG, COPY_PATH_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { openMenu } from "./menu.js";
+import { closeMenu, openMenu } from "./menu.js";
+import { openBranchDialog } from "./orca-branch.js";
 import { toast } from "./toast.js";
 import { copyText, showError } from "./view.js";
 
-// The worktree shown (the selected tab's, else the selected project's main one), with the name its heading shows ("{repo} ・ {branch}").
+// The worktree shown (the selected tab's, else the selected project's main one), with the name its heading shows ("{repo} ・ {branch}"). `branch` is the end of that name that the heading makes a button (A-25), null where it stays text (an SSH host's, or a worktree the list does not hold); `project` is the key of the project of the worktree.
 export interface FilesContext {
   target: string | null;
   path: string;
   label: string;
+  project: string;
+  branch: string | null;
 }
 
 // What was read of a folder: its entries (kept while it is read again), the message of a read that failed, and whether one is on its way.
@@ -37,6 +40,9 @@ let version = 0;
 let waiting = false;
 let openFile: (relative: string) => void = () => {};
 let openDiff: (relative: string) => void = () => {};
+let branchSwitched: () => void = () => {};
+// The heading as it is drawn (the label and the branch), so that the branch button stays while the list under it is open.
+let drawnTitle = "";
 // The files open in the worktree, which the last drawing colored.
 let opened = new Set<string>();
 
@@ -230,12 +236,38 @@ function rows(dir: string, depth: number): HTMLElement[] {
   return nodes;
 }
 
+// The branch button of the heading: the list of branches opens under it (A-25), and a switch reads the tree again as well as the list of Orca.
+function openBranches(anchor: Element) {
+  const here = context;
+  if (here === null || here.branch === null) return;
+  openBranchDialog(anchor, { target: here.target, path: here.path, repo: here.project, branch: here.branch }, () => {
+    void reload();
+    branchSwitched();
+  });
+}
+
+// Draws the heading: the name, and its branch as a button when it has one.
+function drawTitle() {
+  const key = JSON.stringify([context?.label, context?.branch]);
+  if (key === drawnTitle) return;
+  drawnTitle = key;
+  const title = $("orca-files-title");
+  if (context === null || context.branch === null || !context.label.endsWith(context.branch)) {
+    title.textContent = context?.label ?? "";
+    return;
+  }
+  const button = tag("button", "orca-branch-btn", context.branch);
+  button.type = "button";
+  button.onclick = () => openBranches(button);
+  title.replaceChildren(context.label.slice(0, context.label.length - context.branch.length), button);
+}
+
 // Draws the pane, unless it is what is drawn already.
 function draw() {
   const key = JSON.stringify([shown, context, version, [...opened]]);
   if (key === drawn) return;
   drawn = key;
-  $("orca-files-title").textContent = context?.label ?? "";
+  drawTitle();
   $<HTMLButtonElement>("orca-files-reload").disabled = context === null;
   const tree = $("orca-files-tree");
   const top = tree.scrollTop;
@@ -254,15 +286,18 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
     listings.clear();
     expanded.clear();
     version++;
+    // A list of branches is of the worktree that was shown.
+    closeMenu();
   }
   context = next;
   if (shown && context !== null && !listings.has("")) void readDir("");
   draw();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; toggle: () => void }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; toggle: () => void; switched: () => void }) {
   openFile = on.open;
   openDiff = on.diff;
+  branchSwitched = on.switched;
   $("orca-files-toggle").innerHTML = FOLDER_SVG;
   $("orca-files-toggle").onclick = on.toggle;
   $("orca-files-reload").onclick = () => void reload();

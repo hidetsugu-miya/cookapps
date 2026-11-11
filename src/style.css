@@ -896,6 +896,17 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-files-head { flex: none; display: flex; align-items: center; gap: 4px; height: calc(32px * var(--fs)); box-sizing: border-box; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); }
 #orca-files-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); font-weight: 600; }
 #orca-files-head .icon-btn { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
+/* A-25: the branch of the heading is a button that opens the list of branches under it. */
+.orca-branch-btn { max-width: 100%; margin: 0 -4px; padding: 1px 4px; border: 0; border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-weight: inherit; cursor: pointer; }
+.orca-branch-btn:hover, .orca-branch-btn[aria-expanded="true"], .orca-branch-btn:focus-visible { background: var(--soft); outline: none; }
+.orca-dest-pop .orca-branch-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
+.orca-dest-pop .orca-branch-row span:first-child { min-width: 0; overflow-wrap: anywhere; font-size: inherit; color: inherit; }
+.orca-dest-pop .orca-branch-row:disabled { opacity: .45; cursor: default; }
+.orca-dest-pop .orca-branch-row:disabled:hover { background: transparent; }
+.orca-dest-pop .orca-branch-mark { flex: none; display: flex; color: var(--accent); }
+.orca-branch-mark svg { width: 14px; height: 14px; }
+.orca-dest-sec { margin: 6px 10px 2px; font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--muted); }
+.orca-dest-list .empty.fail { color: var(--warn); }
 #orca-files-head .icon-btn svg { width: 15px; height: 15px; }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }

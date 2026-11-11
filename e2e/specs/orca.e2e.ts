@@ -2,6 +2,8 @@ import type { OrcaDiffRow } from "../../ts/bindings/OrcaDiffRow";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileDiff } from "../../ts/bindings/OrcaFileDiff";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
+import type { OrcaLocalBranch } from "../../ts/bindings/OrcaLocalBranch";
+import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
@@ -4357,6 +4359,166 @@ describe("orca: files and editor (A-18)", () => {
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     expect(await copiedTexts()).toEqual([]);
+  });
+
+  // A-25: the branch of the heading. Rust reads the branches and switches (`orca_local_branches`, `orca_remote_branches`, `orca_switch_branch`); the page draws the list, asks for the remote ones by the text, and reads the tree and the list of Orca again after a switch.
+  const local = (name: string, extra: Partial<OrcaLocalBranch> = {}): OrcaLocalBranch => ({ name, current: false, inUse: false, ...extra });
+  const remote = (name: string): OrcaRemoteBranch => ({ name, localName: name.replace(/^origin\//, "") });
+  // feat/a is checked out in the worktree, main in another one.
+  const branchFixtures = (extra: Record<string, unknown> = {}) => ({
+    orca_local_branches: [local("feat/a", { current: true }), local("main", { inUse: true }), local("feat/c")],
+    orca_remote_branches: [remote("origin/feat/a"), remote("origin/feat/d")],
+    orca_switch_branch: { branch: "feat/c", warning: null },
+    ...extra,
+  });
+  const branchButton = () => $("#orca-files-title .orca-branch-btn");
+  const branchRows = () => textsOf(".orca-dest-pop .orca-branch-row");
+  const branchPick = (kind: string, name: string) => $(`.orca-dest-pop .orca-branch-row[data-kind="${kind}"][data-name="${name}"]`);
+  const branchStates = () => browser.execute(() => [...document.querySelectorAll<HTMLButtonElement>(".orca-dest-pop .orca-branch-row")].map((b) => [b.dataset.kind, b.dataset.name, b.getAttribute("aria-current"), b.disabled]));
+  // The file pane open on example-app and the list of branches opened under the button of the heading.
+  async function openBranches(fixtures: Record<string, unknown> = {}) {
+    await openFiles(branchFixtures(fixtures));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await branchButton().click();
+    await expect($('.orca-dest-pop[role="dialog"]')).toBeDisplayed();
+  }
+  // What Orca lists once example-app is on feat/c.
+  const onFeatC = () => orcaOverview([orcaRow("example-app", "feat/c", "Write the docs", { minutes: 2, activity: "Bash: cargo test --all-features" }), ...sample().slice(1)], [orcaWorktree("example-app", "feat/c"), orcaWorktree("example-api", "main")]);
+
+  it("makes the branch of the heading a button that opens the list right under it, with the local and the remote branches, the one the worktree is on marked and the one another worktree has disabled (A-25)", async () => {
+    await openBranches();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
+    await expect(branchButton()).toHaveText("feat/a");
+    await expect(branchButton()).toHaveAttribute("aria-expanded", "true");
+    expect(await callsOf("orca_local_branches")).toEqual([{ path: "/work/example-app", environment: null }]);
+    expect(await waitForCalls("orca_remote_branches")).toEqual([{ path: "/work/example-app", repo: "proj_example-app", query: "", environment: null }]);
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    expect(await textsOf(".orca-dest-pop .orca-dest-sec")).toEqual(["ローカル", "リモート"]);
+    expect(await branchRows()).toEqual(["feat/a", "main", "feat/c", "origin/feat/a", "origin/feat/d"]);
+    expect(await branchStates()).toEqual([
+      ["local", "feat/a", "true", false],
+      ["local", "main", "false", true],
+      ["local", "feat/c", "false", false],
+      ["remote", "origin/feat/a", "false", false],
+      ["remote", "origin/feat/d", "false", false],
+    ]);
+    expect(await count(".orca-dest-pop .orca-branch-mark")).toBe(1);
+    expect(await count('.orca-dest-pop .orca-branch-row[data-name="feat/a"] .orca-branch-mark')).toBe(1);
+    const look = await browser.execute(() => {
+      const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      const opacity = (name: string) => getComputedStyle(document.querySelector(`.orca-dest-pop .orca-branch-row[data-name="${name}"]`)!).opacity;
+      return { under: r(".orca-dest-pop").top >= r(".orca-branch-btn").bottom, inFiles: r(".orca-dest-pop").top < r("#orca-files").bottom, used: opacity("main"), free: opacity("feat/c") };
+    });
+    expect(look).toEqual({ under: true, inFiles: true, used: "0.45", free: "1" });
+    // The tree stays in view under the list.
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+    expect(await callsOf("orca_switch_branch")).toEqual([]);
+  });
+
+  it("narrows the local branches by the filter at once, and asks for the remote ones once after the typing stops (A-25)", async () => {
+    await openBranches();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const search = await mock("orca_remote_branches", [remote("origin/feat/d")]);
+    await $('.orca-dest-pop input[aria-label="ブランチを絞り込む"]').setValue("feat");
+    expect(await textsOf('.orca-dest-pop .orca-branch-row[data-kind="local"]')).toEqual(["feat/a", "feat/c"]);
+    await browser.waitUntil(async () => (await callsOf(search)).length > 0, { timeoutMsg: "the remote branches were never asked for" });
+    await browser.pause(500);
+    expect(await callsOf(search)).toEqual([{ path: "/work/example-app", repo: "proj_example-app", query: "feat", environment: null }]);
+    expect(await branchRows()).toEqual(["feat/a", "feat/c", "origin/feat/d"]);
+    await $('.orca-dest-pop input[aria-label="ブランチを絞り込む"]').setValue("zzz");
+    await expect($(".orca-dest-pop .empty")).toBeDisplayed();
+    expect(await textsOf(".orca-dest-pop .empty")).toEqual(["該当するブランチがありません", "該当するブランチがありません"]);
+    expect(await branchRows()).toEqual([]);
+    await browser.waitUntil(async () => ((await callsOf(search)).at(-1) as { query: string } | undefined)?.query === "zzz", { timeoutMsg: "the new text was never asked for" });
+  });
+
+  it("switches to a local branch with the worktree, the kind and the name, then reads the tree and the list of Orca again and keeps the open files (A-25)", async () => {
+    await openFiles(branchFixtures());
+    await openA();
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const files = await mock("orca_files_list", root());
+    const overview = await mock("orca_overview", onFeatC());
+    await branchPick("local", "feat/c").click();
+    expect(await waitForCalls("orca_switch_branch")).toEqual([{ path: "/work/example-app", kind: "local", name: "feat/c", environment: null }]);
+    await expect($(".orca-dest-pop")).not.toExist();
+    await waitForCalls(overview);
+    expect(await waitForCalls(files)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/c");
+    await expect(branchButton()).toHaveText("feat/c");
+    // The open file stays: its tab, and its text.
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+    await expect(tabOf("file:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("switches to a remote branch with its name as Orca lists it (A-25)", async () => {
+    await openBranches();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    await mock("orca_overview", onFeatC());
+    await branchPick("remote", "origin/feat/d").click();
+    expect(await waitForCalls("orca_switch_branch")).toEqual([{ path: "/work/example-app", kind: "remote", name: "origin/feat/d", environment: null }]);
+    await expect($(".orca-dest-pop")).not.toExist();
+  });
+
+  it("only closes the list on the branch the worktree is on, and calls nothing on a branch in use (A-25)", async () => {
+    await openBranches();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    await browser.execute((once) => {
+      if (window.__e2e_once__(once)) document.querySelector<HTMLElement>('.orca-dest-pop .orca-branch-row[data-name="main"]')!.click();
+    }, onceId());
+    await expect($(".orca-dest-pop")).toBeDisplayed();
+    await branchPick("local", "feat/a").click();
+    await expect($(".orca-dest-pop")).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf("orca_switch_branch")).toEqual([]);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("says a switch that worked with a warning in a notice and reads again (A-25)", async () => {
+    await openBranches({ orca_switch_branch: { branch: "feat/c", warning: "post-checkout hook failed" } });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const overview = await mock("orca_overview", onFeatC());
+    await branchPick("local", "feat/c").click();
+    await expect($(".toast")).toHaveText(expect.stringContaining("feat/c に切り替えました: post-checkout hook failed"));
+    await waitForCalls(overview);
+    await expect($("#error")).not.toBeDisplayed();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/c");
+  });
+
+  it("shows Orca's refusal in the error, and reads nothing again (A-25)", async () => {
+    await openBranches({ orca_switch_branch: rejects("未コミットの変更があるため切り替えられません") });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const overview = await mock("orca_overview", onFeatC());
+    const files = await mock("orca_files_list", root());
+    await branchPick("local", "feat/c").click();
+    await expect($("#error")).toHaveText("未コミットの変更があるため切り替えられません");
+    await expect($(".orca-dest-pop")).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf(overview)).toEqual([]);
+    expect(await callsOf(files)).toEqual([]);
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
+  });
+
+  it("shows the message of the branches that cannot be read in their section, and the other section stays (A-25)", async () => {
+    await openBranches({ orca_local_branches: rejects("worktree が見つかりません") });
+    await expect($(".orca-dest-pop .empty.fail")).toHaveText("worktree が見つかりません");
+    await waitForCount(".orca-dest-pop .orca-branch-row", 2);
+    expect(await branchRows()).toEqual(["origin/feat/a", "origin/feat/d"]);
+  });
+
+  it("leaves the branch of an SSH host's worktree as text (A-25)", async () => {
+    const hostRow = { key: "ssh:s1", name: "s1", status: "working" as const, sessions: 1, atMs: 0 };
+    const hostTree = orcaWorktree("remote-app", "main", { path: "/home/dev/remote-app", projectKey: "ssh:s1" });
+    const remoteRow = orcaRow("remote-app", "main", "Remote task", { projectKey: "ssh:s1", path: "/home/dev/remote-app", paneKey: "tab_remote:leaf_1", handle: "term_remote" });
+    await openOrca(orcaOverview([remoteRow], [hostTree], { ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow] }), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: [], ...branchFixtures() });
+    await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
+    await expect(selectedTab()).toBeDisplayed();
+    await filesToggle().click();
+    await expect($("#orca-files-title")).toHaveText("remote-app ・ main");
+    expect(await count("#orca-files-title button")).toBe(0);
+    expect(await callsOf("orca_local_branches")).toEqual([]);
   });
 });
 
