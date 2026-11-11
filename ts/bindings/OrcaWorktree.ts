@@ -3,7 +3,15 @@
 /**
  * A worktree a launch can start an agent or a terminal in.
  */
-export type OrcaWorktree = { path: string, repo: string, branch: string, 
+export type OrcaWorktree = { path: string, repo: string, 
+/**
+ * Orca's name of the worktree (`displayName`): it is fixed when the worktree is made with a name, so it can differ from the git branch.
+ */
+branch: string, 
+/**
+ * The git branch the worktree is on (`branch` of `orca worktree ps` without `refs/heads/`; empty when it is detached or not given), which the heading of the file pane makes a button (A-25).
+ */
+gitBranch: string, 
 /**
  * The project the worktree belongs to (`OrcaProject::key`; empty when it has none), which the plus of the work pane narrows the worktrees by (A-16).
  */

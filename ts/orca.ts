@@ -654,7 +654,10 @@ function filesWorktree(tabs: Tab[]): { path: string; label: string } | null {
 function drawFiles(tabs: Tab[]) {
   const worktree = filesWorktree(tabs);
   const target = view?.target ?? null;
-  syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
+  // The branch of the heading is a button (A-25) for a worktree of the list that is on a git branch, except an SSH host's, whose branches Rust does not read. It is the git branch, not Orca's name of the worktree.
+  const listed = worktree === null ? undefined : view?.worktrees.find((w) => w.path === worktree.path);
+  const branch = listed !== undefined && listed.gitBranch !== "" && worktree?.label === worktreeLabel(listed) && !projectKey?.startsWith("ssh:") ? listed.gitBranch : null;
+  syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label, project: projectKey ?? "", branch }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
 }
 
 // A file of the file pane was pressed twice: it opens as a tab in the focused pane and is selected, and the editor takes the typing.
@@ -1220,7 +1223,7 @@ export function initOrca() {
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError });
-  initOrcaFiles({ open: openFile, diff: openDiff, toggle: toggleFilesAndDraw });
+  initOrcaFiles({ open: openFile, diff: openDiff, toggle: toggleFilesAndDraw, switched: () => void refreshOrca(true) });
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", () => {
     // A session shown again after the window was hidden is seen.
