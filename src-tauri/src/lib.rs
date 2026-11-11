@@ -324,6 +324,7 @@ pub fn run() {
             orca_files::orca_file_diff,
             orca_files::orca_local_branches,
             orca_files::orca_remote_branches,
+            orca_files::orca_switch_branch,
             orca_files::editor_settings,
             orca_files::editor_settings_set,
             fonts::font_settings,

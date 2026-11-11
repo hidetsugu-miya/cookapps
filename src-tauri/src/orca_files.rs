@@ -8,6 +8,7 @@
 //! The time of the automatic save is saved in `editor-settings.json` in the app config directory.
 //! The difference of a file from HEAD (A-24, `orca_file_diff`) is Orca's `git.diff` (`staged` false, `compareAgainstHead` true): the text at HEAD and the text in the working tree, which `orca_diff.rs` turns into rows.
 //! The branches of a worktree (`orca_local_branches`, `git.localBranches`) and the remote branches found by a text (`orca_remote_branches`, `repo.searchRefs` with `namespace` `remote`) are read here too, for the branch button of the file pane.
+//! The branch of a worktree is switched here too (`orca_switch_branch`, `git.switchBranch`): a local or a remote branch, never a new one, and Orca's refusal is shown in its own words.
 //! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
 
 use std::{
@@ -62,6 +63,9 @@ const TEMP_TRIES: u32 = 1000;
 const DIFF_TOO_LARGE: &str = "差分が大きすぎて表示できません";
 const NOT_LISTED: &str = "ファイルの一覧を読めません";
 const NOT_BRANCHES: &str = "ブランチの一覧を読めません";
+const NOT_SWITCHED: &str = "ブランチを切り替えた結果を読めません";
+const UPDATE_ORCA: &str =
+    "この Orca は、ブランチの切り替えに対応していません。Orca を更新してください";
 /// The most remote branches one search asks for (the number of Orca's own branch picker).
 const BRANCH_LIMIT: u32 = 50;
 /// The longest text of a search, in bytes (Orca's limit for a search text).
@@ -139,6 +143,16 @@ pub struct OrcaLocalBranch {
 pub struct OrcaRemoteBranch {
     pub name: String,
     pub local_name: String,
+}
+
+/// A switch that landed: the branch the worktree is on now, and Orca's `warning` when the switch worked but a step after it did not (a hook that failed, a file another program holds open).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaBranchSwitched {
+    pub branch: String,
+    pub warning: Option<String>,
 }
 
 /// What Orca did with a save: wrote it, or refused because the disk no longer holds the text that was read (`changed`: another text, `missing`: no file, `not-utf8`: bytes that are not text).
@@ -894,6 +908,68 @@ fn branch_reason(error: CallError) -> String {
     }
 }
 
+/// What a switch asks for: `kind` is `local` or `remote` (never `new`, which makes a branch), and the name, trimmed, is not empty, does not start with `-` (git would read it as an option) and has no control character.
+fn check_switch(kind: &str, name: &str) -> Result<(&'static str, String), String> {
+    let kind = match kind {
+        "local" => "local",
+        "remote" => "remote",
+        _ => return Err("ブランチの種類が正しくありません".into()),
+    };
+    let name = name.trim();
+    if name.is_empty() || name.starts_with('-') || name.chars().any(char::is_control) {
+        return Err("ブランチの名前が正しくありません".into());
+    }
+    Ok((kind, name.to_owned()))
+}
+
+/// An answer of `git.switchBranch` (`{ok, branch, head}`, with `warning` when the switch worked but a later step failed).
+fn parse_switched(result: &Value) -> Result<OrcaBranchSwitched, String> {
+    let branch = result["branch"]
+        .as_str()
+        .filter(|branch| !branch.is_empty())
+        .ok_or(NOT_SWITCHED)?;
+    Ok(OrcaBranchSwitched {
+        branch: branch.to_owned(),
+        warning: result["warning"]
+            .as_str()
+            .filter(|warning| !warning.is_empty())
+            .map(str::to_owned),
+    })
+}
+
+/// The message of a refused switch: Orca's own words (it refuses with the reason: changes not committed, a merge in progress, an agent at work), or, for an Orca that lacks the method, the request to update it. A failure with no message of Orca's (the connection) keeps its own text.
+fn switch_reason(error: CallError) -> String {
+    if error.shown.contains("method_not_found") {
+        UPDATE_ORCA.into()
+    } else if error.detail.trim().is_empty() {
+        error.shown
+    } else {
+        error.detail
+    }
+}
+
+/// Switches the worktree at `path` (on `host_id`) to the branch `name` of `kind` (`local`, or `remote` for a name like `origin/a`). `git.switchBranch` refuses when the checkout is not clean, so nothing is lost by a switch.
+async fn switch_branch(
+    rpc: &mut impl Rpc,
+    path: &str,
+    host_id: &str,
+    kind: &str,
+    name: &str,
+) -> Result<OrcaBranchSwitched, String> {
+    let answer = rpc
+        .call(
+            "git.switchBranch",
+            worktree_params(
+                path,
+                Some(host_id),
+                json!({"target": {"kind": kind, "name": name}}),
+            ),
+        )
+        .await
+        .map_err(switch_reason)?;
+    parse_switched(&answer)
+}
+
 // ---- the commands ----
 
 /// An SSH host has no file calls (its `hostId` is `ssh:{id}`), as A-10 found.
@@ -1034,6 +1110,25 @@ pub async fn orca_remote_branches(
         remote_branches(&mut connection, &repo, &query).await
     };
     forgetting(asked.await, &path, environment.as_deref())
+}
+
+/// Switches the worktree at `path` to a local branch, or to a remote one (`kind` `remote`, `name` like `origin/feature/a`; Orca makes the local branch). `kind` `new` is refused. This writes to the worktree, so the target's list is read each time, as a save does, and what was believed of the worktree is thrown away after the call, whatever it answered. Orca's refusal comes back in its own words.
+#[tauri::command]
+pub async fn orca_switch_branch(
+    path: String,
+    kind: String,
+    name: String,
+    environment: Option<String>,
+) -> Result<OrcaBranchSwitched, String> {
+    let (kind, name) = check_switch(&kind, &name)?;
+    let host_id = host_of(&path, environment.as_deref()).await?;
+    let asked = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        switch_branch(&mut connection, &path, &host_id, kind, &name).await
+    };
+    let switched = asked.await;
+    forget_worktree_host(&path, environment.as_deref());
+    switched
 }
 
 /// Saves the text of the editor over the file it was read from, if the disk still holds what was read (`signature`), and answers what happened (A-18). It is not tried again: a failure carries its message.
@@ -1616,6 +1711,142 @@ mod tests {
             remote_branches(&mut orca, "r", "").await.unwrap_err(),
             "Orca がエラーを返しました（runtime_error）"
         );
+    }
+
+    #[test]
+    fn a_switch_takes_a_local_or_a_remote_branch_and_never_a_new_one() {
+        assert_eq!(
+            check_switch("local", "feature/日本語").unwrap(),
+            ("local", "feature/日本語".to_owned())
+        );
+        assert_eq!(
+            check_switch("remote", "  origin/feature/a \t").unwrap(),
+            ("remote", "origin/feature/a".to_owned())
+        );
+        for kind in ["new", "", "Local", "remote ", "detached"] {
+            assert!(check_switch(kind, "main").is_err(), "{kind:?}");
+        }
+        for name in [
+            "",
+            "  ",
+            "-x",
+            " --detach",
+            "a\nb",
+            "a\0b",
+            "a\u{7f}b",
+            "\u{1b}[0m",
+        ] {
+            assert!(check_switch("local", name).is_err(), "{name:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_switch_asks_the_worktree_on_its_host_for_the_branch() {
+        let mut orca = fake(vec![(
+            "git.switchBranch",
+            Ok(json!({"ok": true, "branch": "feature/a", "head": "0123abc"})),
+        )]);
+        let switched = switch_branch(&mut orca, "/work/a", "local", "local", "feature/a")
+            .await
+            .unwrap();
+        assert_eq!(
+            switched,
+            OrcaBranchSwitched {
+                branch: "feature/a".into(),
+                warning: None
+            }
+        );
+        assert_eq!(
+            orca.calls,
+            [(
+                "git.switchBranch".to_owned(),
+                json!({
+                    "worktree": "path:/work/a",
+                    "expectedExecutionHostId": "local",
+                    "target": {"kind": "local", "name": "feature/a"},
+                })
+            )]
+        );
+        let mut orca = fake(vec![("git.switchBranch", Ok(json!({"branch": "a"})))]);
+        switch_branch(&mut orca, "/w", "env-1", "remote", "origin/a")
+            .await
+            .unwrap();
+        assert_eq!(
+            orca.calls[0].1["target"],
+            json!({"kind": "remote", "name": "origin/a"})
+        );
+        assert_eq!(orca.calls[0].1["expectedExecutionHostId"], "env-1");
+    }
+
+    #[tokio::test]
+    async fn a_switch_that_landed_with_a_warning_is_a_success_with_the_warning() {
+        let warning = "Switched to a, but 1 file kept the old branch's content because another program has it open (x.txt).";
+        let mut orca = fake(vec![(
+            "git.switchBranch",
+            Ok(json!({"ok": true, "branch": "a", "head": "0123abc", "warning": warning})),
+        )]);
+        assert_eq!(
+            switch_branch(&mut orca, "/w", "local", "local", "a")
+                .await
+                .unwrap(),
+            OrcaBranchSwitched {
+                branch: "a".into(),
+                warning: Some(warning.into())
+            }
+        );
+        // An empty warning is none, and an answer with no branch is not a switch that can be told.
+        assert_eq!(
+            parse_switched(&json!({"branch": "a", "warning": ""})).unwrap(),
+            OrcaBranchSwitched {
+                branch: "a".into(),
+                warning: None
+            }
+        );
+        for bad in [json!({"ok": true}), json!({"branch": ""}), json!("x")] {
+            assert_eq!(parse_switched(&bad).unwrap_err(), NOT_SWITCHED, "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_switch_orca_refuses_gives_orcas_own_words() {
+        let message = "Commit or discard 2 changed files before switching branches.";
+        let mut orca = fake(vec![(
+            "git.switchBranch",
+            Err(("Orca がエラーを返しました（runtime_error）", message)),
+        )]);
+        assert_eq!(
+            switch_branch(&mut orca, "/w", "local", "local", "a")
+                .await
+                .unwrap_err(),
+            message
+        );
+        // A failed connection has no message of Orca's, so its own text is shown.
+        let mut orca = fake(vec![(
+            "git.switchBranch",
+            Err(("Orca が起動していません", "")),
+        )]);
+        assert_eq!(
+            switch_branch(&mut orca, "/w", "local", "local", "a")
+                .await
+                .unwrap_err(),
+            "Orca が起動していません"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_orca_without_the_switch_is_asked_to_be_updated() {
+        let mut orca = fake(vec![(
+            "git.switchBranch",
+            Err((
+                "Orca がエラーを返しました（method_not_found）",
+                "Unknown method: git.switchBranch",
+            )),
+        )]);
+        let error = switch_branch(&mut orca, "/w", "local", "local", "a")
+            .await
+            .unwrap_err();
+        assert_eq!(error, UPDATE_ORCA);
+        assert!(error.contains("Orca を更新"));
     }
 
     #[tokio::test]
