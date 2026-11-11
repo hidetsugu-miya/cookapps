@@ -121,8 +121,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #inbox-header { padding: 16px 32px 10px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #slack-header { padding: 14px 24px 10px 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #slack-header .icon-btn { color: #444746; border-radius: 50%; }
-#unread-heading .text-btn:disabled, #slack-header .text-btn:disabled { opacity: .4; cursor: default; }
-#unread-heading .text-btn:disabled:hover, #slack-header .text-btn:disabled:hover { background: #fff; }
+#unread-heading .text-btn:disabled { opacity: .4; cursor: default; }
+#unread-heading .text-btn:disabled:hover { background: #fff; }
 /* The right-hand group starts at the first button that is shown: the AI summary button, or the Slack button while the summary button is hidden. */
 #mail-header #thread-summary:not([hidden]), #mail-header #thread-summary[hidden] + #thread-slack { margin-left: auto; }
 #thread-head { margin: 16px 0 20px 56px; font-size: calc(22px * var(--fs)); line-height: 1.35; }
@@ -1142,7 +1142,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .feed-row { position: relative; z-index: 0; display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 14px; width: 100%; box-sizing: border-box; padding: 10px 16px; border-radius: 12px; }
 .feed-open { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 12px; background: transparent; cursor: pointer; }
 .feed-row > :not(.feed-open) { position: relative; z-index: 1; pointer-events: none; }
-.feed-row a, .feed-thread-toggle { pointer-events: auto; }
+.feed-row a, .feed-thread-toggle, .feed-thread-open { pointer-events: auto; }
 .feed-item { position: relative; }
 .feed-item:hover .feed-row { background: var(--hover); }
 .feed-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -1150,14 +1150,8 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .feed-ws { pointer-events: auto; position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; }
 .feed-main { min-width: 0; }
 .feed-meta { display: flex; align-items: baseline; gap: 8px; font-size: calc(13px * var(--fs)); }
-.feed-read, .feed-hide, .feed-watch { position: absolute; top: 8px; visibility: hidden; }
-.feed-read { right: 92px; }
-.feed-hide { right: 52px; }
-.feed-watch { right: 12px; }
-/* The two buttons over the end of the text get the hover background of the row, so that the text under them does not show through; `.icon-btn:hover` (more specific) still marks the button under the pointer. */
-.feed-read, .feed-hide { background: var(--hover); }
-.feed-item.feed-keep .feed-read, .feed-item.feed-keep .feed-hide, .feed-item.feed-keep .feed-watch { visibility: visible; }
-.feed-item:hover .feed-read, .feed-item:focus-within .feed-read, .feed-item:hover .feed-hide, .feed-item:focus-within .feed-hide, .feed-item:hover .feed-watch, .feed-item:focus-within .feed-watch { visibility: visible; }
+.feed-watch { position: absolute; top: 8px; right: 12px; visibility: hidden; }
+.feed-item.feed-keep .feed-watch, .feed-item:hover .feed-watch, .feed-item:focus-within .feed-watch { visibility: visible; }
 /* A watched row keeps its bookmark shown, and the date moves left of it. */
 .feed-item.watched .feed-watch { visibility: visible; }
 .feed-item.watched .feed-row { padding-right: 56px; }
@@ -1168,7 +1162,21 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .feed-text.muted { color: var(--muted); }
 .feed-new { display: block; margin-top: 3px; font-size: calc(12px * var(--fs)); font-weight: bold; color: var(--accent); }
 .feed-item:hover .feed-date, .feed-item:focus-within .feed-date { visibility: hidden; }
-.feed-more { display: flex; justify-content: center; padding: 6px 0; }
+/* A channel's group in the unread section (S-8): its heading, then the messages under the day they were sent. */
+.feed-group { margin-top: 12px; }
+.feed-chan { display: flex; align-items: center; gap: 8px; margin-right: 4px; padding: 6px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bar); font-size: calc(13px * var(--fs)); }
+.feed-chan-ic { flex: none; display: flex; width: 16px; height: 16px; color: var(--muted); }
+.feed-chan-ic svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.feed-chan-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.feed-chan-ws { position: static; flex: none; width: 8px; height: 8px; border: 0; }
+.feed-chan-team { min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
+.feed-chan-count { flex: none; font-size: calc(12px * var(--fs)); color: var(--muted); }
+.feed-chan-read { flex: none; }
+.feed-day { display: flex; align-items: center; gap: 10px; margin: 10px 16px 4px; font-size: calc(12px * var(--fs)); color: var(--muted); }
+.feed-day::before, .feed-day::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.feed-day span { padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; }
+.feed-thread-open { display: block; margin-top: 3px; padding: 0; border: 0; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); font-weight: bold; color: var(--accent); cursor: pointer; }
+.feed-thread-open:hover { text-decoration: underline; }
 .feed-meta b { font-weight: 600; }
 .feed-row.unread { font-weight: bold; }
 .feed-row.unread .feed-meta b { font-weight: 700; }

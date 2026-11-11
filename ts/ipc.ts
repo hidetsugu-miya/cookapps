@@ -14,7 +14,6 @@ import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
 import type { MailSummary } from "./bindings/MailSummary";
-import type { MarkAll } from "./bindings/MarkAll";
 import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
@@ -148,9 +147,9 @@ export interface Commands {
     args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string };
     result: boolean;
   };
-  // The newest 20 rows of the joined channels (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
+  // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
-  // `unreadTotal` the unread messages among all those held and the unread replies (the Slack button's badge), `markableChannels` the channels "すべて既読にする" would move, `unreadThreads` the threads it would clear, `arrived` the unread messages this read found that the one before did not hold (newest first, none at the first read after the start). Messages are kept in memory only.
+  // `unreadTotal` the unread messages among all those held and the unread replies (the Slack button's badge), `unreadChannels` the channels with something unread, each with its number of unread messages, the newest one (`to`) that "既読に設定" sets the position to, and its threads with unread replies, `arrived` the unread messages this read found that the one before did not hold (newest first, none at the first read after the start). Messages are kept in memory only.
   // With `cached` true nothing is asked of Slack: the list is made again from what Rust holds (after a channel was hidden or put back).
   slack_timeline: { args: { cached: boolean } | undefined; result: Timeline };
   // The channels kept off the Slack list, in the order they were hidden, with the channel's name (its ID when the name is not known). Slack itself is not told (its mute cannot be read).
@@ -159,8 +158,6 @@ export interface Commands {
   slack_unhide_channel: { args: { teamId: string; channel: string }; result: boolean };
   // Sets the channel's read position to the message `ts` in Slack (`conversations.mark`), only when it is later than the one held; true when it was sent.
   slack_mark_read: { args: { teamId: string; channel: string; ts: string }; result: boolean };
-  // Sets the read position of every channel with an unread message (among all those held) to its newest unread message; the channels kept off the list and the workspaces whose token cannot write it are left out. Every thread with unread replies is seen up to its newest (kept here, for every workspace).
-  slack_mark_all_read: { args: undefined; result: MarkAll };
   // Watches the thread `ts` (its own message's ts): the replies that exist now are not new. With `seenTs` (what `slack_unwatch` answered) it is put back as it was and Slack is asked nothing.
   slack_watch: { args: { teamId: string; channel: string; ts: string; seenTs?: string | null }; result: boolean };
   // Lets the thread go; answers the reply it had been seen up to (null: it was not watched).

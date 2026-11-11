@@ -3,13 +3,14 @@ import type { SideWorkspace } from "./SideWorkspace";
 import type { TimelineFailure } from "./TimelineFailure";
 import type { TimelineMessage } from "./TimelineMessage";
 import type { TimelineMissing } from "./TimelineMissing";
+import type { UnreadChannel } from "./UnreadChannel";
 
 /**
  * The unread messages of every joined channel of every workspace, newest first, the watched threads, and when to read again.
  */
 export type Timeline = { 
 /**
- * The unread messages (the newest `UNREAD_MAX`), newest first, without the threads that are watched.
+ * The unread messages (the newest `UNREAD_PER_CHANNEL` of each channel) and the threads with unread replies, newest first, without the threads that are watched.
  */
 messages: Array<TimelineMessage>, 
 /**
@@ -25,13 +26,9 @@ pendingChannels: number,
  */
 unreadTotal: number, 
 /**
- * The channels "すべて既読にする" would move (`mark_targets`): 0 when there is nothing to do.
+ * The channels with something unread, for the "既読に設定" of each (`unread_channels`).
  */
-markableChannels: number, 
-/**
- * The threads with unread replies "すべて既読にする" would clear (S-14).
- */
-unreadThreads: number, 
+unreadChannels: Array<UnreadChannel>, 
 /**
  * The unread messages (S-8, as `unread` says) this read found that the one before it did not hold, newest first, `UNREAD_MAX` at most, for the pop-up of a new message.
  * Empty for the first read after the start, for a channel this read is the first to know the read position of, and for the messages of a watched thread (S-13).

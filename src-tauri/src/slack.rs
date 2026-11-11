@@ -387,7 +387,7 @@ fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
     missing_scopes(scopes, &HISTORY_SCOPES)
 }
 
-/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message or "すべて既読にする" sets (`channels:write`, `groups:write`).
+/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message or "既読に設定" sets (`channels:write`, `groups:write`).
 /// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`.
 const OPTIONAL_SCOPES: [&str; 4] = ["users:read", "files:read", "channels:write", "groups:write"];
 
@@ -1399,8 +1399,10 @@ pub async fn slack_post(
 
 // The Slack timeline (S-5), the thread (S-6) and its reply (S-6, S-7). Nothing about messages is saved to disk.
 
-/// The most unread messages the timeline lists (the newest of the messages the cache holds).
+/// The most unread messages one answer lists as `arrived` (the newest of the messages the cache holds).
 const UNREAD_MAX: usize = 20;
+/// The most rows the unread section lists for one channel (S-8): the newest.
+const UNREAD_PER_CHANNEL: usize = 10;
 /// The most watched threads one read asks `conversations.replies` about, over all workspaces: the ones never checked first, then the ones checked longest ago.
 const WATCH_BUDGET: usize = 20;
 /// The most threads one read asks `conversations.replies` about for their unread replies (S-14), over all workspaces (`choose_thread_checks`).
@@ -1564,7 +1566,7 @@ pub struct TimelineMissing {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct Timeline {
-    /// The unread messages (the newest `UNREAD_MAX`), newest first, without the threads that are watched.
+    /// The unread messages (the newest `UNREAD_PER_CHANNEL` of each channel) and the threads with unread replies, newest first, without the threads that are watched.
     messages: Vec<TimelineMessage>,
     /// The watched threads (S-13), the newest activity first; each is `Some` in `watch`.
     watched: Vec<TimelineMessage>,
@@ -1575,10 +1577,8 @@ pub struct Timeline {
     pending_channels: u32,
     /// The unread messages among all the messages held (not only the ones listed), channels kept off the list left out, and the unread replies (S-14; a thread that cannot be counted counts 1); the sidebar's badge.
     unread_total: u32,
-    /// The channels "すべて既読にする" would move (`mark_targets`): 0 when there is nothing to do.
-    markable_channels: u32,
-    /// The threads with unread replies "すべて既読にする" would clear (S-14).
-    unread_threads: u32,
+    /// The channels with something unread, for the "既読に設定" of each (`unread_channels`).
+    unread_channels: Vec<UnreadChannel>,
     /// The unread messages (S-8, as `unread` says) this read found that the one before it did not hold, newest first, `UNREAD_MAX` at most, for the pop-up of a new message.
     /// Empty for the first read after the start, for a channel this read is the first to know the read position of, and for the messages of a watched thread (S-13).
     /// The same message is in the answer once: a read from the cache (`cached: true`) decides it as a full read does.
@@ -1785,8 +1785,6 @@ struct TimelineCache {
     threads: Mutex<HashMap<WatchKey, ThreadEntry>>,
     /// The same as `info_limited_until`, for `conversations.replies`.
     replies_limited_until: Mutex<HashMap<String, Instant>>,
-    /// The same, for `conversations.mark` ("すべて既読にする").
-    mark_limited_until: Mutex<HashMap<String, Instant>>,
     /// The newest message of each channel the last read decided arrivals over (`arrivals`); `None` until the first read after the start.
     arrival_marks: Mutex<Option<ArrivalMarks>>,
 }
@@ -1825,7 +1823,6 @@ impl TimelineCache {
             .unwrap()
             .retain(|(t, _, _), _| t != team_id);
         self.replies_limited_until.lock().unwrap().remove(team_id);
-        self.mark_limited_until.lock().unwrap().remove(team_id);
         if let Some(marks) = self.arrival_marks.lock().unwrap().as_mut() {
             marks.retain(|(t, _), _| t != team_id);
         }
@@ -1921,15 +1918,6 @@ impl TimelineCache {
 
     fn replies_limited(&self, team_id: &str) -> bool {
         stopped(&self.replies_limited_until, team_id)
-    }
-
-    /// The workspace's `conversations.mark` calls stop for `wait`.
-    fn limit_mark(&self, team_id: &str, wait: Duration) {
-        stop_until(&self.mark_limited_until, team_id, wait);
-    }
-
-    fn mark_limited(&self, team_id: &str) -> bool {
-        stopped(&self.mark_limited_until, team_id)
     }
 
     fn own_user(&self, team_id: &str) -> Option<String> {
@@ -2377,14 +2365,17 @@ fn thread_of_message(m: &Raw) -> &str {
     m.thread_ts.as_deref().unwrap_or(&m.ts)
 }
 
+/// Whether the message is one of a watched thread (its own message, or a reply also sent to the channel).
+fn in_watched_thread(m: &Raw, watched: &[Watched]) -> bool {
+    watched
+        .iter()
+        .any(|w| w.team_id == m.team_id && w.channel == m.channel && w.ts == thread_of_message(m))
+}
+
 /// `all` without the messages of the threads that are watched: they are listed in the watch section only.
 fn without_watched_threads(all: Vec<Raw>, watched: &[Watched]) -> Vec<Raw> {
     all.into_iter()
-        .filter(|m| {
-            !watched.iter().any(|w| {
-                w.team_id == m.team_id && w.channel == m.channel && w.ts == thread_of_message(m)
-            })
-        })
+        .filter(|m| !in_watched_thread(m, watched))
         .collect()
 }
 
@@ -2904,33 +2895,80 @@ fn choose_thread_checks(
         .collect()
 }
 
-/// The channels "すべて既読にする" moves, as `(team, channel, ts)`: for each channel of a workspace `writable` allows that holds an unread message, the newest unread one,
-/// in the order the channels first come in `all`.
-fn mark_targets(
-    all: &[Raw],
-    unread: impl Fn(&Raw) -> bool,
-    writable: impl Fn(&str) -> bool,
-) -> Vec<(String, String, String)> {
-    let mut targets: Vec<(String, String, String)> = Vec::new();
-    for m in all.iter().filter(|m| writable(&m.team_id) && unread(m)) {
-        match targets
-            .iter_mut()
-            .find(|(team, channel, _)| *team == m.team_id && *channel == m.channel)
-        {
-            Some(slot) => {
-                if ts_key(&m.ts) > ts_key(&slot.2) {
-                    slot.2 = m.ts.clone();
-                }
-            }
-            None => targets.push((m.team_id.clone(), m.channel.clone(), m.ts.clone())),
-        }
-    }
-    targets
+/// What "既読に設定" of a channel of the unread section needs (S-8, S-14).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct UnreadChannel {
+    team_id: String,
+    channel: String,
+    /// The unread messages the section can list for the channel (the watched threads left out), also those past `UNREAD_PER_CHANNEL`.
+    messages: u32,
+    /// The newest unread message among all the messages held of the channel (the watched threads' too): the read position is set to it. `None` when no message is unread.
+    to: Option<String>,
+    /// The threads of the channel with unread replies, each to be seen up to its newest unread reply.
+    threads: Vec<UnreadThreadMark>,
 }
 
-/// Whether the scopes a token was last seen with (`None`: not known) lack the ones that set a read position.
-fn lacks_mark_scope(scopes: Option<&str>) -> bool {
-    scopes.is_some_and(|s| !missing_scopes(s, &["channels:write", "groups:write"]).is_empty())
+/// A thread with unread replies (S-14): its own message's `ts`, and the newest unread reply to see it up to.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct UnreadThreadMark {
+    ts: String,
+    latest_ts: String,
+}
+
+/// The entry of the channel in `channels`, which gets an empty one when it has none.
+fn channel_slot<'a>(
+    channels: &'a mut Vec<UnreadChannel>,
+    team: &str,
+    channel: &str,
+) -> &'a mut UnreadChannel {
+    let at = channels
+        .iter()
+        .position(|c| c.team_id == team && c.channel == channel)
+        .unwrap_or_else(|| {
+            channels.push(UnreadChannel {
+                team_id: team.to_owned(),
+                channel: channel.to_owned(),
+                messages: 0,
+                to: None,
+                threads: Vec::new(),
+            });
+            channels.len() - 1
+        });
+    &mut channels[at]
+}
+
+/// The channels with something unread, in the order they first come in `all` (newest first) and then in `threads`: for each, the unread messages the section lists (`all` without the watched threads),
+/// the newest unread one among all of `all`, and the threads with unread replies.
+fn unread_channels(
+    all: &[Raw],
+    watched: &[Watched],
+    threads: &[UnreadThread],
+    unread: impl Fn(&Raw) -> bool,
+) -> Vec<UnreadChannel> {
+    let mut channels: Vec<UnreadChannel> = Vec::new();
+    for m in all.iter().filter(|m| unread(m)) {
+        let c = channel_slot(&mut channels, &m.team_id, &m.channel);
+        if !in_watched_thread(m, watched) {
+            c.messages = c.messages.saturating_add(1);
+        }
+        if c.to.as_deref().is_none_or(|to| ts_key(&m.ts) > ts_key(to)) {
+            c.to = Some(m.ts.clone());
+        }
+    }
+    for t in threads {
+        let c = channel_slot(&mut channels, &t.key.0, &t.key.1);
+        c.threads.push(UnreadThreadMark {
+            ts: t.key.2.clone(),
+            latest_ts: t.unread.newest.clone(),
+        });
+    }
+    channels
 }
 
 /// The hidden channels of the workspaces that are connected, with the name `name_of(team, channel)` gives, or the ID when it gives none.
@@ -3179,13 +3217,27 @@ fn newest_first(mut all: Vec<Raw>) -> Vec<Raw> {
     all
 }
 
-/// The messages the list shows, from `sorted` (newest first): the newest `UNREAD_MAX` unread ones, still newest first. Read messages are not listed (S-13).
-fn select_timeline(sorted: Vec<Raw>, unread: impl Fn(&Raw) -> bool) -> Vec<Raw> {
-    sorted
+/// `items` (newest first) with only the first `UNREAD_PER_CHANNEL` of each channel (`channel_of` gives the team and the channel), in the same order.
+fn newest_per_channel<T>(items: Vec<T>, channel_of: impl Fn(&T) -> (&str, &str)) -> Vec<T> {
+    let mut taken: HashMap<(String, String), usize> = HashMap::new();
+    items
         .into_iter()
-        .filter(|m| unread(m))
-        .take(UNREAD_MAX)
+        .filter(|item| {
+            let (team, channel) = channel_of(item);
+            let n = taken
+                .entry((team.to_owned(), channel.to_owned()))
+                .or_insert(0);
+            *n += 1;
+            *n <= UNREAD_PER_CHANNEL
+        })
         .collect()
+}
+
+/// The messages the list shows, from `sorted` (newest first): the newest `UNREAD_PER_CHANNEL` unread ones of each channel, still newest first. Read messages are not listed (S-13).
+fn select_timeline(sorted: Vec<Raw>, unread: impl Fn(&Raw) -> bool) -> Vec<Raw> {
+    newest_per_channel(sorted.into_iter().filter(|m| unread(m)).collect(), |m| {
+        (m.team_id.as_str(), m.channel.as_str())
+    })
 }
 
 /// (team, channel) -> the `ts` (as `ts_key`) of the newest message held when arrivals were last decided.
@@ -4403,7 +4455,7 @@ struct TopRow {
 }
 
 /// The rows of the unread section from the unread messages `messages` and the threads with unread replies: a thread whose parent is one of the messages adds to its row, another has a row of its own.
-/// The newest of the row's own unread message and its unread replies first, `UNREAD_MAX` at most.
+/// The newest of the row's own unread message and its unread replies first, `UNREAD_PER_CHANNEL` at most for each channel.
 fn merge_thread_rows(
     messages: Vec<Raw>,
     threads: Vec<UnreadThread>,
@@ -4436,20 +4488,18 @@ fn merge_thread_rows(
                 .max(),
         )
     });
-    rows.truncate(UNREAD_MAX);
-    rows
+    newest_per_channel(rows, |r| (r.raw.team_id.as_str(), r.raw.channel.as_str()))
 }
 
-/// What the list is made of: the rows of the unread section, the number of unread messages among all the messages held and of unread replies, the channels "すべて既読にする" would move and the threads it would clear.
+/// What the list is made of: the rows of the unread section, the number of unread messages among all the messages held and of unread replies, and the channels with something unread.
 struct Picked {
     top: Vec<TopRow>,
     unread_total: u32,
-    markable_channels: u32,
-    unread_threads: u32,
+    channels: Vec<UnreadChannel>,
 }
 
 /// The rows the list shows (`select_timeline`, the watched threads left out: they are in the watch section, and `merge_thread_rows` with the threads with unread replies) among `all` (newest first),
-/// the number of unread ones among all of `all` and of `threads`, and the channels `mark_targets` finds, by the read positions, the user IDs and the scopes the cache holds.
+/// the number of unread ones among all of `all` and of `threads`, and the channels `unread_channels` finds, by the read positions and the user IDs the cache holds.
 fn pick_timeline(
     cache: &TimelineCache,
     all: Vec<Raw>,
@@ -4457,8 +4507,7 @@ fn pick_timeline(
     mut threads: Vec<UnreadThread>,
 ) -> Picked {
     let unread = |m: &Raw| unread_by_cache(cache, m);
-    let writable = |team: &str| !lacks_mark_scope(cache.scopes(team).as_deref());
-    let markable = mark_targets(&all, unread, writable).len();
+    let channels = unread_channels(&all, watched, &threads, unread);
     // A parent that is still held is drawn from what `conversations.history` said last.
     for thread in &mut threads {
         let (team, channel, ts) = &thread.key;
@@ -4472,8 +4521,7 @@ fn pick_timeline(
     let replies: u32 = threads.iter().map(|t| t.unread.share()).sum();
     Picked {
         unread_total: count_unread(&all, unread).saturating_add(replies),
-        markable_channels: u32::try_from(markable).unwrap_or(u32::MAX),
-        unread_threads: u32::try_from(threads.len()).unwrap_or(u32::MAX),
+        channels,
         top: merge_thread_rows(
             select_timeline(without_watched_threads(all, watched), unread),
             threads,
@@ -4609,8 +4657,7 @@ fn cached_timeline(
         refresh_secs: refresh_secs(pending, largest, unchecked),
         pending_channels: u32::try_from(pending).unwrap_or(u32::MAX),
         unread_total: picked.unread_total,
-        markable_channels: picked.markable_channels,
-        unread_threads: picked.unread_threads,
+        unread_channels: picked.channels,
         arrived: arrived_messages(cache, workspaces, &arrived),
         side,
     }
@@ -4628,7 +4675,7 @@ fn arrived_messages(
         .collect()
 }
 
-/// The newest `UNREAD_MAX` unread messages (`select_timeline`) of the joined public and private channels (no direct messages) of every workspace, with the threads with unread replies (S-14), newest first, and the watched threads (S-13).
+/// The newest `UNREAD_PER_CHANNEL` unread messages of each channel (`select_timeline`) of the joined public and private channels (no direct messages) of every workspace, with the threads with unread replies (S-14), newest first, and the watched threads (S-13).
 /// A workspace that cannot be read at all is in `failed`; the scopes a token lacks are in `missing`. Messages are kept in memory only.
 /// With `cached` true nothing is asked of Slack and no token is read: the list is made again from what the cache holds (`cached_timeline`), as after a channel was hidden or put back.
 #[tauri::command]
@@ -4887,8 +4934,7 @@ pub async fn slack_timeline(
         refresh_secs: live_refresh_secs(refresh_secs(pending, largest, unchecked), live),
         pending_channels: u32::try_from(pending).unwrap_or(u32::MAX),
         unread_total: picked.unread_total,
-        markable_channels: picked.markable_channels,
-        unread_threads: picked.unread_threads,
+        unread_channels: picked.channels,
         arrived: arrived_messages(&state.timeline, &workspaces, &arrived),
         side,
     })
@@ -5267,104 +5313,6 @@ pub async fn slack_mark_read(
     .map_err(|e| log_failure(command, &team_id, e))?;
     state.timeline.advance_last_read(&team_id, &channel, &ts);
     Ok(true)
-}
-
-/// What "すべて既読にする" did: the channels whose read position was moved, and the ones it could not move (they stay unread until the next read).
-#[derive(Serialize, Debug, PartialEq)]
-#[cfg_attr(test, derive(TS))]
-#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
-#[serde(rename_all = "camelCase")]
-pub struct MarkAll {
-    marked: u32,
-    failed: u32,
-}
-
-/// Sets the read position of every channel with an unread message among all the messages held (not only the ones listed) to its newest unread message (`mark_targets`),
-/// `conversations.mark`, `HISTORY_CONCURRENCY` at a time for each workspace. The channels kept off the list and the workspaces whose token lacks `channels:write` or `groups:write` are left out.
-/// A rate limit (429) ends that workspace's calls for the round (the channels not reached are `failed`). The position held moves only for a channel Slack accepted.
-/// Every thread with unread replies is seen up to its newest (S-14): that is kept here, so no scope is needed and Slack has no say in it. A failure to save it is the answer, after the calls.
-#[tauri::command]
-pub async fn slack_mark_all_read(
-    app: AppHandle,
-    auth: State<'_, Auth>,
-    state: State<'_, SlackState>,
-) -> Result<MarkAll, String> {
-    let command = "slack_mark_all_read";
-    let dir = config_dir(&app)?;
-    let workspaces = load_workspaces(&dir)
-        .await
-        .map_err(|e| log_failure(command, "-", e))?;
-    let hidden = load_hidden(&dir).await;
-    let cache = &state.timeline;
-    let watched = load_watched(&dir).await;
-    let seen = load_thread_seen(&dir).await;
-    let moves: Vec<(WatchKey, String)> = unread_threads(
-        cache,
-        &state.channels,
-        &workspaces,
-        &hidden,
-        &watched,
-        &seen,
-    )
-    .into_iter()
-    .map(|t| (t.key, t.unread.newest))
-    .collect();
-    let saved = {
-        let _files = state.files.lock().await;
-        let dir = dir.clone();
-        blocking(move || save_seen_moves(&dir, moves)).await
-    };
-    let targets = mark_targets(
-        &held_messages(cache, &workspaces, &hidden),
-        |m| unread_by_cache(cache, m),
-        |team| !lacks_mark_scope(cache.scopes(team).as_deref()),
-    );
-    let mut tokens: HashMap<String, Option<String>> = HashMap::new();
-    let (mut failed, mut calls) = (0u32, Vec::new());
-    for (team, channel, ts) in targets {
-        // A workspace Slack rate-limited stays untouched until its `Retry-After` has passed: its channels count as failed.
-        if cache.mark_limited(&team) {
-            failed += 1;
-            continue;
-        }
-        if !tokens.contains_key(&team) {
-            let token = token_of(&team)
-                .await
-                .map_err(|e| log_failure(command, &team, e))
-                .ok();
-            tokens.insert(team.clone(), token);
-        }
-        match &tokens[&team] {
-            Some(token) => calls.push(Call {
-                token: token.clone(),
-                form: vec![("channel", channel.clone()), ("ts", ts.clone())],
-                key: (channel, ts),
-                team,
-            }),
-            None => failed += 1,
-        }
-    }
-    let (mut marked, mut logged) = (0u32, HashSet::new());
-    for (team, (channel, ts), got) in call_each(auth.http(), "conversations.mark", calls).await {
-        match got {
-            Some(Ok(_)) => {
-                cache.advance_last_read(&team, &channel, &ts);
-                marked += 1;
-            }
-            Some(Err(e)) => {
-                failed += 1;
-                if let Some(wait) = e.rate_limited {
-                    cache.limit_mark(&team, wait);
-                }
-                if logged.insert(team.clone()) {
-                    log_failure(command, &team, e);
-                }
-            }
-            None => failed += 1,
-        }
-    }
-    saved.map_err(|e| log_failure(command, "-", e))?;
-    Ok(MarkAll { marked, failed })
 }
 
 /// The whole thread that starts with the message `ts` of `channel` (pages of 200, up to 20 pages, as the summary reads it), oldest first, with names, icons and the attached files.
@@ -6735,13 +6683,43 @@ mod tests {
     }
 
     #[test]
-    fn at_most_twenty_unread_are_listed_each_the_newest_and_newest_first_and_read_ones_are_not() {
+    fn at_most_ten_unread_of_a_channel_are_listed_each_the_newest_and_newest_first_and_read_ones_are_not(
+    ) {
         let all = messages_newest_first(60);
         // The newest 30 are unread, the rest are read.
         let chosen = select_timeline(all, |m| secs(m) > 30);
         let order: Vec<usize> = chosen.iter().map(secs).collect();
-        assert_eq!(order, (41..=60).rev().collect::<Vec<_>>());
-        assert_eq!(order.len(), UNREAD_MAX);
+        assert_eq!(order, (51..=60).rev().collect::<Vec<_>>());
+        assert_eq!(order.len(), UNREAD_PER_CHANNEL);
+    }
+
+    #[test]
+    fn the_limit_is_for_each_channel_and_there_is_none_over_all_of_them() {
+        // Three channels of 12 messages each, interleaved newest first: C1 at 36, C2 at 35, C3 at 34, C1 at 33 ...
+        let all: Vec<Raw> = (1..=36)
+            .rev()
+            .map(|i| raw(&format!("C{}", 3 - (36 - i) % 3), &format!("{i}.000000")))
+            .collect();
+        let chosen = select_timeline(all, |_| true);
+        assert_eq!(chosen.len(), 3 * UNREAD_PER_CHANNEL);
+        for channel in ["C1", "C2", "C3"] {
+            let of: Vec<&Raw> = chosen.iter().filter(|m| m.channel == channel).collect();
+            assert_eq!(of.len(), UNREAD_PER_CHANNEL, "{channel}");
+        }
+        // Still newest first over all of them, and each channel's newest are the ones kept.
+        let times: Vec<u64> = chosen.iter().map(|m| ts_key(&m.ts).0).collect();
+        assert!(times.windows(2).all(|w| w[0] > w[1]));
+        assert_eq!(times.last(), Some(&7));
+        // Another workspace's channel of the same ID is its own channel.
+        let mut other: Vec<Raw> = messages_newest_first(12);
+        for m in &mut other {
+            m.team_id = "T2".into();
+        }
+        let both = newest_first([messages_newest_first(12), other].concat());
+        assert_eq!(
+            select_timeline(both, |_| true).len(),
+            2 * UNREAD_PER_CHANNEL
+        );
     }
 
     #[test]
@@ -6980,10 +6958,12 @@ mod tests {
         assert_eq!(all.len(), 34);
         let picked = pick_timeline(&cache, all, &[], Vec::new());
         assert_eq!(picked.unread_total, 25);
-        // 20 of the 25 are listed, and no read one; the one channel with an unread message is what "すべて既読にする" moves.
-        assert_eq!(picked.top.len(), UNREAD_MAX);
+        // 10 of the 25 are listed, and no read one; the channel says it has all 25, and where its position is set to.
+        assert_eq!(picked.top.len(), UNREAD_PER_CHANNEL);
         assert!(picked.top.iter().all(|r| r.raw.channel == "C1"));
-        assert_eq!(picked.markable_channels, 1);
+        assert_eq!(picked.channels.len(), 1);
+        assert_eq!(picked.channels[0].messages, 25);
+        assert_eq!(picked.channels[0].to.as_deref(), Some("1700000030.000000"));
     }
 
     #[test]
@@ -7012,7 +6992,7 @@ mod tests {
         let none = cached_timeline(&cache, &channels, &workspaces, &[], &[], &[]);
         assert_eq!(none.unread_total, 6);
         assert_eq!(none.messages.len(), 6);
-        assert_eq!(none.markable_channels, 2);
+        assert_eq!(none.unread_channels.len(), 2);
         // C3 was never read, so it is pending; a notice of a workspace that is gone is not repeated.
         assert_eq!(none.pending_channels, 1);
         assert_eq!(none.failed, [failure("T1")]);
@@ -8073,7 +8053,8 @@ mod tests {
     }
 
     #[test]
-    fn the_channels_to_mark_are_those_with_an_unread_message_at_their_newest_unread_one() {
+    fn the_channels_with_something_unread_have_their_count_their_newest_unread_one_and_their_threads(
+    ) {
         let mut other = raw("C1", "30.1");
         other.team_id = "T2".into();
         let all = vec![
@@ -8081,40 +8062,63 @@ mod tests {
             raw("C2", "19.1"),
             raw("C1", "18.1"),
             raw("C3", "17.1"),
+            raw("C2", "16.1"),
             other,
         ];
         // The newest of C1 is read; C3 is read. C1's unread one is the older 18.1.
         let unread = |m: &Raw| m.team_id == "T2" || m.ts == "18.1" || m.channel == "C2";
-        let targets = mark_targets(&all, unread, |_| true);
+        let channel = |team: &str, id: &str, messages: u32, to: Option<&str>| UnreadChannel {
+            team_id: team.to_owned(),
+            channel: id.to_owned(),
+            messages,
+            to: to.map(str::to_owned),
+            threads: Vec::new(),
+        };
         assert_eq!(
-            targets,
+            unread_channels(&all, &[], &[], unread),
             [
-                ("T1".to_owned(), "C2".to_owned(), "19.1".to_owned()),
-                ("T1".to_owned(), "C1".to_owned(), "18.1".to_owned()),
-                ("T2".to_owned(), "C1".to_owned(), "30.1".to_owned()),
+                channel("T1", "C2", 2, Some("19.1")),
+                channel("T1", "C1", 1, Some("18.1")),
+                channel("T2", "C1", 1, Some("30.1")),
             ]
         );
         // Several unread ones of a channel: the newest, as a number.
         let several = vec![raw("C1", "9.1"), raw("C1", "10.1"), raw("C1", "8.1")];
         assert_eq!(
-            mark_targets(&several, |_| true, |_| true),
-            [("T1".to_owned(), "C1".to_owned(), "10.1".to_owned())]
+            unread_channels(&several, &[], &[], |_| true),
+            [channel("T1", "C1", 3, Some("10.1"))]
         );
-        // A workspace that may not write is left out; nothing unread is nothing to do.
-        assert!(mark_targets(&all, unread, |team| team != "T1" && team != "T2").is_empty());
-        assert!(mark_targets(&all, |_| false, |_| true).is_empty());
-        assert!(mark_targets(&[], |_| true, |_| true).is_empty());
+        // A message of a watched thread is not in the count, but the position still goes to it when it is the newest.
+        let list = [watched("T1", "C1", "10.1", "10.1")];
+        assert_eq!(
+            unread_channels(&several, &list, &[], |_| true),
+            [channel("T1", "C1", 2, Some("10.1"))]
+        );
+        assert!(unread_channels(&all, &[], &[], |_| false).is_empty());
+        assert!(unread_channels(&[], &[], &[], |_| true).is_empty());
     }
 
     #[test]
-    fn a_token_lacks_the_mark_scopes_only_when_its_scopes_are_known_and_miss_either() {
-        assert!(lacks_mark_scope(Some("channels:history,channels:write")));
-        assert!(lacks_mark_scope(Some("groups:write")));
-        assert!(lacks_mark_scope(Some("")));
-        assert!(!lacks_mark_scope(Some(
-            "channels:write, groups:write, chat:write"
-        )));
-        assert!(!lacks_mark_scope(None));
+    fn a_channel_with_only_unread_replies_is_there_with_its_threads() {
+        let cache = threads_with(vec![
+            unread_read("T1", "C1", "10.000001", &["20.000001", "21.000001"]),
+            unread_read("T1", "C2", "11.000001", &["22.000001"]),
+        ]);
+        let channels = channels_of_t1(&["C1", "C2"]);
+        let workspaces = vec![workspace("T1", "https://one.slack.com/")];
+        let threads = unread_threads(&cache, &channels, &workspaces, &[], &[], &[]);
+        let found = unread_channels(&[raw("C2", "40.000001")], &[], &threads, |_| true);
+        let c2 = &found[0];
+        assert_eq!((c2.channel.as_str(), c2.messages), ("C2", 1));
+        assert_eq!(c2.threads.len(), 1);
+        assert_eq!(c2.threads[0].ts, "11.000001");
+        assert_eq!(c2.threads[0].latest_ts, "22.000001");
+        let c1 = &found[1];
+        assert_eq!(
+            (c1.channel.as_str(), c1.messages, c1.to.clone()),
+            ("C1", 0, None)
+        );
+        assert_eq!(c1.threads[0].latest_ts, "21.000001");
     }
 
     #[test]
@@ -8129,8 +8133,10 @@ mod tests {
         assert_eq!(picked.unread_total, 4);
         assert_eq!(picked.top.len(), 3);
         assert!(picked.top.iter().all(|r| r.raw.ts != ts));
-        // Marking all moves the channel to its newest unread message, a watched thread's included.
-        assert_eq!(picked.markable_channels, 1);
+        // The channel's position goes to its newest unread message, a watched thread's included, and its count leaves the watched one out.
+        assert_eq!(picked.channels.len(), 1);
+        assert_eq!(picked.channels[0].messages, 3);
+        assert_eq!(picked.channels[0].to.as_deref(), Some("1700000004.000000"));
     }
 
     #[test]
@@ -8150,11 +8156,7 @@ mod tests {
             out.watched[0].watch.as_ref().unwrap().status,
             WatchStatus::Pending
         );
-        assert_eq!(out.markable_channels, 1);
-        // The token lacks channels:write: nothing is markable.
-        cache.put_scopes("T1", "channels:history,groups:write");
-        let out = cached_timeline(&cache, &channels, &workspaces, &[], &list, &[]);
-        assert_eq!(out.markable_channels, 0);
+        assert_eq!(out.unread_channels.len(), 1);
         assert_eq!(out.unread_total, 3);
         // A thread of a channel kept off the list stays in the watch section.
         let out = cached_timeline(
@@ -8298,21 +8300,6 @@ mod tests {
         let list = vec![watched("T1", "C1", "10.000001", "20.000001")];
         let (_, moved) = with_seen(list, &key("T1", "C1", "10.000001"), "12.000001");
         assert!(!moved);
-    }
-
-    #[test]
-    fn conversations_mark_stops_per_workspace_until_the_wait_has_passed() {
-        let cache = TimelineCache::default();
-        assert!(!cache.mark_limited("T1"));
-        cache.limit_mark("T1", Duration::from_secs(60));
-        assert!(cache.mark_limited("T1"));
-        assert!(!cache.mark_limited("T2"));
-        // Not the other stops.
-        assert!(!cache.replies_limited("T1"));
-        assert!(!cache.info_limited("T1"));
-        assert!(!cache.rate_limited("T1"));
-        cache.forget("T1");
-        assert!(!cache.mark_limited("T1"));
     }
 
     // S-14: unread replies.
@@ -8621,8 +8608,7 @@ mod tests {
     }
 
     #[test]
-    fn a_row_is_sorted_by_the_newest_of_its_own_unread_message_and_its_unread_replies_and_the_cap_stays(
-    ) {
+    fn a_row_is_sorted_by_the_newest_of_its_own_unread_message_and_its_unread_replies() {
         let cache = threads_with(vec![
             // Its parent is unread and held, and the reply is the newest of all.
             unread_read("T1", "C1", "10.000001", &["40.000001"]),
@@ -8656,13 +8642,23 @@ mod tests {
         // A parent that is held is drawn from what history said last.
         assert_eq!(picked.top[0].raw.reply_count, 9);
         assert_eq!(picked.top[2].raw.reply_count, 1);
-        // The badge adds the replies; the threads are what "すべて既読にする" clears.
+        // The badge adds the replies; the channels list their threads to see.
         assert_eq!(picked.unread_total, 3 + 2);
-        assert_eq!(picked.unread_threads, 2);
+        let threads_of = |channel: &str| {
+            picked
+                .channels
+                .iter()
+                .find(|c| c.channel == channel)
+                .map_or(0, |c| c.threads.len())
+        };
+        assert_eq!(
+            (threads_of("C1"), threads_of("C2"), threads_of("C3")),
+            (1, 1, 0)
+        );
     }
 
     #[test]
-    fn the_unread_section_still_lists_twenty_rows_at_most_with_the_threads_in_it() {
+    fn the_unread_section_lists_ten_rows_at_most_for_each_channel_with_the_threads_in_it() {
         let cache = threads_with(vec![unread_read("T1", "C1", "1.000001", &["99.000001"])]);
         let channels = channels_of_t1(&["C1", "C2"]);
         let workspaces = vec![workspace("T1", "https://one.slack.com/")];
@@ -8674,9 +8670,11 @@ mod tests {
                 .collect(),
         );
         let picked = pick_timeline(&cache, all, &[], threads);
-        assert_eq!(picked.top.len(), UNREAD_MAX);
+        // C1's thread, and the newest 10 of C2's 25 (the thread of C1 does not count against C2).
+        assert_eq!(picked.top.len(), 1 + UNREAD_PER_CHANNEL);
         assert_eq!(picked.top[0].raw.channel, "C1");
         assert_eq!(picked.top[1].raw.ts, "34.000001");
+        assert_eq!(picked.top[10].raw.ts, "25.000001");
         assert_eq!(picked.unread_total, 26);
     }
 
@@ -8733,14 +8731,15 @@ mod tests {
         assert_eq!(spans[0]["spans"][0]["text"], "bold");
         assert_eq!(spans[0]["spans"][0]["bold"], true);
         assert_eq!(spans[0]["spans"][1]["text"], " @Carol");
-        assert_eq!(out.unread_threads, 1);
+        assert_eq!(out.unread_channels[0].threads.len(), 1);
         assert_eq!(out.unread_total, 2);
         assert!(out.watched.iter().all(|m| m.unread_replies.is_none()));
         // Seen up to the newest: the row goes, and so does its share of the badge.
         let seen = [watched("T1", "C1", "10.000001", "21.000001")];
         let out = cached_timeline(&cache, &channels, &workspaces, &[], &list, &seen);
         assert!(out.messages.is_empty());
-        assert_eq!((out.unread_total, out.unread_threads), (0, 0));
+        assert_eq!(out.unread_total, 0);
+        assert!(out.unread_channels.is_empty());
         // A hidden channel has none of it.
         let out = cached_timeline(
             &cache,

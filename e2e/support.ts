@@ -46,6 +46,7 @@ import type { SideChannel } from "../ts/bindings/SideChannel";
 import type { SideWorkspace } from "../ts/bindings/SideWorkspace";
 import type { Timeline } from "../ts/bindings/Timeline";
 import type { TimelineMessage } from "../ts/bindings/TimelineMessage";
+import type { UnreadChannel } from "../ts/bindings/UnreadChannel";
 import type { TimelineReply } from "../ts/bindings/TimelineReply";
 import type { UnreadReplies } from "../ts/bindings/UnreadReplies";
 import type { Todo } from "../ts/bindings/Todo";
@@ -499,8 +500,24 @@ export const watchedMessage = (ts: string, name: string, channelName: string, te
   return { ...message, watch: extra.watch ?? { newReplies, uncounted: false, status: "ok", unreadTo: message.unread ? message.ts : null } };
 };
 
+// What Rust says of the channels with something unread (`Timeline.unreadChannels`), from the rows given: each channel's unread messages, the newest of them (`to`, a number as Rust compares it) and the threads with unread replies.
+export const unreadChannelsOf = (messages: TimelineMessage[]): UnreadChannel[] => {
+  const channels: UnreadChannel[] = [];
+  for (const m of messages) {
+    if (!m.unread && !m.unreadReplies) continue;
+    let c = channels.find((x) => x.teamId === m.teamId && x.channel === m.channel);
+    if (!c) channels.push((c = { teamId: m.teamId, channel: m.channel, messages: 0, to: null, threads: [] }));
+    if (m.unread) {
+      c.messages += 1;
+      if (c.to === null || Number(m.ts) > Number(c.to)) c.to = m.ts;
+    }
+    if (m.unreadReplies) c.threads.push({ ts: m.ts, latestTs: m.unreadReplies.latestTs });
+  }
+  return channels;
+};
+
 // What `slack_timeline` answers; `unreadTotal` is the number of unread messages and unread replies given unless `extra` says another (it counts the messages held, not only the ones listed),
-// `markableChannels` the channels of the unread messages given, `unreadThreads` the rows with unread replies. `watched`, `arrived` and `side` (the side menu) are empty unless `extra` gives them.
+// `unreadChannels` is what `unreadChannelsOf` makes of the rows. `watched`, `arrived` and `side` (the side menu) are empty unless `extra` gives them.
 export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> = {}): Timeline => ({
   messages,
   watched: [],
@@ -509,8 +526,7 @@ export const timeline = (messages: TimelineMessage[], extra: Partial<Timeline> =
   refreshSecs: 120,
   pendingChannels: 0,
   unreadTotal: messages.filter((m) => m.unread).length + messages.reduce((n, m) => n + (m.unreadReplies?.share ?? 0), 0),
-  markableChannels: new Set(messages.filter((m) => m.unread).map((m) => `${m.teamId}/${m.channel}`)).size,
-  unreadThreads: messages.filter((m) => m.unreadReplies).length,
+  unreadChannels: unreadChannelsOf(messages),
   arrived: [],
   side: [],
   ...extra,

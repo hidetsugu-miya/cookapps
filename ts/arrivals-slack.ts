@@ -1,4 +1,4 @@
-// The popups for new Slack messages (S-17): a card in the stack of the new-mail popups (arrivals.ts) for each unread message that a read of the Slack list found, with the actions "既読にする" (S-15), "ウォッチ" (S-13) and "スレッドを開く" (S-6).
+// The popups for new Slack messages (S-17): a card in the stack of the new-mail popups (arrivals.ts) for each unread message that a read of the Slack list found, with the actions "既読にする" (S-17), "ウォッチ" (S-13) and "スレッドを開く" (S-6).
 // The card draws the plain text of the message only (`textContent`), and what each action does is the Slack list's own, handed in by it.
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import { action, dismiss, dismissWhere, isShown, stackCard } from "./arrivals.js";
@@ -6,7 +6,7 @@ import { el, span, tag } from "./dom.js";
 import { BOOKMARK_SVG, CHECK_SVG, CLOSE_SVG } from "./icons.js";
 import { decorateAvatar, workspaceColor } from "./slack-view.js";
 
-// What the buttons of a card do; a card is closed by any of them first. `read` is null when pressing the check would change nothing (S-15).
+// What the buttons of a card do; a card is closed by any of them first. `read` is null when pressing the check would change nothing (S-17).
 export interface SlackCardActions {
   read: (() => void) | null;
   watch: () => void;

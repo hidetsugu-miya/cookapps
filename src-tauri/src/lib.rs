@@ -257,7 +257,6 @@ pub fn run() {
             slack::slack_post,
             slack::slack_timeline,
             slack::slack_mark_read,
-            slack::slack_mark_all_read,
             slack::slack_watch,
             slack::slack_unwatch,
             slack::slack_watch_seen,

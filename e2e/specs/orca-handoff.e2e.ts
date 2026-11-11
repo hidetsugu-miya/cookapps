@@ -1144,7 +1144,7 @@ describe("orca handoff", () => {
   it("keeps the Orca tab selected while another thread opens, and hands the new thread over once it is read", async () => {
     const olderTs = slackTs(60, 1);
     const newerTs = slackTs(30, 3);
-    const messages = [timelineMessage(newerTs, "Carol Example", "ops", "Second thread root", { replyCount: 0 }), timelineMessage(olderTs, "Alice Example", "dev-billing", "Please review the deploy notes.", { replyCount: 1 })];
+    const messages = [timelineMessage(newerTs, "Carol Example", "ops", "Second thread root", { replyCount: 0, channel: "C2" }), timelineMessage(olderTs, "Alice Example", "dev-billing", "Please review the deploy notes.", { replyCount: 1 })];
     await bootOrca({ slack_load: slackLoad, slack_timeline: timeline(messages), claude_status: claudeReady });
     await mock("slack_thread", slackThread([threadMessage(olderTs, "Alice Example", "Please review the deploy notes.")]));
     await $("#nav-slack").click();
