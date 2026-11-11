@@ -1540,6 +1540,11 @@ describe("orca handoff: attached files (A-10)", () => {
     await waitForCalls(handoff);
     await release(handoff, started);
     await expect($(`${MAIL.pane} .ho-session-name`)).toExist();
+    // The session shows no strip: the image waits with the item, and the form brings it back once the session is closed.
+    expect(await count(`${MAIL.pane} .attachment`)).toBe(0);
+    await $(`${MAIL.pane} [aria-label="閉じる"]`).click();
+    await $(MAIL.button).click();
+    await listRead(MAIL);
     expect(await browser.execute((p) => [...document.querySelectorAll(`${p} .attachment img`)].map((i) => (i as HTMLImageElement).alt), MAIL.pane)).toEqual(["second.png"]);
   });
 
