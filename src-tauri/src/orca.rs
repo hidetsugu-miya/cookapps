@@ -863,6 +863,31 @@ pub(crate) fn check_worktree_name(name: &str) -> Result<&str, String> {
     Ok(name)
 }
 
+/// The branch of a new worktree (`--branch`) or the ref it starts from (`--base-branch`), trimmed; `None` when not given or blank. `label` opens the error.
+/// The rules are `git check-ref-format`'s: no space, control character or `~ ^ : ? * [ \\`, no `..` or `@{`, not `@` alone, no `//`, no component starting with `.` or ending with `.lock`, and no `/` or `.` at the end, and a value starting with `-` is refused as an option.
+pub(crate) fn check_ref<'a>(
+    label: &str,
+    value: Option<&'a str>,
+) -> Result<Option<&'a str>, String> {
+    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    let bad_char = |c: char| c.is_control() || c.is_whitespace() || "~^:?*[\\".contains(c);
+    let bad_component =
+        |part: &str| part.is_empty() || part.starts_with('.') || part.ends_with(".lock");
+    if value.starts_with('-')
+        || value == "@"
+        || value.contains("..")
+        || value.contains("@{")
+        || value.ends_with(['/', '.'])
+        || value.chars().any(bad_char)
+        || value.split('/').any(bad_component)
+    {
+        return Err(format!("{label}に使えない文字が含まれています"));
+    }
+    Ok(Some(value))
+}
+
 /// A send the terminal did not take (`result.send.accepted` false) is a failure although the CLI answered `ok`.
 pub(crate) fn check_accepted(result: &Value) -> Result<(), String> {
     if result["send"]["accepted"] == false {
@@ -964,18 +989,28 @@ fn create_args(path: &str, environment: Option<&str>) -> Vec<String> {
 }
 
 /// A new worktree in the repository `project` (A-9): independent of any worktree (`--no-parent`), because the CLI would otherwise record the caller's context as its parent. `--repo=id:` takes the repository id the list holds; `--project` takes a project id or a display name, which the list does not hold.
-fn create_worktree_args(project: &str, name: &str, environment: Option<&str>) -> Vec<String> {
-    with_environment(
-        vec![
-            "worktree".into(),
-            "create".into(),
-            format!("--repo=id:{project}"),
-            format!("--name={name}"),
-            "--no-parent".into(),
-            "--json".into(),
-        ],
-        environment,
-    )
+/// `--branch` and `--base-branch` are passed only when given (already checked by `check_ref`).
+fn create_worktree_args(
+    project: &str,
+    name: &str,
+    branch: Option<&str>,
+    base: Option<&str>,
+    environment: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
+        "worktree".into(),
+        "create".into(),
+        format!("--repo=id:{project}"),
+        format!("--name={name}"),
+    ];
+    if let Some(branch) = branch {
+        args.push(format!("--branch={branch}"));
+    }
+    if let Some(base) = base {
+        args.push(format!("--base-branch={base}"));
+    }
+    args.extend(["--no-parent".into(), "--json".into()]);
+    with_environment(args, environment)
 }
 
 // ---- running the CLI ----
@@ -1352,13 +1387,27 @@ fn open_terminal(path: &str, environment: Option<&str>) -> Result<OrcaStarted, S
     write(&create_args(path, environment)).map(|result| created_of(&result))
 }
 
-/// Makes a new worktree named `name` in the project `project` of the target (A-9), once, and gives its path. The name and the environment are validated, and the project must be in the list read just before; otherwise nothing is made.
-fn create_worktree(project: &str, name: &str, environment: Option<&str>) -> Result<String, String> {
+/// Makes a new worktree named `name` in the project `project` of the target (A-9), once, and gives its path. The name, the branch and the base (when given) and the environment are validated, and the project must be in the list read just before; otherwise nothing is made.
+fn create_worktree(
+    project: &str,
+    name: &str,
+    branch: Option<&str>,
+    base: Option<&str>,
+    environment: Option<&str>,
+) -> Result<String, String> {
     let name = check_worktree_name(name)?;
+    let branch = check_ref("ブランチ名", branch)?;
+    let base = check_ref("作成元", base)?;
     check_listed(environment)?;
     let (ps, _) = read_lists(environment, false);
     check_project(&ps.map_err(message_of)?, project)?;
-    let result = write(&create_worktree_args(project, name, environment))?;
+    let result = write(&create_worktree_args(
+        project,
+        name,
+        branch,
+        base,
+        environment,
+    ))?;
     let path = created_worktree_path_of(&result)?;
     made_worktree().put(environment, &path, Instant::now());
     Ok(path)
@@ -1666,13 +1715,25 @@ pub async fn orca_terminal_create(
 }
 
 /// A-9: makes a new worktree named `name` in the project `project` (a repository key of the list) of the destination, and answers its path. Never run twice.
+/// `branch` (the branch the worktree gets) and `base` (the ref it starts from) are passed to the CLI only when given.
 #[tauri::command]
 pub async fn orca_worktree_create(
     project: String,
     name: String,
+    branch: Option<String>,
+    base: Option<String>,
     environment: Option<String>,
 ) -> Result<String, String> {
-    blocking(move || create_worktree(&project, &name, environment.as_deref())).await?
+    blocking(move || {
+        create_worktree(
+            &project,
+            &name,
+            branch.as_deref(),
+            base.as_deref(),
+            environment.as_deref(),
+        )
+    })
+    .await?
 }
 
 /// A-9: starts a session in a worktree with the summary the user agreed to (`points`), the text of each attached file (`files`, A-10) and, when `context` is given, the content quoted as data.
@@ -2607,7 +2668,7 @@ mod tests {
     #[test]
     fn a_new_worktree_is_made_in_the_repository_with_no_parent_and_no_shell() {
         assert_eq!(
-            create_worktree_args("repo1", "fix-login", None),
+            create_worktree_args("repo1", "fix-login", None, None, None),
             [
                 "worktree",
                 "create",
@@ -2618,7 +2679,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            create_worktree_args("repo1", "fix-login", Some("Studio")),
+            create_worktree_args("repo1", "fix-login", None, None, Some("Studio")),
             [
                 "worktree",
                 "create",
@@ -2631,9 +2692,125 @@ mod tests {
         );
         // A name with blanks or quotes stays one argument, joined to its flag.
         assert_eq!(
-            create_worktree_args("repo1", "fix the \"login\"", None)[3],
+            create_worktree_args("repo1", "fix the \"login\"", None, None, None)[3],
             "--name=fix the \"login\""
         );
+    }
+
+    #[test]
+    fn the_branch_and_the_base_of_a_new_worktree_are_passed_only_when_given() {
+        assert_eq!(
+            create_worktree_args(
+                "repo1",
+                "fix-login",
+                Some("feat/login"),
+                Some("origin/main"),
+                None
+            ),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--branch=feat/login",
+                "--base-branch=origin/main",
+                "--no-parent",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            create_worktree_args(
+                "repo1",
+                "fix-login",
+                Some("feat/login"),
+                None,
+                Some("Studio")
+            ),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--branch=feat/login",
+                "--no-parent",
+                "--json",
+                "--environment=Studio"
+            ]
+        );
+        assert_eq!(
+            create_worktree_args("repo1", "fix-login", None, Some("main"), None),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--base-branch=main",
+                "--no-parent",
+                "--json"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_branch_or_a_base_is_a_git_ref_trimmed_and_blank_means_none() {
+        for ok in [
+            "main",
+            "feat/login",
+            "origin/release-1.2",
+            "refs/heads/fix_a",
+            "ログイン",
+            "a-b",
+            "a@b",
+            "v1.0",
+            "HEAD",
+        ] {
+            assert_eq!(check_ref("ブランチ名", Some(ok)).unwrap(), Some(ok), "{ok}");
+        }
+        assert_eq!(
+            check_ref(
+                "ブランチ名",
+                Some(
+                    "  feat/login 
+"
+                )
+            )
+            .unwrap(),
+            Some("feat/login")
+        );
+        assert_eq!(check_ref("ブランチ名", None).unwrap(), None);
+        assert_eq!(check_ref("ブランチ名", Some("  	")).unwrap(), None);
+        for bad in [
+            "-fix",
+            "  --json",
+            "a..b",
+            "a b",
+            "a\u{3000}b",
+            "a\nb",
+            "a\tb",
+            "a\0b",
+            "a\u{7f}b",
+            "a\u{85}b",
+            "a~1",
+            "a^",
+            "a:b",
+            "a?",
+            "a*",
+            "a[0]",
+            "a\\b",
+            "a@{u}",
+            "@",
+            "/a",
+            "a/",
+            "a//b",
+            "a.",
+            ".a",
+            "a/.b",
+            "a.lock",
+            "a.lock/b",
+        ] {
+            let err = check_ref("作成元", Some(bad)).unwrap_err();
+            assert!(err.starts_with("作成元"), "{bad:?}: {err}");
+        }
     }
 
     #[test]

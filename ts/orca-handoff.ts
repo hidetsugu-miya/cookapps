@@ -61,8 +61,6 @@ interface Turn extends ChatTurnPayload {
   points?: string[];
 }
 const forms = new Map<string, Form>();
-// The turns Claude is sent are the last this many (the same as Rust's CHAT_TURNS).
-const SENT_TURNS = 20;
 
 function formOf(key: string) {
   let form = forms.get(key);
@@ -766,7 +764,7 @@ export class HandoffPane {
   private async makeWorktree(key: string, project: string, name: string, environment: string | null) {
     const earlier = made.get(key);
     if (earlier && earlier.project === project && earlier.name === name && earlier.environment === environment) return earlier.path;
-    const path = await invoke("orca_worktree_create", { project, name, environment });
+    const path = await invoke("orca_worktree_create", { project, name, branch: null, base: null, environment });
     made.set(key, { project, name, environment, path });
     return path;
   }
@@ -791,7 +789,6 @@ export class HandoffPane {
     const history = fix
       ? form.turns
           .slice(1)
-          .slice(-SENT_TURNS)
           .map(({ role, text }) => ({ role, text }))
       : [];
     this.asking.add(key);

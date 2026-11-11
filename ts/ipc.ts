@@ -236,7 +236,7 @@ export interface Commands {
   // A-16: opens a plain terminal in the worktree at `path` (the plus of the work pane). The answer names its `handle` (`paneKey` is always null). Never run twice.
   orca_terminal_create: { args: { path: string; environment: string | null }; result: OrcaStarted };
   // A-9: makes a new worktree named `name` in the project `project` (an `OrcaProject.key` of the destination's list, checked against it; the name is one plain line, trimmed) of the destination (null: this machine, else a saved environment's name). The answer is the new worktree's absolute path. Never run twice.
-  orca_worktree_create: { args: { project: string; name: string; environment: string | null }; result: string };
+  orca_worktree_create: { args: { project: string; name: string; branch: string | null; base: string | null; environment: string | null }; result: string };
   // A-9: starts a session in a worktree with the summary the owner agreed to (`points`), the text of each file attached to it (`files`, A-10) and, when `context` is not null, the content quoted as data after them. Never run twice.
   orca_handoff: { args: { destination: HandoffDestination; points: string[]; files: string[]; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
   // Reads the history of the session in the pane `paneKey` of the worktree `path` (A-7) and sends it to `channel` (an `OrcaChatEvent` at a time) until it is closed or another is opened; only one session is read.

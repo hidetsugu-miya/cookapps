@@ -465,7 +465,7 @@ describe("orca handoff", () => {
     const create = await mock("orca_worktree_create", "/work/example-app-my-name");
     const handoff = await mock("orca_handoff", started);
     await agreeButton(MAIL).click();
-    expect(await waitForCalls(create)).toEqual([{ project: "proj_example-app", name: "my-name", environment: null }]);
+    expect(await waitForCalls(create)).toEqual([{ project: "proj_example-app", name: "my-name", branch: null, base: null, environment: null }]);
     const [call] = (await waitForCalls(handoff)) as Handed[];
     expect(call.destination).toEqual({ kind: "new", path: "/work/example-app-my-name" });
   });
@@ -592,7 +592,7 @@ describe("orca handoff", () => {
     await expect(agreeButton(MAIL)).toBeEnabled();
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await agreeButton(MAIL).click();
-    expect(await waitForCalls(create)).toEqual([{ project: "proj_example-app", name: "fix-invoice", environment: null }]);
+    expect(await waitForCalls(create)).toEqual([{ project: "proj_example-app", name: "fix-invoice", branch: null, base: null, environment: null }]);
     const [call] = (await waitForCalls(handoff)) as Handed[];
     expect(call.destination).toEqual({ kind: "new", path: "/work/example-app-fix-invoice" });
     expect(call.points).toEqual(POINTS);
@@ -616,7 +616,7 @@ describe("orca handoff", () => {
     await $(`${MAIL.pane} .ho-name`).setValue("b");
     await summarize(MAIL, "やって");
     await agreeButton(MAIL).click();
-    expect(await waitForCalls(create)).toEqual([{ project: "proj_example-lab", name: "b", environment: "Lab" }]);
+    expect(await waitForCalls(create)).toEqual([{ project: "proj_example-lab", name: "b", branch: null, base: null, environment: "Lab" }]);
     const [call] = (await waitForCalls(handoff)) as { destination: unknown; environment: string | null }[];
     expect(call.destination).toEqual({ kind: "new", path: "/lab/example-lab-b" });
     expect(call.environment).toBe("Lab");
