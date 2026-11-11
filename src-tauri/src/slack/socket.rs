@@ -823,6 +823,7 @@ async fn refresh_channel(
     let channel = Channel {
         id: request.channel.clone(),
         name,
+        private: false,
     };
     let form = [
         ("channel", channel.id.clone()),
@@ -1247,6 +1248,7 @@ mod tests {
         let list = vec![Channel {
             id: "C1".into(),
             name: "dev".into(),
+            private: false,
         }];
         assert_eq!(name_in(&list, "C1").as_deref(), Some("dev"));
         assert_eq!(name_in(&list, "D1"), None);
@@ -1639,6 +1641,7 @@ mod tests {
         let channel = Channel {
             id: "C1".into(),
             name: "dev".into(),
+            private: false,
         };
         let parent = |ts: &str, replies: u32| {
             raw_from(

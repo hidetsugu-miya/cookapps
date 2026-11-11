@@ -3,4 +3,8 @@
 /**
  * A channel the user is in.
  */
-export type Channel = { id: string, name: string, };
+export type Channel = { id: string, name: string, 
+/**
+ * A private channel (`is_private` of `users.conversations`).
+ */
+private: boolean, };

@@ -23,6 +23,17 @@ export function formatDate(ms: number, now = Date.now()) {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+// The label of a day in a list: "今日", "昨日", this year "10月27日（火）", older "2025年10月27日（月）".
+export function formatDay(ms: number, now = Date.now()) {
+  const d = new Date(ms);
+  const n = new Date(now);
+  const daysAgo = Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86400000);
+  if (daysAgo === 0) return "今日";
+  if (daysAgo === 1) return "昨日";
+  const day = `${d.getMonth() + 1}月${d.getDate()}日（${WEEKDAYS[d.getDay()]}）`;
+  return d.getFullYear() === n.getFullYear() ? day : `${d.getFullYear()}年${day}`;
+}
+
 // Date of a message in the detail view: today "7:12（30 分前）", this year "10月29日 13:05", older "2025/10/17 13:05".
 export function formatDetailDate(ms: number, now = Date.now()) {
   const d = new Date(ms);
