@@ -4,6 +4,7 @@
 // A saved environment streams each terminal shown (`orca_stream_terminal`): its screen first, then the bytes it prints. A terminal is fitted to its pane: the pane's size is sent, with the subscription, with each change and with the keys typed, and Orca sizes the terminal to it;
 // the size Orca sends (the snapshot's and each `size`) is drawn, as another screen of Orca may take the size. Leaving the tab, the screen or a shown window ends the stream of that terminal (`orca_stream_terminal_close`), and Orca gives it back its own size.
 // This machine's Orca cannot stream (its socket answers `method_not_supported`), so its terminals shown are mirrors: the screen is read every second (`orca_terminal_read`) and drawn again; it has no colors and its size is not sent.
+// A terminal of a saved environment that the Orca screen does not stream (A-9 shows one) is a mirror too, read through Orca's CLI every 2 seconds.
 // The keys typed go one send at a time, to the handle of the terminal they were typed in, and the keys typed while a send is on its way go together in the next one.
 // Those not sent yet are sent on when the terminal stops showing (another tab, screen or a hidden window), to the terminal they were typed in, and dropped when it goes. Nothing a terminal prints or is typed is kept or logged here.
 // A file pasted or dropped on a terminal shown is put in its worktree and its path is typed in that terminal (A-10).
@@ -21,9 +22,12 @@ import type { TextKeybind } from "./bindings/TextKeybind";
 import { $, composing } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
+import { loadTerminalLibs, terminalLibsReady } from "./vendor-load.js";
 
 const SCROLLBACK = 5000;
 const MIRROR_MS = 1000;
+// A saved environment's screen is read by a process of Orca's CLI each time, slower than this machine's socket.
+const MIRROR_ENV_MS = 2000;
 const FIT_DELAY_MS = 50;
 // A send of typed keys carries at most this many characters (Rust takes 100,000).
 const SEND_LIMIT = 50_000;
@@ -46,7 +50,7 @@ const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "whi
 // What a link in the text is: it starts with http:// or https:// and ends before a space, a quote, a bracket, or a full-width punctuation mark or bracket (U+3000 to U+303F and U+FF00 to U+FFEF), so a URL in a Japanese sentence is cut where the sentence goes on.
 const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-\uffef]*[^\s"':,.!?{}|\\^~[\]`()<>\u3000-\u303f\uff00-\uffef]/;
 
-// Where a terminal comes from: the stream of a saved environment, or the mirror of this machine.
+// Where a terminal comes from: the stream of a saved environment, or a mirror (of this machine, or of a saved environment that is not streamed).
 // `path` is the worktree the terminal runs in and `environment` the target, where a file dropped on it is put (A-10).
 export interface TermSource {
   kind: "stream" | "mirror";
@@ -353,7 +357,7 @@ async function sendKeys(instance: Instance) {
   instance.sending = true;
   try {
     if (instance.source.kind === "stream") await invoke("orca_stream_input", { handle: instance.source.handle, text });
-    else await invoke("orca_terminal_input", { handle: instance.source.handle, text });
+    else await invoke("orca_terminal_input", { handle: instance.source.handle, text, ...mirrorTarget(instance) });
   } catch (e) {
     onError(e);
   }
@@ -400,13 +404,16 @@ async function attach(host: HTMLElement, files: File[]) {
   }
 }
 
-// ---- the mirror (this machine) ----
+// ---- the mirror (this machine, or a saved environment that is not streamed) ----
+
+// The saved environment a mirror reads and types into; this machine's is left out.
+const mirrorTarget = (instance: Instance) => (instance.source.environment === null ? {} : { environment: instance.source.environment });
 
 async function readFrame(instance: Instance) {
   if (instance.reading) return;
   instance.reading = true;
   try {
-    const lines = await invoke("orca_terminal_read", { handle: instance.source.handle });
+    const lines = await invoke("orca_terminal_read", { handle: instance.source.handle, ...mirrorTarget(instance) });
     const text = lines.join("\r\n");
     if (text !== instance.last) {
       instance.last = text;
@@ -423,7 +430,7 @@ function startMirror(instance: Instance) {
   // A hidden window reads nothing; it starts again when the window is shown (`initOrcaTerminal`).
   if (instance.timer !== null || document.hidden) return;
   readFrame(instance);
-  instance.timer = window.setInterval(() => readFrame(instance), MIRROR_MS);
+  instance.timer = window.setInterval(() => readFrame(instance), instance.source.environment === null ? MIRROR_MS : MIRROR_ENV_MS);
 }
 
 function stopMirror(instance: Instance) {
@@ -487,9 +494,30 @@ function stop(instance: Instance) {
 
 // ---- showing ----
 
+// The last `showTerminals` of each owner that came before xterm.js was read.
+const waiting = new Map<string, () => void>();
+function runWaiting() {
+  const runs = [...waiting.values()];
+  waiting.clear();
+  for (const run of runs) run();
+}
+
 // Shows the terminals of `placements` (the handle, where it comes from, and the host element of its pane) and hides the others of the same `owner`. A terminal is made when it is first shown.
 // `focusId` is the handle of the terminal of the pane that has the focus: its terminal takes the keyboard when it is new or when it just became the focused one.
 export function showTerminals(placements: Placement[], focusId: string | null, owner = ORCA_SCREEN) {
+  // xterm.js is read the first time a terminal is wanted; the last ask of each owner is run once it is there.
+  if (!terminalLibsReady()) {
+    if (placements.length === 0) {
+      waiting.delete(owner);
+    } else {
+      waiting.set(owner, () => showTerminals(placements, focusId, owner));
+      loadTerminalLibs().then(runWaiting, (e) => {
+        waiting.clear();
+        onError(e);
+      });
+    }
+    return;
+  }
   const next = new Set(placements.map((p) => p.id));
   for (const id of [...shown]) {
     if (next.has(id) || owners.get(id) !== owner) continue;
@@ -510,7 +538,14 @@ export function showTerminals(placements: Placement[], focusId: string | null, o
       instance = newInstance(source);
       instances.set(id, instance);
     }
-    if (!shown.has(id)) fresh.push(instance);
+    // The terminal now comes the other way (the Orca screen began or stopped streaming its environment): the reads or the stream end, and the other way starts.
+    const changed = instance.source.kind !== source.kind;
+    if (changed) {
+      stop(instance);
+      instance.source = source;
+      instance.last = null;
+    }
+    if (!shown.has(id) || changed) fresh.push(instance);
     shown.add(id);
     owners.set(id, owner);
     instance.host = host;
@@ -549,6 +584,7 @@ export function showTerminals(placements: Placement[], focusId: string | null, o
 
 // Hides every terminal of `owner` and stops their reads and streams (another screen, or no tab shows).
 export function hideTerminals(owner = ORCA_SCREEN) {
+  waiting.delete(owner);
   if (![...owners.values()].includes(owner)) return;
   showTerminals([], null, owner);
 }

@@ -319,12 +319,12 @@ export class HandoffPane {
     this.reload(true);
   }
 
-  // Where the terminal of a session comes from, or null when it cannot be shown: the session has no terminal (the launch named none and the list has none), or it runs on a saved environment whose stream is not the one the Orca screen holds (A-12). This machine's terminal is mirrored.
+  // Where the terminal of a session comes from, or null when it cannot be shown: the session has no terminal (the launch named none and the list has none). A saved environment that the Orca screen streams (A-12) is streamed; any other terminal, this machine's or a saved environment's, is mirrored.
   private sourceOf(s: Session): TermSource | null {
     const handle = s.handle ?? this.rowOf(s)?.handle ?? null;
     if (handle === null) return null;
-    if (s.environment === null) return { kind: "mirror", handle, path: s.path, environment: null };
-    return streamsEnvironment(s.environment) ? { kind: "stream", handle, path: s.path, environment: s.environment } : null;
+    const kind = s.environment !== null && streamsEnvironment(s.environment) ? "stream" : "mirror";
+    return { kind, handle, path: s.path, environment: s.environment };
   }
 
   // The terminal belongs to this pane while it shows a session that is in view (the window shown, the pane on the screen); otherwise its stream or reads are let go. Without a terminal the note says so.

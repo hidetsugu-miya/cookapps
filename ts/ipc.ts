@@ -251,10 +251,10 @@ export interface Commands {
   orca_close: { args: { handle: string; environment: string | null }; result: null };
   // A-11: answers the questions of a Claude session that waits (the picks are 0-based indexes into `options`), by typing digits and Tab into its terminal `handle` one key at a time, each only when the screen shows what it is for. Not tried again: a failure carries its message.
   orca_answer: { args: { handle: string; questions: { text: string; multi: boolean; options: string[]; picks: number[] }[]; environment: string | null }; result: null };
-  // The lines on the screen of the terminal `handle` of this machine (a Claude session's or a plain one), for the mirror (no colors).
-  orca_terminal_read: { args: { handle: string }; result: string[] };
-  // Types `text` into the terminal `handle` of this machine as it is (no Enter is added).
-  orca_terminal_input: { args: { handle: string; text: string }; result: null };
+  // The lines on the screen of the terminal `handle` (a Claude session's or a plain one) of this machine, or of the saved environment `environment` when given, for the mirror (no colors).
+  orca_terminal_read: { args: { handle: string; environment?: string }; result: string[] };
+  // Types `text` into the terminal `handle` of this machine, or of the saved environment `environment` when given, as it is (no Enter is added).
+  orca_terminal_input: { args: { handle: string; text: string; environment?: string }; result: null };
   // A-8, A-12: opens `url` in the default browser, for a link ⌘+clicked in a terminal. Only an http or https URL is opened; any other fails with the message.
   orca_open_url: { args: { url: string }; result: null };
   // A-12: the stream of the saved environment `environment`: the list goes to `channel` (an `OrcaStreamEvent` at a time) until it is closed or another is opened; only one runs.

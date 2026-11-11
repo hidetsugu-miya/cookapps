@@ -908,7 +908,7 @@ describe("orca handoff", () => {
     expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_new")).toBe(true);
   });
 
-  it("streams the terminal of a session at the saved environment the Orca screen streams, and shows a note instead where it cannot", async () => {
+  it("streams the terminal of a session at the saved environment the Orca screen streams", async () => {
     const studio = { target: "Studio", environments: ["Studio"] };
     await openMail({ orca_overview: orcaOverview(sample(), worktrees(), studio) });
     await waitForCalls("orca_stream_open");
@@ -1154,9 +1154,33 @@ describe("orca handoff", () => {
     // The session is read at its own destination, and the choice is kept for the next handoff.
     await expect($(`${MAIL.pane} [aria-label="Orca の画面で開く"]`)).toBeDisplayed();
     expect((await callsOf(destination)).length).toBeGreaterThan(1);
-    // The Orca screen streams no list of Lab, so the terminal of the session cannot be shown in the pane: the note says so.
-    await expect($(`${MAIL.pane} .ho-note`)).toBeDisplayed();
+    // The Orca screen streams no list of Lab, so the terminal of the session is no stream in the pane.
     expect(await callsOf("orca_stream_terminal")).toEqual([]);
+  });
+
+  it("mirrors the terminal of a session at a saved environment the Orca screen does not stream, reading and typing through that environment", async () => {
+    await openMail({ orca_overview: orcaOverview(sample(), worktrees(), { environments: ["Studio", "Lab"] }) });
+    await mock("orca_destination", orcaOverview([], [orcaWorktree("example-lab", "main")], { target: "Lab", environments: ["Studio", "Lab"], known: false }));
+    const handoff = await mock("orca_handoff", started);
+    const read = await mock("orca_terminal_read", ["$ claude", "> やって"]);
+    const input = await mock("orca_terminal_input", null);
+    await openPane(MAIL);
+    await $(`${MAIL.pane} .ho-destination`).click();
+    await $('//div[@role="menu"]//button[normalize-space(.)="Lab"]').click();
+    await browser.waitUntil(async () => (await textsOf(`${MAIL.pane} .ho-destination`))[0] === "Lab", { timeoutMsg: "the destination was not shown" });
+    await chooseProject(MAIL, "example-lab");
+    await write(MAIL, "やって");
+    await sendButton(MAIL).click();
+    await waitForCalls(handoff);
+    expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new", environment: "Lab" });
+    await browser.waitUntil(async () => (await termText(MAIL)).includes("やって"), { timeoutMsg: "the screen of the session never showed" });
+    await expect($(`${MAIL.pane} .ho-note`)).not.toBeDisplayed();
+    expect(await callsOf("orca_stream_terminal")).toEqual([]);
+    // The keys go through the same environment.
+    await $(`${MAIL.pane} .ho-term .orca-term-box:not([hidden]) .xterm-screen`).click();
+    await browser.keys(["1"]);
+    await browser.waitUntil(async () => (await callsOf(input)).length > 0, { timeoutMsg: "the key never reached the terminal" });
+    expect((await callsOf(input)).every((c) => (c as { handle: string; environment: string }).handle === "term_new" && (c as { environment: string }).environment === "Lab")).toBe(true);
   });
 
   it("changes back to this machine from the menu, which lists the destination read last", async () => {
