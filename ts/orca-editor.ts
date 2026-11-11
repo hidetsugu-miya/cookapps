@@ -5,6 +5,7 @@
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
 import { tag } from "./dom.js";
 import { invoke } from "./ipc.js";
+import { highlightReady, loadHighlight } from "./vendor-load.js";
 
 // What the heading says of the save: nothing yet, waiting for the typing to stop, on its way, done, or not done (and why).
 type Save = "idle" | "pending" | "saving" | "saved" | "changed" | "missing" | "not-utf8" | "error";
@@ -85,8 +86,12 @@ function setSave(f: EditorFile, save: Save) {
 // Draws the text of the textarea in the layer under it: in colors by the grammar of the file, else plain. The layer holds the text of the textarea after this.
 function draw(f: EditorFile) {
   const text = f.area.value;
-  if (f.highlight) f.code.innerHTML = hljs.highlight(text, { language: f.highlight, ignoreIllegals: true }).value;
-  else f.code.textContent = text;
+  if (f.highlight && highlightReady()) f.code.innerHTML = hljs.highlight(text, { language: f.highlight, ignoreIllegals: true }).value;
+  else {
+    f.code.textContent = text;
+    // highlight.js is read the first time a file is colored; the layer is drawn again, colored, once it is there.
+    if (f.highlight) loadHighlight().then(() => drawLater(f, nextFrame), fail);
+  }
 }
 
 function cancelPaint(f: EditorFile) {
