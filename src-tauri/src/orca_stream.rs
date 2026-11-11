@@ -111,7 +111,7 @@ pub enum StreamCommand {
     TerminalClose(String, u64),
     /// The pane's size changed (the terminal `handle`, the first field, fits it).
     Viewport(String, OrcaViewport),
-    /// Keys typed into the terminal `handle` (the first field); they go only while it is a terminal subscribed, and the answer says whether Orca took them.
+    /// Keys typed into the terminal `handle` (the first field); they go while it is subscribed or at least in Orca's list, and the answer says whether Orca took them.
     Input(String, String, oneshot::Sender<Result<(), String>>),
     Close,
 }
@@ -389,7 +389,27 @@ impl Stream {
 }
 
 const NOT_CONNECTED: &str = "接続先につながっていません";
-const OTHER_TERMINAL: &str = "入力したターミナルは表示されていないため、送りませんでした";
+const NOT_LISTED: &str = "入力したターミナルは Orca の一覧にないため、送りませんでした";
+
+/// Where keys typed into a terminal go.
+#[derive(Debug, PartialEq)]
+enum InputRoute {
+    /// The terminal is subscribed: the send claims the pane's size.
+    Subscribed,
+    /// The terminal is in the list but not shown (the screen showed another meanwhile): the send names no size, as it has no pane.
+    Listed,
+    Refused(&'static str),
+}
+
+/// Decides where keys go. `shown`: the screen asks for the terminal; `listed`: it is a terminal of the list held (`loaded`). Keys never reach a terminal other than the one they were typed in, because each send names its handle.
+fn input_route(subscribed: bool, shown: bool, loaded: bool, listed: bool) -> InputRoute {
+    match (subscribed, shown, loaded, listed) {
+        (true, ..) => InputRoute::Subscribed,
+        (false, true, ..) | (false, false, false, _) => InputRoute::Refused(NOT_CONNECTED),
+        (false, false, true, true) => InputRoute::Listed,
+        (false, false, true, false) => InputRoute::Refused(NOT_LISTED),
+    }
+}
 
 impl Connection {
     /// Subscribes the terminals the screen shows that are not subscribed, once the list is held (each must be a terminal of it).
@@ -587,13 +607,18 @@ impl Connection {
                 }
             }
             Some(StreamCommand::Input(handle, text, reply)) => {
-                match (
+                let viewport = stream.watches.get(&handle).map(|w| w.viewport);
+                match input_route(
                     self.terminals.contains_key(&handle),
-                    stream.watches.get(&handle),
+                    viewport.is_some(),
+                    self.loaded,
+                    has_terminal(&self.tabs, &handle),
                 ) {
-                    (true, watch) => {
-                        // The terminal fits its pane, so every send claims the pane's size, as Orca's own screen does.
-                        let viewport = watch.map(|w| w.viewport);
+                    InputRoute::Refused(reason) => {
+                        let _ = reply.send(Err(reason.into()));
+                    }
+                    // The terminal fits its pane, so every send of a subscribed terminal claims the pane's size, as Orca's own screen does; one not shown has no pane.
+                    InputRoute::Subscribed | InputRoute::Listed => {
                         let id = link
                             .send_request(
                                 "terminal.send",
@@ -602,13 +627,6 @@ impl Connection {
                             .await
                             .map_err(reason_of)?;
                         self.inputs.insert(id, reply);
-                    }
-                    // Keys typed into a terminal that is no longer shown (the screen showed another meanwhile) never reach it.
-                    (false, None) => {
-                        let _ = reply.send(Err(OTHER_TERMINAL.into()));
-                    }
-                    (false, Some(_)) => {
-                        let _ = reply.send(Err(NOT_CONNECTED.into()));
                     }
                 }
             }
@@ -1511,13 +1529,13 @@ mod tests {
             assert_eq!(answer.await.unwrap().is_ok(), ok);
         }
 
-        // Keys typed into a terminal that is not shown are refused without a request (the next request is the read below).
+        // Keys typed into a terminal that is not in the list are refused without a request (the next request is the read below).
         let (reply, answer) = oneshot::channel();
         commands
-            .send(StreamCommand::Input("term_s".into(), "\r".into(), reply))
+            .send(StreamCommand::Input("term_none".into(), "\r".into(), reply))
             .ok()
             .unwrap();
-        assert_eq!(answer.await.unwrap(), Err(OTHER_TERMINAL.to_owned()));
+        assert_eq!(answer.await.unwrap(), Err(NOT_LISTED.to_owned()));
 
         // A worktree that `worktree.ps` did not list makes it read again, once.
         let update = json!({"type": "updated", "worktree": "r9::/w/z", "tabs": [shell_tab("t9", "term_9", "zsh")]});
@@ -1541,19 +1559,49 @@ mod tests {
             unsubscribe_params("term_c", "cookapps-test", sub_id.as_str().unwrap())
         );
 
-        // Keys into a terminal shown no more are refused without a request.
+        // Keys into a terminal shown no more, still in the list, are sent all the same, with no size (it has no pane).
         let (reply, answer) = oneshot::channel();
         commands
             .send(StreamCommand::Input("term_c".into(), "x".into(), reply))
             .ok()
             .unwrap();
-        assert_eq!(answer.await.unwrap(), Err(OTHER_TERMINAL.to_owned()));
+        let send = server.request().await;
+        assert_eq!(send["method"], "terminal.send");
+        assert_eq!(
+            send["params"],
+            input_params("term_c", "x", "cookapps-test", None)
+        );
+        assert!(send["params"].get("viewport").is_none());
+        server
+            .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": true}}}))
+            .await;
+        assert!(answer.await.unwrap().is_ok());
 
         commands.send(StreamCommand::Close).ok().unwrap();
         tokio::time::timeout(Duration::from_secs(5), task)
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn keys_go_to_a_subscribed_terminal_or_a_listed_one_and_to_no_other() {
+        use InputRoute::{Listed, Refused, Subscribed};
+        // (subscribed, shown, loaded, listed)
+        assert_eq!(input_route(true, true, true, true), Subscribed);
+        assert_eq!(input_route(false, false, true, true), Listed);
+        // Not in the list: refused as before.
+        assert_eq!(input_route(false, false, true, false), Refused(NOT_LISTED));
+        // Shown but not yet subscribed, or the list not yet held: the connection is not ready.
+        assert_eq!(input_route(false, true, true, true), Refused(NOT_CONNECTED));
+        assert_eq!(
+            input_route(false, false, false, false),
+            Refused(NOT_CONNECTED)
+        );
+        assert_eq!(
+            input_route(false, false, false, true),
+            Refused(NOT_CONNECTED)
+        );
     }
 
     #[tokio::test]

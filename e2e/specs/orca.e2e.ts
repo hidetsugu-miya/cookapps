@@ -1840,7 +1840,7 @@ describe("orca: a saved environment's stream", () => {
     expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_example-app")).toBe(true);
   });
 
-  it("drops the keys not sent yet when another tab shows, so none reaches its terminal", async () => {
+  it("sends the keys not sent yet to the terminal they were typed in when another tab shows", async () => {
     await openStudio(sample(), [orcaTerminal("example-app", "zsh")]);
     await project("example-app").click();
     await waitForCalls("orca_stream_terminal");
@@ -1855,8 +1855,13 @@ describe("orca: a saved environment's stream", () => {
     await tabOf("orca:term_example-app_zsh").$(".orca-tab-btn").click();
     await waitForCalls("orca_stream_terminal", 2);
     await release(input, null);
-    await browser.pause(500);
-    expect(await callsOf(input)).toEqual([{ handle: "term_example-app", text: "1" }]);
+    await browser.waitUntil(async () => (await callsOf(input)).length === 2, { timeoutMsg: "the keys typed before the tab changed were not sent" });
+    // All of them go to the terminal they were typed in, not to the one now shown.
+    expect(await callsOf(input)).toEqual([
+      { handle: "term_example-app", text: "1" },
+      { handle: "term_example-app", text: "2\r" },
+    ]);
+    await release(input, null);
   });
 
   it("shows the message when the keys cannot be sent", async () => {
