@@ -1,4 +1,4 @@
-:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); }
+:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
@@ -953,6 +953,38 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-hl .hljs-emphasis { font-style: italic; }
 .orca-edit-hl .hljs-strong { font-weight: 700; }
 .orca-edit-area:disabled { opacity: .6; }
+.orca-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.orca-diff .orca-empty { margin: 0; padding: 48px 24px; }
+.orca-diff-head { gap: 4px; }
+.orca-diff-head .orca-edit-path { margin-right: 8px; }
+.orca-diff-count { flex: none; margin-right: 8px; color: var(--muted); }
+.orca-diff-btn { flex: none; width: calc(24px * var(--fs)); height: calc(24px * var(--fs)); }
+.orca-diff-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.orca-diff-rows { flex: 1; min-height: 0; overflow: auto; font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; tab-size: 2; }
+.odf-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr); min-height: 1.6em; }
+.odf-row.odf-inline { grid-template-columns: auto auto 1.5em minmax(0, 1fr); }
+.odf-code { min-width: 0; padding: 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: CanvasText; }
+.odf-code.blank { background: var(--diff-blank-bg); }
+.odf-num { min-width: 4ch; padding: 0 6px; box-sizing: content-box; text-align: right; color: var(--muted); background: var(--surface); border-left: 1px solid var(--line); user-select: none; -webkit-user-select: none; }
+.odf-num + .odf-num { border-left: 0; }
+.odf-inline .odf-num:first-child { border-left: 0; }
+.odf-mark { text-align: center; color: var(--muted); user-select: none; -webkit-user-select: none; }
+.odf-row[data-kind="changed"] .old, .odf-row[data-kind="removed"] .old { background: var(--diff-del-bg); }
+.odf-row[data-kind="changed"] .new, .odf-row[data-kind="added"] .new { background: var(--diff-ins-bg); }
+.odf-inline[data-kind="removed"] .odf-code, .odf-inline[data-kind="removed"] .odf-mark { background: var(--diff-del-bg); }
+.odf-inline[data-kind="added"] .odf-code, .odf-inline[data-kind="added"] .odf-mark { background: var(--diff-ins-bg); }
+.odf-inline[data-kind="removed"] .odf-mark { color: var(--diff-del-mark); }
+.odf-inline[data-kind="added"] .odf-mark { color: var(--diff-ins-mark); }
+.orca-diff-rows .hljs-comment, .orca-diff-rows .hljs-quote { color: var(--hl-comment); font-style: italic; }
+.orca-diff-rows .hljs-keyword, .orca-diff-rows .hljs-selector-tag, .orca-diff-rows .hljs-doctag, .orca-diff-rows .hljs-template-tag, .orca-diff-rows .hljs-name { color: var(--hl-keyword); }
+.orca-diff-rows .hljs-string, .orca-diff-rows .hljs-regexp, .orca-diff-rows .hljs-meta .hljs-string { color: var(--hl-string); }
+.orca-diff-rows .hljs-number, .orca-diff-rows .hljs-literal, .orca-diff-rows .hljs-symbol, .orca-diff-rows .hljs-bullet, .orca-diff-rows .hljs-link { color: var(--hl-number); }
+.orca-diff-rows .hljs-title, .orca-diff-rows .hljs-section, .orca-diff-rows .hljs-selector-id, .orca-diff-rows .hljs-selector-class { color: var(--hl-title); }
+.orca-diff-rows .hljs-type, .orca-diff-rows .hljs-built_in, .orca-diff-rows .hljs-class .hljs-title { color: var(--hl-type); }
+.orca-diff-rows .hljs-attr, .orca-diff-rows .hljs-attribute, .orca-diff-rows .hljs-variable, .orca-diff-rows .hljs-property, .orca-diff-rows .hljs-template-variable, .orca-diff-rows .hljs-selector-attr, .orca-diff-rows .hljs-selector-pseudo { color: var(--hl-attr); }
+.orca-diff-rows .hljs-meta { color: var(--hl-meta); }
+.orca-diff-rows .hljs-emphasis { font-style: italic; }
+.orca-diff-rows .hljs-strong { font-weight: 700; }
 .item input.editor-ms { width: 90px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: #fff; }
 .item input.editor-ms:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .orca-term-box { position: absolute; inset: 8px 8px 8px 12px; }

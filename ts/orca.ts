@@ -1,6 +1,6 @@
 // The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18): two panes, and the file pane on the right (orca-files.ts) when it is shown. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
-// A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be.
+// A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row.
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change) and nothing reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
 // and no more once the `orca` command was found missing (the reload button reads again). Only the first read, the screen being shown, the reload button, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
@@ -19,12 +19,13 @@ import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
-import { CHEVRON_SVG, CLAUDE_SVG, FILE_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
+import { CHEVRON_SVG, CLAUDE_SVG, DIFF_SVG, FILE_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { initOrcaChat } from "./orca-chat.js";
+import { closeDiff, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, filesOf, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
 import { filesShown, initOrcaFiles, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
@@ -175,10 +176,10 @@ export function statusIcon(status: OrcaStatus, label = STATUS_LABELS[status]) {
 
 // ---- tabs ----
 
-// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18).
+// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24).
 interface Tab {
   id: string;
-  kind: "claude" | "plain" | "file";
+  kind: "claude" | "plain" | "file" | "diff";
   status: OrcaStatus;
   label: string;
   title: string;
@@ -189,6 +190,9 @@ interface Tab {
   // The worktree's name, "{repo} ・ {branch}", which the heading of the file pane shows.
   where: string;
 }
+
+// A tab with no terminal, whose page is a document of the worktree: a file in the editor, or the difference of a file.
+const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff";
 
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
 const plainTabId = (handle: string) => `orca:${handle}`;
@@ -214,6 +218,10 @@ function tabsOf(key: string): Tab[] {
   for (const f of filesOf(view?.target ?? null, key)) {
     const where = tabs.find((t) => t.path === f.path)?.where ?? view?.worktrees.find((w) => w.path === f.path);
     tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where) });
+  }
+  for (const d of diffsOf(view?.target ?? null, key)) {
+    const where = tabs.find((t) => t.path === d.path)?.where ?? view?.worktrees.find((w) => w.path === d.path);
+    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: nameOf(d.relative), handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where) });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -466,7 +474,7 @@ function cursorKey(rows = visibleRows(matcher())) {
 // `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here.
 function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
   const { local, hosts } = rows;
-  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, openTabs.get(r.key) ?? tabsOf(r.key).filter((t) => t.kind !== "file"), r.key === on, re);
+  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, openTabs.get(r.key) ?? tabsOf(r.key).filter((t) => !isDocument(t)), r.key === on, re);
   const nodes: HTMLElement[] = local.map(node);
   if (hosts.length) nodes.push(tag("h3", "orca-sec", "SSH"), ...hosts.map(node));
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
@@ -489,7 +497,7 @@ function drawFeed() {
   const now = Date.now();
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
-  const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, tabsOf(k).filter((t) => t.kind !== "file")]));
+  const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, tabsOf(k).filter((t) => !isDocument(t))]));
   const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
@@ -516,7 +524,7 @@ function tabNode(t: Tab, selected: boolean) {
   select.type = "button";
   select.setAttribute("role", "tab");
   select.setAttribute("aria-selected", String(selected));
-  select.append(t.kind === "file" ? fileIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
+  select.append(t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
   if (t.kind === "file") {
     wrap.dataset.file = "true";
     if (dirtyIds().has(t.id)) {
@@ -545,12 +553,19 @@ function fileIcon() {
   return icon;
 }
 
+// The mark of a diff's tab.
+function diffIcon() {
+  const icon = tag("span", "orca-ic orca-file-tab-ic");
+  icon.innerHTML = DIFF_SVG;
+  return icon;
+}
+
 // The line under a pane's strip that says why it shows no terminal, else null.
 function emptyText(tabs: Tab[], tab: Tab | undefined) {
   if (started !== null) return null;
   if (projectKey === null) return "プロジェクトを選んでください";
   if (tabs.length === 0) return "セッションはありません";
-  return tab !== undefined && tab.kind !== "file" && tab.handle === null ? "このセッションのターミナルはありません" : null;
+  return tab !== undefined && !isDocument(tab) && tab.handle === null ? "このセッションのターミナルはありません" : null;
 }
 
 // The tree of the layout for drawing: each pane with the tabs it holds that the list still has (a tab that left shows no more before Rust's next answer), and the one it shows.
@@ -568,7 +583,7 @@ function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled:
     focused: node.id === focus,
     empty: emptyText(tabs, tab),
     terminal: !!tab?.handle,
-    editor: tab?.kind === "file",
+    editor: tab !== undefined && isDocument(tab),
     plusDisabled,
     filesShown: filesShown(),
     listOpen,
@@ -611,6 +626,18 @@ function syncEditor(tabs: Tab[]) {
   showEditors(placements);
 }
 
+// Shows the difference of the diff tab selected in each pane while the screen is shown (in the host of the editor, which a pane shows one of).
+function syncDiff(tabs: Tab[]) {
+  const layout = shown() ? currentLayout() : null;
+  const placements: { id: string; host: HTMLElement }[] = [];
+  for (const pane of panesOf(layout?.root ?? null)) {
+    const tab = findTab(view?.target ?? null, projectKey!, tabs, pane.selected);
+    const host = editorHostOf(pane.id);
+    if (tab?.kind === "diff" && host) placements.push({ id: tab.id, host });
+  }
+  showDiffs(placements);
+}
+
 // The worktree the file pane shows: the selected tab's, else (no tab) the main worktree of the selected project. An SSH host's row has no files to read, so a project with no tab gives none there.
 function filesWorktree(tabs: Tab[]): { path: string; label: string } | null {
   const tab = findTab(view?.target ?? null, projectKey ?? "", tabs, selectedTab() ?? "");
@@ -619,7 +646,7 @@ function filesWorktree(tabs: Tab[]): { path: string; label: string } | null {
   const main = view?.worktrees.find((w) => w.projectKey === projectKey && w.isMain);
   // A project with tabs whose layout is not answered yet has no selected tab for a moment: nothing is read for it,
   // except when the only tabs are files of the main worktree (the first file opened in a project with no tab), whose tree stays.
-  if (tabs.some((t) => t.kind !== "file" || t.path !== main?.path)) return null;
+  if (tabs.some((t) => !isDocument(t) || t.path !== main?.path)) return null;
   return main === undefined ? null : { path: main.path, label: worktreeLabel(main) };
 }
 
@@ -637,6 +664,16 @@ function openFile(relative: string) {
   started = null;
   const id = openEditorFile(view.target, projectKey, worktree.path, relative);
   // The select asks Rust for the layout with the new tab in it (`runPaneOp` reads the tabs when it asks).
+  chooseTab(id);
+  draw();
+}
+
+// The difference of a file of the file pane from HEAD (its menu): it opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
+function openDiff(relative: string) {
+  const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
+  if (worktree === null || projectKey === null || view === null) return;
+  started = null;
+  const id = openDiffTab(view.target, projectKey, worktree.path, relative);
   chooseTab(id);
   draw();
 }
@@ -697,7 +734,7 @@ function claimStarted() {
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => t.handle), ...filesOf(view?.target ?? null, projectKey ?? "").map((f) => f.id)]);
+  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => t.handle), ...filesOf(view?.target ?? null, projectKey ?? "").map((f) => f.id), ...diffsOf(view?.target ?? null, projectKey ?? "").map((d) => d.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
 }
 
@@ -714,6 +751,7 @@ function draw() {
   drawFiles(tabs);
   syncTerminal(tabs);
   syncEditor(tabs);
+  syncDiff(tabs);
 }
 
 // ---- the stream of a saved environment ----
@@ -1007,6 +1045,12 @@ async function closeTab(tab: Tab) {
     draw();
     return;
   }
+  if (tab.kind === "diff") {
+    closeDiff(tab.id);
+    closing.delete(tab.id);
+    draw();
+    return;
+  }
   try {
     await invoke("orca_close", { handle: tab.handle!, environment: view?.target ?? null });
   } catch (e) {
@@ -1176,7 +1220,7 @@ export function initOrca() {
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError });
-  initOrcaFiles({ open: openFile, toggle: toggleFilesAndDraw });
+  initOrcaFiles({ open: openFile, diff: openDiff, toggle: toggleFilesAndDraw });
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", () => {
     // A session shown again after the window was hidden is seen.

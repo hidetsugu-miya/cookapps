@@ -4,7 +4,7 @@
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, tag } from "./dom.js";
-import { CHEVRON_SVG, COPY_PATH_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
+import { CHEVRON_SVG, COPY_PATH_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { toast } from "./toast.js";
@@ -36,6 +36,7 @@ let version = 0;
 // Whether a drawing is waiting for the next frame (the reads that end in it are drawn once).
 let waiting = false;
 let openFile: (relative: string) => void = () => {};
+let openDiff: (relative: string) => void = () => {};
 // The files open in the worktree, which the last drawing colored.
 let opened = new Set<string>();
 
@@ -151,14 +152,14 @@ async function download(here: FilesContext, relative: string) {
   }
 }
 
-// The menu of a row (the right button): the path of the entry on the machine of the worktree, its path from the worktree, and, on a file, the download. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
+// The menu of a row (the right button): the path of the entry on the machine of the worktree, its path from the worktree, and, on a file, the download and the difference from HEAD (A-24). The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
 function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
   if (here === null) return;
   const item = (label: string, icon: string, pick: () => unknown) => ({ label, color: "var(--accent)", icon, current: false, pick });
   const copy = (label: string, text: string, done: string) => item(label, COPY_PATH_SVG, () => void copyText(text, done));
   const items = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
-  if (!isDirectory) items.push(item("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)));
+  if (!isDirectory) items.push(item("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), item("差分を表示", DIFF_SVG, () => openDiff(relative)));
   openMenu(anchor, items);
 }
 
@@ -259,8 +260,9 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   draw();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; toggle: () => void }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; toggle: () => void }) {
   openFile = on.open;
+  openDiff = on.diff;
   $("orca-files-toggle").innerHTML = FOLDER_SVG;
   $("orca-files-toggle").onclick = on.toggle;
   $("orca-files-reload").onclick = () => void reload();
