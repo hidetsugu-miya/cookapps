@@ -1083,7 +1083,9 @@ describe("slack list", () => {
 
   it("only folds the replies with the toggle: no thread, nothing read, the scroll position kept, and its own focus after a redraw", async () => {
     // The thread is the oldest row of the channel, so that it is the first of the group and in view.
-    const first = () => withReplies({ ts: slackTs(300, 9) });
+    // Built once: `slackTs` reads the clock, and a new `ts` would give the toggle another key in the second answer.
+    const parent = withReplies({ ts: slackTs(300, 9) });
+    const first = () => parent;
     await openList(timeline([first(), ...many(19)], { refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 20);
     const seen = await mock("slack_thread_seen", true);
