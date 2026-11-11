@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.63.0
+
+A-25 (new): the branch in the heading of the Orca file pane is a button (#439, #440, #441). Pressing it opens a list of branches right under it, in two sections, local and remote, with the current branch checked and a branch checked out in another worktree faint and disabled; typing in its field narrows the list and searches the remote branches. Picking a branch switches the worktree to it (a remote branch makes the local branch that tracks it), and the file tree and the heading are read again while the open tabs stay. When Orca refuses (changes not committed, a merge in progress, an agent at work), its words are shown. It is not a button for a worktree of an SSH host.
+
 ## v0.62.0
 
 A-24 (new): right-clicking a file in the Orca file pane shows "差分を表示", which opens a tab in the work pane with the differences between the file at HEAD and the file on the disk, uncommitted changes included (#462, #463). HEAD is on the left and the disk on the right, with the line numbers between them; a button switches to one column with the removed and added lines one above the other, and back. The text is colored by its language as in the editor, buttons move to the previous and next change, and the head shows the number of changes and a button to read the file again.
