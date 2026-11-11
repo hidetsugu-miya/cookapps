@@ -4133,6 +4133,12 @@ describe("orca: files and editor (A-18)", () => {
     language: "rust",
     highlight: "rust",
   });
+  // 200 rows, with a change at the second row and another at the 150th, so that the rows scroll.
+  const many = (): OrcaFileDiff => {
+    const lines = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`);
+    const side = lines.map((_, i) => row_(i === 1 || i === 149 ? "changed" : "same", i + 1, i + 1));
+    return { oldLines: lines, newLines: lines.map((l, i) => (i === 1 || i === 149 ? `${l} new` : l)), side, inline: side.flatMap((r) => (r.kind === "changed" ? [row_("removed", r.old, null), row_("added", null, r.new)] : [r])), changes: [{ side: 1, inline: 1 }, { side: 149, inline: 150 }], language: "plaintext", highlight: null };
+  };
   const diffRows = () => count(".orca-diff-rows .odf-row");
   const diffButton = (label: string) => $(`.orca-diff [aria-label="${label}"]`);
   const diffCell = (row: number, cell: string) => browser.execute((r, c) => document.querySelectorAll(".orca-diff-rows .odf-row")[r].querySelector(c)!.textContent, row, cell);
@@ -4227,12 +4233,6 @@ describe("orca: files and editor (A-18)", () => {
   });
 
   it("goes to the previous and the next block of changes, and counts them (A-24)", async () => {
-    // 200 rows, with a change at the second row and another at the 150th, so that the rows scroll.
-    const many = (): OrcaFileDiff => {
-      const lines = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`);
-      const side = lines.map((_, i) => row_(i === 1 || i === 149 ? "changed" : "same", i + 1, i + 1));
-      return { oldLines: lines, newLines: lines.map((l, i) => (i === 1 || i === 149 ? `${l} new` : l)), side, inline: side.flatMap((r) => (r.kind === "changed" ? [row_("removed", r.old, null), row_("added", null, r.new)] : [r])), changes: [{ side: 1, inline: 1 }, { side: 149, inline: 150 }], language: "plaintext", highlight: null };
-    };
     await openDiffOf("a.rs", many());
     await waitForCount(".orca-diff-rows .odf-row", 200);
     await expect($(".orca-diff-count")).toHaveText("変更 2 件");
@@ -4251,6 +4251,31 @@ describe("orca: files and editor (A-18)", () => {
     await diffButton("前の変更").click();
     await browser.waitUntil(async () => !(await view()).visible, { timeoutMsg: "the first change never came back" });
     await expect(diffButton("前の変更")).toBeDisabled();
+  });
+
+  it("draws a tab that is out of the page in the view chosen when it is put back, at the block last moved to (A-24)", async () => {
+    await openDiffOf("a.rs", many());
+    await waitForCount(".orca-diff-rows .odf-row", 200);
+    await diffButton("次の変更").click();
+    await expect(diffButton("次の変更")).toBeDisabled();
+    expect(await rightClickRow("b.log")).toBe(true);
+    await pickItem("差分を表示");
+    await expect(tabOf("diff:2")).toBeDisplayed();
+    await waitForCount(".orca-diff-rows .odf-row", 200);
+    await diffButton("1 列で表示").click();
+    await waitForCount(".orca-diff-rows .odf-row", 202);
+    await tabOf("diff:1").$(".orca-tab-btn").click();
+    await expect($(".orca-diff-rows")).toHaveAttribute("data-view", "inline");
+    await waitForCount(".orca-diff-rows .odf-row", 202);
+    await expect(diffButton("左右に並べて表示")).toHaveAttribute("aria-pressed", "true");
+    await expect(diffButton("次の変更")).toBeDisabled();
+    // The second block (the 151st row of one column) is in view, not the pixel place of the other view.
+    const visible = () => browser.execute(() => {
+      const box = document.querySelector(".orca-diff-rows")!.getBoundingClientRect();
+      const r = document.querySelectorAll(".orca-diff-rows .odf-row")[150].getBoundingClientRect();
+      return r.top >= box.top && r.bottom <= box.bottom;
+    });
+    await browser.waitUntil(visible, { timeoutMsg: "the second change was not in view after the tab was put back" });
   });
 
   it("says there is no change for a file with none, and the buttons of the changes are off (A-24)", async () => {

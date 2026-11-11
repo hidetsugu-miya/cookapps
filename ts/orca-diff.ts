@@ -22,6 +22,9 @@ interface DiffTab {
   // The block of changes the buttons moved to last (-1: none yet), and the scroll of the rows, which a tab taken out of the page and put back keeps.
   current: number;
   scroll: number;
+  // Set while the tab is out of the page: the rows are drawn in the other view (stale), or the first answer came and has not scrolled to the first block yet (pending); showDiffs does it when the tab is put back.
+  stale: boolean;
+  pending: boolean;
   // Counts the reads, so that an answer of an earlier read than the last is dropped; the wait before the colors of a long text are drawn.
   seq: number;
   cancelColor: (() => void) | null;
@@ -117,6 +120,14 @@ function render(d: DiffTab) {
     .map((row) => rowHtml(d, row))
     .join("");
   d.rows.dataset.view = inline ? "inline" : "side";
+  d.stale = false;
+}
+
+// Draws the view chosen again, and goes to the block last moved to.
+function redraw(d: DiffTab) {
+  render(d);
+  syncHead(d);
+  if (d.current >= 0) goTo(d, d.current);
 }
 
 function cancelColor(d: DiffTab) {
@@ -164,8 +175,10 @@ async function load(d: DiffTab) {
     render(d);
     d.current = Math.min(d.current, diff.changes.length - 1);
     syncHead(d);
-    if (first && diff.changes.length > 0) goTo(d, 0);
-    else d.rows.scrollTop = top;
+    if (first && diff.changes.length > 0) {
+      if (d.el.isConnected) goTo(d, 0);
+      else d.pending = true;
+    } else d.rows.scrollTop = top;
   } catch (e) {
     if (mine !== d.seq) return;
     cancelColor(d);
@@ -203,19 +216,18 @@ function create(id: string, target: string | null, project: string, path: string
   const rows = tag("div", "orca-diff-rows");
   rows.hidden = true;
   el.append(head, note, rows);
-  const d: DiffTab = { id, target, project, path, relative, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, seq: 0, cancelColor: null, el, note, count, rows, previous, next, view, reload };
+  const d: DiffTab = { id, target, project, path, relative, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, stale: false, pending: false, seq: 0, cancelColor: null, el, note, count, rows, previous, next, view, reload };
   previous.onclick = () => goTo(d, d.current - 1);
   next.onclick = () => goTo(d, d.current + 1);
   reload.onclick = () => void load(d);
   view.onclick = () => {
     inline = !inline;
-    // Every tab shows the view chosen; the tab that was pressed stays at its block of changes.
+    // Every tab shows the view chosen, at its block of changes: a tab on the page is drawn now, one out of the page when it is put back.
     for (const other of diffs.values()) {
       if (other.diff === null) continue;
-      render(other);
-      syncHead(other);
+      if (other.el.isConnected) redraw(other);
+      else other.stale = true;
     }
-    if (d.current >= 0) goTo(d, d.current);
   };
   rows.onscroll = () => {
     d.scroll = rows.scrollTop;
@@ -259,7 +271,17 @@ export function showDiffs(placements: { id: string; host: HTMLElement }[]) {
     if (d.el.parentElement !== host) {
       host.replaceChildren(d.el);
       // Rows that were out of the page start at the top again.
-      d.rows.scrollTop = d.scroll;
+      const drawnAgain = d.stale;
+      if (drawnAgain) {
+        render(d);
+        syncHead(d);
+      }
+      if (d.pending) {
+        d.pending = false;
+        goTo(d, 0);
+      } else if (!drawnAgain) d.rows.scrollTop = d.scroll;
+      else if (d.current >= 0) goTo(d, d.current);
+      else d.rows.scrollTop = 0;
     }
   }
 }
