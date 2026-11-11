@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.61.1
+
+A-23: the traffic lights at the top left of the window are no longer cut by the edge of the window (#421). They are where macOS itself puts them, and the green icon column is 14px wider so that the three fit on it.
+
+S-13: the button at the right of the Slack header that opens the channels kept off the list has the circle with a minus of the side menu's hide button, not an eye (#449).
+
 ## v0.61.0
 
 S-19 (new): the Slack screen has a side menu at its left (#433). Two buttons, "未読メッセージ" (with the number of unread messages) and "ウォッチ", choose which list the body shows, and under them every workspace's joined channels are listed by name with the number of their unread messages. The hide button of a channel moved from the rows of the list to the menu: a circle with a minus, shown while the channel is hovered. The divider can be dragged to change its width.
