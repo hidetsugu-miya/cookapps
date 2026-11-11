@@ -1170,6 +1170,18 @@ describe("todo detail", () => {
     await expect($("#todo-detail")).not.toHaveText(expect.stringContaining("優先度"));
   });
 
+  it("puts the side pane under the body when the body column would be narrower than 320px", async () => {
+    await openTodo();
+    await $(ROWS).click();
+    const place = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().toJSON(), selector);
+    // The 1200px window with the project list and the right pane (40%) open leaves the detail less than 556px (320 + 16 + 220).
+    const [detail, main, side] = [await place("#todo-detail"), await place("#todo-detail .detail-main"), await place("#todo-detail .detail-side")];
+    expect(detail.width).toBeLessThan(556);
+    expect(main.width).toBeGreaterThanOrEqual(320);
+    expect(side.top).toBeGreaterThanOrEqual(main.bottom);
+    expect(side.width).toBe(220);
+  });
+
   it("moves the open task to another project from the side pane, the menu showing the nesting", async () => {
     await openTodo();
     const move = await mock("todoist_move", true);

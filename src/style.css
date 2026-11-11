@@ -419,7 +419,10 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 .drag-ghost { position: fixed; left: 0; top: 0; z-index: 30; max-width: 280px; padding: 6px 12px; border-radius: 8px; background: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); font-size: calc(13px * var(--fs)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .body .parent { color: #888; font-size: calc(12px * var(--fs)); flex: none; }
 
-#todo-detail { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; max-width: 980px; }
+/* Two columns while the body column keeps 320px; narrower, the side column wraps under it. Wrapping by width alone (no container query, whose containment would move the fixed .pop and .menu). */
+#todo-detail { display: flex; flex-wrap: wrap; gap: 16px; max-width: 980px; }
+#todo-detail > .detail-main { flex: 1 1 320px; min-width: 0; }
+#todo-detail > .detail-side { flex: 0 0 220px; box-sizing: border-box; }
 .detail-side { align-self: start; padding: 4px 16px; border-radius: 12px; background: var(--bar); }
 .field { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .field-label { margin-bottom: 4px; font-size: calc(12px * var(--fs)); font-weight: bold; color: #666; }
