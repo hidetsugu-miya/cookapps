@@ -4,6 +4,8 @@ import type { OrcaRow } from "../../ts/bindings/OrcaRow";
 import type { TaskItem } from "../../ts/bindings/TaskItem";
 import type { HandoffSummary } from "../../ts/bindings/HandoffSummary";
 import type { OrcaWorktree } from "../../ts/bindings/OrcaWorktree";
+import type { SideChannel } from "../../ts/bindings/SideChannel";
+import type { SideWorkspace } from "../../ts/bindings/SideWorkspace";
 import type { ThreadDetail } from "../../ts/bindings/ThreadDetail";
 import type { ThreadItem } from "../../ts/bindings/ThreadItem";
 import type { TimelineMessage } from "../../ts/bindings/TimelineMessage";
@@ -362,6 +364,7 @@ const rootTs = tsAgo(46, 1);
 function feed() {
   const unread: TimelineMessage[] = [
     timelineMessage(tsAgo(4, 2), "田中 蓮", "support", "請求書の件、お客さまへの回答は明日の午前で調整しました。原因が分かりしだい共有をお願いします。", { ...inWs(wsA, "C1"), unread: true }),
+    timelineMessage(tsAgo(52, 19), "佐藤 葵", "support", "請求書の再発行は、経理の確認が取れてから送ります。", { ...inWs(wsA, "C1"), unread: true }),
     timelineMessage(tsAgo(11, 3), "鈴木 陽菜", "dev-shop", "ログインの修正をテスト環境に入れました。スマートフォンでの確認をお願いできますか？", { ...inWs(wsA, "C2"), unread: true, replyCount: 1 }),
     timelineMessage(tsAgo(24, 4), "高橋 湊", "general", "明日の定例は 11 時からに変更します。議題は共有シートへお願いします。", { ...inWs(wsA, "C3"), unread: true }),
     timelineMessage(tsAgo(38, 5), "山本 悠", "lab-雑談", "来週の勉強会、テーマの案があれば書いてください。", { ...inWs(wsB, "D1"), unread: true }),
@@ -379,7 +382,29 @@ function feed() {
   const watched: TimelineMessage[] = [
     watchedMessage(tsAgo(200, 10), "加藤 美咲", "dev-shop", "クーポンの併用条件、営業の希望をまとめました。仕様に入れられそうか見てもらえますか？", 2, { ...inWs(wsA, "C2"), replyCount: 6 }),
   ];
-  return timeline(unread, { watched });
+  return timeline(unread, { watched, side: side() });
+}
+// The side menu (S-19): the joined channels of each workspace by name, with the unread number of each channel.
+function side(): SideWorkspace[] {
+  const ch = (id: string, name: string, extra: Partial<SideChannel> = {}): SideChannel => ({ id, name, private: false, unread: 0, ...extra });
+  return [
+    {
+      teamId: wsA.teamId,
+      team: wsA.team,
+      channels: [
+        ch("C7", "alerts", { unread: 1 }),
+        ch("C5", "design", { unread: 1 }),
+        ch("C6", "dev-admin", { unread: 1 }),
+        ch("C4", "dev-billing", { unread: 1 }),
+        ch("C2", "dev-shop", { unread: 2 }),
+        ch("C3", "general", { unread: 1 }),
+        ch("C8", "management", { private: true }),
+        ch("C9", "release"),
+        ch("C1", "support", { unread: 2 }),
+      ],
+    },
+    { teamId: wsB.teamId, team: wsB.team, channels: [ch("D1", "lab-雑談", { unread: 2 }), ch("D2", "study-notes")] },
+  ];
 }
 const slackDetail = () => ({
   ...slackThread([
@@ -491,6 +516,7 @@ describe("readme shots", () => {
     await $("#nav-slack").click();
     await expect($("#slack-list")).toBeDisplayed();
     await waitForCount("#slack-feed .feed-row", 11);
+    await waitForCount("#slack-side .slack-side-btn", 11);
     await shot("slack");
   });
 });

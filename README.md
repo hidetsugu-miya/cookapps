@@ -64,8 +64,8 @@ Claude が「実装すること」に要約するので、直したいところ�
     </td>
     <td width="50%" valign="top">
       <strong>Slack</strong><br />
-      未読と、自分で選んだスレッドだけを追えます。要約して Todo にもできます。<br /><br />
-      <img src="docs/assets/readme/slack.png" alt="未読とウォッチの 2 段に分かれた Slack の一覧" />
+      チャンネルをサイドメニューに並べ、未読はチャンネルごとにまとめて「既読に設定」で片づけます。履歴の表示と投稿もできます。<br /><br />
+      <img src="docs/assets/readme/slack.png" alt="サイドメニューにワークスペースとチャンネルが並び、未読がチャンネルごとにまとまった Slack の画面" />
     </td>
   </tr>
 </table>
@@ -107,7 +107,7 @@ Apple の公証を受けていないので、ブラウザでダウンロード�
 |---|---|
 | [機能の一覧](docs/features.md) | できることのすべて |
 | [セットアップと起動](docs/setup.md) | OAuth クライアントの作り方、ソースからの起動 |
-| [Slack](docs/slack.md) | ワークスペースの追加、貼り付け、要約 |
+| [Slack](docs/slack.md) | ワークスペースの追加、未読とチャンネルの履歴、投稿、要約 |
 | [Orca](docs/orca.md) | セッションの一覧、ターミナル、Claude への渡し方 |
 | [Claude](docs/claude-integration.md) | 要約、接続方式、モデルの選び方 |
 | [MCP サーバー](docs/mcp.md) | Claude Code から受信トレイと予定を扱う |

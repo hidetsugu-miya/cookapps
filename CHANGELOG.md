@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.61.0
+
+S-19 (new): the Slack screen has a side menu at its left (#433). Two buttons, "未読メッセージ" (with the number of unread messages) and "ウォッチ", choose which list the body shows, and under them every workspace's joined channels are listed by name with the number of their unread messages. The hide button of a channel moved from the rows of the list to the menu: a circle with a minus, shown while the channel is hovered. The divider can be dragged to change its width.
+
+S-15, S-8: the unread messages of the Slack list are grouped by channel, the newest 10 of each channel, oldest first under a separator for each day, and there is no limit over all the channels (#434). The heading of a channel has the number of its unread messages and "既読に設定", which moves the channel's read position to its newest unread message (also those not listed) and reads the unread replies of its threads. The header's "すべて既読にする", the check of a row and the "あと N 件" button are gone.
+
+S-20 (new): pressing a channel of the side menu shows its newest 50 messages, oldest first, in place of the list (#435). Opening the history does not read the channel, a row with replies opens its thread, and a failed read shows the error with "再読み込み".
+
+S-21 (new): the history of a channel has a field to post a message to that channel under the user's own name (#436). Cmd+Enter or the button posts, and what is written stays for each channel until the app quits.
+
 ## v0.60.1
 
 M-1: the inbox reads all accounts at once, and the threads of each account without waiting for groups of ten, so it loads faster with several accounts (#411).
