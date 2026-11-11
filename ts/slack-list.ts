@@ -19,7 +19,7 @@ import { MAX_CARDS } from "./arrivals.js";
 import { announceSlackArrival, dismissSlackArrival, pruneSlackArrivals, slackKey } from "./arrivals-slack.js";
 import { $, tag } from "./dom.js";
 import { formatDate, formatDay } from "./format.js";
-import { BOOKMARK_SVG, CHEVRON_SVG, DOT_SVG, HASH_SVG, LOCK_SVG } from "./icons.js";
+import { BOOKMARK_SVG, CHEVRON_SVG, DOT_SVG, HASH_SVG, LOCK_SVG, MINUS_CIRCLE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { closeSlackChannel, openSlackChannel, redrawSlackChannel, revealSlackChannel, selectedChannel } from "./slack-channel.js";
@@ -917,5 +917,6 @@ export function initSlackList() {
   feed().addEventListener("scroll", () => {
     if (!$("slack-list").hidden) listScroll = feed().scrollTop;
   });
+  $("slack-hidden-open").innerHTML = MINUS_CIRCLE_SVG;
   $("slack-hidden-open").onclick = openSettings;
 }
