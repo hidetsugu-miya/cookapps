@@ -358,7 +358,7 @@ export function initSettings() {
         [
           [appsLink(), " で、ワークスペースごとにアプリを作る"],
           ["「User Token Scopes」に次を足す", ...scopesBlock(SLACK_SCOPES)],
-          [code("users:read"), "、", code("files:read"), "、", code("usergroups:read"), " は、Slack の画面に送信者の名前とアイコン、添付画像、ユーザーグループへのメンションの名前を出すために使います。なくても、ほかのことはできます。", code("channels:write"), " と ", code("groups:write"), " は、Slack の画面でメッセージを開いたときや「すべて既読にする」を押したとき、Slack 側のそのチャンネルも既読にするために使います。Slack の仕様で、この 2 つにはチャンネルの管理権限も含まれますが、cookapps は既読位置を送る呼び出し（conversations.mark）にしか使いません。足さなくても、既読を Slack と同期すること以外はできます"],
+          [code("users:read"), "、", code("files:read"), "、", code("usergroups:read"), " は、Slack の画面に送信者の名前とアイコン、添付画像、ユーザーグループへのメンションの名前を出すために使います。なくても、ほかのことはできます。", code("channels:write"), " と ", code("groups:write"), " は、Slack の画面でメッセージを開いたときやチャンネルの「既読に設定」を押したとき、Slack 側のそのチャンネルも既読にするために使います。Slack の仕様で、この 2 つにはチャンネルの管理権限も含まれますが、cookapps は既読位置を送る呼び出し（conversations.mark）にしか使いません。足さなくても、既読を Slack と同期すること以外はできます"],
           ["ワークスペースにインストールし、", code("xoxp-"), " で始まるトークンを下の欄に貼る"],
         ],
         "トークンは OS の資格情報の保管場所に入れ、画面には出しません",

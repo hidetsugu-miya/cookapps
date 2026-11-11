@@ -1,4 +1,4 @@
-import { attachment, boot, callsOf, claudeReady, count, emitEvent, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, thread as mailThread, threadMessage, timeline, timelineMessage, timelineReply, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace } from "../support";
+import { attachment, boot, callsOf, claudeReady, count, emitEvent, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, thread as mailThread, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace } from "../support";
 
 import type { TimelineMessage } from "../../ts/bindings/TimelineMessage";
 
@@ -1285,6 +1285,23 @@ describe("slack list", () => {
     expect(await count("#slack-feed .feed-row")).toBe(0);
   });
 
+  it("takes the channel's whole unread number off the badge and off its number in the side menu, not only the rows listed", async () => {
+    const [shown, other] = [many(3), unreadSample()[1]];
+    const to = slackTs(0, 99);
+    const unreadChannels = [{ teamId: workspace.teamId, channel: "C0123ABCD", messages: 15, to, threads: [] }, ...unreadChannelsOf([other])];
+    const side = [sideWorkspace([sideChannel("C0123ABCD", "dev", { unread: 15 }), sideChannel("C2", "random", { unread: 1 })])];
+    await openUnread([...shown, other], { unreadChannels, side, unreadTotal: 16 });
+    await expect(badge()).toHaveText("16");
+    const mark = await mock("slack_mark_read", holds);
+    await (await readButton("dev")).click();
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: to }]);
+    // Before Slack has answered and the list is made again: the number is lowered by what Rust counted, not by the 3 rows drawn.
+    await expect(badge()).toHaveText("1");
+    expect(await count('#slack-side .slack-side-btn[data-key="T1/C0123ABCD"] .slack-side-n')).toBe(0);
+    expect(await $('#slack-side .slack-side-btn[data-key="T1/C2"] .slack-side-n').getText()).toBe("1");
+    await release(mark, true);
+  });
+
   it("calls slack_thread_seen for each thread of the channel with unread replies, and not slack_mark_read when no message is unread, takes the row out at once, and opens no thread", async () => {
     const message = withReplies();
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([message, unreadSample()[1]]), claude_status: claudeReady });
@@ -1719,6 +1736,17 @@ describe("slack list: the history of a channel (S-20)", () => {
     await browser.waitUntil(async () => await browser.execute(() => document.querySelector("#sc-feed .feed-watch")!.classList.contains("on")));
     await expect($("#slack-thread")).not.toBeDisplayed();
     await expect($("#slack-channel")).toBeDisplayed();
+  });
+
+  it("lets a thread go with the bookmark of a reply also sent to the channel: slack_unwatch is called with the thread's ts, not the reply's", async () => {
+    await openHistory(historySample(), { watched: [watchedMessage(firstTs, "Alice Example", "dev", "first", 0)] });
+    await pressChannel();
+    await waitForCount("#sc-feed .feed-row", 3);
+    const unwatch = await mock("slack_unwatch", null);
+    await mock("slack_timeline", timeline(unreadSample(), { side: sideSample() }));
+    await browser.execute(() => document.querySelectorAll("#sc-feed .feed-item")[2].classList.add("feed-keep"));
+    await $$("#sc-feed .feed-item .feed-watch")[2].click();
+    expect(await waitForCalls(unwatch)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: firstTs }]);
   });
 
   it("shows the error with 再読み込み when the history cannot be read, and reads it again with the button", async () => {

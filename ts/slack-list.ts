@@ -451,7 +451,8 @@ function markRead(m: TimelineMessage): Promise<unknown> | undefined {
 function moveRead(teamId: string, channel: string, to: string): Promise<unknown> | undefined {
   if (!timeline || !canWrite(teamId)) return undefined;
   const moves = (x: TimelineMessage) => x.unread && x.teamId === teamId && x.channel === channel && notAfter(x.ts, to);
-  const moved = [...timeline.messages, ...timeline.watched].filter(moves).length;
+  const movedWatched = timeline.watched.filter(moves).length;
+  const moved = timeline.messages.filter(moves).length + movedWatched;
   for (const x of timeline.watched) {
     if (x.teamId !== teamId || x.channel !== channel) continue;
     if (x.watch?.unreadTo && notAfter(x.watch.unreadTo, to)) x.watch.unreadTo = null;
@@ -459,14 +460,17 @@ function moveRead(teamId: string, channel: string, to: string): Promise<unknown>
   }
   timeline.messages = timeline.messages.filter((x) => !moves(x) || x.unreadReplies);
   for (const x of timeline.messages) if (moves(x)) x.unread = false;
-  // The channel's own count follows: all of it when the position reaches its newest unread message, else what moved.
+  // The channel's own count follows: all of it when the position reaches its newest unread message (Rust's number, which also has the messages past the rows listed, and the watched rows that moved), else what moved.
   const held = timeline.unreadChannels.find((c) => c.teamId === teamId && c.channel === channel);
+  let fall = moved;
   if (held) {
-    if (held.to === null || notAfter(held.to, to)) [held.to, held.messages] = [null, 0];
-    else held.messages = Math.max(0, held.messages - moved);
+    if (held.to === null || notAfter(held.to, to)) {
+      fall = held.messages + movedWatched;
+      [held.to, held.messages] = [null, 0];
+    } else held.messages = Math.max(0, held.messages - moved);
   }
-  unreadCount = Math.max(0, unreadCount - moved);
-  lowerSide(teamId, channel, moved);
+  unreadCount = Math.max(0, unreadCount - fall);
+  lowerSide(teamId, channel, fall);
   drawBadge();
   // A read that is on its way may answer with the old position (the rows would be unread again): once Rust has the new one, the list is made again from its cache, without waiting for the next period.
   const during = isLoading();
@@ -572,15 +576,17 @@ async function watchThread(m: TimelineMessage) {
 // Lets the thread go: the row leaves the watch section at once, and the notice offers to put it back as it was (with the replies it had been seen up to).
 async function unwatchThread(m: TimelineMessage) {
   if (!timeline) return;
-  timeline.watched = timeline.watched.filter((x) => !(x.teamId === m.teamId && x.channel === m.channel && x.ts === m.ts));
+  // A row of the history that is a reply also sent to the channel is the thread's: it lets the thread go (as `watchThread` watches it).
+  const ts = m.threadTs ?? m.ts;
+  timeline.watched = timeline.watched.filter((x) => !(x.teamId === m.teamId && x.channel === m.channel && x.ts === ts));
   draw();
-  const done = await guarded(() => invoke("slack_unwatch", { teamId: m.teamId, channel: m.channel, ts: m.ts }));
-  if (done?.value) toast("ウォッチを外しました", { label: "元に戻す", run: () => rewatch(m, done.value) });
+  const done = await guarded(() => invoke("slack_unwatch", { teamId: m.teamId, channel: m.channel, ts }));
+  if (done?.value) toast("ウォッチを外しました", { label: "元に戻す", run: () => rewatch(m, ts, done.value) });
   load(true);
 }
 
-async function rewatch(m: TimelineMessage, seenTs: string | null) {
-  await guarded(() => invoke("slack_watch", { teamId: m.teamId, channel: m.channel, ts: m.ts, seenTs }));
+async function rewatch(m: TimelineMessage, ts: string, seenTs: string | null) {
+  await guarded(() => invoke("slack_watch", { teamId: m.teamId, channel: m.channel, ts, seenTs }));
   load(true);
 }
 
@@ -628,16 +634,17 @@ function groupsOf(messages: TimelineMessage[]) {
   const groups = new Map<string, TimelineMessage[]>();
   for (const m of messages) {
     const key = `${m.teamId}/${m.channel}`;
-    groups.set(key, [...(groups.get(key) ?? []), m]);
+    const rows = groups.get(key);
+    if (rows) rows.push(m);
+    else groups.set(key, [m]);
   }
-  return [...groups].map(([key, rows]) => ({ key, rows: [...rows].sort((a, b) => Number(a.ts) - Number(b.ts)) }));
+  return [...groups].map(([key, rows]) => ({ key, rows: rows.sort((a, b) => Number(a.ts) - Number(b.ts)) }));
 }
 
 // The heading of a channel's group: its mark (# or a lock), its name, the workspace (muted), the number of its unread messages and "既読に設定".
 // The button is drawn only where pressing it changes something: the token of the workspace may write the position and a message is unread, or a thread of the channel has unread replies (S-14, which need no scope).
-function channelHead(first: TimelineMessage, info: UnreadChannel | undefined) {
+function channelHead(first: TimelineMessage, info: UnreadChannel | undefined, priv: boolean) {
   const head = tag("div", "feed-chan");
-  const priv = timeline?.side.find((w) => w.teamId === first.teamId)?.channels.find((c) => c.id === first.channel)?.private ?? false;
   const mark = tag("span", "feed-chan-ic");
   mark.innerHTML = priv ? LOCK_SVG : HASH_SVG;
   const dot = tag("i", "feed-ws feed-chan-ws");
@@ -659,12 +666,12 @@ function channelHead(first: TimelineMessage, info: UnreadChannel | undefined) {
 }
 
 // The nodes of the unread section: a group for each channel, its messages under the day they were sent.
-function unreadNodes(messages: TimelineMessage[]) {
+function unreadNodes(messages: TimelineMessage[], privates: Set<string>) {
   const today = Date.now();
+  const infos = new Map((timeline?.unreadChannels ?? []).map((c) => [`${c.teamId}/${c.channel}`, c]));
   return groupsOf(messages).map(({ key, rows }) => {
     const group = tag("section", "feed-group");
-    const info = timeline?.unreadChannels.find((c) => `${c.teamId}/${c.channel}` === key);
-    group.append(channelHead(rows[0], info));
+    group.append(channelHead(rows[0], infos.get(key), privates.has(key)));
     let day = "";
     for (const m of rows) {
       const label = formatDay(slackMs(m.ts), today);
@@ -680,13 +687,17 @@ function unreadNodes(messages: TimelineMessage[]) {
   });
 }
 
+// The private channels of the side menu, as `{teamId}/{channel}`: the lock of a group's heading is all the unread section takes from the side menu.
+const privateChannels = () => new Set((timeline?.side ?? []).flatMap((w) => w.channels.filter((c) => c.private).map((c) => `${w.teamId}/${c.id}`)));
+
 // Draws the rows where they are: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
   // The side menu's section: the other one is not drawn.
   const messages = section === "unread" ? (timeline?.messages ?? []) : [];
   const watched = section === "watch" ? (timeline?.watched ?? []) : [];
+  const privates = section === "unread" ? privateChannels() : new Set<string>();
   forgetClosedThreads();
-  const key = JSON.stringify([section, messages, watched, section === "unread" ? timeline?.unreadChannels : null, section === "unread" ? timeline?.side : null, [...closedThreads], loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], timeline?.missing.map((x) => [x.teamId, x.scopes]) ?? [], new Date().toDateString()]);
+  const key = JSON.stringify([section, messages, watched, section === "unread" ? timeline?.unreadChannels : null, [...privates], [...closedThreads], loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], timeline?.missing.map((x) => [x.teamId, x.scopes]) ?? [], new Date().toDateString()]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -697,7 +708,7 @@ function drawFeed() {
   // A heading for each section that has rows.
   box.replaceChildren(
     ...(messages.length || watched.length
-      ? [...(messages.length ? [sectionHeading("未読", DOT_SVG), ...unreadNodes(messages)] : []), ...(watch.length ? [sectionHeading("ウォッチ", BOOKMARK_SVG), ...watch] : [])]
+      ? [...(messages.length ? [sectionHeading("未読", DOT_SVG), ...unreadNodes(messages, privates)] : []), ...(watch.length ? [sectionHeading("ウォッチ", BOOKMARK_SVG), ...watch] : [])]
       : [emptyNode()]),
   );
   box.scrollTop = top;

@@ -3020,6 +3020,20 @@ fn stopped(map: &Mutex<HashMap<String, Instant>>, team_id: &str) -> bool {
         .is_some_and(|until| *until > Instant::now())
 }
 
+/// What the history of a channel answers while its workspace is rate-limited (S-20): Slack is not called.
+const RATE_LIMITED_ERROR: &str = "Slack の呼び出し制限のため、しばらく読めません";
+
+/// The error of a failed `conversations.history` call of one channel: a 429 stops the workspace's timeline reads for the wait Slack asked (`TimelineCache::limit`, as the full read does) and answers `RATE_LIMITED_ERROR`; another failure is `read_error`.
+fn history_failure(cache: &TimelineCache, team_id: &str, team: &str, e: SlackError) -> String {
+    match e.rate_limited {
+        Some(wait) => {
+            cache.limit(team_id, wait);
+            RATE_LIMITED_ERROR.to_owned()
+        }
+        None => read_error(e, team),
+    }
+}
+
 /// How long to stop after a 429: what Slack asked for (`Retry-After`), else `RATE_LIMIT_DEFAULT`, at most `RATE_LIMIT_MAX`.
 fn rate_limit_wait(retry_after: Option<Duration>) -> Duration {
     retry_after
@@ -5438,6 +5452,10 @@ pub async fn slack_channel_history(
     if token_key(&team_id).is_err() || !valid_channel(&channel) {
         return Err(log_failure(command, &team_id, BAD_TARGET));
     }
+    // A workspace the full read found rate-limited is not called until the wait has passed.
+    if state.timeline.rate_limited(&team_id) {
+        return Err(log_failure(command, &team_id, RATE_LIMITED_ERROR));
+    }
     let workspaces = load_workspaces(&config_dir(&app)?)
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
@@ -5461,7 +5479,13 @@ pub async fn slack_channel_history(
         Payload::Form(&form),
     )
     .await
-    .map_err(|e| log_failure(command, &team_id, read_error(e, &workspace.team)))?;
+    .map_err(|e| {
+        log_failure(
+            command,
+            &team_id,
+            history_failure(&state.timeline, &team_id, &workspace.team, e),
+        )
+    })?;
     let rows = history_rows(&reply, &team_id, &known);
 
     let mut seen = HashSet::new();
@@ -6702,6 +6726,24 @@ mod tests {
         assert!(!cache.rate_limited("T1"));
         cache.limit("T3", Duration::ZERO);
         assert!(!cache.rate_limited("T3"));
+    }
+
+    #[test]
+    fn a_rate_limited_history_call_stops_the_workspace_and_says_so_and_another_failure_does_not() {
+        let cache = TimelineCache::default();
+        let mut limited = failure(None);
+        limited.rate_limited = Some(Duration::from_secs(30));
+        assert_eq!(
+            history_failure(&cache, "T1", "Example", limited),
+            RATE_LIMITED_ERROR
+        );
+        assert!(cache.rate_limited("T1"));
+        assert!(!cache.rate_limited("T2"));
+        assert_eq!(
+            history_failure(&cache, "T2", "Example", failure(None)),
+            "元の文"
+        );
+        assert!(!cache.rate_limited("T2"));
     }
 
     #[test]
