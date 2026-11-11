@@ -7,7 +7,7 @@ title: Slack
 ## Slack に貼る
 
 ワークスペースごとに、社内向けの Slack アプリを作ります。
-User Token Scopes に `chat:write`・`channels:read`・`groups:read`・`channels:history`・`groups:history`・`im:history`・`mpim:history` を付けてワークスペースにインストールし（Slack の一覧に送信者の名前とアイコンを出すには `users:read`、添付画像を出すには `files:read`、ユーザーグループへのメンションを名前（`@ハンドル`）で出すには `usergroups:read`、一覧で開いたメッセージや「すべて既読にする」を Slack 側でも既読にするには `channels:write` と `groups:write` も付けます。なくても、ほかの機能は使えます。`channels:write` と `groups:write` は、Slack の仕様でチャンネルの管理権限も含みますが、cookapps は既読位置の更新（`conversations.mark`）にしか使いません）、発行された User OAuth Token（`xoxp-` で始まる）を、サイドメニュー下部の設定にある「Slack」タブへ貼り付けます。
+User Token Scopes に `chat:write`・`channels:read`・`groups:read`・`channels:history`・`groups:history`・`im:history`・`mpim:history` を付けてワークスペースにインストールし（Slack の一覧に送信者の名前とアイコンを出すには `users:read`、添付画像を出すには `files:read`、ユーザーグループへのメンションを名前（`@ハンドル`）で出すには `usergroups:read`、一覧で開いたメッセージや、チャンネルの見出しの「既読に設定」を Slack 側でも既読にするには `channels:write` と `groups:write` も付けます。なくても、ほかの機能は使えます。`channels:write` と `groups:write` は、Slack の仕様でチャンネルの管理権限も含みますが、cookapps は既読位置の更新（`conversations.mark`）にしか使いません）、発行された User OAuth Token（`xoxp-` で始まる）を、サイドメニュー下部の設定にある「Slack」タブへ貼り付けます。
 トークンは Slack に確かめてから、OS の資格情報の保管場所（macOS ではキーチェーン、Windows では資格情報マネージャー）に保存します。
 ワークスペースはいくつでも追加でき、同じワークスペースのトークンを貼り直すと置き換わります。
 ワークスペースの一覧は、`app_config_dir` の `slack-workspaces.json` に保存されます。
