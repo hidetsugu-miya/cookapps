@@ -234,17 +234,21 @@ describe("sidebar", () => {
   });
 });
 
-// A-23: only the screens with a list at the side (Todo, Orca) have the button that closes it.
+// A-23: only the screens with a list at the side (Todo, Orca) and the calendar's panel (C-4) have the button that closes it.
 describe("sidebar: the button that closes a list (A-23)", () => {
   const shown = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>(".list-toggle")].filter((b) => b.offsetParent !== null).length);
 
-  it("shows none on the mail, calendar, Slack and settings screens", async () => {
+  it("shows none on the mail, Slack and settings screens, and one on the calendar, the panel's", async () => {
     await boot({ inbox: inbox(), calendar_week: weekOfToday(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady });
-    for (const nav of ["#nav-mail", "#nav-calendar", "#nav-slack", "#nav-settings"]) {
+    for (const nav of ["#nav-mail", "#nav-slack", "#nav-settings"]) {
       await $(nav).click();
       await expect($(nav)).toHaveAttribute("aria-current", "page");
       expect(await shown()).toBe(0);
     }
+    await $("#nav-calendar").click();
+    await expect($("#nav-calendar")).toHaveAttribute("aria-current", "page");
+    await expect($("#cal-side-toggle")).toBeDisplayed();
+    expect(await shown()).toBe(1);
     // Todo has one, so the count above is not a count of nothing.
     await $("#nav-todo").click();
     await expect($("#projects-toggle")).toBeDisplayed();

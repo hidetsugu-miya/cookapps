@@ -211,6 +211,8 @@ pub fn run() {
             calendar::calendar_cached,
             calendar::calendar_first_day,
             calendar::set_calendar_first_day,
+            calendar::calendar_choices,
+            calendar::set_calendar_shown,
             gmail::inbox,
             gmail::inbox_cached,
             gmail::thread,

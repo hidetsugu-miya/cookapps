@@ -82,12 +82,12 @@ describe("todo Claude pane", () => {
     await expect($("#todo-tool-claude")).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("starts the right side at 40% of the screen", async () => {
+  it("starts the right side at 30% of the screen, its least", async () => {
     await openTodo();
-    await expect($("#todo-split")).toHaveAttribute("aria-valuenow", "40");
+    await expect($("#todo-split")).toHaveAttribute("aria-valuenow", "30");
     const ratio = await browser.execute(() => document.querySelector("#todo-side")!.getBoundingClientRect().width / document.querySelector("#todo")!.getBoundingClientRect().width);
-    expect(ratio).toBeGreaterThan(0.39);
-    expect(ratio).toBeLessThan(0.41);
+    expect(ratio).toBeGreaterThan(0.29);
+    expect(ratio).toBeLessThan(0.31);
   });
 
   it("keeps the right side between 30% and 45% of the screen with the arrow keys", async () => {

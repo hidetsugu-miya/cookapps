@@ -18,7 +18,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::{
-    accounts::write_synced,
+    accounts::{self, write_synced},
     auth::{config_dir, Auth},
     disk_cache,
     gmail::{log_failure, send_json_refreshing, ApiError},
@@ -135,6 +135,21 @@ struct CalendarEntry {
     selected: bool,
     background_color: Option<String>,
     summary: Option<String>,
+    /// `owner` for the user's own calendars; anything else (or none) is a calendar of someone else's, a holiday list, a room and so on.
+    access_role: Option<String>,
+}
+
+impl CalendarEntry {
+    fn is_mine(&self) -> bool {
+        self.access_role.as_deref() == Some("owner")
+    }
+
+    fn name(&self) -> &str {
+        self.summary
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&self.id)
+    }
 }
 
 #[derive(Deserialize)]
@@ -490,6 +505,175 @@ pub async fn set_calendar_first_day(app: AppHandle, first_day: u8) -> Result<(),
         .map_err(|e| e.to_string())?
 }
 
+const SELECTION_FILE: &str = "calendar-selection.json";
+/// The longest calendar ID a choice may name, in bytes.
+const CALENDAR_ID_MAX: usize = 1024;
+
+/// Which calendars the owner chose to show, as `calendar-selection.json` holds them: for each account, the calendar ID and whether it is shown.
+/// A calendar that was never chosen is not in it, and follows `selected` at Google. Google's own `selected` is never written.
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
+struct Selection {
+    #[serde(default)]
+    accounts: HashMap<String, HashMap<String, bool>>,
+}
+
+impl Selection {
+    fn chosen(&self, account: &str, id: &str) -> Option<bool> {
+        self.accounts.get(account)?.get(id).copied()
+    }
+
+    fn shown(&self, account: &str, cal: &CalendarEntry) -> bool {
+        self.chosen(account, &cal.id).unwrap_or(cal.selected)
+    }
+
+    /// This selection with the calendar's choice set. `None` when that choice is already saved.
+    fn with_shown(&self, account: &str, id: &str, shown: bool) -> Option<Self> {
+        if self.chosen(account, id) == Some(shown) {
+            return None;
+        }
+        let mut next = self.clone();
+        next.accounts
+            .entry(account.to_owned())
+            .or_default()
+            .insert(id.to_owned(), shown);
+        Some(next)
+    }
+
+    /// This selection without the account's choices. `None` when it holds none.
+    fn without_account(&self, account: &str) -> Option<Self> {
+        if !self.accounts.contains_key(account) {
+            return None;
+        }
+        let mut next = self.clone();
+        next.accounts.remove(account);
+        Some(next)
+    }
+}
+
+/// The calendars of one account to read events from: those shown by `selection`, in the order given.
+fn visible(
+    calendars: &[CalendarEntry],
+    account: &str,
+    selection: &Selection,
+) -> Vec<CalendarEntry> {
+    calendars
+        .iter()
+        .filter(|c| selection.shown(account, c))
+        .cloned()
+        .collect()
+}
+
+/// One calendar of an account as the screen lists it.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarChoice {
+    id: String,
+    /// The calendar's name, or its ID without one.
+    name: String,
+    /// `None` means the screen picks one from the account.
+    color: Option<String>,
+    /// `true` for a calendar the user owns ("マイカレンダー"), `false` for the others ("他のカレンダー").
+    mine: bool,
+    shown: bool,
+}
+
+/// The calendars of one account to list, in the order Google gives them.
+fn choices(
+    calendars: &[CalendarEntry],
+    account: &str,
+    selection: &Selection,
+) -> Vec<CalendarChoice> {
+    calendars
+        .iter()
+        .map(|c| CalendarChoice {
+            id: c.id.clone(),
+            name: c.name().to_owned(),
+            color: c.background_color.clone(),
+            mine: c.is_mine(),
+            shown: selection.shown(account, c),
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct AccountCalendars {
+    account: String,
+    calendars: Vec<CalendarChoice>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarChoices {
+    accounts: Vec<AccountCalendars>,
+    /// Accounts whose calendars are missing because they must log in again.
+    needs_login: Vec<String>,
+    /// Accounts whose calendars are missing because loading them failed, with the error to show.
+    failed: HashMap<String, String>,
+}
+
+/// The saved selection. A missing or broken file means nothing was chosen.
+fn load_selection(dir: &Path) -> Selection {
+    disk_cache::load(dir, SELECTION_FILE).unwrap_or_default()
+}
+
+/// A choice names a logged-in account and a calendar ID that fits in one path segment of the events URL.
+fn check_choice(accounts: &[String], account: &str, calendar_id: &str) -> Result<(), String> {
+    if !accounts.iter().any(|a| a == account) {
+        return Err("登録されていないアカウントです".into());
+    }
+    if calendar_id.is_empty()
+        || calendar_id.len() > CALENDAR_ID_MAX
+        || calendar_id.chars().any(char::is_control)
+    {
+        return Err("カレンダー ID が不正です".into());
+    }
+    Ok(())
+}
+
+fn save_shown(dir: &Path, account: &str, calendar_id: &str, shown: bool) -> Result<(), String> {
+    let listed = accounts::load(dir)?.unwrap_or_default();
+    check_choice(&listed, account, calendar_id)?;
+    // The kept weeks hold the events of the calendar just hidden, so a changed choice drops them under the same lock.
+    disk_cache::update_and_remove(
+        dir,
+        SELECTION_FILE,
+        [account],
+        |s: Selection| s.with_shown(account, calendar_id, shown),
+        &[CACHE_FILE],
+    )
+}
+
+/// Forgets the account's choices. Call it inside `disk_cache::exclusive`, as `remove_account` does.
+pub(crate) fn forget_selection(dir: &Path, account: &str) -> Result<(), String> {
+    disk_cache::rewrite(
+        dir,
+        SELECTION_FILE,
+        |s: Selection| s.without_account(account),
+        &[],
+    )
+}
+
+/// Shows or hides one calendar of one account in the week, and keeps the choice.
+#[tauri::command]
+pub async fn set_calendar_shown(
+    app: AppHandle,
+    account: String,
+    calendar_id: String,
+    shown: bool,
+) -> Result<(), String> {
+    let dir = config_dir(&app)?;
+    tokio::task::spawn_blocking(move || save_shown(&dir, &account, &calendar_id, shown))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// `timeMin` / `timeMax` of `[from, to)`: local midnights as UTC RFC 3339.
 fn range_bounds<Tz: TimeZone>(tz: &Tz, from: NaiveDate, to: NaiveDate) -> Option<(String, String)> {
     let midnight = |d: NaiveDate| {
@@ -667,11 +851,7 @@ fn is_account_wide(status: Option<u16>, message: &str) -> bool {
 
 /// The message for a calendar that could not be loaded; the calendar is named by its summary, or its ID without one.
 fn calendar_failure(account: &str, cal: &CalendarEntry, message: &str) -> String {
-    let name = cal
-        .summary
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&cal.id);
+    let name = cal.name();
     format!("{account} のカレンダー「{name}」の予定を読み込めませんでした: {message}")
 }
 
@@ -718,7 +898,7 @@ fn events_url(calendar_id: &str) -> Result<String, String> {
     Ok(url.into())
 }
 
-/// The selected calendars of each account, kept in memory for the run so a week does not list them again.
+/// All the calendars of each account (shown or not), kept in memory for the run so a week does not list them again.
 /// Clones share the same map, so the clones a spawned task owns see the same cache.
 #[derive(Default, Clone)]
 pub struct CalendarCache(Arc<Mutex<HashMap<String, Vec<CalendarEntry>>>>);
@@ -741,8 +921,8 @@ async fn join_all<T: Send + 'static>(
     Ok(out)
 }
 
-/// The selected calendars of one account. `Ok(None)` means that account must log in again.
-async fn selected_calendars(
+/// Every calendar of one account, not only the ones Google selected. `Ok(None)` means that account must log in again.
+async fn listed_calendars(
     dir: &Path,
     auth: &Auth,
     account: &str,
@@ -751,7 +931,7 @@ async fn selected_calendars(
         ("maxResults", "250"),
         (
             "fields",
-            "nextPageToken,items(id,selected,backgroundColor,summary)",
+            "nextPageToken,items(id,selected,backgroundColor,summary,accessRole)",
         ),
     ];
     let Some(pages) =
@@ -762,13 +942,34 @@ async fn selected_calendars(
     else {
         return Ok(None);
     };
-    Ok(Some(
-        pages
-            .into_iter()
-            .flat_map(|p| p.items)
-            .filter(|c| c.selected)
-            .collect(),
-    ))
+    Ok(Some(pages.into_iter().flat_map(|p| p.items).collect()))
+}
+
+/// Every calendar of one account, from the kept list unless `refresh`. `Ok(None)` means that account must log in again.
+async fn account_calendars(
+    dir: &Path,
+    auth: &Auth,
+    cache: &CalendarCache,
+    account: &str,
+    refresh: bool,
+) -> Result<Option<Vec<CalendarEntry>>, ApiError> {
+    let kept = if refresh {
+        None
+    } else {
+        cache.0.lock().unwrap().get(account).cloned()
+    };
+    if let Some(c) = kept {
+        return Ok(Some(c));
+    }
+    let Some(c) = listed_calendars(dir, auth, account).await? else {
+        return Ok(None);
+    };
+    cache
+        .0
+        .lock()
+        .unwrap()
+        .insert(account.to_owned(), c.clone());
+    Ok(Some(c))
 }
 
 /// Events in `[min, max)` of one calendar. `Ok(None)` means `account` must log in again.
@@ -812,7 +1013,7 @@ struct AccountEvents {
     failed: Vec<String>,
 }
 
-/// Events in `[min, max)` of every selected calendar of one account, the calendars fetched at once.
+/// Events in `[min, max)` of every calendar of one account that `selection` shows, the calendars fetched at once.
 /// `refresh` lists the calendars again instead of using the kept list. `Ok(None)` means that account must log in again.
 /// A failure of the whole account is an `Err`; a failure of one calendar leaves that calendar out and is listed in `failed`.
 #[allow(clippy::too_many_arguments)]
@@ -820,31 +1021,17 @@ async fn account_events(
     dir: &Path,
     auth: &Auth,
     cache: &CalendarCache,
+    selection: &Selection,
     account: &str,
     min: &str,
     max: &str,
     fields: &str,
     refresh: bool,
 ) -> Result<Option<AccountEvents>, ApiError> {
-    let kept = if refresh {
-        None
-    } else {
-        cache.0.lock().unwrap().get(account).cloned()
+    let Some(listed) = account_calendars(dir, auth, cache, account, refresh).await? else {
+        return Ok(None);
     };
-    let calendars = match kept {
-        Some(c) => c,
-        None => {
-            let Some(c) = selected_calendars(dir, auth, account).await? else {
-                return Ok(None);
-            };
-            cache
-                .0
-                .lock()
-                .unwrap()
-                .insert(account.to_owned(), c.clone());
-            c
-        }
-    };
+    let calendars = visible(&listed, account, selection);
     let jobs = calendars
         .iter()
         .cloned()
@@ -897,6 +1084,7 @@ async fn collect_events(
 ) -> Result<Collected, String> {
     let (mut events, mut needs_login, mut failed) = (Vec::new(), Vec::new(), HashMap::new());
     let mut calendar_failed = Vec::new();
+    let selection = load_selection(dir);
     let accounts = auth
         .accounts(dir)
         .map_err(|e| log_failure(command, "-", e))?;
@@ -905,9 +1093,12 @@ async fn collect_events(
         .map(|account| {
             let (dir, auth, cache) = (dir.to_owned(), auth.clone(), cache.clone());
             let (account, min, max) = (account.clone(), min.to_owned(), max.to_owned());
-            let fields = fields.to_owned();
+            let (fields, selection) = (fields.to_owned(), selection.clone());
             async move {
-                account_events(&dir, &auth, &cache, &account, &min, &max, &fields, refresh).await
+                account_events(
+                    &dir, &auth, &cache, &selection, &account, &min, &max, &fields, refresh,
+                )
+                .await
             }
         })
         .collect();
@@ -968,6 +1159,60 @@ pub async fn list_events(dir: &Path, auth: &Auth, from: &str, to: &str) -> Resul
         failed: found.failed,
         calendar_failed: found.calendar_failed,
     })
+}
+
+/// The calendars of every account, each with whether it is shown. Accounts needing login or failing to load are listed, not fatal.
+#[tauri::command]
+pub async fn calendar_choices(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    cache: State<'_, CalendarCache>,
+) -> Result<CalendarChoices, String> {
+    let dir = config_dir(&app).map_err(|e| log_failure("calendar_choices", "-", e))?;
+    let selection = load_selection(&dir);
+    let accounts = auth
+        .accounts(&dir)
+        .map_err(|e| log_failure("calendar_choices", "-", e))?;
+    let jobs = accounts
+        .iter()
+        .map(|account| {
+            let (dir, auth, cache) = (dir.clone(), auth.inner().clone(), cache.inner().clone());
+            let account = account.clone();
+            async move { account_calendars(&dir, &auth, &cache, &account, false).await }
+        })
+        .collect();
+    let results = join_all(jobs)
+        .await
+        .map_err(|e| log_failure("calendar_choices", "-", e))?;
+    let mut out = CalendarChoices {
+        accounts: Vec::new(),
+        needs_login: Vec::new(),
+        failed: HashMap::new(),
+    };
+    for (account, result) in accounts.into_iter().zip(results) {
+        match result {
+            Ok(Some(calendars)) => out.accounts.push(AccountCalendars {
+                calendars: choices(&calendars, &account, &selection),
+                account,
+            }),
+            Ok(None) => {
+                cache.forget(&account);
+                out.needs_login.push(account);
+            }
+            Err(e) => {
+                cache.forget(&account);
+                let status = e.status;
+                let message = log_failure("calendar_choices", &account, e);
+                match classify(status, &message) {
+                    Failure::NeedsLogin => out.needs_login.push(account),
+                    Failure::Message(m) => {
+                        out.failed.insert(account, m);
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The week containing `date` (YYYY-MM-DD, local), starting on `first_day` (0 = Sunday to 6 = Saturday), with the events of every account, the accounts fetched at once.
@@ -1131,6 +1376,7 @@ mod tests {
             selected: true,
             background_color: color.map(Into::into),
             summary: Some("仕事".into()),
+            access_role: Some("owner".into()),
         }
     }
 
@@ -1731,6 +1977,7 @@ mod tests {
             selected: true,
             background_color: None,
             summary: summary.map(Into::into),
+            access_role: None,
         };
         assert_eq!(
             calendar_failure("a@example.com", &cal("id1", Some("仕事")), "boom"),
@@ -1917,5 +2164,223 @@ mod tests {
         accounts.sort_unstable();
         accounts.dedup();
         assert_eq!(accounts, ["a@example.com", "b@example.com"]);
+    }
+
+    fn entry(id: &str, selected: bool, role: Option<&str>) -> CalendarEntry {
+        CalendarEntry {
+            id: id.into(),
+            selected,
+            background_color: Some("#112233".into()),
+            summary: Some(format!("name of {id}")),
+            access_role: role.map(Into::into),
+        }
+    }
+
+    fn ids(calendars: &[CalendarEntry]) -> Vec<&str> {
+        calendars.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    fn selection_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "cookapps-calendar-selection-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn calendar_entry_reads_the_access_role_and_tolerates_its_absence() {
+        let with: CalendarEntry =
+            serde_json::from_str(r#"{"id":"a","accessRole":"reader","selected":true}"#).unwrap();
+        assert_eq!(with.access_role.as_deref(), Some("reader"));
+        let without: CalendarEntry = serde_json::from_str(r#"{"id":"a"}"#).unwrap();
+        assert_eq!(without.access_role, None);
+        assert!(!without.selected);
+    }
+
+    #[test]
+    fn only_an_owned_calendar_is_mine() {
+        assert!(entry("a", true, Some("owner")).is_mine());
+        for role in [Some("writer"), Some("reader"), Some("freeBusyReader"), None] {
+            assert!(!entry("a", true, role).is_mine(), "{role:?}");
+        }
+    }
+
+    #[test]
+    fn with_nothing_chosen_the_shown_calendars_are_the_ones_google_selected() {
+        let calendars = [
+            entry("mine", true, Some("owner")),
+            entry("hidden", false, Some("owner")),
+            entry("holiday", true, Some("reader")),
+            entry("room", false, Some("reader")),
+        ];
+        let shown = visible(&calendars, "a@example.com", &Selection::default());
+        assert_eq!(ids(&shown), ["mine", "holiday"]);
+    }
+
+    #[test]
+    fn a_saved_choice_wins_over_google_in_both_directions_and_only_for_its_account() {
+        let calendars = [
+            entry("mine", true, Some("owner")),
+            entry("room", false, Some("reader")),
+            entry("other", true, Some("reader")),
+        ];
+        let selection = Selection::default()
+            .with_shown("a@example.com", "mine", false)
+            .unwrap()
+            .with_shown("a@example.com", "room", true)
+            .unwrap()
+            .with_shown("b@example.com", "other", false)
+            .unwrap();
+        let shown = visible(&calendars, "a@example.com", &selection);
+        assert_eq!(ids(&shown), ["room", "other"]);
+        let shown = visible(&calendars, "b@example.com", &selection);
+        assert_eq!(ids(&shown), ["mine"]);
+    }
+
+    #[test]
+    fn choices_keep_the_order_and_carry_name_color_group_and_whether_shown() {
+        let mut nameless = entry("nameless", false, Some("writer"));
+        nameless.summary = None;
+        nameless.background_color = None;
+        let calendars = [
+            entry("mine", true, Some("owner")),
+            entry("shared", false, Some("reader")),
+            nameless,
+        ];
+        let selection = Selection::default()
+            .with_shown("a@example.com", "shared", true)
+            .unwrap();
+        let choices = choices(&calendars, "a@example.com", &selection);
+        let got: Vec<_> = choices
+            .iter()
+            .map(|c| (c.id.as_str(), c.name.as_str(), c.mine, c.shown))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("mine", "name of mine", true, true),
+                ("shared", "name of shared", false, true),
+                ("nameless", "nameless", false, false),
+            ]
+        );
+        assert_eq!(choices[0].color.as_deref(), Some("#112233"));
+        assert_eq!(choices[2].color, None);
+    }
+
+    #[test]
+    fn with_shown_changes_the_saved_choice_and_says_none_when_it_is_already_so() {
+        let first = Selection::default()
+            .with_shown("a@example.com", "x", false)
+            .unwrap();
+        assert_eq!(first.with_shown("a@example.com", "x", false), None);
+        let flipped = first.with_shown("a@example.com", "x", true).unwrap();
+        assert!(flipped.accounts["a@example.com"]["x"]);
+    }
+
+    #[test]
+    fn the_selection_file_is_account_then_calendar_id_then_choice() {
+        let selection = Selection::default()
+            .with_shown("a@example.com", "x@group", false)
+            .unwrap();
+        let value = serde_json::to_value(&selection).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"accounts": {"a@example.com": {"x@group": false}}})
+        );
+        let back: Selection = serde_json::from_value(value).unwrap();
+        assert_eq!(back, selection);
+        let empty: Selection = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, Selection::default());
+    }
+
+    #[test]
+    fn a_choice_is_checked_against_the_accounts_and_the_calendar_id() {
+        let accounts = vec!["a@example.com".to_string()];
+        assert!(check_choice(
+            &accounts,
+            "a@example.com",
+            "x#holiday@group.v.calendar.google.com"
+        )
+        .is_ok());
+        assert!(check_choice(&accounts, "b@example.com", "x").is_err());
+        assert!(check_choice(&accounts, "a@example.com", "").is_err());
+        assert!(check_choice(&accounts, "a@example.com", "a\nb").is_err());
+        assert!(check_choice(&accounts, "a@example.com", &"x".repeat(CALENDAR_ID_MAX)).is_ok());
+        assert!(
+            check_choice(&accounts, "a@example.com", &"x".repeat(CALENDAR_ID_MAX + 1)).is_err()
+        );
+    }
+
+    #[test]
+    fn a_saved_choice_is_read_back_and_a_second_one_keeps_the_first() {
+        let dir = selection_dir("save");
+        accounts::save(&dir, &["a@example.com".to_string()]).unwrap();
+        assert_eq!(load_selection(&dir), Selection::default());
+        save_shown(&dir, "a@example.com", "x", false).unwrap();
+        save_shown(&dir, "a@example.com", "y", true).unwrap();
+        let loaded = load_selection(&dir);
+        assert!(!loaded.accounts["a@example.com"]["x"]);
+        assert!(loaded.accounts["a@example.com"]["y"]);
+        save_shown(&dir, "a@example.com", "x", true).unwrap();
+        assert!(load_selection(&dir).accounts["a@example.com"]["x"]);
+        assert!(!dir.join(format!("{SELECTION_FILE}.tmp")).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_changed_choice_drops_the_kept_weeks_and_an_unchanged_one_keeps_them() {
+        let dir = selection_dir("drops-weeks");
+        accounts::save(&dir, &["a@example.com".to_string()]).unwrap();
+        let keep = || std::fs::write(dir.join(CACHE_FILE), "{}").unwrap();
+        keep();
+        save_shown(&dir, "a@example.com", "x", false).unwrap();
+        assert!(!dir.join(CACHE_FILE).exists());
+        keep();
+        save_shown(&dir, "a@example.com", "x", false).unwrap();
+        assert!(dir.join(CACHE_FILE).exists());
+        save_shown(&dir, "a@example.com", "x", true).unwrap();
+        assert!(!dir.join(CACHE_FILE).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn forgetting_an_account_drops_only_its_choices() {
+        let dir = selection_dir("forget");
+        let both = ["a@example.com".to_string(), "b@example.com".to_string()];
+        accounts::save(&dir, &both).unwrap();
+        save_shown(&dir, "a@example.com", "x", false).unwrap();
+        save_shown(&dir, "b@example.com", "y", false).unwrap();
+        forget_selection(&dir, "a@example.com").unwrap();
+        let loaded = load_selection(&dir);
+        assert!(!loaded.accounts.contains_key("a@example.com"));
+        assert!(!loaded.accounts["b@example.com"]["y"]);
+        // An account with no choice leaves the file as it is.
+        forget_selection(&dir, "c@example.com").unwrap();
+        assert_eq!(load_selection(&dir), loaded);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_choice_for_an_unknown_account_or_a_bad_id_writes_nothing() {
+        let dir = selection_dir("refuse");
+        accounts::save(&dir, &["a@example.com".to_string()]).unwrap();
+        assert!(save_shown(&dir, "b@example.com", "x", false).is_err());
+        assert!(save_shown(&dir, "a@example.com", "", false).is_err());
+        assert!(!dir.join(SELECTION_FILE).exists());
+        let bare = selection_dir("refuse-bare");
+        assert!(save_shown(&bare, "a@example.com", "x", false).is_err());
+        assert!(!bare.join(SELECTION_FILE).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_broken_selection_file_means_nothing_chosen() {
+        let dir = selection_dir("broken");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(SELECTION_FILE), "{").unwrap();
+        assert_eq!(load_selection(&dir), Selection::default());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

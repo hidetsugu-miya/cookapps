@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { boot, copiedTexts, count, inbox, meetUrl, mock, stubClipboard, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
+import { account, boot, calendarChoices, copiedTexts, count, holds, inbox, meetUrl, mock, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
 
 // The button of the event (a timed box or an all-day chip) with `title`.
 const eventButton = (title: string) => $(`//button[contains(@class, "cal-event") or contains(@class, "cal-chip")][contains(., "${title}")]`);
@@ -44,6 +44,98 @@ describe("calendar", () => {
     expect(calls.every((c) => c.firstDay === 1)).toBe(true);
     await expect($("#cal-head .cal-day:nth-child(2)")).toHaveText(expect.stringContaining("月"));
     await expect($("#cal-head .cal-day:nth-child(8)")).toHaveText(expect.stringContaining("日"));
+  });
+});
+
+// The checkbox of the calendar named `name` in the panel.
+const choiceBox = (name: string) => $(`//label[contains(@class, "cal-side-item")][contains(., "${name}")]/input`);
+
+describe("calendar: calendar panel", () => {
+  async function openPanel() {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await waitForText("#cal-side-feed", "Work");
+  }
+
+  it("lists the calendars under the account, as mine and others, left of the week", async () => {
+    await openPanel();
+    await expect($("#cal-side-head")).toHaveText("カレンダー");
+    expect(await textsOf("#cal-side-feed > *")).toEqual([account, "マイカレンダー", "Work", "他のカレンダー", "Holidays"]);
+    await expect(choiceBox("Work")).toBeSelected();
+    await expect(choiceBox("Holidays")).toBeSelected();
+    const { side, scroll, width } = await browser.execute(() => {
+      const rect = (id: string) => document.getElementById(id)!.getBoundingClientRect();
+      return { side: rect("cal-side").right, scroll: rect("cal-scroll").left, width: rect("cal-side").width };
+    });
+    expect(width).toBe(248);
+    expect(side).toBeLessThanOrEqual(scroll);
+    // The box takes the calendar's color.
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".cal-side-item input")!).accentColor)).toBe("rgb(30, 123, 82)");
+  });
+
+  it("closes the panel with the button beside the heading, the week takes its width, and opens it again", async () => {
+    await openPanel();
+    const scrollWidth = () => browser.execute(() => document.getElementById("cal-scroll")!.getBoundingClientRect().width);
+    const open = await scrollWidth();
+    await expect($("#cal-side-toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect($("#cal-bar-toggle")).not.toBeDisplayed();
+    await $("#cal-side-toggle").click();
+    await expect($("#cal-side")).not.toBeDisplayed();
+    await expect($("#cal-bar-toggle")).toBeDisplayed();
+    await expect($("#cal-bar-toggle")).toHaveAttribute("aria-expanded", "false");
+    expect(await scrollWidth()).toBe(open + 248);
+    await $("#cal-bar-toggle").click();
+    await expect($("#cal-side")).toBeDisplayed();
+    await expect($("#cal-bar-toggle")).not.toBeDisplayed();
+    expect(await scrollWidth()).toBe(open);
+    await expect(choiceBox("Work")).toBeSelected();
+  });
+
+  it("saves the choice when a calendar is unchecked, and the week loses its events", async () => {
+    await openPanel();
+    await expect($("#cal-allday .cal-chip")).toHaveText("Holiday");
+    const setShown = await mock("set_calendar_shown", null);
+    const week = weekOfToday();
+    week.allDay = [];
+    await mock("calendar_week", week);
+    await choiceBox("Holidays").click();
+    expect(await waitForCalls(setShown)).toEqual([{ account, calendarId: "holidays", shown: false }]);
+    await waitForCount("#cal-allday .cal-chip", 0);
+    await expect(choiceBox("Holidays")).not.toBeSelected();
+    await expect($("#cal-body .cal-name")).toHaveText("Team sync");
+  });
+
+  it("keeps the box disabled while its choice is being saved", async () => {
+    await openPanel();
+    const setShown = await mock("set_calendar_shown", holds);
+    await choiceBox("Holidays").click();
+    await waitForCalls(setShown);
+    await expect(choiceBox("Holidays")).toBeDisabled();
+    await release(setShown, null);
+    await expect(choiceBox("Holidays")).toBeEnabled();
+  });
+
+  it("saves the choice when it is checked again", async () => {
+    const choices = calendarChoices();
+    choices.accounts[0].calendars[1].shown = false;
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: choices });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-side-feed", "Holidays");
+    await expect(choiceBox("Holidays")).not.toBeSelected();
+    const setShown = await mock("set_calendar_shown", null);
+    await choiceBox("Holidays").click();
+    expect(await waitForCalls(setShown)).toEqual([{ account, calendarId: "holidays", shown: true }]);
+  });
+
+  it("puts the box back and shows the error when the choice cannot be saved", async () => {
+    await openPanel();
+    const setShown = await mock("set_calendar_shown", rejects("保存できません"));
+    await choiceBox("Work").click();
+    await waitForCalls(setShown);
+    await waitForText("#error", "保存できません");
+    await expect(choiceBox("Work")).toBeSelected();
+    await expect($("#cal-allday .cal-chip")).toHaveText("Holiday");
   });
 });
 

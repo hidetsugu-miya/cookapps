@@ -183,7 +183,21 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .images-bar .text-btn:disabled { opacity: .4; cursor: default; }
 
 /* Calendar: --hour is set from HOUR_PX in ts/calendar.ts. */
-#calendar { flex: 1; min-height: 0; display: flex; flex-direction: column; --gutter: 56px; }
+#calendar { flex: 1; min-height: 0; display: flex; --gutter: 56px; }
+#cal-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* C-4: the panel that chooses the calendars to show: a column like #slack-side, 248px wide. */
+#cal-side { flex: none; width: 248px; box-sizing: border-box; display: flex; flex-direction: column; background: var(--bar); border-right: 1px solid var(--line); }
+#cal-side-bar { flex: none; box-sizing: border-box; min-height: var(--header-h); padding: 0 8px 0 16px; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+#cal-side-head { margin: 0; font-size: calc(14px * var(--fs)); font-weight: 600; }
+#cal-bar .list-toggle { margin-right: 8px; }
+#cal-side-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px 12px; }
+.cal-side-account { margin: 10px 0 2px; padding: 0 10px; font-size: calc(12px * var(--fs)); font-weight: 600; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-side-group { margin: 8px 0 2px; padding: 0 10px; font-size: calc(11px * var(--fs)); color: var(--muted); }
+.cal-side-item { display: flex; align-items: center; gap: 10px; min-height: 30px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; cursor: pointer; }
+.cal-side-item:hover { background: var(--hover); }
+.cal-side-item input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--c); cursor: pointer; }
+.cal-side-item:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cal-side-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #cal-bar { flex: none; display: flex; align-items: center; gap: 4px; box-sizing: border-box; min-height: var(--header-h); padding: 0 32px; }
 #cal-title { font-size: calc(20px * var(--fs)); }
 #cal-title .year { color: #888; font-weight: normal; }
@@ -1046,14 +1060,14 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-dest-pop button span { font-size: calc(12px * var(--fs)); color: var(--muted); }
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
 
-/* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail and the Todo have it on the right of the screen (40% at first, a third to a half for the mail and 30% to 45% for the Todo, the divider of ts/split.ts); the Slack thread has it as the Orca tab of its right pane. */
+/* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail and the Todo have it on the right of the screen (the mail 40% at first, a third to a half; the Todo 30% at first, 30% to 45%; the divider of ts/split.ts); the Slack thread has it as the Orca tab of its right pane. */
 #mail-area { flex: 1; min-height: 0; display: flex; }
 #main { min-width: 0; }
 #thread-actions .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
-/* The mail's pane is 40% wide at first, at least 400px; the Todo's right side (T-7, A-9) is 40% at first, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
+/* The mail's pane is 40% wide at first, at least 400px; the Todo's right side (T-7, A-9) is 30% at first, its least, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
 #mail-handoff { min-width: 400px; }
-#todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 40%), 45%); }
+#todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 30%), 45%); }
 #todo-handoff, #todo-claude { flex: 1; min-height: 0; }
 #slack-thread.assist-orca { grid-template-columns: minmax(0, 1fr) auto max(400px, clamp(33.3333%, var(--chat-w, 33.3333%), 50%)); }
 .ho-pane.ho-slack { display: contents; }

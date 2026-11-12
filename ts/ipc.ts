@@ -3,6 +3,7 @@
 import type { AppInfo } from "./bindings/AppInfo";
 import type { AttachedFile } from "./bindings/AttachedFile";
 import type { Channel } from "./bindings/Channel";
+import type { CalendarChoices } from "./bindings/CalendarChoices";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
@@ -80,6 +81,8 @@ export interface Commands {
   calendar_cached: { args: undefined; result: Week[] };
   calendar_first_day: { args: undefined; result: number };
   set_calendar_first_day: { args: { firstDay: number }; result: null };
+  calendar_choices: { args: undefined; result: CalendarChoices };
+  set_calendar_shown: { args: { account: string; calendarId: string; shown: boolean }; result: null };
   inbox: { args: undefined; result: Inbox };
   inbox_cached: { args: undefined; result: Inbox | null };
   sync: { args: Account & { startHistoryId: string }; result: Sync };

@@ -125,7 +125,7 @@ impl Cookapps {
     }
 
     #[tool(
-        description = "List the calendar events of every account from one local date to another, earliest first, each with the name of its calendar. All-day events carry dates, timed events carry times. Accounts that must log in again are in needsLogin, accounts that failed to load are in failed, calendars that failed to load are in calendarFailed.",
+        description = "List the calendar events of every account from one local date to another, earliest first, each with the name of its calendar. Only the calendars shown on the calendar screen (C-4) are read. All-day events carry dates, timed events carry times. Accounts that must log in again are in needsLogin, accounts that failed to load are in failed, calendars that failed to load are in calendarFailed.",
         annotations(read_only_hint = true)
     )]
     async fn list_events(&self, Parameters(a): Parameters<EventsArgs>) -> Result<String, String> {
