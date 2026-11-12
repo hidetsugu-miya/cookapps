@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.63.3
+
+M-2, A-20: a mail body draws in Gmail's face (#494). An HTML body that names no font is in Arial, Helvetica, sans-serif at 13px; a font or size the mail names still wins. A text body is in the same sans-serif, no longer a monospace one, and takes the family and size chosen for the mail screen. The monospace family of the font settings no longer reaches a text body.
+
+M-2: an http(s) URL written as text in an HTML body, outside a link, is a link too, and opens in the default browser as the other links do (#495).
+
+M-2, A-23: the operations of an open mail are a row of icon buttons just above the subject, larger than before (34px): the AI summary, "Slack に貼る", "Todo にする", "Orca に渡す", then "ゴミ箱へ移動" and "アーカイブ" (#503). The row stays at the top while the messages scroll. The band at the top of the mail detail has only "戻る".
+
+S-2, S-3, S-18: the page of a Todo draft made from a Slack message shows, at its top, the workspace and the first line of the linked message, cut with "…" where it does not fit, and "Slack で開く" at the right (#501). The pane on the right is headed "Claude", not "Claude と直す", and is 40% of the page at first; a divider sets it between 30% and 60%. The entry "プロンプトを編集" of the page is gone: the prompt of the summary is opened from "Todo の要約プロンプト" of the Claude tab of the settings only.
+
+S-8, S-15: "既読に設定" at the right of a channel's heading in the unread Slack list is an icon button with two checks, named "既読にする" (#504). It does what it did.
+
 ## v0.63.2
 
 A-23, T-7: the band at the top of every screen is one height, 40px (#482). It was 32px on the Orca screen, 70px on the Todo screen and set by its own padding on the other screens, so the lines under the bands did not meet where two screens or two panes sit side by side. The icon buttons in the bands are one size too (24px, with a 15px icon). With a larger font (A-20) a band grows to fit its text instead of cutting it.
