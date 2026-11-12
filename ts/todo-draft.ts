@@ -1,6 +1,6 @@
 // The page that opens when Claude has summarised a Slack message (S-2), in the place of the Todo list (the task detail's place, `#todo-main`): the draft of the Todo on the left, shaped like the task detail (the name and the description, and beside them the project, the date and the labels),
 // 破棄 at the bottom left and the add button at the bottom right. Nothing is created until the add button is pressed.
-// The left part is `.draft-todo`; at its right is the pane for Claude (S-18, `.draft-chat`): a request there makes Claude propose a new name and description, drawn as a diff
+// The left part is `.draft-todo`; at its right, past a divider the user drags (`ts/split.ts`, 30 to 60% of the page, 40% at first), is the pane for Claude (S-18, `.draft-chat`): a request there makes Claude propose a new name and description, drawn as a diff
 // that 適用 puts into the left part and 却下 drops. The conversation is held in memory and is gone when the page closes.
 // The Todo header's back button (`#todo-back`, the one of the task detail) and 破棄 close it; Escape does not, so a draft is never lost by accident.
 // The project list beside it is inert while the page is open, so that no other list can be chosen under it.
@@ -13,16 +13,16 @@ import { hostOf } from "./format.js";
 import { CLAUDE_SVG, DATE_SVG, PLUS_SVG, SLACK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { getSlackWorkspaces } from "./slack-workspaces.js";
+import { initSplit } from "./split.js";
 import { addSlackTodo, CARD_DUE, type ReviewJob } from "./todo-add.js";
 import { inboxOf, projectName, projectOf, todoState } from "./todo-data.js";
 import { field, openDueEditor, openProjectPicker } from "./todo-detail.js";
 import { renderTodo } from "./todo.js";
 
-// What the owner of the draft does with it: drop it (破棄, the back button), learn that the task was added (`added` is its name; null when Todoist needs a token), and open the prompt screen.
+// What the owner of the draft does with it: drop it (破棄, the back button), and learn that the task was added (`added` is its name; null when Todoist needs a token).
 export interface DraftHooks {
   remove: () => void;
   added: (name: string | null) => void;
-  editPrompt: () => void;
 }
 
 // The open draft: `page` is its node (it stays in the document while another screen is shown), `opener` where the focus returns, `discard` what 破棄 and the back button do.
@@ -144,14 +144,16 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   labels.append(tag("div", "field-label", "ラベル"));
 
   const team = getSlackWorkspaces()?.find((w) => hostOf(w.url) === job.host)?.team ?? job.host ?? "";
+  // The workspace and the first line of the linked message (Rust cuts and flattens it); the line the header cannot hold is cut by the CSS.
   const source = tag("div", "draft-src");
   source.title = job.url;
   source.insertAdjacentHTML("beforeend", SLACK_SVG);
-  source.append(`${team} の Slack のメッセージ`);
-  const editPrompt = tag("button", "link-btn draft-prompt", "プロンプトを編集");
-  editPrompt.type = "button";
+  source.append(tag("span", "draft-team", team));
+  if (summary.targetText) source.append(tag("span", "draft-quote", summary.targetText));
+  const openLink = tag("a", "link-btn draft-open", "Slack で開く");
+  if (job.url.startsWith("https://")) openLink.setAttribute("href", job.url);
   const head = tag("div", "draft-head");
-  head.append(source, tag("span", "draft-grow"), editPrompt);
+  head.append(source, openLink);
 
   // The link of the message is put at the end of the description by Rust; it is shown here as it will be, and cannot be edited.
   const link = tag("div", "draft-link", job.url);
@@ -175,12 +177,22 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   const todo = tag("section", "draft-todo");
   todo.append(head, main, side, foot);
 
-  const page = tag("section", "draft");
+  const page = tag("section", "draft split-main");
   page.id = "todo-draft";
   page.setAttribute("aria-label", "Todo の案");
   page.tabIndex = -1;
   const pane = claudePane();
-  page.append(todo, pane);
+  const split = tag("div", "split-bar");
+  split.id = "draft-split";
+  split.setAttribute("role", "separator");
+  split.setAttribute("aria-orientation", "vertical");
+  split.setAttribute("aria-label", "Claude の幅");
+  split.setAttribute("aria-valuemin", "30");
+  split.setAttribute("aria-valuemax", "60");
+  split.tabIndex = 0;
+  split.append(tag("span"));
+  page.append(todo, split, pane);
+  initSplit(page, split, { min: 0.3, max: 0.6, initial: 0.4 });
 
   live = { name, description, saving: false };
   // Editing the left part by hand makes an open proposal stale (it was made for the text it was asked about).
@@ -215,7 +227,6 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
     hooks.remove();
   };
   drop.onclick = discard;
-  editPrompt.onclick = hooks.editPrompt;
   // Enter in the name, or Cmd+Enter (Ctrl+Enter off macOS) anywhere in the draft, adds.
   // Not in the Claude pane, where Cmd+Enter sends the request.
   page.onkeydown = (e) => {
@@ -244,7 +255,7 @@ function claudePane() {
   clear.disabled = true;
   const head = tag("div", "chat-head");
   head.insertAdjacentHTML("beforeend", CLAUDE_SVG);
-  head.append("Claude と直す", clear);
+  head.append("Claude", clear);
   const log = tag("div", "chat-log");
   log.id = "draft-log";
   const note = tag("p", "chat-note");

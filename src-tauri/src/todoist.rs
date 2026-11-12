@@ -3438,6 +3438,7 @@ mod tests {
             project_id: None,
             omitted: 0,
             target_cut: false,
+            target_text: String::new(),
         }
     }
 

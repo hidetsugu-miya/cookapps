@@ -1,4 +1,4 @@
-import { boot, callsOf, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, slackMessageUrl, slackSummary, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 // What Claude answers when the request changes nothing.
@@ -488,21 +488,6 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
       kind,
       value,
     );
-  const saved = { ...claudeSettings, promptChat: { model: "opus", effort: "high" } } as const;
-
-  // The Todo screen with the prompt opened by 「プロンプトを編集」 of the page of a draft: the settings screen was never visited.
-  async function openFromTodo(settings: unknown = claudeSettings) {
-    await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady, claude_model_settings: settings });
-    await $("#nav-todo").click();
-    await waitForCount("#todo-list li.task", 1);
-    await mock("todoist_summarize_slack", slackSummary);
-    await $("#todo-add-input").setValue(slackMessageUrl);
-    await $("#todo-add-button").click();
-    await $("#todo-draft").waitForExist();
-    await $("#todo-draft .draft-prompt").click();
-    await expect($("#prompt")).toBeDisplayed();
-  }
-
   it("puts a model select and an effort select, borderless and short, under the request field", async () => {
     await openPrompt();
     await expect(selectOf("model")).toBeDisplayed();
@@ -523,13 +508,6 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
     await openPrompt();
     expect(await count("#slack-compose select")).toBe(0);
     expect(await count("#prompt-model select")).toBe(2);
-  });
-
-  it("shows the saved values of the prompt conversation when opened from Todo, without visiting the settings", async () => {
-    await openFromTodo(saved);
-    await expect(selectOf("model")).toHaveValue("opus");
-    await expect(selectOf("effort")).toHaveValue("high");
-    expect((await callsOf("claude_model_settings")).length).toBeGreaterThan(0);
   });
 
   it("saves a model with the purpose promptChat and no effort, an effort with both, and the settings show it", async () => {

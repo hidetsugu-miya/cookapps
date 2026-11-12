@@ -516,10 +516,25 @@ fn add_page(
     }
 }
 
+/// The longest headline of a linked message the draft page shows: a line of the header cuts what does not fit, so this only bounds what is sent.
+const HEADLINE_LIMIT: usize = 200;
+
+/// The linked message's text as one line for the header of the draft page: mrkdwn as plain text (a name it cannot know is the unknown name), every run of white space
+/// (line breaks included) as one space, and at most `HEADLINE_LIMIT` characters.
+fn headline(text: &str) -> String {
+    plain_text(text, &|_| None)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(HEADLINE_LIMIT)
+        .collect()
+}
+
 /// The thread the summary reads: every message of `read` (the pages, oldest first, the first being the thread's own message) as a line, in order, with the blank ones skipped except the linked one,
 /// and the linked message `message_ts` marked by its index. A linked message the pages did not reach is taken from `alone` and put last.
 /// `has_first` is whether the thread's own message is the first line (it is not when it is blank). `None` when the linked message is in neither.
-/// `unread` is the count of replies the read left unread.
+/// `unread` is the count of replies the read left unread. `target_text` is the linked message's `headline`.
 fn thread_of(read: &[Value], alone: &[Value], message_ts: &str, unread: usize) -> Option<Thread> {
     let mut lines = Vec::new();
     let mut target = None;
@@ -530,16 +545,17 @@ fn thread_of(read: &[Value], alone: &[Value], message_ts: &str, unread: usize) -
             continue;
         }
         if linked {
-            target = Some(lines.len());
+            target = Some((lines.len(), m));
         }
         has_first |= i == 0;
         lines.push(message_line(m));
     }
-    let target = match target {
-        Some(target) => target,
+    let (target, linked) = match target {
+        Some(found) => found,
         None => {
-            lines.push(message_line(alone.iter().find(|m| m["ts"] == message_ts)?));
-            lines.len() - 1
+            let m = alone.iter().find(|m| m["ts"] == message_ts)?;
+            lines.push(message_line(m));
+            (lines.len() - 1, m)
         }
     };
     Some(Thread {
@@ -547,6 +563,7 @@ fn thread_of(read: &[Value], alone: &[Value], message_ts: &str, unread: usize) -
         target,
         has_first,
         unread,
+        target_text: headline(linked["text"].as_str().unwrap_or_default()),
     })
 }
 
@@ -6276,6 +6293,38 @@ mod tests {
         assert_eq!(thread.lines, ["U1: a", "U2: b", "U9: late"]);
         assert_eq!(thread.target, 2);
         assert_eq!(thread.unread, 7);
+    }
+
+    #[test]
+    fn the_target_text_is_the_linked_message_as_one_line_of_plain_text() {
+        let read = [
+            msg("1.1", "U1", "first"),
+            msg(
+                "1.2",
+                "U2",
+                "  &lt;a&gt; <@U1> :tada:\r\n\n  <https://a.example/x|link>  ",
+            ),
+        ];
+        let thread = thread_of(&read, &[], "1.2", 0).unwrap();
+        assert_eq!(
+            thread.target_text,
+            "<a> @不明 🎉 link (https://a.example/x)"
+        );
+        let alone = [msg("9.9", "U9", "late\nmessage")];
+        assert_eq!(
+            thread_of(&read, &alone, "9.9", 0).unwrap().target_text,
+            "late message"
+        );
+        let blank = [msg("1.1", "U1", " ")];
+        assert_eq!(thread_of(&blank, &[], "1.1", 0).unwrap().target_text, "");
+    }
+
+    #[test]
+    fn the_headline_is_cut_at_the_limit_in_characters() {
+        let long = "あ".repeat(HEADLINE_LIMIT + 50);
+        assert_eq!(headline(&long).chars().count(), HEADLINE_LIMIT);
+        let exact = "a".repeat(HEADLINE_LIMIT);
+        assert_eq!(headline(&exact), exact);
     }
 
     #[test]

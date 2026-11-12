@@ -11,7 +11,6 @@ import { toast } from "./toast.js";
 import { inboxOf, projectName, projectOf, todoState, viewProjectId } from "./todo-data.js";
 import { openDueEditor, openProjectPicker } from "./todo-detail.js";
 import { draftOpen, type DraftHooks, openDraft } from "./todo-draft.js";
-import { openPrompt } from "./todo-prompt.js";
 import { todoCall } from "./todo-write.js";
 import { loadTodo } from "./todo.js";
 import { showError } from "./view.js";
@@ -198,7 +197,6 @@ const draftHooks = (job: PendingAdd): DraftHooks => ({
     loadTodo(false, false);
     openNextDraft();
   },
-  editPrompt: () => openPrompt("todo"),
 });
 
 function reviewField(label: string, control: HTMLElement) {

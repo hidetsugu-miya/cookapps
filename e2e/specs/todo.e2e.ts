@@ -126,6 +126,125 @@ describe("todo", () => {
     expect(await browser.execute(() => document.getElementById("projects")!.inert)).toBe(true);
   });
 
+  it("names the Claude pane Claude, and puts 280px of details beside the name and the description", async () => {
+    await openSummaryCard();
+    await expect($("#draft-chat .chat-head")).toHaveText(expect.stringContaining("Claude"));
+    await expect($("#draft-chat .chat-head")).not.toHaveText(expect.stringContaining("直す"));
+    expect(await browser.execute(() => document.querySelector("#todo-draft .detail-side")!.getBoundingClientRect().width)).toBe(280);
+  });
+
+  it("shows the workspace and the first line of the linked message in the header row, and opens the message from 'Slack で開く'", async () => {
+    await openSummaryCard();
+    await expect($("#todo-draft .draft-team")).toHaveText("Example Team");
+    await expect($("#todo-draft .draft-quote")).toHaveText(slackSummary.targetText);
+    await expect($("#todo-draft .draft-src")).toHaveAttribute("title", slackMessageUrl);
+    const open = $("#todo-draft .draft-head a.draft-open");
+    await expect(open).toHaveText("Slack で開く");
+    await expect(open).toHaveAttribute("href", slackMessageUrl);
+    // The link is at the right end of the row, after the message.
+    const place = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().toJSON(), selector);
+    const [src, link, head] = [await place("#todo-draft .draft-src"), await place("#todo-draft .draft-open"), await place("#todo-draft .draft-head")];
+    expect(src.right).toBeLessThanOrEqual(link.left);
+    expect(link.right).toBeLessThanOrEqual(head.right);
+  });
+
+  it("draws the message as text and cuts what does not fit the row with an ellipsis, keeping the link in the row", async () => {
+    await openTodo();
+    const long = `<b>bold</b> ${"very long ".repeat(60)}`.trim();
+    await mock("todoist_summarize_slack", { ...slackSummary, targetText: long });
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await $("#todo-draft").waitForExist();
+    await expect($("#todo-draft .draft-quote")).toHaveText(long);
+    expect(await count("#todo-draft .draft-quote b")).toBe(0);
+    const row = await browser.execute(() => {
+      const q = document.querySelector<HTMLElement>("#todo-draft .draft-quote")!;
+      const head = document.querySelector<HTMLElement>("#todo-draft .draft-head")!;
+      const open = document.querySelector<HTMLElement>("#todo-draft .draft-open")!;
+      return { cut: q.scrollWidth > q.clientWidth, ellipsis: getComputedStyle(q).textOverflow, one: getComputedStyle(q).whiteSpace, inside: open.getBoundingClientRect().right <= head.getBoundingClientRect().right, wide: head.scrollWidth <= head.clientWidth };
+    });
+    expect(row).toEqual({ cut: true, ellipsis: "ellipsis", one: "nowrap", inside: true, wide: true });
+  });
+
+  it("shows only the workspace when the linked message has no text", async () => {
+    await openTodo();
+    await mock("todoist_summarize_slack", { ...slackSummary, targetText: "" });
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await $("#todo-draft").waitForExist();
+    await expect($("#todo-draft .draft-team")).toHaveText("Example Team");
+    expect(await count("#todo-draft .draft-quote")).toBe(0);
+  });
+
+  describe("the divider of the Claude pane", () => {
+    const share = () =>
+      browser.execute(() => document.getElementById("draft-chat")!.getBoundingClientRect().width / document.getElementById("todo-draft")!.clientWidth);
+    const press = (key: string) =>
+      browser.execute(
+        (id, k) => window.__e2e_once__(id) && document.getElementById("draft-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })),
+        onceId(),
+        key,
+      );
+    const dragTo = (x: number) =>
+      browser.execute((at) => {
+        const box = document.getElementById("todo-draft")!.getBoundingClientRect();
+        const init = (): PointerEventInit => ({ bubbles: true, cancelable: true, pointerId: 7, button: 0, clientX: box.left + box.width * at, clientY: box.top + 80 });
+        document.getElementById("draft-split")!.dispatchEvent(new PointerEvent("pointerdown", init()));
+        document.dispatchEvent(new PointerEvent("pointermove", init()));
+        document.dispatchEvent(new PointerEvent("pointerup", init()));
+      }, x);
+
+    it("is a vertical separator between the draft and the pane, which starts at 40%", async () => {
+      await openSummaryCard();
+      const split = $("#draft-split");
+      await expect(split).toHaveAttribute("role", "separator");
+      await expect(split).toHaveAttribute("aria-orientation", "vertical");
+      await expect(split).toHaveAttribute("aria-label", "Claude の幅");
+      await expect(split).toHaveAttribute("aria-valuemin", "30");
+      await expect(split).toHaveAttribute("aria-valuemax", "60");
+      await expect(split).toHaveAttribute("aria-valuenow", "40");
+      await expect(split).toHaveAttribute("tabindex", "0");
+      expect(await share()).toBeCloseTo(0.4, 2);
+      const place = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().toJSON(), selector);
+      const [todo, bar, chat] = [await place("#todo-draft .draft-todo"), await place("#draft-split"), await place("#draft-chat")];
+      expect(todo.right).toBeLessThanOrEqual(bar.left + 1);
+      expect(bar.right).toBeLessThanOrEqual(chat.left + 1);
+    });
+
+    it("is moved by the arrow keys between 30% and 60%", async () => {
+      await openSummaryCard();
+      await press("ArrowLeft");
+      await press("ArrowLeft");
+      expect(await share()).toBeCloseTo(0.44, 2);
+      for (let i = 0; i < 20; i++) await press("ArrowLeft");
+      expect(await share()).toBeCloseTo(0.6, 2);
+      await expect($("#draft-split")).toHaveAttribute("aria-valuenow", "60");
+      for (let i = 0; i < 30; i++) await press("ArrowRight");
+      expect(await share()).toBeCloseTo(0.3, 2);
+      await expect($("#draft-split")).toHaveAttribute("aria-valuenow", "30");
+    });
+
+    it("sets the width by dragging, held to 30% and 60%, and starts at 40% again for the next draft", async () => {
+      await openSummaryCard();
+      await dragTo(0.5);
+      expect(await share()).toBeCloseTo(0.5, 2);
+      await expect($("#draft-split")).toHaveAttribute("aria-valuenow", "50");
+      await dragTo(0.95);
+      expect(await share()).toBeCloseTo(0.3, 2);
+      await dragTo(0.1);
+      expect(await share()).toBeCloseTo(0.6, 2);
+      await expect($("#draft-split")).toHaveAttribute("aria-valuenow", "60");
+      await $("#todo-draft .draft-drop").click();
+      await $("#todo-draft").waitForExist({ reverse: true });
+      await mock("todoist_summarize_slack", slackSummary);
+      await $("#todo-add-input").setValue(slackMessageUrl);
+      await $("#todo-add-button").click();
+      await $("#todo-draft").waitForExist();
+      await expect($("#draft-split")).toHaveAttribute("aria-valuenow", "40");
+      expect(await share()).toBeCloseTo(0.4, 2);
+    });
+  });
+
   it("keeps the page over a background refresh of the Todo data", async () => {
     await openSummaryCard();
     await $("#todo-draft .draft-name").setValue("My own name");
@@ -524,11 +643,10 @@ describe("todo", () => {
       await expect($("#draft-chat-note")).not.toBeDisplayed();
     });
 
-    // Claude must be usable for the summary to open the page, so the state changes after it: on the settings screen, reached from the prompt screen while another screen is shown.
+    // Claude must be usable for the summary to open the page, so the state changes after it: on the settings screen, while the page waits in the document.
     it("turns the request field off and says so when Claude is disconnected while another screen is shown, and back on when it is connected again", async () => {
       await openSummaryCard();
       await expect($("#draft-chat-note")).not.toBeDisplayed();
-      await $("#todo-draft .draft-prompt").click();
       await $("#nav-settings").click();
       await $("#settings-tab-claude").click();
       await mock("claude_connection", connection("subscription", claudeMissing, { state: "none" }));
@@ -540,7 +658,6 @@ describe("todo", () => {
       await expect($("#draft-chat-note")).toBeDisplayed();
       await expect($("#draft-input")).toBeDisabled();
       await expect($("#draft-send")).toBeDisabled();
-      await $("#todo-draft .draft-prompt").click();
       await $("#nav-settings").click();
       await mock("claude_connection", connection("subscription", claudeReady, { state: "none" }));
       await $("#claude-recheck").click();
@@ -633,22 +750,6 @@ describe("todo", () => {
     await openRecommendedCard("p9");
     await expect($("#todo-draft .draft-project")).toHaveText("インボックス");
     await expect($("#todo-draft .draft-project .tag")).not.toExist();
-  });
-
-  it("opens the prompt screen from the page, and 戻る returns to the Todo screen with the page and its edits still there", async () => {
-    await openSummaryCard();
-    await $("#todo-draft .draft-name").setValue("My own name");
-    await $("#todo-draft .draft-prompt").click();
-    // The page stays in the document, off the screen with the Todo screen.
-    await expect($("#todo-draft")).not.toBeDisplayed();
-    await expect($("#prompt")).toBeDisplayed();
-    await expect($("#todo")).not.toBeDisplayed();
-    await expect($("#nav-settings")).toHaveAttribute("aria-current", "page");
-    await $("#prompt-back").click();
-    await expect($("#todo")).toBeDisplayed();
-    await $("#todo-draft").waitForDisplayed();
-    await expect($("#todo-draft .draft-name")).toHaveValue("My own name");
-    await expect($("#nav-todo")).toHaveAttribute("aria-current", "page");
   });
 
   it("adds with Enter in the name field", async () => {
@@ -1320,7 +1421,7 @@ function withDescription() {
 }
 
 describe("todo prompt icon", () => {
-  it("has no Claude icon for the summary prompt in the heading: the prompt is opened from the settings and from the page of a draft", async () => {
+  it("has no Claude icon for the summary prompt in the heading: the prompt is opened from the Claude tab of the settings only", async () => {
     await openTodo();
     expect(await count("#todo-prompt")).toBe(0);
     await $(ROWS).click();
@@ -1328,20 +1429,15 @@ describe("todo prompt icon", () => {
     expect(await count("#todo-prompt")).toBe(0);
   });
 
-  it("opens the prompt screen from the page of a draft, and 戻る returns to the Todo screen", async () => {
+  it("has no way to the prompt screen on the page of a draft", async () => {
     await openTodo();
     await mock("todoist_summarize_slack", slackSummary);
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
     await $("#todo-draft").waitForExist();
-    await $("#todo-draft .draft-prompt").click();
-    await expect($("#prompt")).toBeDisplayed();
-    await expect($("#todo")).not.toBeDisplayed();
-    await expect($("#nav-settings")).toHaveAttribute("aria-current", "page");
-    await $("#prompt-back").click();
-    await expect($("#todo")).toBeDisplayed();
+    expect(await count("#todo-draft .draft-prompt")).toBe(0);
+    await expect($("#todo-draft")).not.toHaveText(expect.stringContaining("プロンプトを編集"));
     await expect($("#prompt")).not.toBeDisplayed();
-    await expect($("#nav-todo")).toHaveAttribute("aria-current", "page");
   });
 });
 
