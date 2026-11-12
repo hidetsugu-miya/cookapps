@@ -1,4 +1,6 @@
-// The frame a mail's HTML body is shown in: what is cleaned before it is written, how its links are routed, and how it is sized.
+import { urlsIn } from "./url-text.js";
+
+// The frame a mail's HTML body is shown in: what is cleaned before it is written, which URLs become links, how its links are routed, and how it is sized.
 // The mail's document can name elements after Document's own members (<img name="querySelectorAll">),
 // which hides the real ones (DOM clobbering), so the prototype's are called explicitly.
 export const queryAll = <E extends Element = Element>(doc: Document, selector: string) =>
@@ -39,6 +41,37 @@ export function routeLinks(doc: Document) {
     }
     setAttr.call(a, "target", web ? "_top" : "_self");
     if (web) setAttr.call(a, "title", url);
+  }
+}
+
+// Wraps the http(s) URLs that stand in the text of a mail's document (outside a link) in links, for `routeLinks` to route; call it before `routeLinks`.
+// The text is read by one walk, and only a text node that holds a URL is replaced, by text nodes and new links made with DOM calls (never from markup).
+// What is left alone: a link, whose URL stays one, and what is not text on the page (script, style, textarea, title, svg, ...), where a link would be wrong or never drawn.
+const NOT_LINKED = new Set(["a", "script", "style", "textarea", "title", "svg", "math", "select", "button", "noframes", "noembed", "xmp", "plaintext"]);
+const nodeTypeOf = Object.getOwnPropertyDescriptor(Node.prototype, "nodeType")!.get as (this: Node) => number;
+export function linkTextUrls(doc: Document) {
+  const found: Text[] = [];
+  const walker = Document.prototype.createTreeWalker.call(doc, rootOf.call(doc), NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, (node) => {
+    if (nodeTypeOf.call(node) === Node.ELEMENT_NODE) return NOT_LINKED.has(localNameOf.call(node as Element)) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+    return /https?:\/\//i.test((node as Text).data) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+  });
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) found.push(n as Text);
+  for (const node of found) {
+    const text = node.data;
+    const urls = urlsIn(text);
+    if (!urls.length) continue;
+    const parts: (string | HTMLElement)[] = [];
+    let last = 0;
+    for (const { index, url } of urls) {
+      parts.push(text.slice(last, index));
+      const a = Document.prototype.createElement.call(doc, "a");
+      setAttr.call(a, "href", url);
+      Element.prototype.append.call(a, url);
+      parts.push(a);
+      last = index + url.length;
+    }
+    parts.push(text.slice(last));
+    node.replaceWith(...parts);
   }
 }
 
@@ -118,5 +151,8 @@ export function plainBody(html: string) {
 // here the missing allow-scripts would be the only guard. It goes after a leading DOCTYPE, which must stay first for standards mode.
 const BODY_CSP =
   `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">`;
+// The font of a mail that names none, Gmail's: Arial at 13px. The family is the root's and the size the body's (not the root's, which would move rem), both
+// ahead of the mail's own styles, which win by coming later, as do its inline styles and <font face>. A table is given the size too, which quirks mode (a mail with no DOCTYPE) would reset to the browser's.
+const BODY_FONT = "<style>html{font-family:Arial,Helvetica,sans-serif}body{font-size:13px}table{font-size:inherit}</style>";
 export const withBodyCsp = (html: string) =>
-  /^\s*<!doctype[^>]*>/i.test(html) ? html.replace(/^(\s*<!doctype[^>]*>)/i, `$1${BODY_CSP}`) : BODY_CSP + html;
+  /^\s*<!doctype[^>]*>/i.test(html) ? html.replace(/^(\s*<!doctype[^>]*>)/i, `$1${BODY_CSP}${BODY_FONT}`) : BODY_CSP + BODY_FONT + html;
