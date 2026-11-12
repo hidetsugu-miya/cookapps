@@ -387,7 +387,7 @@ fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
     missing_scopes(scopes, &HISTORY_SCOPES)
 }
 
-/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message or "既読に設定" sets (`channels:write`, `groups:write`).
+/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message or "既読にする" sets (`channels:write`, `groups:write`).
 /// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`.
 const OPTIONAL_SCOPES: [&str; 4] = ["users:read", "files:read", "channels:write", "groups:write"];
 
@@ -1596,7 +1596,7 @@ pub struct Timeline {
     pending_channels: u32,
     /// The unread messages among all the messages held (not only the ones listed), channels kept off the list left out, and the unread replies (S-14; a thread that cannot be counted counts 1); the sidebar's badge.
     unread_total: u32,
-    /// The channels with something unread, for the "既読に設定" of each (`unread_channels`).
+    /// The channels with something unread, for the "既読にする" of each (`unread_channels`).
     unread_channels: Vec<UnreadChannel>,
     /// The unread messages (S-8, as `unread` says) this read found that the one before it did not hold, newest first, `UNREAD_MAX` at most, for the pop-up of a new message.
     /// Empty for the first read after the start, for a channel this read is the first to know the read position of, and for the messages of a watched thread (S-13).
@@ -2914,7 +2914,7 @@ fn choose_thread_checks(
         .collect()
 }
 
-/// What "既読に設定" of a channel of the unread section needs (S-8, S-14).
+/// What "既読にする" of a channel of the unread section needs (S-8, S-14).
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]

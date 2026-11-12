@@ -41,16 +41,16 @@ const layout = () =>
       return [row(c)];
     });
   });
-// The groups of the unread section: the texts of the heading (the mark, the dot and the empty ones left out), whether it has a lock, and the text of each row.
+// The groups of the unread section: the texts of the heading (the name of an icon button is its aria-label; the mark, the dot and the empty ones left out), whether it has a lock, and the text of each row.
 const groups = () =>
   browser.execute(() =>
     [...document.querySelectorAll("#slack-feed .feed-group")].map((g) => ({
-      head: [...g.querySelector(".feed-chan")!.children].map((c) => c.textContent!.trim()).filter(Boolean),
+      head: [...g.querySelector(".feed-chan")!.children].map((c) => c.textContent!.trim() || c.getAttribute("aria-label") || "").filter(Boolean),
       lock: !!g.querySelector(".feed-chan-ic rect"),
       rows: [...g.querySelectorAll(".feed-main > .feed-text")].map((t) => t.textContent!.trim()),
     })),
   );
-// The "既読に設定" button of the group of the channel named `name`.
+// The "既読にする" button of the group of the channel named `name`.
 const readButton = async (name: string) => {
   for (const group of await $$("#slack-feed .feed-group")) if ((await group.$(".feed-chan-name").getText()) === name) return group.$(".feed-chan-read");
   throw new Error(`no group of ${name}`);
@@ -492,7 +492,7 @@ describe("slack list", () => {
     expect(await weightOf("#slack-feed .feed-row.unread")).toBe("700");
   });
 
-  it("groups the unread rows by channel under a heading with the mark, the name, the workspace and the number of unread messages, and 既読に設定 at its right end", async () => {
+  it("groups the unread rows by channel under a heading with the mark, the name, the workspace and the number of unread messages, and 既読にする at its right end", async () => {
     const side = [sideWorkspace([sideChannel("C0123ABCD", "dev"), sideChannel("G2", "ops", { private: true })])];
     const messages = [
       timelineMessage(slackTs(1), "Alice Example", "dev", "first", { unread: true }),
@@ -502,15 +502,16 @@ describe("slack list", () => {
     await openList(timeline(messages, { side }));
     await waitForCount("#slack-feed .feed-row", 3);
     expect(await groups()).toEqual([
-      { head: ["dev", "Example Team", "2 件のメッセージ", "既読に設定"], lock: false, rows: ["second", "first"] },
-      { head: ["ops", "Example Team", "1 件のメッセージ", "既読に設定"], lock: true, rows: ["other"] },
+      { head: ["dev", "Example Team", "2 件のメッセージ", "既読にする"], lock: false, rows: ["second", "first"] },
+      { head: ["ops", "Example Team", "1 件のメッセージ", "既読にする"], lock: true, rows: ["other"] },
     ]);
     const head = await browser.execute(() => {
       const h = document.querySelector<HTMLElement>("#slack-feed .feed-chan")!;
       const [button, count] = [h.querySelector<HTMLElement>(".feed-chan-read")!.getBoundingClientRect(), h.querySelector<HTMLElement>(".feed-chan-count")!.getBoundingClientRect()];
-      return { buttonAtEnd: Math.abs(h.getBoundingClientRect().right - button.right) < 24, countLeftOfButton: count.right <= button.left, tag: h.querySelector(".feed-chan-read")!.className };
+      const read = h.querySelector<HTMLElement>(".feed-chan-read")!;
+      return { buttonAtEnd: Math.abs(h.getBoundingClientRect().right - button.right) < 24, countLeftOfButton: count.right <= button.left, tag: read.className, name: read.getAttribute("aria-label"), text: read.textContent, icon: !!read.querySelector("svg path") };
     });
-    expect(head).toEqual({ buttonAtEnd: true, countLeftOfButton: true, tag: "text-btn feed-chan-read" });
+    expect(head).toEqual({ buttonAtEnd: true, countLeftOfButton: true, tag: "icon-btn feed-chan-read", name: "既読にする", text: "", icon: true });
     // The heading says what Rust counted for the channel, also when the rows are fewer.
     await mock("slack_timeline", timeline(messages, { side, unreadChannels: [{ teamId: workspace.teamId, channel: "C0123ABCD", messages: 25, to: messages[0].ts, threads: [] }] }));
     await emitEvent("slack-timeline-dirty");
@@ -1251,7 +1252,7 @@ describe("slack list", () => {
   // Reading a channel without opening a thread (S-15).
   const lackingWrite = [{ teamId: workspace.teamId, team: workspace.team, scopes: ["channels:write"] }];
 
-  it("reads a channel with 既読に設定 at once without opening a thread: slack_mark_read goes to its newest unread message, its rows go, the other channel's stay, the badge falls, and the list is made again from Rust's cache", async () => {
+  it("reads a channel with 既読にする at once without opening a thread: slack_mark_read goes to its newest unread message, its rows go, the other channel's stay, the badge falls, and the list is made again from Rust's cache", async () => {
     const messages = unreadSample();
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(messages), claude_status: claudeReady });
     await expect(badge()).toHaveText("3");
@@ -1339,13 +1340,13 @@ describe("slack list", () => {
     ]);
   });
 
-  it("draws 既読に設定 only where pressing it changes something: not for an unread message when the token cannot write the position, but for unread replies", async () => {
+  it("draws 既読にする only where pressing it changes something: not for an unread message when the token cannot write the position, but for unread replies", async () => {
     const messages = [unreadSample()[0], withReplies({ channel: "C2", channelName: "random" })];
     await openList(timeline(messages, { missing: lackingWrite }));
     await waitForCount("#slack-feed .feed-row", 2);
     expect(await groups()).toEqual([
       { head: ["dev", "Example Team", "1 件のメッセージ"], lock: false, rows: ["first"] },
-      { head: ["random", "Example Team", "既読に設定"], lock: false, rows: ["Parent"] },
+      { head: ["random", "Example Team", "既読にする"], lock: false, rows: ["Parent"] },
     ]);
   });
 
@@ -1394,7 +1395,7 @@ describe("slack list", () => {
     await expect($("#slack-thread")).not.toBeDisplayed();
   });
 
-  it("ignores the second click of a double click on 既読に設定 and on the row that moved under the pointer, and opens a thread with a double click on a row", async () => {
+  it("ignores the second click of a double click on 既読にする and on the row that moved under the pointer, and opens a thread with a double click on a row", async () => {
     const messages = unreadSample();
     const mark = await openUnread(messages);
     const thread = await mock("slack_thread", slackThread([threadMessage(messages[1].ts, "Bob Example", "other")]));
@@ -1423,7 +1424,7 @@ describe("slack list", () => {
     expect(await callsOf(thread)).toHaveLength(1);
   });
 
-  it("uses no answer of a read that began before 既読に設定, and makes the list again from the cache once the requests are done", async () => {
+  it("uses no answer of a read that began before 既読にする, and makes the list again from the cache once the requests are done", async () => {
     const messages = unreadSample();
     await openList(timeline(messages, { refreshSecs: 2 }));
     await waitForCount("#slack-feed .feed-row", 3);
@@ -2000,7 +2001,7 @@ describe("slack list: the popups for a new Slack message (S-17)", () => {
     await waitForCount(".arrival", 0);
   });
 
-  it("closes the card of a message that the list marks read, with 既読に設定 of its channel", async () => {
+  it("closes the card of a message that the list marks read, with 既読にする of its channel", async () => {
     const message = fresh(1, "Deploy finished");
     await arrive([message]);
     await waitForCount(".arrival", 1);

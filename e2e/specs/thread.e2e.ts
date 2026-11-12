@@ -34,6 +34,60 @@ describe("thread", () => {
     await expect($("#threads")).toBeDisplayed();
   });
 
+  it("holds only the back button in the header, and puts the operations in a row just above the subject, lined up with it", async () => {
+    await mock("thread", threadDetail("First unread", "Hello from Alice", true));
+    await mock("set_read", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
+    const layout = await browser.execute(() => {
+      const box = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      const ids = (s: string) => [...document.querySelectorAll(s)].map((b) => b.id);
+      const first = document.querySelector<HTMLElement>("#thread-actions > button:not([hidden])")!;
+      return {
+        header: ids("#mail-header > *"),
+        headerHeight: box("#mail-header").height,
+        actions: ids("#thread-actions > button:not([hidden])"),
+        actionsInHeader: document.querySelector("#mail-header #thread-actions") !== null,
+        size: [first.getBoundingClientRect().width, first.getBoundingClientRect().height],
+        icon: [first.querySelector("svg")!.getBoundingClientRect().width, first.querySelector("svg")!.getBoundingClientRect().height],
+        leftOfSubject: Math.round(first.getBoundingClientRect().left - box("#thread-head").left),
+        aboveSubject: box("#thread-actions").bottom <= box("#thread-head").top,
+      };
+    });
+    expect(layout).toEqual({
+      header: ["back"],
+      headerHeight: 40,
+      actions: ["thread-slack", "thread-todo", "thread-orca", "trash", "archive"],
+      actionsInHeader: false,
+      size: [34, 34],
+      icon: [20, 20],
+      leftOfSubject: 0,
+      aboveSubject: true,
+    });
+  });
+
+  it("keeps the row of operations at the top of the scrolling area, in the body's color, while a long mail scrolls", async () => {
+    await mock("thread", threadDetail("First unread", Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\n"), true));
+    await mock("set_read", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
+    const tops = () =>
+      browser.execute(() => ({
+        row: Math.round(document.getElementById("thread-actions")!.getBoundingClientRect().top - document.getElementById("main")!.getBoundingClientRect().top),
+        subject: Math.round(document.getElementById("thread-head")!.getBoundingClientRect().top),
+      }));
+    const before = await tops();
+    expect(before.row).toBeGreaterThanOrEqual(0);
+    await browser.execute(() => {
+      document.getElementById("main")!.scrollTop = 600;
+    });
+    const after = await tops();
+    expect(after.row).toBe(0);
+    expect(after.subject).toBeLessThan(before.subject - 100);
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("thread-actions")!).backgroundColor)).toBe("rgb(255, 255, 255)");
+    for (const id of ["#thread-slack", "#thread-todo", "#thread-orca", "#trash", "#archive"]) await expect($(id)).toBeDisplayedInViewport();
+  });
+
   it("opens a read thread without marking it read", async () => {
     const open = await mock("thread", threadDetail("Already read", "Old news", false));
     const setRead = await mock("set_read", true);
@@ -346,11 +400,11 @@ describe("thread AI summary", () => {
     await expect(summaryButton()).not.toBeDisplayed();
   });
 
-  it("shows the icon first in the toolbar while Claude is logged in", async () => {
+  it("shows the icon first in the row of operations while Claude is logged in", async () => {
     await open("First unread", quote("Quote"));
     await expect(summaryButton()).toBeDisplayed();
     await expect(summaryButton()).toHaveAttribute("aria-label", "AI 要約");
-    const order = await browser.execute(() => [...document.querySelectorAll("#mail-header > button:not([hidden])")].map((b) => b.id));
+    const order = await browser.execute(() => [...document.querySelectorAll("#mail-header > button:not([hidden]), #thread-actions > button:not([hidden])")].map((b) => b.id));
     expect(order).toEqual(["back", "thread-summary", "thread-slack", "thread-todo", "thread-orca", "trash", "archive"]);
   });
 

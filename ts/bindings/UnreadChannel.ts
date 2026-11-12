@@ -2,7 +2,7 @@
 import type { UnreadThreadMark } from "./UnreadThreadMark";
 
 /**
- * What "既読に設定" of a channel of the unread section needs (S-8, S-14).
+ * What "既読にする" of a channel of the unread section needs (S-8, S-14).
  */
 export type UnreadChannel = { teamId: string, channel: string, 
 /**

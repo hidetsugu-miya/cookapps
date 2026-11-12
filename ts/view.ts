@@ -33,7 +33,7 @@ export function show(view: View) {
   $("slack-channel").hidden = view !== "slack-channel";
   $("slack-thread").hidden = view !== "slack-thread";
   $("orca").hidden = view !== "orca";
-  // The mail header is the thread's toolbar: the list and the login screen have none.
+  // The mail header is the thread's bar with "戻る": the list and the login screen have none.
   $("mail-header").hidden = view !== "thread";
   // The inbox has its own header (the unread operation); the login screen has none.
   $("inbox-header").hidden = view !== "list";

@@ -144,7 +144,7 @@ async function write(screen: Screen, text: string, summary: HandoffSummary = han
 }
 
 describe("orca handoff", () => {
-  it("opens from the header icon of the mail, with its destinations, the card and the empty instruction", async () => {
+  it("opens from the icon of the row above the mail's subject, with its destinations, the card and the empty instruction", async () => {
     await openMail();
     await expect($(MAIL.button)).toHaveAttribute("aria-label", "Orca に渡す");
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "false");
@@ -153,6 +153,14 @@ describe("orca handoff", () => {
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "true");
     await expect($(MAIL.pane)).toBeDisplayed();
     expect(await textsOf(`${MAIL.pane} .ho-title`)).toEqual(["Orca に渡す"]);
+    // The row of operations is in the area left of the pane, whole.
+    expect(
+      await browser.execute(() => {
+        const row = document.getElementById("thread-actions")!.getBoundingClientRect();
+        const last = document.getElementById("archive")!.getBoundingClientRect();
+        return { inMain: row.right <= document.getElementById("mail-handoff")!.getBoundingClientRect().left, lastInRow: last.right <= row.right && last.left >= row.left };
+      }),
+    ).toEqual({ inMain: true, lastInRow: true });
     // The divider reuses split.ts: a separator for the width of the pane.
     await expect($("#mail-split")).toHaveAttribute("role", "separator");
     await expect($("#mail-split")).toHaveAttribute("aria-label", "Orca の幅");

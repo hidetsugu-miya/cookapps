@@ -166,7 +166,7 @@ async function markRead(account: string, id: string) {
   }
 }
 
-// The buttons of the header that act on the loaded thread. They are disabled until it arrives; "戻る" is not one of them.
+// The buttons of the row above the subject (#thread-actions) that act on the loaded thread. They are disabled until it arrives; "戻る" is not one of them.
 const ACTIONS = ["thread-summary", "thread-slack", "thread-todo", "thread-orca", "trash", "archive"];
 
 // What the detail view holds until the thread arrives: the sender the list row has (none for a thread opened from Todo with no row),

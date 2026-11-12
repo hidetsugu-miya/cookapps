@@ -26,7 +26,7 @@ pendingChannels: number,
  */
 unreadTotal: number, 
 /**
- * The channels with something unread, for the "既読に設定" of each (`unread_channels`).
+ * The channels with something unread, for the "既読にする" of each (`unread_channels`).
  */
 unreadChannels: Array<UnreadChannel>, 
 /**
