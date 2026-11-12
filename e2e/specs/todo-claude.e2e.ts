@@ -72,9 +72,10 @@ describe("todo Claude pane", () => {
         right: tools.right - orca.right < 40 && claude.right <= orca.left,
         same: color("#todo-body > header").backgroundColor === color("#todo-tools").backgroundColor && color("#todo-body > header").borderBottomColor === color("#todo-tools").borderBottomColor,
         line: color("#todo-tools").borderBottomWidth,
+        heights: [head.height, tools.height, claude.height, orca.height],
       };
     });
-    expect(rows).toEqual({ level: true, right: true, same: true, line: "2px" });
+    expect(rows).toEqual({ level: true, right: true, same: true, line: "2px", heights: [40, 40, 24, 24] });
     // A click on Claude's icon keeps Claude's pane.
     await $("#todo-tool-claude").click();
     await expect($(pane)).toBeDisplayed();

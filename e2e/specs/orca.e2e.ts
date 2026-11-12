@@ -511,8 +511,8 @@ describe("orca", () => {
     expect(box.listRight).toBeLessThanOrEqual(box.splitLeft + 1);
     expect(box.splitRight).toBeLessThanOrEqual(box.workLeft + 1);
     expect(box.share).toBeCloseTo(0.25, 2);
-    expect(box.header).toBe(32);
-    expect(box.tabs).toBe(32);
+    expect(box.header).toBe(40);
+    expect(box.tabs).toBe(40);
     expect(box.tabsTop).toBe(box.headerTop);
     expect(box.buttons).toEqual([24, 24, 24]);
     // No label and no 「新規」: the button of the list (A-23) at the left, the bell and the reload at the right.
