@@ -184,23 +184,54 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 
 /* Calendar: --hour is set from HOUR_PX in ts/calendar.ts. */
 #calendar { flex: 1; min-height: 0; display: flex; --gutter: 56px; }
-#cal-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#cal-main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
 /* C-4: the panel that chooses the calendars to show: a column like #slack-side, 248px wide. */
 #cal-side { flex: none; width: 248px; box-sizing: border-box; display: flex; flex-direction: column; background: var(--bar); border-right: 1px solid var(--line); }
-#cal-side-bar { flex: none; box-sizing: border-box; min-height: var(--header-h); padding: 0 8px 0 16px; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+/* C-1, C-4: the bar of the week and the heading row of the panel are the tinted band of the Todo header (#todo-body > header), of the same height, so that the two lines meet. */
+#cal-side-bar, #cal-bar { flex: none; box-sizing: border-box; min-height: var(--header-h); display: flex; align-items: center; background: var(--soft); border-bottom: 2px solid var(--accent); }
+#cal-side-bar { padding: 0 8px 0 16px; }
+#cal-side-bar .icon-btn:hover:not(:disabled), #cal-bar .icon-btn:hover:not(:disabled) { background: var(--hover); }
 #cal-side-head { margin: 0; font-size: calc(14px * var(--fs)); font-weight: 600; }
 #cal-bar .list-toggle { margin-right: 8px; }
 #cal-side-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px 12px; }
-.cal-side-account { margin: 10px 0 2px; padding: 0 10px; font-size: calc(12px * var(--fs)); font-weight: 600; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#cal-month { flex: none; padding: 8px 8px 10px; border-bottom: 1px solid var(--line); }
+.cal-side-account { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; margin: 14px 0 2px; padding: 0 8px; box-sizing: border-box; border: 0; border-radius: 8px; background: none; color: #444; font: inherit; font-size: calc(12px * var(--fs)); font-weight: 600; text-align: left; cursor: pointer; }
+#cal-side-feed > .cal-side-account:first-child { margin-top: 0; }
+.cal-side-account:hover { background: var(--hover); }
+.cal-side-account:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cal-side-avatar { width: 20px; height: 20px; flex: none; border-radius: 50%; color: #fff; font-size: calc(10px * var(--fs)); font-weight: bold; display: flex; align-items: center; justify-content: center; }
+.cal-side-email { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-side-chevron { flex: none; display: flex; color: var(--muted); }
+.cal-side-chevron svg { width: 14px; height: 14px; }
+.cal-side-account[aria-expanded="true"] .cal-side-chevron svg { transform: rotate(90deg); }
+/* The calendars of an account are indented and held by a line at their left. */
+.cal-side-body { margin: 0 0 0 18px; padding-left: 2px; border-left: 1px solid var(--line); }
 .cal-side-group { margin: 8px 0 2px; padding: 0 10px; font-size: calc(11px * var(--fs)); color: var(--muted); }
 .cal-side-item { display: flex; align-items: center; gap: 10px; min-height: 30px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; cursor: pointer; }
 .cal-side-item:hover { background: var(--hover); }
 .cal-side-item input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--c); cursor: pointer; }
 .cal-side-item:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .cal-side-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#cal-bar { flex: none; display: flex; align-items: center; gap: 4px; box-sizing: border-box; min-height: var(--header-h); padding: 0 32px; }
-#cal-title { font-size: calc(20px * var(--fs)); }
-#cal-title .year { color: #888; font-weight: normal; }
+#cal-bar { gap: 4px; padding: 0 16px; }
+#cal-heading { margin: 0 0 0 8px; font-size: calc(20px * var(--fs)); font-weight: 600; }
+#cal-title { padding: 2px 8px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }
+#cal-title:hover, #cal-title[aria-expanded="true"] { background: var(--hover); }
+#cal-title:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The small calendar of a month, in the panel and over the week (ts/calendar-month.ts). */
+#cal-month-pop { position: absolute; z-index: 6; width: 232px; box-sizing: border-box; padding: 8px 8px 10px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
+.cal-mini-head { display: flex; align-items: center; gap: 2px; padding: 0 4px 4px; }
+.cal-mini-title { flex: 1; font-size: calc(13px * var(--fs)); font-weight: 600; }
+.cal-mini-head .icon-btn { width: 24px; height: 24px; }
+.cal-mini-head .icon-btn svg { width: 14px; height: 14px; }
+.cal-mini-row { display: grid; grid-template-columns: repeat(7, 1fr); }
+.cal-mini-row.current { border-radius: 14px; background: var(--soft); }
+.cal-mini-wd { height: 22px; line-height: 22px; text-align: center; font-size: calc(11px * var(--fs)); color: var(--muted); }
+.cal-mini-day { width: 26px; height: 26px; margin: 0 auto; padding: 0; border: 0; border-radius: 50%; background: none; color: inherit; font: inherit; font-size: calc(11px * var(--fs)); font-variant-numeric: tabular-nums; cursor: pointer; }
+.cal-mini-day:hover { background: var(--soft); }
+.cal-mini-row.current .cal-mini-day:hover { background: var(--chip-line); }
+.cal-mini-day:focus-visible { outline: 2px solid var(--accent); }
+.cal-mini-day.other { color: var(--muted); opacity: .6; }
+.cal-mini-day.today, .cal-mini-day.today:hover { background: var(--accent); color: var(--on-accent); opacity: 1; }
 .text-btn { height: 32px; padding: 0 16px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; color: #333; cursor: pointer; font-family: inherit; font-size: calc(11px * var(--fs)); }
 .text-btn:hover, .text-btn[aria-pressed="true"] { background: var(--soft); }
 .text-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }

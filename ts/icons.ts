@@ -20,6 +20,7 @@ export const DAY_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><
 export const DATE_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/>');
 export const GRIP_SVG = svgOf('<path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01"/>');
 export const CHEVRON_SVG = svgOf('<path d="M9 6l6 6-6 6"/>');
+export const CHEVRON_LEFT_SVG = svgOf('<path d="M15 6l-6 6 6 6"/>');
 export const EDIT_SVG = svgOf('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>');
 export const OUTDENT_SVG = svgOf('<path d="M3 5h18M13 12h8M3 19h18"/><path d="M8 9l-4 3 4 3"/>');
 export const FOLDER_SVG = svgOf('<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>');

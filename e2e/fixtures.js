@@ -130,6 +130,20 @@ window.__e2e_calls__ = {};
 // a spec that splits mocks it with the layout it wants.
 const selectedIn = {};
 const computed = {
+  // The weeks that hold the month, from the first day of the week (what Rust's `calendar_month` answers).
+  calendar_month: ({ year, month, firstDay }) => {
+    const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const back = (d) => (d.getDay() + 7 - firstDay) % 7;
+    const first = new Date(year, month - 1, 1);
+    const last = new Date(year, month, 0);
+    const start = new Date(year, month - 1, 1 - back(first));
+    const end = new Date(year, month - 1, last.getDate() + 6 - back(last));
+    const days = [];
+    for (let d = start; d <= end; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+      days.push({ date: iso(d), day: d.getDate(), inMonth: d.getMonth() === month - 1 });
+    }
+    return { weekdays: [0, 1, 2, 3, 4, 5, 6].map((i) => (firstDay + i) % 7), days };
+  },
   orca_panes: ({ environment, project, tabs, op }) => {
     const key = JSON.stringify([environment, project]);
     if (op?.kind === "select" && tabs.includes(op.tab)) selectedIn[key] = op.tab;

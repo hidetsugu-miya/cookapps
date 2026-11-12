@@ -3,7 +3,8 @@ import type { CalendarChoice } from "./bindings/CalendarChoice";
 import type { CalendarChoices } from "./bindings/CalendarChoices";
 import { closeDetail } from "./calendar-detail.js";
 import { $, el, tag } from "./dom.js";
-import { avatarColor } from "./format.js";
+import { avatarColor, initials } from "./format.js";
+import { CHEVRON_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { showError } from "./view.js";
@@ -15,6 +16,9 @@ let loaded = false;
 let seq = 0;
 // Called after a choice is saved, to draw the week again.
 let onChanged: () => void = () => {};
+
+// The accounts whose calendars are folded away, held in memory only.
+const folded = new Set<string>();
 
 // Whether the panel is open: what the owner chose, held in memory only, so it is open again when the app starts.
 let panelOpen = true;
@@ -83,15 +87,37 @@ function item(account: string, c: CalendarChoice) {
   return label;
 }
 
+// The account's row, which folds its calendars away or shows them again: its avatar as the sidebar draws it (the initials and the color), the address and a chevron.
+function accountRow(account: string, body: HTMLElement) {
+  const row = tag("button", "cal-side-account");
+  row.type = "button";
+  row.setAttribute("aria-expanded", String(!folded.has(account)));
+  const avatar = tag("span", "cal-side-avatar", initials(account));
+  avatar.style.background = avatarColor(account);
+  const chevron = tag("span", "cal-side-chevron");
+  chevron.innerHTML = CHEVRON_SVG;
+  row.append(avatar, tag("span", "cal-side-email", account), chevron);
+  row.title = account;
+  row.onclick = () => {
+    const open = folded.delete(account);
+    if (!open) folded.add(account);
+    row.setAttribute("aria-expanded", String(open));
+    body.hidden = !open;
+  };
+  return row;
+}
+
 function draw() {
   const nodes: HTMLElement[] = [];
   for (const { account, calendars } of choices?.accounts ?? []) {
-    nodes.push(el("cal-side-account", account));
+    const body = tag("div", "cal-side-body");
+    body.hidden = folded.has(account);
     for (const [mine, title] of [[true, "マイカレンダー"], [false, "他のカレンダー"]] as const) {
       const group = calendars.filter((c) => c.mine === mine);
       if (group.length === 0) continue;
-      nodes.push(el("cal-side-group", title), ...group.map((c) => item(account, c)));
+      body.append(el("cal-side-group", title), ...group.map((c) => item(account, c)));
     }
+    nodes.push(accountRow(account, body), body);
   }
   $("cal-side-feed").replaceChildren(...nodes);
 }

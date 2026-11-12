@@ -4,6 +4,7 @@ import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
 import { addAccount, refreshPopup } from "./accounts.js";
 import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
+import { closeMonthPop, followCalendarWeek, initCalendarMonth, refreshCalendarDay, showCalendarMonth } from "./calendar-month.js";
 import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
 import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
@@ -149,11 +150,9 @@ function renderWeek(w: Week) {
     if (i === todayIndex) node.classList.add("today");
     return node;
   };
-  // The title names the month of the middle of the week.
-  const year = document.createElement("span");
-  year.className = "year";
-  year.textContent = ` ${days[3].getFullYear()}`;
-  $("cal-title").replaceChildren(`${days[3].getMonth() + 1}月`, year);
+  // The title names the month of the middle of the week, and the small calendars show it.
+  $("cal-title").textContent = `${days[3].getFullYear()}年${days[3].getMonth() + 1}月`;
+  showCalendarMonth(w.weekStart, days[3]);
   $("cal-head").replaceChildren(
     el("cal-gutter"),
     ...days.map((d, i) => {
@@ -255,7 +254,8 @@ async function showKeptWeek(key: string, seq: number) {
 
 // Shows the week of `calDate`: the kept one at once, then the fetched one if it differs, so the scroll position stays.
 // With none kept, the old week stays (dimmed) until the new one arrives.
-export async function loadCalendar(refresh = false) {
+// With `follow`, the month calendars go back to the month of the week when it is the one already shown.
+export async function loadCalendar(refresh = false, follow = false) {
   const seq = ++calSeq;
   $("error").hidden = true;
   let first: number;
@@ -267,6 +267,7 @@ export async function loadCalendar(refresh = false) {
   }
   if (seq !== calSeq) return;
   const key = weekKey(calDate, first);
+  if (follow && calShown?.weekStart === key) followCalendarWeek();
   const kept = calCache.get(key);
   if (kept) {
     if (calShown?.weekStart !== key) renderWeek(kept);
@@ -292,6 +293,8 @@ export async function loadCalendar(refresh = false) {
 // Opens the calendar screen: the first draw scrolls to the morning again.
 export function showCalendar() {
   calScrolled = false;
+  closeMonthPop();
+  refreshCalendarDay();
   show("calendar");
   loadCalendar();
 }
@@ -311,15 +314,20 @@ function choiceChanged() {
 const moveWeek = (date: string) => {
   closeDetail();
   calDate = date;
-  loadCalendar();
+  loadCalendar(false, true);
 };
 
 export function initCalendar() {
   initCalendarSide(choiceChanged);
+  initCalendarMonth(moveWeek);
   $("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));
   $("cal-next").onclick = () => moveWeek(isoDate(addDays(calDate, 7)));
   $("cal-today").onclick = () => moveWeek(isoDate(new Date()));
   $("calendar").style.setProperty("--hour", `${HOUR_PX}px`);
   setInterval(() => currentScreen() === "calendar" && !document.hidden && loadCalendar(true), CAL_REFRESH_MS);
-  setInterval(() => currentScreen() === "calendar" && drawNow(), 60000);
+  setInterval(() => {
+    if (currentScreen() !== "calendar") return;
+    drawNow();
+    refreshCalendarDay();
+  }, 60000);
 }

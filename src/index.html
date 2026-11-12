@@ -97,19 +97,21 @@
         <div id="cal-side-bar" data-tauri-drag-region>
           <h2 id="cal-side-head" data-tauri-drag-region>カレンダー</h2>
         </div>
+        <div id="cal-month"></div>
         <div id="cal-side-feed"></div>
       </aside>
       <div id="cal-main">
         <div id="cal-bar" data-tauri-drag-region="deep">
-          <h1 id="cal-title"></h1>
+          <button id="cal-today" class="text-btn">今日</button>
           <button id="cal-prev" class="icon-btn" aria-label="前の週">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
           </button>
-          <button id="cal-today" class="text-btn">今日</button>
           <button id="cal-next" class="icon-btn" aria-label="次の週">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
           </button>
+          <h1 id="cal-heading"><button id="cal-title" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="cal-month-pop"></button></h1>
         </div>
+        <div id="cal-month-pop" role="dialog" aria-label="月のカレンダー" hidden></div>
         <div id="cal-notice"></div>
         <div id="cal-scroll">
           <div id="cal-top">
