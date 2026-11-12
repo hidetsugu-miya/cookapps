@@ -22,14 +22,17 @@ Bad:  the reviewer and release-verifier both check in round 2 that the same find
 Run `.claude/tools/run-ci.sh` (static checks and unit tests; it stops at the first failing check) on the HEAD to be reviewed, and fix a failure first.
 CI goes first, so that a fix for a type, lint, clippy or unit test failure lands before anyone reads the code.
 When CI passes, start `.claude/tools/run-e2e.sh` (in the background; `e2e.md`) and the reviewers in the same message, and launch `release-verifier` only when both have come back (at the owner's instruction, 2026-11-12; #485. It replaces "E2E passes before the reviewers start", under which the reviewers waited for E2E).
-`release-verifier` checks the CI and E2E records of HEAD, so it fails on a HEAD whose E2E failed. The first round launches it all the same, to rate the reviewers' findings and to return the failure.
+`release-verifier` checks the CI and E2E records of HEAD, so it is not launched on a HEAD whose E2E failed. In the first round, the reviewers' replies and the E2E failure go straight to the fix, and the release-verifier that follows the second round rates them.
 A failed E2E is handled as a blocking finding of the first round: find the cause (`run-e2e.sh --only {spec}` runs the failed spec alone, `e2e.md`), fix it, and put the fix into the diff of the second round with the other blocking fixes.
+When the reviewers had no blocking finding and E2E alone failed by chance, so that no code needs a fix, run `run-e2e.sh` again, and launch release-verifier when it passes. A code fix for an E2E-only failure is read in the second round.
 
 ```text
 Good: commit -> run-ci.sh passes -> run-e2e.sh (background) and the reviewers together -> release-verifier
-Good: E2E fails in the first round -> release-verifier fails it -> fix with the blocking findings -> run-ci.sh -> run-e2e.sh and code-reviewer together -> release-verifier
+Good: E2E fails in the first round -> no release-verifier -> fix with the reviewers' blocking findings -> run-ci.sh -> run-e2e.sh and code-reviewer together -> release-verifier
+Good: E2E alone fails by chance and no code needs a fix -> run-e2e.sh --only passes -> run-e2e.sh again passes -> release-verifier
 Bad:  commit -> reviewers -> run-ci.sh fails -> fix -> the reviewers read the old code
 Bad:  launch release-verifier while run-e2e.sh is still running
+Bad:  launch release-verifier on a HEAD whose E2E failed, only to rate the findings
 ```
 
 ### In the first round, review the whole range to be pushed, with only the reviewers that are needed
@@ -72,6 +75,7 @@ Bad:  second round -> relaunch all three reviewers to check that their findings 
 ### After three rounds with a blocking finding left, redesign instead of patching
 
 A third failure means the design is the problem, not the next line to fix (at the owner's instruction, 2026-11-03).
+A failure of E2E alone, with no blocking finding from the reviewers, does not count as a round.
 Stop fixing finding by finding, and do this without asking the owner:
 1. Gather every finding of every round, blocking and not, and name what they have in common.
 2. Redesign what they touch against the goal the owner asked for, keeping that goal as it is.
