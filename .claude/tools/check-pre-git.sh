@@ -38,6 +38,19 @@ check() {
   [ "$got" -eq "$want" ] && echo "ok   $name" || { echo "FAIL $name (期待 ${want}、結果 ${got})"; fail=1; }
 }
 
+# check_gate <ゲート名> <名前> <hook 入力の cwd> <コマンド> [stderr に出る文]: exit 2 で止まり、ゲートの行がログに残り、文があればそれが stderr に出ることを確かめる
+check_gate() {
+  local gate=$1 name=$2 got err
+  rm -rf "$tmp/hook-logs"
+  err=$(jq -n --arg cwd "$3" --arg c "$4" '{cwd: $cwd, tool_input: {command: $c}}' \
+    | CLAUDE_PROJECT_DIR="$main" "$hook" 2>&1 >/dev/null)
+  got=$?
+  if [ "$got" -ne 2 ]; then echo "FAIL $name (期待 2、結果 ${got})"; fail=1
+  elif ! cat "$tmp"/hook-logs/hooks-*.log 2>/dev/null | grep -q -F "gate=$gate"$'\t'; then echo "FAIL $name (ログにゲート $gate の行がない)"; fail=1
+  elif [ -n "${5:-}" ] && ! grep -q -F "$5" <<< "$err"; then echo "FAIL $name (文がない: $5)"; fail=1
+  else echo "ok   $name"; fi
+}
+
 # 止める: 記録の無い worktree の HEAD は、main で起動しても止まる
 check 2 "main で起動し worktree で push（記録なし）" "$work" "git push -u origin HEAD"
 check 2 "main で起動し main から git -C で worktree を push（記録なし）" "$main" "git -C $work push -u origin HEAD"
@@ -49,12 +62,14 @@ check 2 "main で起動し cd の相対パスで worktree に移って push（�
 mkdir -p "$main/.claude/ci" "$main/.claude/e2e" "$main/.claude/reviews"
 jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}' > "$main/.claude/ci/$sha"
 jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0", tests: {passed: 1, total: 1}}' > "$main/.claude/e2e/$sha"
-check 2 "main で起動し worktree で push（合格記録なし）" "$work" "git push -u origin HEAD"
+check_gate "レビュー" "main で起動し worktree で push（合格記録なし、ゲートの行が残る）" "$work" "git push -u origin HEAD"
 : > "$main/.claude/reviews/$sha"
 check 0 "main で起動し worktree で push（記録あり）" "$work" "git push -u origin HEAD"
 echo dirty > "$work/dirty.txt"
 git -C "$work" add dirty.txt
 check 2 "main で起動し worktree で push（記録あり、未コミットの変更あり）" "$work" "git push -u origin HEAD"
+check_gate "作業ツリー" "未コミットの変更ありで push（ゲートの行が残る）" "$work" "git push -u origin HEAD" "コミットしていない変更があります"
+check_gate "作業ツリー" "未コミットの変更ありで commit と push（別のコマンドにする文が出る）" "$work" "git commit -m x && git push -u origin HEAD" "commit と push を別のコマンドにしてください"
 git -C "$work" reset -q dirty.txt
 rm "$work/dirty.txt"
 check 0 "main の checkout から push（新しいコミットなし）" "$main" "git push origin main"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash): commit/tag は公開禁止語の検査、push はさらに CI・E2E・レビューの合格記録を確かめる（CI と E2E の検査そのものは走らせない。CI は run-ci.sh、E2E は run-e2e.sh が回す）。
-# push の範囲が guard-e2e.sh か plan-release*.py、この hook に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
+# push の範囲が、各 hook・tool の自己テストの対象（guard-e2e.sh、pre-git.sh、hook-log.sh、check-guard-e2e.sh、check-pre-git.sh、plan-release*.py、nightly-limit.sh、use-worktree.sh、handover.sh、post-gh.sh）に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
 # 検査する checkout は hook 入力の cwd（先頭の cd DIR && か cd DIR; と、git の -C があればその場所）の checkout で、CLAUDE_PROJECT_DIR ではない（#310）。記録の置き場所だけは --git-common-dir の main の checkout。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
@@ -46,7 +46,18 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   git rev-parse -q --verify "${range%..*}" >/dev/null 2>&1 \
     && gate "公開禁止語(コミットメッセージ $range)" "$guard" log "$range"
   # The records are of HEAD's commit, so the working tree must equal the commits being pushed.
-  git diff --quiet HEAD || { echo "push 前の検査: コミットしていない変更があります。検査はコミットの中身と一致しません" >&2; git diff --stat HEAD >&2; exit 2; }
+  t=$(hook_log_now)
+  git diff --quiet HEAD; rc=$?
+  hook_log_gate "作業ツリー" "$t" "$rc"
+  if [ "$rc" -ne 0 ]; then
+    msg="push 前の検査: コミットしていない変更があります。検査はコミットの中身と一致しません"
+    # With a commit or tag in the same command, the tree is still dirty when this hook runs, before the commit is made.
+    grep -q -E "${g}(commit|tag)|git-commit-run[[:space:]]+commit" <<< "$cmd" \
+      && msg+=$'\n'"commit か tag と push が 1 つのコマンドにあります。commit と push を別のコマンドにしてください"
+    echo "$msg" >&2
+    git diff --stat HEAD >&2
+    exit 2
+  fi
   # The self-tests of a hook and of a tool run on this checkout's own copy, and only when the range touches what they test (#255).
   # With no base to compare, they run.
   if git rev-parse -q --verify "${range%..*}" >/dev/null 2>&1; then
@@ -69,6 +80,7 @@ if grep -q -E "${g}push" <<< "$cmd"; then
     gate "CI" "$main/.claude/tools/check-ci.sh"
     gate "E2E" "$main/.claude/tools/check-e2e.sh"
     if [ ! -f "$main/.claude/reviews/$(git rev-parse HEAD)" ]; then
+      t=$(hook_log_now)
       base=""
       for c in $(git rev-list "$range" 2>/dev/null); do
         [ -f "$main/.claude/reviews/$c" ] && { base=$c; break; }
@@ -82,6 +94,7 @@ if grep -q -E "${g}push" <<< "$cmd"; then
       if [ "$offending" != ok ]; then
         msg="ゲート失敗: レビュー"$'\n'"HEAD $(git rev-parse --short HEAD) の合格記録がありません。.claude/rules/review.md の手順で $range をレビューしてください"
         [ -n "$offending" ] && msg+=$'\n'"${base:0:7} から HEAD までに、リリース作業の外の変更があります:"$'\n'"$offending"
+        hook_log_gate "レビュー" "$t" 2
         echo "$msg" >&2
         exit 2
       fi
