@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.64.0
+
+C-4: the calendar screen has a panel, left of the week, to choose the calendars to show (#330, #331, #332). It lists every calendar of each account, under its address, in "マイカレンダー" (the calendars the account owns) and "他のカレンダー" (a person's calendar, holidays, rooms), each with a checkbox in the calendar's color. A change draws the week again at once and is saved in `calendar-selection.json`; nothing is written to Google, and a calendar never chosen follows its choice at Google, so the week is as before until the owner changes it. A button beside the heading folds the panel, and the week takes its width. The `list_events` tool of the MCP server reads the same calendars.
+
+T-7: the right side of the Todo screen starts at its least width, 30% of the screen, no longer 40% (#513).
+
 ## v0.63.5
 
 S-7, S-18, T-7: the field that asks Claude is one part on the Todo screen, in the pane of a Slack thread and in the pane of a Todo draft (#497). In each the model and effort selects sit inside the frame of the field, in a row under the text at the left of the round send button; in the Slack thread and the Todo draft they were under the frame. The field of the Slack thread no longer shows "Claude に頼みたいことを書く".

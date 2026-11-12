@@ -1,4 +1,5 @@
 // Temporary: the product screenshots of the README. Not a test; made-up data only.
+import type { CalendarChoices } from "../../ts/bindings/CalendarChoices";
 import type { Info } from "../../ts/bindings/Info";
 import type { OrcaRow } from "../../ts/bindings/OrcaRow";
 import type { TaskItem } from "../../ts/bindings/TaskItem";
@@ -313,6 +314,27 @@ function week(): Week {
   };
 }
 
+// The calendars the panel of C-4 lists, shown as the week draws them.
+function calendarChoices(): CalendarChoices {
+  const cal = (id: string, name: string, color: string, mine: boolean, shown = true) => ({ id, name, color, mine, shown });
+  return {
+    accounts: [
+      {
+        account: WORK,
+        calendars: [
+          cal(WORK, "仕事", "#039be5", true),
+          cal("release@example.com", "リリース予定", "#33b679", true, false),
+          cal("ja.japanese#holiday@group.v.calendar.google.com", "日本の祝日", "#0b8043", false),
+          cal("room-b@example.com", "会議室 B", "#f4511e", false, false),
+        ],
+      },
+      { account: HOME, calendars: [cal(HOME, "プライベート", "#8e24aa", true), cal("family@example.org", "家族", "#e67c73", false)] },
+    ],
+    needsLogin: [],
+    failed: {},
+  };
+}
+
 // ---- Todo ----
 
 const dated = (t: TaskItem, date: string, time: string | null = null): TaskItem => ({ ...t, due: { date, time, string: date, recurring: false } });
@@ -433,6 +455,7 @@ const common = () => ({
   slack_timeline: feed(),
   todoist_load: todo(),
   calendar_week: week(),
+  calendar_choices: calendarChoices(),
   app_info: { version: "0.41.1", updatable: true },
 });
 
