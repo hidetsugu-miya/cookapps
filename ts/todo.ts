@@ -352,7 +352,7 @@ export function initTodo() {
     focusTodoClaude();
   };
   // 40% of the screen at first; the divider keeps it between 30% and 45% of the screen (the CSS holds the same range).
-  initSplit($("todo"), $("todo-split"), { initial: 0.4, min: 0.3, max: 0.45 });
+  initSplit($("todo"), $("todo-split"), { min: 0.3, max: 0.45 });
   // The document's pointerdown closes an open menu before the click, so whether this press found it open is read before that.
   let wasOpen = false;
   $("todo-more").onpointerdown = () => (wasOpen = $("todo-more").hasAttribute("aria-expanded"));

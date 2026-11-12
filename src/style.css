@@ -1053,7 +1053,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
 /* The mail's pane is 40% wide at first, at least 400px; the Todo's right side (T-7, A-9) is 40% at first, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
 #mail-handoff { min-width: 400px; }
-#todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 40%), 45%); }
+#todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 30%), 45%); }
 #todo-handoff, #todo-claude { flex: 1; min-height: 0; }
 #slack-thread.assist-orca { grid-template-columns: minmax(0, 1fr) auto max(400px, clamp(33.3333%, var(--chat-w, 33.3333%), 50%)); }
 .ho-pane.ho-slack { display: contents; }
