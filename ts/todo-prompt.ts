@@ -10,10 +10,6 @@ import { itemRow, settingsTab } from "./settings.js";
 import { toast } from "./toast.js";
 import { showError } from "./view.js";
 
-type Origin = "settings" | "todo";
-
-// Where the screen was opened from; 戻る goes back there.
-let origin: Origin = "settings";
 // The instructions as saved; null until read.
 let saved: TodoPrompt | null = null;
 // What the edit field holds; null until the screen was opened once. It is kept, with the conversation, when the screen is left, and gone with the app.
@@ -40,7 +36,7 @@ const chat = createChat({
 // The settings' Claude card row: the state of the instructions and the way in.
 export function promptRow() {
   const open = tag("button", "text-btn", "確認・編集");
-  open.onclick = () => openPrompt("settings");
+  open.onclick = openPrompt;
   return itemRow({
     name: "Todo の要約プロンプト",
     meta: "Slack のメッセージを Todo にするときの指示",
@@ -100,11 +96,10 @@ function disarmReset() {
 }
 
 // Opens the screen. The first time, the field takes the saved instructions; after that it keeps what the user left in it.
-export async function openPrompt(from: Origin) {
-  origin = from;
+async function openPrompt() {
   showPromptScreen();
   $("prompt-error").hidden = true;
-  // Opened from Todo, the settings may not be read; the selects under the request field need them.
+  // The selects under the request field need the model settings.
   showModelSlot("prompt-model");
   if (draft === null) {
     if (saved === null) await loadPromptState();
@@ -118,7 +113,7 @@ export async function openPrompt(from: Origin) {
 }
 
 export function initPrompt() {
-  $("prompt-back").onclick = () => setScreen(origin, settingsTab());
+  $("prompt-back").onclick = () => setScreen("settings", settingsTab());
   $<HTMLTextAreaElement>("prompt-body").oninput = (e) => {
     draft = (e.currentTarget as HTMLTextAreaElement).value;
     $("prompt-error").hidden = true;

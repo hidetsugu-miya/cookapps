@@ -355,7 +355,7 @@ pub struct KeySaved {
 /// What a message is turned into: the task's name, its description, when it is due (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM` as the schema asks; the model may still break it),
 /// and the ID of the project that fits it best. `summarize` keeps `project_id` only when it is one of the projects it was given.
 /// `omitted` is how many messages of the thread the summary does not reflect (unread, left out, or in a chunk that failed), and `target_cut` is whether the linked message was cut because it is long;
-/// only `summarize` sets them, never the model's answer.
+/// and `target_text` is the linked message as one line of plain text, for the header of the draft page; only `summarize` sets them, never the model's answer.
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -367,17 +367,19 @@ pub struct Summary {
     pub project_id: Option<String>,
     pub omitted: u32,
     pub target_cut: bool,
+    pub target_text: String,
 }
 
 /// The thread of a Slack message as the summary reads it: each message as a line `{user}: {text}` (the lines of its text after the first indented), oldest first,
 /// `target` the index of the linked one, `has_first` whether the first line is the thread's own message (not a reply, which a blank first message leaves),
-/// and `unread` the count of replies the read could not reach.
+/// `unread` the count of replies the read could not reach, and `target_text` the linked message as the one line the draft page shows (`Summary::target_text`).
 #[derive(Debug, PartialEq)]
 pub struct Thread {
     pub lines: Vec<String>,
     pub target: usize,
     pub has_first: bool,
     pub unread: usize,
+    pub target_text: String,
 }
 
 /// The summary instructions as the screen shows them: the body that can be edited, the default body, the fixed part around it
@@ -792,6 +794,7 @@ fn parse_summary(out: &str) -> Result<Summary, SummaryError> {
         // Never read from the answer: the model's words cannot set how much was left out.
         omitted: 0,
         target_cut: false,
+        target_text: String::new(),
     })
 }
 
@@ -2257,6 +2260,7 @@ pub async fn summarize(
     summary.project_id = known_project(summary.project_id.take(), projects);
     summary.omitted = u32::try_from(thread.unread + left_out).unwrap_or(u32::MAX);
     summary.target_cut = plan.target_cut;
+    summary.target_text = thread.target_text.clone();
     Ok(summary)
 }
 
@@ -2954,7 +2958,8 @@ mod tests {
                 due: Some("2026-11-01 15:00".into()),
                 project_id: Some("p1".into()),
                 omitted: 0,
-                target_cut: false
+                target_cut: false,
+                target_text: String::new(),
             })
         );
     }
@@ -2995,6 +3000,7 @@ mod tests {
             project_id: Some("p1".into()),
             omitted: 0,
             target_cut: false,
+            target_text: String::new(),
         })
         .unwrap();
         assert_eq!(sent["projectId"], "p1");
@@ -5411,6 +5417,16 @@ mod tests {
     }
 
     #[test]
+    fn the_target_text_is_set_by_us_and_never_read_from_the_model() {
+        let out = json!({
+            "is_error": false,
+            "structured_output": {"content": "a", "description": "b", "targetText": "x", "target_text": "x"}
+        })
+        .to_string();
+        assert_eq!(parse_summary(&out).unwrap().target_text, "");
+    }
+
+    #[test]
     fn the_summary_reaches_the_screen_with_the_omitted_count() {
         let sent = serde_json::to_value(Summary {
             content: "a".into(),
@@ -5419,10 +5435,12 @@ mod tests {
             project_id: None,
             omitted: 3,
             target_cut: true,
+            target_text: "c".into(),
         })
         .unwrap();
         assert_eq!(sent["omitted"], 3);
         assert_eq!(sent["targetCut"], true);
+        assert_eq!(sent["targetText"], "c");
     }
 
     #[test]

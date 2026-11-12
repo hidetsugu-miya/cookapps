@@ -1,7 +1,7 @@
 // The Slack screen's list (S-5, S-8, S-13, S-14, S-15) and its side menu (S-19, slack-side.ts): the side menu's "未読メッセージ" shows the unread section and "ウォッチ" the watch section, one at a time.
-// Under a fixed header, the unread section groups the unread messages (past the channel's read position in Slack; the newest 10 of each channel, Rust's choice) of the joined channels of every workspace by channel, a heading with the channel, the number of its unread messages and "既読に設定",
+// Under a fixed header, the unread section groups the unread messages (past the channel's read position in Slack; the newest 10 of each channel, Rust's choice) of the joined channels of every workspace by channel, a heading with the channel, the number of its unread messages and "既読にする",
 // then the messages of the channel oldest first under the day they were sent, with the threads with unread replies among them (the watched threads follow in the watch section). A message that is read leaves the list unless its thread is watched or has unread replies.
-// A message draws what the thread draws of it (slack-blocks.ts, slack-rich.ts), with no image. It opens the thread (slack-thread.ts) and sets the channel's read position to it, as does its "N 件の返信"; "既読に設定" reads the channel without opening anything (S-15), a thread is watched or let go with its bookmark (S-13), and the toggle folds its unread replies (S-14).
+// A message draws what the thread draws of it (slack-blocks.ts, slack-rich.ts), with no image. It opens the thread (slack-thread.ts) and sets the channel's read position to it, as does its "N 件の返信"; "既読にする" reads the channel without opening anything (S-15), a thread is watched or let go with its bookmark (S-13), and the toggle folds its unread replies (S-14).
 // A channel is kept off the list from the side menu (S-9), and pressed there it shows its history instead of the list (S-20, slack-channel.ts). The watch section keeps the rows it always had.
 // The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only.
 // The list is read at startup and again every `refreshSecs` while the window is visible, on whatever screen (the Slack button's badge follows it); showing the screen reads it only when no read is on its way and the one held is older than `refreshSecs`.
@@ -19,7 +19,7 @@ import { MAX_CARDS } from "./arrivals.js";
 import { announceSlackArrival, dismissSlackArrival, pruneSlackArrivals, slackKey } from "./arrivals-slack.js";
 import { $, tag } from "./dom.js";
 import { formatDate, formatDay } from "./format.js";
-import { BOOKMARK_SVG, CHEVRON_SVG, DOT_SVG, HASH_SVG, LOCK_SVG, MINUS_CIRCLE_SVG } from "./icons.js";
+import { BOOKMARK_SVG, CHECK_ALL_SVG, CHEVRON_SVG, DOT_SVG, HASH_SVG, LOCK_SVG, MINUS_CIRCLE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { closeSlackChannel, openSlackChannel, redrawSlackChannel, revealSlackChannel, selectedChannel } from "./slack-channel.js";
@@ -322,7 +322,7 @@ function rowOf(m: TimelineMessage, key: string, grouped: boolean, open?: (m: Tim
   return row;
 }
 
-// Opens the thread of a row and reads it (S-6, S-8). The second click of a double click on "既読に設定" lands here when the row moved under the pointer: it opens nothing.
+// Opens the thread of a row and reads it (S-6, S-8). The second click of a double click on "既読にする" lands here when the row moved under the pointer: it opens nothing.
 function openRow(m: TimelineMessage, e: MouseEvent) {
   if (e.detail > 1 && Date.now() - lastCheckAt < DOUBLE_CLICK_MS) return;
   listScroll = feed().scrollTop;
@@ -347,7 +347,7 @@ const clockOf = (m: TimelineMessage) => {
 
 // The latest `slack_mark_read` on its way: a list made from the cache before Rust has the new position would bring the rows back unread.
 let marking: Promise<unknown> = Promise.resolve();
-// When "既読に設定" (or the popup's check) was last pressed, and how long after it a second click of a double click can come.
+// When "既読にする" (or the popup's check) was last pressed, and how long after it a second click of a double click can come.
 let lastCheckAt = 0;
 const DOUBLE_CLICK_MS = 500;
 
@@ -394,7 +394,7 @@ async function readOne(m: TimelineMessage) {
   load(true);
 }
 
-// "既読に設定" of a channel (S-15): the channel's position goes to its newest unread message (all of them, also those past the 10 listed) and every thread of the channel with unread replies is seen up to its newest reply (S-14). Nothing is opened.
+// "既読にする" of a channel (S-15): the channel's position goes to its newest unread message (all of them, also those past the 10 listed) and every thread of the channel with unread replies is seen up to its newest reply (S-14). Nothing is opened.
 // The rows and the badge change at once, and once every request is done, whatever it answered, the list is made again from Rust's cache, so that the counts are Rust's. The requests go through the same guard as S-9 (the latest request only, none answered while the press is on its way).
 async function readChannel(c: UnreadChannel) {
   if (!timeline) return;
@@ -641,7 +641,7 @@ function groupsOf(messages: TimelineMessage[]) {
   return [...groups].map(([key, rows]) => ({ key, rows: rows.sort((a, b) => Number(a.ts) - Number(b.ts)) }));
 }
 
-// The heading of a channel's group: its mark (# or a lock), its name, the workspace (muted), the number of its unread messages and "既読に設定".
+// The heading of a channel's group: its mark (# or a lock), its name, the workspace (muted), the number of its unread messages and the button "既読にする".
 // The button is drawn only where pressing it changes something: the token of the workspace may write the position and a message is unread, or a thread of the channel has unread replies (S-14, which need no scope).
 function channelHead(first: TimelineMessage, info: UnreadChannel | undefined, priv: boolean) {
   const head = tag("div", "feed-chan");
@@ -652,8 +652,10 @@ function channelHead(first: TimelineMessage, info: UnreadChannel | undefined, pr
   head.append(mark, tag("b", "feed-chan-name", first.channelName), dot, tag("span", "feed-chan-team", first.team));
   if (info && info.messages > 0) head.append(tag("span", "feed-chan-count", `${info.messages} 件のメッセージ`));
   if (info && ((info.to !== null && canWrite(first.teamId)) || info.threads.length > 0)) {
-    const read = tag("button", "text-btn feed-chan-read", "既読に設定");
+    const read = tag("button", "icon-btn feed-chan-read");
     read.type = "button";
+    read.setAttribute("aria-label", "既読にする");
+    read.innerHTML = CHECK_ALL_SVG;
     read.dataset.key = `${first.teamId}/${first.channel}/read`;
     // A double click is two clicks (the second has `detail` 2): the first removes the group, so the second must not press the button of the group that moved under the pointer.
     read.onclick = (e) => {

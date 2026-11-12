@@ -396,7 +396,7 @@ export const emitEvent = (name: string, payload: unknown = null) =>
 export const slackMessageUrl = "https://example-team.slack.com/archives/C0123ABCD/p1700000000123456";
 
 // What `todoist_summarize_slack` answers for `slackMessageUrl`.
-export const slackSummary: Summary = { content: "Reply to the vendor", description: "- Asked for a quote\n- Wants an answer by Friday", due: "2026-11-06", projectId: null, omitted: 0, targetCut: false };
+export const slackSummary: Summary = { content: "Reply to the vendor", description: "- Asked for a quote\n- Wants an answer by Friday", due: "2026-11-06", projectId: null, omitted: 0, targetCut: false, targetText: "Could you send us the quote for the new plan by Friday?" };
 
 // What `claude_model_settings` answers (the same as the base answer in e2e/fixtures.js): the defaults, Sonnet and medium, and Sonnet and high for the Slack reply.
 export const claudeSettings: ClaudeSettings = {

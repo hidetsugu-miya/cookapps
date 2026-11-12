@@ -1484,6 +1484,7 @@ pub async fn todoist_summarize_slack(
     app: AppHandle,
     auth: State<'_, Auth>,
     state: State<'_, TodoistState>,
+    slack_state: State<'_, slack::SlackState>,
     url: String,
 ) -> Result<Option<Summary>, String> {
     let command = "todoist_summarize_slack";
@@ -1497,7 +1498,7 @@ pub async fn todoist_summarize_slack(
         return Ok(None);
     }
     let dir = config_dir(&app).map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let thread = slack::message_context(&dir, auth.http(), url.trim())
+    let thread = slack::message_context(&dir, auth.http(), &slack_state, url.trim())
         .await
         .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     // The projects of the last load, in tree order (empty before one; the `sync` lock is not waited for): Claude names the one that fits, and only a project of this list is kept.
@@ -3438,6 +3439,7 @@ mod tests {
             project_id: None,
             omitted: 0,
             target_cut: false,
+            target_text: String::new(),
         }
     }
 

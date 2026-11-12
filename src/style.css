@@ -118,7 +118,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .row-btn.busy:disabled, .icon-btn.busy:disabled { opacity: 1; }
 .date { text-align: right; white-space: nowrap; padding-right: 8px; color: #666; font-size: calc(12px * var(--fs)); }
 
-/* Detail view: the toolbar is tinted, the subject sits above the messages, and each message lines its body up with the sender's name (avatar 40px + gap 16px). */
+/* Detail view: the bar at the top is tinted and holds "戻る" only, the operations are a row of icons just above the subject (M-2), and each message lines its body up with the sender's name (avatar 40px + gap 16px). */
 #mail-header { box-sizing: border-box; min-height: var(--header-h); padding: 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #mail-header .icon-btn { color: #444746; border-radius: 50%; }
 /* The inbox's header and the Slack list's carry the same tint as the thread's bar; they stay above the list while it scrolls (only #main and #slack-feed scroll). */
@@ -127,8 +127,12 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #slack-header .icon-btn { color: #444746; border-radius: 50%; }
 #unread-heading .text-btn:disabled { opacity: .4; cursor: default; }
 #unread-heading .text-btn:disabled:hover { background: #fff; }
-/* The right-hand group starts at the first button that is shown: the AI summary button, or the Slack button while the summary button is hidden. */
-#mail-header #thread-summary:not([hidden]), #mail-header #thread-summary[hidden] + #thread-slack { margin-left: auto; }
+/* The operations of the open mail: a row of icons lined up with the subject (56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding (and sticks 8px above its content box, WebKit measuring from there) and has the color of the body, so that nothing shows through it. The line before "ゴミ箱へ移動" is drawn by the button itself, so it is not there when the buttons that take a row out are hidden. */
+#thread-actions { position: sticky; top: -8px; z-index: 2; display: flex; align-items: center; gap: 4px; margin: 0 -24px 0 -32px; padding: 4px 24px 4px 88px; background: var(--surface); }
+#thread-actions .icon-btn { width: 34px; height: 34px; color: var(--ink-soft); border-radius: 50%; }
+#thread-actions .icon-btn svg { width: 20px; height: 20px; }
+#thread-actions #trash { position: relative; margin-left: 10px; }
+#thread-actions #trash::before { content: ""; position: absolute; left: -7px; top: 7px; bottom: 7px; width: 1px; background: var(--chip-line); }
 #thread-head { margin: 16px 0 20px 56px; font-size: calc(22px * var(--fs)); line-height: 1.35; }
 #thread-subject { display: inline; margin: 0; font-size: inherit; font-weight: normal; color: #1f1f1f; white-space: normal; overflow-wrap: anywhere; }
 #thread-head .label { display: inline-block; white-space: nowrap; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--code-line); color: #444746; font-size: calc(11px * var(--fs)); vertical-align: middle; }
@@ -353,19 +357,21 @@ button.review-chip:hover { background: var(--hover); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .text-btn.primary .spin { border-color: var(--accent-dim); border-top-color: #fff; }
 .review-add { display: inline-flex; align-items: center; gap: 6px; }
-/* The page of Claude's draft of a Todo (ts/todo-draft.ts), in the place of the list: the draft on the left like the task detail, project, date and labels beside it. A Claude pane is a second column of .draft. */
+/* The page of Claude's draft of a Todo (ts/todo-draft.ts), in the place of the list: the draft on the left like the task detail, project, date and labels beside it. The Claude pane is the right column of .draft, past a divider (ts/split.ts): 30 to 60% of the page, 40% at first. */
 #todo-main.drafting { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
-.draft { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.draft { flex: 1; min-height: 0; display: flex; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .draft:focus { outline: none; }
-.draft-chat { grid-column: 2; min-height: 0; border-left: 1px solid var(--line); }
+.draft-chat { flex: none; width: clamp(30%, var(--chat-w, 40%), 60%); min-height: 0; }
 #draft-chat .composer-foot { justify-content: flex-end; }
 #draft-chat .chat-ai { white-space: pre-wrap; }
-.draft-todo { display: grid; grid-template-columns: minmax(0, 1fr) 220px; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.draft-todo { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 280px; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .draft-head { grid-column: 1 / 3; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 20px; border-bottom: 1px solid var(--line); font-size: calc(12px * var(--fs)); color: #555; }
-.draft-src { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-src { flex: 1; display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; }
 .draft-src svg { width: 13px; height: 13px; flex: none; color: var(--slack); }
+.draft-team { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; font-weight: bold; }
+.draft-quote { min-width: 0; margin-left: 5px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.draft-open { flex: none; font-size: calc(12px * var(--fs)); text-decoration: none; white-space: nowrap; }
 .draft-grow { flex: 1; }
-.draft-prompt { font-size: calc(12px * var(--fs)); }
 .draft-main { grid-column: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 16px 20px; overflow-y: auto; }
 #todo-draft .name.draft-name { flex: none; }
 .draft-desc { flex: 1; min-height: 120px; box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; color: #333; line-height: 1.6; resize: none; }
@@ -1027,7 +1033,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 /* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail and the Todo have it on the right of the screen (40% at first, a third to a half for the mail and up to a half for the Todo, the divider of ts/split.ts); the Slack thread has it as the Orca tab of its right pane. */
 #mail-area { flex: 1; min-height: 0; display: flex; }
 #main { min-width: 0; }
-#mail-header .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+#thread-actions .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
 /* The mail's pane is 40% wide at first, at least 400px; the Todo's right side (T-7, A-9) is 40% at first, at least 380px, up to a half; the Slack tab keeps the width of the Claude pane, at least 400px. */
 #mail-handoff { min-width: 400px; }
@@ -1169,7 +1175,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .feed-chan-ws { position: static; flex: none; width: 8px; height: 8px; border: 0; }
 .feed-chan-team { min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .feed-chan-count { flex: none; font-size: calc(12px * var(--fs)); color: var(--muted); }
-.feed-chan-read { flex: none; }
+.feed-chan-read { flex: none; width: 32px; height: 32px; }
 .feed-day { display: flex; align-items: center; gap: 10px; margin: 10px 16px 4px; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .feed-day::before, .feed-day::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .feed-day span { padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; }

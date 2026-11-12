@@ -387,7 +387,7 @@ fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
     missing_scopes(scopes, &HISTORY_SCOPES)
 }
 
-/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message or "既読に設定" sets (`channels:write`, `groups:write`).
+/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message or "既読にする" sets (`channels:write`, `groups:write`).
 /// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`.
 const OPTIONAL_SCOPES: [&str; 4] = ["users:read", "files:read", "channels:write", "groups:write"];
 
@@ -516,11 +516,32 @@ fn add_page(
     }
 }
 
+/// The longest headline of a linked message the draft page shows: a line of the header cuts what does not fit, so this only bounds what is sent.
+const HEADLINE_LIMIT: usize = 200;
+
+/// The linked message's text as one line for the header of the draft page: mrkdwn as plain text (a mention `name_of` cannot name is the unknown name), every run of white space
+/// (line breaks included) as one space, and at most `HEADLINE_LIMIT` characters.
+fn headline(text: &str, name_of: &dyn Fn(&str) -> Option<String>) -> String {
+    plain_text(text, name_of)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(HEADLINE_LIMIT)
+        .collect()
+}
+
 /// The thread the summary reads: every message of `read` (the pages, oldest first, the first being the thread's own message) as a line, in order, with the blank ones skipped except the linked one,
 /// and the linked message `message_ts` marked by its index. A linked message the pages did not reach is taken from `alone` and put last.
 /// `has_first` is whether the thread's own message is the first line (it is not when it is blank). `None` when the linked message is in neither.
-/// `unread` is the count of replies the read left unread.
-fn thread_of(read: &[Value], alone: &[Value], message_ts: &str, unread: usize) -> Option<Thread> {
+/// `unread` is the count of replies the read left unread. `target_text` is the linked message's `headline`, with the names `name_of` knows.
+fn thread_of(
+    read: &[Value],
+    alone: &[Value],
+    message_ts: &str,
+    unread: usize,
+    name_of: &dyn Fn(&str) -> Option<String>,
+) -> Option<Thread> {
     let mut lines = Vec::new();
     let mut target = None;
     let mut has_first = false;
@@ -530,16 +551,17 @@ fn thread_of(read: &[Value], alone: &[Value], message_ts: &str, unread: usize) -
             continue;
         }
         if linked {
-            target = Some(lines.len());
+            target = Some((lines.len(), m));
         }
         has_first |= i == 0;
         lines.push(message_line(m));
     }
-    let target = match target {
-        Some(target) => target,
+    let (target, linked) = match target {
+        Some(found) => found,
         None => {
-            lines.push(message_line(alone.iter().find(|m| m["ts"] == message_ts)?));
-            lines.len() - 1
+            let m = alone.iter().find(|m| m["ts"] == message_ts)?;
+            lines.push(message_line(m));
+            (lines.len() - 1, m)
         }
     };
     Some(Thread {
@@ -547,6 +569,7 @@ fn thread_of(read: &[Value], alone: &[Value], message_ts: &str, unread: usize) -
         target,
         has_first,
         unread,
+        target_text: headline(linked["text"].as_str().unwrap_or_default(), name_of),
     })
 }
 
@@ -1262,9 +1285,11 @@ async fn read_pages(
 
 /// The thread of the Slack message `url` points at, read with the token of the link's workspace: the whole thread, in pages of `REPLY_PAGE_SIZE` up to `REPLY_PAGES` pages,
 /// whether the link is to its first message or to a reply. A linked message the pages did not reach is read on its own.
+/// The mentions of the linked message's headline are named from what `state` already holds (no call to Slack for them).
 pub async fn message_context(
     dir: &Path,
     http: &reqwest::Client,
+    state: &SlackState,
     url: &str,
 ) -> Result<Thread, String> {
     let link = parse_url(url)?;
@@ -1305,7 +1330,8 @@ pub async fn message_context(
         pages.len().saturating_sub(1),
         alone.iter().any(|m| m["ts"] == message_ts),
     );
-    thread_of(&pages, &alone, &message_ts, unread).ok_or_else(|| NO_MESSAGE.to_owned())
+    let name_of = |id: &str| state.timeline.name_of(&workspace.team_id, id);
+    thread_of(&pages, &alone, &message_ts, unread, &name_of).ok_or_else(|| NO_MESSAGE.to_owned())
 }
 
 /// What a post of the mail starts out as, as plain text.
@@ -1579,7 +1605,7 @@ pub struct Timeline {
     pending_channels: u32,
     /// The unread messages among all the messages held (not only the ones listed), channels kept off the list left out, and the unread replies (S-14; a thread that cannot be counted counts 1); the sidebar's badge.
     unread_total: u32,
-    /// The channels with something unread, for the "既読に設定" of each (`unread_channels`).
+    /// The channels with something unread, for the "既読にする" of each (`unread_channels`).
     unread_channels: Vec<UnreadChannel>,
     /// The unread messages (S-8, as `unread` says) this read found that the one before it did not hold, newest first, `UNREAD_MAX` at most, for the pop-up of a new message.
     /// Empty for the first read after the start, for a channel this read is the first to know the read position of, and for the messages of a watched thread (S-13).
@@ -2897,7 +2923,7 @@ fn choose_thread_checks(
         .collect()
 }
 
-/// What "既読に設定" of a channel of the unread section needs (S-8, S-14).
+/// What "既読にする" of a channel of the unread section needs (S-8, S-14).
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -6235,7 +6261,7 @@ mod tests {
             msg("1.2", "U2", " 明日までに "),
             msg("1.3", "U3", "了解"),
         ];
-        let thread = thread_of(&read, &[], "1.2", 0).unwrap();
+        let thread = thread_of(&read, &[], "1.2", 0, &|_| None).unwrap();
         assert_eq!(
             thread.lines,
             ["U1: PR を見てほしい", "U2: 明日までに", "U3: 了解"]
@@ -6247,7 +6273,7 @@ mod tests {
     #[test]
     fn a_message_alone_is_a_thread_of_one() {
         let read = [msg("1.1", "U1", "a")];
-        let thread = thread_of(&read, &[], "1.1", 0).unwrap();
+        let thread = thread_of(&read, &[], "1.1", 0, &|_| None).unwrap();
         assert_eq!((thread.lines, thread.target), (vec!["U1: a".to_owned()], 0));
     }
 
@@ -6260,10 +6286,10 @@ mod tests {
             msg("1.4", "U4", ""),
             msg("1.5", "U5", "b"),
         ];
-        let thread = thread_of(&read, &[], "1.5", 0).unwrap();
+        let thread = thread_of(&read, &[], "1.5", 0, &|_| None).unwrap();
         assert_eq!(thread.lines, ["U1: a", "U5: b"]);
         assert_eq!(thread.target, 1);
-        let linked_blank = thread_of(&read, &[], "1.4", 0).unwrap();
+        let linked_blank = thread_of(&read, &[], "1.4", 0, &|_| None).unwrap();
         assert_eq!(linked_blank.lines, ["U1: a", "U4: ", "U5: b"]);
         assert_eq!(linked_blank.target, 1);
     }
@@ -6272,17 +6298,64 @@ mod tests {
     fn a_linked_message_beyond_the_pages_is_added_after_the_pages() {
         let read = [msg("1.1", "U1", "a"), msg("1.2", "U2", "b")];
         let alone = [msg("9.9", "U9", "late")];
-        let thread = thread_of(&read, &alone, "9.9", 7).unwrap();
+        let thread = thread_of(&read, &alone, "9.9", 7, &|_| None).unwrap();
         assert_eq!(thread.lines, ["U1: a", "U2: b", "U9: late"]);
         assert_eq!(thread.target, 2);
         assert_eq!(thread.unread, 7);
     }
 
     #[test]
+    fn the_target_text_is_the_linked_message_as_one_line_of_plain_text() {
+        let read = [
+            msg("1.1", "U1", "first"),
+            msg(
+                "1.2",
+                "U2",
+                "  &lt;a&gt; <@U1> :tada:\r\n\n  <https://a.example/x|link>  ",
+            ),
+        ];
+        let thread = thread_of(&read, &[], "1.2", 0, &|_| None).unwrap();
+        assert_eq!(
+            thread.target_text,
+            "<a> @不明 🎉 link (https://a.example/x)"
+        );
+        let alone = [msg("9.9", "U9", "late\nmessage")];
+        assert_eq!(
+            thread_of(&read, &alone, "9.9", 0, &|_| None)
+                .unwrap()
+                .target_text,
+            "late message"
+        );
+        let blank = [msg("1.1", "U1", " ")];
+        assert_eq!(
+            thread_of(&blank, &[], "1.1", 0, &|_| None)
+                .unwrap()
+                .target_text,
+            ""
+        );
+    }
+
+    #[test]
+    fn the_target_text_names_a_mention_the_names_know_and_leaves_the_rest_unknown() {
+        let read = [msg("1.1", "U1", "<@U1> asks <@U2|x> and <@U9>")];
+        let names = |id: &str| (id == "U1").then(|| "yuki".to_owned());
+        let thread = thread_of(&read, &[], "1.1", 0, &names).unwrap();
+        assert_eq!(thread.target_text, "@yuki asks @x and @不明");
+    }
+
+    #[test]
+    fn the_headline_is_cut_at_the_limit_in_characters() {
+        let long = "あ".repeat(HEADLINE_LIMIT + 50);
+        assert_eq!(headline(&long, &|_| None).chars().count(), HEADLINE_LIMIT);
+        let exact = "a".repeat(HEADLINE_LIMIT);
+        assert_eq!(headline(&exact, &|_| None), exact);
+    }
+
+    #[test]
     fn a_message_that_is_not_there_gives_nothing() {
-        assert_eq!(thread_of(&[], &[], "1.1", 0), None);
+        assert_eq!(thread_of(&[], &[], "1.1", 0, &|_| None), None);
         let other = [msg("1.2", "U1", "b")];
-        assert_eq!(thread_of(&other, &other, "1.1", 0), None);
+        assert_eq!(thread_of(&other, &other, "1.1", 0, &|_| None), None);
     }
 
     #[test]
@@ -6331,7 +6404,7 @@ mod tests {
             msg("1.2", "U2", "a"),
             msg("1.3", "U3", "b"),
         ];
-        let thread = thread_of(&read, &[], "1.3", 0).unwrap();
+        let thread = thread_of(&read, &[], "1.3", 0, &|_| None).unwrap();
         assert_eq!(thread.lines, ["U2: a", "U3: b"]);
         assert!(!thread.has_first);
         let with_parent = thread_of(
@@ -6339,11 +6412,12 @@ mod tests {
             &[],
             "1.2",
             0,
+            &|_| None,
         )
         .unwrap();
         assert!(with_parent.has_first);
         // A blank parent that is the linked message is still the first line.
-        let blank_target = thread_of(&read, &[], "1.1", 0).unwrap();
+        let blank_target = thread_of(&read, &[], "1.1", 0, &|_| None).unwrap();
         assert!(blank_target.has_first);
     }
 

@@ -25,7 +25,12 @@ async function openMail(subject: string, text: string) {
 // Presses "Slack に貼る"; `slack_preview` answers `preview`. Returns the handle of `slack_preview`.
 async function pressSlack(preview = slackPreview) {
   const call = await mock("slack_preview", preview);
-  await $("#thread-slack").click();
+  // A click at the button's place on the screen, not `click()`: WebDriver scrolls the element it is given to the place a sticky row has when it is not stuck (the scroll of 400 became 47), and a user's click does not move the page.
+  const at = await browser.execute(() => {
+    const r = document.getElementById("thread-slack")!.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  });
+  await browser.action("pointer").move({ origin: "viewport", ...at }).down().up().perform();
   await expect($("#slack-compose")).toBeDisplayed();
   return call;
 }

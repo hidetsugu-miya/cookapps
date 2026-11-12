@@ -3,6 +3,7 @@ import { $ } from "./dom.js";
 
 export const svgOf = (paths: string) => `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
 
+export const CHECK_ALL_SVG = svgOf('<path d="M2 13l5 5L14 8"/><path d="M10 15l2 2L22 7"/>');
 export const CHECK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>';
 export const PERSON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="5"/><path d="M2 24c0-6 4.5-9 10-9s10 3 10 9z"/></svg>';
 export const TODO_SVG = $("thread-todo").innerHTML.trim();

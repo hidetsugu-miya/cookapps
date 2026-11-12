@@ -45,24 +45,6 @@
       <button id="back" class="icon-btn" aria-label="戻る" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></svg>
       </button>
-      <button id="thread-summary" class="icon-btn" aria-label="AI 要約" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3l1.4 3.6L13 8l-3.6 1.4L8 13l-1.4-3.6L3 8l3.6-1.4z"/><path d="M16.5 6H21M16.5 11H21M4 17h17M4 21h11"/></svg>
-      </button>
-      <button id="thread-slack" class="icon-btn" aria-label="Slack に貼る" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/></svg>
-      </button>
-      <button id="thread-todo" class="icon-btn" aria-label="Todo にする" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
-      </button>
-      <button id="thread-orca" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
-      </button>
-      <button id="trash" class="icon-btn" aria-label="ゴミ箱へ移動" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
-      </button>
-      <button id="archive" class="icon-btn" aria-label="アーカイブ" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11h14V8"/><path d="M10 12h4"/></svg>
-      </button>
     </header>
     <header id="inbox-header" data-tauri-drag-region="deep" hidden>
       <h1>受信トレイ</h1>
@@ -82,6 +64,26 @@
         <ul id="read-threads"></ul>
       </div>
       <section id="thread" hidden>
+        <div id="thread-actions">
+          <button id="thread-summary" class="icon-btn" aria-label="AI 要約" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3l1.4 3.6L13 8l-3.6 1.4L8 13l-1.4-3.6L3 8l3.6-1.4z"/><path d="M16.5 6H21M16.5 11H21M4 17h17M4 21h11"/></svg>
+          </button>
+          <button id="thread-slack" class="icon-btn" aria-label="Slack に貼る" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/></svg>
+          </button>
+          <button id="thread-todo" class="icon-btn" aria-label="Todo にする" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="14" height="14" rx="3"/><path d="M7 11l2.5 2.5L14 9"/><path d="M19 15v6M16 18h6"/></svg>
+          </button>
+          <button id="thread-orca" class="icon-btn" aria-label="Orca に渡す" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+          </button>
+          <button id="trash" class="icon-btn" aria-label="ゴミ箱へ移動" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
+          </button>
+          <button id="archive" class="icon-btn" aria-label="アーカイブ" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11h14V8"/><path d="M10 12h4"/></svg>
+          </button>
+        </div>
         <div id="thread-head"><h2 id="thread-subject"></h2><span id="thread-label" class="label">受信トレイ</span></div>
         <div id="mail-summary" role="status" hidden></div>
         <div id="messages"></div>
