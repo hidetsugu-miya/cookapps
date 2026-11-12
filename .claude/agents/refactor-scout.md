@@ -1,6 +1,6 @@
 ---
 name: refactor-scout
-description: "cookapps の内部の作りの改善候補を探す役。Rust と TS の重複、責務の混ざり、モジュールの境界の崩れ、testing.md への違反を読み、影響範囲付きの候補を最大 5 件返す。編集しない。improvement-proposal の手順の中で起動する。"
+description: "cookapps の内部の作りの改善候補を探す役。Rust と TS の重複、責務の混ざり、モジュールの境界の崩れ、testing.md への違反を読み、影響範囲付きの候補を最大 5 件返す。編集しない。improvement-proposal と ship の夜の実行の手順の中で起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---

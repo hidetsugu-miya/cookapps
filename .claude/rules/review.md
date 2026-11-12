@@ -17,16 +17,22 @@ Bad:  the reviewer and release-verifier both check in round 2 that the same find
 
 ## Flow
 
-### Run CI and E2E on HEAD before launching the reviewers, and fix any failure first
+### Run CI first, then start E2E and the reviewers together, and launch release-verifier when both are back
 
-Run `.claude/tools/run-ci.sh` (static checks and unit tests; it stops at the first failing check) and then `.claude/tools/run-e2e.sh` on the HEAD to be reviewed (`e2e.md`), and launch the reviewers only after both pass.
-CI goes first, so that a fix for a type, lint, clippy or unit test failure lands before E2E runs on the code.
-A fix for a CI or E2E failure changes the code the reviewers read, so their read goes stale (4 of the last 30 E2E runs failed, each fixed by a commit minutes later).
-An E2E run takes about a minute (measured median 58 seconds), which is cheaper than an Opus reviewer launch.
+Run `.claude/tools/run-ci.sh` (static checks and unit tests; it stops at the first failing check) on the HEAD to be reviewed, and fix a failure first.
+CI goes first, so that a fix for a type, lint, clippy or unit test failure lands before anyone reads the code.
+When CI passes, start `.claude/tools/run-e2e.sh` (in the background; `e2e.md`) and the reviewers in the same message, and launch `release-verifier` only when both have come back (at the owner's instruction, 2026-11-12; #485. It replaces "E2E passes before the reviewers start", under which the reviewers waited for E2E).
+`release-verifier` checks the CI and E2E records of HEAD, so it is not launched on a HEAD whose E2E failed. In the first round, the reviewers' replies and the E2E failure go straight to the fix, and the release-verifier that follows the second round rates them.
+A failed E2E is handled as a blocking finding of the first round: find the cause (`run-e2e.sh --only {spec}` runs the failed spec alone, `e2e.md`), fix it, and put the fix into the diff of the second round with the other blocking fixes.
+When the reviewers had no blocking finding and E2E alone failed by chance, so that no code needs a fix, run `run-e2e.sh` again, and launch release-verifier when it passes. A code fix for an E2E-only failure is read in the second round.
 
 ```text
-Good: commit -> run-ci.sh passes -> run-e2e.sh passes -> reviewers -> release-verifier
+Good: commit -> run-ci.sh passes -> run-e2e.sh (background) and the reviewers together -> release-verifier
+Good: E2E fails in the first round -> no release-verifier -> fix with the reviewers' blocking findings -> run-ci.sh -> run-e2e.sh and code-reviewer together -> release-verifier
+Good: E2E alone fails by chance and no code needs a fix -> run-e2e.sh --only passes -> run-e2e.sh again passes -> release-verifier
 Bad:  commit -> reviewers -> run-ci.sh fails -> fix -> the reviewers read the old code
+Bad:  launch release-verifier while run-e2e.sh is still running
+Bad:  launch release-verifier on a HEAD whose E2E failed, only to rate the findings
 ```
 
 ### In the first round, review the whole range to be pushed, with only the reviewers that are needed
@@ -51,10 +57,11 @@ Bad:  the diff is only screen wording -> three reviews
 
 ### In the second and third rounds, review only the fixed diff, with only the reviewers that are needed
 
-The range runs from the HEAD reviewed in the previous round to the new HEAD (`{previous HEAD}..HEAD`), and E2E has passed on the new HEAD.
+The range runs from the HEAD reviewed in the previous round to the new HEAD (`{previous HEAD}..HEAD`). The fix may hold non-blocking fixes too ("Fix blocking findings inside the review…" below); the reviewers read the whole diff of the fix.
 Always launch code-reviewer.
 Launch performance-reviewer only when it has an open blocking finding.
 Launch security-reviewer only when it has an open blocking finding, or when the fixing diff touches any of the conditions of the first round.
+Run `run-ci.sh` on the new HEAD first, then `run-e2e.sh` and these reviewers together, as in the first round.
 Pass the reviewers the list of blocking findings still open, so that they do not report them again. They look only for new blocking findings that the fixing diff created.
 Whether an open finding is fixed is confirmed only by release-verifier, which gets the open blocking findings and the replies of this round.
 When the whole range was reviewed again, fine-grained findings that had not appeared before came up new every time, and the review never ended.
@@ -68,6 +75,7 @@ Bad:  second round -> relaunch all three reviewers to check that their findings 
 ### After three rounds with a blocking finding left, redesign instead of patching
 
 A third failure means the design is the problem, not the next line to fix (at the owner's instruction, 2026-11-03).
+A failure of E2E alone, with no blocking finding from the reviewers, does not count as a round.
 Stop fixing finding by finding, and do this without asking the owner:
 1. Gather every finding of every round, blocking and not, and name what they have in common.
 2. Redesign what they touch against the goal the owner asked for, keeping that goal as it is.
@@ -103,36 +111,39 @@ Bad:  the same finding -> High, because any spec gap is High
 
 ## What to fix
 
-### Fix blocking findings inside the review, and non-blocking findings after the pass
+### Fix blocking findings inside the review, and non-blocking findings with them or after the pass
 
 The blocking ones are security Critical and High, performance High, and code review High.
-Fix the blocking findings and send them to the next round.
-Do not fix non-blocking findings (Medium and Low) during the review. This keeps the next round's range from growing.
-After release-verifier passes, and before the push, fix the non-blocking findings that serve the goal of the change. Do not ask the owner.
-Decline one that does not serve the goal, and state it with the reason in the completion report: nothing outside the owner's goal is done (at the owner's instruction, 2026-11-03).
+When the first round fails, fix the blocking findings and, in the same fix, the non-blocking findings (Medium and Low) that serve the goal of the change, and send the fix to the next round (at the owner's instruction, 2026-11-12; #485. It replaces the instruction of 2026-10-29, "do not fix non-blocking findings during the review", which cost a second pass of the same files after the verdict).
+The second-round reviewers get the whole diff of that fix, the non-blocking fixes included.
+When the first round passes, nothing is sent back: after release-verifier passes, and before the push, fix the non-blocking findings that serve the goal of the change. Do not ask the owner.
+A non-blocking finding that first appears in the second round or later is fixed after the pass, so that the next round's range does not grow.
+Decline a finding that does not serve the goal, and state it with the reason in the completion report: nothing outside the owner's goal is done (at the owner's instruction, 2026-11-03).
 When a finding has several ways to fix it, choose the recommended one and state it in the completion report.
-At the owner's instruction (2026-10-29). The earlier rule "report Medium and Low after the push, and the owner decides whether to fix them" was dropped.
 
 ```text
-Good: High and Low found -> fix High and run round 2 -> pass -> fix Low -> range check -> push
-Bad:  High and Low found -> fix both and run round 2
+Good: High and Low found in round 1 -> fix both in one commit -> round 2 reads the whole fix -> pass -> push
+Good: round 1 passes with a Low -> fix Low after the pass -> range check -> push
+Good: round 2 finds a new Low -> pass -> fix Low -> range check -> push
+Bad:  round 1 fails with a High and a Low, and the Low is left for after the pass
 Bad:  pass -> push with Low left, and ask the owner whether to fix it
 ```
 
-### Do not send fixes for non-blocking findings through review
+### Send the fixes for non-blocking findings through the next round when the round failed, and through the range check when it passed
 
-After fixing non-blocking findings, do not launch the reviewers.
+A fix made after a pass is not sent through the reviewers.
 Launch only release-verifier, and pass it the range (from the passed HEAD to the new HEAD) and the list of fixed findings.
 release-verifier checks that the diff is only fixes for the findings on the list, and writes the pass record for the new HEAD. It does not review the content of the findings.
 If a change not on the list is mixed in, it fails, and that diff goes through the first-round flow.
 Put the fixes in the same pull request.
 A pull request where the owner asked only for fixes to non-blocking findings (such as findings on an already merged version) also passes with only the range check. The range is `origin/main..HEAD`.
+A fix made inside a failed round is not this: it is part of the blocking fix, and the second round reads it.
 At the owner's instruction (2026-10-29). Running a review for every small fix produced too many reviews.
 The check of the pass record (`pre-git.sh`) stays. The writer stays limited to release-verifier, so that the range check alone can let a change through.
 
 ```text
 Good: after a1b2c3d passed, fix Low -> pass release-verifier a1b2c3d..HEAD and the list of findings -> pass record -> push
-Bad:  after fixing Low, run the performance and code reviews again
+Bad:  after a pass, fix Low and run the performance and code reviews again
 Bad:  add a new feature to a Low fix and push with only the range check
 ```
 
@@ -143,16 +154,16 @@ A rebuilt diff produces new findings in the second round.
 
 ## CI and E2E records
 
-### Run CI and E2E on every HEAD before handing it to the reviewers or release-verifier
+### Run CI before the reviewers and E2E before release-verifier, on every HEAD
 
-Run `.claude/tools/run-ci.sh` and `.claude/tools/run-e2e.sh` on a HEAD before you hand it to the reviewers or to release-verifier (`testing.md`, `e2e.md`).
+Run `.claude/tools/run-ci.sh` on a HEAD before you hand it to the reviewers, and `.claude/tools/run-e2e.sh` before you hand it to release-verifier; E2E may run while the reviewers read (`testing.md`, `e2e.md`).
 release-verifier and `pre-git.sh` call `.claude/tools/check-ci.sh` and `.claude/tools/check-e2e.sh`, which require a passing, clean record for HEAD (`.claude/ci/{HEAD SHA}`, `.claude/e2e/{HEAD SHA}`) with the version of that commit. Without either, release-verifier fails.
 Reviewers cannot confirm screen behavior by reading the diff, and `pre-git.sh` runs none of the checks, so a push is stopped when the record of HEAD is missing.
 
 ```text
-Good: commit -> run-ci.sh -> run-e2e.sh -> reviewers -> fix High -> run-ci.sh -> run-e2e.sh -> second-round review -> release-verifier -> pass
+Good: commit -> run-ci.sh -> run-e2e.sh and the reviewers together -> fix High -> run-ci.sh -> run-e2e.sh and the second-round review together -> release-verifier -> pass
 Bad:  launch release-verifier without running CI or E2E
-Bad:  run CI or E2E only after the reviewers, and fix its failure under them
+Bad:  run CI only after the reviewers, and fix its failure under them
 ```
 
 ### Rerun CI and E2E every time a commit is added

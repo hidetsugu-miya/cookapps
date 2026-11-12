@@ -2,13 +2,35 @@
 # E2E を回し、結果を main の checkout の .claude/e2e/{HEAD の SHA} に JSON で書く（.claude/rules/review.md、check-e2e.sh が読む。pre-git.sh と release-verifier は check-e2e.sh を呼ぶ）。
 # ビルドと E2E の出力は .claude/e2e/{HEAD の SHA}.log に残す（同じ HEAD で再実行すると上書き）。後から回数や失敗を検証するため。
 # 使い方: run-e2e.sh [checkout のパス]（省略時はカレント）。終了コードは E2E の結果。
+#        run-e2e.sh --only {spec の名前} [checkout のパス]  e2e/specs/{名前}.e2e.ts を 1 つのアプリだけで流す。落ちた spec を直るまで回すための入口（.claude/rules/e2e.md）。
+#          記録は書かず（作業ツリーが汚れていてもよい）、出力は only-{名前}.log に残す。記録の代わりにはならないので、通ったら引数なしで 1 回回す。
 # 作業ツリーが汚れていれば、記録を書かずに exit 2 で止まる（記録は HEAD のコミットの中身についてだけ言うため）。
 # node_modules が無ければ、先に npm ci する（ログに入る）。
 set -uo pipefail
+only=""
+if [ "${1:-}" = "--only" ]; then
+  [ $# -ge 2 ] || { echo "使い方: run-e2e.sh --only {spec の名前} [checkout のパス]" >&2; exit 2; }
+  only="$2"
+  [[ $only =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "spec の名前は inbox のような名前で指定してください: $only" >&2; exit 2; }
+  shift 2
+fi
 cd "${1:-.}" || exit 2
 root=$(git rev-parse --show-toplevel) && cd "$root" || exit 2
 main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
 dirty() { [ -n "$(git status --porcelain)" ]; }
+
+if [ -n "$only" ]; then
+  [ -f "e2e/specs/$only.e2e.ts" ] || { echo "e2e/specs/$only.e2e.ts がありません" >&2; exit 2; }
+  mkdir -p "$main/.claude/e2e" || exit 2
+  log="$main/.claude/e2e/only-$only.log"
+  { [ -d node_modules ] || mise exec -- npm ci; } >"$log" 2>&1 \
+    && mise exec -- npm run e2e:build >>"$log" 2>&1 && E2E_ONLY="$only" mise exec -- npm run e2e >>"$log" 2>&1
+  code=$?
+  [ "$code" -ne 0 ] && tail -n 40 "$log" >&2
+  echo "E2E(--only $only): exit=${code}（記録は書きません）"
+  echo "ログ: $log"
+  exit "$code"
+fi
 
 dirty && { echo "作業ツリーが汚れています。コミットしてから実行してください（記録は書きません）" >&2; git status --short >&2; exit 2; }
 sha=$(git rev-parse HEAD)

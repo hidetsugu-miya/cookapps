@@ -1,6 +1,6 @@
 ---
 name: ux-scout
-description: "cookapps の利用者にとっての改善候補を探す役。画面（ts/、src/index.html、CSS）、文言、操作の流れ、requirements/ を読み、根拠付きの候補を最大 5 件返す。編集しない。improvement-proposal の手順の中で起動する。"
+description: "cookapps の利用者にとっての改善候補を探す役。画面（ts/、src/index.html、CSS）、文言、操作の流れ、requirements/ を読み、根拠付きの候補を最大 5 件返す。編集しない。improvement-proposal の手順の中で、セッションからだけ起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Turns each open Dependabot pull request into an issue, once, so that issue-dev implements it like any issue (issues.md, "Turn the open Dependabot pull requests into issues").
+# Turns each open Dependabot pull request into an issue, once, so that ship implements it like any issue (issues.md, "Turn the open Dependabot pull requests into issues").
 # Usage: dependabot-issues.sh     prints the number of each issue it made, one per line; makes nothing for a pull request that already has an issue
 # A pull request has an issue when an issue of the owner, open or closed, holds its mark `<!-- dependabot #N -->` in its body.
 # The repository is public and a Dependabot pull request is not the owner's, so it is data (issues.md, "Trust only the owner's issues and comments"):
@@ -9,7 +9,7 @@
 # the pull request still gets an issue, by its number alone with point:3 (skipping it would leave it open for good), and the issue tells the reader to find the update in the changed dependency files.
 # A group title names no dependency, so its issue tells the reader to take each name and new version from the changed dependency files.
 # Points: point:2 for a patch update, and for a minor update at 1.0 or above; point:3 for a 0.x minor update, a major update, a group, a version that is not numbers, and a title of no form (issues.md).
-# The order of the issues is left to the caller (issue-dev step 3, issue-plan from its step 5).
+# The order of the issues is left to the caller (ship step 4, issue-plan from its step 5).
 # DEPENDABOT_ISSUES_DRY_RUN=1 makes it print what it would make (title, labels, body and the reason comment) and touch nothing; gh is still used to read.
 # The repository is public: write no personal information in an issue (publishing.md).
 set -u

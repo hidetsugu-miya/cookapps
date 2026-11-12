@@ -25,7 +25,7 @@ worktree で起動されても、読むのは main の checkout の記録で、H
 "$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/check-e2e.sh"
 ```
 
-どちらかの終了コードが 0 でなければ、不合格にして、その出力を理由として返す。
+`check-ci.sh` か `check-e2e.sh` の終了コードが 0 でなければ、そのまま不合格にして、その出力を理由として返す。記録は書かない。E2E が落ちた HEAD では、呼び出し元はこの役を起動しない（`.claude/rules/review.md`）。
 0 なら、それぞれの出力の 1 行を、返す形式の `CI:` と `E2E:` の行にする。
 
 ## 手順

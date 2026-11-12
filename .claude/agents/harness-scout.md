@@ -1,6 +1,6 @@
 ---
 name: harness-scout
-description: "cookapps の開発の仕組み（hook、skill とそれが動かす .claude/tools/、agent）の改善候補を探す役。記述を今のコードと要件に突き合わせ、直近 7 日の夜間ログと引き継ぎ Discussion から、止まったゲート、長引いたレビュー、繰り返された指示を拾い、根拠付きの候補を最大 5 件返す。編集しない。improvement-proposal の手順の中で起動する。"
+description: "cookapps の開発の仕組み（hook、skill とそれが動かす .claude/tools/、agent）の改善候補を探す役。記述を今のコードと要件に突き合わせ、直近 7 日の夜間ログと引き継ぎ Discussion から、止まったゲート、長引いたレビュー、繰り返された指示を拾い、根拠付きの候補を最大 5 件返す。編集しない。improvement-proposal と ship の夜の実行の手順の中で起動する。"
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -16,7 +16,7 @@ tools: Read, Grep, Glob, Bash
 ## 見る観点
 
 - 定義が今のコードや要件と食い違っている（agent の観点が今の機能に追いついていない、skill の手順が今のツールの使い方と違う、ツールの使い方の文が実装と違う、など）
-- 夜間ログ（起動プロンプトで渡された `.claude/nightly/` の絶対パスの、直近 7 日の `*.log`）で、止まったゲート（hook や `pre-git.sh`、`run-ci.sh` の拒否）、同じ原因の失敗の繰り返し、時間切れで止まった実行
+- 夜間ログ（起動プロンプトで渡された `.claude/nightly/` の絶対パスの、直近 7 日の `ship-*.log` と、切り替え前の `issue-dev-*.log`）で、止まったゲート（hook や `pre-git.sh`、`run-ci.sh` の拒否）、同じ原因の失敗の繰り返し、時間切れで止まった実行
 - 引き継ぎ Discussion（`handover.sh read`）で、長引いたレビュー（3 回戦まで行った、設計をやり直した）、繰り返された指示、同じ質問の再発
 - hook と tools の中の重複、死んだ分岐、使われないオプション
 - 同じ原因の箇所が複数あるのに、1 つしか直っていない
