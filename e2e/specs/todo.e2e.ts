@@ -1396,7 +1396,7 @@ describe("todo detail", () => {
     await openTodo();
     await $(ROWS).click();
     const place = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().toJSON(), selector);
-    // The 1200px window with the project list and the right pane (40%) open leaves the detail less than 556px (320 + 16 + 220).
+    // The 1200px window with the project list and the right pane (30%) open leaves the detail less than 556px (320 + 16 + 220).
     const [detail, main, side] = [await place("#todo-detail"), await place("#todo-detail .detail-main"), await place("#todo-detail .detail-side")];
     expect(detail.width).toBeLessThan(556);
     expect(main.width).toBeGreaterThanOrEqual(320);
