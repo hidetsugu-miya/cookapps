@@ -26,13 +26,15 @@ const freePorts = async (count: number) => {
   return ports;
 };
 
-// The service starts one app for each capability, so the specs are split into three capabilities and run in three apps at once.
-// The first two capabilities name their specs, chosen so that all three take about the same time (the per-spec times of a run, in seconds: orca 124, slack-list 92, todo 59, inbox 49, sidebar 37, settings 32, slack-thread 26, orca-handoff 19, todo-prompt 10, thread 9, slack-compose 8, calendar 5; about 155 for each capability); every spec not named here (a new one included) runs in the last one.
-// `--spec` replaces the specs of every capability and keeps only their excludes, so a spec given there runs in each app that does not exclude it (three apps for an unnamed spec, two for a named one).
+// The service starts one app for each capability, so the specs are split into four capabilities and run in four apps at once.
+// The first three capabilities name their specs: orca, which cannot be split (one spec for one screen), has an app of its own, and the other three apps take about the same time (the median of the last 30 passing runs, in seconds: orca 167, slack-list 89, todo 65, inbox 49, orca-handoff 39, settings 38, sidebar 38, slack-thread 26, todo-prompt 9, thread 9, slack-compose 8, calendar 6, todo-claude 5; 167 for orca and about 127 for each of the others).
+// Every spec not named here (a new one included) runs in the last one, which is slack-list and settings today and has the most room.
+// `--spec` replaces the specs of every capability and keeps only their excludes, so a spec given there runs in each app that does not exclude it (four apps for an unnamed spec, three for a named one).
 // `wdio:maxInstances: 1` keeps two workers out of one app.
 const namedSpecs = [
-  ["./e2e/specs/orca.e2e.ts", "./e2e/specs/slack-thread.e2e.ts", "./e2e/specs/calendar.e2e.ts"],
-  ["./e2e/specs/slack-list.e2e.ts", "./e2e/specs/todo.e2e.ts", "./e2e/specs/slack-compose.e2e.ts"],
+  ["./e2e/specs/orca.e2e.ts"],
+  ["./e2e/specs/inbox.e2e.ts", "./e2e/specs/sidebar.e2e.ts", "./e2e/specs/slack-thread.e2e.ts", "./e2e/specs/slack-compose.e2e.ts", "./e2e/specs/calendar.e2e.ts"],
+  ["./e2e/specs/todo.e2e.ts", "./e2e/specs/orca-handoff.e2e.ts", "./e2e/specs/todo-prompt.e2e.ts", "./e2e/specs/thread.e2e.ts", "./e2e/specs/todo-claude.e2e.ts"],
 ];
 const appCapability = (specs: { "wdio:specs": string[] } | { "wdio:exclude": string[] }) => ({
   browserName: "tauri",
@@ -53,7 +55,7 @@ if (onlySpec !== undefined && !existsSync(onlySpec)) throw new Error(`${onlySpec
 export const config = {
   runner: "local",
   specs: ["./e2e/specs/**/*.e2e.ts"],
-  maxInstances: 3,
+  maxInstances: 4,
   services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
   capabilities:
     onlySpec !== undefined
@@ -61,6 +63,7 @@ export const config = {
       : [
           appCapability({ "wdio:specs": namedSpecs[0] }),
           appCapability({ "wdio:specs": namedSpecs[1] }),
+          appCapability({ "wdio:specs": namedSpecs[2] }),
           appCapability({ "wdio:exclude": namedSpecs.flat() }),
         ],
   framework: "mocha",
