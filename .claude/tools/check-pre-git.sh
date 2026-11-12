@@ -97,7 +97,8 @@ git -C "$work" commit -q -m "release"
 rsha=$(git -C "$work" rev-parse HEAD)
 jq -n --arg sha "$rsha" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}' > "$main/.claude/ci/$rsha"
 jq -n --arg sha "$rsha" '{sha: $sha, clean: true, passed: true, version: "0.0.0", tests: {passed: 1, total: 1}}' > "$main/.claude/e2e/$rsha"
-check_logged_pass "レビュー" "リリース作業だけの新しいコミットで push（合格記録なし、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"check 0 "main の checkout から push（新しいコミットなし）" "$main" "git push origin main"
+check_logged_pass "レビュー" "リリース作業だけの新しいコミットで push（合格記録なし、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
+check 0 "main の checkout から push（新しいコミットなし）" "$main" "git push origin main"
 check 0 "無関係なコマンド" "$work" "git status"
 
 # main の checkout の HEAD に記録が無ければ、従来どおり止まる
