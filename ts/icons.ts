@@ -14,6 +14,7 @@ export const DOT_SVG = svgOf('<circle cx="12" cy="12" r="5"/>');
 export const MAIL_SVG = svgOf('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>');
 export const RETURN_SVG = svgOf('<path d="M9 14 4 9l5-5M4 9h9a7 7 0 0 1 7 7v4"/>');
 export const SUB_SVG = svgOf('<path d="M6 4v10a3 3 0 0 0 3 3h9"/><path d="M15 14l3 3-3 3"/>');
+export const TAG_SVG = svgOf('<path d="M3 4v7l9.5 9.5a1.4 1.4 0 0 0 2 0l6-6a1.4 1.4 0 0 0 0-2L11 3H4a1 1 0 0 0-1 1z"/><path d="M7.5 7.5h.01"/>');
 export const OPEN_SVG = svgOf('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>');
 export const DAY_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M12 14v3"/>');
 export const DATE_SVG = svgOf('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/>');

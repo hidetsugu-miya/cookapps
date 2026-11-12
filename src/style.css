@@ -396,6 +396,9 @@ button.review-chip:hover { background: var(--hover); }
 .task { position: relative; display: grid; grid-template-columns: 20px 1fr 160px auto; align-items: center; gap: 16px; padding: 12px 16px; border-radius: 12px; }
 .task:hover { background: var(--hover); }
 .task.single { grid-template-columns: 20px 1fr auto; }
+/* The row of the task list in three lines (T-1): the name; the first line of the description; the due moment, labels, subtask count and, in the "today" list, the project. */
+.task.tall { grid-template-columns: 20px minmax(0, 1fr); gap: 2px 14px; padding: 10px 16px; border-radius: 0; border-bottom: 1px solid var(--line); }
+.task.tall:last-child { border-bottom: 0; }
 #todo-list .task { cursor: pointer; }
 .check { appearance: none; -webkit-appearance: none; width: 20px; height: 20px; margin: 0; border: 1.5px solid var(--p, #b4b9c2); border-radius: 50%; background: #fff; cursor: pointer; display: grid; place-items: center; }
 .check:hover::after, .check:checked::after { content: ""; width: 5px; height: 9px; margin-top: -2px; border: solid var(--p, #b4b9c2); border-width: 0 2px 2px 0; transform: rotate(45deg); }
@@ -407,17 +410,30 @@ button.review-chip:hover { background: var(--hover); }
 .body { min-width: 0; }
 .body .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
 .body .t svg { width: 14px; height: 14px; color: #888; flex: none; }
-.ptag { display: flex; align-items: center; gap: 6px; color: #666; font-size: calc(12px * var(--fs)); overflow: hidden; white-space: nowrap; }
+.tname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.task.tall .desc { grid-column: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.task.tall .desc.url { text-decoration: underline; }
+.task.tall .meta { grid-column: 2; display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.task.tall .chips { display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.task.tall .chips > * { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.task.tall .chips svg { width: 12px; height: 12px; flex: none; }
+.task.tall .due { padding-right: 0; }
+.task.tall .due:not(.over) { color: var(--accent); }
+.ptag { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; max-width: 40%; color: #666; font-size: calc(12px * var(--fs)); overflow: hidden; white-space: nowrap; }
+.pname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .task .trail { min-width: 92px; position: relative; }
 /* Over the name, so the column is only as wide as the due date. */
 .task .row-actions { position: absolute; right: 0; top: 50%; transform: translateY(-50%); padding-left: 8px; background: var(--hover); }
+/* In the list the buttons lie over the top right of the row, over the name, and leave the due moment on the third line alone. */
+/* The grip and the subtask toggle sit on the first line, by the checkbox. */
+.task.tall > .toggle { top: 10px; margin-top: 0; }
+.task.tall .grip { top: 8px; transform: none; }
+.task.tall .row-actions { top: 2px; right: 4px; transform: none; padding: 0 0 0 8px; border-radius: 8px; }
 .due { color: #666; font-size: calc(12px * var(--fs)); white-space: nowrap; padding-right: 8px; }
 .due.over { color: #b00020; }
 .task:not(:hover):not(:focus-within) .row-actions { visibility: hidden; }
 /* visibility, not opacity: an opacity < 1 layer paints above the buttons and would take their clicks. */
-.task:hover .due, .task:focus-within .due { visibility: hidden; }
-.subcount { display: inline-flex; align-items: center; gap: 3px; color: #888; font-size: calc(12px * var(--fs)); margin-left: 6px; }
-.subcount svg { width: 13px; height: 13px; }
+.task:not(.tall):hover .due, .task:not(.tall):focus-within .due { visibility: hidden; }
 .row-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 1px 6px; border: 1px solid var(--accent); border-radius: 6px; font: inherit; }
 .row-edit:focus { outline: none; }
 .grip { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); width: 14px; height: 24px; color: #888; cursor: grab; display: flex; align-items: center; justify-content: center; }
@@ -427,7 +443,7 @@ button.review-chip:hover { background: var(--hover); }
 .proj.drop, .task.drop { background: var(--soft); box-shadow: inset 0 0 0 2px var(--accent); }
 body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
 .drag-ghost { position: fixed; left: 0; top: 0; z-index: 30; max-width: 280px; padding: 6px 12px; border-radius: 8px; background: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); font-size: calc(13px * var(--fs)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
-.body .parent { color: #888; font-size: calc(12px * var(--fs)); flex: none; }
+.task.tall .chips .parent { display: block; flex: 0 1 auto; min-width: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; }
 
 /* Two columns while the body column keeps 320px; narrower, the side column wraps under it. Wrapping by width alone (no container query, whose containment would move the fixed .pop and .menu). */
 #todo-detail { display: flex; flex-wrap: wrap; gap: 16px; max-width: 980px; }
@@ -1030,14 +1046,14 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-dest-pop button span { font-size: calc(12px * var(--fs)); color: var(--muted); }
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
 
-/* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail and the Todo have it on the right of the screen (40% at first, a third to a half for the mail and up to a half for the Todo, the divider of ts/split.ts); the Slack thread has it as the Orca tab of its right pane. */
+/* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail and the Todo have it on the right of the screen (40% at first, a third to a half for the mail and 30% to 45% for the Todo, the divider of ts/split.ts); the Slack thread has it as the Orca tab of its right pane. */
 #mail-area { flex: 1; min-height: 0; display: flex; }
 #main { min-width: 0; }
 #thread-actions .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
-/* The mail's pane is 40% wide at first, at least 400px; the Todo's right side (T-7, A-9) is 40% at first, at least 380px, up to a half; the Slack tab keeps the width of the Claude pane, at least 400px. */
+/* The mail's pane is 40% wide at first, at least 400px; the Todo's right side (T-7, A-9) is 40% at first, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
 #mail-handoff { min-width: 400px; }
-#todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(380px, var(--chat-w, 40%), 50%); }
+#todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 40%), 45%); }
 #todo-handoff, #todo-claude { flex: 1; min-height: 0; }
 #slack-thread.assist-orca { grid-template-columns: minmax(0, 1fr) auto max(400px, clamp(33.3333%, var(--chat-w, 33.3333%), 50%)); }
 .ho-pane.ho-slack { display: contents; }
