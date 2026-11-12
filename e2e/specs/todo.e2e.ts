@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettings, comment, connection, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, todoDraftEdit, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettings, comment, composerLayout, connection, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, todoDraftEdit, waitForCalls, waitForCount, waitForText,
 } from "../support";
 
 // The app with Todoist connected and the Todo screen open.
@@ -623,8 +623,10 @@ describe("todo", () => {
       await expect($("#todo-draft")).toExist();
     });
 
-    it("has the Slack summary's model and effort under the request field, and shows a note while Claude cannot be used", async () => {
+    it("has the Slack summary's model and effort and the send button in the frame of the request field, and shows a note while Claude cannot be used", async () => {
       await openSummaryCard();
+      expect(await composerLayout("draft")).toEqual({ framed: [true, true, true], modelBelowInput: true, sendRightOfModel: true, sendInsideFrame: true, sendRadius: "50%", placeholder: null });
+      await expect($("#draft-input")).not.toHaveAttribute("placeholder");
       await expect($("#draft-model select[data-kind=model]")).toHaveValue("sonnet");
       await expect($("#draft-model select[data-kind=effort]")).toHaveValue("medium");
       const save = await mock("claude_model_settings_save", { ...claudeSettings, slackSummary: { model: "opus", effort: "medium" } });

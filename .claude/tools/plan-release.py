@@ -6,6 +6,7 @@ Usage:
   plan-release.py apply <plan.json> [--dry-run]
   plan-release.py unsplit [--mine <issue numbers>]
   plan-release.py migrate [--dry-run]
+  plan-release.py split <split.json>
   plan-release.py next [--mine <issue numbers>]
   plan-release.py release
   plan-release.py close [--dry-run]
@@ -14,6 +15,10 @@ Usage:
 `blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
 `start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run). `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
 (open, no `needs:owner`, not in hand, and no milestone named for a feature; a milestone named for a version is no mark): `issue-plan` applies its step 3 to each before it orders.
+`split` splits a big issue into parts (`issue-plan` step 3): the file is JSON, {"issue": n, "milestone": "feature", "parts": [{"title", "body", "labels", "points_reason"}]}.
+It checks everything before it writes (the issue is open and the owner's, each part has exactly one `point:*` of 3 or less, the labels exist, a part of a point:8 issue has `solo`), makes the milestone and `solo` when they are missing,
+creates the parts in order, each with the reason of its points as a comment, and closes the issue as not planned only when every part exists; a failure stops it with the numbers made, and a second run keeps the parts
+that are already open in the milestone under the same title. With no parts it only puts the issue in the milestone.
 `migrate` is run once after the milestones named for versions are retired: it takes such a milestone off the open issues of less than 5 points and closes the ones left empty (it splits nothing). `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
 the tag that is due after a merge (the workflow tags at the merge, so it shows only until it has, or when it did not), and the release whose follow-up is open (its tag exists, and the issues are not commented yet). `close` closes the milestones (a milestone is a feature, not a version) whose issues are all done and released.
 Talks to GitHub only through `gh`, so it runs from any checkout. Exit 2: the plan or the state is refused (stderr says why).
@@ -552,6 +557,89 @@ def done_milestones(milestones, issues):
     return [m for m in milestones if m["open_issues"] == 0 and m["closed_issues"] > 0 and m["title"] not in waiting]
 
 
+# ---- pure: split ----
+
+SOLO_DESCRIPTION = "a part of a point:8 issue: the parts are a release of their own"
+
+
+def parse_split(raw):
+    """-> (problems, spec). `spec` is {"issue": int, "milestone": str, "parts": [{"title", "body", "labels", "points_reason"}]} when the shape is right."""
+    if not isinstance(raw, dict):
+        return ["split: not a JSON object"], None
+    problems = []
+    n = raw.get("issue")
+    if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+        problems.append("split.issue: must be an issue number")
+    milestone = raw.get("milestone")
+    if not isinstance(milestone, str) or not milestone.strip():
+        problems.append("split.milestone: must be the name of the feature")
+    parts = raw.get("parts")
+    if not isinstance(parts, list):
+        problems.append("split.parts: must be a list (empty when the issue cannot be split)")
+        parts = []
+    out = []
+    for k, part in enumerate(parts, 1):
+        where = f"split.parts[{k}]"
+        if not isinstance(part, dict):
+            problems.append(f"{where}: not an object")
+            continue
+        title, body, labels, reason = (part.get(key) for key in ("title", "body", "labels", "points_reason"))
+        if not isinstance(title, str) or not title.strip():
+            problems.append(f"{where}.title: must be a text")
+        if not isinstance(body, str):
+            problems.append(f"{where}.body: must be a text")
+        if not isinstance(labels, list) or any(not isinstance(label, str) or not label.strip() for label in labels):
+            problems.append(f"{where}.labels: must be a list of label names")
+        if not isinstance(reason, str) or not reason.strip():
+            problems.append(f"{where}.points_reason: must be a text")
+    if problems:
+        return problems, None
+    return [], {
+        "issue": n,
+        "milestone": milestone.strip(),
+        "parts": [
+            {"title": p["title"].strip(), "body": p["body"], "labels": list(dict.fromkeys(p["labels"])), "points_reason": p["points_reason"].strip()}
+            for p in parts
+        ],
+    }
+
+
+def split_problems(spec, parent, owner, repo_labels):
+    """-> every reason the split must not start. `parent`: the issue as the REST API gives it. `repo_labels`: the names of the labels of the repository."""
+    problems = []
+    n = spec["issue"]
+    if parent.get("pull_request"):
+        problems.append(f"#{n} is a pull request")
+    if parent.get("state") != "open":
+        problems.append(f"#{n} is not open")
+    if (parent.get("user") or {}).get("login") != owner:
+        problems.append(f"#{n} is not an issue of the owner")
+    parent_labels = [label["name"] for label in parent.get("labels", [])]
+    big = "point:8" in parent_labels
+    known = set(repo_labels)
+    titles = Counter(p["title"] for p in spec["parts"])
+    for title, c in sorted(titles.items()):
+        if c > 1:
+            problems.append(f"parts: the title '{title}' appears twice")
+    for k, part in enumerate(spec["parts"], 1):
+        where = f"part {k} ({part['title']})"
+        marks = [label for label in part["labels"] if label.startswith("point:")]
+        if len(marks) != 1:
+            problems.append(f"{where}: needs exactly one point:* label, has {len(marks)}")
+        elif marks[0] not in QUICK_POINTS:
+            problems.append(f"{where}: {marks[0]} is more than point:3")
+        for label in part["labels"]:
+            if label != "solo" and label not in known:
+                problems.append(f"{where}: the label '{label}' does not exist")
+        if big and "solo" not in part["labels"]:
+            problems.append(f"{where}: #{n} is point:8, so every part needs the label solo")
+    return problems
+
+
+def split_comment(numbers):
+    return "部品に分けました: " + "、".join(f"#{n}" for n in numbers)
+
+
 # ---- gh ----
 
 
@@ -868,6 +956,77 @@ def cmd_close(args):
         print(f"closed milestone {m['title']}")
 
 
+def cmd_split(args):
+    try:
+        with open(args.file, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError) as e:
+        raise PlanError([f"{args.file}: {e}"])
+    problems, spec = parse_split(raw)
+    if problems:
+        raise PlanError(problems)
+    view = json.loads(gh("repo", "view", "--json", "nameWithOwner,owner"))
+    repo, owner = view["nameWithOwner"], view["owner"]["login"]
+    n = spec["issue"]
+    try:
+        parent = api(f"repos/{repo}/issues/{n}")
+    except GhError as e:
+        raise PlanError([f"#{n}: {e}"])
+    repo_labels = [label["name"] for label in api(f"repos/{repo}/labels?per_page=100", paginate=True)]
+    milestones = api(f"repos/{repo}/milestones?state=all&per_page=100", paginate=True)
+    found = next((m for m in milestones if m["title"] == spec["milestone"]), None)
+    problems = split_problems(spec, parent, owner, repo_labels)
+    if found and found["state"] != "open":
+        problems.append(f"the milestone '{spec['milestone']}' is closed")
+    if problems:
+        raise PlanError(problems)
+    # The existing parts are read before anything is written, so that a failure here leaves nothing behind.
+    kept = {}
+    if found and spec["parts"]:
+        for r in api(f"repos/{repo}/issues?milestone={found['number']}&state=open&per_page=100", paginate=True):
+            if "pull_request" not in r and r["number"] != n and r["user"]["login"] == owner:
+                kept.setdefault(r["title"], r["number"])
+
+    made = []  # the numbers of the parts, made now or found
+    try:
+        if found:
+            print(f"milestone {spec['milestone']} exists")
+        else:
+            api(f"repos/{repo}/milestones", "POST", {"title": spec["milestone"], "description": f"#{n} {parent['title']}"})
+            print(f"made milestone {spec['milestone']}")
+        if not spec["parts"]:
+            gh("issue", "edit", str(n), "--milestone", spec["milestone"])
+            print(f"put #{n} in the milestone; it was not split")
+            return
+        if any("solo" in p["labels"] for p in spec["parts"]) and "solo" not in repo_labels:
+            gh("label", "create", "solo", "--description", SOLO_DESCRIPTION)
+            print("made label solo")
+        for part in spec["parts"]:
+            if part["title"] in kept:
+                made.append(kept[part["title"]])
+                print(f"#{kept[part['title']]} {part['title']}: kept")
+                # A first run may have stopped at this part's comment, so the reason is written when it is not there.
+                comments = api(f"repos/{repo}/issues/{kept[part['title']]}/comments?per_page=100", paginate=True)
+                if not any(c["user"]["login"] == owner and c["body"].strip() == part["points_reason"].strip() for c in comments):
+                    gh("issue", "comment", str(kept[part["title"]]), "--body", part["points_reason"])
+                continue
+            args_ = ["issue", "create", "--title", part["title"], "--body", part["body"], "--milestone", spec["milestone"]]
+            for label in part["labels"]:
+                args_ += ["--label", label]
+            printed = gh(*args_).strip().splitlines()
+            url = printed[-1] if printed else ""
+            number = re.search(r"/issues/(\d+)\s*$", url)
+            if not number:
+                raise GhError(f"gh issue create printed no issue URL: {url!r}")
+            made.append(int(number.group(1)))
+            print(f"#{made[-1]} {part['title']}: made")
+            gh("issue", "comment", str(made[-1]), "--body", part["points_reason"])
+        gh("issue", "close", str(n), "--reason", "not planned", "--comment", split_comment(made))
+        print(f"closed #{n} as not planned")
+    except GhError as e:
+        raise GhError(f"{e}\nstopped: #{n} stays open; parts so far: {', '.join(f'#{m}' for m in made) or 'none'}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -885,6 +1044,9 @@ def main(argv=None):
     m = sub.add_parser("migrate")
     m.add_argument("--dry-run", action="store_true")
     m.set_defaults(fn=cmd_migrate)
+    sp = sub.add_parser("split")
+    sp.add_argument("file")
+    sp.set_defaults(fn=cmd_split)
     sub.add_parser("release").set_defaults(fn=cmd_release)
     c = sub.add_parser("close")
     c.add_argument("--dry-run", action="store_true")

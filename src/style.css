@@ -362,7 +362,6 @@ button.review-chip:hover { background: var(--hover); }
 .draft { flex: 1; min-height: 0; display: flex; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .draft:focus { outline: none; }
 .draft-chat { flex: none; width: clamp(30%, var(--chat-w, 40%), 60%); min-height: 0; }
-#draft-chat .composer-foot { justify-content: flex-end; }
 #draft-chat .chat-ai { white-space: pre-wrap; }
 .draft-todo { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 280px; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .draft-head { grid-column: 1 / 3; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 20px; border-bottom: 1px solid var(--line); font-size: calc(12px * var(--fs)); color: #555; }
@@ -737,7 +736,7 @@ button.status:hover { filter: brightness(.95); }
 #prompt-body, #slack-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
 #prompt-body:focus, #slack-body:focus { outline: 2px solid var(--soft); }
 #prompt-body:disabled, #slack-body:disabled { border-color: var(--chip-line); background: var(--bar); }
-/* The model and effort of a Claude pane's purpose (the prompt conversation, the Slack thread conversation), under the request field, without a frame. */
+/* The model and effort of a Claude pane's purpose, without a frame: under the request field on the prompt screen, in the frame's row for the panes made by ts/composer.ts. */
 .chat-model { display: flex; justify-content: flex-end; gap: 2px; margin-top: 8px; }
 .chat-model:empty { display: none; }
 .chat-model select { height: 28px; padding: 0 4px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); color: #222; }
@@ -769,15 +768,16 @@ button.status:hover { filter: brightness(.95); }
 .composer:has(textarea:disabled) { background: var(--bar); }
 .chat-input { display: block; width: 100%; box-sizing: border-box; padding: 0; border: 0; outline: 0; resize: none; background: transparent; font: inherit; line-height: calc(20px * var(--fs)); max-height: 120px; overflow-y: auto; }
 .composer-foot { display: flex; align-items: center; gap: 8px; }
+/* ts/composer.ts: the row in the frame of a Claude pane's request field holds the model and effort at the left and the send button at the right. */
+.composer-end { justify-content: flex-end; }
+.composer-foot .chat-model { margin: 0 auto 0 0; }
 .composer-hint { flex: 1; min-width: 0; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .composer-foot .text-btn { height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
 .chat-clear:disabled, .chat-send:disabled { opacity: .4; cursor: default; }
 .chat-clear:disabled:hover { background: #fff; }
 .chat-send:disabled:hover { background: var(--accent); filter: none; }
-/* T-7: the Claude pane of the Todo screen. It takes the place of the Orca pane (the same divider and width); its reply keeps line breaks, the send button sits at the right of the row of the model and effort, and the proposed tasks are cards under the reply. */
+/* T-7: the Claude pane of the Todo screen. It takes the place of the Orca pane (the same divider and width); its reply keeps line breaks, the proposed tasks are cards under the reply. */
 #todo-claude .chat-ai { white-space: pre-wrap; }
-#todo-claude .composer-foot { justify-content: flex-end; }
-#todo-claude .chat-model { margin: 0 auto 0 0; }
 .chat-tasks { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .chat-task { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .chat-task-name { font-weight: bold; }
@@ -1238,7 +1238,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #reply-chat { grid-column: 3; }
 #st-body { min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 .chat-foot { display: flex; flex-direction: column; background: var(--bar); }
-#reply-chat .composer-foot, #st-reply .composer-foot, #sc-reply .composer-foot { justify-content: flex-end; }
+#st-reply .composer-foot, #sc-reply .composer-foot { justify-content: flex-end; }
 .icon-btn.chat-send-icon { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
 .icon-btn.chat-send-icon:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
 .chat-send-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }

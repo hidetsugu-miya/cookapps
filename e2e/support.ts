@@ -130,6 +130,24 @@ export async function waitForCalls(command: string, times = 1) {
 // `$$(selector).length` is typed as a promise; counting in the page is plain.
 export const count = (selector: string) => browser.execute((s) => document.querySelectorAll(s).length, selector);
 
+// Where the parts of a Claude pane's request field (ts/composer.ts) are: the field, the model and effort slot and the send button, all in the one frame (`.composer`) of `{prefix}-form`;
+// the slot in the row under the field, at the left of the send button, which is round.
+export const composerLayout = (prefix: string) =>
+  browser.execute((p) => {
+    const part = (name: string) => document.getElementById(`${p}-${name}`)!;
+    const frame = document.querySelector(`#${p}-form > .composer`)!;
+    const [input, model, send] = [part("input"), part("model"), part("send")];
+    const box = (e: Element) => e.getBoundingClientRect();
+    return {
+      framed: [input, model, send].map((e) => e.closest(".composer") === frame),
+      modelBelowInput: box(model).top >= box(input).bottom,
+      sendRightOfModel: box(send).left >= box(model).right,
+      sendInsideFrame: box(send).right <= box(frame).right && box(send).bottom <= box(frame).bottom,
+      sendRadius: getComputedStyle(send).borderRadius,
+      placeholder: input.getAttribute("placeholder"),
+    };
+  }, prefix);
+
 // The text of every element matching `selector`, hidden ones included (`getText` is empty for an element that is not displayed).
 export const textsOf = (selector: string) =>
   browser.execute((s) => [...document.querySelectorAll(s)].map((e) => e.textContent?.trim() ?? ""), selector);

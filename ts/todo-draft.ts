@@ -8,6 +8,7 @@ import type { PromptEdit } from "./bindings/PromptEdit";
 import type { Summary } from "./bindings/Summary";
 import { createChat } from "./claude-chat.js";
 import { showModelSlot } from "./claude.js";
+import { createComposer } from "./composer.js";
 import { $, composing, isMac, tag } from "./dom.js";
 import { hostOf } from "./format.js";
 import { CLAUDE_SVG, DATE_SVG, PLUS_SVG, SLACK_SVG } from "./icons.js";
@@ -247,7 +248,7 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   page.focus();
 }
 
-// The pane for Claude, shaped like the Slack thread's (S-7): the log, the request field with its send button, and the model and effort under it. Its ids are the ones claude-chat.ts reads.
+// The pane for Claude, shaped like the Slack thread's (S-7): the log, and the request field (composer.ts) with the model and effort and the send button in its frame. Its ids are the ones claude-chat.ts reads.
 function claudePane() {
   const clear = tag("button", "text-btn chat-clear", "クリア");
   clear.id = "draft-clear";
@@ -261,26 +262,8 @@ function claudePane() {
   const note = tag("p", "chat-note");
   note.id = "draft-chat-note";
   note.hidden = true;
-  const input = tag("textarea", "chat-input");
-  input.id = "draft-input";
-  input.rows = 1;
-  input.setAttribute("aria-label", "Claude への指示");
-  input.autocomplete = "off";
-  const send = tag("button", "icon-btn chat-send chat-send-icon");
-  send.id = "draft-send";
-  send.setAttribute("aria-label", "送信");
-  send.insertAdjacentHTML("beforeend", '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>');
-  const composerFoot = tag("div", "composer-foot");
-  composerFoot.append(send);
-  const composer = tag("div", "composer");
-  composer.append(input, composerFoot);
-  const model = tag("div", "chat-model");
-  model.id = "draft-model";
-  const form = tag("form", "chat-form");
-  form.id = "draft-form";
-  form.append(composer, model);
   const foot = tag("div", "chat-foot");
-  foot.append(note, form);
+  foot.append(note, createComposer({ prefix: "draft", label: "Claude への指示" }));
   const pane = tag("aside", "chat-pane draft-chat");
   pane.id = "draft-chat";
   pane.setAttribute("aria-label", "Claude");
