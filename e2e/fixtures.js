@@ -40,6 +40,8 @@ const answers = {
   calendar_cached: [],
   calendar_first_day: 0,
   set_calendar_first_day: null,
+  calendar_choices: { accounts: [], needsLogin: [], failed: {} },
+  set_calendar_shown: null,
   inbox: { accounts: [], threads: [], needsLogin: [], failed: {}, historyIds: {} },
   sync: { kind: "unchanged" },
   todoist_cached: null,
