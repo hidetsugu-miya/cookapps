@@ -24,7 +24,6 @@ import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
-import { initOrcaChat } from "./orca-chat.js";
 import { closeDiff, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, filesOf, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
 import { filesShown, initOrcaFiles, syncFiles, toggleFiles } from "./orca-files.js";
@@ -709,7 +708,7 @@ function adopt(read: OrcaOverview) {
   // A terminal that left Orca's list leaves the tabs, with its screen.
   if (!keep && view.state === "ready") {
     const held = liveHandles();
-    pruneTerminals((handle) => held.has(handle));
+    pruneTerminals((handle, source) => source.environment !== view?.target || held.has(handle));
   }
   if (view.state === "ready") forgetGone();
   claimStarted();
@@ -842,6 +841,9 @@ function refresh() {
 
 // The last read, for a side pane to draw at once while it reads again.
 export const heldOrca = () => view;
+
+// Whether the stream of the list is that of the saved environment `environment`: only then can a pane of A-9 stream the terminal of a session on it (A-12).
+export const streamsEnvironment = (environment: string) => streaming() && view?.target === environment;
 
 // Reads the list for a side pane (the agents with their terminals, and the worktrees), whatever screen is shown, and gives what is held after it. `force` starts the read although another is on its way (the first read of a pane and the read after a send); the poll of a shown session does not. The first read of the app asks for the target too.
 export async function refreshOrca(force: boolean) {
@@ -1217,8 +1219,6 @@ function initSearch() {
 }
 
 export function initOrca() {
-  // The history of A-7 is read only by the side pane of A-9 now; it still pauses with the window.
-  initOrcaChat();
   initOrcaTerminal(showError);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });

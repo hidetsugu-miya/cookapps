@@ -1,4 +1,5 @@
 // The list of branches under the branch button in the heading of the file pane (A-25): the local branches of the worktree and, below them, the remote ones found by the text of the filter. A pick switches the worktree to that branch.
+// The same list picks the ref a new worktree starts from and its existing branch (A-9, `openBranchList`).
 // Rust reads the branches (`orca_local_branches`, `orca_remote_branches`) and switches (`orca_switch_branch`); this module draws the list and takes the press. The local branches are read when the list opens and narrowed by the filter here; the remote ones are asked for by the text, after the typing stops.
 import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
 import { tag } from "./dom.js";
@@ -34,6 +35,35 @@ async function switchTo(here: BranchContext, kind: "local" | "remote", name: str
 // The list that was opened last; it is open while it is in the page (another menu, a pick or a click elsewhere takes it out).
 let openPop: HTMLElement | null = null;
 
+// Where the branches are read from: a worktree of the project (its local branches and which are in use), and the project's key (the remote branches belong to the repository).
+export interface BranchSource {
+  target: string | null;
+  path: string;
+  repo: string;
+}
+
+// A branch picked: `name` as Orca names it (`origin/feature/a` for a remote one), `localName` the local branch it is or would be.
+export interface PickedBranch {
+  kind: "local" | "remote";
+  name: string;
+  localName: string;
+}
+
+// How a list is used: what is marked, whether a branch in use elsewhere is refused, a row above the sections, and what a pick does.
+export interface BranchListOptions {
+  // True for the row to mark; `checkedOut` is whether the worktree has the local branch checked out.
+  current: (kind: "local" | "remote", name: string, checkedOut: boolean) => boolean;
+  // A branch another worktree has checked out cannot be picked (git cannot check it out twice).
+  refuseInUse: boolean;
+  // The local branch the folder being read has checked out cannot be picked either (a new worktree cannot check it out beside that folder).
+  refuseCurrent?: boolean;
+  // A row above the sections that picks none (the default base of a new worktree).
+  top?: { label: string; current: boolean; pick: () => void };
+  // A row marked `current` closes the list and picks nothing when `pickCurrent` is false.
+  pickCurrent: boolean;
+  pick: (branch: PickedBranch) => void;
+}
+
 // Closes the list of branches if it is the menu that is open, and leaves any other menu alone.
 export function closeBranchDialog() {
   if (openPop?.isConnected) closeMenu();
@@ -41,6 +71,16 @@ export function closeBranchDialog() {
 
 // Opens the list under `anchor`. A pick closes it; the branch the worktree is on only closes it.
 export function openBranchDialog(anchor: Element, here: BranchContext, switched: () => void) {
+  openBranchList(anchor, here, {
+    current: (_kind, _name, checkedOut) => checkedOut,
+    refuseInUse: true,
+    pickCurrent: false,
+    pick: (b) => void switchTo(here, b.kind, b.name, switched),
+  });
+}
+
+// Opens the list of branches under `anchor`: the local ones of `here.path` and, by the text of the filter, the remote ones of the repository. The list of A-25 and the choices of a new worktree (A-9) are made by it.
+export function openBranchList(anchor: Element, here: BranchSource, options: BranchListOptions) {
   const pop = tag("div", "menu orca-dest-pop");
   pop.setAttribute("role", "dialog");
   pop.setAttribute("aria-label", "ブランチ");
@@ -55,16 +95,26 @@ export function openBranchDialog(anchor: Element, here: BranchContext, switched:
     list.append(tag("p", "orca-dest-sec", title), box);
     return { box, rows: [] as HTMLElement[], none: tag("p", "empty", "該当するブランチがありません"), answered: false, failed: false };
   };
+  if (options.top) {
+    const top = tag("button", "orca-branch-row", options.top.label);
+    top.type = "button";
+    top.setAttribute("aria-current", String(options.top.current));
+    top.onclick = () => {
+      closeMenu();
+      options.top?.pick();
+    };
+    list.prepend(top);
+  }
   const localSection = makeSection("ローカル");
   const remoteSection = makeSection("リモート");
 
-  const row = (kind: "local" | "remote", name: string, current: boolean, inUse: boolean) => {
+  const row = (kind: "local" | "remote", name: string, localName: string, current: boolean, inUse: boolean) => {
     const b = tag("button", "orca-branch-row");
     b.type = "button";
     b.dataset.kind = kind;
     b.dataset.name = name;
     b.setAttribute("aria-current", String(current));
-    b.disabled = inUse;
+    b.disabled = options.refuseInUse && inUse;
     b.append(tag("span", "", name));
     if (current) {
       const mark = tag("span", "orca-branch-mark");
@@ -73,7 +123,7 @@ export function openBranchDialog(anchor: Element, here: BranchContext, switched:
     }
     b.onclick = () => {
       closeMenu();
-      if (!current) void switchTo(here, kind, name, switched);
+      if (!current || options.pickCurrent) options.pick({ kind, name, localName });
     };
     return b;
   };
@@ -117,7 +167,7 @@ export function openBranchDialog(anchor: Element, here: BranchContext, switched:
         error = String(e);
       }
       if (!pop.isConnected) break;
-      if (!again) fill(remoteSection, next.map((b) => row("remote", b.name, false, false)), error);
+      if (!again) fill(remoteSection, next.map((b) => row("remote", b.name, b.localName, options.current("remote", b.name, false), false)), error);
     } while (again);
     asking = false;
   };
@@ -134,7 +184,7 @@ export function openBranchDialog(anchor: Element, here: BranchContext, switched:
   filter.focus();
   void searchRemote();
   invoke("orca_local_branches", { path: here.path, environment: here.target }).then(
-    (read) => pop.isConnected && fill(localSection, read.map((b) => row("local", b.name, b.current, b.inUse)), null),
+    (read) => pop.isConnected && fill(localSection, read.map((b) => row("local", b.name, b.name, options.current("local", b.name, b.current), b.inUse || (options.refuseCurrent === true && b.current))), null),
     (e) => pop.isConnected && fill(localSection, [], String(e)),
   );
 }

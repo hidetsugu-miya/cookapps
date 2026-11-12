@@ -32,9 +32,9 @@ use crate::{
     auth::config_dir,
     orca::{forget_worktree_host, worktree_host, worktree_host_cached},
     orca_attach::{worktree_params, Rpc},
-    orca_chat::{CallError, Connection},
     orca_diff::{diff_rows, lines_of, OrcaDiffChange, OrcaDiffRow},
     orca_language::{detect_language, highlight_name},
+    orca_link::{CallError, Connection},
 };
 
 const SETTINGS_FILE: &str = "editor-settings.json";

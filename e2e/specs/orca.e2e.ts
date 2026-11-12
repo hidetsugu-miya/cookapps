@@ -534,10 +534,8 @@ describe("orca", () => {
     expect(await count(".orca-tabs .orca-tab")).toBe(0);
     await expect($(".orca-term")).not.toBeDisplayed();
     await expect($(".orca-empty")).toHaveText("プロジェクトを選んでください");
-    // No composer and no history on this screen.
+    // No composer on this screen.
     expect(await count("#orca-input")).toBe(0);
-    expect(await count("#orca-chat")).toBe(0);
-    expect(await callsOf("orca_chat_open")).toEqual([]);
   });
 
   it("selects a row with a click and shows its tab as a terminal, mirrored from this machine", async () => {
@@ -549,9 +547,8 @@ describe("orca", () => {
     await expect($(".orca-term")).toBeDisplayed();
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_example-app" });
     await browser.waitUntil(async () => (await screenText()).includes("Write the docs"), { timeoutMsg: "the screen of the session never showed" });
-    // This machine has no stream, and no history is read.
+    // This machine has no stream.
     expect(await callsOf("orca_stream_terminal")).toEqual([]);
-    expect(await callsOf("orca_chat_open")).toEqual([]);
     // Another row takes the selection and its terminal.
     await mock("orca_terminal_read", ["$"]);
     await select("example-lib");
@@ -1840,7 +1837,7 @@ describe("orca: a saved environment's stream", () => {
     expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_example-app")).toBe(true);
   });
 
-  it("drops the keys not sent yet when another tab shows, so none reaches its terminal", async () => {
+  it("sends the keys not sent yet to the terminal they were typed in when another tab shows", async () => {
     await openStudio(sample(), [orcaTerminal("example-app", "zsh")]);
     await project("example-app").click();
     await waitForCalls("orca_stream_terminal");
@@ -1855,8 +1852,13 @@ describe("orca: a saved environment's stream", () => {
     await tabOf("orca:term_example-app_zsh").$(".orca-tab-btn").click();
     await waitForCalls("orca_stream_terminal", 2);
     await release(input, null);
-    await browser.pause(500);
-    expect(await callsOf(input)).toEqual([{ handle: "term_example-app", text: "1" }]);
+    await browser.waitUntil(async () => (await callsOf(input)).length === 2, { timeoutMsg: "the keys typed before the tab changed were not sent" });
+    // All of them go to the terminal they were typed in, not to the one now shown.
+    expect(await callsOf(input)).toEqual([
+      { handle: "term_example-app", text: "1" },
+      { handle: "term_example-app", text: "2\r" },
+    ]);
+    await release(input, null);
   });
 
   it("shows the message when the keys cannot be sent", async () => {
@@ -3101,12 +3103,18 @@ describe("orca: files and editor (A-18)", () => {
       add,
       onceId(),
     );
-  // Opens a.rs with the answer of the read and waits for its text.
+  // highlight.js is read the first time a file is colored (#414), so the colors come a little after the text: waits for the library and for the frame that draws the layer again.
+  const waitForColors = async () => {
+    await browser.waitUntil(() => browser.execute("return typeof hljs !== 'undefined'"), { timeoutMsg: "highlight.js was never read" });
+    await browser.execute("return new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))");
+  };
+  // Opens a.rs with the answer of the read and waits for its text (and for its colors, when the answer has a grammar).
   async function openFileWith(read: OrcaFileText, rows = 4) {
     await mock("orca_file_read", read);
     await waitForCount("#orca-files-tree .orca-file", rows);
     await doublePress("a.rs");
     await expect($(".orca-edit-area")).toHaveValue(read.content, { trim: false });
+    if (read.highlight) await waitForColors();
   }
   // Opens a.rs with `content` and waits for its text (`rows` is how many rows the tree has).
   const openA = (content = "fn main() {}\n", signature = "sig-1", rows = 4) => openFileWith(text(content, signature), rows);
@@ -3176,6 +3184,19 @@ describe("orca: files and editor (A-18)", () => {
     expect(await tokens("comment")).toEqual(["// note"]);
     expect(await layerText()).toBe('fn main() {\n    let x = "a"; // note\n}\n');
     await expect($(".orca-edit-hl")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("reads xterm.js with the first terminal and highlight.js with the first colored file, and not at the start (#414)", async () => {
+    const read = (name: string) => browser.execute(`return typeof ${name} !== 'undefined'`);
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: rootIgnored, editor_settings: { autosaveMs: 100 } });
+    expect(await read("hljs")).toBe(false);
+    await project("example-app").click();
+    await browser.waitUntil(() => read("Terminal"), { timeoutMsg: "xterm.js was never read" });
+    expect(await read("hljs")).toBe(false);
+    await filesToggle().click();
+    await openFileWith(rust("fn a() {}\n"));
+    expect(await read("hljs")).toBe(true);
+    expect(await tokens("keyword")).toEqual(["fn"]);
   });
 
   it("shows the colors of the tokens and the caret of the textarea, whose own text is transparent (A-21)", async () => {
@@ -4150,6 +4171,7 @@ describe("orca: files and editor (A-18)", () => {
     const diff = await mock("orca_file_diff", value);
     expect(await rightClickRow(relative)).toBe(true);
     await pickItem("差分を表示");
+    if ((value as { highlight?: string | null }).highlight) await waitForColors();
     return diff;
   }
 

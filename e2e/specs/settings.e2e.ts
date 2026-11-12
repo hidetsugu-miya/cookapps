@@ -777,7 +777,7 @@ describe("settings: Claude model and effort", () => {
     ["promptChat", "プロンプトの会話", "Todo の要約プロンプトを Claude と編集するとき"],
     ["proofread", "Slack に貼る文章の校正", "Slack に貼る画面の「Claude と校正」"],
     ["slackReply", "Slack のスレッドの相談", "スレッド詳細の Claude 欄"],
-    ["orcaHandoff", "Orca に渡す要約", "Orca に渡すペインで、実装することを要約するとき"],
+    ["orcaHandoff", "Orca に渡す要約", "Orca に渡すペインで、渡す内容を要約するとき"],
     ["todoChat", "Todo の相談", "Todo の Claude ペインで、タスクを頼むとき"],
   ];
   // The default effort of a purpose: medium, and high for the Slack thread conversation.

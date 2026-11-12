@@ -1,4 +1,4 @@
-import { boot, callsOf, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, slackMessageUrl, slackSummary, textsOf, todoData, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 // What Claude answers when the request changes nothing.
@@ -490,12 +490,16 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
     );
   const saved = { ...claudeSettings, promptChat: { model: "opus", effort: "high" } } as const;
 
-  // The Todo screen with the prompt opened by the icon of its heading: the settings screen was never visited.
+  // The Todo screen with the prompt opened by 「プロンプトを編集」 of the page of a draft: the settings screen was never visited.
   async function openFromTodo(settings: unknown = claudeSettings) {
     await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady, claude_model_settings: settings });
     await $("#nav-todo").click();
     await waitForCount("#todo-list li.task", 1);
-    await $("#todo-prompt").click();
+    await mock("todoist_summarize_slack", slackSummary);
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await $("#todo-draft").waitForExist();
+    await $("#todo-draft .draft-prompt").click();
     await expect($("#prompt")).toBeDisplayed();
   }
 

@@ -19,11 +19,11 @@ atMs: number,
  */
 handle: string | null, 
 /**
- * The agent's pane (`{tabId}:{leafId}`), which finds its session for the history (A-7); `None` when the agent has none.
+ * The agent's pane (`{tabId}:{leafId}`), which names its tab (A-12); `None` when the agent has none.
  */
 paneKey: string | null, 
 /**
- * The worktree's path, which the history asks Orca for the worktree's tabs.
+ * The worktree's path.
  */
 path: string, 
 /**

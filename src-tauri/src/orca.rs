@@ -19,8 +19,7 @@ use ts_rs::TS;
 use crate::{
     accounts::write_synced,
     auth::config_dir,
-    orca_chat::check_pane_key,
-    orca_handoff::{agreed_instruction, compose, HandoffContext},
+    orca_handoff::{compose, handoff_instruction, HandoffContext},
     orca_stream::{clamp_viewport, OrcaViewport},
 };
 
@@ -94,9 +93,9 @@ pub struct OrcaRow {
     pub at_ms: i64,
     /// The terminal that takes a send; `None` when it was not found (the row can be read but takes no post).
     pub handle: Option<String>,
-    /// The agent's pane (`{tabId}:{leafId}`), which finds its session for the history (A-7); `None` when the agent has none.
+    /// The agent's pane (`{tabId}:{leafId}`), which names its tab (A-12); `None` when the agent has none.
     pub pane_key: Option<String>,
-    /// The worktree's path, which the history asks Orca for the worktree's tabs.
+    /// The worktree's path.
     pub path: String,
     /// The latest action: `{tool}: {first line of its input}`, else the first line of the last answer, else empty (A-8).
     pub activity: String,
@@ -112,7 +111,7 @@ pub struct OrcaRow {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct OrcaStarted {
-    /// The agent's pane (`{tabId}:{leafId}`), which finds its history (A-7).
+    /// The agent's pane (`{tabId}:{leafId}`), which names its tab (A-12).
     pub pane_key: Option<String>,
     /// The terminal that takes the next send.
     pub handle: Option<String>,
@@ -782,6 +781,20 @@ pub(crate) fn check_handle(handle: &str) -> Result<(), String> {
     }
 }
 
+/// A pane is `{tabId}:{leafId}`; nothing else is accepted, and a key is never put in a command line.
+fn check_pane_key(pane_key: &str) -> Result<(), String> {
+    if !pane_key.is_empty()
+        && pane_key.chars().count() <= 256
+        && pane_key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '_' | '-'))
+    {
+        Ok(())
+    } else {
+        Err("エージェントの場所が正しくありません".into())
+    }
+}
+
 pub(crate) fn check_path(path: &str) -> Result<(), String> {
     if Path::new(path).is_absolute() {
         Ok(())
@@ -863,6 +876,32 @@ pub(crate) fn check_worktree_name(name: &str) -> Result<&str, String> {
     Ok(name)
 }
 
+/// The branch of a new worktree (`--branch`) or the ref it starts from (`--base-branch`), trimmed; `None` when not given or blank. `label` opens the error.
+/// The rules are `git check-ref-format`'s: no space, control character or `~ ^ : ? * [ \\`, no zero-width, bidirectional or tag character (the ones `orca_handoff` takes out of a card), no `..` or `@{`, not `@` alone, no `//`, no component starting with `.` or ending with `.lock`, and no `/` or `.` at the end, and a value starting with `-` is refused as an option.
+pub(crate) fn check_ref<'a>(
+    label: &str,
+    value: Option<&'a str>,
+) -> Result<Option<&'a str>, String> {
+    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    let bad_char = |c: char| c.is_control() || c.is_whitespace() || "~^:?*[\\".contains(c);
+    let bad_component =
+        |part: &str| part.is_empty() || part.starts_with('.') || part.ends_with(".lock");
+    if value.starts_with('-')
+        || value == "@"
+        || value.contains("..")
+        || value.contains("@{")
+        || value.ends_with(['/', '.'])
+        || value.chars().any(bad_char)
+        || crate::orca_handoff::without_hidden(value) != value
+        || value.split('/').any(bad_component)
+    {
+        return Err(format!("{label}に使えない文字が含まれています"));
+    }
+    Ok(Some(value))
+}
+
 /// A send the terminal did not take (`result.send.accepted` false) is a failure although the CLI answered `ok`.
 pub(crate) fn check_accepted(result: &Value) -> Result<(), String> {
     if result["send"]["accepted"] == false {
@@ -935,14 +974,7 @@ fn screen_args(handle: &str, environment: Option<&str>) -> Vec<String> {
     )
 }
 
-/// The keys of a mirrored terminal, written verbatim: no `--enter`, so control bytes reach the terminal as typed.
-fn input_args(handle: &str, text: &str, environment: Option<&str>) -> Vec<String> {
-    let mut args = args_of(&["terminal", "send", "--terminal", handle]);
-    args.extend([format!("--text={text}"), "--json".into()]);
-    with_environment(args, environment)
-}
-
-/// Always Claude: the history of A-7 reads only Claude's sessions. A session started from the Orca screen (A-12) has no first prompt: the user types it in the terminal.
+/// Always Claude. A session started from the Orca screen (A-12) has no first prompt: the user types it in the terminal.
 fn launch_args(path: &str, prompt: Option<&str>, environment: Option<&str>) -> Vec<String> {
     let mut args = args_of(&["agent", "launch", "--agent", "claude"]);
     args.extend([
@@ -964,18 +996,28 @@ fn create_args(path: &str, environment: Option<&str>) -> Vec<String> {
 }
 
 /// A new worktree in the repository `project` (A-9): independent of any worktree (`--no-parent`), because the CLI would otherwise record the caller's context as its parent. `--repo=id:` takes the repository id the list holds; `--project` takes a project id or a display name, which the list does not hold.
-fn create_worktree_args(project: &str, name: &str, environment: Option<&str>) -> Vec<String> {
-    with_environment(
-        vec![
-            "worktree".into(),
-            "create".into(),
-            format!("--repo=id:{project}"),
-            format!("--name={name}"),
-            "--no-parent".into(),
-            "--json".into(),
-        ],
-        environment,
-    )
+/// `--branch` and `--base-branch` are passed only when given (already checked by `check_ref`).
+fn create_worktree_args(
+    project: &str,
+    name: &str,
+    branch: Option<&str>,
+    base: Option<&str>,
+    environment: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
+        "worktree".into(),
+        "create".into(),
+        format!("--repo=id:{project}"),
+        format!("--name={name}"),
+    ];
+    if let Some(branch) = branch {
+        args.push(format!("--branch={branch}"));
+    }
+    if let Some(base) = base {
+        args.push(format!("--base-branch={base}"));
+    }
+    args.extend(["--no-parent".into(), "--json".into()]);
+    with_environment(args, environment)
 }
 
 // ---- running the CLI ----
@@ -1287,20 +1329,9 @@ fn send(handle: &str, text: &str, environment: Option<&str>) -> Result<(), Strin
     write(&send_args(handle, text, environment)).map(|_| ())
 }
 
-/// A-11: the handle must be a row of the list the target gives just now, the environment a saved one.
-pub(crate) fn check_target(handle: &str, environment: Option<&str>) -> Result<(), String> {
-    check_handle(handle)?;
-    check_listed(environment)?;
-    let (ps, terminals) = read_lists(environment, true);
-    check_session(
-        &rows_of(&ps.map_err(message_of)?, &terminals.map_err(message_of)?),
-        handle,
-    )
-}
-
 /// A call of this machine's Orca over its unix socket from a thread of `blocking`, so no CLI process is started.
 fn local_blocking(method: &str, params: Value) -> Result<Value, String> {
-    tokio::runtime::Handle::current().block_on(crate::orca_chat::local_call(method, params))
+    tokio::runtime::Handle::current().block_on(crate::orca_link::local_call(method, params))
 }
 
 /// The lines on the screen of a terminal: of this machine over its unix socket (`terminal.read`), of a saved environment through the CLI. The handle was checked by the caller.
@@ -1311,20 +1342,6 @@ fn read_lines(handle: &str, environment: Option<&str>) -> Result<Vec<String>, St
         Some(_) => call(&screen_args(handle, environment), READ_TIMEOUT)
             .map(|result| screen_lines_of(&result))
             .map_err(message_of),
-    }
-}
-
-/// A-11: the lines on the screen of the session `handle`, read without the mirror's check of the handle (the caller checked it).
-pub(crate) fn read_screen(handle: &str, environment: Option<&str>) -> Result<Vec<String>, String> {
-    read_lines(handle, environment)
-}
-
-/// A-11: one key typed into the session `handle` (no Enter): over the unix socket for this machine, like the keys of its mirror, and through the CLI for a saved environment. Only digits and Tab come here, so no secret is in the arguments.
-pub(crate) fn press_key(handle: &str, key: &str, environment: Option<&str>) -> Result<(), String> {
-    match environment {
-        None => local_blocking("terminal.send", input_params(handle, key, "cookapps", None))
-            .and_then(|result| check_accepted(&result)),
-        Some(_) => write(&input_args(handle, key, environment)).map(|_| ()),
     }
 }
 
@@ -1352,13 +1369,27 @@ fn open_terminal(path: &str, environment: Option<&str>) -> Result<OrcaStarted, S
     write(&create_args(path, environment)).map(|result| created_of(&result))
 }
 
-/// Makes a new worktree named `name` in the project `project` of the target (A-9), once, and gives its path. The name and the environment are validated, and the project must be in the list read just before; otherwise nothing is made.
-fn create_worktree(project: &str, name: &str, environment: Option<&str>) -> Result<String, String> {
+/// Makes a new worktree named `name` in the project `project` of the target (A-9), once, and gives its path. The name, the branch and the base (when given) and the environment are validated, and the project must be in the list read just before; otherwise nothing is made.
+fn create_worktree(
+    project: &str,
+    name: &str,
+    branch: Option<&str>,
+    base: Option<&str>,
+    environment: Option<&str>,
+) -> Result<String, String> {
     let name = check_worktree_name(name)?;
+    let branch = check_ref("ブランチ名", branch)?;
+    let base = check_ref("作成元", base)?;
     check_listed(environment)?;
     let (ps, _) = read_lists(environment, false);
     check_project(&ps.map_err(message_of)?, project)?;
-    let result = write(&create_worktree_args(project, name, environment))?;
+    let result = write(&create_worktree_args(
+        project,
+        name,
+        branch,
+        base,
+        environment,
+    ))?;
     let path = created_worktree_path_of(&result)?;
     made_worktree().put(environment, &path, Instant::now());
     Ok(path)
@@ -1476,15 +1507,16 @@ pub(crate) fn forget_worktree_host(path: &str, environment: Option<&str>) {
     worktree_hosts().forget(environment, path);
 }
 
-/// Hands the content to a new session (A-9): the prompt is composed here from the summary the user agreed to (`points`), the attached files and the content, then the launch of A-6 runs once with its checks.
+/// Hands the content to a new session (A-9): the prompt is composed here from the instruction the user wrote, the attached files, the content with its summary inside the block, then the launch of A-6 runs once with its checks.
 fn handoff(
     destination: &OrcaDestination,
-    points: &[String],
+    instruction: &str,
     files: &[String],
+    summary: &[String],
     context: Option<&HandoffContext>,
     environment: Option<&str>,
 ) -> Result<OrcaStarted, String> {
-    let text = compose(&agreed_instruction(points, files)?, context)?;
+    let text = compose(&handoff_instruction(instruction, files)?, summary, context)?;
     let OrcaDestination::New { path } = destination;
     launch(path, Some(&text), environment)
 }
@@ -1500,33 +1532,66 @@ fn close(handle: &str, environment: Option<&str>) -> Result<(), String> {
     parse_output(&out).map(|_| ())
 }
 
-/// The handles that were checked against the terminals of this machine's list, so only the first read or input of a terminal reads the list. A handle leaves when a read or a send of its terminal fails.
+/// The terminals (a handle in this machine's Orca, or in a saved environment) that were checked against the list of their target, so only the first read or input of a terminal reads the list. A terminal leaves when a read or a send of it fails.
 #[derive(Default, Clone)]
-pub struct OrcaMirror(Arc<Mutex<HashSet<String>>>);
+pub struct OrcaMirror(Arc<Mutex<HashSet<MirrorKey>>>);
+
+/// The saved environment (none for this machine) and the handle of a terminal.
+type MirrorKey = (Option<String>, String);
 
 impl OrcaMirror {
-    fn forget(&self, handle: &str) {
-        self.0.lock().unwrap().remove(handle);
+    fn key(handle: &str, environment: Option<&str>) -> MirrorKey {
+        (environment.map(str::to_owned), handle.to_owned())
+    }
+
+    fn knows(&self, handle: &str, environment: Option<&str>) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .contains(&Self::key(handle, environment))
+    }
+
+    fn remember(&self, handle: &str, environment: Option<&str>) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(Self::key(handle, environment));
+    }
+
+    fn forget(&self, handle: &str, environment: Option<&str>) {
+        self.0
+            .lock()
+            .unwrap()
+            .remove(&Self::key(handle, environment));
     }
 }
 
-/// Checks that `handle` is a terminal (a Claude session's or a plain one) of this machine's list read just now, unless an earlier read or input of it did.
-fn check_mirrored(mirror: &OrcaMirror, handle: &str) -> Result<(), String> {
+/// Checks that `handle` is a terminal (a Claude session's or a plain one) of the list of its target (this machine, or the saved environment `environment`) read just now, unless an earlier read or input of it did. A saved environment must be one of the saved ones.
+fn check_mirrored(
+    mirror: &OrcaMirror,
+    handle: &str,
+    environment: Option<&str>,
+) -> Result<(), String> {
     check_handle(handle)?;
-    if !mirror.0.lock().unwrap().contains(handle) {
-        let (ps, terminals) = read_lists(None, true);
+    if !mirror.knows(handle, environment) {
+        check_listed(environment)?;
+        let (ps, terminals) = read_lists(environment, true);
         let (ps, terminals) = (ps.map_err(message_of)?, terminals.map_err(message_of)?);
         let rows = rows_of(&ps, &terminals);
         check_terminal(&rows, &plain_terminals_of(&ps, &terminals, &rows), handle)?;
-        mirror.0.lock().unwrap().insert(handle.to_owned());
+        mirror.remember(handle, environment);
     }
     Ok(())
 }
 
-/// The lines on the screen of a terminal of this machine, over the unix socket (no CLI process is started). Read once a second while its tab is shown, so the list is read only the first time.
-fn screen(mirror: &OrcaMirror, handle: &str) -> Result<Vec<String>, String> {
-    check_mirrored(mirror, handle)?;
-    read_lines(handle, None).inspect_err(|_| mirror.forget(handle))
+/// The lines on the screen of a terminal for its mirror: of this machine over the unix socket (no CLI process is started; read once a second while its tab is shown), of a saved environment through the CLI (one process for each read, every 2 seconds). The list is read only the first time.
+fn screen(
+    mirror: &OrcaMirror,
+    handle: &str,
+    environment: Option<&str>,
+) -> Result<Vec<String>, String> {
+    check_mirrored(mirror, handle, environment)?;
+    read_lines(handle, environment).inspect_err(|_| mirror.forget(handle, environment))
 }
 
 /// The params of `terminal.send`, as the CLI sends them: no `enter`, so control bytes reach the terminal as typed. `client` names this app (A-12 gives the id its stream subscribed with). With a `viewport` (the pane's size, A-12) the send claims that size again, as Orca's own screen does at every key.
@@ -1570,15 +1635,20 @@ pub fn orca_open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
 }
 
 /// Checks the keys and the terminal.
-fn check_input(mirror: &OrcaMirror, handle: &str, text: &str) -> Result<(), String> {
+fn check_input(
+    mirror: &OrcaMirror,
+    handle: &str,
+    environment: Option<&str>,
+    text: &str,
+) -> Result<(), String> {
     check_handle(handle)?;
     check_keys(text)?;
-    check_mirrored(mirror, handle)
+    check_mirrored(mirror, handle, environment)
 }
 
 /// The SSH hosts of this machine's Orca, from its runtime (not a public interface: it was written against Orca 1.4.248). A failure is an empty list.
 pub(crate) async fn local_ssh_targets() -> Vec<OrcaSshTarget> {
-    crate::orca_chat::local_call("ssh.listEditableTargets", serde_json::json!({}))
+    crate::orca_link::local_call("ssh.listEditableTargets", serde_json::json!({}))
         .await
         .map(|result| ssh_targets_of(&result))
         .unwrap_or_default()
@@ -1666,29 +1736,43 @@ pub async fn orca_terminal_create(
 }
 
 /// A-9: makes a new worktree named `name` in the project `project` (a repository key of the list) of the destination, and answers its path. Never run twice.
+/// `branch` (the branch the worktree gets) and `base` (the ref it starts from) are passed to the CLI only when given.
 #[tauri::command]
 pub async fn orca_worktree_create(
     project: String,
     name: String,
+    branch: Option<String>,
+    base: Option<String>,
     environment: Option<String>,
 ) -> Result<String, String> {
-    blocking(move || create_worktree(&project, &name, environment.as_deref())).await?
+    blocking(move || {
+        create_worktree(
+            &project,
+            &name,
+            branch.as_deref(),
+            base.as_deref(),
+            environment.as_deref(),
+        )
+    })
+    .await?
 }
 
-/// A-9: starts a session in a worktree with the summary the user agreed to (`points`), the text of each attached file (`files`, A-10) and, when `context` is given, the content quoted as data.
+/// A-9: starts a session in a worktree with the instruction the user wrote (`instruction`), the text of each attached file (`files`, A-10), and, when `context` is given, the content quoted as data with the summary of it (`summary`) inside the block.
 #[tauri::command]
 pub async fn orca_handoff(
     destination: OrcaDestination,
-    points: Vec<String>,
+    instruction: String,
     files: Vec<String>,
+    summary: Vec<String>,
     context: Option<HandoffContext>,
     environment: Option<String>,
 ) -> Result<OrcaStarted, String> {
     blocking(move || {
         handoff(
             &destination,
-            &points,
+            &instruction,
             &files,
+            &summary,
             context.as_ref(),
             environment.as_deref(),
         )
@@ -1702,36 +1786,65 @@ pub async fn orca_close(handle: String, environment: Option<String>) -> Result<(
     blocking(move || close(&handle, environment.as_deref())).await?
 }
 
-/// The lines on the screen of the terminal `handle` of this machine, for the mirror.
+/// The lines on the screen of the terminal `handle` of this machine, or of the saved environment `environment`, for the mirror.
 #[tauri::command]
 pub async fn orca_terminal_read(
     mirror: tauri::State<'_, OrcaMirror>,
     handle: String,
+    environment: Option<String>,
 ) -> Result<Vec<String>, String> {
     let mirror = mirror.inner().clone();
-    blocking(move || screen(&mirror, &handle)).await?
+    blocking(move || screen(&mirror, &handle, environment.as_deref())).await?
 }
 
-/// Types `text` into the terminal `handle` of this machine as it is, over its unix socket (`terminal.send`), so the keys are in no argument of a process.
+/// One `terminal.send` over the WebSocket of a saved environment; a send Orca did not take is a failure.
+async fn send_keys(
+    link: &mut crate::orca_link::WsLink,
+    handle: &str,
+    text: &str,
+) -> Result<(), String> {
+    let result = link
+        .request(
+            "terminal.send",
+            input_params(handle, text, "cookapps", None),
+        )
+        .await
+        .map_err(crate::orca_link::reason_of)?;
+    check_accepted(&result)
+}
+
+/// Types `text` into the terminal `handle` as it is, as `terminal.send`: of this machine over its unix socket, of the saved environment `environment` over a WebSocket of its own, so the keys are in no argument of a process.
 #[tauri::command]
 pub async fn orca_terminal_input(
     mirror: tauri::State<'_, OrcaMirror>,
     handle: String,
     text: String,
+    environment: Option<String>,
 ) -> Result<(), String> {
     let mirror = mirror.inner().clone();
     {
-        let (mirror, handle, text) = (mirror.clone(), handle.clone(), text.clone());
-        blocking(move || check_input(&mirror, &handle, &text)).await??;
+        let (mirror, handle, text, environment) = (
+            mirror.clone(),
+            handle.clone(),
+            text.clone(),
+            environment.clone(),
+        );
+        blocking(move || check_input(&mirror, &handle, environment.as_deref(), &text)).await??;
     }
-    let sent = crate::orca_chat::local_call(
-        "terminal.send",
-        input_params(&handle, &text, "cookapps", None),
-    )
-    .await
-    .and_then(|result| check_accepted(&result));
+    let sent = match environment.clone() {
+        None => crate::orca_link::local_call(
+            "terminal.send",
+            input_params(&handle, &text, "cookapps", None),
+        )
+        .await
+        .and_then(|result| check_accepted(&result)),
+        Some(name) => match crate::orca_link::connect_environment(name).await {
+            Ok(mut link) => send_keys(&mut link, &handle, &text).await,
+            Err(reason) => Err(reason),
+        },
+    };
     if sent.is_err() {
-        mirror.forget(&handle);
+        mirror.forget(&handle, environment.as_deref());
     }
     sent
 }
@@ -2242,6 +2355,16 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_key_has_only_the_characters_of_an_id() {
+        for ok in ["tabA:leaf1", "a1b2c3d4-e5f6-7890:leaf_2", &"a".repeat(256)] {
+            assert!(check_pane_key(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "a b", "a;b", "a/b", "--x y", "é", &"a".repeat(257)] {
+            assert!(check_pane_key(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn a_worktree_path_is_absolute() {
         assert!(check_path("/Users/example/work").is_ok());
         for bad in ["", "work", "./work", "--json", "~/work"] {
@@ -2607,7 +2730,7 @@ mod tests {
     #[test]
     fn a_new_worktree_is_made_in_the_repository_with_no_parent_and_no_shell() {
         assert_eq!(
-            create_worktree_args("repo1", "fix-login", None),
+            create_worktree_args("repo1", "fix-login", None, None, None),
             [
                 "worktree",
                 "create",
@@ -2618,7 +2741,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            create_worktree_args("repo1", "fix-login", Some("Studio")),
+            create_worktree_args("repo1", "fix-login", None, None, Some("Studio")),
             [
                 "worktree",
                 "create",
@@ -2631,9 +2754,164 @@ mod tests {
         );
         // A name with blanks or quotes stays one argument, joined to its flag.
         assert_eq!(
-            create_worktree_args("repo1", "fix the \"login\"", None)[3],
+            create_worktree_args("repo1", "fix the \"login\"", None, None, None)[3],
             "--name=fix the \"login\""
         );
+    }
+
+    #[test]
+    fn the_branch_and_the_base_of_a_new_worktree_are_passed_only_when_given() {
+        assert_eq!(
+            create_worktree_args(
+                "repo1",
+                "fix-login",
+                Some("feat/login"),
+                Some("origin/main"),
+                None
+            ),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--branch=feat/login",
+                "--base-branch=origin/main",
+                "--no-parent",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            create_worktree_args(
+                "repo1",
+                "fix-login",
+                Some("feat/login"),
+                None,
+                Some("Studio")
+            ),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--branch=feat/login",
+                "--no-parent",
+                "--json",
+                "--environment=Studio"
+            ]
+        );
+        assert_eq!(
+            create_worktree_args("repo1", "fix-login", None, Some("main"), None),
+            [
+                "worktree",
+                "create",
+                "--repo=id:repo1",
+                "--name=fix-login",
+                "--base-branch=main",
+                "--no-parent",
+                "--json"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_branch_or_a_base_is_a_git_ref_trimmed_and_blank_means_none() {
+        for ok in [
+            "main",
+            "feat/login",
+            "origin/release-1.2",
+            "refs/heads/fix_a",
+            "ログイン",
+            "a-b",
+            "a@b",
+            "v1.0",
+            "HEAD",
+        ] {
+            assert_eq!(check_ref("ブランチ名", Some(ok)).unwrap(), Some(ok), "{ok}");
+        }
+        assert_eq!(
+            check_ref(
+                "ブランチ名",
+                Some(
+                    "  feat/login 
+"
+                )
+            )
+            .unwrap(),
+            Some("feat/login")
+        );
+        assert_eq!(check_ref("ブランチ名", None).unwrap(), None);
+        assert_eq!(check_ref("ブランチ名", Some("  	")).unwrap(), None);
+        for bad in [
+            "-fix",
+            "  --json",
+            "a..b",
+            "a b",
+            "a\u{3000}b",
+            "a\nb",
+            "a\tb",
+            "a\0b",
+            "a\u{7f}b",
+            "a\u{85}b",
+            "a\u{200b}b",
+            "a\u{200d}b",
+            "a\u{2060}b",
+            "a\u{feff}b",
+            "a\u{202e}b",
+            "a\u{2066}b",
+            "a\u{e0041}b",
+            "a~1",
+            "a^",
+            "a:b",
+            "a?",
+            "a*",
+            "a[0]",
+            "a\\b",
+            "a@{u}",
+            "@",
+            "/a",
+            "a/",
+            "a//b",
+            "a.",
+            ".a",
+            "a/.b",
+            "a.lock",
+            "a.lock/b",
+        ] {
+            let err = check_ref("作成元", Some(bad)).unwrap_err();
+            assert!(err.starts_with("作成元"), "{bad:?}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_keys_of_a_saved_environment_go_over_its_websocket_and_a_refused_send_fails() {
+        use crate::{
+            orca_e2ee::testing::Desktop,
+            orca_link::{
+                ws_testing::{bind, FakeDesktop},
+                WsLink,
+            },
+        };
+        let (listener, url) = bind().await;
+        let desktop = Desktop::new([31; 32]);
+        let key = desktop.public_key_b64();
+        let server = tokio::spawn(async move {
+            let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
+            for accepted in [true, false] {
+                let send = server.request().await;
+                assert_eq!(send["method"], "terminal.send");
+                assert_eq!(
+                    send["params"],
+                    input_params("term_1", "\u{3}--json", "cookapps", None)
+                );
+                server
+                    .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": accepted}}}))
+                    .await;
+            }
+        });
+        let mut link = WsLink::connect(&url, "device-token", &key).await.unwrap();
+        assert!(send_keys(&mut link, "term_1", "\u{3}--json").await.is_ok());
+        assert!(send_keys(&mut link, "term_1", "\u{3}--json").await.is_err());
+        server.await.unwrap();
     }
 
     #[test]
@@ -2746,11 +3024,11 @@ mod tests {
     }
 
     #[test]
-    fn a_handoff_refuses_a_summary_with_no_point_before_it_runs_anything() {
+    fn a_handoff_refuses_a_blank_instruction_before_it_runs_anything() {
         let destination = OrcaDestination::New { path: "/w".into() };
         assert_eq!(
-            handoff(&destination, &[" \n".into()], &[], None, None).unwrap_err(),
-            "要約がありません"
+            handoff(&destination, " \n", &[], &["a".into()], None, None).unwrap_err(),
+            "指示を書いてください"
         );
     }
 
@@ -2764,9 +3042,11 @@ mod tests {
         let bad_path = OrcaDestination::New {
             path: "relative".into(),
         };
-        assert!(handoff(&bad_path, &["i".into()], &[], Some(&context), None)
-            .unwrap_err()
-            .contains("worktree"));
+        assert!(
+            handoff(&bad_path, "i", &[], &["s".into()], Some(&context), None)
+                .unwrap_err()
+                .contains("worktree")
+        );
     }
 
     #[test]
@@ -3346,7 +3626,7 @@ mod tests {
     }
 
     #[test]
-    fn the_close_read_and_input_arguments() {
+    fn the_close_and_read_arguments() {
         assert_eq!(
             close_args("term_1", None),
             [
@@ -3373,23 +3653,6 @@ mod tests {
                 "--json",
                 "--environment=Studio"
             ]
-        );
-        // No `--enter`, and the text joined to its flag so that control bytes and `--json` are taken as typed.
-        assert_eq!(
-            input_args("term_1", "\u{3}--json", None),
-            [
-                "terminal",
-                "send",
-                "--terminal",
-                "term_1",
-                "--text=\u{3}--json",
-                "--json"
-            ]
-        );
-        assert!(!input_args("term_1", "x", Some("Studio")).contains(&"--enter".to_owned()));
-        assert_eq!(
-            input_args("term_1", "x", Some("Studio")).last().unwrap(),
-            "--environment=Studio"
         );
     }
 
@@ -3429,22 +3692,41 @@ mod tests {
     #[test]
     fn keys_and_closes_with_a_bad_handle_or_text_run_nothing() {
         let mirror = OrcaMirror::default();
-        assert!(check_input(&mirror, "--json", "x").is_err());
-        assert!(check_input(&mirror, "term_1", "").is_err());
-        assert!(check_input(&mirror, "term_1", "a\0").is_err());
+        for environment in [None, Some("Studio")] {
+            assert!(check_input(&mirror, "--json", environment, "x").is_err());
+            assert!(check_input(&mirror, "term_1", environment, "").is_err());
+            assert!(check_input(&mirror, "term_1", environment, "a\0").is_err());
+            assert!(screen(&mirror, "term_a b", environment).is_err());
+        }
         assert!(close("--json", None).is_err());
-        assert!(screen(&mirror, "term_a b").is_err());
         assert!(mirror.0.lock().unwrap().is_empty());
     }
 
     #[test]
     fn a_checked_terminal_is_not_checked_again_until_a_failure_forgets_it() {
         let mirror = OrcaMirror::default();
-        mirror.0.lock().unwrap().insert("term_1".into());
+        mirror.remember("term_1", None);
         // Checked before: no list is read (a list read would fail here, with no Orca).
-        assert_eq!(check_mirrored(&mirror, "term_1"), Ok(()));
-        mirror.forget("term_1");
+        assert_eq!(check_mirrored(&mirror, "term_1", None), Ok(()));
+        mirror.forget("term_1", None);
         assert!(mirror.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_handle_checked_in_one_target_is_not_checked_in_another() {
+        let mirror = OrcaMirror::default();
+        mirror.remember("term_1", Some("Studio"));
+        // Checked before: no environment list and no terminal list is read.
+        assert_eq!(check_mirrored(&mirror, "term_1", Some("Studio")), Ok(()));
+        assert!(mirror.knows("term_1", Some("Studio")));
+        assert!(!mirror.knows("term_1", None));
+        assert!(!mirror.knows("term_1", Some("Other")));
+        assert!(!mirror.knows("term_2", Some("Studio")));
+        // A failure of a saved environment's terminal forgets that one and no other.
+        mirror.remember("term_1", None);
+        mirror.forget("term_1", Some("Studio"));
+        assert!(!mirror.knows("term_1", Some("Studio")));
+        assert!(mirror.knows("term_1", None));
     }
 
     #[test]

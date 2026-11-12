@@ -48,6 +48,7 @@ import type { Inbox } from "./bindings/Inbox";
 ### Put a library's distribution file in `src/vendor/` as it is
 
 Place a single-file distribution without changes, and load it with `index.html` as a classic script before `js/main.js`.
+A library that only one screen uses is read by `ts/vendor-load.ts` the first time that screen needs it, so the start of the app does not wait for it (xterm.js and its addons, highlight.js; #414).
 It is in neither a module nor npm, so TS uses it through a declaration in `globals.d.ts`.
 Keep the version and license notice in the comment at the top of the distribution file.
 This lets us use a library the owner chose to adopt without having a bundler (2026-10-31: marked and DOMPurify were adopted to render descriptions as Markdown).

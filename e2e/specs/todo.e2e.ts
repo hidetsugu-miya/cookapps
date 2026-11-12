@@ -1170,6 +1170,18 @@ describe("todo detail", () => {
     await expect($("#todo-detail")).not.toHaveText(expect.stringContaining("優先度"));
   });
 
+  it("puts the side pane under the body when the body column would be narrower than 320px", async () => {
+    await openTodo();
+    await $(ROWS).click();
+    const place = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().toJSON(), selector);
+    // The 1200px window with the project list and the right pane (40%) open leaves the detail less than 556px (320 + 16 + 220).
+    const [detail, main, side] = [await place("#todo-detail"), await place("#todo-detail .detail-main"), await place("#todo-detail .detail-side")];
+    expect(detail.width).toBeLessThan(556);
+    expect(main.width).toBeGreaterThanOrEqual(320);
+    expect(side.top).toBeGreaterThanOrEqual(main.bottom);
+    expect(side.width).toBe(220);
+  });
+
   it("moves the open task to another project from the side pane, the menu showing the nesting", async () => {
     await openTodo();
     const move = await mock("todoist_move", true);
@@ -1308,37 +1320,21 @@ function withDescription() {
 }
 
 describe("todo prompt icon", () => {
-  const icon = "#todo-prompt";
-
-  it("shows the Claude icon in the heading of a list only, with the tooltip text as its label", async () => {
+  it("has no Claude icon for the summary prompt in the heading: the prompt is opened from the settings and from the page of a draft", async () => {
     await openTodo();
-    await expect($(icon)).toBeDisplayed();
-    await expect($(icon)).toHaveAttribute("aria-label", "Todo の要約プロンプトを確認・編集");
-    await $('#projects .proj[data-view="p1"]').click();
-    await waitForCount("#todo-list li.task", 2);
-    await expect($(icon)).toBeDisplayed();
+    expect(await count("#todo-prompt")).toBe(0);
     await $(ROWS).click();
     await expect($("#todo-back")).toBeDisplayed();
-    await expect($(icon)).not.toBeDisplayed();
-    await $("#todo-back").click();
-    await expect($(icon)).toBeDisplayed();
+    expect(await count("#todo-prompt")).toBe(0);
   });
 
-  it("draws the Claude mark that the Claude card uses", async () => {
+  it("opens the prompt screen from the page of a draft, and 戻る returns to the Todo screen", async () => {
     await openTodo();
-    expect(await browser.execute(() => document.querySelector("#todo-prompt")!.innerHTML.includes("M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"))).toBe(true);
-  });
-
-  it("is not shown while the token form is up", async () => {
-    await boot({ inbox: inbox(), todoist_load: null, slack_load: slackLoad, claude_status: claudeReady });
-    await $("#nav-todo").click();
-    await expect($("#todo-token")).toBeDisplayed();
-    await expect($(icon)).not.toBeDisplayed();
-  });
-
-  it("opens the prompt screen when pressed, and 戻る returns to the Todo list", async () => {
-    await openTodo();
-    await $(icon).click();
+    await mock("todoist_summarize_slack", slackSummary);
+    await $("#todo-add-input").setValue(slackMessageUrl);
+    await $("#todo-add-button").click();
+    await $("#todo-draft").waitForExist();
+    await $("#todo-draft .draft-prompt").click();
     await expect($("#prompt")).toBeDisplayed();
     await expect($("#todo")).not.toBeDisplayed();
     await expect($("#nav-settings")).toHaveAttribute("aria-current", "page");
@@ -1346,7 +1342,6 @@ describe("todo prompt icon", () => {
     await expect($("#todo")).toBeDisplayed();
     await expect($("#prompt")).not.toBeDisplayed();
     await expect($("#nav-todo")).toHaveAttribute("aria-current", "page");
-    await expect($(icon)).toBeDisplayed();
   });
 });
 

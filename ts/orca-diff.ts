@@ -6,6 +6,7 @@ import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
 import { tag } from "./dom.js";
 import { COLUMNS_SVG, DOWN_SVG, LINES_SVG, RELOAD_SVG, UP_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { highlightReady, loadHighlight } from "./vendor-load.js";
 
 interface DiffTab {
   id: string;
@@ -139,18 +140,28 @@ function cancelColor(d: DiffTab) {
 function paint(d: DiffTab, diff: OrcaFileDiff) {
   cancelColor(d);
   const size = diff.oldLines.reduce((n, l) => n + l.length, 0) + diff.newLines.reduce((n, l) => n + l.length, 0);
-  if (diff.highlight && size > COLOR_NOW_MAX) {
+  if (diff.highlight && (size > COLOR_NOW_MAX || !highlightReady())) {
     d.oldHtml = htmlLines(diff.oldLines, null);
     d.newHtml = htmlLines(diff.newLines, null);
-    const id = window.setTimeout(() => {
+    const color = () => {
       d.cancelColor = null;
       d.oldHtml = htmlLines(diff.oldLines, diff.highlight);
       d.newHtml = htmlLines(diff.newLines, diff.highlight);
       const top = d.rows.scrollTop;
       render(d);
       d.rows.scrollTop = top;
-    }, COLOR_WAIT_MS);
-    d.cancelColor = () => clearTimeout(id);
+    };
+    if (highlightReady()) {
+      const id = window.setTimeout(color, COLOR_WAIT_MS);
+      d.cancelColor = () => clearTimeout(id);
+    } else {
+      // highlight.js is read the first time a file is colored; a text that fails to load stays plain.
+      let live = true;
+      loadHighlight().then(() => live && color(), () => {});
+      d.cancelColor = () => {
+        live = false;
+      };
+    }
   } else {
     d.oldHtml = htmlLines(diff.oldLines, diff.highlight);
     d.newHtml = htmlLines(diff.newLines, diff.highlight);

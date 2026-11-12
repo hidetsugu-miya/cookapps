@@ -47,7 +47,7 @@ let thread: SlackThread | null = null;
 let readError: string | null = null;
 // Only the latest read may draw.
 let readSeq = 0;
-// The messages stay at the newest one while the user has not scrolled up from the bottom, as the Orca timeline does (orca-chat.ts): within BOTTOM_PX of it counts as the bottom.
+// The messages stay at the newest one while the user has not scrolled up from the bottom: within BOTTOM_PX of it counts as the bottom.
 // `lastTop` is the scroll position last seen or set, so that an upward move (the user's) can be told from the box shrinking.
 const BOTTOM_PX = 40;
 let stick = true;

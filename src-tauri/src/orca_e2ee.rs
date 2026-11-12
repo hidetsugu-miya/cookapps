@@ -1,4 +1,4 @@
-//! A-7: the client side of the "E2EE v2" framing of Orca's paired connection (a WebSocket to another machine's Orca).
+//! The client side of the "E2EE v2" framing of Orca's paired connection (a WebSocket to another machine's Orca).
 //! Pure: bytes and strings in and out, no I/O. A token or a key is in no error text and no `Debug` output (the types here derive none).
 //!
 //! The handshake is the client's half of Orca's `PairedE2EEV2ClientSession`: a plain-text hello with the client's public key and nonce,

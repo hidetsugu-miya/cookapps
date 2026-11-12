@@ -5,7 +5,7 @@
  */
 export type OrcaStarted = { 
 /**
- * The agent's pane (`{tabId}:{leafId}`), which finds its history (A-7).
+ * The agent's pane (`{tabId}:{leafId}`), which names its tab (A-12).
  */
 paneKey: string | null, 
 /**

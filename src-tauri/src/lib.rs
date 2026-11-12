@@ -11,14 +11,13 @@ pub mod image_senders;
 pub mod images;
 pub mod mail_address;
 pub mod orca;
-pub mod orca_answer;
 pub mod orca_attach;
-pub mod orca_chat;
 pub mod orca_diff;
 pub mod orca_e2ee;
 pub mod orca_files;
 pub mod orca_handoff;
 pub mod orca_language;
+pub mod orca_link;
 pub mod orca_panes;
 pub mod orca_stream;
 pub mod orca_theme;
@@ -194,7 +193,6 @@ pub fn run() {
         .manage(slack::SlackState::default())
         .manage(std::sync::Mutex::new(None::<tauri_plugin_updater::Update>))
         .manage(update::Installed::default())
-        .manage(orca_chat::OrcaChat::default())
         .manage(orca::OrcaMirror::default())
         .manage(orca_stream::OrcaStream::default())
         .manage(Mutex::new(Badge::default()))
@@ -304,11 +302,6 @@ pub fn run() {
             orca::orca_terminal_input,
             orca::orca_open_url,
             orca_attach::orca_attach_file,
-            orca_answer::orca_answer,
-            orca_chat::orca_chat_open,
-            orca_chat::orca_chat_close,
-            orca_chat::orca_chat_older,
-            orca_chat::orca_chat_pause,
             orca_stream::orca_stream_open,
             orca_stream::orca_stream_close,
             orca_stream::orca_stream_terminal,
