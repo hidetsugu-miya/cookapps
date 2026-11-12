@@ -877,7 +877,7 @@ pub(crate) fn check_worktree_name(name: &str) -> Result<&str, String> {
 }
 
 /// The branch of a new worktree (`--branch`) or the ref it starts from (`--base-branch`), trimmed; `None` when not given or blank. `label` opens the error.
-/// The rules are `git check-ref-format`'s: no space, control character or `~ ^ : ? * [ \\`, no `..` or `@{`, not `@` alone, no `//`, no component starting with `.` or ending with `.lock`, and no `/` or `.` at the end, and a value starting with `-` is refused as an option.
+/// The rules are `git check-ref-format`'s: no space, control character or `~ ^ : ? * [ \\`, no zero-width, bidirectional or tag character (the ones `orca_handoff` takes out of a card), no `..` or `@{`, not `@` alone, no `//`, no component starting with `.` or ending with `.lock`, and no `/` or `.` at the end, and a value starting with `-` is refused as an option.
 pub(crate) fn check_ref<'a>(
     label: &str,
     value: Option<&'a str>,
@@ -894,6 +894,7 @@ pub(crate) fn check_ref<'a>(
         || value.contains("@{")
         || value.ends_with(['/', '.'])
         || value.chars().any(bad_char)
+        || crate::orca_handoff::without_hidden(value) != value
         || value.split('/').any(bad_component)
     {
         return Err(format!("{label}に使えない文字が含まれています"));
@@ -971,13 +972,6 @@ fn screen_args(handle: &str, environment: Option<&str>) -> Vec<String> {
         ]),
         environment,
     )
-}
-
-/// The keys of a mirrored terminal, written verbatim: no `--enter`, so control bytes reach the terminal as typed.
-fn input_args(handle: &str, text: &str, environment: Option<&str>) -> Vec<String> {
-    let mut args = args_of(&["terminal", "send", "--terminal", handle]);
-    args.extend([format!("--text={text}"), "--json".into()]);
-    with_environment(args, environment)
 }
 
 /// Always Claude. A session started from the Orca screen (A-12) has no first prompt: the user types it in the terminal.
@@ -1803,7 +1797,23 @@ pub async fn orca_terminal_read(
     blocking(move || screen(&mirror, &handle, environment.as_deref())).await?
 }
 
-/// Types `text` into the terminal `handle` as it is: of this machine over its unix socket (`terminal.send`), so the keys are in no argument of a process; of the saved environment `environment` through the CLI (`orca terminal send`), where they are.
+/// One `terminal.send` over the WebSocket of a saved environment; a send Orca did not take is a failure.
+async fn send_keys(
+    link: &mut crate::orca_link::WsLink,
+    handle: &str,
+    text: &str,
+) -> Result<(), String> {
+    let result = link
+        .request(
+            "terminal.send",
+            input_params(handle, text, "cookapps", None),
+        )
+        .await
+        .map_err(crate::orca_link::reason_of)?;
+    check_accepted(&result)
+}
+
+/// Types `text` into the terminal `handle` as it is, as `terminal.send`: of this machine over its unix socket, of the saved environment `environment` over a WebSocket of its own, so the keys are in no argument of a process.
 #[tauri::command]
 pub async fn orca_terminal_input(
     mirror: tauri::State<'_, OrcaMirror>,
@@ -1828,10 +1838,10 @@ pub async fn orca_terminal_input(
         )
         .await
         .and_then(|result| check_accepted(&result)),
-        Some(name) => {
-            let (handle, text) = (handle.clone(), text.clone());
-            blocking(move || write(&input_args(&handle, &text, Some(&name))).map(|_| ())).await?
-        }
+        Some(name) => match crate::orca_link::connect_environment(name).await {
+            Ok(mut link) => send_keys(&mut link, &handle, &text).await,
+            Err(reason) => Err(reason),
+        },
     };
     if sent.is_err() {
         mirror.forget(&handle, environment.as_deref());
@@ -2842,6 +2852,13 @@ mod tests {
             "a\0b",
             "a\u{7f}b",
             "a\u{85}b",
+            "a\u{200b}b",
+            "a\u{200d}b",
+            "a\u{2060}b",
+            "a\u{feff}b",
+            "a\u{202e}b",
+            "a\u{2066}b",
+            "a\u{e0041}b",
             "a~1",
             "a^",
             "a:b",
@@ -2863,6 +2880,38 @@ mod tests {
             let err = check_ref("作成元", Some(bad)).unwrap_err();
             assert!(err.starts_with("作成元"), "{bad:?}: {err}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_keys_of_a_saved_environment_go_over_its_websocket_and_a_refused_send_fails() {
+        use crate::{
+            orca_e2ee::testing::Desktop,
+            orca_link::{
+                ws_testing::{bind, FakeDesktop},
+                WsLink,
+            },
+        };
+        let (listener, url) = bind().await;
+        let desktop = Desktop::new([31; 32]);
+        let key = desktop.public_key_b64();
+        let server = tokio::spawn(async move {
+            let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
+            for accepted in [true, false] {
+                let send = server.request().await;
+                assert_eq!(send["method"], "terminal.send");
+                assert_eq!(
+                    send["params"],
+                    input_params("term_1", "\u{3}--json", "cookapps", None)
+                );
+                server
+                    .send(json!({"id": send["id"], "ok": true, "result": {"send": {"accepted": accepted}}}))
+                    .await;
+            }
+        });
+        let mut link = WsLink::connect(&url, "device-token", &key).await.unwrap();
+        assert!(send_keys(&mut link, "term_1", "\u{3}--json").await.is_ok());
+        assert!(send_keys(&mut link, "term_1", "\u{3}--json").await.is_err());
+        server.await.unwrap();
     }
 
     #[test]
@@ -3577,7 +3626,7 @@ mod tests {
     }
 
     #[test]
-    fn the_close_read_and_input_arguments() {
+    fn the_close_and_read_arguments() {
         assert_eq!(
             close_args("term_1", None),
             [
@@ -3604,23 +3653,6 @@ mod tests {
                 "--json",
                 "--environment=Studio"
             ]
-        );
-        // No `--enter`, and the text joined to its flag so that control bytes and `--json` are taken as typed.
-        assert_eq!(
-            input_args("term_1", "\u{3}--json", None),
-            [
-                "terminal",
-                "send",
-                "--terminal",
-                "term_1",
-                "--text=\u{3}--json",
-                "--json"
-            ]
-        );
-        assert!(!input_args("term_1", "x", Some("Studio")).contains(&"--enter".to_owned()));
-        assert_eq!(
-            input_args("term_1", "x", Some("Studio")).last().unwrap(),
-            "--environment=Studio"
         );
     }
 

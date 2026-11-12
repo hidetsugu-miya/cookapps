@@ -185,6 +185,11 @@ pub fn compose(
     Ok(text)
 }
 
+/// The check of the length that can be made before Claude summarises the content: the prompt without a summary and without the files is the shortest one the hand-over can make, so one that is over the limit already is refused at once, before the summary, the worktree and the upload are paid for. The same refusal as `compose` gives.
+pub fn check_length(instruction: &str, context: &HandoffContext) -> Result<(), String> {
+    compose(instruction, &[], Some(context)).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,5 +456,25 @@ mod tests {
         let c = context("一行目\n\t二行目\u{200b}\r\n三行目");
         let text = compose("i", &[], Some(&c)).unwrap();
         assert!(text.ends_with("\">\n一行目\n\t二行目\n三行目\n</cookapps-context>"));
+    }
+
+    #[test]
+    fn a_prompt_over_the_limit_is_refused_before_the_summary_is_made() {
+        let long = "あ".repeat(TEXT_LIMIT);
+        let err = check_length(&long, &context("本文")).unwrap_err();
+        assert_eq!(
+            err,
+            compose(&long, &[], Some(&context("本文"))).unwrap_err()
+        );
+        // The body counts with the instruction.
+        assert!(check_length("指示", &context(&"い".repeat(TEXT_LIMIT))).is_err());
+        // A prompt within the limit passes (the summary is not counted here: `compose` checks it again with the summary).
+        assert!(check_length("指示", &context("本文")).is_ok());
+        assert!(check_length("指示", &context(&"い".repeat(TEXT_LIMIT - 300))).is_ok());
+        // A blank instruction is refused here too.
+        assert_eq!(
+            check_length(" \n", &context("本文")).unwrap_err(),
+            "指示を書いてください"
+        );
     }
 }

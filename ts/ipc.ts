@@ -209,8 +209,8 @@ export interface Commands {
   // Claude's fix of a Todo proposal made from a Slack message: the same conversation, for the name and the description (`content`, `description`) instead of the instructions; each part is null with no lines when it is left alone.
   // The model and effort are those of `slackSummary`. Nothing is saved, not even the request.
   claude_edit_todo_draft: { args: { content: string; description: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoDraftEdit };
-  // A-9: Claude's summary of the content to hand over (the mail, the Slack thread or the Todo of the card), as points. `context` is quoted to Claude as data, never followed; the instruction the user wrote is not sent. The model and effort are those of `orcaHandoff`. Nothing is saved.
-  claude_summarize_handoff: { args: { context: HandoffContext }; result: HandoffSummary };
+  // A-9: Claude's summary of the content to hand over (the mail, the Slack thread or the Todo of the card), as points. `context` is quoted to Claude as data, never followed; the instruction the user wrote is not sent to Claude: Rust only checks it with the content against the limit of the prompt, before the call. The model and effort are those of `orcaHandoff`. Nothing is saved.
+  claude_summarize_handoff: { args: { context: HandoffContext; instruction: string }; result: HandoffSummary };
   // Claude's answer to a request about Todo tasks: a short reply and the tasks it proposes (name, date `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, project ID; a project or a date that is not valid is null, and a task with a bad date or name is not returned). Nothing is created in Todoist.
   // `history` is the conversation so far and `instruction` the new request. The Todoist projects of the last load are sent from Rust. The model and effort are those of `todoChat`. Nothing is saved.
   claude_chat_todo: { args: { history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoChatReply };

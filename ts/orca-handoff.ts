@@ -9,12 +9,12 @@ import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import { getClaude } from "./claude.js";
 import { composing, isMac, tag } from "./dom.js";
 import { ARROW_UP_SVG, CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
-import { type HandoffDestination, invoke } from "./ipc.js";
+import { type HandoffContext, type HandoffDestination, invoke } from "./ipc.js";
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
 import { openBranchList, type BranchSource, type PickedBranch } from "./orca-branch.js";
 import { openMenu } from "./menu.js";
-import { hideTerminals, showTerminals, type TermSource } from "./orca-terminal.js";
+import { hideTerminals, isShowing, releaseTerminal, showTerminals, type TermSource } from "./orca-terminal.js";
 import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, streamsEnvironment, THIS_MACHINE, worktreeLabel } from "./orca.js";
 
 // The item a pane is for: a key that is the same while the same mail, thread or task is shown, and the content to hand over, built when the pane is opened.
@@ -87,6 +87,8 @@ const attached = new Map<string, Attachment[]>();
 let chosenProject: string | null = null;
 // The worktree a send of an item made and did not finish with (the files or the launch failed after it): a send again with the same project, name, branch, base and destination uses it instead of making another.
 const made = new Map<string, { project: string; name: string; branch: string | null; base: string | null; environment: string | null; path: string }>();
+// The summary Claude made of the content of an item in a send that did not finish: a send again with the same content uses its points instead of asking Claude again.
+const summarised = new Map<string, { context: HandoffContext; points: string[] }>();
 // The Orca the panes talk to (a saved environment's name, null for this machine), kept for the next handoff. Undefined until one is chosen: the panes then follow the target of the Orca screen, which a choice here never changes.
 let chosenDest: string | null | undefined;
 const panes = new Set<HandoffPane>();
@@ -132,6 +134,8 @@ export class HandoffPane {
   private lastRead = 0;
   // Names the pane as the owner of the terminal it shows (orca-terminal.ts).
   private owner = `handoff-${++paneSeq}`;
+  // The handle of the terminal the pane made for its session, so that it is forgotten with the session.
+  private termHandle: string | null = null;
   // The element that takes the files dropped or pasted before a hand-over: it stays, and the form is drawn in it. After it the terminal takes them (A-10).
   private formMain = tag("div", "ho-main ho-whole");
   // The parts of the session shown: its notice, its header, the note for a session whose terminal cannot be shown, and the host of the terminal.
@@ -188,6 +192,7 @@ export class HandoffPane {
     const key = item?.key ?? null;
     if (key !== this.itemKey) {
       if (this.itemKey !== null) dropIdleForm(this.itemKey);
+      this.releaseTerm();
       this.itemKey = key;
       this.removed = false;
       // The card is built when the pane opens (the form is drawn), not for each item that goes by.
@@ -340,7 +345,19 @@ export class HandoffPane {
       sess.note.hidden = source !== null;
     }
     if (!sess || !source || document.hidden || sess.term.getClientRects().length === 0) return hideTerminals(this.owner);
-    showTerminals([{ id: source.handle, source, host: sess.term }], source.handle, this.owner);
+    // The pane shows another terminal now (the row gave the handle the launch did not): the old one is forgotten.
+    if (this.termHandle !== null && this.termHandle !== source.handle) this.releaseTerm();
+    this.termHandle = source.handle;
+    // Every second this runs: a terminal already shown as asked is left as it is.
+    const placement = { id: source.handle, source, host: sess.term };
+    if (!isShowing(placement, this.owner)) showTerminals([placement], source.handle, this.owner);
+  }
+
+  // Forgets the terminal the pane made (the session was forgotten, or the pane shows the session of another item).
+  private releaseTerm() {
+    if (this.termHandle === null) return;
+    releaseTerminal(this.termHandle, this.owner);
+    this.termHandle = null;
   }
 
   // The pane of the session: the one the launch named, else the one of its row in the list.
@@ -548,6 +565,7 @@ export class HandoffPane {
       openBranchList(existingChip, source, {
         current: (kind, branch) => form.existing?.kind === kind && form.existing.name === branch,
         refuseInUse: true,
+        refuseCurrent: true,
         pickCurrent: true,
         pick: (b) => {
           form.existing = b;
@@ -815,6 +833,7 @@ export class HandoffPane {
   // Forgets the session handed to the item: the next open shows the send form.
   private forget() {
     if (this.itemKey === null) return;
+    this.releaseTerm();
     sessions.delete(this.itemKey);
     this.errors.delete(this.itemKey);
     this.removed = false;
@@ -839,6 +858,16 @@ export class HandoffPane {
     return path;
   }
 
+  // The points of the summary of the content: the ones an earlier send of the item made for the same content, else Claude's (kept for a retry after a later failure).
+  private async summarise(key: string, context: HandoffContext, instruction: string) {
+    const earlier = summarised.get(key);
+    if (earlier && earlier.context.kind === context.kind && earlier.context.title === context.title && earlier.context.body === context.body) return earlier.points;
+    // The instruction goes to Rust for the check of the length only; Claude is not sent it.
+    const { points } = await invoke("claude_summarize_handoff", { context, instruction });
+    summarised.set(key, { context, points });
+    return points;
+  }
+
   // Hands the instruction over as it was written: Claude summarises the content first when the card is there (a failure ends it before anything starts), then the worktree is made when 新規作成 is chosen (a failure ends it before anything starts), the files go into the worktree of the session, and the session starts once with the instruction, the paths of the files, the summary and the content.
   private async handOver() {
     const el = this.el;
@@ -859,13 +888,14 @@ export class HandoffPane {
     this.update();
     try {
       const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
-      const summary = context ? (await invoke("claude_summarize_handoff", { context })).points : [];
+      const summary = context ? await this.summarise(key, context, instruction) : [];
       const worktree = form.fresh ? await this.makeWorktree(key, form, project, environment) : own!;
       const uploaded = files.length ? await uploadAttachments(files, worktree, environment) : [];
       const destination: HandoffDestination = { kind: "new", path: worktree };
       const started = await invoke("orca_handoff", { destination, instruction, files: uploaded.map((f) => f.text), summary, context, environment });
       sessions.set(key, { path: worktree, paneKey: started.paneKey, handle: started.handle, environment, seen: false });
       made.delete(key);
+      summarised.delete(key);
       forms.delete(key);
       // Only the files sent: one added while the hand-over ran (still being read when it began) stays.
       const left = (attached.get(key) ?? []).filter((a) => !files.includes(a));

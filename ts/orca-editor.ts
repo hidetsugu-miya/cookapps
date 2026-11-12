@@ -89,8 +89,16 @@ function draw(f: EditorFile) {
   if (f.highlight && highlightReady()) f.code.innerHTML = hljs.highlight(text, { language: f.highlight, ignoreIllegals: true }).value;
   else {
     f.code.textContent = text;
-    // highlight.js is read the first time a file is colored; the layer is drawn again, colored, once it is there.
-    if (f.highlight) loadHighlight().then(() => drawLater(f, nextFrame), fail);
+    // highlight.js is read the first time a file is colored; the layer is drawn again, colored, once it is there. A read that fails once gives up the colors of the file while it is open, so a key does not read it again.
+    if (f.highlight)
+      loadHighlight().then(
+        () => drawLater(f, nextFrame),
+        (e) => {
+          if (!f.highlight) return;
+          f.highlight = null;
+          fail(e);
+        },
+      );
   }
 }
 

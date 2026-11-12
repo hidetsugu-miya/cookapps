@@ -134,7 +134,7 @@ const worktreeRow = (name: string) => $(`//div[@role="menu"]//button[.//span[@cl
 // What `claude_summarize_handoff` answers by default, and the arguments `orca_handoff` and `claude_summarize_handoff` are called with.
 const POINTS = ["請求書の金額を直す", "テストを足す"];
 type Handed = { destination: unknown; instruction: string; files: string[]; summary: string[]; context: { kind: string; title: string; body: string } | null; environment: string | null };
-type Asked = { context: { kind: string; title: string; body: string } };
+type Asked = { context: { kind: string; title: string; body: string }; instruction: string };
 
 // Writes the instruction and makes Claude answer `summary` for the content when the button hands it over (the mock is returned, and its calls are the asks). The press of the button is the test's.
 async function write(screen: Screen, text: string, summary: HandoffSummary = handoffSummary(POINTS)) {
@@ -315,7 +315,7 @@ describe("orca handoff", () => {
 
   describe("the frame of a worktree to make", () => {
     const BRANCHES = [
-      { name: "feat/a", current: true, inUse: true },
+      { name: "feat/a", current: true, inUse: false },
       { name: "main", current: false, inUse: true },
       { name: "feat/c", current: false, inUse: false },
     ];
@@ -390,7 +390,7 @@ describe("orca handoff", () => {
       expect(await waitForCalls(create)).toEqual([{ project: "proj_example-app", name: "x", branch: null, base: null, environment: null }]);
     });
 
-    it("picks an existing branch with the ones another worktree has checked out refused, disables the ref, and passes the local name of the branch with no ref", async () => {
+    it("picks an existing branch with the ones another worktree has checked out and the branch of the project's own folder refused, disables the ref, and passes the local name of the branch with no ref", async () => {
       await openFresh();
       const create = await mock("orca_worktree_create", "/work/example-app-x");
       await mock("orca_handoff", started);
@@ -411,6 +411,8 @@ describe("orca handoff", () => {
       await waitForCount(".orca-dest-pop .orca-branch-row", 4);
       expect(await dialogRows()).toEqual(["feat/a", "main", "feat/c", "origin/feat/d"]);
       expect(await textsOf(".orca-dest-pop .orca-branch-row:disabled")).toEqual(["feat/a", "main"]);
+      await expect(branchRow("feat/a")).toBeDisabled();
+      await expect(branchRow("feat/c")).toBeEnabled();
       await branchRow("origin/feat/d").click();
       expect(await textsOf(`${MAIL.pane} .ho-existing`)).toEqual(["origin/feat/d"]);
       await expect(sendButton(MAIL)).toBeEnabled();
@@ -602,9 +604,9 @@ describe("orca handoff", () => {
     expect(call.context!.body).toContain("差出人: Alice <alice@example.com>");
     expect(call.context!.body).toContain("日時: ");
     expect(call.context!.body).toContain(mailBody);
-    // Claude got the content alone, as the card holds it, and not the instruction.
+    // The content goes as the card holds it; the instruction goes to Rust for the check of the length, and Claude is not sent it.
     const [asked] = (await callsOf(ask)) as Asked[];
-    expect(asked).toEqual({ context: call.context });
+    expect(asked).toEqual({ context: call.context, instruction: "原因を調べて" });
     // Nothing else was sent, and the Orca screen's own launch was not used.
     expect(await callsOf("orca_start")).toHaveLength(0);
     expect(await callsOf(handoff)).toHaveLength(1);
@@ -768,23 +770,26 @@ describe("orca handoff", () => {
     await waitForCalls(handoff);
   });
 
-  it("does not make a second worktree when the launch fails after one was made and the same send is tried again", async () => {
+  it("does not make a second worktree or ask Claude again when the launch fails after one was made and the same send is tried again", async () => {
     await openMail();
     const create = await mock("orca_worktree_create", "/work/example-app-fix");
     const handoff = await mock("orca_handoff", rejects("Orca が指示を受け付けませんでした"));
     await openPane(MAIL);
     await chooseProject(MAIL, "example-app");
     await chooseNewWorktree(MAIL);
-    await write(MAIL, "やって");
+    const ask = await write(MAIL, "やって");
     await $(`${MAIL.pane} .ho-name`).setValue("fix");
     await sendButton(MAIL).click();
     await waitForCalls(handoff);
     await expect($(`${MAIL.pane} .ho-form .pending.fail`)).toHaveText("Orca が指示を受け付けませんでした");
     const again = await mock("orca_handoff", started);
     await sendButton(MAIL).click();
-    const [call] = (await waitForCalls(again)) as { destination: unknown }[];
+    const [call] = (await waitForCalls(again)) as { destination: unknown; summary: string[] }[];
     expect(call.destination).toEqual({ kind: "new", path: "/work/example-app-fix" });
     expect(await callsOf(create)).toHaveLength(1);
+    // The summary of the first send is used again: Claude is asked once.
+    expect(call.summary).toEqual(POINTS);
+    expect(await callsOf(ask)).toHaveLength(1);
   });
 
   it("keeps the chosen project in memory for the next handoff", async () => {
@@ -1465,8 +1470,8 @@ describe("orca handoff: attached files (A-10)", () => {
     expect(call.destination).toEqual({ kind: "new", path: "/work/example-app" });
     expect(call.instruction).toBe("この画面を直して");
     expect(call.summary).toEqual(POINTS);
-    // Claude is sent the content alone, not the instruction or the files.
-    expect(Object.keys(((await callsOf(ask)) as Asked[])[0])).toEqual(["context"]);
+    // The files are not sent with the summary, and the instruction is there for the check of the length only.
+    expect(Object.keys(((await callsOf(ask)) as Asked[])[0])).toEqual(["context", "instruction"]);
     expect(call.files).toEqual([`${dropped("example-app")} `]);
     expect(call.environment).toBe("Studio");
     expect(await callsOf(attach)).toEqual([{ path: "/work/example-app", name: "shot.png", data: PNG, environment: "Studio" }]);

@@ -1,5 +1,5 @@
 // Loads the libraries of src/vendor/ that only the Orca screens use, the first time one is wanted and not at start-up.
-// Each group is read once: the scripts keep their order, and a failed read is tried again at the next ask.
+// Each group is read once: the scripts keep their order, and a failed read is tried again at the next ask, only for the scripts that failed.
 // The paths are inside vendor/, so the CSP (`script-src 'self'`) is as it was.
 
 const TERMINAL = ["vendor/xterm.js", "vendor/addon-fit.js", "vendor/addon-unicode11.js", "vendor/addon-web-links.js"];
@@ -7,8 +7,20 @@ const HIGHLIGHT = ["vendor/highlight.min.js", "vendor/highlight-languages.js"];
 
 const loading = new Map<string, Promise<void>>();
 const loaded = new Set<string>();
+// The read of each script, kept while it is on its way or done; a failed one is let go, so the next ask reads it alone.
+const scripts = new Map<string, Promise<void>>();
 
 function script(src: string) {
+  let read = scripts.get(src);
+  if (!read) {
+    read = add(src);
+    scripts.set(src, read);
+    read.catch(() => scripts.delete(src));
+  }
+  return read;
+}
+
+function add(src: string) {
   return new Promise<void>((resolve, reject) => {
     const el = document.createElement("script");
     el.src = src;

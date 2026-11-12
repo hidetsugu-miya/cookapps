@@ -73,6 +73,8 @@ interface Instance {
   source: TermSource;
   // The host element of its pane while it is shown, else null (its box waits in the stash).
   host: HTMLElement | null;
+  // The owner that showed it last, kept while it waits in the stash: only the Orca screen's own are pruned with the list of Orca.
+  owner: string;
   // The channel of its stream, null when it has none: an event of another channel is not drawn.
   channel: { onmessage: (event: OrcaTermEvent) => void } | null;
   // The number of the showing of its stream: Rust ends a showing only by a close of the same number, whatever order the calls arrive in.
@@ -259,7 +261,7 @@ function writeAgain(instance: Instance, data: string) {
   });
 }
 
-function newInstance(source: TermSource): Instance {
+function newInstance(source: TermSource, owner: string): Instance {
   const el = document.createElement("div");
   el.className = "orca-term-box";
   el.hidden = true;
@@ -292,7 +294,7 @@ function newInstance(source: TermSource): Instance {
   term.unicode.activeVersion = "11";
   term.loadAddon(new WebLinksAddon.WebLinksAddon(open, { hover, leave, urlRegex: URL_REGEX }));
   term.open(el);
-  const instance: Instance = { term, fit, el, source, host: null, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false };
+  const instance: Instance = { term, fit, el, source, host: null, owner, channel: null, generation: 0, timer: null, last: null, reading: false, pending: "", sending: false, replaying: 0, copy: null, copyQueued: false };
   // The clipboard request of a program. Returning true says it was handled, so xterm.js passes it on to nobody.
   term.parser.registerOscHandler(52, (data) => {
     const text = instance.replaying > 0 ? null : osc52Text(data);
@@ -535,7 +537,7 @@ export function showTerminals(placements: Placement[], focusId: string | null, o
   for (const { id, source, host } of placements) {
     let instance = instances.get(id);
     if (!instance) {
-      instance = newInstance(source);
+      instance = newInstance(source, owner);
       instances.set(id, instance);
     }
     // The terminal now comes the other way (the Orca screen began or stopped streaming its environment): the reads or the stream end, and the other way starts.
@@ -548,6 +550,7 @@ export function showTerminals(placements: Placement[], focusId: string | null, o
     if (!shown.has(id) || changed) fresh.push(instance);
     shown.add(id);
     owners.set(id, owner);
+    instance.owner = owner;
     instance.host = host;
     // Shown again in a new pane: the keys of the old one are not for the new.
     if (instance.el.parentElement !== host) {
@@ -582,6 +585,12 @@ export function showTerminals(placements: Placement[], focusId: string | null, o
   focusedId = focusId;
 }
 
+// Whether `owner` shows the terminal of `placement` as it is asked for: the same handle, kind of source and host element, so showing it again would change nothing.
+export function isShowing(placement: Placement, owner: string) {
+  const instance = instances.get(placement.id);
+  return !!instance && shown.has(placement.id) && owners.get(placement.id) === owner && instance.host === placement.host && instance.source.kind === placement.source.kind && !instance.el.hidden;
+}
+
 // Hides every terminal of `owner` and stops their reads and streams (another screen, or no tab shows).
 export function hideTerminals(owner = ORCA_SCREEN) {
   waiting.delete(owner);
@@ -603,9 +612,17 @@ function dropTerminal(id: string) {
   instances.delete(id);
 }
 
-// Forgets every terminal whose handle and source `keep` does not accept (the sessions that left Orca's list, or the target changed).
+// Forgets every terminal of the Orca screen whose handle and source `keep` does not accept (the sessions that left Orca's list, or the target changed). The terminal a pane of A-9 made is that pane's: its session decides, not the list of the screen.
 export function pruneTerminals(keep: (id: string, source: TermSource) => boolean) {
-  for (const [id, instance] of [...instances]) if (!keep(id, instance.source)) dropTerminal(id);
+  for (const [id, instance] of [...instances]) if (instance.owner === ORCA_SCREEN && !keep(id, instance.source)) dropTerminal(id);
+}
+
+// Forgets the terminal of the handle `id` that the pane `owner` made (its session was forgotten, or the pane shows another). One the Orca screen took since stays: it is the screen's to forget.
+export function releaseTerminal(id: string, owner: string) {
+  const instance = instances.get(id);
+  if (!instance || instance.owner !== owner) return;
+  hideTerminals(owner);
+  dropTerminal(id);
 }
 
 // What a failed send of typed keys does (the screen shows the message).

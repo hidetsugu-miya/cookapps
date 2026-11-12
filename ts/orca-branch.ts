@@ -55,6 +55,8 @@ export interface BranchListOptions {
   current: (kind: "local" | "remote", name: string, checkedOut: boolean) => boolean;
   // A branch another worktree has checked out cannot be picked (git cannot check it out twice).
   refuseInUse: boolean;
+  // The local branch the folder being read has checked out cannot be picked either (a new worktree cannot check it out beside that folder).
+  refuseCurrent?: boolean;
   // A row above the sections that picks none (the default base of a new worktree).
   top?: { label: string; current: boolean; pick: () => void };
   // A row marked `current` closes the list and picks nothing when `pickCurrent` is false.
@@ -182,7 +184,7 @@ export function openBranchList(anchor: Element, here: BranchSource, options: Bra
   filter.focus();
   void searchRemote();
   invoke("orca_local_branches", { path: here.path, environment: here.target }).then(
-    (read) => pop.isConnected && fill(localSection, read.map((b) => row("local", b.name, b.name, options.current("local", b.name, b.current), b.inUse)), null),
+    (read) => pop.isConnected && fill(localSection, read.map((b) => row("local", b.name, b.name, options.current("local", b.name, b.current), b.inUse || (options.refuseCurrent === true && b.current))), null),
     (e) => pop.isConnected && fill(localSection, [], String(e)),
   );
 }

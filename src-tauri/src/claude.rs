@@ -2478,14 +2478,16 @@ async fn chat_edit(
         })
 }
 
-/// Has Claude summarise the content of a handoff (A-9): `context` is the mail, Slack thread or Todo to hand over (quoted as data). The instruction the user wrote is not sent.
+/// Has Claude summarise the content of a handoff (A-9): `context` is the mail, Slack thread or Todo to hand over (quoted as data). The instruction the user wrote is not sent to Claude: it only lets Rust refuse, before the call, a hand-over whose prompt is over the limit already.
 /// The content is sent to Anthropic through Claude Code, only when the user pressed the button that hands it over, and nothing is saved. The model and effort are those of `orcaHandoff` (A-2). What the model says and the prompt never reach the log.
 #[tauri::command]
 pub async fn claude_summarize_handoff(
     app: tauri::AppHandle,
     context: crate::orca_handoff::HandoffContext,
+    instruction: String,
 ) -> Result<HandoffSummary, String> {
     let command = "claude_summarize_handoff";
+    crate::orca_handoff::check_length(&instruction, &context)?;
     let out = chat_ask(
         &app,
         command,
