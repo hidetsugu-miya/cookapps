@@ -3,6 +3,8 @@
 html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
 :root { --ff-base: var(--ff-app, -apple-system, sans-serif); --fs: var(--fs-app, 1); }
+/* A-23: the header band at the top of every screen is one height (--header-h), and the icon buttons in it one size (--header-btn, with --header-ic for the icon); no screen sets its own. */
+:root { --header-h: 40px; --header-btn: 24px; --header-ic: 15px; }
 body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0; display: flex; }
 #mail-header, #inbox-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
@@ -58,6 +60,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: #444; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .icon-btn:hover:not(:disabled) { background: var(--soft); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
+#mail-header .icon-btn, #inbox-header .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 #error { color: #b00020; padding: 8px 32px; margin: 0; white-space: pre-wrap; }
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
@@ -115,11 +119,11 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .date { text-align: right; white-space: nowrap; padding-right: 8px; color: #666; font-size: calc(12px * var(--fs)); }
 
 /* Detail view: the toolbar is tinted, the subject sits above the messages, and each message lines its body up with the sender's name (avatar 40px + gap 16px). */
-#mail-header { padding: 14px 32px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#mail-header { box-sizing: border-box; height: var(--header-h); padding: 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #mail-header .icon-btn { color: #444746; border-radius: 50%; }
 /* The inbox's header and the Slack list's carry the same tint as the thread's bar; they stay above the list while it scrolls (only #main and #slack-feed scroll). */
-#inbox-header { padding: 16px 32px 10px; background: var(--bar); border-bottom: 1px solid var(--line); }
-#slack-header, #sc-head { padding: 14px 24px 10px 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#inbox-header { box-sizing: border-box; height: var(--header-h); padding: 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#slack-header, #sc-head { box-sizing: border-box; height: var(--header-h); padding: 0 24px 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #slack-header .icon-btn { color: #444746; border-radius: 50%; }
 #unread-heading .text-btn:disabled { opacity: .4; cursor: default; }
 #unread-heading .text-btn:disabled:hover { background: #fff; }
@@ -177,7 +181,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 
 /* Calendar: --hour is set from HOUR_PX in ts/calendar.ts. */
 #calendar { flex: 1; min-height: 0; display: flex; flex-direction: column; --gutter: 56px; }
-#cal-bar { flex: none; display: flex; align-items: center; gap: 4px; padding: 20px 32px 12px; }
+#cal-bar { flex: none; display: flex; align-items: center; gap: 4px; box-sizing: border-box; height: var(--header-h); padding: 0 32px; }
 #cal-title { font-size: calc(20px * var(--fs)); }
 #cal-title .year { color: #888; font-weight: normal; }
 .text-btn { height: 32px; padding: 0 16px; border: 1px solid var(--chip-line); border-radius: 16px; background: #fff; color: #333; cursor: pointer; font-family: inherit; font-size: calc(11px * var(--fs)); }
@@ -264,7 +268,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .arrival-who b { flex: none; max-width: 60%; }
 .arrival-channel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
 #todo { flex: 1; min-height: 0; display: flex; }
-#projects { width: 220px; flex: none; border-right: 1px solid var(--line); padding: 20px 12px; box-sizing: border-box; overflow-y: auto; }
+#projects { width: 220px; flex: none; border-right: 1px solid var(--line); padding: 0 12px 20px; box-sizing: border-box; overflow-y: auto; }
 #projects h3 { font-size: calc(12px * var(--fs)); color: #888; font-weight: normal; margin: 16px 8px 4px; }
 .proj { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: #333; cursor: pointer; text-align: left; }
 .proj:hover { background: var(--hover); }
@@ -283,11 +287,9 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .proj svg { width: 18px; height: 18px; flex: none; }
 .pdot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 #todo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-/* T-7, A-9: the first row of the Todo screen is tinted on both sides (the header of the tasks and, on the right, the icons that choose Claude's pane or the Orca pane), with the same height as the header of the Orca screen (32px, with 24px buttons) so that the two lines meet; the second row of the right side (the heading of the pane chosen) is the same height for both panes. */
-#todo-body > header, #todo-tools { box-sizing: border-box; height: 32px; background: var(--soft); border-bottom: 2px solid var(--accent); }
+/* T-7, A-9: the first row of the Todo screen is tinted on both sides (the header of the tasks and, on the right, the icons that choose Claude's pane or the Orca pane), with the height of every header (--header-h) so that the two lines meet; the second row of the right side (the heading of the pane chosen) is the same height for both panes. */
+#todo-body > header, #todo-tools { box-sizing: border-box; height: var(--header-h); background: var(--soft); border-bottom: 2px solid var(--accent); }
 #todo-body > header { padding-top: 0; padding-bottom: 0; }
-#todo-body > header .icon-btn, #todo-tools .icon-btn { width: 24px; height: 24px; }
-#todo-body > header .icon-btn svg, #todo-tools .icon-btn svg { width: 15px; height: 15px; }
 #todo-body > header .icon-btn:hover:not(:disabled) { background: var(--hover); }
 #todo-tools { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 16px; }
 #todo-tools .icon-btn:hover:not(:disabled) { background: var(--hover); }
@@ -700,7 +702,7 @@ button.status:hover { filter: brightness(.95); }
 
 /* The Todo prompt screen: the fixed part and the editable body on the left, the conversation with Claude on the right. */
 #prompt, #slack-compose { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#prompt header, #slack-compose header { gap: 8px; padding: 16px 24px 12px 16px; border-bottom: 1px solid var(--line); }
+#prompt header, #slack-compose header { box-sizing: border-box; height: var(--header-h); gap: 8px; padding: 0 24px 0 16px; border-bottom: 1px solid var(--line); }
 #prompt h1, #slack-compose h1 { flex: none; }
 #prompt .grow, #slack-compose .grow { flex: 1; }
 #prompt-error, #slack-error { margin: 8px 24px 0; }
@@ -791,18 +793,17 @@ button.status:hover { filter: brightness(.95); }
 #orca { flex: 1; min-height: 0; display: flex; }
 #orca-list { flex: none; width: clamp(20%, var(--list-w, 25%), 50%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
 #orca-split { flex: none; }
-/* A-12: a header of 32px, level with the tab strip of the work pane: the bell (with its number) and the reload at the right, buttons of 24px. */
-#orca-header { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 2px; height: 32px; box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); }
-#orca-header .icon-btn { flex: none; width: auto; min-width: 24px; height: 24px; gap: 3px; padding: 0 4px; color: var(--ink-soft); }
-#orca-header .icon-btn svg { width: 15px; height: 15px; }
+/* A-12: a header of the height of every header, level with the tab strip of the work pane: the bell (with its number) and the reload at the right. */
+#orca-header { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 2px; height: var(--header-h); box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); }
+#orca-header .icon-btn { flex: none; width: auto; min-width: var(--header-btn); gap: 3px; padding: 0 4px; color: var(--ink-soft); }
 #orca-header .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 /* A-23: the button that closes and opens the list. It is first in the header, pushed to the left (the bell and the reload keep the right), and (while the list is closed) at the left end of the tab strip of the pane at the left edge. */
-.list-toggle { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
-.list-toggle svg { width: 15px; height: 15px; }
+.list-toggle { flex: none; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
+.list-toggle svg { width: var(--header-ic); height: var(--header-ic); }
 #orca-header .list-toggle { margin-right: auto; }
 .orca-tabbar .list-toggle { margin-left: 6px; }
 /* A-23, Todo: first in the list of projects, level with the buttons of the header beside it; while the list is closed, first in that header. */
-#projects .list-toggle { display: flex; margin: 6px 0 8px; }
+#projects .list-toggle { display: flex; margin: calc((var(--header-h) - var(--header-btn)) / 2) 0 8px; }
 /* Beside the bell: the question icon (or the working mark) and the number. */
 #orca-bell-badge { display: flex; align-items: center; gap: 2px; font-size: calc(11px * var(--fs)); font-weight: 600; }
 #orca-bell-badge .orca-ic { width: 10px; height: 10px; }
@@ -877,7 +878,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-session-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .orca-sec { margin: 12px 10px 4px; font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--muted); }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-/* A-12, A-16, A-17: the work pane is a tree of splits and panes. The bar of 32px of a pane has the tab strip, as wide as its tabs and scrolling when they overflow, with the plus right after it; the terminal of the selected tab is under it. The pane that has the focus shows an accent line on its bar while there are several panes. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
+/* A-12, A-16, A-17: the work pane is a tree of splits and panes. The bar of a pane (the height of every header) has the tab strip, as wide as its tabs and scrolling when they overflow, with the plus right after it; the terminal of the selected tab is under it. The pane that has the focus shows an accent line on its bar while there are several panes. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
 #orca-panes { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
 #orca-panes > * { flex: 1; min-width: 0; min-height: 0; }
 .orca-split-node { display: flex; min-width: 0; min-height: 0; }
@@ -888,11 +889,11 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-split-node[data-direction="column"] > * + * { border-top: 1px solid var(--line); }
 .orca-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #orca-panes[data-multi="true"] .orca-pane[data-focused="true"] .orca-tabbar { box-shadow: inset 0 2px 0 var(--accent); }
-.orca-tabbar { flex: none; display: flex; align-items: center; height: calc(32px * var(--fs)); box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }
+.orca-tabbar { flex: none; display: flex; align-items: center; height: var(--header-h); box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }
 .orca-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; padding: 0 0 0 6px; overflow-x: auto; overflow-y: hidden; }
-.orca-plus { flex: none; width: 24px; height: 24px; margin: 0 6px 0 2px; color: var(--ink-soft); }
-.orca-plus svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
-.orca-tab { flex: none; display: flex; align-items: center; height: calc(28px * var(--fs)); max-width: 220px; min-width: 0; box-sizing: border-box; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
+.orca-plus { flex: none; width: var(--header-btn); height: var(--header-btn); margin: 0 6px 0 2px; color: var(--ink-soft); }
+.orca-plus svg { width: var(--header-ic); height: var(--header-ic); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.orca-tab { flex: none; display: flex; align-items: center; height: calc(var(--header-h) - 4px); max-width: 220px; min-width: 0; box-sizing: border-box; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
 .orca-tab:has(.orca-tab-btn[aria-selected="true"]) { border-color: var(--line); background: var(--surface); color: inherit; }
 .orca-tab-btn { display: flex; align-items: center; gap: 6px; min-width: 0; height: 100%; padding: 0 2px 0 10px; border: 0; border-radius: 8px 0 0 0; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
 .orca-tab-btn:hover { color: var(--accent); }
@@ -907,7 +908,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-panes .orca-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* The file pane (A-18) on the right of the work pane: the tree of the selected tab's worktree (`--files-w` is where the divider put it, 15% to 40% of the screen), and the editor of a file in the place of a terminal. */
 #orca-files { flex: none; width: clamp(15%, var(--files-w, 22%), 40%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
-#orca-files-bar { flex: none; display: flex; align-items: center; height: calc(32px * var(--fs)); box-sizing: border-box; border-bottom: 1px solid var(--line); }
+#orca-files-bar { flex: none; display: flex; align-items: center; height: var(--header-h); box-sizing: border-box; border-bottom: 1px solid var(--line); }
 #orca-files-head { flex: none; display: flex; align-items: center; gap: 4px; height: calc(32px * var(--fs)); box-sizing: border-box; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); }
 #orca-files-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); font-weight: 600; }
 #orca-files-head .icon-btn { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
@@ -941,8 +942,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-file[data-open="true"] .orca-file-ic { color: var(--accent); }
 .orca-file-note { margin: 0; padding: 2px 8px 2px calc(24px + var(--depth, 0) * 14px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
 .orca-file-note.fail { color: var(--warn); }
-.orca-files-toggle { flex: none; margin: 0 6px 0 auto; width: 24px; height: 24px; color: var(--ink-soft); }
-.orca-files-toggle svg { width: 15px; height: 15px; }
+.orca-files-toggle { flex: none; margin: 0 6px 0 auto; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
+.orca-files-toggle svg { width: var(--header-ic); height: var(--header-ic); }
 .orca-files-toggle[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 .orca-file-tab-ic { color: var(--muted); }
 .orca-file-tab-ic svg { width: 13px; height: 13px; stroke-width: 1.8; }
@@ -1097,7 +1098,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 /* A-9: the terminal of the session handed to (A-12), under its header; it takes the height that is left. */
 .ho-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* The Orca tab of the Slack thread's right pane sits in the rows of the grid that the Claude pane uses. */
-#reply-chat .chat-head { padding: 8px 16px 0; border-bottom-color: var(--chip-line); }
+#reply-chat .chat-head { box-sizing: border-box; height: var(--header-h); padding: 0 16px; border-bottom-color: var(--chip-line); }
 #reply-tabs { display: flex; gap: 2px; align-self: stretch; }
 .chat-tab { display: inline-flex; align-items: center; gap: 6px; height: 38px; margin-bottom: -1px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: none; font: inherit; font-size: calc(13px * var(--fs)); font-weight: normal; color: var(--muted); cursor: pointer; }
 .chat-tab svg { width: 16px; height: 16px; }
@@ -1205,7 +1206,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 
 /* The Slack thread: the messages, a card to make a Todo, the reply field, and (to the right of the divider) the conversation with Claude. */
 #st-detail { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-#st-head { gap: 4px; padding: 14px 16px 10px 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#st-head { box-sizing: border-box; height: var(--header-h); gap: 4px; padding: 0 16px 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #st-head h1 { margin-left: 4px; }
 /* The thread and the Claude pane share the rows of one grid (subgrid), so the line under the headers and the line over the reply field and the request field are at the same height,
    whichever of the two fields grows. The Claude pane's width is the third column: a third to a half of the screen, as `.split-chat` says elsewhere. */
