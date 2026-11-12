@@ -14,6 +14,9 @@ let view = { year: today.getFullYear(), month: today.getMonth() + 1 };
 // The first day of the week shown (the day the week starts on, C-3), and the date it falls on.
 let weekStart = "";
 let first = 0;
+// The middle day of the week shown, and the date the calendars were drawn on (today's circle follows it).
+let middleDay = today;
+let drawnOn = "";
 let pick: (date: string) => void = () => {};
 // The calendars made, with what is redrawn in each. A read that began before a newer one must not draw over it.
 const calendars: { title: HTMLElement; grid: HTMLElement }[] = [];
@@ -51,6 +54,7 @@ async function redraw() {
   try {
     const grid = await invoke("calendar_month", { year: view.year, month: view.month, firstDay: first });
     if (mine !== seq) return;
+    drawnOn = isoDate(new Date());
     for (const c of calendars) c.grid.replaceChildren(...rowsOf(grid));
   } catch (e) {
     if (mine === seq) showError(e);
@@ -102,14 +106,26 @@ function openMonthPop() {
   title.setAttribute("aria-expanded", "true");
 }
 
-// The week of `start` ("YYYY-MM-DD") is drawn, and `middle` is the day in the middle of it: the calendars show its month, unless they show this week already.
+// The week of `start` ("YYYY-MM-DD") is drawn, and `middle` is the day in the middle of it: the calendars show its month and are drawn again when the week is not the one they show.
 export function showCalendarMonth(start: string, middle: Date) {
-  if (start !== weekStart) {
-    weekStart = start;
-    first = addDays(start, 0).getDay();
-    view = { year: middle.getFullYear(), month: middle.getMonth() + 1 };
-  }
+  if (start === weekStart) return;
+  weekStart = start;
+  first = addDays(start, 0).getDay();
+  middleDay = middle;
+  view = { year: middle.getFullYear(), month: middle.getMonth() + 1 };
   redraw();
+}
+
+// Brings the calendars back to the month of the week shown, when they were moved to another one.
+export function followCalendarWeek() {
+  if (view.year === middleDay.getFullYear() && view.month === middleDay.getMonth() + 1) return;
+  view = { year: middleDay.getFullYear(), month: middleDay.getMonth() + 1 };
+  redraw();
+}
+
+// Draws the calendars again when the date changed since they were drawn, so that today's circle moves.
+export function refreshCalendarDay() {
+  if (weekStart && drawnOn !== isoDate(new Date())) redraw();
 }
 
 // `pickDate` shows the week that holds the date pressed.

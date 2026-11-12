@@ -294,6 +294,20 @@ describe("calendar: month calendar", () => {
     expect(await callsOf("calendar_week")).toContainEqual({ date, firstDay: 0, refresh: false });
   });
 
+  it("goes back to the month of the week shown when today or a day of the same week is pressed", async () => {
+    await openMonth();
+    const title = await $("#cal-month .cal-mini-title").getText();
+    await $('#cal-month button[aria-label="次の月"]').click();
+    await browser.waitUntil(async () => (await $("#cal-month .cal-mini-title").getText()) !== title);
+    await $("#cal-today").click();
+    await expect($("#cal-month .cal-mini-title")).toHaveText(title);
+    await expect($("#cal-month-pop .cal-mini-title")).toHaveText(title);
+    await $('#cal-month button[aria-label="前の月"]').click();
+    await browser.waitUntil(async () => (await $("#cal-month .cal-mini-title").getText()) !== title);
+    await $("#cal-month .cal-mini-row.current .cal-mini-day").click();
+    await expect($("#cal-month .cal-mini-title")).toHaveText(title);
+  });
+
   it("opens from the month of the bar, over the week, also while the panel is closed, and shows the week of a pressed day and closes", async () => {
     await openMonth();
     await mock("calendar_week", weekOfToday());

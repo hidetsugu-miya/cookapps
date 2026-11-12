@@ -534,6 +534,10 @@ pub struct MonthGrid {
 /// The weeks that hold the month `month` (1 to 12) of `year`, each starting on `first_day`.
 fn month_grid(year: i32, month: u32, first_day: u8) -> Result<MonthGrid, String> {
     let invalid = || format!("月が不正です: {year}-{month}");
+    // Chrono's own range is wider, and its date arithmetic panics at the ends.
+    if !(1..=9999).contains(&year) {
+        return Err(invalid());
+    }
     let first = NaiveDate::from_ymd_opt(year, month, 1).ok_or_else(invalid)?;
     let next = if month == 12 {
         NaiveDate::from_ymd_opt(year + 1, 1, 1)
@@ -1551,6 +1555,12 @@ mod tests {
         assert!(month_grid(2026, 0, 0).is_err());
         assert!(month_grid(2026, 13, 0).is_err());
         assert!(month_grid(2026, 11, 7).is_err());
+        assert!(month_grid(0, 1, 0).is_err());
+        assert!(month_grid(10000, 1, 0).is_err());
+        assert!(month_grid(i32::MIN, 1, 0).is_err());
+        assert!(month_grid(i32::MAX, 12, 0).is_err());
+        assert!(month_grid(9999, 12, 0).is_ok());
+        assert!(month_grid(1, 1, 0).is_ok());
     }
 
     #[test]

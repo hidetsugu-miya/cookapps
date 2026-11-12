@@ -4,7 +4,7 @@ import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
 import { addAccount, refreshPopup } from "./accounts.js";
 import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
-import { closeMonthPop, initCalendarMonth, showCalendarMonth } from "./calendar-month.js";
+import { closeMonthPop, followCalendarWeek, initCalendarMonth, refreshCalendarDay, showCalendarMonth } from "./calendar-month.js";
 import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
 import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
@@ -254,7 +254,8 @@ async function showKeptWeek(key: string, seq: number) {
 
 // Shows the week of `calDate`: the kept one at once, then the fetched one if it differs, so the scroll position stays.
 // With none kept, the old week stays (dimmed) until the new one arrives.
-export async function loadCalendar(refresh = false) {
+// With `follow`, the month calendars go back to the month of the week when it is the one already shown.
+export async function loadCalendar(refresh = false, follow = false) {
   const seq = ++calSeq;
   $("error").hidden = true;
   let first: number;
@@ -266,6 +267,7 @@ export async function loadCalendar(refresh = false) {
   }
   if (seq !== calSeq) return;
   const key = weekKey(calDate, first);
+  if (follow && calShown?.weekStart === key) followCalendarWeek();
   const kept = calCache.get(key);
   if (kept) {
     if (calShown?.weekStart !== key) renderWeek(kept);
@@ -292,6 +294,7 @@ export async function loadCalendar(refresh = false) {
 export function showCalendar() {
   calScrolled = false;
   closeMonthPop();
+  refreshCalendarDay();
   show("calendar");
   loadCalendar();
 }
@@ -311,7 +314,7 @@ function choiceChanged() {
 const moveWeek = (date: string) => {
   closeDetail();
   calDate = date;
-  loadCalendar();
+  loadCalendar(false, true);
 };
 
 export function initCalendar() {
@@ -322,5 +325,9 @@ export function initCalendar() {
   $("cal-today").onclick = () => moveWeek(isoDate(new Date()));
   $("calendar").style.setProperty("--hour", `${HOUR_PX}px`);
   setInterval(() => currentScreen() === "calendar" && !document.hidden && loadCalendar(true), CAL_REFRESH_MS);
-  setInterval(() => currentScreen() === "calendar" && drawNow(), 60000);
+  setInterval(() => {
+    if (currentScreen() !== "calendar") return;
+    drawNow();
+    refreshCalendarDay();
+  }, 60000);
 }

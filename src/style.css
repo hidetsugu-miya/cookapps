@@ -216,7 +216,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #cal-heading { margin: 0 0 0 8px; font-size: calc(20px * var(--fs)); font-weight: 600; }
 #cal-title { padding: 2px 8px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }
 #cal-title:hover, #cal-title[aria-expanded="true"] { background: var(--hover); }
-#cal-title:focus-visible { outline: 2px solid var(--accent); }
+#cal-title:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* The small calendar of a month, in the panel and over the week (ts/calendar-month.ts). */
 #cal-month-pop { position: absolute; z-index: 6; width: 232px; box-sizing: border-box; padding: 8px 8px 10px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
 .cal-mini-head { display: flex; align-items: center; gap: 2px; padding: 0 4px 4px; }
