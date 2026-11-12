@@ -1,19 +1,17 @@
 #!/bin/sh
-# Runs a skill headlessly from the main checkout; launchd starts improvement-proposal every day at 22:00 and issue-dev at 00:30 (issues.md).
-# Usage: nightly.sh improvement-proposal|issue-dev  (the exit code is claude's)
-# Keeps one run per skill with a lock directory, writes .claude/nightly/{skill}-{date}.log (logs older than 30 days are deleted), and shows a macOS notification at the end.
-# Every skill gets NIGHTLY_DEADLINE_EPOCH, which the skill checks with nightly-limit.sh before it starts something new; nothing kills the process at the deadline.
-# improvement-proposal: 1 hour after the start, 23:00 for the job: no new candidate starts after it, so that the run ends well before issue-dev starts at 00:30 and waits for it.
-# issue-dev: the end of its 3 hours (03:30 for the job), which stops new issues (nightly-limit.sh also holds a run to 10 points), and HANDOVER_RUN_START (handover.sh). It first waits for the lock of improvement-proposal to go (at most 30 minutes), so that the issues made there are placed in the same night.
+# Runs the ship skill headlessly from the main checkout; launchd starts it every day at 00:30 (issues.md).
+# Usage: nightly.sh ship  (the exit code is claude's)
+# Keeps one run with a lock directory, writes .claude/nightly/ship-{date}.log (logs older than 30 days are deleted), and shows a macOS notification at the end.
+# The skill gets NIGHTLY_DEADLINE_EPOCH, the end of its 3 hours (03:30 for the job), which it checks with nightly-limit.sh before it starts something new (nothing kills the process at the deadline; nightly-limit.sh also holds a run to 10 points), and HANDOVER_RUN_START (handover.sh).
 set -u
 if [ $# -ne 1 ]; then
-  echo "使い方: nightly.sh improvement-proposal|issue-dev" >&2
+  echo "使い方: nightly.sh ship" >&2
   exit 2
 fi
 case "$1" in
-  improvement-proposal | issue-dev) skill="$1" ;;
+  ship) skill="$1" ;;
   *)
-    echo "使い方: nightly.sh improvement-proposal|issue-dev" >&2
+    echo "使い方: nightly.sh ship" >&2
     exit 2
     ;;
 esac
@@ -40,30 +38,8 @@ echo $$ > "$lock/pid"
 trap 'rm -rf "$lock"' EXIT
 find .claude/nightly -name '*.log' -mtime +30 -delete
 echo "開始: $(date '+%Y-%m-%d %H:%M:%S')" >> "$log"
-# Waits (at most 30 minutes) for the lock of the job that runs before this one, so that the two never write at once.
-wait_for() {
-  waited=0
-  other_lock=".claude/nightly/$1.lock"
-  while [ -d "$other_lock" ] && ps -p "$(cat "$other_lock/pid" 2>/dev/null)" -o command= 2>/dev/null | grep -qF "nightly.sh $1"; do
-    if [ "$waited" -ge 1800 ]; then
-      echo "待機を打ち切り: $(date '+%Y-%m-%d %H:%M:%S') $1 が 30 分たっても終わらないので、先へ進みます" >> "$log"
-      break
-    fi
-    [ "$waited" -eq 0 ] && echo "待機: $(date '+%Y-%m-%d %H:%M:%S') $1 の実行が終わるのを待ちます" >> "$log"
-    sleep 10
-    waited=$((waited + 10))
-  done
-}
-case "$skill" in
-  issue-dev)
-    wait_for improvement-proposal
-    export HANDOVER_RUN_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    export NIGHTLY_DEADLINE_EPOCH=$(($(date +%s) + 3 * 3600))
-    ;;
-  improvement-proposal)
-    export NIGHTLY_DEADLINE_EPOCH=$(($(date +%s) + 60 * 60))
-    ;;
-esac
+export HANDOVER_RUN_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+export NIGHTLY_DEADLINE_EPOCH=$(($(date +%s) + 3 * 3600))
 claude -p "/${skill}" --permission-mode auto </dev/null >> "$log" 2>&1
 code=$?
 echo "終了コード: ${code}" >> "$log"

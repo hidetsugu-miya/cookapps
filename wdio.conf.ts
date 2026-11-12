@@ -43,16 +43,26 @@ const appCapability = (specs: { "wdio:specs": string[] } | { "wdio:exclude": str
   ...specs,
 });
 
+// `run-e2e.sh --only {name}` sets E2E_ONLY and runs `e2e/specs/{name}.e2e.ts` in one app, to run a failed spec again alone (`.claude/rules/e2e.md`).
+// It narrows the capabilities to one, so the spec runs once; `--spec` would run it in every capability.
+const only = process.env.E2E_ONLY;
+if (only !== undefined && !/^[a-z0-9][a-z0-9-]*$/.test(only)) throw new Error(`E2E_ONLY must be a spec name such as "inbox", got "${only}"`);
+const onlySpec = only === undefined ? undefined : `./e2e/specs/${only}.e2e.ts`;
+if (onlySpec !== undefined && !existsSync(onlySpec)) throw new Error(`${onlySpec} does not exist`);
+
 export const config = {
   runner: "local",
   specs: ["./e2e/specs/**/*.e2e.ts"],
   maxInstances: 3,
   services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
-  capabilities: [
-    appCapability({ "wdio:specs": namedSpecs[0] }),
-    appCapability({ "wdio:specs": namedSpecs[1] }),
-    appCapability({ "wdio:exclude": namedSpecs.flat() }),
-  ],
+  capabilities:
+    onlySpec !== undefined
+      ? [appCapability({ "wdio:specs": [onlySpec] })]
+      : [
+          appCapability({ "wdio:specs": namedSpecs[0] }),
+          appCapability({ "wdio:specs": namedSpecs[1] }),
+          appCapability({ "wdio:exclude": namedSpecs.flat() }),
+        ],
   framework: "mocha",
   reporters: ["spec"],
   // A `browser.execute` that loses its result costs the 3 s script timeout plus a retry, which used up the default 5 s of one `waitUntil`; 15 s fits that and stays far under the test's 60 s.

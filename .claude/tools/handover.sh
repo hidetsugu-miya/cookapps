@@ -1,9 +1,9 @@
 #!/bin/sh
-# The hand-over between the runs of issue-dev: one fixed Discussion (Ideas, titled 自走の引き継ぎ), one comment per run (issues.md).
+# The hand-over between the runs of ship: one fixed Discussion (Ideas, titled 自走の引き継ぎ), one comment per run (issues.md).
 # Usage: handover.sh ensure          prints the Discussion's URL; creates the Discussion when it does not exist yet
 #        handover.sh read            ensure, then prints the last hand-over and the owner's replies since the run that wrote it started
 #        handover.sh write <file>    posts the file as a hand-over comment and prints the comment's URL
-#        handover.sh note <file>     posts the file as a comment that is not a hand-over (the result of improvement-proposal): first line `<!-- ai -->`, prints the comment's URL
+#        handover.sh note <file>     posts the file as a comment that is not a hand-over: first line `<!-- ai -->`, prints the comment's URL
 #        handover.sh format <owner>  reads the JSON of a Discussion (the query of `read`) from stdin and prints what `read` prints; no network
 # The runs write with the owner's account, so a comment is told by its mark `<!-- handover run-start=... -->`, which `write` puts on the first line.
 # A comment without the mark whose author is the owner is the owner's reply, and the next run reads it first and takes it as an instruction.
@@ -52,7 +52,7 @@ create_discussion() {
   cat > "$bodyfile" <<'BODY'
 ## この記録の目的
 
-`issue-dev` の定期実行（毎日 00:30）が、次の回に引き継ぐことを書く場所です。
+`ship` の定期実行（毎日 00:30）が、次の回に引き継ぐことを書く場所です。
 各回の終わりに 1 コメントが付きます。
 コメントの先頭の印（`<!-- handover ... -->`）で、自走の回のコメントと見分けます。
 

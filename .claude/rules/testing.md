@@ -64,7 +64,7 @@ Before a push, `.claude/tools/run-ci.sh` runs the version check (the source vers
 These checks run only on macOS; nothing checks Windows.
 
 ```text
-Good: commit -> run-ci.sh -> run-e2e.sh -> review -> push (pre-git.sh checks the records) -> post-checks.sh -> merge
+Good: commit -> run-ci.sh -> run-e2e.sh and the reviewers together -> release-verifier -> push (pre-git.sh checks the records) -> post-checks.sh -> merge
 Bad:  add a static, test or e2e job to the workflow
 Bad:  write a CI record by hand, or run the checks inside pre-git.sh again
 ```

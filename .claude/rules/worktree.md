@@ -52,7 +52,7 @@ When main has moved since the branch started, run `git fetch origin main && git 
 The ruleset refuses a pull request whose branch does not contain main, so a combined failure is found before the merge.
 
 ```text
-Good: another branch was merged -> git merge origin/main in the worktree -> run-ci.sh -> run-e2e.sh -> review -> push -> post-checks.sh -> merge
+Good: another branch was merged -> git merge origin/main in the worktree -> run-ci.sh -> run-e2e.sh and the reviewers together -> release-verifier -> push -> post-checks.sh -> merge
 Bad:  merge first, and find on main that the two branches break each other
 ```
 

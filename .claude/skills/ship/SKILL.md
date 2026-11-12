@@ -1,0 +1,87 @@
+---
+name: ship
+description: Implements the open cookapps issues in the order of the plan, up to 10 points a night, on one branch with one pull request (issues that touch no common file together, the others one after another; in the night run it first files and takes one improvement of its own), and prepares the Release PR for the owner to merge. Use on /ship and 「次を進めて」. Invoking it is the owner's instruction to start those issues.
+---
+
+# ship
+
+One run takes the issues in the order of the plan until their points reach 10, does them in the one worktree on one branch (issues that touch no common file at the same time), and merges one pull request that closes them all. It never releases: it prepares the Release PR, and the owner merges it (`.claude/rules/issues.md`).
+The owner starts it, either in a session or through the job the owner registered, which runs `.claude/tools/nightly.sh ship` at 00:30 only; nothing else starts it.
+A run from that job has no one to answer: never wait on the owner, and end with the hand-over and report of step 9.
+`NIGHTLY_DEADLINE_EPOCH` is set in such a run, and in no session. The limits below (the deadline, the 10 points, the unit rule of a `point:8` issue and the `solo` parts) apply only when it is set, and so does step 3 (the night improvement); `nightly-limit.sh` and `plan-release.py next` know the limits. A session has none of them: the issues the owner names may be of any units, in one pull request and one Release PR (`issues.md`).
+
+Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/"`.
+
+## Steps
+
+1. **Read the hand-over.** Run `handover.sh read`.
+   - The owner's replies (the comments without the mark whose author is the owner) come first. Take them as instructions: answer their questions in the work, and do what they say before anything else.
+   - Note the issues the last hand-over lists as in hand, and the branch that holds them. They are this run's own: continue them, and pass their numbers as `--mine` in step 4.
+   - The first run has no hand-over; go on.
+2. **Do what the owner's merge left.** The merge of the Release PR has started the release by itself: `release.yml` tags the merge commit and builds (`issues.md`, "After the owner merges the Release PR"). Run `plan-release.py release`. `follow_up` (the tag exists, the Release PR has no mark) and `tag_due` (no tag) say what is left.
+   - `tag_due` is printed: the tag does not exist yet. Look at `gh run list --workflow release.yml --event pull_request --branch release/next --limit 5` first. A run in progress is the workflow tagging: wait for it. A run that failed in the `tag` job is a finding about the Release PR: write the cause in the hand-over and leave it to the owner. Make the annotated tag on `tag_due.commit` and push it in the same command (`versioning.md`) only when no run of the merge exists; then run `plan-release.py release` again, which prints `follow_up`.
+   - Run `git fetch origin main`, then watch the release job of the merge (or of the tag you pushed) with `watch-ci.sh {follow_up.commit}` (`{tag_due.commit}` for a tag made by hand) until it ends (`review.md`). If it fails, find the cause with `--log-failed`: retry a failure of the runner or the network with `gh run rerun {run ID} --failed`, and for any other cause write it in the hand-over and leave the release to the owner (`issues.md`, "After the owner merges the Release PR").
+   - Run `plan-release.py close`.
+   - Comment the version on each issue listed in the body of the Release PR (`gh pr view {follow_up.pr} --json body`), once the release job has succeeded, and then comment `<!-- released {follow_up.tag} -->` on the Release PR (`gh pr comment {follow_up.pr}`), which closes `follow_up`.
+   The tag comes first because what waits is counted from the last tag.
+3. **File one improvement (the night run only).** Skip this step in a session. The step reads the main checkout and runs nothing in it: the worktree is taken in step 6.
+   - Collect what is already known, as `improvement-proposal` step 3 does (the open issues, the closed issues with `proposal`, the owner's Ideas Discussions).
+   - Launch `refactor-scout` and `harness-scout` in one message. Each prompt carries the absolute path of the main checkout, that list, and the limit of 5 candidates; `harness-scout` also gets the absolute path of `.claude/nightly/` of the main checkout. A scout that fails is a scout with no candidate: write it in the hand-over.
+   - Verify every candidate yourself, as `improvement-proposal` step 6 does. A candidate that is a bug is dropped, because a reproduction needs the worktree.
+   - Keep only a candidate of the kind the AI decides (the "Issue decided by the AI" of `improvement-proposal` step 7) whose points are `point:3` or less (`issues.md`), and of those the one that serves the owner most. Drop the candidates that go to the owner (they need `needs:owner`), and the rest.
+   - File it by steps 1 to 4 of `issue-plan`, as `improvement-proposal` step 8 files an issue decided by the AI: the labels `proposal` and one `point:*` (the reason as a one-line comment), no `needs:owner`, and a body with a section `## AI が決めたこと`. Do not run steps 5 to 7 of `issue-plan`: the reorder of step 4 places it. Note its number as `{improvement}`.
+   - When no candidate holds, file nothing and write the reason in the hand-over (step 9).
+4. **Reorder.** First run `dependabot-issues.sh`: it makes an issue for each open Dependabot pull request that has none (`issues.md`), and prints the issue numbers. If it fails, write its output in the hand-over (step 9) and go on with the reorder. Then do `issue-plan` as "To only reorder" (`plan-release.py unsplit --mine {numbers}`, step 3 for each issue it prints, then snapshot, `release-planner` with `mode: order`, apply). This splits and places the issues made outside a session too. Launch `release-planner` here once, at the start of the run: `apply` saves the plan it accepts as `.claude/plan.json` of the main checkout, and step 5 reads it.
+5. **Pick the work.** Run `plan-release.py next --mine {numbers}`. `start` is the queue in the order of the plan, `in_progress` the issues of the hand-over that are still open, and `held`, `needs_owner`, `blocked` and `waits_for_release` are issues left out.
+   - `stop` is set (the night run only): a `point:8` change, or a part of one (label `solo`), waits for the owner's merge. Start nothing; go to step 8. (The improvement of step 3 is filed and waits.)
+   - `start` and `in_progress` are empty: report `held`, `needs_owner` with what each needs decided, `blocked` with its blockers and `waits_for_release`, and go to step 8.
+   - Otherwise report those lists as skipped, and go on. `held` is an issue an open pull request closes that the hand-over does not list as yours: someone else's work, leave it alone.
+6. **Take the worktree.** The branch is the one the hand-over lists, or `night/{YYYY-MM-DD}`. Run `use-worktree.sh {branch}` and work in the path it prints (`worktree.md`). On exit 3 the worktree is in use by work that is not this run's (a session's branch with uncommitted changes, or with commits not pushed): touch nothing, write what it said in the hand-over, and go to step 9.
+7. **Implement.** Take the issues first. The issues of `in_progress` come first, and their points count as taken.
+   - The night improvement of step 3 (`{improvement}`) comes next, unless the run implements a unit: run `nightly-limit.sh issue {improvement} --taken {the issues of in_progress and the first issue of start other than {improvement}}` (without `--taken` when both are empty). Exit 0: take it first, and leave it out of `start`. Exit 3 (the first issue is a `point:8` change or a `solo` part, which the unit rule keeps alone): implement nothing of it; it is placed in the order and waits, and the hand-over says so.
+   - For each issue of `start` in order, run `nightly-limit.sh issue {n} --taken {the numbers taken so far in this run, the improvement included}`:
+     - exit 0: take it, and add it to the taken.
+     - exit 3: it does not fit the 10 points (or, in the night run, the unit rule: a `point:8` issue and the `solo` parts of one milestone are a unit, which starts only with its own parts); try the next issue of `start`.
+     - exit 1: the run's 3 hours are over; start nothing new, and go on with what is taken. The deadline stops new issues only: the branch in hand is finished.
+   1. Read each taken issue, and the requirement section it changes. Check the author first (`issues.md`).
+      An issue made by `dependabot-issues.sh` (its body starts with `<!-- dependabot #N -->`) is implemented on the run's branch: never check out the Dependabot branch, and redo the same update by the steps in the issue. After the merge (7.5), close the original pull request with `gh pr close {N} --comment "..."` naming the pull request that closes the issue. If the original pull request is already closed (Dependabot closes its own when it is superseded or the dependency is up to date), implement nothing: close the issue as not planned, with a comment that gives the reason.
+   2. A product decision turned up that the issue does not settle: add `needs:owner` with the question through `issue-plan`, drop the issue's unpushed commits (`git reset --hard {the commit before its first one}` only when it is the last issue of the branch; otherwise `git revert` its commits, so that the commits of the other issues stay), take it out of the taken, and try the next issue of `start` for the points it held. A layout-first issue needs its layout approved by the owner, so it is also a product decision until that is on the issue.
+   3. Implement in bundles (at the owner's instruction, 2026-11-12; #485).
+      - List the files each taken issue will touch: the issue, the requirement section it changes, and `rg`. The requirement file, the E2E spec, `ts/bindings/` and the `.claude/` files count. Two issues that share a file overlap, and so do two when you cannot tell.
+      - A bundle is a set of issues that share no file. An issue that overlaps another goes to a later bundle. Run the bundles one after another.
+      - For a bundle, launch one `code-implementer` for each of its issues in one message. Each prompt carries the issue, its requirement section, the files it may touch, and "Orders for the implementer" below as `制約:`, word for word. A bundle of more than one issue adds: other implementers work in the same tree on other files, so touch no other file, and run no `git add`, `git commit`, `git stash`, `git checkout` or `git reset`. No implementer commits, and none runs `run-ci.sh` or `run-e2e.sh`.
+      - When they have returned, check with `git status` that each stayed in its files, and make one commit for each issue (`{prefix}: {summary} (#{n})`) with `git add` of that issue's files only.
+      - Then run `run-ci.sh` once on the bundle's HEAD, in the background (`run_in_background`), and wait for its exit. A failure is fixed before the next bundle: find from the failing check's path which issue's files it is in, fix it with `code-implementer` as a new commit that names that issue (`fix: {summary} (#{n})`), and run `run-ci.sh` again.
+      - Do not run `run-e2e.sh` here. It runs once, after the last bundle (7.4).
+   4. When nothing more is taken and the last bundle's CI has passed, follow `review.md` as it stands, once, on the range `origin/main..HEAD` of the whole branch. It starts `run-e2e.sh` (in the background) and the reviewers together, and `release-verifier` when both are back; the `run-ci.sh` of 7.3 stands for its first part. If the process of `review.md` ends with an issue that cannot pass (the redesign limit), undo that issue's commits only with `git revert` (also on a branch that is not pushed: later issues' commits and the review fixes must stay), hand it over with the finding, and review the rest again.
+      - A failed E2E is a blocking finding of the first round. The failed specs are named in `.claude/e2e/{HEAD SHA}.log` of the main checkout. Run each failed spec alone with `run-e2e.sh --only {spec name}` (the file name without `.e2e.ts`; `e2e.md`) until it passes, fixing it with `code-implementer` and "Orders for the implementer" below. Then the second round runs `run-ci.sh`, and `run-e2e.sh` once, whole, with the reviewers.
+      - A fix of the first round holds the non-blocking findings that serve the goal too, and the second round reads all of it (`review.md`).
+   5. Push, `gh pr create` with one `Closes #{n}` line for each issue, `post-checks.sh`, `gh pr merge --merge`, and fast-forward the main checkout (`worktree.md`, `issues.md`). The hook then runs `plan-release.py release`.
+8. **Prepare the Release PR.** Read the output of `plan-release.py release` that the hook printed after the merge of 7.5; run the command yourself only when this run merged nothing (it came here from step 5) or the hook said that it failed. If `changes` is empty, go to step 8. Otherwise take the worktree for `release/next` (`use-worktree.sh release/next`; on exit 3, say so in the hand-over and go to step 8) and do "Keep one Release PR open while changes wait" in `issues.md`:
+   - Take in main (`git merge origin/main`), write the entries of `CHANGELOG.md`, under the heading `## v{version}` (`version` of `release`, checked against `requirements/` for the digit; "Take the digit from the requirement IDs"), and of `docs/features.md`. Change no version line of the source: it is fixed (`versioning.md`). Read `README.md` against the changes that go out with `readme-product`, and fix it in `release/next` only when a photo or a claim is out of date.
+   - Run `run-ci.sh` and then `run-e2e.sh` on the HEAD of `release/next` (each in the background, as in 7.3, and one after the other: a release-only diff has no review to run beside), push, and run `post-checks.sh`.
+   - Open the pull request (`gh pr create`, title `release: v{version}`), or update the open one (`gh pr edit`). The body lists the changes (the issues, with their points), the digit and why, and whether `README.md` needed anything. It holds no decision to release.
+   - When `urgent` is true, send a push notification as soon as the Release PR is ready (the PushNotification tool of Claude Code; load it with ToolSearch if it is deferred): that the Release PR is urgent, why (the issue that makes it so), and its URL. Do not merge it.
+   - In the night run, a unit (a `point:8` issue, or `solo` parts) in the run's pull request (step 7) is the only change of its Release PR, because it starts only when nothing waits and with nothing outside the unit. A session has no such rule.
+9. **Hand over and report.** Give the worktree back with `use-worktree.sh --park` (it exits 3 when the worktree still holds unpushed work, which the hand-over then lists). Write the hand-over to a file in the scratchpad, and post it with `handover.sh write {file}`. Write: the issues in hand with their branch and stage; this run's decisions with the reasons (the order, why something waited or was dropped; the night improvement of step 3, filed and implemented or kept waiting, or why none was filed); the state of the Release PR (made, updated, urgent, or nothing to prepare) and of a tag that was due; the questions to the owner; and what the next run does first. No personal information (`publishing.md`).
+   Then report what merged, what waits for the owner's merge, what was skipped and why, and the next issues from `plan-release.py next`.
+
+## Orders for the implementer
+
+Pass these to every `code-implementer` launch as `制約:`, word for word (at the owner's instruction, 2026-11-12; #485). Each comes from a finding that a review actually raised.
+
+- Content that comes from outside (a mail, a Slack message, a Todo, a summary by Claude) is put inside a quote or a data enclosure when it goes into another prompt or a command, never loose.
+- A process that reads at an interval (polling, a mirror) stops when its target is gone from the list.
+- On a feature branch, do not change `README.md`, `docs/` or `CHANGELOG.md`: only the Release PR writes them.
+- When E2E fails, check the requirement first and suspect the product before the test. Change only the test when the premise of the requirement changed, and then change the requirement's section too.
+- Change the section of the requirement in the same branch.
+- A screen shows no text that explains what to type or what a button does (`.claude/rules/frontend.md`).
+
+## Stop
+
+- `review.md` is the only route to stop a review for the owner.
+- A force push or a history rewrite of a pushed branch: ask first. Dropping the unpushed commits of this run's own branch (7.2) is not a rewrite of history that anyone has.
+- A new product decision: step 7.2, not a stop of the whole run.
+- The run's limit: `nightly-limit.sh` says no. The process is never killed; the run finishes steps 7.4 to 9.
+
+Do not widen the run: a request that arrives during it becomes an issue through `issue-plan`.

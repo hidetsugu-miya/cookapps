@@ -938,8 +938,8 @@ class NightlyLimit(unittest.TestCase):
     def test_after_the_deadline_nothing_starts(self):
         code, text = self.run_limit("issue", "1", deadline=1000, now=1000)
         self.assertEqual(code, 1, text)
-        self.assertEqual(self.run_limit("proposal", deadline=1000, now=1500)[0], 1)
-        self.assertEqual(self.run_limit("proposal", deadline=2000, now=1500)[0], 0)
+        self.assertEqual(self.run_limit("issue", "1", deadline=1000, now=1500)[0], 1)
+        self.assertEqual(self.run_limit("issue", "1", deadline=2000, now=1500)[0], 0)
 
     def test_a_point_8_issue_starts_only_as_the_first_issue_and_nothing_follows_it(self):
         self.assertEqual(self.run_limit("issue", "8")[0], 0)
@@ -986,7 +986,7 @@ class NightlyLimit(unittest.TestCase):
         self.assertEqual(self.run_limit("issue", "1", "--taken", "77")[0], 2)
 
     def test_wrong_usage(self):
-        for args in (["issue"], ["issue", "x"], ["issue", "1", "--taken"], ["issue", "1", "5"], ["release", "v0.1.0"], ["proposal", "1"], []):
+        for args in (["issue"], ["issue", "x"], ["issue", "1", "--taken"], ["issue", "1", "5"], ["release", "v0.1.0"], ["proposal"], ["proposal", "1"], []):
             self.assertEqual(self.run_limit(*args)[0], 2, args)
 
 
