@@ -3,6 +3,24 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.63.1
+
+A-9: the pane that hands a mail, a Slack thread or a Todo to Orca is a form from the top down, and what the user writes is handed over as it was written (#475, #476). Claude no longer summarises the instruction, and the buttons "要約する" and "直す", the conversation about the summary, the model and effort selects and the proposed worktree name are gone. The card is summarised by Claude when the user presses the arrow icon "Orca に渡す" at the bottom right of the instruction field (or Cmd+Enter): the summary goes into the quoted content, above its text, after the instruction and the paths of the files. The pane starts at 40% of the screen.
+
+A-9: the worktree chip lists every worktree of the chosen project, the project's own folder first and "新規作成" last, each with its name and, under it, its branch, and a search field (#444). The session starts in the one picked.
+
+A-9: "新規作成" shows a frame with the name, the ref the worktree starts from and its branch, a new one or an existing one (#445, #446). The ref is picked from the local and remote branches of the project, and the existing branch from the local and remote branches that are free to take. A name that git would refuse as a branch or a ref is refused with a message, and nothing is made.
+
+A-9: after the hand-over the pane shows the terminal of the session in place of the history, with the repository, the branch and the state above it, a button that opens the session on the Orca screen, and a close icon (#477). Keys can be typed into it and files dropped on it. A session of this Mac is mirrored, as on the Orca screen, and one of a saved environment is shown too.
+
+A-7, A-11: the history of an Orca session and the box that answered a question of Claude in it are retired (#478). A question is answered in the terminal of the session.
+
+T-7, S-3: the right side of the Todo screen is always open, in two rows (#447). The first row has only the icons of Claude and "Orca に渡す" (the second can be pressed only while a task is open); under it are the heading and the controls of the one chosen, and its content. The headers of both sides are tinted. The icons for Claude and Orca in the header of the tasks and the ✳ that opened the prompt of the summary are gone: the prompt is opened from the Claude tab of the settings and from "プロンプトを編集" on the page of a draft.
+
+A-12: the keys typed in a terminal of a saved environment are sent to that terminal also when it has just stopped being shown (another tab, another screen, a hidden window) (#429).
+
+A-12, A-21, A-24: the app no longer reads at start-up the libraries that only the Orca screen uses (the terminal and the colors of the editor and the diff, about 755 KB); they are read the first time they are needed (#414).
+
 ## v0.63.0
 
 A-25 (new): the branch in the heading of the Orca file pane is a button (#439, #440, #441). Pressing it opens a list of branches right under it, in two sections, local and remote, with the current branch checked and a branch checked out in another worktree faint and disabled; typing in its field narrows the list and searches the remote branches. Picking a branch switches the worktree to it (a remote branch makes the local branch that tracks it), and the file tree and the heading are read again while the open tabs stay. When Orca refuses (changes not committed, a merge in progress, an agent at work), its words are shown. It is not a button for a worktree of an SSH host.
