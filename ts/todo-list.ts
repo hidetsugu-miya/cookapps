@@ -188,7 +188,12 @@ function metaChip(cls: string, icon: string, text: string) {
 }
 
 // The first line of a description that is not empty, for the second line of a row.
-const firstLine = (description: string) => description.split("\n").map((l) => l.trim()).find((l) => l);
+function firstLine(description: string) {
+  for (const line of description.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+}
 
 function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>) {
   const mail = linkedMail(t, accounts);

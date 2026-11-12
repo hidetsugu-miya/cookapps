@@ -417,14 +417,17 @@ button.review-chip:hover { background: var(--hover); }
 .task.tall .chips { display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .task.tall .chips > * { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .task.tall .chips svg { width: 12px; height: 12px; flex: none; }
-.task.tall .due { padding-right: 0; color: var(--accent); }
-.task.tall .due.over { color: #b00020; }
+.task.tall .due { padding-right: 0; }
+.task.tall .due:not(.over) { color: var(--accent); }
 .ptag { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; max-width: 40%; color: #666; font-size: calc(12px * var(--fs)); overflow: hidden; white-space: nowrap; }
 .pname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .task .trail { min-width: 92px; position: relative; }
 /* Over the name, so the column is only as wide as the due date. */
 .task .row-actions { position: absolute; right: 0; top: 50%; transform: translateY(-50%); padding-left: 8px; background: var(--hover); }
 /* In the list the buttons lie over the top right of the row, over the name, and leave the due moment on the third line alone. */
+/* The grip and the subtask toggle sit on the first line, by the checkbox. */
+.task.tall > .toggle { top: 10px; margin-top: 0; }
+.task.tall .grip { top: 8px; transform: none; }
 .task.tall .row-actions { top: 2px; right: 4px; transform: none; padding: 0 0 0 8px; border-radius: 8px; }
 .due { color: #666; font-size: calc(12px * var(--fs)); white-space: nowrap; padding-right: 8px; }
 .due.over { color: #b00020; }
