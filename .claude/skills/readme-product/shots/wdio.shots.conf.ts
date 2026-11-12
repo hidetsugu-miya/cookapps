@@ -6,7 +6,7 @@ export const config = {
   specs: ["__ROOT__/e2e/specs/readme-shots.e2e.ts"],
   maxInstances: 1,
   capabilities: [base.capabilities[2]].map((c) => {
-    const { "wdio:exclude": _x, ...rest } = c as Record<string, unknown>;
+    const { "wdio:exclude": _x, "wdio:specs": _s, ...rest } = c as Record<string, unknown>;
     return rest;
   }),
 };

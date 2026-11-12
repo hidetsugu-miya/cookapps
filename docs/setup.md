@@ -42,6 +42,7 @@ npx tauri dev
 Todoist に接続している場合は、取得したタスクとプロジェクトとラベルが、同じ場所の `todoist-cache.json` に保存されます（接続できないときの表示に使い、接続を解除すると消えます）。
 表示した週の予定は、場所や説明などの詳細を含めて、同じ場所の `calendar-cache.json` に保存されます（起動直後の表示に使い、アカウントを削除すると消えます）。
 週の始まりの曜日は、同じ場所の `calendar-settings.json` に保存されます。
+表示するカレンダーの選択は、同じ場所の `calendar-selection.json` に保存されます（アカウントを削除すると、そのアカウントの分が消えます）。
 Claude のモデルと effort は、用途ごとに、同じ場所の `claude-settings.json` に保存されます。
 Claude Code の接続方式（サブスクリプションか API キーか）は、同じ場所の `claude-auth.json` に保存されます。API キーは OS の資格情報の保管場所に保存し、画面には出しません。
 Todo の要約プロンプトを編集すると、編集した指示が同じ場所の `todo-prompt.json` に保存されます（デフォルトに戻すと消えます）。
