@@ -19,6 +19,7 @@ import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
 import type { Comment } from "./bindings/Comment";
+import type { MonthGrid } from "./bindings/MonthGrid";
 import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
 import type { TodoChatReply } from "./bindings/TodoChatReply";
@@ -81,6 +82,8 @@ export interface Commands {
   calendar_cached: { args: undefined; result: Week[] };
   calendar_first_day: { args: undefined; result: number };
   set_calendar_first_day: { args: { firstDay: number }; result: null };
+  // The weeks that hold the month (1 to 12) of the small calendar of C-4.
+  calendar_month: { args: { year: number; month: number; firstDay: number }; result: MonthGrid };
   calendar_choices: { args: undefined; result: CalendarChoices };
   set_calendar_shown: { args: { account: string; calendarId: string; shown: boolean }; result: null };
   inbox: { args: undefined; result: Inbox };

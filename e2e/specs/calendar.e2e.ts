@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { account, boot, calendarChoices, copiedTexts, count, holds, inbox, meetUrl, mock, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
+import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, meetUrl, mock, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
 
 // The button of the event (a timed box or an all-day chip) with `title`.
 const eventButton = (title: string) => $(`//button[contains(@class, "cal-event") or contains(@class, "cal-chip")][contains(., "${title}")]`);
@@ -61,7 +61,8 @@ describe("calendar: calendar panel", () => {
   it("lists the calendars under the account, as mine and others, left of the week", async () => {
     await openPanel();
     await expect($("#cal-side-head")).toHaveText("カレンダー");
-    expect(await textsOf("#cal-side-feed > *")).toEqual([account, "マイカレンダー", "Work", "他のカレンダー", "Holidays"]);
+    expect(await textsOf("#cal-side-feed > .cal-side-account .cal-side-email")).toEqual([account]);
+    expect(await textsOf("#cal-side-feed .cal-side-body > *")).toEqual(["マイカレンダー", "Work", "他のカレンダー", "Holidays"]);
     await expect(choiceBox("Work")).toBeSelected();
     await expect(choiceBox("Holidays")).toBeSelected();
     const { side, scroll, width } = await browser.execute(() => {
@@ -72,6 +73,39 @@ describe("calendar: calendar panel", () => {
     expect(side).toBeLessThanOrEqual(scroll);
     // The box takes the calendar's color.
     expect(await browser.execute(() => getComputedStyle(document.querySelector(".cal-side-item input")!).accentColor)).toBe("rgb(30, 123, 82)");
+  });
+
+  it("draws the account as its avatar and address, and its calendars indented and held by a line", async () => {
+    await openPanel();
+    const row = $("#cal-side-feed > .cal-side-account");
+    await expect(row.$(".cal-side-avatar")).toHaveText("M");
+    const look = await browser.execute(() => {
+      const avatar = document.querySelector(".cal-side-avatar") as HTMLElement;
+      const body = document.querySelector(".cal-side-body") as HTMLElement;
+      const accountRow = document.querySelector(".cal-side-account") as HTMLElement;
+      return {
+        // The sidebar's avatar of the same account has the same color.
+        avatar: avatar.style.background,
+        sidebar: (document.querySelector(`#account-list .avatar[data-account="me@example.com"]`) as HTMLElement).style.background,
+        line: getComputedStyle(body).borderLeftWidth,
+        indented: body.getBoundingClientRect().left > accountRow.getBoundingClientRect().left,
+      };
+    });
+    expect(look.avatar).toBe(look.sidebar);
+    expect(look).toMatchObject({ line: "1px", indented: true });
+  });
+
+  it("folds the calendars of an account away and shows them again, by the account's row", async () => {
+    await openPanel();
+    const row = $("#cal-side-feed > .cal-side-account");
+    await expect(row).toHaveAttribute("aria-expanded", "true");
+    await expect($(".cal-side-body")).toBeDisplayed();
+    await row.click();
+    await expect(row).toHaveAttribute("aria-expanded", "false");
+    await expect($(".cal-side-body")).not.toBeDisplayed();
+    await row.click();
+    await expect(row).toHaveAttribute("aria-expanded", "true");
+    await expect(choiceBox("Work")).toBeDisplayed();
   });
 
   it("closes the panel with the button beside the heading, the week takes its width, and opens it again", async () => {
@@ -151,6 +185,151 @@ async function redrawWith(week: Week) {
 
 // A press as a mouse makes it: pointerdown, mouseup and click. WebDriver's element click only calls el.click() and then el.focus(), so it sends no pointerdown and takes the focus back.
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
+
+// The title the bar shows for the week of `weekOfToday`: the year and the month of its middle day, "2026年11月".
+function weekTitle(firstDay = 0) {
+  const [y, m, d] = weekOfToday(firstDay).weekStart.split("-").map(Number);
+  const middle = new Date(y, m - 1, d + 3);
+  return `${middle.getFullYear()}年${middle.getMonth() + 1}月`;
+}
+
+// Waits until the week holding `date` ("YYYY-MM-DD") was asked for since the week was mocked again (which forgets the calls).
+const weekAsked = (date: string) =>
+  browser.waitUntil(async () => ((await callsOf("calendar_week")) as { date: string }[]).some((c) => c.date === date), { timeoutMsg: `the week of ${date} was not asked for` });
+
+describe("calendar: header", () => {
+  it("has today, the arrows and the month in the band of the Todo header, and the panel's heading in the same band", async () => {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await expect($("#cal-title")).toHaveText(weekTitle());
+    const bar = await browser.execute(() => {
+      const left = (id: string) => document.getElementById(id)!.getBoundingClientRect().left;
+      const style = (id: string) => getComputedStyle(document.getElementById(id)!);
+      const box = (id: string) => document.getElementById(id)!.getBoundingClientRect();
+      return {
+        order: ["cal-today", "cal-prev", "cal-next", "cal-title"].sort((a, b) => left(a) - left(b)),
+        background: [style("cal-bar").backgroundColor, style("cal-side-bar").backgroundColor],
+        underline: [style("cal-bar").borderBottomWidth, style("cal-side-bar").borderBottomWidth],
+        bottom: [box("cal-bar").bottom, box("cal-side-bar").bottom],
+        soft: getComputedStyle(document.documentElement).getPropertyValue("--soft").trim(),
+      };
+    });
+    expect(bar.order).toEqual(["cal-today", "cal-prev", "cal-next", "cal-title"]);
+    expect(bar.background[0]).toBe(bar.background[1]);
+    expect(bar.background[0]).not.toBe("rgba(0, 0, 0, 0)");
+    expect(bar.underline).toEqual(["2px", "2px"]);
+    expect(bar.bottom[0]).toBe(bar.bottom[1]);
+  });
+
+  it("still goes to the week before and after, and to today", async () => {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await mock("calendar_week", weekOfToday());
+    const day = (days: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    await $("#cal-next").click();
+    await weekAsked(day(7));
+    await $("#cal-prev").click();
+    await $("#cal-prev").click();
+    await weekAsked(day(-7));
+    await $("#cal-today").click();
+    await weekAsked(day(0));
+  });
+});
+
+describe("calendar: month calendar", () => {
+  async function openMonth(firstDay = 0) {
+    await boot({ inbox: inbox(), calendar_first_day: firstDay, calendar_week: weekOfToday(firstDay), calendar_choices: calendarChoices() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await waitForText("#cal-month .cal-mini-title", "年");
+    await waitForCount("#cal-month .cal-mini-day.today", 1);
+  }
+  const today = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  // The second day of a week of the grid other than the one shown, as "YYYY-MM-DD" (the first is what the weeks around the shown one are fetched ahead by).
+  const otherWeek = (host: string) =>
+    browser.execute((h) => {
+      const current = document.querySelector(`${h} .cal-mini-row.current`)!;
+      const row = (current.nextElementSibling ?? current.previousElementSibling) as HTMLElement;
+      return (row.querySelectorAll(".cal-mini-day")[1] as HTMLElement).dataset.date!;
+    }, host);
+
+  it("is above the calendars with the month of the week, the weekdays from the first day, today in a circle and the shown week tinted", async () => {
+    await openMonth(1);
+    await expect($("#cal-month .cal-mini-title")).toHaveText(weekTitle(1));
+    expect(await textsOf("#cal-month .cal-mini-row:first-child .cal-mini-wd")).toEqual(["月", "火", "水", "木", "金", "土", "日"]);
+    await expect($("#cal-month .cal-mini-day.today")).toHaveAttribute("data-date", today());
+    // The row of the week shown starts on the week's first day, and holds today.
+    expect(await textsOf("#cal-month .cal-mini-row.current .cal-mini-day.today")).toHaveLength(1);
+    expect(await browser.execute(() => (document.querySelector("#cal-month .cal-mini-row.current .cal-mini-day") as HTMLElement).dataset.date)).toBe(weekOfToday(1).weekStart);
+    expect(await count("#cal-month .cal-mini-row.current")).toBe(1);
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#cal-month .cal-mini-day.today")!).backgroundColor)).toBe("rgb(30, 123, 82)");
+    // Days of the months before and after are lighter.
+    expect(await browser.execute(() => Number(getComputedStyle(document.querySelector("#cal-month .cal-mini-day.other") ?? document.body).opacity))).toBeLessThan(1);
+    // It is left of the calendars' list.
+    expect(await browser.execute(() => document.getElementById("cal-month")!.getBoundingClientRect().bottom <= document.getElementById("cal-side-feed")!.getBoundingClientRect().top)).toBe(true);
+  });
+
+  it("moves the month with the arrows, and shows the week of a pressed day", async () => {
+    await openMonth();
+    await mock("calendar_week", weekOfToday());
+    const title = await $("#cal-month .cal-mini-title").getText();
+    await $('#cal-month button[aria-label="次の月"]').click();
+    await browser.waitUntil(async () => (await $("#cal-month .cal-mini-title").getText()) !== title);
+    // The week drawn is of the old month, and the title of the bar stays.
+    await expect($("#cal-title")).toHaveText(weekTitle());
+    await $('#cal-month button[aria-label="前の月"]').click();
+    await expect($("#cal-month .cal-mini-title")).toHaveText(title);
+    const date = await otherWeek("#cal-month");
+    await $(`#cal-month .cal-mini-day[data-date="${date}"]`).click();
+    await weekAsked(date);
+    expect(await callsOf("calendar_week")).toContainEqual({ date, firstDay: 0, refresh: false });
+  });
+
+  it("opens from the month of the bar, over the week, also while the panel is closed, and shows the week of a pressed day and closes", async () => {
+    await openMonth();
+    await mock("calendar_week", weekOfToday());
+    await $("#cal-side-toggle").click();
+    await expect($("#cal-month")).not.toBeDisplayed();
+    await expect($("#cal-month-pop")).not.toBeDisplayed();
+    await expect($("#cal-title")).toHaveAttribute("aria-expanded", "false");
+    await $("#cal-title").click();
+    await expect($("#cal-month-pop")).toBeDisplayed();
+    await expect($("#cal-title")).toHaveAttribute("aria-expanded", "true");
+    await expect($("#cal-month-pop .cal-mini-title")).toHaveText(weekTitle());
+    // Under the bar, over the week.
+    expect(await browser.execute(() => document.getElementById("cal-month-pop")!.getBoundingClientRect().top >= document.getElementById("cal-bar")!.getBoundingClientRect().bottom)).toBe(true);
+    const date = await otherWeek("#cal-month-pop");
+    await $(`#cal-month-pop .cal-mini-day[data-date="${date}"]`).click();
+    await weekAsked(date);
+    await expect($("#cal-month-pop")).not.toBeDisplayed();
+    await expect($("#cal-title")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("closes on Escape, on a click elsewhere and on the month of the bar", async () => {
+    await openMonth();
+    await $("#cal-title").click();
+    await expect($("#cal-month-pop")).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect($("#cal-month-pop")).not.toBeDisplayed();
+    await $("#cal-title").click();
+    await expect($("#cal-month-pop")).toBeDisplayed();
+    await press($("#cal-body"));
+    await expect($("#cal-month-pop")).not.toBeDisplayed();
+    await $("#cal-title").click();
+    await expect($("#cal-month-pop")).toBeDisplayed();
+    await $("#cal-title").click();
+    await expect($("#cal-month-pop")).not.toBeDisplayed();
+  });
+});
 
 describe("calendar: event detail", () => {
   it("opens beside a timed event, inside the window, with each item and the Meet link", async () => {

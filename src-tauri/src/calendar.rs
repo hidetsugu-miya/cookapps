@@ -505,6 +505,65 @@ pub async fn set_calendar_first_day(app: AppHandle, first_day: u8) -> Result<(),
         .map_err(|e| e.to_string())?
 }
 
+/// One day of the small month calendar of the calendar screen (C-4).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct MonthDay {
+    /// Local date, "YYYY-MM-DD".
+    date: String,
+    /// The day of the month.
+    day: u32,
+    /// Whether the day is in the month asked for (the others fill the first and the last week).
+    in_month: bool,
+}
+
+/// The small month calendar of the calendar screen (C-4): the weeks that hold the month, from the first day of the week.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct MonthGrid {
+    /// The weekday of each column, 0 = Sunday to 6 = Saturday, starting with the first day of the week.
+    weekdays: Vec<u8>,
+    /// Seven days for each week of the month, in order.
+    days: Vec<MonthDay>,
+}
+
+/// The weeks that hold the month `month` (1 to 12) of `year`, each starting on `first_day`.
+fn month_grid(year: i32, month: u32, first_day: u8) -> Result<MonthGrid, String> {
+    let invalid = || format!("月が不正です: {year}-{month}");
+    let first = NaiveDate::from_ymd_opt(year, month, 1).ok_or_else(invalid)?;
+    let next = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)
+    }
+    .ok_or_else(invalid)?;
+    let start = week_start(first, first_day)?;
+    let end = week_start(next - Duration::days(1), first_day)? + Duration::days(6);
+    let days = (0..=(end - start).num_days())
+        .map(|i| {
+            let d = start + Duration::days(i);
+            MonthDay {
+                date: d.to_string(),
+                day: d.day(),
+                in_month: d.month() == month,
+            }
+        })
+        .collect();
+    Ok(MonthGrid {
+        weekdays: (0..7).map(|i| (first_day + i) % 7).collect(),
+        days,
+    })
+}
+
+#[tauri::command]
+pub fn calendar_month(year: i32, month: u32, first_day: u8) -> Result<MonthGrid, String> {
+    month_grid(year, month, first_day)
+}
+
 const SELECTION_FILE: &str = "calendar-selection.json";
 /// The longest calendar ID a choice may name, in bytes.
 const CALENDAR_ID_MAX: usize = 1024;
@@ -1434,6 +1493,64 @@ mod tests {
         assert_eq!(week_start(date("2026-10-29"), 0), Ok(date("2026-10-25"))); // Thursday
         assert_eq!(week_start(date("2026-10-25"), 0), Ok(date("2026-10-25"))); // Sunday
         assert_eq!(week_start(date("2026-10-31"), 0), Ok(date("2026-10-25"))); // Saturday
+    }
+
+    #[test]
+    fn month_grid_covers_the_weeks_of_the_month() {
+        // November 2026 starts on Sunday and ends on Monday the 30th.
+        let sunday = month_grid(2026, 11, 0).unwrap();
+        assert_eq!(sunday.weekdays, [0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(sunday.days.len(), 35);
+        assert_eq!(sunday.days[0].date, "2026-11-01");
+        assert_eq!(sunday.days[34].date, "2026-12-05");
+        assert!(sunday.days[29].in_month && !sunday.days[30].in_month);
+        // Starting on Monday, the first row begins in October, and the 30th is alone on the first day of a sixth row.
+        let monday = month_grid(2026, 11, 1).unwrap();
+        assert_eq!(monday.weekdays, [1, 2, 3, 4, 5, 6, 0]);
+        assert_eq!(monday.days.len(), 42);
+        assert_eq!(monday.days[0].date, "2026-10-26");
+        assert!(!monday.days[0].in_month && monday.days[6].in_month);
+        assert_eq!(
+            (
+                monday.days[35].date.as_str(),
+                monday.days[35].day,
+                monday.days[35].in_month
+            ),
+            ("2026-11-30", 30, true)
+        );
+        assert_eq!(monday.days[41].date, "2026-12-06");
+    }
+
+    #[test]
+    fn month_grid_has_four_five_or_six_weeks() {
+        // February 2026 is exactly four weeks from Sunday; a 31-day month that starts late needs six.
+        assert_eq!(month_grid(2026, 2, 0).unwrap().days.len(), 28);
+        assert_eq!(month_grid(2026, 8, 0).unwrap().days.len(), 42);
+        assert_eq!(month_grid(2026, 8, 1).unwrap().days.len(), 42);
+        for first in 0..7 {
+            for month in 1..=12 {
+                let grid = month_grid(2026, month, first).unwrap();
+                assert_eq!(grid.days.len() % 7, 0);
+                assert!(grid.days.iter().filter(|d| d.in_month).count() >= 28);
+                assert!(grid.days[0].date.as_str() <= format!("2026-{month:02}-01").as_str());
+            }
+        }
+    }
+
+    #[test]
+    fn month_grid_crosses_the_year() {
+        let december = month_grid(2026, 12, 0).unwrap();
+        assert_eq!(december.days[0].date, "2026-11-29");
+        assert_eq!(december.days.last().unwrap().date, "2027-01-02");
+        let january = month_grid(2027, 1, 0).unwrap();
+        assert_eq!(january.days[0].date, "2026-12-27");
+    }
+
+    #[test]
+    fn month_grid_refuses_a_bad_month_or_first_day() {
+        assert!(month_grid(2026, 0, 0).is_err());
+        assert!(month_grid(2026, 13, 0).is_err());
+        assert!(month_grid(2026, 11, 7).is_err());
     }
 
     #[test]

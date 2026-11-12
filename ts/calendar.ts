@@ -4,6 +4,7 @@ import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
 import { addAccount, refreshPopup } from "./accounts.js";
 import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
+import { closeMonthPop, initCalendarMonth, showCalendarMonth } from "./calendar-month.js";
 import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
 import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
@@ -149,11 +150,9 @@ function renderWeek(w: Week) {
     if (i === todayIndex) node.classList.add("today");
     return node;
   };
-  // The title names the month of the middle of the week.
-  const year = document.createElement("span");
-  year.className = "year";
-  year.textContent = ` ${days[3].getFullYear()}`;
-  $("cal-title").replaceChildren(`${days[3].getMonth() + 1}月`, year);
+  // The title names the month of the middle of the week, and the small calendars show it.
+  $("cal-title").textContent = `${days[3].getFullYear()}年${days[3].getMonth() + 1}月`;
+  showCalendarMonth(w.weekStart, days[3]);
   $("cal-head").replaceChildren(
     el("cal-gutter"),
     ...days.map((d, i) => {
@@ -292,6 +291,7 @@ export async function loadCalendar(refresh = false) {
 // Opens the calendar screen: the first draw scrolls to the morning again.
 export function showCalendar() {
   calScrolled = false;
+  closeMonthPop();
   show("calendar");
   loadCalendar();
 }
@@ -316,6 +316,7 @@ const moveWeek = (date: string) => {
 
 export function initCalendar() {
   initCalendarSide(choiceChanged);
+  initCalendarMonth(moveWeek);
   $("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));
   $("cal-next").onclick = () => moveWeek(isoDate(addDays(calDate, 7)));
   $("cal-today").onclick = () => moveWeek(isoDate(new Date()));
