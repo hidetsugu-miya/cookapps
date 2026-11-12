@@ -239,8 +239,8 @@ function modelBlock() {
   return [note, grid];
 }
 
-// The two selects under a Claude pane's request field, without a frame: the model and effort of the pane's purpose, the same values as the settings'.
-// The prompt screen's pane (the prompt conversation) and the Slack thread's pane (the Slack thread conversation) have them.
+// The two selects of a Claude pane's request field, without a frame: the model and effort of the pane's purpose, the same values as the settings'.
+// The prompt screen's pane (the prompt conversation) has them under the field; the Slack thread's pane (the Slack thread conversation) has them in the frame of the field (composer.ts).
 // The Todo draft page's pane (S-18) has them for the Slack summary's purpose; the page is not always open, so a slot that is not in the page is skipped.
 // The Todo screen's Claude pane (T-7) has them for the Todo conversation's purpose.
 const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["reply-model", "slackReply"], ["draft-model", "slackSummary"], ["todo-claude-model", "todoChat"]];

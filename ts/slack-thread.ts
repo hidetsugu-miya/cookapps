@@ -8,6 +8,7 @@ import type { ThreadMessage } from "./bindings/ThreadMessage";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import { createChat, type Turn } from "./claude-chat.js";
 import { getClaude, showModelSlot } from "./claude.js";
+import { createComposer } from "./composer.js";
 import { $, composing, isMac, tag } from "./dom.js";
 import { formatDetailDate, hostOf } from "./format.js";
 import { FILE_SVG } from "./icons.js";
@@ -478,6 +479,7 @@ function selectAssistant(tab: "claude" | "orca") {
 }
 
 export function initSlackThread() {
+  $("reply-chat-note").after(createComposer({ prefix: "reply", label: "Claude への依頼" }));
   handoff = new HandoffPane({
     root: $("st-orca"),
     forced: true,

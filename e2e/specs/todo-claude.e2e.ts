@@ -1,5 +1,5 @@
 import type { TodoChatReply } from "../../ts/bindings/TodoChatReply";
-import { boot, callsOf, claudeLoggedOut, claudeReady, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, claudeLoggedOut, composerLayout, claudeReady, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText } from "../support";
 
 // The Claude pane of the Todo screen (T-7).
 const pane = "#todo-claude";
@@ -105,7 +105,7 @@ describe("todo Claude pane", () => {
     expect(await share()).toBeCloseTo(0.3, 2);
   });
 
-  it("has the request field with the model and effort of todoChat under it, and no help text", async () => {
+  it("has the request field with the model and effort of todoChat and the send button in its frame, and no help text", async () => {
     await openTodo();
     await openPane();
     await expect(input()).toHaveAttribute("aria-label", "Claude への依頼");
@@ -115,9 +115,8 @@ describe("todo Claude pane", () => {
     await expect($('#todo-claude-model select[data-purpose="todoChat"][data-kind="model"]')).toHaveValue("sonnet");
     await expect($('#todo-claude-model select[data-purpose="todoChat"][data-kind="effort"]')).toHaveValue("medium");
     expect(await count("#todo-claude-model select")).toBe(2);
-    // The row of the selects is under the field, with the send button at its right end.
-    expect(await browser.execute(() => document.querySelector("#todo-claude-model")!.getBoundingClientRect().top >= document.querySelector("#todo-claude-input")!.getBoundingClientRect().bottom)).toBe(true);
-    expect(await browser.execute(() => document.querySelector("#todo-claude-send")!.getBoundingClientRect().left >= document.querySelector("#todo-claude-model")!.getBoundingClientRect().right)).toBe(true);
+    // The selects and the send button are in the frame of the field, in the row under it, the send button at the right end.
+    expect(await composerLayout("todo-claude")).toEqual({ framed: [true, true, true], modelBelowInput: true, sendRightOfModel: true, sendInsideFrame: true, sendRadius: "50%", placeholder: null });
   });
 
   it("is never shown with the Orca pane: the Orca icon waits for a task, and either icon chooses its pane", async () => {

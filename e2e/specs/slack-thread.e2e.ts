@@ -1,6 +1,6 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
 import {
-  attachment, boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
+  attachment, boot, callsOf, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
   copiedTexts, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings,
 } from "../support";
 
@@ -981,7 +981,7 @@ describe("slack thread: asking Claude", () => {
     await $("#reply-send").click();
   };
 
-  it("has the Claude and Orca tabs and クリア in the header, no 校正する button, an arrow send button, no key hints and the new placeholder", async () => {
+  it("has the Claude and Orca tabs and クリア in the header, no 校正する button, an arrow send button, no key hints and no placeholder", async () => {
     await openDetail();
     const pane = $("#reply-chat");
     await expect(pane).toHaveAttribute("aria-label", "Claude");
@@ -992,10 +992,12 @@ describe("slack thread: asking Claude", () => {
     expect(await count("#reply-chat .chat-head svg")).toBe(2);
     // The Slack compose screen keeps its own row (S-4).
     expect(await count("#reply-proofread, #reply-chat .proofread-row")).toBe(0);
-    await expect($("#reply-input")).toHaveAttribute("placeholder", "Claude に頼みたいことを書く");
+    await expect($("#reply-input")).not.toHaveAttribute("placeholder");
     await expect($("#reply-send")).toHaveAttribute("aria-label", "送信");
     await expect($("#reply-send")).toHaveText("");
     expect(await count("#reply-send svg")).toBe(1);
+    // The model and effort and the send button are in the frame of the field (the same part as the Todo screen's Claude pane).
+    expect(await composerLayout("reply")).toEqual({ framed: [true, true, true], modelBelowInput: true, sendRightOfModel: true, sendInsideFrame: true, sendRadius: "50%", placeholder: null });
     // The keys are not told on either side, and still work.
     expect(await count("#st-keys, #reply-keys")).toBe(0);
     expect(await count("#st-reply .composer-hint, #reply-form .composer-hint")).toBe(0);
@@ -1188,7 +1190,7 @@ describe("slack thread: asking Claude", () => {
     expect(await count(`${log} .chat-diff`)).toBe(0);
   });
 
-  it("shows the model and effort of the Slack thread under the request field, Sonnet and high by default, and saves a change as slackReply", async () => {
+  it("shows the model and effort of the Slack thread in the frame of the request field, Sonnet and high by default, and saves a change as slackReply", async () => {
     await openDetail();
     const model = $('#reply-model select[data-kind="model"]');
     const effort = $('#reply-model select[data-kind="effort"]');
