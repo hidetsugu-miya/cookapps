@@ -171,7 +171,9 @@ impl Auth {
             // The kept mail list and calendar hold this account's subjects and events.
             [gmail::CACHE_FILE, calendar::CACHE_FILE]
                 .into_iter()
-                .try_for_each(|file| disk_cache::remove(dir, file))
+                .try_for_each(|file| disk_cache::remove(dir, file))?;
+            // And the calendars the account had chosen to show.
+            calendar::forget_selection(dir, account)
         })
     }
 

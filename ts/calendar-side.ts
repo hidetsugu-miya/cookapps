@@ -63,6 +63,10 @@ function item(account: string, c: CalendarChoice) {
   box.onchange = async () => {
     const shown = box.checked;
     seq++;
+    // One save at a time for this box: a second press while it runs would race the first.
+    // A disabled box drops the focus, so it is given back.
+    const focused = document.activeElement === box;
+    box.disabled = true;
     try {
       await invoke("set_calendar_shown", { account, calendarId: c.id, shown });
       c.shown = shown;
@@ -70,6 +74,9 @@ function item(account: string, c: CalendarChoice) {
     } catch (e) {
       box.checked = !shown;
       showError(e);
+    } finally {
+      box.disabled = false;
+      if (focused) box.focus({ preventScroll: true });
     }
   };
   label.append(box, tag("span", "cal-side-name", c.name));
@@ -96,8 +103,10 @@ export async function loadCalendarChoices(refresh: boolean) {
   try {
     const read = await invoke("calendar_choices");
     if (mine !== seq) return;
-    choices = read;
     loaded = true;
+    // The same calendars as drawn: leave the panel alone, so a refresh does not take the focus from a box.
+    if (JSON.stringify(read) === JSON.stringify(choices)) return;
+    choices = read;
     draw();
   } catch {
     // The panel keeps what it showed; the week reports a failure of the accounts.

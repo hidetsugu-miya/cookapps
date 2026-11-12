@@ -53,12 +53,36 @@ pub(crate) fn update<'a, T: Serialize + DeserializeOwned + Default>(
     used: impl IntoIterator<Item = &'a str>,
     change: impl FnOnce(T) -> Option<T>,
 ) -> Result<(), String> {
+    update_and_remove(dir, file, used, change, &[])
+}
+
+/// Like `update`, and when `change` gave a value that was written, deletes `stale` under the same lock (a missing file counts as deleted).
+pub(crate) fn update_and_remove<'a, T: Serialize + DeserializeOwned + Default>(
+    dir: &Path,
+    file: &str,
+    used: impl IntoIterator<Item = &'a str>,
+    change: impl FnOnce(T) -> Option<T>,
+    stale: &[&str],
+) -> Result<(), String> {
     let _writing = WRITING.lock().unwrap_or_else(|e| e.into_inner());
     if !registered(dir, used) {
         return Ok(());
     }
+    rewrite(dir, file, change, stale)
+}
+
+/// `update` without the lock and the account check, for use inside `exclusive`.
+pub(crate) fn rewrite<T: Serialize + DeserializeOwned + Default>(
+    dir: &Path,
+    file: &str,
+    change: impl FnOnce(T) -> Option<T>,
+    stale: &[&str],
+) -> Result<(), String> {
     match change(load(dir, file).unwrap_or_default()) {
-        Some(value) => write(dir, file, &value),
+        Some(value) => {
+            write(dir, file, &value)?;
+            stale.iter().try_for_each(|f| remove(dir, f))
+        }
         None => Ok(()),
     }
 }

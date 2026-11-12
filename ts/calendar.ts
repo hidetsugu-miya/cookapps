@@ -296,11 +296,16 @@ export function showCalendar() {
   loadCalendar();
 }
 
+// How long after the last change of the choice the week is fetched again, so a run of changes fetches once.
+const CHOICE_FETCH_MS = 300;
+let choiceTimer: ReturnType<typeof setTimeout> | undefined;
+
 // A calendar was shown or hidden (C-4): the weeks drawn, fetched and kept hold the old choice.
 function choiceChanged() {
   dropWeeks();
   keptWeeks = Promise.resolve([]);
-  loadCalendar();
+  clearTimeout(choiceTimer);
+  choiceTimer = setTimeout(() => loadCalendar(), CHOICE_FETCH_MS);
 }
 
 const moveWeek = (date: string) => {

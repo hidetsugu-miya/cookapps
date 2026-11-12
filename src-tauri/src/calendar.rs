@@ -538,6 +538,16 @@ impl Selection {
             .insert(id.to_owned(), shown);
         Some(next)
     }
+
+    /// This selection without the account's choices. `None` when it holds none.
+    fn without_account(&self, account: &str) -> Option<Self> {
+        if !self.accounts.contains_key(account) {
+            return None;
+        }
+        let mut next = self.clone();
+        next.accounts.remove(account);
+        Some(next)
+    }
 }
 
 /// The calendars of one account to read events from: those shown by `selection`, in the order given.
@@ -630,9 +640,24 @@ fn check_choice(accounts: &[String], account: &str, calendar_id: &str) -> Result
 fn save_shown(dir: &Path, account: &str, calendar_id: &str, shown: bool) -> Result<(), String> {
     let listed = accounts::load(dir)?.unwrap_or_default();
     check_choice(&listed, account, calendar_id)?;
-    disk_cache::update(dir, SELECTION_FILE, [account], |s: Selection| {
-        s.with_shown(account, calendar_id, shown)
-    })
+    // The kept weeks hold the events of the calendar just hidden, so a changed choice drops them under the same lock.
+    disk_cache::update_and_remove(
+        dir,
+        SELECTION_FILE,
+        [account],
+        |s: Selection| s.with_shown(account, calendar_id, shown),
+        &[CACHE_FILE],
+    )
+}
+
+/// Forgets the account's choices. Call it inside `disk_cache::exclusive`, as `remove_account` does.
+pub(crate) fn forget_selection(dir: &Path, account: &str) -> Result<(), String> {
+    disk_cache::rewrite(
+        dir,
+        SELECTION_FILE,
+        |s: Selection| s.without_account(account),
+        &[],
+    )
 }
 
 /// Shows or hides one calendar of one account in the week, and keeps the choice.
@@ -2301,6 +2326,39 @@ mod tests {
         save_shown(&dir, "a@example.com", "x", true).unwrap();
         assert!(load_selection(&dir).accounts["a@example.com"]["x"]);
         assert!(!dir.join(format!("{SELECTION_FILE}.tmp")).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_changed_choice_drops_the_kept_weeks_and_an_unchanged_one_keeps_them() {
+        let dir = selection_dir("drops-weeks");
+        accounts::save(&dir, &["a@example.com".to_string()]).unwrap();
+        let keep = || std::fs::write(dir.join(CACHE_FILE), "{}").unwrap();
+        keep();
+        save_shown(&dir, "a@example.com", "x", false).unwrap();
+        assert!(!dir.join(CACHE_FILE).exists());
+        keep();
+        save_shown(&dir, "a@example.com", "x", false).unwrap();
+        assert!(dir.join(CACHE_FILE).exists());
+        save_shown(&dir, "a@example.com", "x", true).unwrap();
+        assert!(!dir.join(CACHE_FILE).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn forgetting_an_account_drops_only_its_choices() {
+        let dir = selection_dir("forget");
+        let both = ["a@example.com".to_string(), "b@example.com".to_string()];
+        accounts::save(&dir, &both).unwrap();
+        save_shown(&dir, "a@example.com", "x", false).unwrap();
+        save_shown(&dir, "b@example.com", "y", false).unwrap();
+        forget_selection(&dir, "a@example.com").unwrap();
+        let loaded = load_selection(&dir);
+        assert!(!loaded.accounts.contains_key("a@example.com"));
+        assert!(!loaded.accounts["b@example.com"]["y"]);
+        // An account with no choice leaves the file as it is.
+        forget_selection(&dir, "c@example.com").unwrap();
+        assert_eq!(load_selection(&dir), loaded);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

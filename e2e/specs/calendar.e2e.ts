@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { account, boot, calendarChoices, copiedTexts, count, inbox, meetUrl, mock, rejects, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
+import { account, boot, calendarChoices, copiedTexts, count, holds, inbox, meetUrl, mock, rejects, release, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
 
 // The button of the event (a timed box or an all-day chip) with `title`.
 const eventButton = (title: string) => $(`//button[contains(@class, "cal-event") or contains(@class, "cal-chip")][contains(., "${title}")]`);
@@ -104,6 +104,16 @@ describe("calendar: calendar panel", () => {
     await waitForCount("#cal-allday .cal-chip", 0);
     await expect(choiceBox("Holidays")).not.toBeSelected();
     await expect($("#cal-body .cal-name")).toHaveText("Team sync");
+  });
+
+  it("keeps the box disabled while its choice is being saved", async () => {
+    await openPanel();
+    const setShown = await mock("set_calendar_shown", holds);
+    await choiceBox("Holidays").click();
+    await waitForCalls(setShown);
+    await expect(choiceBox("Holidays")).toBeDisabled();
+    await release(setShown, null);
+    await expect(choiceBox("Holidays")).toBeEnabled();
   });
 
   it("saves the choice when it is checked again", async () => {
