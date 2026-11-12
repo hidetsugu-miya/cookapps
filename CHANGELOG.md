@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.63.4
+
+T-1: a row of the task list has three lines, so that it reads in half of the screen (#507): the name; the first line of the description, underlined when it is an address; and the due moment, the labels, the subtask count and, in the "today" list, the project at the right. The buttons of a row lie over its top right while the pointer is on it.
+
+T-7: the right side of the Todo screen is between 30% and 45% of the screen, set by the divider (#507). It no longer keeps a least of 380px, which in a narrow window passed the upper bound and stopped the divider.
+
 ## v0.63.3
 
 M-2, A-20: a mail body draws in Gmail's face (#494). An HTML body that names no font is in Arial, Helvetica, sans-serif at 13px; a font or size the mail names still wins. A text body is in the same sans-serif, no longer a monospace one, and takes the family and size chosen for the mail screen. The monospace family of the font settings no longer reaches a text body.
