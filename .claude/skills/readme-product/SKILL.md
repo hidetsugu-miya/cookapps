@@ -64,3 +64,4 @@ Read every photo with `Read` before committing it. Add a new photo only if the R
 5. Report what changed, what was not checked (the page as GitHub draws it, unless it was looked at), and the URL.
 
 When the Release PR is prepared ("After the owner merges the Release PR", step 1, in `issues.md`), read the README against the changes that go out. When one makes a photo or a claim out of date, do steps 2 and 3 in `release/next`, and let the Release PR carry them instead of steps 1 and 4. When none does, change nothing, and say so in the Release PR body.
+Either way, the Release PR shows the photos of the screens its changes touch, in its body or in a comment, by the raw URL of the commit that holds them (`issues.md`, "Keep one Release PR open while changes wait").
