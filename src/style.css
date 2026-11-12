@@ -283,10 +283,13 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .proj svg { width: 18px; height: 18px; flex: none; }
 .pdot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 #todo-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-/* T-7, A-9: the first row of the Todo screen is tinted on both sides (the header of the tasks and, on the right, the icons that choose Claude's pane or the Orca pane), with the same height so that the two lines meet; the second row of the right side (the heading of the pane chosen) is the same height for both panes. */
-#todo-body > header, #todo-tools { box-sizing: border-box; height: 70px; background: var(--soft); border-bottom: 2px solid var(--accent); }
+/* T-7, A-9: the first row of the Todo screen is tinted on both sides (the header of the tasks and, on the right, the icons that choose Claude's pane or the Orca pane), with the same height as the header of the Orca screen (32px, with 24px buttons) so that the two lines meet; the second row of the right side (the heading of the pane chosen) is the same height for both panes. */
+#todo-body > header, #todo-tools { box-sizing: border-box; height: 32px; background: var(--soft); border-bottom: 2px solid var(--accent); }
+#todo-body > header { padding-top: 0; padding-bottom: 0; }
+#todo-body > header .icon-btn, #todo-tools .icon-btn { width: 24px; height: 24px; }
+#todo-body > header .icon-btn svg, #todo-tools .icon-btn svg { width: 15px; height: 15px; }
 #todo-body > header .icon-btn:hover:not(:disabled) { background: var(--hover); }
-#todo-tools { flex: none; display: flex; align-items: flex-start; justify-content: flex-end; gap: 4px; padding: 20px 16px 12px; }
+#todo-tools { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 16px; }
 #todo-tools .icon-btn:hover:not(:disabled) { background: var(--hover); }
 #todo-tools .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 #todo-tool-claude { color: var(--claude); }
