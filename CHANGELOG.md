@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.64.1
+
+C-1, C-4: the calendar screen reads like the other screens (#515). The bar above the week is the tinted band of the Todo screen, with 「今日」, the arrows and the month, written as 「2026年11月」, from the left; the month opens a small month calendar under it, and a day pressed there shows its week. The panel has the same month calendar at its top, and each account is a row with the initial and color of its avatar in the sidebar and its address, with its calendars indented under it and folded by pressing the row.
+
 ## v0.64.0
 
 C-4: the calendar screen has a panel, left of the week, to choose the calendars to show (#330, #331, #332). It lists every calendar of each account, under its address, in "マイカレンダー" (the calendars the account owns) and "他のカレンダー" (a person's calendar, holidays, rooms), each with a checkbox in the calendar's color. A change draws the week again at once and is saved in `calendar-selection.json`; nothing is written to Google, and a calendar never chosen follows its choice at Google, so the week is as before until the owner changes it. A button beside the heading folds the panel, and the week takes its width. The `list_events` tool of the MCP server reads the same calendars.
