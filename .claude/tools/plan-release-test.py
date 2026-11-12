@@ -703,6 +703,289 @@ class Refuse(unittest.TestCase):
         self.assertEqual(numbers(bad), [2])
 
 
+class FakeGh:
+    """An in-memory GitHub behind `pr.gh`: it takes the argument list as gh does, and records every call that writes."""
+
+    def __init__(self, labels=("point:1", "point:2", "point:3", "point:5", "point:8", "bug", "proposal"), fail_on=None):
+        self.labels = list(labels)
+        self.issues = {}  # number -> raw issue
+        self.milestones = []  # {"number", "title", "state", "description"}
+        self.writes = []
+        self.fail_on = fail_on  # (command words, nth call of it) -> fail
+        self.counts = {}
+        self.next_number = 500
+
+    def add_issue(self, n, title, labels=(), user="owner", state="open", milestone=None):
+        self.issues[n] = {
+            "number": n,
+            "title": title,
+            "state": state,
+            "user": {"login": user},
+            "labels": [{"name": label} for label in labels],
+            "milestone": milestone,
+        }
+
+    def milestone(self, title, state="open"):
+        m = {"number": len(self.milestones) + 1, "title": title, "state": state, "description": ""}
+        self.milestones.append(m)
+        return m
+
+    def written(self, *words):
+        return [w for w in self.writes if w[: len(words)] == list(words)]
+
+    def _fail_if(self, words):
+        if not self.fail_on:
+            return
+        key, nth = self.fail_on
+        if words[: len(key)] == list(key):
+            self.counts[key] = self.counts.get(key, 0) + 1
+            if self.counts[key] == nth:
+                raise pr.GhError("gh " + " ".join(words) + ": boom")
+
+    def __call__(self, *args):
+        a = list(args)
+        if a[:2] == ["repo", "view"]:
+            return "owner/repo\n" if "nameWithOwner" in a else "owner\n"
+        if a[0] == "api":
+            return self._api(a[1:])
+        self._fail_if(a)
+        self.writes.append(a)
+        if a[:2] == ["label", "create"]:
+            self.labels.append(a[2])
+            return "\n"
+        if a[:2] == ["issue", "create"]:
+            title = a[a.index("--title") + 1]
+            labels = [a[i + 1] for i, x in enumerate(a) if x == "--label"]
+            milestone = a[a.index("--milestone") + 1]
+            assert all(label in self.labels for label in labels), "gh refuses a label that does not exist"
+            self.next_number += 1
+            self.add_issue(self.next_number, title, labels, milestone={"title": milestone})
+            return f"https://github.com/owner/repo/issues/{self.next_number}\n"
+        if a[:2] == ["issue", "close"]:
+            self.issues[int(a[2])]["state"] = "closed"
+            return "\n"
+        if a[:2] == ["issue", "edit"]:
+            self.issues[int(a[2])]["milestone"] = {"title": a[a.index("--milestone") + 1]}
+            return "\n"
+        return "\n"
+
+    def _api(self, a):
+        path = a[0]
+        method = a[a.index("-X") + 1] if "-X" in a else "GET"
+        fields = {x.split("=", 1)[0]: x.split("=", 1)[1] for k, x in enumerate(a) if k and a[k - 1] in ("-f", "-F")}
+        if method == "POST" and path.endswith("/milestones"):
+            self._fail_if(["api", "milestones"])
+            self.writes.append(["api", "milestones", fields["title"]])
+            m = self.milestone(fields["title"])
+            m["description"] = fields["description"]
+            return json.dumps(m)
+        if path.endswith("/labels?per_page=100"):
+            return json.dumps([{"name": label} for label in self.labels])
+        if "/milestones?" in path:
+            return json.dumps(self.milestones)
+        if "/issues?milestone=" in path:
+            number = int(path.split("milestone=")[1].split("&")[0])
+            title = next(m["title"] for m in self.milestones if m["number"] == number)
+            return json.dumps([i for i in self.issues.values() if i["state"] == "open" and (i["milestone"] or {}).get("title") == title])
+        n = int(path.rsplit("/", 1)[1])
+        if n not in self.issues:
+            raise pr.GhError(f"gh api {path}: Not Found")
+        return json.dumps(self.issues[n])
+
+
+def part(title, labels=("point:3",), reason="一つの画面だけを触る"):
+    return {"title": title, "body": f"{title} の本文\n\nCreated by Claude Code", "labels": list(labels), "points_reason": reason}
+
+
+class Split(unittest.TestCase):
+    def run_split(self, fake, spec):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "split.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(spec, f)
+            real, pr.gh = pr.gh, fake
+            out, err = io.StringIO(), io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = pr.main(["split", path])
+            finally:
+                pr.gh = real
+        return code, out.getvalue(), err.getvalue()
+
+    def big(self, labels=("point:5",), user="owner", state="open"):
+        fake = FakeGh()
+        fake.add_issue(438, "大きな機能", labels, user=user, state=state)
+        return fake
+
+    def test_the_parts_are_made_in_order_with_the_reason_and_the_big_issue_is_closed_as_not_planned(self):
+        fake = self.big()
+        fake.labels.append("adds:requirement")
+        spec = {"issue": 438, "milestone": "Slack のスレッド", "parts": [part("一つ目", ("point:3", "adds:requirement")), part("二つ目", ("point:2",), "小さい修正")]}
+        code, out, err = self.run_split(fake, spec)
+        self.assertEqual((code, err), (0, ""))
+        creates = fake.written("issue", "create")
+        self.assertEqual([c[c.index("--title") + 1] for c in creates], ["一つ目", "二つ目"])
+        self.assertEqual([c[c.index("--milestone") + 1] for c in creates], ["Slack のスレッド"] * 2)
+        self.assertEqual([creates[0][i + 1] for i, x in enumerate(creates[0]) if x == "--label"], ["point:3", "adds:requirement"])
+        self.assertEqual([c[-1] for c in fake.written("issue", "comment")], ["一つの画面だけを触る", "小さい修正"])
+        self.assertEqual(fake.written("issue", "close"), [["issue", "close", "438", "--reason", "not planned", "--comment", "部品に分けました: #501、#502"]])
+        self.assertEqual(fake.issues[438]["state"], "closed")
+        self.assertEqual(fake.written("api", "milestones"), [["api", "milestones", "Slack のスレッド"]])
+        self.assertEqual(fake.milestones[0]["description"], "#438 大きな機能")
+        self.assertEqual(fake.written("label"), [])
+        kinds = [w[0] + ":" + w[1] for w in fake.writes]
+        self.assertEqual(kinds, ["api:milestones", "issue:create", "issue:comment", "issue:create", "issue:comment", "issue:close"])
+
+    def test_a_value_with_spaces_or_dashes_reaches_gh_as_one_argument(self):
+        fake = self.big()
+        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "a b", "parts": [part("--x y $(z)")]})
+        self.assertEqual(code, 0)
+        create = fake.written("issue", "create")[0]
+        self.assertEqual(create[create.index("--title") + 1], "--x y $(z)")
+
+    def test_a_failed_check_writes_nothing(self):
+        one = [part("a")]
+        cases = {
+            "closed": (self.big(state="closed"), {"issue": 438, "milestone": "f", "parts": one}, "is not open"),
+            "other author": (self.big(user="someone"), {"issue": 438, "milestone": "f", "parts": one}, "not an issue of the owner"),
+            "no point": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a", ("bug",))]}, "exactly one point:*"),
+            "two points": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a", ("point:2", "point:3"))]}, "exactly one point:*"),
+            "too big": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a", ("point:5",))]}, "more than point:3"),
+            "unknown label": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "nope"))]}, "'nope' does not exist"),
+            "same title": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a"), part("a")]}, "appears twice"),
+            "point 8 without solo": (self.big(("point:8",)), {"issue": 438, "milestone": "f", "parts": [part("a"), part("b", ("point:3", "solo"))]}, "needs the label solo"),
+            "unknown issue": (self.big(), {"issue": 999, "milestone": "f", "parts": one}, "#999"),
+            "not a split file": (self.big(), {"issue": "x", "milestone": "", "parts": [{"title": "a"}]}, "split.issue"),
+        }
+        for name, (fake, spec, text) in cases.items():
+            with self.subTest(name):
+                code, out, err = self.run_split(fake, spec)
+                self.assertEqual(code, 2)
+                self.assertIn(text, err)
+                self.assertEqual(fake.writes, [])
+                self.assertEqual(fake.milestones, [])
+
+    def test_a_closed_milestone_of_the_same_name_writes_nothing(self):
+        fake = self.big()
+        fake.milestone("f", "closed")
+        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a")]})
+        self.assertEqual(code, 2)
+        self.assertIn("is closed", err)
+        self.assertEqual(fake.writes, [])
+
+    def test_every_problem_is_listed_at_once(self):
+        fake = self.big(state="closed")
+        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a", ("bug",)), part("b", ("point:5",))]})
+        self.assertEqual(code, 2)
+        self.assertEqual(len(err.strip().splitlines()), 3)
+
+    def test_a_point_8_issue_gives_every_part_solo_and_makes_the_label_when_it_is_missing(self):
+        fake = self.big(("point:8",))
+        spec = {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "solo")), part("b", ("point:3", "solo"))]}
+        code, _, err = self.run_split(fake, spec)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual([w[2] for w in fake.written("label", "create")], ["solo"])
+        self.assertLess(fake.writes.index(fake.written("label", "create")[0]), fake.writes.index(fake.written("issue", "create")[0]))
+        self.assertEqual(fake.issues[438]["state"], "closed")
+        self.assertTrue(all("solo" in [x["name"] for x in fake.issues[n]["labels"]] for n in (501, 502)))
+
+    def test_solo_that_exists_is_not_made_again(self):
+        fake = self.big(("point:8",))
+        fake.labels.append("solo")
+        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "solo"))]})
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.written("label"), [])
+
+    def test_a_failed_part_stops_the_run_and_the_big_issue_stays_open(self):
+        fake = self.big()
+        fake.fail_on = (("issue", "create"), 2)
+        code, out, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a"), part("b"), part("c")]})
+        self.assertEqual(code, 1)
+        self.assertIn("#501", err)
+        self.assertIn("#438 stays open", err)
+        self.assertEqual(len(fake.written("issue", "create")), 1)
+        self.assertEqual(fake.written("issue", "close"), [])
+        self.assertEqual(fake.issues[438]["state"], "open")
+
+    def test_a_failed_comment_stops_the_run_too(self):
+        fake = self.big()
+        fake.fail_on = (("issue", "comment"), 1)
+        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a"), part("b")]})
+        self.assertEqual(code, 1)
+        self.assertIn("#501", err)
+        self.assertEqual(fake.written("issue", "close"), [])
+        self.assertEqual(fake.issues[438]["state"], "open")
+
+    def test_a_failed_milestone_writes_nothing_else(self):
+        fake = self.big()
+        fake.fail_on = (("api", "milestones"), 1)
+        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a")]})
+        self.assertEqual(code, 1)
+        self.assertIn("parts so far: none", err)
+        self.assertEqual(fake.writes, [])
+
+    def test_a_failed_close_leaves_the_parts_and_says_so(self):
+        fake = self.big()
+        fake.fail_on = (("issue", "close"), 1)
+        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a")]})
+        self.assertEqual(code, 1)
+        self.assertIn("parts so far: #501", err)
+        self.assertEqual(fake.issues[438]["state"], "open")
+
+    def test_a_second_run_keeps_the_open_parts_of_the_same_title_and_makes_the_rest(self):
+        fake = self.big()
+        spec = {"issue": 438, "milestone": "f", "parts": [part("a"), part("b"), part("c")]}
+        fake.fail_on = (("issue", "create"), 3)
+        self.assertEqual(self.run_split(fake, spec)[0], 1)
+        fake.fail_on = None
+        fake.writes.clear()
+        code, out, err = self.run_split(fake, spec)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual([c[c.index("--title") + 1] for c in fake.written("issue", "create")], ["c"])
+        self.assertEqual(fake.written("api", "milestones"), [])
+        self.assertEqual(fake.written("issue", "close")[0][-1], "部品に分けました: #501、#502、#503")
+        self.assertIn("#501 a: kept", out)
+        self.assertEqual(len([i for i in fake.issues.values() if i["title"] == "a"]), 1)
+
+    def test_a_part_of_the_same_title_in_another_milestone_or_closed_or_of_someone_else_is_not_kept(self):
+        fake = self.big()
+        fake.milestone("f")
+        fake.add_issue(300, "a", ("point:3",), milestone={"title": "other"})
+        fake.add_issue(301, "b", ("point:3",), state="closed", milestone={"title": "f"})
+        fake.add_issue(302, "a", ("point:3",), user="someone", milestone={"title": "f"})
+        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a"), part("b")]})
+        self.assertEqual(code, 0)
+        self.assertEqual(len(fake.written("issue", "create")), 2)
+
+    def test_no_parts_only_puts_the_issue_in_the_milestone(self):
+        fake = self.big()
+        code, out, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": []})
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(fake.written("issue", "edit"), [["issue", "edit", "438", "--milestone", "f"]])
+        self.assertEqual(fake.written("issue", "create"), [])
+        self.assertEqual(fake.written("issue", "close"), [])
+        self.assertEqual(fake.issues[438]["state"], "open")
+        self.assertEqual(fake.written("api", "milestones"), [["api", "milestones", "f"]])
+
+    def test_no_parts_with_an_existing_milestone_makes_no_milestone(self):
+        fake = self.big(("point:8",))
+        fake.milestone("f")
+        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": []})
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.written("api", "milestones"), [])
+        self.assertEqual(len(fake.written("issue", "edit")), 1)
+
+    def test_a_split_file_that_is_not_json_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "x.json")
+            with open(path, "w") as f:
+                f.write("{")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(pr.main(["split", path]), 2)
+            self.assertIn(path, err.getvalue())
+
+
 class Stream(unittest.TestCase):
     def test_paginated_output_is_flattened(self):
         self.assertEqual(pr.parse_stream('[{"a":1}][{"a":2}]\n[]'), [{"a": 1}, {"a": 2}])
