@@ -83,6 +83,107 @@ describe("thread", () => {
   });
 });
 
+// M-2: an HTML body is drawn in its frame, whose document this page reads. WebKit calls no listener inside it, so the checks read the document the way `routeLinks` does.
+describe("thread HTML body", () => {
+  beforeEach(async () => {
+    await boot({ inbox: inbox() });
+    await waitForCount("#unread-threads li", 2);
+  });
+
+  // Opens a thread of one HTML message and waits until the frame has been written and the links routed.
+  async function openHtml(body: string) {
+    const base = threadDetail("First unread", "", true);
+    await mock("thread", { ...base, messages: [{ ...base.messages[0], html: true, body }] });
+    await mock("set_read", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
+    await browser.waitUntil(
+      () =>
+        browser.execute(() => {
+          // The mail's body carries `data-ready` and the frame's load (the links are routed in it) is over; the frame starts as an empty, loaded document.
+          const doc = document.querySelector<HTMLIFrameElement>("#messages iframe")?.contentDocument;
+          return !!doc?.body?.hasAttribute("data-ready") && doc.readyState === "complete";
+        }),
+      { timeoutMsg: "the frame never loaded the body" },
+    );
+  }
+  // The links of the frame's document, in order.
+  const links = () =>
+    browser.execute(() =>
+      [...document.querySelector<HTMLIFrameElement>("#messages iframe")!.contentDocument!.querySelectorAll("a")].map((a) => ({
+        href: a.getAttribute("href"),
+        target: a.getAttribute("target"),
+        title: a.getAttribute("title"),
+        text: a.textContent,
+      })),
+    );
+  // The computed font of the first element `selector` finds in the frame's document.
+  const fontIn = (selector: string) =>
+    browser.execute((s) => {
+      const style = getComputedStyle(document.querySelector<HTMLIFrameElement>("#messages iframe")!.contentDocument!.querySelector(s)!);
+      return { family: style.fontFamily.replace(/"/g, ""), size: style.fontSize };
+    }, selector);
+
+  it("makes the http(s) URL that stands as text a link that goes the way of every link", async () => {
+    await openHtml(
+      '<body data-ready><p id="a">See https://example.com/a?x=1&amp;y=2, and (https://example.com/b).</p><p>HTTP://EXAMPLE.COM/Up</p>',
+    );
+    expect(await links()).toEqual([
+      { href: "https://example.com/a?x=1&y=2", target: "_top", title: "https://example.com/a?x=1&y=2", text: "https://example.com/a?x=1&y=2" },
+      { href: "https://example.com/b", target: "_top", title: "https://example.com/b", text: "https://example.com/b" },
+      { href: "HTTP://EXAMPLE.COM/Up", target: "_top", title: "http://example.com/Up", text: "HTTP://EXAMPLE.COM/Up" },
+    ]);
+    // The text around the URLs stays as it was.
+    const text = await browser.execute(() => document.querySelector<HTMLIFrameElement>("#messages iframe")!.contentDocument!.getElementById("a")!.textContent);
+    expect(text).toBe("See https://example.com/a?x=1&y=2, and (https://example.com/b).");
+  });
+
+  it("does not wrap a URL that is in a link, and keeps the link as it is", async () => {
+    await openHtml(
+      '<body data-ready><p><a href="https://example.com/c?r=1">https://example.com/c</a> and <a href="https://example.com/d">go to <b>https://example.com/d</b></a></p>',
+    );
+    const found = await links();
+    expect(found.map((a) => a.href)).toEqual(["https://example.com/c?r=1", "https://example.com/d"]);
+    expect(found.every((a) => a.target === "_top")).toBe(true);
+    const nested = await browser.execute(() => document.querySelector<HTMLIFrameElement>("#messages iframe")!.contentDocument!.querySelectorAll("a a").length);
+    expect(nested).toBe(0);
+  });
+
+  it("does not wrap what is not an http(s) URL, or a URL where a link has no place", async () => {
+    await openHtml(
+      "<body data-ready><p>ftp://example.com/e mailto:bob@example.com www.example.com javascript:alert(1) example.com/f</p>" +
+        "<textarea>https://example.com/g</textarea><title>https://example.com/h</title><style>/* https://example.com/i */ p { margin: 0 }</style>" +
+        '<svg><text id="s">https://example.com/j</text></svg><button>https://example.com/k</button><p>and the tag &lt;img src=x&gt; https://example.com/l</p>',
+    );
+    // Only the last URL, in an ordinary paragraph, is a link; the escaped tag is text, not an element.
+    expect((await links()).map((a) => a.href)).toEqual(["https://example.com/l"]);
+    const inFrame = await browser.execute(() => {
+      const doc = document.querySelector<HTMLIFrameElement>("#messages iframe")!.contentDocument!;
+      return { img: doc.querySelectorAll("img").length, style: [...doc.querySelectorAll("style")].pop()!.textContent, area: doc.querySelector("textarea")!.value };
+    });
+    expect(inFrame).toEqual({ img: 0, style: "/* https://example.com/i */ p { margin: 0 }", area: "https://example.com/g" });
+  });
+
+  it("draws a mail that names no font in Gmail's, and lets a font the mail names win", async () => {
+    await openHtml(
+      '<body data-ready><p id="plain">Plain</p><p id="own" style="font-family: Georgia, serif; font-size: 20px">Own</p>' +
+        '<font id="face" face="Courier">Face</font><table><tr><td id="cell">Cell</td></tr></table>',
+    );
+    // The mail has no DOCTYPE, so the table is also checked: quirks mode would give it the browser's size.
+    expect(await fontIn("#plain")).toEqual({ family: "Arial, Helvetica, sans-serif", size: "13px" });
+    expect(await fontIn("#cell")).toEqual({ family: "Arial, Helvetica, sans-serif", size: "13px" });
+    expect(await fontIn("#own")).toEqual({ family: "Georgia, serif", size: "20px" });
+    expect((await fontIn("#face")).family).toContain("Courier");
+  });
+
+  it("lets the style of the mail itself win over the default font, also for a mail with a DOCTYPE", async () => {
+    await openHtml(
+      '<!DOCTYPE html><html><head><style>body { font-family: Verdana; font-size: 20px }</style></head><body data-ready><p id="p">Text</p></body></html>',
+    );
+    expect(await fontIn("#p")).toEqual({ family: "Verdana", size: "20px" });
+  });
+});
+
 describe("thread loading", () => {
   const headerButtons = ["#thread-slack", "#thread-todo", "#thread-orca", "#trash", "#archive"];
 

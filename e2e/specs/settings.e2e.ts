@@ -1439,7 +1439,7 @@ describe("settings: fonts (the Font tab, A-20)", () => {
       html,
       selector,
     );
-  // The body of a text mail (`.plain`), and the code in a popup.
+  // The body of a text mail (`.plain`: the mail screen's family, else Gmail's, M-2), and the code in a popup.
   const plainFamily = () => familyOfNew('<div class="plain">text</div>', ".plain");
   const codeFamily = () => familyOfNew('<div class="pop"><code>x</code></div>', "code");
   const options = (id: string) => browser.execute((i) => [...(document.getElementById(i) as HTMLSelectElement).options].map((o) => o.textContent), id);
@@ -1532,6 +1532,9 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     expect(await waitForCalls(set)).toEqual([{ area: "mail", family: "Hiragino Sans", size: 14, ghostty: false }]);
     await browser.waitUntil(async () => (await fontOf("#mail-area")).family.includes("Hiragino Sans"), { timeoutMsg: "the mail never took the family" });
     expect((await fontOf("#inbox-header")).family).toContain("Hiragino Sans");
+    // The body of a text mail takes the family chosen for the mail screen in place of Gmail's.
+    expect(await plainFamily()).toContain("Hiragino Sans");
+    expect(await plainFamily()).not.toContain("Arial");
     // The other screens keep the system's.
     expect((await fontOf("#calendar")).family).not.toContain("Hiragino Sans");
     expect(await selectedText("font-mail-family")).toBe("Hiragino Sans");
@@ -1587,6 +1590,7 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     expect(await rootVar("--ff-mail")).toBe("");
     expect(await rootVar("--fs-mail")).toBe("");
     expect((await fontOf("#mail-area")).size).toBe("14px");
+    expect(await plainFamily()).toBe("Arial, Helvetica, sans-serif");
   });
 
   it("stops following Ghostty when a family is chosen for the terminals, and follows again when Ghostty is chosen", async () => {
@@ -1619,7 +1623,7 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     expect((await fontOf("#orca-files")).size).toBe("14px");
     // The first family of the app, and the monospace stack as it was.
     expect((await fontOf("body")).family.replace(/"/g, "")).toBe("-apple-system, sans-serif");
-    expect(await plainFamily()).toBe("HackGen Console NF no U+3000, ui-monospace, Menlo, monospace");
+    expect(await plainFamily()).toBe("Arial, Helvetica, sans-serif");
     expect(await selectedText("font-app-family")).toBe("システム標準");
     expect(await selectedText("font-app-size")).toBe("14 px");
     expect(await selectedText("font-orca-pane-size")).toBe("14 px");
@@ -1692,8 +1696,8 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     expect(await waitForCalls(set)).toEqual([{ area: "mono", family: "Menlo", size: 14, ghostty: false }]);
     await browser.waitUntil(async () => (await rootVar("--ff-mono")) !== "", { timeoutMsg: "the monospace never took the family" });
     expect(await rootVar("--ff-mono")).toBe('"Menlo",');
-    // The text of a mail keeps the face that leaves out U+3000 after the family chosen.
-    expect(await plainFamily()).toBe("Menlo, HackGen Console NF no U+3000, ui-monospace, Menlo, monospace");
+    // The text of a mail is not a monospace stack: it keeps Gmail's family.
+    expect(await plainFamily()).toBe("Arial, Helvetica, sans-serif");
     expect(await codeFamily()).toBe("Menlo, ui-monospace, monospace");
     // Nothing else takes it, and no size is set for it.
     expect(await rootVar("--fs-mono")).toBe("");
@@ -1710,7 +1714,7 @@ describe("settings: fonts (the Font tab, A-20)", () => {
     await chooseOption("font-mono-family", "own");
     expect(await waitForCalls(set)).toEqual([{ area: "mono", family: null, size: 14, ghostty: false }]);
     await browser.waitUntil(async () => (await rootVar("--ff-mono")) === "", { timeoutMsg: "the monospace never went back" });
-    expect(await plainFamily()).toBe("HackGen Console NF no U+3000, ui-monospace, Menlo, monospace");
+    expect(await plainFamily()).toBe("Arial, Helvetica, sans-serif");
     expect(await codeFamily()).toBe("ui-monospace, monospace");
   });
 

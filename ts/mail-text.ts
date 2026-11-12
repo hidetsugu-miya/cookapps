@@ -1,21 +1,6 @@
 import type { MessageDetail } from "./bindings/MessageDetail";
 import { queryAll } from "./mail-frame.js";
-
-// A plain-text body as text nodes and links to its http(s) URLs. A click navigates this page, which Rust's on_navigation
-// cancels and opens in the default browser. A URL ends at whitespace, a non-ASCII character or " < > (never in a URL as is);
-// trailing punctuation is left out, and a trailing ")" only when unpaired, as in "(https://example.com/a)" but not ".../Foo_(bar)".
-const URL_IN_TEXT = /https?:\/\/[!#-;=?-~]+/gi;
-
-function trimUrl(url: string) {
-  const opens = url.split("(").length - 1;
-  let closes = url.split(")").length - 1;
-  let end = url.length;
-  for (; end; end--) {
-    const c = url[end - 1];
-    if (c === ")" ? closes-- <= opens : !".,;:!?']".includes(c)) break;
-  }
-  return url.slice(0, end);
-}
+import { urlsIn } from "./url-text.js";
 
 // A message as plain text, for the summary. It lives in TS because it needs DOMParser (Rust has no HTML parser). An HTML body is parsed by DOMParser (no script runs and nothing is fetched: the document has no
 // browsing context), its style, script and what is hidden (noscript, the hidden attribute, an inline display:none or visibility:hidden) are dropped, and a line break is put before and after a block (after a <br>) and a space after a cell,
@@ -52,27 +37,18 @@ export function htmlText(html: string, showHrefs = false) {
     .trim();
 }
 
-function isAppOrigin(url: string) {
-  try {
-    return new URL(url).hostname === "tauri.localhost";
-  } catch {
-    return false;
-  }
-}
-
+// A plain-text body as text nodes and links to its http(s) URLs (`urlsIn`). A click navigates this page, which Rust's on_navigation
+// cancels and opens in the default browser.
 export function linkify(text: string) {
   const nodes: (string | HTMLAnchorElement)[] = [];
   let last = 0;
-  for (const match of text.matchAll(URL_IN_TEXT)) {
-    const url = trimUrl(match[0]);
-    // A link to the app's own origin on Windows would navigate the window itself (Rust's on_navigation lets it through), so it stays text.
-    if (isAppOrigin(url)) continue;
-    nodes.push(text.slice(last, match.index));
+  for (const { index, url } of urlsIn(text)) {
+    nodes.push(text.slice(last, index));
     const a = document.createElement("a");
     a.href = url;
     a.textContent = url;
     nodes.push(a);
-    last = match.index + url.length;
+    last = index + url.length;
   }
   nodes.push(text.slice(last));
   return nodes;

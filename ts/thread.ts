@@ -7,7 +7,7 @@ import { dismiss } from "./arrivals.js";
 import { applySync, load, removeRow } from "./inbox.js";
 import { rowKey, rows, setReadState, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
-import { autoFit, fitAfterImages, frameObserver, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
+import { autoFit, fitAfterImages, frameObserver, linkTextUrls, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
 import { clearSummary, renderSummary, summaryPressed } from "./mail-summary.js";
 import { linkify } from "./mail-text.js";
@@ -92,6 +92,7 @@ function message(m: MessageDetail, ctx: ThreadCtx, folded: boolean, foldable: bo
       frame.setAttribute("sandbox", "allow-same-origin allow-top-navigation-by-user-activation");
       frame.srcdoc = withBodyCsp(plainBody(m.body));
       autoFit(frame, (doc) => {
+        linkTextUrls(doc);
         routeLinks(doc);
         ctx.cids.then((byMessage) => {
           if (ctx.stale()) return;
