@@ -1,9 +1,11 @@
 // C-4: the panel at the left of the calendar's week, where the calendars to show are chosen, grouped by account.
 import type { CalendarChoice } from "./bindings/CalendarChoice";
 import type { CalendarChoices } from "./bindings/CalendarChoices";
+import { closeDetail } from "./calendar-detail.js";
 import { $, el, tag } from "./dom.js";
 import { avatarColor } from "./format.js";
 import { invoke } from "./ipc.js";
+import { drawListToggle, listToggle } from "./list-toggle.js";
 import { showError } from "./view.js";
 
 // The calendars as last read, and whether that read is still good: a login or a removal of an account makes it stale.
@@ -14,8 +16,36 @@ let seq = 0;
 // Called after a choice is saved, to draw the week again.
 let onChanged: () => void = () => {};
 
+// Whether the panel is open: what the owner chose, held in memory only, so it is open again when the app starts.
+let panelOpen = true;
+
+// Shows the panel, or (closed) the button in the bar of the week that opens it again. The panel's own button is in the panel, so it goes with it.
+function layoutPanel() {
+  $("cal-side").hidden = !panelOpen;
+  $("cal-bar-toggle").hidden = panelOpen;
+  drawListToggle($("cal-side-toggle"), panelOpen);
+  drawListToggle($("cal-bar-toggle"), panelOpen);
+}
+
+// Closes the panel or opens it again; the week takes the width of a closed panel.
+// The pressed button is hidden by it, so the focus goes on to the button that is shown now.
+function togglePanel() {
+  const focused = document.activeElement?.classList.contains("list-toggle") ?? false;
+  closeDetail();
+  panelOpen = !panelOpen;
+  layoutPanel();
+  if (focused) $(panelOpen ? "cal-side-toggle" : "cal-bar-toggle").focus({ preventScroll: true });
+}
+
 export function initCalendarSide(changed: () => void) {
   onChanged = changed;
+  const inPanel = listToggle("カレンダー一覧", togglePanel);
+  inPanel.id = "cal-side-toggle";
+  $("cal-side-bar").append(inPanel);
+  const inBar = listToggle("カレンダー一覧", togglePanel);
+  inBar.id = "cal-bar-toggle";
+  $("cal-bar").prepend(inBar);
+  layoutPanel();
 }
 
 export function forgetCalendarChoices() {

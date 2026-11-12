@@ -74,6 +74,24 @@ describe("calendar: calendar panel", () => {
     expect(await browser.execute(() => getComputedStyle(document.querySelector(".cal-side-item input")!).accentColor)).toBe("rgb(30, 123, 82)");
   });
 
+  it("closes the panel with the button beside the heading, the week takes its width, and opens it again", async () => {
+    await openPanel();
+    const scrollWidth = () => browser.execute(() => document.getElementById("cal-scroll")!.getBoundingClientRect().width);
+    const open = await scrollWidth();
+    await expect($("#cal-side-toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect($("#cal-bar-toggle")).not.toBeDisplayed();
+    await $("#cal-side-toggle").click();
+    await expect($("#cal-side")).not.toBeDisplayed();
+    await expect($("#cal-bar-toggle")).toBeDisplayed();
+    await expect($("#cal-bar-toggle")).toHaveAttribute("aria-expanded", "false");
+    expect(await scrollWidth()).toBe(open + 248);
+    await $("#cal-bar-toggle").click();
+    await expect($("#cal-side")).toBeDisplayed();
+    await expect($("#cal-bar-toggle")).not.toBeDisplayed();
+    expect(await scrollWidth()).toBe(open);
+    await expect(choiceBox("Work")).toBeSelected();
+  });
+
   it("saves the choice when a calendar is unchecked, and the week loses its events", async () => {
     await openPanel();
     await expect($("#cal-allday .cal-chip")).toHaveText("Holiday");
