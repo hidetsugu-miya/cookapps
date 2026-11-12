@@ -4,6 +4,7 @@ import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
 import { addAccount, refreshPopup } from "./accounts.js";
 import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
+import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
 import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
 import { invoke } from "./ipc.js";
@@ -51,6 +52,7 @@ export function resetCalendar(dropKept: boolean) {
   dropWeeks();
   if (dropKept) keptWeeks = Promise.resolve([]);
   calRefresh = true;
+  forgetCalendarChoices();
 }
 
 // Forgets the weeks drawn and fetched so far (not the calendar lists behind them).
@@ -282,6 +284,8 @@ export async function loadCalendar(refresh = false) {
     if (seq === calSeq) showError(e);
   } finally {
     if (seq === calSeq) $("calendar").classList.remove("loading");
+    // After the week, whose fetch lists the calendars again when they are stale, so this read finds them kept.
+    loadCalendarChoices(refresh);
   }
 }
 
@@ -292,6 +296,13 @@ export function showCalendar() {
   loadCalendar();
 }
 
+// A calendar was shown or hidden (C-4): the weeks drawn, fetched and kept hold the old choice.
+function choiceChanged() {
+  dropWeeks();
+  keptWeeks = Promise.resolve([]);
+  loadCalendar();
+}
+
 const moveWeek = (date: string) => {
   closeDetail();
   calDate = date;
@@ -299,6 +310,7 @@ const moveWeek = (date: string) => {
 };
 
 export function initCalendar() {
+  initCalendarSide(choiceChanged);
   $("cal-prev").onclick = () => moveWeek(isoDate(addDays(calDate, -7)));
   $("cal-next").onclick = () => moveWeek(isoDate(addDays(calDate, 7)));
   $("cal-today").onclick = () => moveWeek(isoDate(new Date()));

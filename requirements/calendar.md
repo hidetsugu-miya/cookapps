@@ -11,3 +11,7 @@ Press an event of the week (timed or all-day) and a popover beside it shows the 
 ## C-3 First day of the week
 
 The settings screen has a "カレンダー" tab where the first day of the week is chosen from Sunday to Saturday (the default is Sunday). It is saved in `calendar-settings.json` in the app config directory and the calendar draws its weeks from that day
+
+## C-4 Calendars to show
+
+The calendar screen has a panel, 248px wide, left of the week, headed "カレンダー". It groups the calendars by account, with the address as the heading of each group, and under it lists them in two parts, "マイカレンダー" (the calendars the account owns) and "他のカレンダー" (the others: a person's calendar added to the list, holidays, rooms), each as a checkbox and the calendar's name. The checkbox takes the calendar's color (the account's color when the calendar has none), and a part with no calendar is not drawn. Checking or unchecking a calendar saves the choice in `calendar-selection.json` in the app config directory, writes nothing to Google (the scope stays `calendar.readonly`), and draws the week again from the new choice at once; a choice that cannot be saved puts the checkbox back and shows the error. A calendar never chosen follows `selected` at Google. The panel is read when the calendar is opened and again when the week is refreshed or the accounts change

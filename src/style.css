@@ -183,7 +183,19 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .images-bar .text-btn:disabled { opacity: .4; cursor: default; }
 
 /* Calendar: --hour is set from HOUR_PX in ts/calendar.ts. */
-#calendar { flex: 1; min-height: 0; display: flex; flex-direction: column; --gutter: 56px; }
+#calendar { flex: 1; min-height: 0; display: flex; --gutter: 56px; }
+#cal-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* C-4: the panel that chooses the calendars to show: a column like #slack-side, 248px wide. */
+#cal-side { flex: none; width: 248px; box-sizing: border-box; display: flex; flex-direction: column; background: var(--bar); border-right: 1px solid var(--line); }
+#cal-side-head { flex: none; box-sizing: border-box; min-height: var(--header-h); margin: 0; padding: 0 16px; display: flex; align-items: center; font-size: calc(14px * var(--fs)); font-weight: 600; border-bottom: 1px solid var(--line); }
+#cal-side-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px 12px; }
+.cal-side-account { margin: 10px 0 2px; padding: 0 10px; font-size: calc(12px * var(--fs)); font-weight: 600; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-side-group { margin: 8px 0 2px; padding: 0 10px; font-size: calc(11px * var(--fs)); color: var(--muted); }
+.cal-side-item { display: flex; align-items: center; gap: 10px; min-height: 30px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; cursor: pointer; }
+.cal-side-item:hover { background: var(--hover); }
+.cal-side-item input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--c); cursor: pointer; }
+.cal-side-item:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cal-side-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #cal-bar { flex: none; display: flex; align-items: center; gap: 4px; box-sizing: border-box; min-height: var(--header-h); padding: 0 32px; }
 #cal-title { font-size: calc(20px * var(--fs)); }
 #cal-title .year { color: #888; font-weight: normal; }

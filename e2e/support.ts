@@ -2,6 +2,7 @@
 // The fixtures are typed by the types ts-rs writes from the Serialize structs (ts/bindings/), so a change of a struct's shape fails the type check here.
 // Only example.com addresses and made-up names appear here: the repository is public.
 import type { Channel } from "../ts/bindings/Channel";
+import type { CalendarChoices } from "../ts/bindings/CalendarChoices";
 import type { Checked } from "../ts/bindings/Checked";
 import type { Claude } from "../ts/bindings/Claude";
 import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
@@ -279,6 +280,21 @@ export function weekOfToday(firstDay = 0): Week {
     calendarFailed: [],
   };
 }
+
+// The calendars of the account: "Work" is its own with a color of its own, "Holidays" is another one (the calendars of `weekOfToday`'s events) and takes the account's color.
+export const calendarChoices = (): CalendarChoices => ({
+  accounts: [
+    {
+      account,
+      calendars: [
+        { id: "work", name: "Work", color: "#1e7b52", mine: true, shown: true },
+        { id: "holidays", name: "Holidays", color: null, mine: false, shown: true },
+      ],
+    },
+  ],
+  needsLogin: [],
+  failed: {},
+});
 
 // ---- Todoist ----
 
