@@ -64,15 +64,40 @@ jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}
 jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0", tests: {passed: 1, total: 1}}' > "$main/.claude/e2e/$sha"
 check_gate "レビュー" "main で起動し worktree で push（合格記録なし、ゲートの行が残る）" "$work" "git push -u origin HEAD"
 : > "$main/.claude/reviews/$sha"
-check 0 "main で起動し worktree で push（記録あり）" "$work" "git push -u origin HEAD"
+# check_logged_pass <ゲート名> <名前> <hook 入力の cwd> <コマンド>: exit 0 で通り、ゲートの行が exit=0 でログに残ることを確かめる
+check_logged_pass() {
+  local gate=$1 name=$2 got
+  rm -rf "$tmp/hook-logs"
+  jq -n --arg cwd "$3" --arg c "$4" '{cwd: $cwd, tool_input: {command: $c}}' \
+    | CLAUDE_PROJECT_DIR="$main" "$hook" >/dev/null 2>&1
+  got=$?
+  if [ "$got" -ne 0 ]; then echo "FAIL $name (期待 0、結果 ${got})"; fail=1
+  elif ! cat "$tmp"/hook-logs/hooks-*.log 2>/dev/null | grep -q -E "gate=$gate"$'\t'"duration_ms=[0-9]+"$'\t'"exit=0"; then echo "FAIL $name (ログにゲート $gate の exit=0 の行がない)"; fail=1
+  else echo "ok   $name"; fi
+}
+check_logged_pass "レビュー" "main で起動し worktree で push（記録あり、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"
 echo dirty > "$work/dirty.txt"
 git -C "$work" add dirty.txt
 check 2 "main で起動し worktree で push（記録あり、未コミットの変更あり）" "$work" "git push -u origin HEAD"
 check_gate "作業ツリー" "未コミットの変更ありで push（ゲートの行が残る）" "$work" "git push -u origin HEAD" "コミットしていない変更があります"
 check_gate "作業ツリー" "未コミットの変更ありで commit と push（別のコマンドにする文が出る）" "$work" "git commit -m x && git push -u origin HEAD" "commit と push を別のコマンドにしてください"
+err=$(jq -n --arg cwd "$work" --arg c "git tag -a v0.0.1 -m v0.0.1 && git push origin v0.0.1" '{cwd: $cwd, tool_input: {command: $c}}' \
+  | CLAUDE_PROJECT_DIR="$main" "$hook" 2>&1 >/dev/null)
+got=$?
+if [ "$got" -ne 2 ]; then echo "FAIL 未コミットの変更ありで tag と push（期待 2、結果 ${got})"; fail=1
+elif grep -q -F "別のコマンドにしてください" <<< "$err"; then echo "FAIL 未コミットの変更ありで tag と push（tag に別のコマンドを求める文が出た）"; fail=1
+else echo "ok   未コミットの変更ありで tag と push（別のコマンドにする文は出ない）"; fi
 git -C "$work" reset -q dirty.txt
 rm "$work/dirty.txt"
-check 0 "main の checkout から push（新しいコミットなし）" "$main" "git push origin main"
+
+# リリース作業だけの新しいコミット: 合格記録がなくても通り、レビューのゲートの行が exit=0 で残る
+echo "## v0.0.1" > "$work/CHANGELOG.md"
+git -C "$work" add CHANGELOG.md
+git -C "$work" commit -q -m "release"
+rsha=$(git -C "$work" rev-parse HEAD)
+jq -n --arg sha "$rsha" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}' > "$main/.claude/ci/$rsha"
+jq -n --arg sha "$rsha" '{sha: $sha, clean: true, passed: true, version: "0.0.0", tests: {passed: 1, total: 1}}' > "$main/.claude/e2e/$rsha"
+check_logged_pass "レビュー" "リリース作業だけの新しいコミットで push（合格記録なし、ゲートの行が exit=0 で残る）" "$work" "git push -u origin HEAD"check 0 "main の checkout から push（新しいコミットなし）" "$main" "git push origin main"
 check 0 "無関係なコマンド" "$work" "git status"
 
 # main の checkout の HEAD に記録が無ければ、従来どおり止まる

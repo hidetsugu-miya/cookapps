@@ -965,8 +965,8 @@ def cmd_split(args):
     problems, spec = parse_split(raw)
     if problems:
         raise PlanError(problems)
-    repo = gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
-    owner = gh("repo", "view", "--json", "owner", "--jq", ".owner.login").strip()
+    view = json.loads(gh("repo", "view", "--json", "nameWithOwner,owner"))
+    repo, owner = view["nameWithOwner"], view["owner"]["login"]
     n = spec["issue"]
     try:
         parent = api(f"repos/{repo}/issues/{n}")
@@ -1005,6 +1005,10 @@ def cmd_split(args):
             if part["title"] in kept:
                 made.append(kept[part["title"]])
                 print(f"#{kept[part['title']]} {part['title']}: kept")
+                # A first run may have stopped at this part's comment, so the reason is written when it is not there.
+                comments = api(f"repos/{repo}/issues/{kept[part['title']]}/comments?per_page=100", paginate=True)
+                if not any(c["user"]["login"] == owner and c["body"].strip() == part["points_reason"].strip() for c in comments):
+                    gh("issue", "comment", str(kept[part["title"]]), "--body", part["points_reason"])
                 continue
             args_ = ["issue", "create", "--title", part["title"], "--body", part["body"], "--milestone", spec["milestone"]]
             for label in part["labels"]:

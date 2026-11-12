@@ -51,9 +51,9 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   hook_log_gate "作業ツリー" "$t" "$rc"
   if [ "$rc" -ne 0 ]; then
     msg="push 前の検査: コミットしていない変更があります。検査はコミットの中身と一致しません"
-    # With a commit or tag in the same command, the tree is still dirty when this hook runs, before the commit is made.
-    grep -q -E "${g}(commit|tag)|git-commit-run[[:space:]]+commit" <<< "$cmd" \
-      && msg+=$'\n'"commit か tag と push が 1 つのコマンドにあります。commit と push を別のコマンドにしてください"
+    # With a commit in the same command, the tree is still dirty when this hook runs, before the commit is made. A tag goes in the same command as the push (versioning.md), so it is not named here.
+    grep -q -E "${g}commit|git-commit-run[[:space:]]+commit" <<< "$cmd" \
+      && msg+=$'\n'"commit と push が 1 つのコマンドにあります。commit と push を別のコマンドにしてください"
     echo "$msg" >&2
     git diff --stat HEAD >&2
     exit 2
@@ -79,8 +79,8 @@ if grep -q -E "${g}push" <<< "$cmd"; then
     main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
     gate "CI" "$main/.claude/tools/check-ci.sh"
     gate "E2E" "$main/.claude/tools/check-e2e.sh"
+    t=$(hook_log_now)
     if [ ! -f "$main/.claude/reviews/$(git rev-parse HEAD)" ]; then
-      t=$(hook_log_now)
       base=""
       for c in $(git rev-list "$range" 2>/dev/null); do
         [ -f "$main/.claude/reviews/$c" ] && { base=$c; break; }
@@ -99,6 +99,7 @@ if grep -q -E "${g}push" <<< "$cmd"; then
         exit 2
       fi
     fi
+    hook_log_gate "レビュー" "$t" 0
   fi
 fi
 exit 0

@@ -711,6 +711,7 @@ class FakeGh:
         self.issues = {}  # number -> raw issue
         self.milestones = []  # {"number", "title", "state", "description"}
         self.writes = []
+        self.comments = {}  # issue number -> comments written by `gh issue comment`
         self.fail_on = fail_on  # (command words, nth call of it) -> fail
         self.counts = {}
         self.next_number = 500
@@ -745,7 +746,7 @@ class FakeGh:
     def __call__(self, *args):
         a = list(args)
         if a[:2] == ["repo", "view"]:
-            return "owner/repo\n" if "nameWithOwner" in a else "owner\n"
+            return json.dumps({"nameWithOwner": "owner/repo", "owner": {"login": "owner"}})
         if a[0] == "api":
             return self._api(a[1:])
         self._fail_if(a)
@@ -761,6 +762,9 @@ class FakeGh:
             self.next_number += 1
             self.add_issue(self.next_number, title, labels, milestone={"title": milestone})
             return f"https://github.com/owner/repo/issues/{self.next_number}\n"
+        if a[:2] == ["issue", "comment"]:
+            self.comments.setdefault(int(a[2]), []).append({"user": {"login": "owner"}, "body": a[a.index("--body") + 1]})
+            return "\n"
         if a[:2] == ["issue", "close"]:
             self.issues[int(a[2])]["state"] = "closed"
             return "\n"
@@ -787,6 +791,8 @@ class FakeGh:
             number = int(path.split("milestone=")[1].split("&")[0])
             title = next(m["title"] for m in self.milestones if m["number"] == number)
             return json.dumps([i for i in self.issues.values() if i["state"] == "open" and (i["milestone"] or {}).get("title") == title])
+        if "/comments?" in path:
+            return json.dumps(self.comments.get(int(path.split("/issues/")[1].split("/")[0]), []))
         n = int(path.rsplit("/", 1)[1])
         if n not in self.issues:
             raise pr.GhError(f"gh api {path}: Not Found")
@@ -946,6 +952,18 @@ class Split(unittest.TestCase):
         self.assertEqual(fake.written("issue", "close")[0][-1], "部品に分けました: #501、#502、#503")
         self.assertIn("#501 a: kept", out)
         self.assertEqual(len([i for i in fake.issues.values() if i["title"] == "a"]), 1)
+
+    def test_a_second_run_writes_the_reason_of_a_kept_part_whose_comment_failed_and_not_one_that_has_it(self):
+        fake = self.big()
+        spec = {"issue": 438, "milestone": "f", "parts": [part("a", reason="理由 a"), part("b", reason="理由 b")]}
+        fake.fail_on = (("issue", "comment"), 2)
+        self.assertEqual(self.run_split(fake, spec)[0], 1)
+        fake.fail_on = None
+        fake.writes.clear()
+        code, _, err = self.run_split(fake, spec)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual([(c[2], c[-1]) for c in fake.written("issue", "comment")], [("502", "理由 b")])
+        self.assertEqual(fake.written("issue", "create"), [])
 
     def test_a_part_of_the_same_title_in_another_milestone_or_closed_or_of_someone_else_is_not_kept(self):
         fake = self.big()
