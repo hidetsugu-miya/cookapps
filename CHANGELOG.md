@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.63.5
+
+S-7, S-18, T-7: the field that asks Claude is one part on the Todo screen, in the pane of a Slack thread and in the pane of a Todo draft (#497). In each the model and effort selects sit inside the frame of the field, in a row under the text at the left of the round send button; in the Slack thread and the Todo draft they were under the frame. The field of the Slack thread no longer shows "Claude に頼みたいことを書く".
+
 ## v0.63.4
 
 T-1: a row of the task list has three lines, so that it reads in half of the screen (#507): the name; the first line of the description, underlined when it is an address; and the due moment, the labels, the subtask count and, in the "today" list, the project at the right. The buttons of a row lie over its top right while the pointer is on it.
