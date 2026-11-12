@@ -1129,6 +1129,125 @@ describe("todo: closing the list of projects (A-23)", () => {
   });
 });
 
+describe("todo: the rows of the list in three lines", () => {
+  // Today's list with three tasks: one with a description, a label, subtasks and a time, one overdue with a plain description, and a bare one.
+  const rowsData = () => {
+    const full = { ...task("k1", "Write report", "p1", "today"), description: "\n  \nhttps://example.com/pr/17 \nsecond line", labels: ["Errand"], subDone: 1, subTotal: 2 };
+    const late = { ...task("k5", "Pay rent", "p4", "overdue"), description: "plain first line\nnext" };
+    const bare = task("k6", "Water plants", "p4", "today");
+    return { ...todoData(), tasks: [dueToday(full, "13:45"), late, bare] };
+  };
+  async function openRows(data = rowsData()) {
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, data.tasks.length);
+  }
+  // What a row holds, by line: the second line's text and whether it is underlined, the chips of the third line and the project at its right end.
+  const linesOf = (name: string) =>
+    browser.execute((n) => {
+      const li = [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].find((l) => l.querySelector(".tname")!.textContent === n)!;
+      const desc = li.querySelector<HTMLElement>(".desc");
+      const meta = li.querySelector<HTMLElement>(".meta");
+      const top = (el: Element | null) => el?.getBoundingClientRect().top ?? null;
+      return {
+        desc: desc?.textContent ?? null,
+        underlined: desc ? getComputedStyle(desc).textDecorationLine : null,
+        chips: [...li.querySelectorAll(".meta .chips > *")].map((c) => `${c.className}:${c.textContent}`),
+        project: li.querySelector(".meta .ptag")?.textContent ?? null,
+        hasMeta: !!meta,
+        order: [top(li.querySelector(".tname")), top(desc), top(meta)],
+        due: li.querySelector(".due") ? getComputedStyle(li.querySelector(".due")!).color : null,
+      };
+    }, name);
+
+  it("draws the name, the first line of the description that is not empty, and the due moment, labels, subtask count and project", async () => {
+    await openRows();
+    const full = await linesOf("Write report");
+    expect(full.desc).toBe("https://example.com/pr/17");
+    expect(full.chips).toEqual(["due:13:45", "label:Errand", "subcount:1/2"]);
+    expect(full.project).toBe("Work");
+    const [name, desc, meta] = full.order as number[];
+    expect(name).toBeLessThan(desc);
+    expect(desc).toBeLessThan(meta);
+  });
+
+  it("underlines a description line that begins with http:// or https://, and only that", async () => {
+    await openRows();
+    expect((await linesOf("Write report")).underlined).toBe("underline");
+    const plain = await linesOf("Pay rent");
+    expect(plain.desc).toBe("plain first line");
+    expect(plain.underlined).toBe("none");
+    await expect(rowOf("Write report").$(".desc a")).not.toExist();
+  });
+
+  it("opens the task when the description line is pressed, as the rest of the row does", async () => {
+    await openRows();
+    await rowOf("Write report").$(".desc").click();
+    await expect($("#todo-detail")).toBeDisplayed();
+    await expect($("#todo-detail .name")).toHaveValue("Write report");
+  });
+
+  it("has no second line without a description, and no third line without anything for it in a project's list", async () => {
+    await openRows();
+    const bare = await linesOf("Water plants");
+    expect(bare.desc).toBeNull();
+    expect(bare.chips).toEqual(["due:今日"]);
+    expect(bare.project).toBe("Home");
+    const data = todoData();
+    data.tasks = [task("k7", "Quiet note", "p1", "none"), dueToday(task("k1", "Write report", "p1", "today"), "13:45")];
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 2);
+    const quiet = await linesOf("Quiet note");
+    expect(quiet.desc).toBeNull();
+    expect(quiet.hasMeta).toBe(false);
+    expect((await linesOf("Write report")).project).toBeNull();
+  });
+
+  it("draws the due moment of an overdue task in red and the others in another color", async () => {
+    await openRows();
+    const late = (await linesOf("Pay rent")).due;
+    expect(late).toBe("rgb(176, 0, 32)");
+    expect((await linesOf("Write report")).due).not.toBe(late);
+    expect((await linesOf("Water plants")).due).not.toBe(late);
+  });
+
+  it("keeps the project at the right end of the third line and cuts a long name with an ellipsis", async () => {
+    const data = rowsData();
+    data.tasks[0].content = "A very long name ".repeat(30);
+    await openRows(data);
+    const cut = await browser.execute(() => {
+      const li = [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].find((l) => l.querySelector(".tname")!.textContent!.startsWith("A very long"))!;
+      const name = li.querySelector<HTMLElement>(".tname")!;
+      const row = li.getBoundingClientRect();
+      const project = li.querySelector(".ptag")!.getBoundingClientRect();
+      return { clipped: name.scrollWidth > name.clientWidth, ellipsis: getComputedStyle(name).textOverflow, inside: name.getBoundingClientRect().right <= row.right, atEnd: row.right - project.right < 24 };
+    });
+    expect(cut).toEqual({ clipped: true, ellipsis: "ellipsis", inside: true, atEnd: true });
+  });
+
+  it("shows the row buttons over the top right of the row, away from the third line", async () => {
+    await openRows();
+    const placed = await browser.execute(() => {
+      const li = [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].find((l) => l.querySelector(".tname")!.textContent === "Write report")!;
+      const actions = li.querySelector<HTMLElement>(".row-actions")!;
+      // The driver never hovers: show them as the hover does.
+      actions.style.visibility = "visible";
+      const [a, r, m] = [actions.getBoundingClientRect(), li.getBoundingClientRect(), li.querySelector(".meta")!.getBoundingClientRect()];
+      return { atTop: a.top >= r.top, atRight: r.right - a.right < 24, clear: a.bottom <= m.top, position: getComputedStyle(actions).position };
+    });
+    expect(placed).toEqual({ atTop: true, atRight: true, clear: true, position: "absolute" });
+  });
+
+  it("parts the rows of a group with a thin line, the last one of each group without", async () => {
+    await openRows();
+    // The overdue group holds one row, today's two.
+    const lines = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].map((li) => getComputedStyle(li).borderBottomWidth));
+    expect(lines).toEqual(["0px", "1px", "0px"]);
+  });
+});
+
 describe("todo: moving a task by its grip", () => {
   // The Work project: "Write report" and "Plan trip" (closed).
   async function openWork() {

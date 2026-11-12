@@ -2,7 +2,7 @@
 import type { MailRef } from "./bindings/MailRef";
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, tag } from "./dom.js";
-import { CHEVRON_SVG, DATE_SVG, DAY_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, OUTDENT_SVG, SUB_SVG } from "./icons.js";
+import { CHEVRON_SVG, DATE_SVG, DAY_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, OUTDENT_SVG, SUB_SVG, TAG_SVG } from "./icons.js";
 import { rowButton, rows } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
@@ -179,9 +179,20 @@ function taskRows(t: TaskItem, showProject: boolean, accounts: Set<string | unde
   return open ? [li, ...subs.flatMap((s) => taskRows(s, showProject, accounts, [...under, t.id]))] : [li];
 }
 
+// A chip of the third line of a row: the icon and the text.
+function metaChip(cls: string, icon: string, text: string) {
+  const chip = tag("span", cls);
+  chip.innerHTML = icon;
+  chip.append(text);
+  return chip;
+}
+
+// The first line of a description that is not empty, for the second line of a row.
+const firstLine = (description: string) => description.split("\n").map((l) => l.trim()).find((l) => l);
+
 function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>) {
   const mail = linkedMail(t, accounts);
-  const li = tag("li", `task${showProject ? "" : " single"}`);
+  const li = tag("li", "task tall");
   li.dataset.id = t.id;
   li.onclick = () => {
     // A drag that starts in the name field and ends elsewhere on the row clicks the row; the edit keeps it.
@@ -198,28 +209,33 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
   };
   const line = tag("div", "t");
   if (mail) line.insertAdjacentHTML("beforeend", MAIL_SVG);
-  const name = tag("span", "", t.content);
+  const name = tag("span", "tname", t.content);
   line.append(name);
-  // Where a subtask belongs, in the "today" list; in a project it is nested under its parent.
-  if (t.parent && showProject) line.append(tag("span", "parent", t.parent.content));
-  if (t.subTotal) {
-    const count = tag("span", "subcount");
-    count.innerHTML = SUB_SVG;
-    count.append(`${t.subDone}/${t.subTotal}`);
-    line.append(count);
-  }
   const body = tag("div", "body");
   body.append(line);
   li.append(box, body, gripOf(li, t));
-  if (showProject) {
-    const p = projectOf(t.projectId);
-    const tagEl = tag("div", "ptag");
-    const dot = tag("span", "pdot");
-    dot.style.background = p?.color as string;
-    tagEl.append(dot, projectName(p));
-    li.append(tagEl);
+  // The second line: the first line of the description, underlined when it is an address (it is not a link; the row opens the task).
+  const first = firstLine(t.description);
+  if (first) li.append(tag("div", `desc${/^https?:\/\//.test(first) ? " url" : ""}`, first));
+  // The third line: the due moment, labels, subtask count and, where a subtask belongs (in the "today" list; in a project it is nested under its parent), its parent; at the right end the project.
+  const chips = tag("span", "chips");
+  if (t.due) chips.append(metaChip(`due${t.bucket === "overdue" ? " over" : ""}`, DATE_SVG, dueLabel(t.due)));
+  for (const label of t.labels) chips.append(metaChip("label", TAG_SVG, label));
+  if (t.subTotal) chips.append(metaChip("subcount", SUB_SVG, `${t.subDone}/${t.subTotal}`));
+  if (t.parent && showProject) chips.append(tag("span", "parent", t.parent.content));
+  if (chips.childElementCount || showProject) {
+    const meta = tag("div", "meta");
+    meta.append(chips);
+    if (showProject) {
+      const p = projectOf(t.projectId);
+      const tagEl = tag("div", "ptag");
+      const dot = tag("span", "pdot");
+      dot.style.background = p?.color as string;
+      tagEl.append(dot, tag("span", "pname", projectName(p)));
+      meta.append(tagEl);
+    }
+    li.append(meta);
   }
-  const trail = tag("div", "trail");
   const actions = tag("div", "row-actions");
   actions.append(
     rowButton("edit-row", "名前を変更", EDIT_SVG, () => editRowName(name, t)),
@@ -230,8 +246,7 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
   if (t.parent) actions.append(rowButton("unparent-row", "親タスクから外す", OUTDENT_SVG, () => moveTask(t.id, t.projectId)));
   if (mail) actions.append(rowButton("mail-row", "メールを開く", MAIL_SVG, () => openMailFromTodo(mail)));
   actions.append(rowButton("open-row", "Todoist で開く", OPEN_SVG, () => invoke("todoist_open", { id: t.id }).catch(showError)));
-  trail.append(tag("span", `due${t.bucket === "overdue" ? " over" : ""}`, t.due ? dueLabel(t.due) : ""), actions);
-  li.append(trail);
+  li.append(actions);
   return li;
 }
 

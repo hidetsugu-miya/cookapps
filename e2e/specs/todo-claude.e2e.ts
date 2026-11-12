@@ -90,6 +90,21 @@ describe("todo Claude pane", () => {
     expect(ratio).toBeLessThan(0.41);
   });
 
+  it("keeps the right side between 30% and 45% of the screen with the arrow keys", async () => {
+    await openTodo();
+    const split = $("#todo-split");
+    await expect(split).toHaveAttribute("aria-valuemin", "30");
+    await expect(split).toHaveAttribute("aria-valuemax", "45");
+    const share = () => browser.execute(() => document.querySelector("#todo-side")!.getBoundingClientRect().width / document.querySelector("#todo")!.getBoundingClientRect().width);
+    const press = (key: string) => browser.execute((k) => document.getElementById("todo-split")!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })), key);
+    for (let i = 0; i < 10; i++) await press("ArrowLeft");
+    await expect(split).toHaveAttribute("aria-valuenow", "45");
+    expect(await share()).toBeCloseTo(0.45, 2);
+    for (let i = 0; i < 20; i++) await press("ArrowRight");
+    await expect(split).toHaveAttribute("aria-valuenow", "30");
+    expect(await share()).toBeCloseTo(0.3, 2);
+  });
+
   it("has the request field with the model and effort of todoChat under it, and no help text", async () => {
     await openTodo();
     await openPane();
