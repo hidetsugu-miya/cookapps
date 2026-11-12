@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.63.2
+
+A-23, T-7: the band at the top of every screen is one height, 40px (#482). It was 32px on the Orca screen, 70px on the Todo screen and set by its own padding on the other screens, so the lines under the bands did not meet where two screens or two panes sit side by side. The icon buttons in the bands are one size too (24px, with a 15px icon). With a larger font (A-20) a band grows to fit its text instead of cutting it.
+
 ## v0.63.1
 
 A-9: the pane that hands a mail, a Slack thread or a Todo to Orca is a form from the top down, and what the user writes is handed over as it was written (#475, #476). Claude no longer summarises the instruction, and the buttons "要約する" and "直す", the conversation about the summary, the model and effort selects and the proposed worktree name are gone. The card is summarised by Claude when the user presses the arrow icon "Orca に渡す" at the bottom right of the instruction field (or Cmd+Enter): the summary goes into the quoted content, above its text, after the instruction and the paths of the files. The pane starts at 40% of the screen.
