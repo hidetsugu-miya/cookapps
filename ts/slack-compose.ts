@@ -67,6 +67,7 @@ const chat = createChat({
   locked: () => posting,
   keyHint: false,
   fixedInput: true,
+  autoApply: true,
 });
 
 function disarmReset() {

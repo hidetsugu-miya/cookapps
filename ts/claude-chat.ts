@@ -40,6 +40,9 @@ export interface ChatConfig {
   keyHint?: boolean;
   // True when the request field keeps the height the CSS gives it and scrolls inside (default false: it grows with its text).
   fixedInput?: boolean;
+  // True when an answer that changes the text is put into it at once (default false: the proposal waits for "適用"). The log then keeps the number of changed lines and "元に戻す" instead of the diff.
+  // An answer that arrives after the text was changed, or while the text is locked, is not put in: it stays a proposal that cannot be applied.
+  autoApply?: boolean;
 }
 
 // A change Claude proposed: the whole new text, the lines that differ, and the text when it was asked (an `open` proposal applies only to that text).
@@ -47,7 +50,9 @@ interface Proposal {
   body: string;
   diff: DiffLine[];
   base: string;
-  state: "open" | "applied" | "rejected";
+  state: "open" | "applied" | "rejected" | "reverted";
+  // Put into the text at once (`autoApply`): drawn as a count and "元に戻す", and the text it made is `body`.
+  auto?: boolean;
 }
 export interface Turn {
   role: "user" | "assistant";
@@ -73,6 +78,8 @@ export function createChat(cfg: ChatConfig) {
   let clearTimer = 0;
   // The apply buttons of the open proposals drawn now, with the line that says why one is disabled.
   let applyControls: { proposal: Proposal; apply: HTMLButtonElement; stale: HTMLElement }[] = [];
+  // The "元に戻す" buttons of the proposals put in at once: one works only while the text is still the one that proposal made.
+  let undoControls: { proposal: Proposal; undo: HTMLButtonElement }[] = [];
 
   function disarmClear() {
     clearTimeout(clearTimer);
@@ -96,10 +103,33 @@ export function createChat(cfg: ChatConfig) {
       apply.disabled = proposal.base !== text || (cfg.locked?.() ?? false);
       stale.hidden = proposal.base === text;
     }
+    for (const { proposal, undo } of undoControls) undo.disabled = proposal.body !== text || (cfg.locked?.() ?? false);
     return on;
   }
 
+  // What stays in the log of a proposal that was put in at once: how many lines it changed, and "元に戻す" while the text is still the one it made.
+  function appliedCard(p: Proposal) {
+    const card = tag("div", "chat-diff");
+    const foot = tag("div", "diff-foot");
+    if (p.state === "reverted") {
+      foot.append(tag("span", "diff-state", "元に戻しました"));
+    } else {
+      const lines = Math.max(1, p.diff.filter((d) => d.kind === "del").length, p.diff.filter((d) => d.kind === "ins").length);
+      const undo = tag("button", "text-btn", "元に戻す");
+      undo.onclick = () => {
+        cfg.apply(p.base);
+        p.state = "reverted";
+        draw();
+      };
+      undoControls.push({ proposal: p, undo });
+      foot.append(tag("span", "diff-count", `${lines} 行を変えました`), undo);
+    }
+    card.append(foot);
+    return card;
+  }
+
   function diffCard(p: Proposal) {
+    if (p.auto) return appliedCard(p);
     const card = tag("div", "chat-diff");
     for (const d of p.diff) card.append(tag("div", d.kind === "del" ? "diff-del" : "diff-ins", `${d.kind === "del" ? "-" : "+"} ${d.text}`));
     const foot = tag("div", "diff-foot");
@@ -138,6 +168,7 @@ export function createChat(cfg: ChatConfig) {
 
   function draw() {
     applyControls = [];
+    undoControls = [];
     const thinking = tag("div", "pending");
     thinking.append(tag("span", "spin"), tag("span", "sp", "Claude が考えています…"));
     const log = $(id("log"));
@@ -204,6 +235,12 @@ export function createChat(cfg: ChatConfig) {
     sending = false;
     // The conversation was forgotten meanwhile: the answer is dropped, and the request field is free again.
     if (mine !== generation) return cfg.changed();
+    const proposal = turn.proposal;
+    if (cfg.autoApply && proposal && proposal.body !== body && cfg.text() === body && !cfg.locked?.()) {
+      cfg.apply(proposal.body);
+      proposal.state = "applied";
+      proposal.auto = true;
+    }
     addTurn(turn);
     draw();
   }

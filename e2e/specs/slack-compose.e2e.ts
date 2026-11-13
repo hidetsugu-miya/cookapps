@@ -66,7 +66,8 @@ async function askProofread() {
   await $("#slack-send").click();
 }
 
-const applyButton = () => $("#slack-log .diff-foot .text-btn.primary");
+// The "元に戻す" of an answer that was put into the preview at once.
+const undoButton = () => $("#slack-log .diff-foot .text-btn");
 
 describe("slack compose screen", () => {
   it("opens from the thread with the mail's text in the edit field and no field for a note", async () => {
@@ -242,23 +243,23 @@ describe("slack compose screen", () => {
     await expect(post()).toBeDisabled();
   });
 
-  it("locks the edit field and the apply button while the post is on its way, and frees them when it fails", async () => {
+  it("locks the edit field and 元に戻す while the post is on its way, and frees them when it fails", async () => {
     await openCompose();
     await chooseGeneral();
     await mock("claude_proofread_slack", proofreadEdit);
     await askProofread();
     await waitForCount("#slack-log .chat-ai", 1);
-    await expect(applyButton()).toBeEnabled();
+    await expect(undoButton()).toBeEnabled();
     const slackPost = await mock("slack_post", holds);
     await post().click();
     await waitForCalls(slackPost);
     await expect(body()).toBeDisabled();
-    await expect(applyButton()).toBeDisabled();
-    await expect($("#slack-log .diff-stale")).not.toBeDisplayed();
+    await expect(undoButton()).toBeDisabled();
+    expect(await count("#slack-log .diff-stale")).toBe(0);
     await release(slackPost, rejects("チャンネルに投稿する権限がありません"));
     await expect($("#slack-error")).toHaveText(expect.stringContaining("チャンネルに投稿する権限がありません"));
     await expect(body()).toBeEnabled();
-    await expect(applyButton()).toBeEnabled();
+    await expect(undoButton()).toBeEnabled();
   });
 
   it("stays on another mail's compose screen when an earlier post finishes", async () => {
@@ -359,7 +360,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     await mock("claude_proofread_slack", proofreadEdit);
     await askProofread();
     await waitForCount("#slack-log .chat-ai", 1);
-    expect(await textsOf("#slack-log .diff-foot .text-btn")).toEqual(["却下", "適用"]);
+    expect(await textsOf("#slack-log .diff-foot .text-btn")).toEqual(["元に戻す"]);
     // The answer text keeps its look: the line breaks of an answer are not kept here.
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#slack-log .chat-ai")!).whiteSpace)).toBe("normal");
   });
@@ -383,7 +384,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     await expect(model).toHaveValue("opus");
   });
 
-  it("sends 校正してください with the text, and applying the proposal changes the edit field without posting", async () => {
+  it("sends 校正してください with the text, and the answer changes the preview and the edit field at once without posting", async () => {
     await openCompose();
     await chooseGeneral();
     const slackPost = await mock("slack_post", true);
@@ -392,13 +393,27 @@ describe("slack compose screen: proofreading with Claude", () => {
     expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください" }]);
     await waitForCount("#slack-log .chat-ai", 1);
     await expect($("#slack-log .chat-user")).toHaveText("校正してください");
-    await expect($("#slack-log .diff-ins")).toHaveText("+ Hello from Alice。");
-    await expect(applyButton()).toBeEnabled();
-    await applyButton().click();
     await expect(body()).toHaveValue(proofreadEdit.body as string);
-    await expect($("#slack-log .diff-state")).toHaveText("適用しました");
+    await expect(previewBox()).toHaveText(proofreadEdit.body as string);
+    // The log keeps the number of changed lines and 元に戻す, not the diff and 適用.
+    await expect($("#slack-log .diff-count")).toHaveText("1 行を変えました");
+    expect(await textsOf("#slack-log .diff-foot .text-btn")).toEqual(["元に戻す"]);
+    expect(await count("#slack-log .diff-ins, #slack-log .diff-del")).toBe(0);
     expect(await callsOf(slackPost)).toEqual([]);
     await expect($("#slack-compose")).toBeDisplayed();
+  });
+
+  it("puts the text from before the answer back with 元に戻す", async () => {
+    await openCompose();
+    await mock("claude_proofread_slack", proofreadEdit);
+    await askProofread();
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect(body()).toHaveValue(proofreadEdit.body as string);
+    await undoButton().click();
+    await expect(body()).toHaveValue(slackPreview);
+    await expect(previewBox()).toHaveText(slackPreview);
+    await expect($("#slack-log .diff-state")).toHaveText("元に戻しました");
+    expect(await count("#slack-log .diff-foot .text-btn")).toBe(0);
   });
 
   it("sends the typed request on Cmd+Enter (Ctrl+Enter off macOS) with the same command and arguments as the send button", async () => {
@@ -432,18 +447,31 @@ describe("slack compose screen: proofreading with Claude", () => {
     });
   });
 
-  it("cannot apply an old proposal once the edit field was changed", async () => {
+  it("cannot undo an answer once the edit field was changed", async () => {
     await openCompose();
     await mock("claude_proofread_slack", proofreadEdit);
     await askProofread();
     await waitForCount("#slack-log .chat-ai", 1);
-    await expect(applyButton()).toBeEnabled();
+    await expect(undoButton()).toBeEnabled();
+    await setBody(`${proofreadEdit.body} (edited)`);
+    await expect(undoButton()).toBeDisabled();
+    // Putting the text back makes it undoable again.
+    await setBody(proofreadEdit.body as string);
+    await expect(undoButton()).toBeEnabled();
+  });
+
+  it("does not put in an answer that arrives after the edit field was changed, and keeps it as a proposal that cannot be applied", async () => {
+    await openCompose();
+    const edit = await mock("claude_proofread_slack", holds);
+    await askProofread();
+    await waitForCalls(edit);
     await setBody(`${slackPreview} (edited)`);
-    await expect(applyButton()).toBeDisabled();
+    await release(edit, proofreadEdit);
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect(body()).toHaveValue(`${slackPreview} (edited)`);
+    expect(await textsOf("#slack-log .diff-foot .text-btn")).toEqual(["却下", "適用"]);
+    await expect($("#slack-log .diff-foot .text-btn.primary")).toBeDisabled();
     await expect($("#slack-log .diff-stale")).toBeDisplayed();
-    // Putting the text back makes it applicable again.
-    await setBody(slackPreview);
-    await expect(applyButton()).toBeEnabled();
   });
 
   it("proofreads while an API key is in use", async () => {
