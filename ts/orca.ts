@@ -1041,7 +1041,7 @@ function pickTerminal(t: OrcaTerminal) {
   chooseTab(plainTabId(t.handle));
 }
 
-// Closes a tab. An Orca terminal is closed in Orca, and the list is read at once: it leaves the tabs then, and a failure keeps the tab and shows the message.
+// Closes a tab. An Orca terminal is closed in Orca, and the list is read at once: it leaves the tabs then, and a failure keeps the tab, shows the message and reads the list again.
 async function closeTab(tab: Tab) {
   if (closing.has(tab.id)) return;
   closing.add(tab.id);
@@ -1065,6 +1065,8 @@ async function closeTab(tab: Tab) {
     showError(e);
     closing.delete(tab.id);
     draw();
+    // The terminal may be gone from Orca already: the list is read again, and the tab leaves only if the read no longer holds it.
+    if (!streaming()) load(clockScope(), true);
     return;
   }
   closing.delete(tab.id);
