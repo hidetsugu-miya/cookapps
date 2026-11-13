@@ -151,16 +151,6 @@ pub(crate) fn message_blocks(
     (out, show_text)
 }
 
-/// Every block that can be drawn, `rich_text` included (an attachment has no `text` to fall back to).
-fn all_blocks(blocks: &Value, name_of: NameOf) -> Vec<ThreadBlock> {
-    blocks
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|b| block(b, name_of))
-        .collect()
-}
-
 /// The elements of a JSON array; none for anything else.
 fn items(v: &Value) -> &[Value] {
     v.as_array().map_or(&[], Vec::as_slice)
@@ -520,6 +510,8 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
     let rich = |key: &str| rich_of(&a[key], name_of, styled(key));
     let title = text("title");
     let body = rich("text");
+    // The attachment's `text` is always drawn, so its blocks follow the message's rule: a `rich_text` that only repeats the `text` is not drawn, and with no `text` it is.
+    let blocks = message_blocks(&a["blocks"], body.is_none(), name_of).0;
     let mut out = ThreadAttachment {
         color: color(a["color"].as_str()),
         pretext: rich("pretext"),
@@ -552,7 +544,7 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
             .flatten()
             .filter_map(|b| button(b, name_of))
             .collect(),
-        blocks: all_blocks(&a["blocks"], name_of),
+        blocks,
         image: None,
         thumb: None,
         fallback: None,
@@ -1652,12 +1644,36 @@ mod tests {
     }
 
     #[test]
-    fn the_blocks_inside_an_attachment_are_all_drawn_even_rich_text() {
+    fn the_rich_text_inside_an_attachment_with_no_text_is_drawn() {
         let list = attachments(json!([{"blocks": [rich_section("inside"), {"type": "divider"}]}]));
         assert_eq!(
             list[0].blocks,
             vec![section("inside"), ThreadBlock::Divider]
         );
+    }
+
+    #[test]
+    fn the_rich_text_that_repeats_the_text_of_an_attachment_is_not_drawn() {
+        let body = "1\n2\n3\n4\n5\n6";
+        let list = attachments(json!([{
+            "is_msg_unfurl": true,
+            "author_name": "Alice",
+            "text": body,
+            "blocks": [rich_section(body)]
+        }]));
+        assert!(list[0].blocks.is_empty());
+        assert!(list[0].text.is_some());
+        assert!(list[0].text_short.is_some());
+    }
+
+    #[test]
+    fn the_blocks_other_than_rich_text_stay_with_the_text_of_an_attachment() {
+        let list = attachments(json!([{
+            "text": "body",
+            "blocks": [rich_section("body"), {"type": "section", "text": {"type": "mrkdwn", "text": "more"}}]
+        }]));
+        assert_eq!(list[0].blocks, vec![section("body"), section("more")]);
+        assert!(list[0].text.is_some());
     }
 
     #[test]
