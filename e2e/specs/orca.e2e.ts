@@ -51,6 +51,7 @@ import {
   terminalThemes,
   textsOf,
   threadDetail,
+  timers,
   waitForCalls,
   waitForCount,
 } from "../support";
@@ -869,15 +870,15 @@ describe("orca", () => {
 
   it("says the command is missing, and does not read again by the clock", async () => {
     // The base answer is the one with no orca command.
-    await boot({ inbox: inbox() });
+    await boot({ inbox: inbox(), ...timers({ orcaClock: 1000 }) });
     await $("#nav-orca").click();
     await expect($("#orca-status")).toHaveText("未インストール");
     expect(await classOf("#orca-status")).toContain("off");
     await expect($("#orca-notice")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
     await expect($(".orca-plus")).toBeDisabled();
-    // The start and showing the screen read; the clock (every 10 seconds on this screen) reads no more.
+    // The start and showing the screen read; the clock (every 10 seconds on this screen, 1 second here) reads no more.
     const before = (await callsOf("orca_overview")).length;
-    await browser.pause(12_000);
+    await browser.pause(1200);
     expect(await callsOf("orca_overview")).toHaveLength(before);
     // The reload button looks again.
     await $("#orca-refresh").click();
@@ -1728,26 +1729,26 @@ describe("orca: projects", () => {
     });
 
     it("stops reading while another tab shows", async () => {
-      await openOrca(orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] }));
+      await openOrca(orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] }), timers({ orcaMirror: 250 }));
       await project("example-app").click();
       const read = await mock("orca_terminal_read", ["$"]);
       await tabOf(zsh).$(".orca-tab-btn").click();
       await waitForCalls(read);
       await project("example-api").click();
       await mock("orca_terminal_read", ["$"]);
-      await browser.pause(2500);
+      await browser.pause(300);
       // Only the terminal shown is read.
       expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle === "term_example-api")).toBe(true);
     });
 
     it("stops reading while the window is hidden, and reads at once and goes on when it is shown", async () => {
-      await openOrca(withTerminals());
+      await openOrca(withTerminals(), timers({ orcaMirror: 250 }));
       await project("example-app").click();
       await tabOf(zsh).$(".orca-tab-btn").click();
       await waitForCalls("orca_terminal_read");
       await setWindowHidden(true);
       await mock("orca_terminal_read", ["$"]);
-      await browser.pause(2500);
+      await browser.pause(300);
       expect(await callsOf("orca_terminal_read")).toEqual([]);
       await setWindowHidden(false);
       expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_example-app_zsh" });
@@ -1794,7 +1795,7 @@ describe("orca: a saved environment's stream", () => {
   const viewportOf = (call: unknown) => (call as { viewport: { cols: number; rows: number } }).viewport;
 
   it("opens the stream of the saved environment, draws each list it sends, and reads nothing by the clock", async () => {
-    await openOrca(orcaOverview([], [], studioOnly));
+    await openOrca(orcaOverview([], [], studioOnly), timers({ orcaClock: 1000 }));
     expect(await channelCalls("orca_stream_open")).toEqual([{ environment: "Studio", channel: true }]);
     await sendStream(streamList(sample(), worktrees()));
     await waitForCount("#orca-feed .orca-project", 4);
@@ -1804,9 +1805,9 @@ describe("orca: a saved environment's stream", () => {
     // The next list replaces it.
     await sendStream(streamList([working("example-app"), finished("example-api")], worktrees()));
     await waitForCount("#orca-feed .orca-project", 2);
-    // The clock reads this screen every 10 seconds; a streamed list is not read.
+    // The clock reads this screen every 10 seconds (1 second here); a streamed list is not read.
     const overview = await mock("orca_overview", orcaOverview([], [], studioOnly));
-    await browser.pause(12_000);
+    await browser.pause(1200);
     expect(await callsOf(overview)).toEqual([]);
   });
 
@@ -2895,7 +2896,7 @@ describe("orca: split panes (A-17)", () => {
   });
 
   it("asks again, with the tabs now listed, when a tab leaves, and draws the layout without its pane", async () => {
-    await openSplit();
+    await openSplit(overview(), saved(), timers({ orcaMirror: 250 }));
     // The shell of the second pane is closed in Orca: the list no longer has it, and Rust answers a layout of one pane.
     const panes = await mock("orca_panes", layout(pane("p1", [claude, bash]), "p1"));
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
@@ -2906,7 +2907,7 @@ describe("orca: split panes (A-17)", () => {
     expect(await paneTabs("p1")).toEqual(["Write the docs", "bash"]);
     // The terminal of the pane that closed is no longer read.
     await mock("orca_terminal_read", ["$"]);
-    await browser.pause(2500);
+    await browser.pause(300);
     expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle !== "term_example-app_zsh")).toBe(true);
   });
 

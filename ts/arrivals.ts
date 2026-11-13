@@ -2,6 +2,7 @@
 // The stack is shared with the popups for new Slack messages (S-17, arrivals-slack.ts), which put their cards in it with `stackCard`.
 import type { ThreadItem } from "./bindings/ThreadItem";
 import { $, el, span, tag } from "./dom.js";
+import { periodMs } from "./e2e-timers.js";
 import { avatarColor, initials } from "./format.js";
 import { CHECK_SVG, CLOSE_SVG } from "./icons.js";
 import { removeRow } from "./inbox.js";
@@ -93,7 +94,7 @@ export function stackCard(key: string, card: HTMLElement) {
   const arm = () => {
     clearTimeout(timer);
     // A card closed before its time must not close a newer card of the same thread.
-    timer = window.setTimeout(() => cards.get(key) === card && dismiss(key), SHOW_MS);
+    timer = window.setTimeout(() => cards.get(key) === card && dismiss(key), periodMs("arrival", SHOW_MS));
   };
   const hold = () => clearTimeout(timer);
   for (const type of ["mouseenter", "focusin"]) card.addEventListener(type, hold);
