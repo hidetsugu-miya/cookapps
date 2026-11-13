@@ -29,6 +29,7 @@ use crate::{
         ThreadAttachment, ThreadBlock,
     },
     slack_emoji,
+    slack_markdown::to_mrkdwn,
     slack_mrkdwn::{self, Rich},
 };
 
@@ -574,7 +575,7 @@ fn thread_of(
 }
 
 /// Slack's mrkdwn treats these three characters as markup.
-fn escape_mrkdwn(s: &str) -> String {
+pub(crate) fn escape_mrkdwn(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -614,15 +615,28 @@ fn mail_text(subject: &str, from: &str, date: &str, body: &str) -> String {
     parts.join("\n\n")
 }
 
-/// The text to post, escaped for Slack (`*` stays markup), or why it cannot be posted: blank, or past `POST_LIMIT` characters.
-fn post_text(text: &str) -> Result<String, String> {
-    if text.trim().is_empty() {
+/// The text to post, or why it cannot be posted: blank, or past `POST_LIMIT` characters.
+/// `markdown` false: `text` is plain text, escaped for Slack (`*` stays markup), and the limit is counted on `text`.
+/// `markdown` true: `text` is the Markdown of the rich field (S-6, S-21), turned into mrkdwn first, and blank and the limit are judged on the mrkdwn that is sent.
+fn post_text(text: &str, markdown: bool) -> Result<String, String> {
+    let too_long = || format!("貼る内容が長すぎます（{POST_LIMIT} 文字まで）");
+    if !markdown {
+        if text.trim().is_empty() {
+            return Err("貼る内容が空です".into());
+        }
+        if text.chars().count() > POST_LIMIT {
+            return Err(too_long());
+        }
+        return Ok(escape_mrkdwn(text.trim()));
+    }
+    let text = to_mrkdwn(text);
+    if text.is_empty() {
         return Err("貼る内容が空です".into());
     }
     if text.chars().count() > POST_LIMIT {
-        return Err(format!("貼る内容が長すぎます（{POST_LIMIT} 文字まで）"));
+        return Err(too_long());
     }
-    Ok(escape_mrkdwn(text.trim()))
+    Ok(text)
 }
 
 /// The message for the UI of a Slack error code. Slack answers 200 with `ok: false`.
@@ -1340,7 +1354,7 @@ pub fn slack_preview(subject: &str, from: &str, date: &str, body: &str) -> Strin
     mail_text(subject, from, date, body)
 }
 
-/// Checks the destination and the text, and posts `text` to the channel or as a reply in `thread_ts`'s thread. A failure is logged under `command` and returned.
+/// Checks the destination and the text, and posts `text` (`markdown`: the Markdown of the rich field, see `post_text`) to the channel or as a reply in `thread_ts`'s thread. A failure is logged under `command` and returned.
 /// The text goes to Slack only here, on the user's click.
 async fn send_post(
     http: &reqwest::Client,
@@ -1349,6 +1363,7 @@ async fn send_post(
     channel: &str,
     thread_ts: Option<&str>,
     text: &str,
+    markdown: bool,
 ) -> Result<(), String> {
     if token_key(team_id).is_err()
         || !valid_channel(channel)
@@ -1356,7 +1371,7 @@ async fn send_post(
     {
         return Err(log_failure(command, team_id, BAD_TARGET));
     }
-    let text = post_text(text).map_err(|e| log_failure(command, team_id, e))?;
+    let text = post_text(text, markdown).map_err(|e| log_failure(command, team_id, e))?;
     let token = token_of(team_id)
         .await
         .map_err(|e| log_failure(command, team_id, e))?;
@@ -1395,6 +1410,7 @@ pub async fn slack_post(
         &channel,
         thread_ts.as_deref(),
         &text,
+        false,
     )
     .await?;
     // The post is done: failing to remember where is only logged.
@@ -1494,6 +1510,7 @@ pub struct TimelineMessage {
     blocks: Vec<ThreadBlock>,
     show_text: bool,
     attachments: Vec<ThreadAttachment>,
+    reactions: Vec<Reaction>,
     reply_count: u32,
     permalink: String,
     has_files: bool,
@@ -1503,6 +1520,27 @@ pub struct TimelineMessage {
     watch: Option<WatchMark>,
     /// The replies of the thread that are unread (S-14). Never set in the watch section.
     unread_replies: Option<UnreadReplies>,
+    /// Set only for a row of a channel's history (S-20) that is a reply also sent to the channel (`thread_broadcast`).
+    thread_reply: Option<ThreadReply>,
+}
+
+/// What a row of a channel's history says of the thread it replied to (S-20): `parent` is the start of the thread's own message as one line of plain text (`headline`), `None` when it is not known.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadReply {
+    parent: Option<String>,
+}
+
+/// A reaction under a message: the emoji drawn as text (`emojify`; a custom emoji stays `:name:`) and how many people gave it.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct Reaction {
+    emoji: String,
+    count: u32,
 }
 
 /// The unread replies of a row's thread (S-14). `uncounted`: the thread is longer than the page that was read and its newest reply is after the position, so `count` says nothing (it is 0).
@@ -1671,6 +1709,7 @@ pub struct ThreadMessage {
     /// Whether the text (`rich`) is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
     show_text: bool,
     attachments: Vec<ThreadAttachment>,
+    reactions: Vec<Reaction>,
     /// The https addresses of the images of `blocks` and `attachments`, once each; the screen asks for them only when the user presses "画像を表示".
     image_urls: Vec<String>,
 }
@@ -1720,8 +1759,16 @@ struct Raw {
     text: String,
     reply_count: u32,
     has_files: bool,
+    /// Set only by `history_rows`, for a reply also sent to the channel.
+    broadcast: Option<Broadcast>,
     /// The fields the screen draws (`thread_slim`), shared: a read clones every message it holds, and only the rows listed are drawn.
     source: Arc<Value>,
+}
+
+/// What a reply also sent to the channel (`thread_broadcast`) says of its thread: the mrkdwn text of the thread's own message when it is known (`broadcast_of`).
+#[derive(Debug, PartialEq, Clone)]
+struct Broadcast {
+    parent_text: Option<String>,
 }
 
 /// (team, user) -> when it was asked, and what Slack said (`None`: it could not say).
@@ -2541,6 +2588,7 @@ fn watch_row(
         text: String::new(),
         reply_count: 0,
         has_files: false,
+        broadcast: None,
         source: Arc::new(Value::Null),
     };
     let own = ts_key(&w.ts);
@@ -3247,22 +3295,49 @@ fn raw_from(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
             .as_u64()
             .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
         has_files: m["files"].as_array().is_some_and(|f| !f.is_empty()),
+        broadcast: None,
         source: Arc::new(thread_slim(m)),
     })
 }
 
 /// The messages of a `conversations.history` answer for a channel's history (S-20): the listed ones (`is_listed`), oldest first, none twice.
 fn history_rows(reply: &Value, team_id: &str, channel: &Channel) -> Vec<Raw> {
+    let page: &[Value] = reply["messages"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let mut rows = newest_first(
-        reply["messages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|m| raw_of(team_id, channel, m))
+        page.iter()
+            .filter_map(|m| {
+                let mut raw = raw_of(team_id, channel, m)?;
+                raw.broadcast = broadcast_of(m, page);
+                Some(raw)
+            })
             .collect(),
     );
     rows.reverse();
     rows
+}
+
+/// Whether the message `m` is a reply also sent to the channel (`thread_broadcast`, with a `thread_ts` other than its own `ts`), and the text of the thread's own message if it is known:
+/// the `root` the message carries, else the message of `page` (the messages of the same `conversations.history` answer) whose `ts` is the `thread_ts`. A blank text is no text.
+fn broadcast_of(m: &Value, page: &[Value]) -> Option<Broadcast> {
+    if m["subtype"] != "thread_broadcast" {
+        return None;
+    }
+    let ts = m["ts"].as_str()?;
+    let thread_ts = m["thread_ts"]
+        .as_str()
+        .filter(|t| *t != ts && valid_ts(t))?;
+    let text_of = |v: &Value| {
+        v["text"]
+            .as_str()
+            .filter(|t| !t.trim().is_empty())
+            .map(str::to_owned)
+    };
+    let parent_text = text_of(&m["root"])
+        .or_else(|| page.iter().find(|p| p["ts"] == thread_ts).and_then(text_of));
+    Some(Broadcast { parent_text })
 }
 
 /// `all` newest first by `ts` as a number, without a message listed twice (the same team, channel and `ts`).
@@ -3680,6 +3755,8 @@ fn timeline_message(
         blocks: drawn.blocks,
         show_text: drawn.show_text,
         attachments: drawn.attachments,
+        // Only a row of a channel's history draws them (`history_messages`); the list does not.
+        reactions: Vec::new(),
         reply_count: raw.reply_count,
         permalink: permalink(
             &workspace.url,
@@ -3691,6 +3768,13 @@ fn timeline_message(
         unread,
         watch: None,
         unread_replies: None,
+        thread_reply: raw.broadcast.as_ref().map(|b| ThreadReply {
+            parent: b
+                .parent_text
+                .as_deref()
+                .map(|t| headline(t, name_of))
+                .filter(|h| !h.is_empty()),
+        }),
     }
 }
 
@@ -3753,7 +3837,31 @@ fn thread_slim(m: &Value) -> Value {
         "attachments": m["attachments"],
         "username": m["username"],
         "bot_profile": m["bot_profile"],
+        // Only the name and the count: the people who gave a reaction are not drawn.
+        "reactions": m["reactions"].as_array().map(|list| {
+            list.iter()
+                .map(|r| json!({"name": r["name"], "count": r["count"]}))
+                .collect::<Vec<_>>()
+        }),
     })
+}
+
+/// The reactions of a message (`reactions` of `conversations.history` and `conversations.replies`), in Slack's order: the emoji as `emojify` draws `:name:` (a skin tone comes as `+1::skin-tone-2` in the name) and the count.
+/// An entry with no name or no positive count is left out.
+fn reactions_of(m: &Value) -> Vec<Reaction> {
+    m["reactions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let name = r["name"].as_str().filter(|n| !n.is_empty())?;
+            let count = u32::try_from(r["count"].as_u64()?).unwrap_or(u32::MAX);
+            (count > 0).then(|| Reaction {
+                emoji: emojify(&format!(":{name}:")),
+                count,
+            })
+        })
+        .collect()
 }
 
 /// What the screen draws of a message (`thread_slim`), in the thread and in the list.
@@ -3804,6 +3912,7 @@ fn thread_message(
         blocks,
         show_text,
         attachments,
+        reactions: reactions_of(m),
         ts: m["ts"].as_str().unwrap_or_default().to_owned(),
         user: m["user"]
             .as_str()
@@ -4586,7 +4695,7 @@ fn pick_timeline(
     }
 }
 
-/// The users a message draws: its sender (a bot names itself) and the people its text, blocks and attachments mention.
+/// The users a message draws: its sender (a bot names itself) and the people its text, blocks and attachments mention, and those the start of its parent mentions (a reply also sent to the channel).
 fn people_of(m: &Raw) -> Vec<String> {
     m.bot
         .is_none()
@@ -4594,6 +4703,12 @@ fn people_of(m: &Raw) -> Vec<String> {
         .flatten()
         .into_iter()
         .chain(mention_ids(&m.text))
+        .chain(
+            m.broadcast
+                .iter()
+                .filter_map(|b| b.parent_text.as_deref())
+                .flat_map(mention_ids),
+        )
         .chain(mentioned_users(&m.source))
         .filter(|user| valid_channel(user))
         .collect()
@@ -4635,6 +4750,21 @@ fn unread_replies_of(cache: &TimelineCache, unread: &ThreadUnread) -> UnreadRepl
             })
             .collect(),
     }
+}
+
+/// The rows of a channel's history (S-20) as the screen draws them: the only rows that carry the reactions.
+fn history_messages(
+    cache: &TimelineCache,
+    workspaces: &[Workspace],
+    rows: &[Raw],
+) -> Vec<TimelineMessage> {
+    rows.iter()
+        .filter_map(|raw| {
+            let mut m = message_of(cache, workspaces, raw, false)?;
+            m.reactions = reactions_of(&raw.source);
+            Some(m)
+        })
+        .collect()
 }
 
 /// The rows as the screen draws them.
@@ -5530,10 +5660,7 @@ pub async fn slack_channel_history(
         lookup_users(auth.http(), &state.timeline, wanted),
         lookup_groups(API_URL, auth.http(), &state.timeline, teams),
     );
-    Ok(rows
-        .iter()
-        .filter_map(|raw| message_of(&state.timeline, &workspaces, raw, false))
-        .collect())
+    Ok(history_messages(&state.timeline, &workspaces, &rows))
 }
 
 /// Posts `text` to a channel of the side menu (S-21) under the user's own name, as S-1 posts (the same checks of the text and the same Japanese errors, `unfurl_*` off).
@@ -5545,17 +5672,27 @@ pub async fn slack_channel_post(
     team_id: String,
     channel: String,
     text: String,
+    markdown: Option<bool>,
 ) -> Result<bool, String> {
     let command = "slack_channel_post";
     if token_key(&team_id).is_err() || held_channel(&state, &team_id, &channel).is_none() {
         return Err(log_failure(command, &team_id, BAD_TARGET));
     }
-    send_post(auth.http(), command, &team_id, &channel, None, &text).await?;
+    send_post(
+        auth.http(),
+        command,
+        &team_id,
+        &channel,
+        None,
+        &text,
+        markdown.unwrap_or(false),
+    )
+    .await?;
     Ok(true)
 }
 
 /// Posts `text` as a reply in the thread `thread_ts` of `channel`, as S-1 posts (the same checks, `unfurl_*` off, the same Japanese errors).
-/// The recent destinations of S-1 are not touched. The text goes to Slack only here, on the user's click.
+/// The recent destinations of S-1 are not touched. `markdown` is as for `slack_channel_post`. The text goes to Slack only here, on the user's click.
 #[tauri::command]
 pub async fn slack_reply(
     auth: State<'_, Auth>,
@@ -5563,6 +5700,7 @@ pub async fn slack_reply(
     channel: String,
     thread_ts: String,
     text: String,
+    markdown: Option<bool>,
 ) -> Result<bool, String> {
     send_post(
         auth.http(),
@@ -5571,6 +5709,7 @@ pub async fn slack_reply(
         &channel,
         Some(&thread_ts),
         &text,
+        markdown.unwrap_or(false),
     )
     .await?;
     Ok(true)
@@ -5927,19 +6066,40 @@ mod tests {
     #[test]
     fn the_edited_text_is_escaped_but_keeps_its_bold_markup() {
         assert_eq!(
-            post_text("  *見積 <1>*\nA <a@x.jp> & 本文\n").as_deref(),
+            post_text("  *見積 <1>*\nA <a@x.jp> & 本文\n", false).as_deref(),
             Ok("*見積 &lt;1&gt;*\nA &lt;a@x.jp&gt; &amp; 本文")
         );
     }
 
     #[test]
     fn a_blank_or_too_long_text_is_refused_in_japanese() {
-        assert_eq!(post_text(" \n ").unwrap_err(), "貼る内容が空です");
-        assert!(post_text(&"あ".repeat(POST_LIMIT)).is_ok());
+        assert_eq!(post_text(" \n ", false).unwrap_err(), "貼る内容が空です");
+        assert!(post_text(&"あ".repeat(POST_LIMIT), false).is_ok());
         assert_eq!(
-            post_text(&"あ".repeat(POST_LIMIT + 1)).unwrap_err(),
+            post_text(&"あ".repeat(POST_LIMIT + 1), false).unwrap_err(),
             "貼る内容が長すぎます（10000 文字まで）"
         );
+    }
+
+    #[test]
+    fn a_markdown_text_is_turned_into_mrkdwn_and_judged_after_it() {
+        assert_eq!(
+            post_text("**見積** <1> & [表](https://a.jp/)\n\n- 一\n- 二\n", true).as_deref(),
+            Ok("*見積* &lt;1&gt; &amp; <https://a.jp/|表>\n\n- 一\n- 二")
+        );
+        assert_eq!(post_text(" \n ", true).unwrap_err(), "貼る内容が空です");
+        // The limit counts the text that is sent: `<` grows to `&lt;`, and a link's address shrinks to its label.
+        assert!(post_text(&"あ".repeat(POST_LIMIT), true).is_ok());
+        let long = "あ".repeat(POST_LIMIT - 3) + "<";
+        assert_eq!(
+            post_text(&long, true).unwrap_err(),
+            "貼る内容が長すぎます（10000 文字まで）"
+        );
+        assert!(post_text(&long, false).is_ok());
+        let link = format!("[{}](https://example.com/{})", "あ", "x".repeat(POST_LIMIT));
+        assert!(post_text(&link, true).is_err());
+        let short = "[あ](https://a.jp/)";
+        assert_eq!(post_text(short, true).as_deref(), Ok("<https://a.jp/|あ>"));
     }
 
     #[test]
@@ -6493,6 +6653,7 @@ mod tests {
             text: "t".into(),
             reply_count: 0,
             has_files: false,
+            broadcast: None,
             source: Arc::new(Value::Null),
         }
     }
@@ -9124,6 +9285,120 @@ mod tests {
 
     // Part 1: what a row of the list draws.
 
+    /// A reply also sent to the channel (`thread_broadcast`) in the thread `9.000001`, with `extra` merged in.
+    fn broadcast_reply(extra: Value) -> Value {
+        let mut m = json!({"type": "message", "subtype": "thread_broadcast", "ts": "13.000001", "thread_ts": "9.000001", "user": "U1", "text": "done"});
+        for (k, v) in extra.as_object().unwrap() {
+            m[k] = v.clone();
+        }
+        m
+    }
+
+    fn parent_of(m: &Value, page: &[Value]) -> Option<Option<String>> {
+        broadcast_of(m, page).map(|b| b.parent_text)
+    }
+
+    #[test]
+    fn a_broadcast_reply_takes_its_parents_text_from_its_root() {
+        let m =
+            broadcast_reply(json!({"root": {"ts": "9.000001", "text": "<!here> release *now*"}}));
+        // The page has the parent too: the root is taken first.
+        let page = [
+            m.clone(),
+            json!({"type": "message", "ts": "9.000001", "text": "from the page"}),
+        ];
+        assert_eq!(
+            parent_of(&m, &page),
+            Some(Some("<!here> release *now*".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_broadcast_reply_without_a_root_takes_its_parents_text_from_the_page() {
+        let m = broadcast_reply(json!({}));
+        let page = [
+            m.clone(),
+            json!({"type": "message", "ts": "10.000001", "text": "other"}),
+            json!({"type": "message", "ts": "9.000001", "text": "from the page"}),
+        ];
+        assert_eq!(parent_of(&m, &page), Some(Some("from the page".to_owned())));
+        // A root with a blank text is no root.
+        let blank = broadcast_reply(json!({"root": {"ts": "9.000001", "text": "  "}}));
+        assert_eq!(
+            parent_of(&blank, &page),
+            Some(Some("from the page".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_broadcast_reply_with_no_parent_text_anywhere_is_still_a_broadcast() {
+        let m = broadcast_reply(json!({}));
+        assert_eq!(parent_of(&m, std::slice::from_ref(&m)), Some(None));
+        let blank_parent = [
+            m.clone(),
+            json!({"type": "message", "ts": "9.000001", "text": " ", "files": [{"id": "F1"}]}),
+        ];
+        assert_eq!(parent_of(&m, &blank_parent), Some(None));
+    }
+
+    #[test]
+    fn only_a_thread_broadcast_with_another_thread_is_a_broadcast() {
+        let plain =
+            json!({"type": "message", "ts": "13.000001", "thread_ts": "9.000001", "text": "x"});
+        assert_eq!(broadcast_of(&plain, std::slice::from_ref(&plain)), None);
+        let own = broadcast_reply(json!({"thread_ts": "13.000001"}));
+        assert_eq!(broadcast_of(&own, &[]), None);
+        let none = broadcast_reply(json!({"thread_ts": null}));
+        assert_eq!(broadcast_of(&none, &[]), None);
+        let bad = broadcast_reply(json!({"thread_ts": "x"}));
+        assert_eq!(broadcast_of(&bad, &[]), None);
+    }
+
+    #[test]
+    fn a_history_row_carries_the_parent_of_a_broadcast_and_a_list_row_carries_none() {
+        let m = broadcast_reply(json!({}));
+        let parent = json!({"type": "message", "ts": "9.000001", "user": "U2", "text": "start"});
+        let reply = json!({"ok": true, "messages": [m.clone(), parent]});
+        let rows = history_rows(&reply, "T1", &channel("C1"));
+        assert_eq!(rows[0].broadcast, None);
+        assert_eq!(
+            rows[1].broadcast,
+            Some(Broadcast {
+                parent_text: Some("start".to_owned())
+            })
+        );
+        assert_eq!(raw_of("T1", &channel("C1"), &m).unwrap().broadcast, None);
+    }
+
+    #[test]
+    fn a_broadcast_row_draws_the_start_of_its_parent_as_one_line_of_plain_text() {
+        let w = workspace("T1", "https://one.slack.com/");
+        let name_of = |id: &str| (id == "U7").then(|| "Grace".to_owned());
+        let row_of = |b: Option<Broadcast>| {
+            let mut raw = raw_from("T1", &channel("C1"), &broadcast_reply(json!({}))).unwrap();
+            raw.broadcast = b;
+            timeline_message(&raw, &w, None, &name_of, false).thread_reply
+        };
+        let parent = |text: &str| {
+            Some(Broadcast {
+                parent_text: Some(text.to_owned()),
+            })
+        };
+        assert_eq!(
+            row_of(parent("<@U7> &lt;go&gt; :tada:\n\n  ship it")),
+            Some(ThreadReply {
+                parent: Some("@Grace <go> 🎉 ship it".to_owned())
+            })
+        );
+        assert_eq!(
+            row_of(Some(Broadcast { parent_text: None })),
+            Some(ThreadReply { parent: None })
+        );
+        // Nothing of the text is left once it is turned into plain text.
+        assert_eq!(row_of(parent("<>")), Some(ThreadReply { parent: None }));
+        assert_eq!(row_of(None), None);
+    }
+
     #[test]
     fn a_row_of_the_list_draws_what_the_thread_draws_with_its_styles_blocks_and_attachments() {
         let m = json!({
@@ -9334,5 +9609,93 @@ mod tests {
         assert_eq!(rows[2].thread_ts.as_deref(), Some("9.000001"));
         assert_eq!(rows[0].channel_name, "name C1");
         assert!(history_rows(&json!({"ok": true}), "T1", &channel("C1")).is_empty());
+    }
+
+    #[test]
+    fn reactions_are_read_as_emoji_and_count_in_slacks_order() {
+        let reaction = |emoji: &str, count: u32| Reaction {
+            emoji: emoji.to_owned(),
+            count,
+        };
+        let m = json!({"type": "message", "ts": "1.000001", "reactions": [
+            {"name": "tada", "count": 3, "users": ["U1", "U2", "U3"]},
+            {"name": "+1::skin-tone-2", "count": 1, "users": ["U1"]},
+            {"name": "partyparrot", "count": 12, "users": ["U1"]},
+        ]});
+        let want = [
+            reaction("🎉", 3),
+            reaction("👍🏻", 1),
+            reaction(":partyparrot:", 12),
+        ];
+        assert_eq!(reactions_of(&m), want);
+        // The slim copy a read keeps gives the same, without the users.
+        let slim = thread_slim(&m);
+        assert_eq!(reactions_of(&slim), want);
+        assert!(slim["reactions"][0].get("users").is_none());
+    }
+
+    #[test]
+    fn a_message_without_usable_reactions_has_none() {
+        assert!(reactions_of(&json!({"ts": "1.000001"})).is_empty());
+        assert!(reactions_of(&json!({"reactions": "tada"})).is_empty());
+        assert!(reactions_of(&json!({"reactions": []})).is_empty());
+        assert!(thread_slim(&json!({"ts": "1.000001"}))["reactions"].is_null());
+        let m = json!({"reactions": [
+            {"name": "", "count": 2},
+            {"count": 2},
+            {"name": "tada"},
+            {"name": "fire", "count": 0},
+            {"name": "fire", "count": -1},
+            {"name": "eyes", "count": 2},
+        ]});
+        assert_eq!(
+            reactions_of(&m),
+            [Reaction {
+                emoji: "👀".to_owned(),
+                count: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn only_a_history_row_and_a_thread_message_carry_the_reactions() {
+        let m = json!({
+            "type": "message", "ts": "10.000001", "user": "U1", "text": "hi <@U7>",
+            "reactions": [{"name": "tada", "count": 2, "users": ["U1", "U2"]}],
+        });
+        let raw = raw_from("T1", &channel("C1"), &m).unwrap();
+        let name_of = |_: &str| None;
+        let w = workspace("T1", "https://one.slack.com/");
+        let want = [Reaction {
+            emoji: "🎉".to_owned(),
+            count: 2,
+        }];
+        // A row of the list carries none.
+        let row = timeline_message(&raw, &w, None, &name_of, false);
+        assert!(row.reactions.is_empty());
+        // A row of a channel's history does, as a thread message does.
+        let rows = history_messages(&TimelineCache::default(), &[w], &[raw]);
+        assert_eq!(rows.len(), 1);
+        let thread = thread_message(&thread_slim(&m), None, &name_of);
+        assert_eq!(rows[0].reactions, want);
+        assert_eq!(rows[0].reactions, thread.reactions);
+    }
+
+    #[test]
+    fn the_mentions_in_the_start_of_a_broadcasts_parent_are_looked_up() {
+        let m = broadcast_reply(
+            json!({"text": "ok <@U1>", "root": {"ts": "9.000001", "text": "<@U7> go <@U8|x>"}}),
+        );
+        let reply = json!({"ok": true, "messages": [m]});
+        let rows = history_rows(&reply, "T1", &channel("C1"));
+        assert_eq!(people_of(&rows[0]), ["U1", "U1", "U7", "U8"]);
+        // A message that is no broadcast names only its own people.
+        let plain = raw_from(
+            "T1",
+            &channel("C1"),
+            &json!({"ts": "1.000001", "user": "U2", "text": "x <@U3>"}),
+        )
+        .unwrap();
+        assert_eq!(people_of(&plain), ["U2", "U3"]);
     }
 }

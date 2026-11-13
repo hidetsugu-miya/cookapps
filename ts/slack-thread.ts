@@ -1,4 +1,4 @@
-// The Slack thread (S-6, S-7, S-11): the messages of a thread with their senders' icons, attached images, blocks and attachments (slack-blocks.ts), a field to reply in, a card to make a Todo from the message,
+// The Slack thread (S-6, S-7, S-11, S-22): the messages of a thread with their senders' icons, attached images, blocks and attachments (slack-blocks.ts), reactions, a field to reply in, a card to make a Todo from the message,
 // and a conversation with Claude (claude-chat.ts) to ask about the thread and the reply: proofread it, summarise the thread, write a reply. Nothing leaves the app until "返信する"; Claude is asked only when the user sends a request,
 // and then it gets the reply field's text, the conversation, the request and the messages of the thread as shown.
 // The thread is read when it is opened and after a reply, not on a timer. The reply and the conversation are kept per thread in memory until the app quits.
@@ -17,7 +17,7 @@ import { closeMenu } from "./menu.js";
 import { attachmentNode, blocksNode } from "./slack-blocks.js";
 import { richNodes } from "./slack-rich.js";
 import { revealSlackList, seeThread } from "./slack-list.js";
-import { decorateAvatar, loadIcons, slackMs } from "./slack-view.js";
+import { decorateAvatar, loadIcons, reactionsNode, slackMs } from "./slack-view.js";
 import { initSplit } from "./split.js";
 import { toast } from "./toast.js";
 import { HandoffPane } from "./orca-handoff.js";
@@ -218,6 +218,8 @@ function messageNode(m: ThreadMessage) {
     files.append(...m.files.map(fileNode));
     body.append(files);
   }
+  const reactions = reactionsNode(m.reactions);
+  if (reactions) body.append(reactions);
   row.dataset.ts = m.ts;
   row.append(avatar, body);
   return row;

@@ -1,5 +1,5 @@
 // The history of a channel (S-20, S-21): the body of the Slack screen while a channel of the side menu is chosen.
-// A header with the channel (# or a lock, and its name) and the workspace (muted) only, then the newest messages (`slack_channel_history`) oldest first under the day they were sent, each drawn as a row of the unread list is (slack-list.ts) with its "N 件の返信" and its bookmark.
+// A header with the channel (# or a lock, and its name) and the workspace (muted) only, then the newest messages (`slack_channel_history`) oldest first under the day they were sent, each drawn as a row of the unread list is (slack-list.ts) with "スレッドに返信済み: …" above the text of a reply also sent to the channel, its reactions (S-22), its "N 件の返信" and its bookmark.
 // Pressing a message or its replies opens the thread (slack-thread.ts), whose back button returns here at the same scroll position. Nothing here reads a channel: the read position is set from the unread list only.
 // The history is read when the channel is pressed, and again when it is pressed once more; a read that fails shows the error and "再読み込み". Everything is held in memory only.
 // Under the history is a field to post to the channel (S-21, `slack_channel_post`): what is written is kept per channel in memory, and a post that works empties it and reads the history again.
@@ -10,7 +10,7 @@ import { HASH_SVG, LOCK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { historyItem, watchedKeys } from "./slack-list.js";
 import { openSlackThread } from "./slack-thread.js";
-import { loadIcons, slackMs } from "./slack-view.js";
+import { loadIcons, reactionsNode, slackMs } from "./slack-view.js";
 import { toast } from "./toast.js";
 import { show } from "./view.js";
 
@@ -110,7 +110,13 @@ function messageNodes(rows: TimelineMessage[]) {
       sep.append(tag("span", "", label));
       nodes.push(sep);
     }
-    nodes.push(historyItem(m, `c/${m.ts}`, openThread));
+    const item = historyItem(m, `c/${m.ts}`, openThread);
+    // The reactions (S-22) sit under the text, above "N 件の返信".
+    const reactions = reactionsNode(m.reactions);
+    if (reactions) item.querySelector(".feed-main > .feed-text")?.after(reactions);
+    // A reply also sent to the channel says which thread it answered, above its text (#467).
+    if (m.threadReply) item.querySelector(".feed-main > .feed-text")?.before(tag("div", "feed-thread-reply", m.threadReply.parent === null ? "スレッドに返信済み" : `スレッドに返信済み: ${m.threadReply.parent}`));
+    nodes.push(item);
   }
   return nodes;
 }

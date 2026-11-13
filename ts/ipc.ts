@@ -182,9 +182,10 @@ export interface Commands {
   // The newest messages of a joined channel (S-20), oldest first, drawn as the list's rows (`unread` false); it changes no read position.
   slack_channel_history: { args: { teamId: string; channel: string }; result: TimelineMessage[] };
   // Posts `text` to a channel of the side menu (S-21) under the user's own name (the checks and the errors of `slack_post`; the recent destinations are not touched).
-  slack_channel_post: { args: { teamId: string; channel: string; text: string }; result: boolean };
-  // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched).
-  slack_reply: { args: { teamId: string; channel: string; threadTs: string; text: string }; result: boolean };
+  // `markdown` true: `text` is the Markdown of the rich field, turned into Slack's mrkdwn in Rust before it is checked and sent; absent or false: plain text, as before.
+  slack_channel_post: { args: { teamId: string; channel: string; text: string; markdown?: boolean }; result: boolean };
+  // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched). `markdown` as for `slack_channel_post`.
+  slack_reply: { args: { teamId: string; channel: string; threadTs: string; text: string; markdown?: boolean }; result: boolean };
   // The attached images (a thread file's `thumbUrl`) as data: URIs by URL; the token goes to files.slack.com only. What cannot be fetched is not in the map.
   slack_file_images: { args: { teamId: string; urls: string[] }; result: Record<string, string> };
   // The user's own icon in each workspace.

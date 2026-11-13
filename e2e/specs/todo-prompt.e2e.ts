@@ -1,4 +1,4 @@
-import { boot, callsOf, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, composerLayout, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 // What Claude answers when the request changes nothing.
@@ -316,14 +316,18 @@ describe("todo prompt screen: the conversation with Claude", () => {
 });
 
 describe("todo prompt screen: the request field", () => {
-  it("is one line high, with the key hint under it and the send button beside the hint", async () => {
+  it("is one line high with no placeholder and no key hint, and has the round send button with the selects in the frame", async () => {
     await openPrompt();
     expect(await $("#prompt-input").getTagName()).toBe("textarea");
     expect(await heightOf("#prompt-input")).toBe(20);
-    const mac = await browser.execute(() => /Mac/.test(navigator.platform));
-    await expect($("#prompt-keys")).toHaveText(mac ? "↩ で改行、⌘↩ で送信" : "Enter で改行、Ctrl+Enter で送信");
-    await expect($("#prompt-send")).toHaveElementClass("primary");
-    expect(await heightOf("#prompt-send")).toBe(26);
+    await expect(input()).toHaveAttribute("aria-label", "Claude への指示");
+    await expect(input()).not.toHaveAttribute("placeholder");
+    // The keys are not told, and still work (the specs below send with Cmd+Enter).
+    expect(await count("#prompt-keys, #prompt-form .composer-hint")).toBe(0);
+    await expect($("#prompt-send")).toHaveAttribute("aria-label", "送信");
+    await expect($("#prompt-send")).toHaveText("");
+    expect(await count("#prompt-send svg")).toBe(1);
+    expect(await composerLayout("prompt")).toEqual({ framed: [true, true, true], modelBelowInput: true, sendRightOfModel: true, sendInsideFrame: true, sendRadius: "50%", placeholder: null });
   });
 
   it("takes plain Enter as a line break and sends nothing", async () => {
@@ -488,7 +492,7 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
       kind,
       value,
     );
-  it("puts a model select and an effort select, borderless and short, under the request field", async () => {
+  it("puts a model select and an effort select, borderless and short, in the frame of the request field", async () => {
     await openPrompt();
     await expect(selectOf("model")).toBeDisplayed();
     await expect(selectOf("effort")).toBeDisplayed();
@@ -499,15 +503,18 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
     await expect(selectOf("effort")).toHaveAttribute("aria-label", "effort");
     await expect(selectOf("model")).toHaveValue("sonnet");
     await expect(selectOf("effort")).toHaveValue("medium");
-    // After the composer, inside the form, and without a border.
-    expect(await browser.execute(() => document.querySelector("#prompt-form > .composer")?.nextElementSibling?.id)).toBe("prompt-model");
+    // In the row of the frame under the field, and without a border.
+    expect(await browser.execute(() => document.querySelector("#prompt-form > .composer > .composer-foot")?.firstElementChild?.id)).toBe("prompt-model");
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#prompt-model select")!).borderTopWidth)).toBe("0px");
   });
 
-  it("is on the prompt screen only, not on the Slack compose screen", async () => {
+  it("is the prompt conversation's on the prompt screen (S-3) and the proofreading's on the Slack compose screen (S-4), the two never mixed", async () => {
     await openPrompt();
-    expect(await count("#slack-compose select")).toBe(0);
     expect(await count("#prompt-model select")).toBe(2);
+    expect(await count('#prompt-model select[data-purpose="promptChat"]')).toBe(2);
+    expect(await count("#slack-model select")).toBe(2);
+    expect(await count('#slack-model select[data-purpose="proofread"]')).toBe(2);
+    expect(await count('#slack-compose select:not([data-purpose="proofread"])')).toBe(0);
   });
 
   it("saves a model with the purpose promptChat and no effort, an effort with both, and the settings show it", async () => {

@@ -24,6 +24,7 @@ pub mod orca_theme;
 pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
+mod slack_markdown;
 mod slack_mrkdwn;
 pub mod todoist;
 pub mod update;

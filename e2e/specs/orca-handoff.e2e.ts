@@ -4,6 +4,8 @@ import {
   boot,
   callsOf,
   claudeReady,
+  claudeSettings,
+  composerLayout,
   count,
   fire,
   handoffSummary,
@@ -108,6 +110,9 @@ const field = (screen: Screen) => $(`${screen.pane} textarea`);
 const termText = (screen: Screen) => $(`${screen.pane} .ho-term .orca-term-box:not([hidden]) .xterm-rows`).getText();
 // The arrow in the field of the instruction.
 const sendButton = (screen: Screen) => $(`${screen.pane} .ho-form .chat-send`);
+// The model and effort of the summary, in the frame of the field.
+const selectOf = (screen: Screen, kind: "model" | "effort") => $(`${screen.pane} #handoff-model select[data-purpose="orcaHandoff"][data-kind="${kind}"]`);
+const heightOf = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().height, selector);
 
 // Picks the project named `name` in the menu of its chip: the worktree is then the project's own folder (default).
 async function chooseProject(screen: Screen, name: string) {
@@ -179,8 +184,9 @@ describe("orca handoff", () => {
     await expect(field(MAIL)).toHaveAttribute("aria-label", "Orca への指示");
     await expect(sendButton(MAIL)).toHaveAttribute("aria-label", "Orca に渡す");
     await expect(sendButton(MAIL)).toBeDisabled();
-    // No model and effort under the field, and no note while Claude can be used.
-    expect(await count(`${MAIL.pane} .chat-model, ${MAIL.pane} select`)).toBe(0);
+    // The model and effort of the summary are in the frame of the field, and there is no note while Claude can be used.
+    await expect(selectOf(MAIL, "model")).toBeDisplayed();
+    await expect(selectOf(MAIL, "effort")).toBeDisplayed();
     await expect($(`${MAIL.pane} .chat-note`)).not.toBeDisplayed();
     // The icon closes the pane again.
     await $(`${MAIL.pane} [aria-label="閉じる"]`).click();
@@ -188,34 +194,102 @@ describe("orca handoff", () => {
     await expect($(MAIL.button)).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("lays the form out from the top down, with the field filling the height that is left and the arrow at its bottom right", async () => {
+  it("lays the form out from the top down, with the instruction in the frame of the composer: one line high, the selects at the left and the round arrow at the right", async () => {
     await openMail();
     await openPane(MAIL);
+    await expect(selectOf(MAIL, "model")).toBeDisplayed();
     const box = await browser.execute((pane) => {
       const rect = (selector: string) => {
         const r = document.querySelector(`${pane} ${selector}`)!.getBoundingClientRect();
         return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
       };
       const area = document.getElementById("mail-area")!.getBoundingClientRect();
-      return { chips: rect(".ho-new"), card: rect(".ho-card"), field: rect("textarea"), arrow: rect(".ho-form .chat-send"), pane: rect(".ho-whole"), width: document.querySelector(pane)!.getBoundingClientRect().width / area.width };
+      return { chips: rect(".ho-new"), card: rect(".ho-card"), frame: rect(".composer"), width: document.querySelector(pane)!.getBoundingClientRect().width / area.width };
     }, MAIL.pane);
-    // Chips, then the card, then the field.
+    // Chips, then the card, then the frame of the field.
     expect(box.chips.bottom).toBeLessThanOrEqual(box.card.top);
-    expect(box.card.bottom).toBeLessThanOrEqual(box.field.top);
-    // The field takes what is left: its bottom is near the pane's, and it is taller than the card.
-    expect(box.pane.bottom - box.field.bottom).toBeLessThan(40);
-    expect(box.field.bottom - box.field.top).toBeGreaterThan(100);
-    // The arrow is inside the field, at its bottom right.
-    expect(box.arrow.left).toBeGreaterThan(box.field.left);
-    expect(box.arrow.right).toBeLessThanOrEqual(box.field.right);
-    expect(box.field.bottom - box.arrow.bottom).toBeLessThan(20);
-    expect(box.field.right - box.arrow.right).toBeLessThan(20);
+    expect(box.card.bottom).toBeLessThanOrEqual(box.frame.top);
+    expect(await composerLayout("handoff")).toEqual({ framed: [true, true, true], modelBelowInput: true, sendRightOfModel: true, sendInsideFrame: true, sendRadius: "50%", placeholder: null });
+    // The field starts as one line, not three.
+    expect(await heightOf("#handoff-input")).toBe(20);
     // The pane starts at 40% of the screen.
     await expect($("#mail-split")).toHaveAttribute("aria-valuenow", "40");
     expect(box.width).toBeGreaterThan(0.39);
     expect(box.width).toBeLessThan(0.41);
     // No button with words in the form (the summary and revise buttons are gone).
     expect(await textsOf(`${MAIL.pane} .ho-form button:not(.review-chip):not(.icon-btn)`)).toEqual([]);
+  });
+
+  it("grows the field with its lines, and goes back to one line when the text is short again", async () => {
+    await openMail();
+    await openPane(MAIL);
+    const type = (text: string) =>
+      browser.execute((t) => {
+        const input = document.querySelector<HTMLTextAreaElement>("#handoff-input")!;
+        input.value = t;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }, text);
+    await type("一行目\n二行目\n三行目");
+    expect(await heightOf("#handoff-input")).toBe(60);
+    await type("一行");
+    expect(await heightOf("#handoff-input")).toBe(20);
+  });
+
+  it("saves the model with the purpose orcaHandoff and no effort, and the effort with both, and the hand-over still calls the same commands", async () => {
+    await openMail();
+    await openPane(MAIL);
+    await expect(selectOf(MAIL, "model")).toHaveValue("sonnet");
+    await expect(selectOf(MAIL, "effort")).toHaveValue("medium");
+    expect(await selectOf(MAIL, "model").$$("option").map((o) => o.getText())).toEqual(["Haiku", "Sonnet", "Opus"]);
+    await expect(selectOf(MAIL, "model")).toHaveAttribute("aria-label", "モデル");
+    // In the row of the frame under the field.
+    expect(await browser.execute(() => document.querySelector("#handoff-form > .composer > .composer-foot")?.firstElementChild?.id)).toBe("handoff-model");
+    const choose = (kind: "model" | "effort", value: string) =>
+      browser.execute(
+        (id, k, v) => {
+          if (!window.__e2e_once__(id)) return;
+          const select = document.querySelector<HTMLSelectElement>(`#handoff-model select[data-purpose="orcaHandoff"][data-kind="${k}"]`)!;
+          select.value = v;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        onceId(),
+        kind,
+        value,
+      );
+    const save = await mock("claude_model_settings_save", { ...claudeSettings, orcaHandoff: { model: "opus", effort: "medium" } });
+    await choose("model", "opus");
+    expect(await waitForCalls(save)).toEqual([{ purpose: "orcaHandoff", model: "opus" }]);
+    await expect(selectOf(MAIL, "model")).toHaveValue("opus");
+    const saveEffort = await mock("claude_model_settings_save", { ...claudeSettings, orcaHandoff: { model: "opus", effort: "max" } });
+    await choose("effort", "max");
+    expect(await waitForCalls(saveEffort)).toEqual([{ purpose: "orcaHandoff", model: "opus", effort: "max" }]);
+    await expect(selectOf(MAIL, "effort")).toHaveValue("max");
+    // The send is the same as without the selects.
+    const handoff = await mock("orca_handoff", started);
+    await chooseProject(MAIL, "example-app");
+    const ask = await write(MAIL, "請求書を直して");
+    await sendButton(MAIL).click();
+    const [call] = (await waitForCalls(handoff)) as Handed[];
+    expect(call.instruction).toBe("請求書を直して");
+    expect(call.summary).toEqual(POINTS);
+    expect(((await waitForCalls(ask)) as Asked[])[0].instruction).toBe("請求書を直して");
+  });
+
+  it("draws the model and effort in the frame of every pane that is open, the mail's and the Slack thread's alike", async () => {
+    const messages = [timelineMessage(rootTs, "Alice Example", "dev-billing", "Please review the deploy notes.", { replyCount: 1 })];
+    await openMail({ slack_load: slackLoad, slack_timeline: timeline(messages) });
+    await openPane(MAIL);
+    await mock("slack_thread", slackThread([threadMessage(rootTs, "Alice Example", "Please review the deploy notes."), threadMessage(replyTs, "Bob Example", "Looks fine to me.")]));
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 1);
+    await $("#slack-feed .feed-open").click();
+    await waitForCount("#st-msgs .st-msg", 2);
+    await $(SLACK.button).click();
+    await listRead(SLACK);
+    for (const screen of [MAIL, SLACK]) {
+      await expect(selectOf(screen, "model")).toHaveValue("sonnet");
+      await expect(selectOf(screen, "effort")).toHaveValue("medium");
+    }
   });
 
   it("hands over with Cmd+Enter (Ctrl+Enter off macOS) as the arrow does, and not while the instruction is blank", async () => {

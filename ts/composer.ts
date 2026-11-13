@@ -1,4 +1,4 @@
-// The request field of a Claude pane (A-2, T-7, S-7, S-18): one frame that holds the field, which starts as one line and grows with its text (claude-chat.ts grows it),
+// The request field of a Claude pane (A-2, T-7, S-3, S-4, S-7, S-18): one frame that holds the field, which starts as one line and grows with its text (claude-chat.ts grows it),
 // and, in the row under it, the model and effort selects at the left (a slot that `showModelSlot` of claude.ts fills) and the round send button at the right.
 // It makes the form with the ids `{prefix}-form`, `-input`, `-model` and `-send` that claude-chat.ts reads; the owner puts it in the pane (before `chat.init()`), and may put more in the form, above the frame.
 // `model: false` leaves the slot out, for a pane that has no model to choose. The field has no placeholder (`.claude/rules/frontend.md`).

@@ -1,5 +1,5 @@
 import {
-  boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, workspace,
+  boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, claudeSettings, composerLayout, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, workspace,
 } from "../support";
 
 const body = () => $("#slack-body");
@@ -318,22 +318,47 @@ describe("slack compose screen", () => {
 });
 
 describe("slack compose screen: proofreading with Claude", () => {
-  it("keeps its header text, the 校正する button, the text send button, the key hint and the diff card without コピー", async () => {
+  it("keeps its header text, the 校正する button and the diff card without コピー, and has the round send button with the selects in the frame", async () => {
     await openCompose();
     await chooseGeneral();
     await expect($("#slack-chat")).toHaveAttribute("aria-label", "Claude と校正");
     await expect($("#slack-chat .chat-head")).toHaveText(expect.stringContaining("Claude と校正"));
     await expect($("#slack-proofread")).toHaveText("校正する");
-    await expect($("#slack-send")).toHaveText("送信");
-    await expect($("#slack-input")).toHaveAttribute("placeholder", "どう直したいかを書く");
-    await expect($("#slack-keys")).not.toHaveText("");
+    // The 校正する button is in the form, above the frame of the field.
+    expect(await browser.execute(() => document.getElementById("slack-proofread")!.closest("#slack-form") !== null && document.querySelector("#slack-form > .composer")!.previousElementSibling === document.querySelector("#slack-form > .proofread-row"))).toBe(true);
+    await expect($("#slack-input")).toHaveAttribute("aria-label", "Claude への依頼");
+    await expect($("#slack-input")).not.toHaveAttribute("placeholder");
+    // The keys are not told (and still work: see the spec of Cmd+Enter below).
+    expect(await count("#slack-keys, #slack-form .composer-hint")).toBe(0);
+    await expect($("#slack-send")).toHaveAttribute("aria-label", "送信");
+    await expect($("#slack-send")).toHaveText("");
+    expect(await count("#slack-send svg")).toBe(1);
+    expect(await composerLayout("slack")).toEqual({ framed: [true, true, true], modelBelowInput: true, sendRightOfModel: true, sendInsideFrame: true, sendRadius: "50%", placeholder: null });
     await mock("claude_proofread_slack", proofreadEdit);
     await $("#slack-proofread").click();
     await waitForCount("#slack-log .chat-ai", 1);
     expect(await textsOf("#slack-log .diff-foot .text-btn")).toEqual(["却下", "適用"]);
-    // The answer text and the send button keep their look: the line breaks of an answer are not kept here, and the send button is a text button.
+    // The answer text keeps its look: the line breaks of an answer are not kept here.
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#slack-log .chat-ai")!).whiteSpace)).toBe("normal");
-    expect(await browser.execute(() => document.getElementById("slack-send")!.className)).toBe("text-btn primary chat-send");
+  });
+
+  it("shows the model and effort of the proofreading in the frame of the request field, Sonnet and medium by default, and saves a change as proofread", async () => {
+    await openCompose();
+    const model = $('#slack-model select[data-kind="model"]');
+    const effort = $('#slack-model select[data-kind="effort"]');
+    await expect(model).toHaveValue("sonnet");
+    await expect(effort).toHaveValue("medium");
+    await expect(effort).toHaveAttribute("data-effort", "medium");
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#slack-model select")!).borderTopWidth)).toBe("0px");
+    const save = await mock("claude_model_settings_save", { ...claudeSettings, proofread: { model: "opus", effort: "medium" } });
+    await browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      const select = document.querySelector<HTMLSelectElement>('#slack-model select[data-kind="model"]')!;
+      select.value = "opus";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }, onceId());
+    expect(await waitForCalls(save)).toEqual([{ purpose: "proofread", model: "opus" }]);
+    await expect(model).toHaveValue("opus");
   });
 
   it("sends 校正してください with the text, and applying the proposal changes the edit field without posting", async () => {
@@ -352,6 +377,18 @@ describe("slack compose screen: proofreading with Claude", () => {
     await expect($("#slack-log .diff-state")).toHaveText("適用しました");
     expect(await callsOf(slackPost)).toEqual([]);
     await expect($("#slack-compose")).toBeDisplayed();
+  });
+
+  it("sends the typed request on Cmd+Enter (Ctrl+Enter off macOS) with the same command and arguments as the send button", async () => {
+    await openCompose();
+    const edit = await mock("claude_proofread_slack", proofreadEdit);
+    await $("#slack-input").setValue("敬語にして");
+    await browser.execute((id) => {
+      if (!window.__e2e_once__(id)) return;
+      const mac = /Mac/.test(navigator.platform);
+      document.getElementById("slack-input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, bubbles: true, cancelable: true }));
+    }, onceId());
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "敬語にして" }]);
   });
 
   it("sends a typed request with the text and the conversation so far", async () => {

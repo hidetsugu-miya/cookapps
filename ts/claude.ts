@@ -240,14 +240,18 @@ function modelBlock() {
 }
 
 // The two selects of a Claude pane's request field, without a frame: the model and effort of the pane's purpose, the same values as the settings'.
-// The prompt screen's pane (the prompt conversation) has them under the field; the Slack thread's pane (the Slack thread conversation) has them in the frame of the field (composer.ts).
+// The prompt screen's pane (the prompt conversation), the Slack compose screen's pane (S-4, the proofreading) and the Slack thread's pane (the Slack thread conversation) have them in the frame of the field (composer.ts).
 // The Todo draft page's pane (S-18) has them for the Slack summary's purpose; the page is not always open, so a slot that is not in the page is skipped.
 // The Todo screen's Claude pane (T-7) has them for the Todo conversation's purpose.
-const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["reply-model", "slackReply"], ["draft-model", "slackSummary"], ["todo-claude-model", "todoChat"]];
+// The pane of A-9 has them in the frame of its field for the summary of a handoff.
+const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["slack-model", "proofread"], ["reply-model", "slackReply"], ["draft-model", "slackSummary"], ["todo-claude-model", "todoChat"], ["handoff-model", "orcaHandoff"]];
 
-function redrawModelSlot(id: string) {
+// The pane of A-9 is drawn in the mail, the Todo and the Slack thread at once, each with a slot of the same id, so every element of the id is drawn, not the first one `$` finds.
+function redrawModelSlot(id: string, onlyEmpty = false) {
   const purpose = MODEL_SLOTS.find(([slot]) => slot === id)![1];
-  $(id)?.replaceChildren(...(modelSettings === null ? [] : purposeSelects(purpose, "")));
+  for (const slot of document.querySelectorAll<HTMLElement>(`[id="${id}"]`)) {
+    if (!onlyEmpty || slot.childElementCount === 0) slot.replaceChildren(...(modelSettings === null ? [] : purposeSelects(purpose, "")));
+  }
 }
 
 // Every select drawn, on the settings screen and on the prompt screen.
@@ -288,7 +292,7 @@ async function saveModel(purpose: Purpose, change: { model: Model } | { effort: 
 // Opens a pane's selects: the settings are read the first time, and what was read is drawn if the selects are empty.
 export function showModelSlot(id: string) {
   if (modelSettings === null) loadModelSettings();
-  else if ($(id).childElementCount === 0) redrawModelSlot(id);
+  else redrawModelSlot(id, true);
 }
 
 // Reads the saved model and effort; the card and the prompt screen follow. A read that a save overtook is dropped: the save's answer is newer.

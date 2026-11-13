@@ -816,7 +816,6 @@ button.status:hover { filter: brightness(.95); }
 /* ts/composer.ts: the row in the frame of a Claude pane's request field holds the model and effort at the left and the send button at the right. */
 .composer-end { justify-content: flex-end; }
 .composer-foot .chat-model { margin: 0 auto 0 0; }
-.composer-hint { flex: 1; min-width: 0; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .composer-foot .text-btn { height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
 .chat-clear:disabled, .chat-send:disabled { opacity: .4; cursor: default; }
 .chat-clear:disabled:hover { background: #fff; }
@@ -1128,15 +1127,9 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .ho-form .chat-note { padding: 0; border-top: 0; background: none; }
 .ho-form { display: flex; flex-direction: column; gap: 8px; }
 .ho-form .pending { margin: 0; }
-.ho-form .chat-input { flex: 1; min-width: 0; }
-.ho-form .icon-btn.chat-send-icon { width: 32px; height: 32px; }
-/* The form before a hand-over, from the top down; the field of the instruction takes the height that is left (at least 120px, and the form scrolls when the rest leaves less), with the arrow over its bottom right corner. */
+/* The form before a hand-over, from the top down; the frame of the field (composer.ts) sits at the bottom, and the form scrolls when the rest leaves too little height. */
 .ho-form.ho-fill { flex: 1; min-height: 0; overflow-y: auto; gap: 10px; padding: 12px 14px 14px; }
-.ho-compose { position: relative; flex: 1 0 120px; display: flex; }
-.ho-compose .chat-input { flex: 1; height: auto; max-height: none; box-sizing: border-box; padding: 10px 12px 48px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); overflow-y: auto; }
-.ho-compose .chat-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-.ho-compose .chat-input:disabled { background: var(--bar); }
-.ho-compose .chat-send-icon { position: absolute; right: 8px; bottom: 8px; }
+.ho-form .composer { margin-top: auto; }
 /* A-10: the files attached to an instruction, above the composer (an image as a thumbnail, any other file by its name); a file dragged over the pane or the terminal outlines it. */
 .attachments { display: flex; flex-wrap: wrap; gap: 8px; }
 .attachment { position: relative; width: 64px; height: 64px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; overflow: hidden; }
@@ -1240,6 +1233,8 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .feed-day { display: flex; align-items: center; gap: 10px; margin: 10px 16px 4px; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .feed-day::before, .feed-day::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .feed-day span { padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; }
+/* A reply also sent to the channel (S-20): which thread it answered, one line above the text. */
+.feed-thread-reply { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); font-weight: normal; color: var(--muted); }
 .feed-thread-open { display: block; margin-top: 3px; padding: 0; border: 0; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); font-weight: bold; color: var(--accent); cursor: pointer; }
 .feed-thread-open:hover { text-decoration: underline; }
 .feed-meta b { font-weight: 600; }
@@ -1306,6 +1301,10 @@ a.icon-btn { text-decoration: none; }
 .st-pre code { font: inherit; }
 .st-sep { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .st-sep::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+/* S-22: the reactions under a message, in the thread and in the history of a channel. They are display only. */
+.reactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border: 1px solid var(--chip-line); border-radius: 999px; background: var(--bar); font-size: calc(12px * var(--fs)); line-height: 1.4; color: var(--ink-soft); }
+.reaction-count { color: var(--muted); font-weight: 600; }
 .st-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .st-thumb { display: flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 160px; min-height: 100px; max-width: 360px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bar); }
 .st-thumb.loading { width: 240px; height: 140px; }
