@@ -211,7 +211,7 @@ impl Auth {
             .open_url(url.as_str(), None::<&str>)
             .map_err(|e| format!("ブラウザを開けません: {e}"))?;
 
-        let code = tokio::time::timeout(LOGIN_TIMEOUT, receive_code(&listener, &state))
+        let code = tokio::time::timeout(LOGIN_TIMEOUT, receive_code(&listener, &state, "Google"))
             .await
             .map_err(|_| "ログインがタイムアウトしました".to_string())??;
         let res = self
@@ -398,18 +398,23 @@ fn load_client(dir: &Path) -> Result<Client, String> {
         .map_err(|e| format!("{} の形式が不正です: {e}", path.display()))
 }
 
-fn random_string() -> Result<String, String> {
+pub(crate) fn random_string() -> Result<String, String> {
     let mut buf = [0u8; 32];
     getrandom::fill(&mut buf).map_err(|e| e.to_string())?;
     Ok(URL_SAFE_NO_PAD.encode(buf))
 }
 
-fn pkce_challenge(verifier: &str) -> String {
+pub(crate) fn pkce_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
 /// Serves the loopback listener until the redirect arrives; other requests (favicon etc.) get a 404.
-async fn receive_code(listener: &TcpListener, state: &str) -> Result<String, String> {
+/// `server` names the authorization server in the error of a redirect that carries one.
+pub(crate) async fn receive_code(
+    listener: &TcpListener,
+    state: &str,
+    server: &str,
+) -> Result<String, String> {
     loop {
         let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
         let mut buf = [0u8; 4096];
@@ -431,13 +436,13 @@ async fn receive_code(listener: &TcpListener, state: &str) -> Result<String, Str
         // The browser may already have gone; the code is what matters.
         let _ = stream.write_all(response.as_bytes()).await;
         if status == "200 OK" {
-            return code_from_request(line, state);
+            return code_from_request(line, state, server);
         }
     }
 }
 
 /// Extracts the authorization code from a request line such as `GET /?code=..&state=.. HTTP/1.1`.
-fn code_from_request(line: &str, expected_state: &str) -> Result<String, String> {
+fn code_from_request(line: &str, expected_state: &str, server: &str) -> Result<String, String> {
     let path = line
         .split_whitespace()
         .nth(1)
@@ -453,7 +458,7 @@ fn code_from_request(line: &str, expected_state: &str) -> Result<String, String>
         }
     }
     if let Some(e) = error {
-        return Err(format!("Google がエラーを返しました: {e}"));
+        return Err(format!("{server} がエラーを返しました: {e}"));
     }
     if state.as_deref() != Some(expected_state) {
         return Err("state が一致しません".into());
@@ -483,14 +488,14 @@ mod tests {
     #[test]
     fn extracts_code_when_state_matches() {
         let line = "GET /?code=4%2Fabc&state=xyz&scope=s HTTP/1.1";
-        assert_eq!(code_from_request(line, "xyz"), Ok("4/abc".into()));
+        assert_eq!(code_from_request(line, "xyz", "Google"), Ok("4/abc".into()));
     }
 
     #[test]
     fn rejects_state_mismatch() {
         let line = "GET /?code=abc&state=other HTTP/1.1";
         assert_eq!(
-            code_from_request(line, "xyz"),
+            code_from_request(line, "xyz", "Google"),
             Err("state が一致しません".into())
         );
     }
@@ -498,7 +503,7 @@ mod tests {
     #[test]
     fn rejects_error_parameter() {
         let line = "GET /?error=access_denied&state=xyz HTTP/1.1";
-        let err = code_from_request(line, "xyz").unwrap_err();
+        let err = code_from_request(line, "xyz", "Google").unwrap_err();
         assert!(err.contains("access_denied"));
     }
 
@@ -506,7 +511,7 @@ mod tests {
     fn rejects_missing_code() {
         let line = "GET /?state=xyz HTTP/1.1";
         assert_eq!(
-            code_from_request(line, "xyz"),
+            code_from_request(line, "xyz", "Google"),
             Err("認可コードがありません".into())
         );
     }
@@ -639,6 +644,6 @@ mod tests {
 
     #[test]
     fn rejects_malformed_request_line() {
-        assert!(code_from_request("GET", "xyz").is_err());
+        assert!(code_from_request("GET", "xyz", "Google").is_err());
     }
 }

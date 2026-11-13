@@ -11,6 +11,7 @@ pub mod image_senders;
 pub mod images;
 pub mod mail_address;
 pub mod markdown_patch;
+pub mod notion;
 pub mod orca;
 pub mod orca_attach;
 pub mod orca_diff;
@@ -194,6 +195,7 @@ pub fn run() {
         .manage(calendar::CalendarCache::default())
         .manage(todoist::TodoistState::default())
         .manage(slack::SlackState::default())
+        .manage(notion::NotionState::default())
         .manage(std::sync::Mutex::new(None::<tauri_plugin_updater::Update>))
         .manage(update::Installed::default())
         .manage(orca::OrcaMirror::default())
@@ -282,6 +284,9 @@ pub fn run() {
             slack::socket::slack_app_token_set,
             slack::socket::slack_app_token_remove,
             slack::socket::slack_socket_status,
+            notion::notion_accounts,
+            notion::notion_connect,
+            notion::notion_disconnect,
             claude::claude_status,
             claude::claude_connection,
             claude::claude_key_save,

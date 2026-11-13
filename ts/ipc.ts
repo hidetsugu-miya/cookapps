@@ -28,6 +28,7 @@ import type { HandoffSummary } from "./bindings/HandoffSummary";
 import type { Skill } from "./bindings/Skill";
 import type { SlackChatReply } from "./bindings/SlackChatReply";
 import type { TodoChatReply } from "./bindings/TodoChatReply";
+import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
 import type { OrcaCommitList } from "./bindings/OrcaCommitList";
@@ -157,6 +158,12 @@ export interface Commands {
   slack_app_token_remove: { args: { teamId: string }; result: SocketStatus[] };
   // S-16: the connections now. A change is sent to the screen as the event `slack-socket-status` (one `SocketStatus`).
   slack_socket_status: { args: undefined; result: SocketStatus[] };
+  // The connected Notion workspaces; `reconnect` is true when no token is kept. Asks Notion nothing.
+  notion_accounts: { args: undefined; result: NotionAccount[] };
+  // Opens the browser for Notion's consent and answers the connected workspace.
+  notion_connect: { args: undefined; result: NotionAccount };
+  // Revokes the grant at Notion and drops its token and entry.
+  notion_disconnect: { args: { workspaceId: string }; result: null };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   slack_link: { args: { url: string }; result: Target };
   // What a post of the mail starts out as (plain text); the user edits it on the compose screen.
