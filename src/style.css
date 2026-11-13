@@ -10,7 +10,7 @@ body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #todo-body, #todo-handoff, #todo-claude { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
-#slack-side, #slack-list, #slack-channel, #slack-thread, #slack-compose { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#slack-side, #slack-list, #slack-channel, #slack-claude, #slack-thread, #slack-compose { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-list { --fs: var(--fs-orca-list, 1); font-family: var(--ff-orca-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-work, #orca-files { --fs: var(--fs-orca-pane, 1); font-family: var(--ff-orca-pane, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -1015,6 +1015,35 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-file[data-open="true"] .orca-file-ic { color: var(--accent); }
 .orca-file-note { margin: 0; padding: 2px 8px 2px calc(24px + var(--depth, 0) * 14px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
 .orca-file-note.fail { color: var(--warn); }
+/* A-27: the buttons that choose the files or the history in the top row of the file pane, and the history (the commits above, the files of the chosen commit below). */
+.orca-files-mode { flex: none; width: var(--header-btn); height: var(--header-btn); margin-left: 6px; color: var(--ink-soft); }
+.orca-files-mode:first-child { margin-left: 12px; }
+.orca-files-mode svg { width: var(--header-ic); height: var(--header-ic); }
+.orca-files-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+#orca-history { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1.2fr) minmax(0, 1fr); }
+#orca-history-list, #orca-history-files { min-height: 0; overflow: auto; padding: 4px 4px 8px; }
+#orca-history-files { border-top: 1px solid var(--line); }
+#orca-history .pending { margin: 4px; }
+.orca-commit { display: flex; flex-direction: column; gap: 1px; width: 100%; min-width: 0; box-sizing: border-box; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
+.orca-commit:hover { background: var(--hover); }
+.orca-commit:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-commit[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+.orca-commit-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-commit-meta { display: flex; gap: 8px; font-size: calc(11.5px * var(--fs)); color: var(--muted); }
+.orca-commit-id { font-family: var(--ff-mono, ) ui-monospace, monospace; }
+.orca-hfile { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
+.orca-hfile:hover { background: var(--hover); }
+.orca-hfile:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-hfile[aria-pressed="true"] { background: var(--soft); }
+.orca-hfile-st { flex: none; width: 14px; text-align: center; font-size: calc(11px * var(--fs)); font-weight: 700; color: var(--muted); }
+.orca-hfile[data-status="added"] .orca-hfile-st { color: var(--ins); }
+.orca-hfile[data-status="deleted"] .orca-hfile-st { color: var(--del); }
+.orca-hfile-name { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; }
+.orca-hfile-dir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
+.orca-hfile-n { flex: none; display: flex; gap: 4px; font-size: calc(11.5px * var(--fs)); }
+.orca-hfile-add { color: var(--ins); }
+.orca-hfile-del { color: var(--del); }
+.orca-diff-commit { flex: none; margin-right: 8px; padding: 0 6px; border-radius: 8px; background: var(--soft); color: var(--accent); font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
 .orca-files-toggle { flex: none; margin: 0 6px 0 auto; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
 .orca-files-toggle svg { width: var(--header-ic); height: var(--header-ic); }
 .orca-files-toggle[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
@@ -1234,6 +1263,16 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .slack-side-item:hover .slack-side-hide, .slack-side-item:focus-within .slack-side-hide, .slack-side-item.keep .slack-side-hide { visibility: visible; }
 .slack-side-item:hover .slack-side-n, .slack-side-item:focus-within .slack-side-n, .slack-side-item.keep .slack-side-n { visibility: hidden; }
 #slack-list, #slack-channel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* S-24: the Claude pane on the right of the list, the watch and a channel's history: 30% of the screen at first, between 25% and 40% (ts/split.ts; the clamp holds the same range). Its head is the band of T-7: --soft with a 2px line of --accent. */
+#slack-claude { flex: none; width: clamp(25%, var(--slack-claude-w, 30%), 40%); min-height: 0; }
+#slack-claude .chat-head { box-sizing: border-box; min-height: var(--header-h); padding: 0 16px; background: var(--soft); border-bottom: 2px solid var(--accent); }
+#slack-claude .chat-ai { white-space: pre-wrap; }
+/* The draft of a post under a reply: a card; "投稿欄に入れる" is there only while a channel's history is shown. */
+.chat-draft { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.chat-draft-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-draft .text-btn { align-self: flex-end; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
+.chat-draft-put { display: none; }
+#slack-screen:has(#slack-channel:not([hidden])) .chat-draft-put { display: block; }
 #slack-pending { padding: 8px 32px 0; }
 #slack-notice:not(:empty) { padding-top: 8px; }
 #slack-feed, #sc-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }
@@ -1323,6 +1362,27 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .icon-btn.chat-send-icon { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
 .icon-btn.chat-send-icon:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
 .chat-send-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* S-21: the rich field for writing a Slack message (ts/slack-editor.ts): the toolbar over the field, the send arrow at the right end of the row under it, all inside one frame. Milkdown has no theme, so the elements get their looks here. */
+.rich-composer { padding: 0; gap: 0; }
+.rich-composer.busy { background: var(--bar); }
+.rich-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--line); border-radius: 12px 12px 0 0; background: var(--bar); }
+.rich-tool svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rich-tool:disabled { opacity: .4; cursor: default; }
+.rich-sep { width: 1px; height: 20px; margin: 0 4px; background: var(--line); }
+.rich-href { flex: 1; min-width: 160px; height: 28px; box-sizing: border-box; margin-left: 6px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; font: inherit; background: var(--surface); }
+.rich-input { box-sizing: border-box; min-height: calc(3 * 20px * var(--fs) + 20px); max-height: calc(6 * 20px * var(--fs) + 20px); overflow-y: auto; padding: 10px 14px; }
+.rich-input .ProseMirror { outline: none; white-space: pre-wrap; word-wrap: break-word; line-height: calc(20px * var(--fs)); min-height: calc(3 * 20px * var(--fs)); user-select: text; -webkit-user-select: text; }
+.rich-input .ProseMirror > :first-child { margin-top: 0; }
+.rich-input .ProseMirror > :last-child { margin-bottom: 0; }
+.rich-input p { margin: 0 0 .4em; }
+.rich-input ul, .rich-input ol { margin: 0 0 .4em; padding-left: 1.6em; }
+.rich-input li > p { margin: 0; }
+.rich-input blockquote { margin: 0 0 .4em; padding: 0 1em; border-left: 3px solid var(--line); color: var(--muted); }
+.rich-input a { color: var(--accent); }
+.rich-input code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: .9em; padding: .1em .3em; border-radius: 4px; background: var(--soft); }
+.rich-input pre { margin: 0 0 .4em; padding: 8px 10px; border-radius: 8px; background: var(--soft); overflow-x: auto; white-space: pre; }
+.rich-input pre code { padding: 0; background: transparent; }
+.rich-composer .composer-foot { padding: 4px 8px 8px; }
 #sc-head h1 { display: flex; align-items: center; gap: 8px; }
 #sc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #st-head small, #sc-head small { margin-left: 8px; font-size: calc(12px * var(--fs)); font-weight: normal; color: var(--muted); }

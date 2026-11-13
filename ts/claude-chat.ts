@@ -9,8 +9,8 @@ import type { TodoTaskProposal } from "./bindings/TodoTaskProposal";
 import { getClaude } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
 
-// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, or the destination it chose and whether a post it asked for was refused (the Slack compose screen, S-4, S-23).
-export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; destination?: Target | null; postRefused?: boolean };
+// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, the destination it chose and whether a post it asked for was refused (the Slack compose screen, S-4, S-23), or the draft of a post (the Slack screen's pane, S-24).
+export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; destination?: Target | null; postRefused?: boolean; draft?: string | null };
 
 export interface ChatTurnPayload {
   role: "user" | "assistant";
@@ -31,6 +31,8 @@ export interface ChatConfig {
   answered?: (answer: ChatAnswer) => void;
   // Draws the tasks an answer proposes, under its reply; without it `tasks` is not drawn.
   cards?: (tasks: TodoTaskProposal[]) => HTMLElement;
+  // Draws the draft of a post an answer carries, under its reply; without it `draft` is not drawn.
+  draft?: (draft: string) => HTMLElement;
   // The lines (one per task) that tell Claude what an earlier answer proposed; they are added to that answer's text in the history it is sent, because the cards are not text. Without it only the text is sent.
   tasksText?: (tasks: TodoTaskProposal[]) => string;
   // The conversation changed: the owner draws what follows from it, and calls `refresh`.
@@ -64,6 +66,7 @@ export interface Turn {
   failed?: boolean;
   proposal?: Proposal;
   tasks?: TodoTaskProposal[];
+  draft?: string;
 }
 
 // The oldest turns are dropped past this many. Rust keeps the last CHAT_TURNS of what it is sent.
@@ -167,6 +170,7 @@ export function createChat(cfg: ChatConfig) {
     const node = tag("div", "chat-ai", t.text);
     if (t.proposal) node.append(diffCard(t.proposal));
     if (t.tasks?.length && cfg.cards) node.append(cfg.cards(t.tasks));
+    if (t.draft && cfg.draft) node.append(cfg.draft(t.draft));
     return node;
   }
 
@@ -233,6 +237,7 @@ export function createChat(cfg: ChatConfig) {
         text: answer.reply,
         proposal: answer.body === null ? undefined : { body: answer.body, diff: answer.diff, base: body, state: "open" },
         tasks: answer.tasks,
+        draft: answer.draft?.trim() ? answer.draft : undefined,
       };
     } catch (e) {
       turn = { role: "assistant", text: `送れませんでした: ${e}`, failed: true };

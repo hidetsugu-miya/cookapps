@@ -1,6 +1,6 @@
-// The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18): two panes, and the file pane on the right (orca-files.ts) when it is shown. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
+// The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
-// A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row.
+// A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history.
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change) and nothing reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
 // and no more once the `orca` command was found missing (the reload button reads again). Only the first read, the screen being shown, the reload button, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
@@ -24,7 +24,7 @@ import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
-import { closeDiff, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
+import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, filesOf, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
 import { filesShown, initOrcaFiles, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
@@ -220,7 +220,7 @@ function tabsOf(key: string): Tab[] {
   }
   for (const d of diffsOf(view?.target ?? null, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? view?.worktrees.find((w) => w.path === d.path);
-    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: nameOf(d.relative), handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where) });
+    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where) });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -670,12 +670,12 @@ function openFile(relative: string) {
   draw();
 }
 
-// The difference of a file of the file pane from HEAD (its menu): it opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
-function openDiff(relative: string) {
+// The difference of a file of the file pane from HEAD (its menu), or, with `commit`, of a file of a commit of the history (A-27): it opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
+function openDiff(relative: string, commit: DiffCommit | null = null) {
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
   if (worktree === null || projectKey === null || view === null) return;
   started = null;
-  const id = openDiffTab(view.target, projectKey, worktree.path, relative);
+  const id = openDiffTab(view.target, projectKey, worktree.path, relative, commit);
   chooseTab(id);
   draw();
 }
@@ -1223,7 +1223,7 @@ export function initOrca() {
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError });
-  initOrcaFiles({ open: openFile, diff: openDiff, toggle: toggleFilesAndDraw, switched: () => void refreshOrca(true) });
+  initOrcaFiles({ open: openFile, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw, switched: () => void refreshOrca(true) });
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", () => {
     // A session shown again after the window was hidden is seen.

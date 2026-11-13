@@ -1,5 +1,9 @@
 import type { MarkdownParts } from "../../ts/bindings/MarkdownParts";
 import type { MarkdownPatchResult } from "../../ts/bindings/MarkdownPatchResult";
+import type { OrcaCommit } from "../../ts/bindings/OrcaCommit";
+import type { OrcaCommitFile } from "../../ts/bindings/OrcaCommitFile";
+import type { OrcaCommitFiles } from "../../ts/bindings/OrcaCommitFiles";
+import type { OrcaCommitList } from "../../ts/bindings/OrcaCommitList";
 import type { OrcaDiffRow } from "../../ts/bindings/OrcaDiffRow";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileDiff } from "../../ts/bindings/OrcaFileDiff";
@@ -4791,6 +4795,371 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files-title")).toHaveText("remote-app ・ main");
     expect(await count("#orca-files-title button")).toBe(0);
     expect(await callsOf("orca_local_branches")).toEqual([]);
+  });
+  // A-27: the history of the file pane. Rust reads the commits and the files of one (`orca_git_history`, `orca_commit_files`) and the diff of a file in a commit (`orca_commit_file_diff`); the page draws them, reads on at the end of the list and opens the diff tab.
+  const commitId = (n: number) => `${n.toString(16).padStart(7, "0")}${"b".repeat(33)}`;
+  const commitOf = (n: number, subject = `Commit ${n}`): OrcaCommit => ({ id: commitId(n), shortId: commitId(n).slice(0, 7), subject, author: "Alice Example", timeMs: Date.UTC(2024, 9, 17, 12, 0), parents: n > 1 ? [commitId(n - 1)] : [] });
+  const page = (from: number, to: number, hasMore: boolean): OrcaCommitList => ({ commits: Array.from({ length: from - to + 1 }, (_, i) => commitOf(from - i)), hasMore, historyToken: "tok-1", historyChanged: false });
+  const fileOf = (path: string, extra: Partial<OrcaCommitFile> = {}): OrcaCommitFile => ({ status: "modified", path, oldPath: null, added: 3, removed: 1, ...extra });
+  const changedFiles = (files: OrcaCommitFile[], extra: Partial<OrcaCommitFiles> = {}): OrcaCommitFiles => ({ files, total: files.length, parentId: commitId(2), ...extra });
+  const paneMode = (label: string) => $(`#orca-files-bar [aria-label="${label}"]`);
+  const commitRows = () => count("#orca-history-list .orca-commit");
+  const commitRow = (n: number) => $(`#orca-history-list .orca-commit[data-id="${commitId(n)}"]`);
+  const historyFile = (path: string) => $(`#orca-history-files .orca-hfile[data-path="${path}"]`);
+  const historyFixtures = (extra: Record<string, unknown> = {}) => ({ orca_git_history: page(3, 1, false), orca_commit_files: changedFiles([fileOf("src/a.rs"), fileOf("b.md", { status: "added", added: 10, removed: 0 })]), orca_commit_file_diff: diffOfA(), ...extra });
+  async function openHistory(fixtures: Record<string, unknown> = {}) {
+    await openFiles(historyFixtures(fixtures));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await paneMode("履歴").click();
+    await expect($("#orca-history")).toBeDisplayed();
+  }
+  const pressTwice = (selector: string) =>
+    browser.execute(
+      (q, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(q)!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+      },
+      selector,
+      onceId(),
+    );
+
+  it("has the buttons of the files and of the history in the top row, and shows the files at the start without reading the history (A-27)", async () => {
+    await openFiles(historyFixtures());
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const bar = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-files-bar > button")].map((b) => [b.getAttribute("aria-label"), b.getAttribute("aria-pressed"), b.querySelector("svg") !== null]));
+    expect(bar).toEqual([["ファイル", "true", true], ["履歴", "false", true], ["ファイル欄", "true", true]]);
+    await expect($("#orca-files-tree")).toBeDisplayed();
+    await expect($("#orca-history")).not.toBeDisplayed();
+    await expect($("#orca-files-reload")).toHaveAttribute("aria-label", "ファイルを読み直す");
+    expect(await callsOf("orca_git_history")).toEqual([]);
+  });
+
+  it("switches to the history, which is read with the worktree and the first 50 commits, and back to the files, which are not read again (A-27)", async () => {
+    await openHistory();
+    await expect(paneMode("履歴")).toHaveAttribute("aria-pressed", "true");
+    await expect(paneMode("ファイル")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#orca-files-tree")).not.toBeDisplayed();
+    await expect($("#orca-files-reload")).toHaveAttribute("aria-label", "履歴を読み直す");
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
+    expect(await waitForCalls("orca_git_history")).toEqual([{ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null }]);
+    const files = await mock("orca_files_list", root());
+    const history = await mock("orca_git_history", page(3, 1, false));
+    await paneMode("ファイル").click();
+    await expect($("#orca-files-tree")).toBeDisplayed();
+    await expect($("#orca-history")).not.toBeDisplayed();
+    await expect($("#orca-files-reload")).toHaveAttribute("aria-label", "ファイルを読み直す");
+    await paneMode("履歴").click();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await browser.pause(200);
+    expect(await callsOf(files)).toEqual([]);
+    expect(await callsOf(history)).toEqual([]);
+  });
+
+  it("lists the commits in the order given with the subject, the short id and the time (A-27)", async () => {
+    await openHistory();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    expect(await textsOf("#orca-history-list .orca-commit-subject")).toEqual(["Commit 3", "Commit 2", "Commit 1"]);
+    expect(await textsOf("#orca-history-list .orca-commit-id")).toEqual(["0000003", "0000002", "0000001"]);
+    expect(await textsOf("#orca-history-list .orca-commit-time")).toEqual(["2024/10/17", "2024/10/17", "2024/10/17"]);
+    await expect($("#orca-history-files .orca-hfile")).not.toExist();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("reads the next commits at the end of the list with the number read so far as skip and the token of the first answer, and stops when there are no more (A-27)", async () => {
+    await openFiles(historyFixtures({ orca_git_history: holds }));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await paneMode("履歴").click();
+    await waitForCalls("orca_git_history");
+    await release("orca_git_history", page(120, 71, true));
+    await waitForCount("#orca-history-list .orca-commit", 50);
+    await browser.pause(300);
+    expect(await callsOf("orca_git_history")).toHaveLength(1);
+    const toEnd = () =>
+      browser.execute(() => {
+        const l = document.getElementById("orca-history-list")!;
+        l.scrollTop = l.scrollHeight;
+      });
+    await toEnd();
+    expect(await waitForCalls("orca_git_history", 2)).toEqual([
+      { path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null },
+      { path: "/work/example-app", limit: 50, skip: 50, historyToken: "tok-1", environment: null },
+    ]);
+    await release("orca_git_history", page(70, 21, true));
+    await waitForCount("#orca-history-list .orca-commit", 100);
+    await toEnd();
+    await waitForCalls("orca_git_history", 3);
+    await release("orca_git_history", page(20, 18, false));
+    await waitForCount("#orca-history-list .orca-commit", 103);
+    expect((await callsOf("orca_git_history"))[2]).toEqual({ path: "/work/example-app", limit: 50, skip: 100, historyToken: "tok-1", environment: null });
+    await toEnd();
+    await browser.pause(300);
+    expect(await callsOf("orca_git_history")).toHaveLength(3);
+  });
+
+  it("adds the next commits under the rows there are, and a click draws no row of the list again (A-27)", async () => {
+    await openHistory();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    const mark = () =>
+      browser.execute(() => {
+        for (const row of document.querySelectorAll("#orca-history-list .orca-commit")) (row as HTMLElement & { kept?: boolean }).kept = true;
+      });
+    const kept = () => browser.execute(() => [...document.querySelectorAll("#orca-history-list .orca-commit")].filter((row) => (row as HTMLElement & { kept?: boolean }).kept === true).length);
+    await mark();
+    await commitRow(3).click();
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    await historyFile("src/a.rs").click();
+    await expect(historyFile("src/a.rs")).toHaveAttribute("aria-pressed", "true");
+    await commitRow(2).click();
+    await expect(commitRow(2)).toHaveAttribute("aria-pressed", "true");
+    await expect(commitRow(3)).toHaveAttribute("aria-pressed", "false");
+    expect(await kept()).toBe(3);
+  });
+
+  it("draws a commit that Orca gives twice once (A-27)", async () => {
+    await openFiles(historyFixtures({ orca_git_history: holds }));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await paneMode("履歴").click();
+    await waitForCalls("orca_git_history");
+    await release("orca_git_history", page(60, 11, true));
+    await waitForCount("#orca-history-list .orca-commit", 50);
+    await browser.execute(() => {
+      const l = document.getElementById("orca-history-list")!;
+      l.scrollTop = l.scrollHeight;
+    });
+    await waitForCalls("orca_git_history", 2);
+    await release("orca_git_history", page(12, 8, false));
+    await waitForCount("#orca-history-list .orca-commit", 53);
+    expect(await count(`#orca-history-list .orca-commit[data-id="${commitId(11)}"]`)).toBe(1);
+  });
+
+  it("reads the list again from the start when Orca no longer holds the history it began (A-27)", async () => {
+    await openFiles(historyFixtures({ orca_git_history: holds }));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await paneMode("履歴").click();
+    await waitForCalls("orca_git_history");
+    await release("orca_git_history", page(60, 11, true));
+    await waitForCount("#orca-history-list .orca-commit", 50);
+    await browser.execute(() => {
+      const l = document.getElementById("orca-history-list")!;
+      l.scrollTop = l.scrollHeight;
+    });
+    await waitForCalls("orca_git_history", 2);
+    await release("orca_git_history", { commits: [], hasMore: false, historyToken: "tok-1", historyChanged: true });
+    await waitForCalls("orca_git_history", 3);
+    expect((await callsOf("orca_git_history"))[2]).toEqual({ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null });
+    await release("orca_git_history", { ...page(5, 1, false), historyToken: "tok-2" });
+    await waitForCount("#orca-history-list .orca-commit", 5);
+  });
+
+  it("reads the files of the commit pressed, with its full id, and draws their marks, names and counts (A-27)", async () => {
+    const files = changedFiles([fileOf("src/a.rs"), fileOf("b.md", { status: "added", added: 10, removed: 0 }), fileOf("c.png", { status: "modified", added: null, removed: null }), fileOf("docs/new.md", { status: "renamed", oldPath: "old.md", added: 0, removed: 0 })], { total: 7 });
+    await openHistory({ orca_commit_files: files });
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    expect(await waitForCalls("orca_commit_files")).toEqual([{ path: "/work/example-app", commitId: commitId(3), environment: null }]);
+    await waitForCount("#orca-history-files .orca-hfile", 4);
+    await expect(commitRow(3)).toHaveAttribute("aria-pressed", "true");
+    await expect(commitRow(2)).toHaveAttribute("aria-pressed", "false");
+    const rows = await browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>("#orca-history-files .orca-hfile")].map((r) => [r.dataset.status, r.querySelector(".orca-hfile-st")!.textContent, r.querySelector(".orca-hfile-name")!.textContent, r.querySelector(".orca-hfile-dir")!.textContent, r.querySelector(".orca-hfile-n")!.textContent, r.title]),
+    );
+    expect(rows).toEqual([
+      ["modified", "M", "a.rs", "src", "+3−1", "src/a.rs"],
+      ["added", "A", "b.md", "", "+10−0", "b.md"],
+      ["modified", "M", "c.png", "", "", "c.png"],
+      ["renamed", "R", "new.md", "docs", "+0−0", "old.md → docs/new.md"],
+    ]);
+    // More files than the list holds: the rest is counted.
+    await expect($("#orca-history-files .orca-file-note")).toHaveText("ほか 3 件");
+    await commitRow(2).click();
+    await waitForCalls("orca_commit_files", 2);
+    expect((await callsOf("orca_commit_files"))[1]).toEqual({ path: "/work/example-app", commitId: commitId(2), environment: null });
+    await expect(commitRow(2)).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("drops the files that come for a commit that is not the chosen one any more (A-27)", async () => {
+    await openHistory({ orca_commit_files: holds });
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await waitForCalls("orca_commit_files");
+    await commitRow(2).click();
+    await waitForCalls("orca_commit_files", 2);
+    await release("orca_commit_files", changedFiles([fileOf("stale.rs")]));
+    await browser.pause(200);
+    await expect($("#orca-history-files .orca-hfile")).not.toExist();
+    await release("orca_commit_files", changedFiles([fileOf("fresh.rs")]));
+    await waitForCount("#orca-history-files .orca-hfile", 1);
+    expect(await textsOf("#orca-history-files .orca-hfile-name")).toEqual(["fresh.rs"]);
+  });
+
+  it("opens the diff of a file of the commit as a tab on a double press, with the parent, the commit and the path, and the short id in the heading and the tab (A-27)", async () => {
+    await openHistory();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    // A single press only chooses the file.
+    await historyFile("src/a.rs").click();
+    await expect(historyFile("src/a.rs")).toHaveAttribute("aria-pressed", "true");
+    expect(await callsOf("orca_commit_file_diff")).toEqual([]);
+    await pressTwice('#orca-history-files .orca-hfile[data-path="src/a.rs"]');
+    expect(await waitForCalls("orca_commit_file_diff")).toEqual([{ path: "/work/example-app", commitId: commitId(3), parentId: commitId(2), relative: "src/a.rs", oldRelative: null, environment: null }]);
+    expect(await callsOf("orca_file_diff")).toEqual([]);
+    await expect(tabOf("diff:1")).toBeDisplayed();
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs 0000003"]);
+    await expect(tabOf("diff:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect($(".orca-diff .orca-edit-path")).toHaveText("src/a.rs");
+    await expect($(".orca-diff .orca-diff-commit")).toHaveText("0000003");
+    await expect($(".orca-diff-count")).toHaveText("変更 2 件");
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("selects the diff tab that is open for the same file of the same commit and reads it again, and opens another tab for another commit (A-27)", async () => {
+    await openHistory();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    await pressTwice('#orca-history-files .orca-hfile[data-path="src/a.rs"]');
+    await waitForCalls("orca_commit_file_diff");
+    await pressTwice('#orca-history-files .orca-hfile[data-path="src/a.rs"]');
+    await waitForCalls("orca_commit_file_diff", 2);
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs 0000003"]);
+    const calls = await callsOf("orca_commit_file_diff");
+    expect(calls[1]).toEqual(calls[0]);
+    await commitRow(2).click();
+    await waitForCalls("orca_commit_files", 2);
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    await pressTwice('#orca-history-files .orca-hfile[data-path="src/a.rs"]');
+    await waitForCalls("orca_commit_file_diff", 3);
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs 0000003", "a.rs 0000002"]);
+  });
+
+  it("sends no parent for the first commit and the old path for a renamed file, and Enter opens the diff too (A-27)", async () => {
+    const first = changedFiles([fileOf("docs/new.md", { status: "renamed", oldPath: "old.md" })], { parentId: null });
+    await openHistory({ orca_commit_files: first });
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(1).click();
+    await waitForCount("#orca-history-files .orca-hfile", 1);
+    await browser.execute((once) => {
+      if (!window.__e2e_once__(once)) return;
+      document.querySelector<HTMLElement>('#orca-history-files .orca-hfile[data-path="docs/new.md"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    }, onceId());
+    expect(await waitForCalls("orca_commit_file_diff")).toEqual([{ path: "/work/example-app", commitId: commitId(1), parentId: null, relative: "docs/new.md", oldRelative: "old.md", environment: null }]);
+  });
+
+  it("repeats the call of the commit when the diff tab is read again (A-27)", async () => {
+    await openHistory();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    await pressTwice('#orca-history-files .orca-hfile[data-path="b.md"]');
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    await diffButton("読み直す").click();
+    await waitForCalls("orca_commit_file_diff", 2);
+    const calls = await callsOf("orca_commit_file_diff");
+    expect(calls[1]).toEqual({ path: "/work/example-app", commitId: commitId(3), parentId: commitId(2), relative: "b.md", oldRelative: null, environment: null });
+    expect(await callsOf("orca_file_diff")).toEqual([]);
+  });
+
+  it("shows the reason in place of the rows when the diff of the commit cannot be read (A-27)", async () => {
+    await openHistory({ orca_commit_file_diff: rejects("バイナリのファイルの差分は表示できません") });
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    await pressTwice('#orca-history-files .orca-hfile[data-path="b.md"]');
+    await expect($(".orca-diff .orca-empty")).toHaveText("バイナリのファイルの差分は表示できません");
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the reason of a list that cannot be read, and the reload button reads it again from the start (A-27)", async () => {
+    await openHistory({ orca_git_history: rejects("Git の履歴を読めません") });
+    await expect($("#orca-history-list .orca-file-note.fail")).toHaveText("Git の履歴を読めません");
+    await expect($("#error")).not.toBeDisplayed();
+    await browser.pause(300);
+    expect(await callsOf("orca_git_history")).toHaveLength(1);
+    await mock("orca_git_history", page(3, 1, false));
+    await $("#orca-files-reload").click();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await expect($("#orca-history-list .orca-file-note")).not.toExist();
+    expect(await callsOf("orca_git_history")).toEqual([{ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null }]);
+  });
+
+  it("shows the reason of the files of a commit that cannot be read, and says so for a commit with no file (A-27)", async () => {
+    await openHistory({ orca_commit_files: rejects("コミットのファイルを読めません") });
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await expect($("#orca-history-files .orca-file-note.fail")).toHaveText("コミットのファイルを読めません");
+    await mock("orca_commit_files", changedFiles([]));
+    await commitRow(2).click();
+    await expect($("#orca-history-files .orca-file-note")).toHaveText("変更されたファイルはありません");
+  });
+
+  it("says so when the history has no commit (A-27)", async () => {
+    await openHistory({ orca_git_history: { commits: [], hasMore: false, historyToken: null, historyChanged: false } });
+    await expect($("#orca-history-list .orca-file-note")).toHaveText("コミットがありません");
+  });
+
+  it("reads the list again from the start when the reload button is pressed, and drops the chosen commit (A-27)", async () => {
+    await openHistory();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    await mock("orca_git_history", page(4, 1, false));
+    await $("#orca-files-reload").click();
+    await waitForCount("#orca-history-list .orca-commit", 4);
+    expect(await callsOf("orca_git_history")).toEqual([{ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null }]);
+    await expect($("#orca-history-files .orca-hfile")).not.toExist();
+    await expect($('#orca-history-list .orca-commit[aria-pressed="true"]')).not.toExist();
+  });
+
+  it("follows the worktree of the selected tab: the list is read again, and the choice of the history stays (A-27)", async () => {
+    const value = orcaOverview(sample(), [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" })], {
+      terminals: [orcaTerminal("example-app", "zsh", { path: "/work/example-app-b", branch: "feat/b" })],
+    });
+    await openFiles(historyFixtures(), value);
+    await paneMode("履歴").click();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    const history = await mock("orca_git_history", page(9, 7, false));
+    await tabOf(zsh).$(".orca-tab-btn").click();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/b");
+    expect(await waitForCalls(history)).toEqual([{ path: "/work/example-app-b", limit: 50, skip: 0, historyToken: null, environment: null }]);
+    await browser.waitUntil(async () => (await textsOf("#orca-history-list .orca-commit-subject")).join() === "Commit 9,Commit 8,Commit 7", { timeoutMsg: "the list of the other worktree never showed" });
+    await expect($("#orca-history-files .orca-hfile")).not.toExist();
+    await expect($("#orca-history")).toBeDisplayed();
+    await expect(paneMode("履歴")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps the branch button of the heading in the history, and reads the list again from the start after a switch (A-27, A-25)", async () => {
+    await openFiles(historyFixtures(branchFixtures()));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await paneMode("履歴").click();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await expect(branchButton()).toHaveText("feat/a");
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const history = await mock("orca_git_history", page(8, 6, false));
+    await mock("orca_overview", onFeatC());
+    await branchPick("local", "feat/c").click();
+    expect(await waitForCalls(history)).toEqual([{ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null }]);
+    await browser.waitUntil(async () => (await textsOf("#orca-history-list .orca-commit-subject")).join() === "Commit 8,Commit 7,Commit 6", { timeoutMsg: "the new list never showed" });
+    await expect(branchButton()).toHaveText("feat/c");
+    await expect($("#orca-history")).toBeDisplayed();
+  });
+
+  it("keeps the choice and the list when the pane is hidden and shown again (A-27)", async () => {
+    await openHistory();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await $("#orca-files-toggle").click();
+    await expect($("#orca-files")).not.toBeDisplayed();
+    await filesToggle().click();
+    await expect($("#orca-files")).toBeDisplayed();
+    await expect($("#orca-history")).toBeDisplayed();
+    await expect($("#orca-files-tree")).not.toBeDisplayed();
+    await browser.pause(200);
+    expect(await commitRows()).toBe(3);
+    expect(await callsOf("orca_git_history")).toHaveLength(1);
   });
 });
 

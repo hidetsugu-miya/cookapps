@@ -1,5 +1,5 @@
-// The Slack thread (S-6, S-7, S-11, S-22): the messages of a thread with their senders' icons, attached images, blocks and attachments (slack-blocks.ts), reactions, a field to reply in, a card to make a Todo from the message,
-// and a conversation with Claude (claude-chat.ts) to ask about the thread and the reply: proofread it, summarise the thread, write a reply. Nothing leaves the app until "返信する"; Claude is asked only when the user sends a request,
+// The Slack thread (S-6, S-7, S-11, S-22): the messages of a thread with their senders' icons, attached images, blocks and attachments (slack-blocks.ts), reactions, a rich field to reply in (slack-editor.ts), a card to make a Todo from the message,
+// and a conversation with Claude (claude-chat.ts) to ask about the thread and the reply: proofread it, summarise the thread, write a reply. Nothing leaves the app until the reply is posted; Claude is asked only when the user sends a request,
 // and then it gets the reply field's text, the conversation, the request and the messages of the thread as shown.
 // The thread is read when it is opened and after a reply, not on a timer. The reply and the conversation are kept per thread in memory until the app quits.
 import type { SlackThread } from "./bindings/SlackThread";
@@ -9,12 +9,13 @@ import type { TimelineMessage } from "./bindings/TimelineMessage";
 import { createChat, type Turn } from "./claude-chat.js";
 import { getClaude, showModelSlot } from "./claude.js";
 import { createComposer } from "./composer.js";
-import { $, composing, isMac, tag } from "./dom.js";
+import { $, tag } from "./dom.js";
 import { formatDetailDate, hostOf } from "./format.js";
 import { FILE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu } from "./menu.js";
 import { attachmentNode, blocksNode } from "./slack-blocks.js";
+import { createSlackEditor } from "./slack-editor.js";
 import { richNodes } from "./slack-rich.js";
 import { revealSlackList, seeThread } from "./slack-list.js";
 import { decorateAvatar, loadIcons, reactionsNode, slackMs } from "./slack-view.js";
@@ -56,7 +57,7 @@ let lastTop = 0;
 // Going to the end did not take effect because the pane was hidden (its height is 0 then): the thread opens at the end when it is shown again.
 let endPending = false;
 
-// What is being written in a thread and the conversation about it, by thread.
+// What is being written in a thread (the Markdown of the rich field, blank kept as "") and the conversation about it, by thread.
 interface Draft {
   text: string;
   turns: Turn[];
@@ -79,19 +80,36 @@ const blockImages = new Map<string, string>();
 // `fetch_images` takes at most 50 URLs.
 const FETCH_BATCH = 50;
 
-const input = () => $<HTMLTextAreaElement>("st-input");
+// The thread whose text the rich field holds now (null: none, the field is empty).
+let shownKey: string | null = null;
 const draft = () => (current ? drafts.get(current.key) : undefined);
 const hasText = () => !!draft()?.text.trim();
+// True while the field holds an edit that the draft has not taken yet: typing only marks it, and the Markdown is taken (`syncDraft`) when it is needed (a read of the text for Claude, a switch of thread, a reply).
+let dirty = false;
+let staleTimer = 0;
+// How long after the last key the pane of Claude is told that the text changed (its old proposals can no longer be applied).
+const STALE_DELAY = 150;
+
+// Takes the field's Markdown into the draft of the thread whose text it holds.
+function syncDraft() {
+  if (!dirty) return;
+  dirty = false;
+  const d = shownKey ? drafts.get(shownKey) : undefined;
+  if (d && editor.ready()) d.text = editor.blank() ? "" : editor.markdown();
+}
 
 const chat = createChat({
   prefix: "reply",
   loginNote: "設定の Claude タブで接続すると、Claude に相談できます",
   // The reply field's text, which may be blank: Claude can write a reply from the thread. There is none to ask about while no thread is open.
-  text: () => draft()?.text ?? null,
+  text: () => {
+    syncDraft();
+    return draft()?.text ?? null;
+  },
   apply: (text) => {
     draft()!.text = text;
-    input().value = text;
-    grow();
+    editor.set(text);
+    dirty = false;
     refreshSlackThread();
   },
   // The thread goes as the screen shows it (the sender's name, the time and the text), and whether its read stopped short; while it is not read, none goes.
@@ -103,17 +121,33 @@ const chat = createChat({
   keyHint: false,
 });
 
-// The field is three lines high and grows with its text up to six (the CSS holds the limit). A hidden field measures 0, which is left alone.
-function grow() {
-  const field = input();
-  field.style.height = "auto";
-  field.style.height = field.scrollHeight > 0 ? `${field.scrollHeight}px` : "";
-}
+const editor = createSlackEditor({
+  prefix: "st",
+  label: "スレッドに返信",
+  sendLabel: "返信",
+  onChange: () => {
+    if (!draft()) return;
+    dirty = true;
+    $("st-error").hidden = true;
+    editor.setSendDisabled(posting || editor.blank());
+    clearTimeout(staleTimer);
+    staleTimer = window.setTimeout(refreshSlackThread, STALE_DELAY);
+  },
+  onSubmit: () => reply(),
+});
 
-// Draws what follows from the state: the field and the buttons, whether Claude can be asked, and whether a Todo can be made.
+// Draws what follows from the state: the field and the arrow, whether Claude can be asked, and whether a Todo can be made.
+// The field is put right only when another thread's text is in it, or after a reply emptied the draft; typing never rewrites it.
 export function refreshSlackThread() {
-  input().disabled = posting;
-  $<HTMLButtonElement>("st-send").disabled = posting || !hasText();
+  syncDraft();
+  const text = draft()?.text ?? "";
+  const key = current?.key ?? null;
+  if (editor.ready() && (shownKey !== key || (!text && !editor.blank()))) {
+    editor.set(text);
+    shownKey = key;
+  }
+  editor.setBusy(posting);
+  editor.setSendDisabled(posting || !hasText());
   chat.refresh();
   $("st-todo").hidden = !(getClaude()?.state === "ready" && todoConnected);
   $<HTMLButtonElement>("st-todo").disabled = summarizing;
@@ -370,7 +404,6 @@ export function openSlackThread(m: TimelineMessage) {
   else link.removeAttribute("href");
   const d = drafts.get(key) ?? { text: "", turns: [] };
   drafts.set(key, d);
-  input().value = d.text;
   // The same thread again: the pane still shows its conversation, and an answer on its way is still wanted.
   if (!same) {
     chat.use(d.turns);
@@ -378,7 +411,11 @@ export function openSlackThread(m: TimelineMessage) {
   }
   show("slack-thread");
   showModelSlot("reply-model");
-  grow();
+  // Reads the rich field the first time a thread is shown, and draws the text of the thread in it when it is there.
+  editor.ensure().then(refreshSlackThread, (e) => {
+    $("st-error").textContent = `エディターを読み込めませんでした: ${e}`;
+    $("st-error").hidden = false;
+  });
   const open = current;
   invoke("todoist_connected").then(
     (connected) => {
@@ -395,6 +432,7 @@ export function openSlackThread(m: TimelineMessage) {
 
 async function reply() {
   const open = current;
+  syncDraft();
   const d = draft();
   if (!open || !d || posting || !d.text.trim()) return;
   $("st-error").hidden = true;
@@ -402,7 +440,7 @@ async function reply() {
   posting = true;
   refreshSlackThread();
   try {
-    await invoke("slack_reply", { teamId: open.teamId, channel: open.channel, threadTs: open.ts, text: d.text });
+    await invoke("slack_reply", { teamId: open.teamId, channel: open.channel, threadTs: open.ts, text: d.text, markdown: true });
   } catch (e) {
     posting = false;
     refreshSlackThread();
@@ -411,10 +449,9 @@ async function reply() {
     return toast(`スレッドに返信できませんでした: ${e}`);
   }
   posting = false;
+  dirty = false;
   d.text = "";
   if (isOpen(open) && !$("slack-thread").hidden) {
-    input().value = "";
-    grow();
     note("スレッドに返信しました");
     readThread("end");
   } else {
@@ -497,21 +534,7 @@ export function initSlackThread() {
     revealSlackList();
   };
   $("st-todo").onclick = makeTodo;
-  $("st-send").onclick = reply;
-  input().oninput = () => {
-    const d = draft();
-    if (!d) return;
-    d.text = input().value;
-    $("st-error").hidden = true;
-    grow();
-    refreshSlackThread();
-  };
-  // Enter is a line break; Cmd+Enter (Ctrl+Enter off macOS) posts, unless it only confirms an IME conversion.
-  input().onkeydown = (e) => {
-    if (e.key !== "Enter" || composing(e) || !(isMac ? e.metaKey : e.ctrlKey)) return;
-    e.preventDefault();
-    reply();
-  };
+  $("st-reply").append(editor.el);
   chat.init();
   const box = $("st-msgs");
   // The user moved up from the bottom: stop following. Moving down to within BOTTOM_PX of the bottom follows again; a position cut by a redraw is not a move down.

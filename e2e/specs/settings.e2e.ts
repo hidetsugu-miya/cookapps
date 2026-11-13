@@ -779,6 +779,7 @@ describe("settings: Claude model and effort", () => {
     ["slackReply", "Slack のスレッドの相談", "スレッド詳細の Claude 欄"],
     ["orcaHandoff", "Orca に渡す要約", "Orca に渡すペインで、渡す内容を要約するとき"],
     ["todoChat", "Todo の相談", "Todo の Claude ペインで、タスクを頼むとき"],
+    ["slackChat", "Slack の相談", "Slack の一覧とチャンネルの Claude ペイン"],
   ];
   // The default effort of a purpose: medium, and high for the Slack thread conversation.
   const defaultEffort = (purpose: Purpose) => (purpose === "slackReply" ? "high" : "medium");
@@ -801,11 +802,11 @@ describe("settings: Claude model and effort", () => {
   const drawnSelects = () => browser.execute(() => document.querySelectorAll("#claude-models select").length);
 
   for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
-    it(`has its own card with the defaults selected for the seven purposes, while Claude is ${state}`, async () => {
+    it(`has its own card with the defaults selected for the eight purposes, while Claude is ${state}`, async () => {
       await openSettings([], status, "claude");
       await expect($("#claude-models")).toBeDisplayed();
       await expect($("#claude-prompt .item-name")).toHaveText("Todo の要約プロンプト");
-      expect(await drawnSelects()).toBe(14);
+      expect(await drawnSelects()).toBe(16);
       for (const [purpose] of PURPOSES) {
         await expect(selectOf(purpose, "model")).toHaveValue("sonnet");
         await expect(selectOf(purpose, "effort")).toHaveValue(defaultEffort(purpose));
@@ -813,7 +814,7 @@ describe("settings: Claude model and effort", () => {
     });
   }
 
-  it("names the seven purposes in order, each with where it is used, and labels its selects", async () => {
+  it("names the eight purposes in order, each with where it is used, and labels its selects", async () => {
     await openSettings([], claudeReady, "claude");
     const whos = await textsOf("#claude-models .model-grid .who");
     expect(whos).toEqual(PURPOSES.map(([, name, meta]) => `${name}${meta}`));
@@ -842,7 +843,7 @@ describe("settings: Claude model and effort", () => {
     const wrapped = await browser.execute(() =>
       [...document.querySelectorAll<HTMLElement>("#claude-models .model-grid .who .item-meta")].map((e) => e.getBoundingClientRect().height > 20),
     );
-    expect(wrapped).toEqual([false, false, false, false, false, false, false]);
+    expect(wrapped).toEqual([false, false, false, false, false, false, false, false]);
   });
 
   it("shows the saved model and effort of each purpose", async () => {
@@ -858,6 +859,7 @@ describe("settings: Claude model and effort", () => {
         slackReply: { model: "haiku", effort: "xhigh" },
         orcaHandoff: { model: "opus", effort: "low" },
         todoChat: { model: "haiku", effort: "high" },
+        slackChat: { model: "opus", effort: "medium" },
       },
     });
     await $("#nav-settings").click();
@@ -876,6 +878,8 @@ describe("settings: Claude model and effort", () => {
     await expect(selectOf("orcaHandoff", "effort")).toHaveValue("low");
     await expect(selectOf("todoChat", "model")).toHaveValue("haiku");
     await expect(selectOf("todoChat", "effort")).toHaveValue("high");
+    await expect(selectOf("slackChat", "model")).toHaveValue("opus");
+    await expect(selectOf("slackChat", "effort")).toHaveValue("medium");
   });
 
   for (const [purpose, name] of PURPOSES) {
@@ -960,6 +964,7 @@ describe("settings: Claude model and effort", () => {
           slackReply: { model: "sonnet", effort: "high" },
           orcaHandoff: { model: "sonnet", effort: "medium" },
           todoChat: { model: "sonnet", effort: "medium" },
+          slackChat: { model: "sonnet", effort: "medium" },
         },
       });
       await $("#nav-settings").click();
@@ -998,6 +1003,7 @@ describe("settings: Claude model and effort", () => {
           slackReply: { model: "sonnet", effort: "high" },
           orcaHandoff: { model: "sonnet", effort: "medium" },
           todoChat: { model: "sonnet", effort: "medium" },
+          slackChat: { model: "sonnet", effort: "medium" },
         },
       });
       await $("#nav-settings").click();
@@ -1019,11 +1025,11 @@ describe("settings: Claude model and effort", () => {
     });
   });
 
-  it("says in the ? hint that each of the seven Claude calls has its own setting", async () => {
+  it("says in the ? hint that each of the eight Claude calls has its own setting", async () => {
     await openSettings([], claudeReady, "claude");
     await $("#claude-help").click();
     await expect($('[role="dialog"][aria-label="Claude の使い方"] .foot')).toHaveText(
-      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack のスレッドの相談、Orca に渡す要約、Todo の相談のそれぞれに選べます"),
+      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack のスレッドの相談、Orca に渡す要約、Todo の相談、Slack の相談のそれぞれに選べます"),
     );
   });
 });

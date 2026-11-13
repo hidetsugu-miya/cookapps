@@ -32,6 +32,9 @@ export function show(view: View) {
   $("slack-list").hidden = view !== "slack-list";
   $("slack-channel").hidden = view !== "slack-channel";
   $("slack-thread").hidden = view !== "slack-thread";
+  // The thread has a Claude pane of its own (S-7); the other three share the one of S-24.
+  $("slack-claude").hidden = view === "slack-thread";
+  $("slack-claude-split").hidden = view === "slack-thread";
   $("orca").hidden = view !== "orca";
   // The mail header is the thread's bar with "戻る": the list and the login screen have none.
   $("mail-header").hidden = view !== "thread";

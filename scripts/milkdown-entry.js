@@ -2,12 +2,22 @@
 // An editor is read only until `edit` is called on it; the page decides, from `normalize`, whether the text may be edited.
 import { defaultValueCtx, Editor, editorViewCtx, editorViewOptionsCtx, rootCtx } from "@milkdown/kit/core";
 import { history } from "@milkdown/kit/plugin/history";
-import { commonmark } from "@milkdown/kit/preset/commonmark";
-import { gfm } from "@milkdown/kit/preset/gfm";
+import {
+  commonmark,
+  createCodeBlockCommand,
+  toggleEmphasisCommand,
+  toggleInlineCodeCommand,
+  toggleLinkCommand,
+  toggleStrongCommand,
+  wrapInBlockquoteCommand,
+  wrapInBulletListCommand,
+  wrapInOrderedListCommand,
+} from "@milkdown/kit/preset/commonmark";
+import { gfm, toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
 import { Plugin } from "@milkdown/kit/prose/state";
-import { $prose, getMarkdown } from "@milkdown/kit/utils";
+import { $prose, callCommand, getMarkdown, replaceAll } from "@milkdown/kit/utils";
 
-function make(root, markdown, state) {
+function make(root, markdown, state, editable = false) {
   // Tells the page, at once and without the text, that the document changed (the page asks for the text when it needs it).
   const watch = $prose(
     () =>
@@ -23,7 +33,7 @@ function make(root, markdown, state) {
     .config((ctx) => {
       ctx.set(rootCtx, root);
       ctx.set(defaultValueCtx, markdown);
-      ctx.update(editorViewOptionsCtx, (prev) => ({ ...prev, editable: () => false }));
+      ctx.update(editorViewOptionsCtx, (prev) => ({ ...prev, editable: () => editable }));
     })
     .use(commonmark)
     .use(gfm)
@@ -52,4 +62,37 @@ export async function normalize(markdown) {
   const exported = editor.action(getMarkdown());
   await editor.destroy();
   return exported;
+}
+
+const COMPOSE_COMMANDS = {
+  bold: toggleStrongCommand,
+  italic: toggleEmphasisCommand,
+  strike: toggleStrikethroughCommand,
+  link: toggleLinkCommand,
+  orderedList: wrapInOrderedListCommand,
+  bulletList: wrapInBulletListCommand,
+  quote: wrapInBlockquoteCommand,
+  code: toggleInlineCodeCommand,
+  codeBlock: createCodeBlockCommand,
+};
+
+// An editable editor for writing a message (S-21), empty to begin with. `onChange` is called after each change of the document, also one made by `set`.
+// `markdown()` is what it exports, `blank()` whether it holds no text but spaces, `set(markdown)` replaces its content, `run(name, payload)` runs one command of the toolbar
+// (bold, italic, strike, link with `{href}`, orderedList, bulletList, quote, code, codeBlock) and gives the focus back to the text, `focus()` focuses it, `setEditable(on)` turns the typing on or off, and `destroy` takes the editor out of `root`.
+export async function compose(root, onChange) {
+  const state = { onEdit: onChange };
+  const editor = await make(root, "", state, true);
+  const view = () => editor.action((ctx) => ctx.get(editorViewCtx));
+  return {
+    destroy: () => editor.destroy(),
+    markdown: () => editor.action(getMarkdown()),
+    blank: () => view().state.doc.textContent.trim() === "",
+    set: (markdown) => editor.action(replaceAll(markdown)),
+    focus: () => view().focus(),
+    setEditable: (on) => view().setProps({ editable: () => on }),
+    run: (name, payload) => {
+      editor.action(callCommand(COMPOSE_COMMANDS[name].key, payload));
+      view().focus();
+    },
+  };
 }

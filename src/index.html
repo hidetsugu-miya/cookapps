@@ -411,12 +411,6 @@
           <div id="sc-feed"></div>
           <div id="sc-reply">
             <p id="sc-error" class="pending fail" role="alert" hidden></p>
-            <div class="composer">
-              <textarea id="sc-input" class="chat-input" rows="3" aria-label="チャンネルに投稿" autocomplete="off"></textarea>
-              <div class="composer-foot">
-                <button id="sc-send" class="text-btn primary" disabled>投稿する</button>
-              </div>
-            </div>
           </div>
         </section>
         <section id="slack-thread" class="split-main" hidden>
@@ -440,12 +434,6 @@
             </div>
             <div id="st-reply">
               <p id="st-error" class="pending fail" role="alert" hidden></p>
-              <div class="composer">
-                <textarea id="st-input" class="chat-input" rows="3" aria-label="スレッドに返信" placeholder="スレッドに返信" autocomplete="off"></textarea>
-                <div class="composer-foot">
-                  <button id="st-send" class="text-btn primary" disabled>返信する</button>
-                </div>
-              </div>
             </div>
           </div>
           <div id="reply-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
@@ -469,6 +457,17 @@
           </aside>
         </section>
       </div>
+      <div id="slack-claude-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="25" aria-valuemax="40" aria-valuenow="30" tabindex="0"><span></span></div>
+      <aside id="slack-claude" class="chat-pane" aria-label="Claude">
+        <div class="chat-head">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+          <button id="slack-claude-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+        </div>
+        <div id="slack-claude-log" class="chat-log"></div>
+        <div class="chat-foot">
+          <p id="slack-claude-chat-note" class="chat-note" hidden></p>
+        </div>
+      </aside>
     </section>
     <section id="orca" class="split-main" hidden>
       <aside id="orca-list" aria-label="プロジェクト">
@@ -504,6 +503,8 @@
       <div id="orca-files-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="ファイル欄の幅" aria-valuemin="15" aria-valuemax="40" aria-valuenow="22" tabindex="0" hidden><span></span></div>
       <aside id="orca-files" aria-label="ファイル" hidden>
         <div id="orca-files-bar" data-tauri-drag-region>
+          <button id="orca-files-mode-files" class="icon-btn orca-files-mode" type="button" aria-label="ファイル" aria-pressed="true"></button>
+          <button id="orca-files-mode-history" class="icon-btn orca-files-mode" type="button" aria-label="履歴" aria-pressed="false"></button>
           <button id="orca-files-toggle" class="icon-btn orca-files-toggle" type="button" aria-label="ファイル欄" aria-pressed="true"></button>
         </div>
         <header id="orca-files-head">
@@ -513,6 +514,10 @@
           </button>
         </header>
         <div id="orca-files-tree"></div>
+        <div id="orca-history" hidden>
+          <div id="orca-history-list"></div>
+          <div id="orca-history-files"></div>
+        </div>
       </aside>
     </section>
     <section id="slack-compose" hidden>
