@@ -1,4 +1,4 @@
-// The rich field for writing a Slack message (S-21, and the thread reply of S-6 later): one frame that holds a toolbar of the styles Slack's mrkdwn has, the Milkdown editor under it (src/vendor/milkdown.js, A-26) and the round send arrow at the right end of the row below.
+// The rich field for writing a Slack message (S-21, and the thread reply of S-6): one frame that holds a toolbar of the styles Slack's mrkdwn has, the Milkdown editor under it (src/vendor/milkdown.js, A-26) and the round send arrow at the right end of the row below.
 // The owner puts `el` in its pane and keeps the text itself (the Markdown of the field, `markdown()`); Rust turns it into mrkdwn when it posts (`markdown: true` of `slack_channel_post`, S-21).
 // Milkdown is read the first time `ensure()` is called. Until it is there the frame is drawn with the field off and the arrow off, and `ensure()` says when it is ready. The field has no placeholder (`.claude/rules/frontend.md`).
 import { composing, isMac, tag } from "./dom.js";
@@ -10,6 +10,8 @@ export interface SlackEditorOptions {
   prefix: string;
   // The accessible name of the field.
   label: string;
+  // The accessible name of the arrow (default "投稿").
+  sendLabel?: string;
   // The text changed by typing or by a toolbar button (not by `set`).
   onChange: () => void;
   // Cmd+Enter (Ctrl+Enter off macOS) in the field, or the arrow pressed.
@@ -45,7 +47,7 @@ const TOOLS: { name: MilkdownCommand | null; label: string; svg: string }[] = [
   { name: "codeBlock", label: "コードブロック", svg: svgOf('<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M9 10l-2 2 2 2M15 10l2 2-2 2"/>') },
 ];
 
-export function createSlackEditor({ prefix, label, onChange, onSubmit }: SlackEditorOptions): SlackEditor {
+export function createSlackEditor({ prefix, label, sendLabel = "投稿", onChange, onSubmit }: SlackEditorOptions): SlackEditor {
   let view: MilkdownComposer | null = null;
   let loading: Promise<void> | null = null;
   let busy = false;
@@ -61,7 +63,7 @@ export function createSlackEditor({ prefix, label, onChange, onSubmit }: SlackEd
   host.id = `${prefix}-input`;
   const send = tag("button", "icon-btn chat-send chat-send-icon");
   send.id = `${prefix}-send`;
-  send.setAttribute("aria-label", "投稿");
+  send.setAttribute("aria-label", sendLabel);
   send.insertAdjacentHTML("beforeend", SEND_SVG);
   send.disabled = true;
   send.onclick = onSubmit;
