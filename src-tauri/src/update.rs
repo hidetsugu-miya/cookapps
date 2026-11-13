@@ -10,10 +10,9 @@ use tokio::task::spawn_blocking;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{accounts::write_synced, auth::config_dir, gmail::log_failure};
+use crate::{accounts::write_atomic, auth::config_dir, gmail::log_failure};
 
 const FILE: &str = "update-settings.json";
-const TMP_FILE: &str = "update-settings.json.tmp";
 
 // Releases carry only the Apple Silicon macOS build, so elsewhere every check would fail.
 const UPDATABLE: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
@@ -48,12 +47,8 @@ fn load(dir: &Path) -> UpdateMode {
 }
 
 fn save(dir: &Path, mode: UpdateMode) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(FILE), dir.join(TMP_FILE));
     let text = serde_json::to_string_pretty(&SettingsFile { mode }).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, FILE, &text)
 }
 
 /// The running version, and whether this build can update itself.

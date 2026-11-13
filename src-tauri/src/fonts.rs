@@ -12,10 +12,9 @@ use tauri::AppHandle;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{accounts::write_synced, auth::config_dir};
+use crate::{accounts::write_atomic, auth::config_dir};
 
 const FILE: &str = "font-settings.json";
-const TMP_FILE: &str = "font-settings.json.tmp";
 /// The sizes, in pixels: the range and the step.
 const SIZE_MIN: f64 = 8.0;
 const SIZE_MAX: f64 = 32.0;
@@ -186,13 +185,8 @@ fn load_settings(dir: &Path) -> FontSettings {
 }
 
 fn save_settings(dir: &Path, settings: &FontSettings) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(FILE), dir.join(TMP_FILE));
     let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    // Rename over the target so a crash mid-write leaves the old file, not a truncated one.
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, FILE, &text)
 }
 
 /// The settings with the pick of `area` changed. The family must be one of `installed`, or the one the place holds; the size is brought into its range (the place `Mono` keeps the size it holds, whatever is sent); only the work space of Orca may follow Ghostty.
