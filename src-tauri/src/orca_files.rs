@@ -9,6 +9,7 @@
 //! The difference of a file from HEAD (A-24, `orca_file_diff`) is Orca's `git.diff` (`staged` false, `compareAgainstHead` true): the text at HEAD and the text in the working tree, which `orca_diff.rs` turns into rows.
 //! The branches of a worktree (`orca_local_branches`, `git.localBranches`) and the remote branches found by a text (`orca_remote_branches`, `repo.searchRefs` with `namespace` `remote`) are read here too, for the branch button of the file pane.
 //! The branch of a worktree is switched here too (`orca_switch_branch`, `git.switchBranch`): a local or a remote branch, never a new one, and Orca's refusal is shown in its own words.
+//! The commits of a worktree (`orca_git_history`, `git.history`: HEAD first, the newest first, read `limit` at a time with `skip`) and the files a commit changed (`orca_commit_files`, `git.commitCompare`) are read here too, for the history of the file pane. Both only read; a subject, an author and a path are held in memory only and are in no log line. They were tried on this machine's Orca 1.4.258 over its unix socket (a saved environment was not tried).
 //! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
 
 use std::{
@@ -66,6 +67,12 @@ const NOT_BRANCHES: &str = "ブランチの一覧を読めません";
 const NOT_SWITCHED: &str = "ブランチを切り替えた結果を読めません";
 const UPDATE_ORCA: &str =
     "この Orca は、ブランチの切り替えに対応していません。Orca を更新してください";
+const NOT_HISTORY: &str = "コミットの一覧を読めません";
+const NOT_COMMIT_FILES: &str = "コミットの変更ファイルを読めません";
+/// The most commits one `git.history` answers (Orca refuses a `limit` above it).
+const HISTORY_MAX: u32 = 200;
+/// The most files of one commit that are returned (a page of `files.readDir` holds as many); `OrcaCommitFiles::total` says how many the commit changed.
+const COMMIT_FILES_MAX: usize = LIST_LIMIT;
 /// The most remote branches one search asks for (the number of Orca's own branch picker).
 const BRANCH_LIMIT: u32 = 50;
 /// The longest text of a search, in bytes (Orca's limit for a search text).
@@ -153,6 +160,68 @@ pub struct OrcaRemoteBranch {
 pub struct OrcaBranchSwitched {
     pub branch: String,
     pub warning: Option<String>,
+}
+
+/// A commit of the history: the full id and the short one, the first line of the message, the author's name, the time of the commit in milliseconds since the epoch, and the ids of its parents (the first one is the side a merge is read against).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaCommit {
+    pub id: String,
+    pub short_id: String,
+    pub subject: String,
+    pub author: String,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub time_ms: i64,
+    pub parents: Vec<String>,
+}
+
+/// A page of the history, and whether more commits follow it (`skip` by the number read so far reads them).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaCommitList {
+    pub commits: Vec<OrcaCommit>,
+    pub has_more: bool,
+}
+
+/// How a commit changed a file (Orca's names; a type change is `modified`).
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "kebab-case")]
+pub enum OrcaCommitFileStatus {
+    Modified,
+    Added,
+    Deleted,
+    Renamed,
+    Copied,
+}
+
+/// A file a commit changed: `old_path` is where a renamed or copied file came from, and the numbers of lines added and removed are none for a binary file.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaCommitFile {
+    pub status: OrcaCommitFileStatus,
+    pub path: String,
+    pub old_path: Option<String>,
+    pub added: Option<u32>,
+    pub removed: Option<u32>,
+}
+
+/// The files a commit changed against its first parent (`parent_id`, none for the first commit of the history), at most `COMMIT_FILES_MAX` of them; `total` is how many it changed.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaCommitFiles {
+    pub files: Vec<OrcaCommitFile>,
+    pub total: u32,
+    pub parent_id: Option<String>,
 }
 
 /// What Orca did with a save: wrote it, or refused because the disk no longer holds the text that was read (`changed`: another text, `missing`: no file, `not-utf8`: bytes that are not text).
@@ -970,6 +1039,154 @@ async fn switch_branch(
     parse_switched(&answer)
 }
 
+// ---- the history ----
+
+/// A full git object id (40 hex digits, or 64 for SHA-256), the form Orca takes and no other.
+fn is_object_id(id: &str) -> bool {
+    matches!(id.len(), 40 | 64) && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The range of one read of the history: `limit` from 1 to `HISTORY_MAX`.
+fn check_history_limit(limit: u32) -> Result<(), String> {
+    if (1..=HISTORY_MAX).contains(&limit) {
+        Ok(())
+    } else {
+        Err("コミットの数が正しくありません".into())
+    }
+}
+
+/// The arguments of `git.history`: the commits reachable from HEAD, `limit` of them after the first `skip`.
+fn history_params(limit: u32, skip: u32) -> Value {
+    json!({"refs": "head", "limit": limit, "skip": skip})
+}
+
+/// The commits of an answer of `git.history` (`{items: [{id, displayId, subject, message, author, timestamp, parentIds}], hasMore, ...}`). An item with no full id cannot be told from another, and a page with one is refused as a whole, so that `skip` by the number read never lands in the wrong place.
+fn parse_history(result: &Value) -> Result<OrcaCommitList, String> {
+    let items = result["items"].as_array().ok_or(NOT_HISTORY)?;
+    let commits = items
+        .iter()
+        .map(|item| {
+            let id = item["id"]
+                .as_str()
+                .filter(|id| is_object_id(id))
+                .ok_or(NOT_HISTORY)?;
+            let subject = item["subject"]
+                .as_str()
+                .or_else(|| item["message"].as_str().and_then(|m| m.lines().next()))
+                .unwrap_or_default();
+            let short_id = item["displayId"]
+                .as_str()
+                .filter(|short| !short.is_empty())
+                .unwrap_or(&id[..7]);
+            Ok(OrcaCommit {
+                id: id.to_owned(),
+                short_id: short_id.to_owned(),
+                subject: subject.to_owned(),
+                author: item["author"].as_str().unwrap_or_default().to_owned(),
+                time_ms: item["timestamp"].as_i64().unwrap_or(0),
+                parents: item["parentIds"]
+                    .as_array()
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(Value::as_str)
+                            .filter(|id| is_object_id(id))
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(OrcaCommitList {
+        has_more: result["hasMore"] == true && !commits.is_empty(),
+        commits,
+    })
+}
+
+async fn git_history(
+    rpc: &mut impl Rpc,
+    path: &str,
+    limit: u32,
+    skip: u32,
+) -> Result<OrcaCommitList, String> {
+    let answer = rpc
+        .call(
+            "git.history",
+            worktree_params(path, None, history_params(limit, skip)),
+        )
+        .await
+        .map_err(branch_reason)?;
+    parse_history(&answer)
+}
+
+fn commit_file_status(status: &str) -> OrcaCommitFileStatus {
+    match status {
+        "added" => OrcaCommitFileStatus::Added,
+        "deleted" => OrcaCommitFileStatus::Deleted,
+        "renamed" => OrcaCommitFileStatus::Renamed,
+        "copied" => OrcaCommitFileStatus::Copied,
+        _ => OrcaCommitFileStatus::Modified,
+    }
+}
+
+/// The files of an answer of `git.commitCompare` (`{summary: {status, parentOid, changedFiles, errorMessage}, entries: [{path, status, oldPath, added, removed}]}`). A summary that is not `ready` is a commit Orca could not read; an entry with no path is refused.
+fn parse_commit_files(result: &Value) -> Result<OrcaCommitFiles, String> {
+    match result["summary"]["status"].as_str() {
+        Some("ready") => {}
+        Some("invalid-commit") => return Err("コミットが見つかりません".into()),
+        _ => return Err(NOT_COMMIT_FILES.into()),
+    }
+    let entries = result["entries"].as_array().ok_or(NOT_COMMIT_FILES)?;
+    let count = |entry: &Value, key: &str| entry[key].as_u64().and_then(|n| u32::try_from(n).ok());
+    let files = entries
+        .iter()
+        .take(COMMIT_FILES_MAX)
+        .map(|entry| {
+            let path = entry["path"]
+                .as_str()
+                .filter(|path| !path.is_empty())
+                .ok_or(NOT_COMMIT_FILES)?;
+            Ok(OrcaCommitFile {
+                status: commit_file_status(entry["status"].as_str().unwrap_or_default()),
+                path: path.to_owned(),
+                old_path: entry["oldPath"]
+                    .as_str()
+                    .filter(|old| !old.is_empty())
+                    .map(str::to_owned),
+                added: count(entry, "added"),
+                removed: count(entry, "removed"),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let total = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+    Ok(OrcaCommitFiles {
+        total: result["summary"]["changedFiles"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .map_or(total, |n| n.max(total)),
+        parent_id: result["summary"]["parentOid"]
+            .as_str()
+            .filter(|id| is_object_id(id))
+            .map(str::to_owned),
+        files,
+    })
+}
+
+async fn commit_files(
+    rpc: &mut impl Rpc,
+    path: &str,
+    commit_id: &str,
+) -> Result<OrcaCommitFiles, String> {
+    let answer = rpc
+        .call(
+            "git.commitCompare",
+            worktree_params(path, None, json!({"commitId": commit_id})),
+        )
+        .await
+        .map_err(branch_reason)?;
+    parse_commit_files(&answer)
+}
+
 // ---- the commands ----
 
 /// An SSH host has no file calls (its `hostId` is `ssh:{id}`), as A-10 found.
@@ -1149,6 +1366,41 @@ pub async fn orca_switch_branch(
     let switched = asked.await;
     forget_worktree_host(&path, environment.as_deref());
     switched
+}
+
+/// The commits of the worktree at `path` from HEAD, the newest first: `limit` (1 to 200) of them after the first `skip` (the history of the file pane). A worktree that is not one of the target's list is refused as for the list.
+#[tauri::command]
+pub async fn orca_git_history(
+    path: String,
+    limit: u32,
+    skip: u32,
+    environment: Option<String>,
+) -> Result<OrcaCommitList, String> {
+    check_history_limit(limit)?;
+    cached_host_of(&path, environment.as_deref()).await?;
+    let asked = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        git_history(&mut connection, &path, limit, skip).await
+    };
+    forgetting(asked.await, &path, environment.as_deref())
+}
+
+/// The files the commit `commit_id` (a full id) of the worktree at `path` changed against its first parent. A worktree that is not one of the target's list is refused as for the list.
+#[tauri::command]
+pub async fn orca_commit_files(
+    path: String,
+    commit_id: String,
+    environment: Option<String>,
+) -> Result<OrcaCommitFiles, String> {
+    if !is_object_id(&commit_id) {
+        return Err("コミットの ID が正しくありません".into());
+    }
+    cached_host_of(&path, environment.as_deref()).await?;
+    let asked = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        commit_files(&mut connection, &path, &commit_id).await
+    };
+    forgetting(asked.await, &path, environment.as_deref())
 }
 
 /// Saves the text of the editor over the file it was read from, if the disk still holds what was read (`signature`), and answers what happened (A-18). It is not tried again: a failure carries its message.
@@ -1331,6 +1583,268 @@ mod tests {
             answers: answers.into_iter().collect(),
             ..Fake::default()
         }
+    }
+
+    const ID_A: &str = "19ea5e77168cddfe8b9d5c4f1b0b09761fdca3f7";
+    const ID_B: &str = "cfabd25c06c3a9c52c2ef09c528c018a5dd195ee";
+
+    #[test]
+    fn only_a_full_object_id_is_one() {
+        assert!(is_object_id(ID_A));
+        assert!(is_object_id(&"A".repeat(40)));
+        assert!(is_object_id(&"0".repeat(64)));
+        for bad in [
+            "",
+            "19ea5e7",
+            &"a".repeat(39),
+            &"a".repeat(41),
+            &"a".repeat(63),
+            &format!("{}g", "a".repeat(39)),
+            &format!("{} ", "a".repeat(39)),
+            "HEAD",
+            "--all",
+        ] {
+            assert!(!is_object_id(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_read_of_the_history_takes_one_to_two_hundred() {
+        assert!(check_history_limit(1).is_ok());
+        assert!(check_history_limit(200).is_ok());
+        assert!(check_history_limit(0).is_err());
+        assert!(check_history_limit(201).is_err());
+    }
+
+    #[test]
+    fn the_history_is_asked_from_head_with_limit_and_skip() {
+        assert_eq!(
+            history_params(50, 100),
+            json!({"refs": "head", "limit": 50, "skip": 100})
+        );
+    }
+
+    #[test]
+    fn the_commits_of_an_answer_keep_their_order_and_parents() {
+        let answer = json!({
+            "currentRef": {"id": "refs/heads/main"},
+            "hasMore": true,
+            "historyToken": "t",
+            "items": [
+                {
+                    "author": "A", "authorEmail": "a@example.com", "displayId": "19ea5e7",
+                    "id": ID_A, "message": "Merge x\n\nbody", "subject": "Merge x",
+                    "parentIds": [ID_B, "bad"], "references": [], "timestamp": 1_794_542_268_000_i64
+                },
+                {"id": ID_B, "message": "first line\nsecond", "parentIds": []},
+            ],
+        });
+        let list = parse_history(&answer).unwrap();
+        assert!(list.has_more);
+        assert_eq!(
+            list.commits,
+            [
+                OrcaCommit {
+                    id: ID_A.into(),
+                    short_id: "19ea5e7".into(),
+                    subject: "Merge x".into(),
+                    author: "A".into(),
+                    time_ms: 1_794_542_268_000,
+                    parents: vec![ID_B.into()],
+                },
+                OrcaCommit {
+                    id: ID_B.into(),
+                    short_id: "cfabd25".into(),
+                    subject: "first line".into(),
+                    author: String::new(),
+                    time_ms: 0,
+                    parents: vec![],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn the_end_of_the_history_has_no_more() {
+        let end = parse_history(&json!({"items": [], "hasMore": true})).unwrap();
+        assert!(end.commits.is_empty() && !end.has_more);
+        let last = parse_history(&json!({"items": [{"id": ID_A}], "hasMore": false})).unwrap();
+        assert_eq!(last.commits.len(), 1);
+        assert!(!last.has_more);
+        let none = parse_history(&json!({"items": [{"id": ID_A}]})).unwrap();
+        assert!(!none.has_more);
+    }
+
+    #[test]
+    fn a_history_that_cannot_be_read_is_refused_whole() {
+        for bad in [
+            json!({}),
+            json!("x"),
+            json!({"items": "x"}),
+            json!({"items": [{"id": ID_A}, {"subject": "no id"}]}),
+            json!({"items": [{"id": "19ea5e7"}]}),
+        ] {
+            assert_eq!(parse_history(&bad).unwrap_err(), NOT_HISTORY, "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_history_is_asked_of_the_worktree_by_its_path() {
+        let mut orca = fake(vec![(
+            "git.history",
+            Ok(json!({"items": [{"id": ID_A}], "hasMore": false})),
+        )]);
+        let list = git_history(&mut orca, "/work/a", 50, 0).await.unwrap();
+        assert_eq!(list.commits[0].id, ID_A);
+        assert_eq!(
+            orca.calls,
+            [(
+                "git.history".to_owned(),
+                json!({"worktree": "path:/work/a", "refs": "head", "limit": 50, "skip": 0})
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_history_orca_refuses_says_why() {
+        let mut orca = fake(vec![(
+            "git.history",
+            Err((
+                "Orca がエラーを返しました（selector_not_found）",
+                "selector_not_found",
+            )),
+        )]);
+        assert_eq!(
+            git_history(&mut orca, "/work/a", 50, 0).await.unwrap_err(),
+            "worktree が見つかりません"
+        );
+        let mut orca = fake(vec![]);
+        assert_eq!(
+            git_history(&mut orca, "/work/a", 50, 0).await.unwrap_err(),
+            "no answer"
+        );
+    }
+
+    fn compare(entries: Value) -> Value {
+        json!({
+            "entries": entries,
+            "summary": {
+                "baseRef": "cfabd25", "changedFiles": 1, "commitOid": ID_A,
+                "compareRef": "19ea5e7", "parentOid": ID_B, "status": "ready"
+            }
+        })
+    }
+
+    #[test]
+    fn the_files_of_a_commit_keep_status_paths_and_counts() {
+        let answer = compare(json!([
+            {"path": "a.rs", "status": "modified", "added": 10, "removed": 6},
+            {"path": "b.rs", "status": "added", "added": 3, "removed": 0},
+            {"path": "c.rs", "status": "deleted", "added": 0, "removed": 4},
+            {"path": "d/new.rs", "oldPath": "d/old.rs", "status": "renamed", "added": 1, "removed": 1},
+            {"path": "e.rs", "oldPath": "a.rs", "status": "copied"},
+            {"path": "img.png", "status": "modified"},
+            {"path": "t.rs", "status": "something else", "oldPath": ""},
+        ]));
+        let files = parse_commit_files(&answer).unwrap();
+        assert_eq!(files.parent_id.as_deref(), Some(ID_B));
+        assert_eq!(files.total, 7);
+        let file = |status, path: &str, old: Option<&str>, added, removed| OrcaCommitFile {
+            status,
+            path: path.into(),
+            old_path: old.map(str::to_owned),
+            added,
+            removed,
+        };
+        use OrcaCommitFileStatus::{Added, Copied, Deleted, Modified, Renamed};
+        assert_eq!(
+            files.files,
+            [
+                file(Modified, "a.rs", None, Some(10), Some(6)),
+                file(Added, "b.rs", None, Some(3), Some(0)),
+                file(Deleted, "c.rs", None, Some(0), Some(4)),
+                file(Renamed, "d/new.rs", Some("d/old.rs"), Some(1), Some(1)),
+                file(Copied, "e.rs", Some("a.rs"), None, None),
+                file(Modified, "img.png", None, None, None),
+                file(Modified, "t.rs", None, None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_first_commit_has_no_parent_and_a_big_commit_is_cut() {
+        let mut answer = compare(json!([]));
+        answer["summary"]["parentOid"] = Value::Null;
+        answer["summary"]["changedFiles"] = json!(0);
+        let files = parse_commit_files(&answer).unwrap();
+        assert!(files.files.is_empty() && files.parent_id.is_none() && files.total == 0);
+        let many: Vec<Value> = (0..COMMIT_FILES_MAX + 3)
+            .map(|n| json!({"path": format!("f{n}"), "status": "added"}))
+            .collect();
+        let mut big = compare(Value::Array(many));
+        big["summary"]["changedFiles"] = json!(COMMIT_FILES_MAX + 3);
+        let files = parse_commit_files(&big).unwrap();
+        assert_eq!(files.files.len(), COMMIT_FILES_MAX);
+        assert_eq!(files.total as usize, COMMIT_FILES_MAX + 3);
+        // A parent that is not a full id is not believed.
+        let mut odd = compare(json!([]));
+        odd["summary"]["parentOid"] = json!("cfabd25");
+        assert!(parse_commit_files(&odd).unwrap().parent_id.is_none());
+    }
+
+    #[test]
+    fn a_commit_orca_cannot_read_is_refused() {
+        let mut missing = compare(json!([]));
+        missing["summary"]["status"] = json!("invalid-commit");
+        assert_eq!(
+            parse_commit_files(&missing).unwrap_err(),
+            "コミットが見つかりません"
+        );
+        for status in [json!("error"), json!("loading"), Value::Null] {
+            let mut failed = compare(json!([]));
+            failed["summary"]["status"] = status;
+            assert_eq!(parse_commit_files(&failed).unwrap_err(), NOT_COMMIT_FILES);
+        }
+        for bad in [
+            json!({}),
+            json!({"summary": {"status": "ready"}}),
+            compare(json!([{"status": "added"}])),
+            compare(json!([{"path": "", "status": "added"}])),
+        ] {
+            assert_eq!(
+                parse_commit_files(&bad).unwrap_err(),
+                NOT_COMMIT_FILES,
+                "{bad}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_files_of_a_commit_are_asked_with_the_full_id() {
+        let mut orca = fake(vec![(
+            "git.commitCompare",
+            Ok(compare(json!([{"path": "a.rs", "status": "modified"}]))),
+        )]);
+        let files = commit_files(&mut orca, "/work/a", ID_A).await.unwrap();
+        assert_eq!(files.files.len(), 1);
+        assert_eq!(
+            orca.calls,
+            [(
+                "git.commitCompare".to_owned(),
+                json!({"worktree": "path:/work/a", "commitId": ID_A})
+            )]
+        );
+        let mut orca = fake(vec![(
+            "git.commitCompare",
+            Err((
+                "Orca がエラーを返しました（invalid_argument）",
+                "Expected a full git object id",
+            )),
+        )]);
+        assert_eq!(
+            commit_files(&mut orca, "/work/a", ID_A).await.unwrap_err(),
+            "Orca がエラーを返しました（invalid_argument）"
+        );
     }
 
     #[test]
