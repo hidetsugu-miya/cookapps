@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.65.0
+
+S-22: a message in a channel's history and in a thread shows its reactions under it, each emoji with its count (#468, #469). A custom emoji shows as its `:name:`. It is display only; reactions cannot be added or removed.
+
+S-20: a reply that was also sent to the channel shows 「スレッドに返信済み:」 and the start of the message it replies to above its text, in a pale color, in the channel's history (#467). Pressing it opens the thread.
+
+S-3, S-4, A-9: the field that asks Claude is the same part on the screen that edits the Todo summary prompt, on the Slack compose screen and in the pane that hands an item to Orca (#498, #499, #500). The send button is a round arrow, and the model and effort selects sit inside the frame of the field; the Slack compose screen now has the selects of the proofreading, and the pane of Orca those of the summary of a handoff. The field of the Orca pane starts one line high and grows with the text. The fields no longer show 「どう変えたいかを書く」, 「どう直したいかを書く」 or the keys that send; Cmd+Enter still sends.
+
+S-5: the Slack list draws again only the rows that changed, so a row keeps its place and focus when the list is read again or a thread is closed (#416).
+
 ## v0.64.1
 
 C-1, C-4: the calendar screen reads like the other screens (#515). The bar above the week is the tinted band of the Todo screen, with 「今日」, the arrows and the month, written as 「2026年11月」, from the left; the month opens a small month calendar under it, and a day pressed there shows its week. The panel has the same month calendar at its top, and each account is a row with the initial and color of its avatar in the sidebar and its address, with its calendars indented under it and folded by pressing the row.
