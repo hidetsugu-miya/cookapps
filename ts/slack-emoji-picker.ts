@@ -1,6 +1,7 @@
 // The emoji picker under the "add a reaction" button of a message (S-25): a search field, then the emoji used in this run (最近), the workspace's custom emoji (S-26) and the standard emoji.
 // Rust lists the emoji (`slack_emoji_catalog`); the list is kept here per workspace for an hour, in memory only, so it is not asked for again each time the picker opens.
 // The images of the custom emoji are fetched for the cells that are in view only, as they scroll in.
+// The cells of a workspace are made once with its list and kept with it, so that opening the picker again makes none.
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
 import { composing, tag } from "./dom.js";
 import { invoke } from "./ipc.js";
@@ -11,8 +12,8 @@ export type PickedEmoji = { name: string; emoji: string; image: string | null };
 
 export type PickerOptions = {
   onPick: (picked: PickedEmoji) => void;
-  // Fetches the images at these addresses and paints the cells waiting for them (`loadIcons` of slack-view).
-  loadImages: (urls: string[]) => unknown;
+  // Fetches the images of these slots (the address and the node waiting for it) and paints them (`loadIcons` of slack-view).
+  loadImages: (images: { url: string; node: HTMLElement }[]) => unknown;
 };
 
 // How long a workspace's list is kept (Rust keeps the custom emoji for as long).
@@ -20,20 +21,51 @@ const CATALOG_TTL = 60 * 60 * 1000;
 // How many recent emoji a workspace remembers.
 const RECENT_MAX = 24;
 
-const catalogs = new Map<string, { at: number; got: Promise<EmojiCatalog> }>();
+// The cells of one section: the grid, which is moved from one picker to the next, and the cells with their names in lower case.
+type Cell = { name: string; node: HTMLElement };
+type Part = { grid: HTMLElement; cells: Cell[] };
+type Built = { custom: Part; standard: Part };
+
+const catalogs = new Map<string, { at: number; got: Promise<Built> }>();
 // The emoji added in this run, newest first, by workspace. Memory only.
 const recents = new Map<string, PickedEmoji[]>();
 
+function partOf(list: PickedEmoji[]): Part {
+  const grid = tag("div", "emoji-grid");
+  const cells = list.map((e) => ({ name: e.name.toLowerCase(), node: cellOf(e) }));
+  grid.append(...cells.map((c) => c.node));
+  return { grid, cells };
+}
+
+// The workspace's cells are made once, with the list: opening the picker again moves the grids and makes no cell.
 function catalogOf(teamId: string) {
   const kept = catalogs.get(teamId);
   if (kept && Date.now() - kept.at < CATALOG_TTL) return kept.got;
-  const entry = { at: Date.now(), got: invoke("slack_emoji_catalog", { teamId }) };
+  const entry = {
+    at: Date.now(),
+    got: invoke("slack_emoji_catalog", { teamId }).then(
+      (catalog: EmojiCatalog): Built => ({
+        custom: partOf(catalog.custom.map((c) => ({ name: c.name, emoji: `:${c.name}:`, image: c.image }))),
+        standard: partOf(catalog.standard.map((e) => ({ name: e.name, emoji: e.emoji, image: null }))),
+      }),
+    ),
+  };
   catalogs.set(teamId, entry);
-  // A failed read is not kept: the next opening asks again.
-  entry.got.catch(() => {
-    if (catalogs.get(teamId) === entry) catalogs.delete(teamId);
-  });
+  // A failed read is not kept: the next opening asks again. Nor is a list with no custom emoji, which may be a failure of Rust's read or a token that was pasted again since.
+  entry.got.then(
+    (built) => {
+      if (built.custom.cells.length === 0 && catalogs.get(teamId) === entry) catalogs.delete(teamId);
+    },
+    () => {
+      if (catalogs.get(teamId) === entry) catalogs.delete(teamId);
+    },
+  );
   return entry.got;
+}
+
+// Forgets the lists of every workspace: a token was pasted again or a workspace was removed, so what Rust lists may differ now.
+export function forgetEmojiCatalogs() {
+  catalogs.clear();
 }
 
 // Remembers `picked` as the newest recent emoji of the workspace, once the reaction was added.
@@ -54,7 +86,7 @@ function cellOf(picked: PickedEmoji) {
     return cell;
   }
   cell.dataset.image = picked.image;
-  // `paintIcons` puts the image here once it is fetched.
+  // The image is put here once it is fetched (`awaitEmoji` of slack-view, asked when the cell comes into view).
   const slot = tag("span", "reaction-emoji");
   slot.dataset.emojiImage = picked.image;
   cell.append(slot);
@@ -63,11 +95,13 @@ function cellOf(picked: PickedEmoji) {
 
 function sectionOf(title: string) {
   const section = tag("section", "emoji-sec");
-  const grid = tag("div", "emoji-grid");
-  section.append(tag("h3", "", title), grid);
+  const heading = tag("h3", "", title);
   section.hidden = true;
-  return { section, grid };
+  return { section, heading, cells: [] as Cell[] };
 }
+
+// The observer of the picker that is open: the next opening ends it (cells of the grids are moved to the next picker).
+let watching: IntersectionObserver | null = null;
 
 // Opens the picker under `anchor`. A pick closes it and calls `onPick`; Escape and a press elsewhere close it (`menu.ts`).
 export function openEmojiPicker(anchor: Element, teamId: string, options: PickerOptions) {
@@ -91,44 +125,49 @@ export function openEmojiPicker(anchor: Element, teamId: string, options: Picker
   pop.append(input, scroll);
 
   // The custom cells whose images are asked for, a little after they come into view (one request for the cells of a scroll).
-  const wanted = new Set<string>();
+  let wanted: { url: string; node: HTMLElement }[] = [];
   let timer: number | undefined;
+  watching?.disconnect();
   const observer = new IntersectionObserver(
     (entries) => {
       if (!pop.isConnected) return observer.disconnect();
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
-        const url = (entry.target as HTMLElement).dataset.image;
-        if (url) wanted.add(url);
-        observer.unobserve(entry.target);
+        const cell = entry.target as HTMLElement;
+        const slot = cell.firstElementChild as HTMLElement | null;
+        if (slot?.dataset.emojiImage) wanted.push({ url: slot.dataset.emojiImage, node: slot });
+        observer.unobserve(cell);
       }
-      if (wanted.size && timer === undefined) {
+      if (wanted.length && timer === undefined) {
         timer = window.setTimeout(() => {
           timer = undefined;
           if (!pop.isConnected) return;
-          const urls = [...wanted];
-          wanted.clear();
-          options.loadImages(urls);
+          const images = wanted;
+          wanted = [];
+          options.loadImages(images);
         }, 30);
       }
     },
     { root: scroll, rootMargin: "80px" },
   );
+  watching = observer;
 
-  const fill = (s: { section: HTMLElement; grid: HTMLElement }, list: PickedEmoji[]) => {
-    s.grid.replaceChildren(...list.map(cellOf));
-    s.section.hidden = list.length === 0;
-    for (const cell of s.grid.querySelectorAll<HTMLElement>(".emoji-cell[data-image]")) observer.observe(cell);
+  const fill = (s: ReturnType<typeof sectionOf>, part: Part) => {
+    s.cells = part.cells;
+    s.section.replaceChildren(s.heading, part.grid);
+    s.section.hidden = part.cells.length === 0;
+    // The cells whose image is not here yet: a grid kept from an earlier opening has the painted ones already.
+    for (const { node } of part.cells) if (node.dataset.image && (node.firstElementChild as HTMLElement | null)?.dataset.emojiImage) observer.observe(node);
   };
 
-  // The cells the text leaves: a part of the name, case ignored. A section with none is hidden.
+  // The cells the text leaves: a part of the name, case ignored. A section with none is hidden. Only a cell whose state changes is written.
   const filter = () => {
     const q = input.value.trim().toLowerCase();
     for (const s of sections) {
       let any = false;
-      for (const cell of s.grid.querySelectorAll<HTMLElement>(".emoji-cell")) {
-        const hit = q === "" || cell.dataset.name!.toLowerCase().includes(q);
-        cell.hidden = !hit;
+      for (const c of s.cells) {
+        const hit = q === "" || c.name.includes(q);
+        if (c.node.hidden === hit) c.node.hidden = !hit;
         any ||= hit;
       }
       s.section.hidden = !any;
@@ -152,20 +191,14 @@ export function openEmojiPicker(anchor: Element, teamId: string, options: Picker
 
   showMenu(anchor, pop);
   input.focus();
-  fill(recent, recents.get(teamId) ?? []);
+  fill(recent, partOf(recents.get(teamId) ?? []));
   status.textContent = "読み込んでいます…";
   catalogOf(teamId).then(
-    (catalog) => {
+    (built) => {
       if (!pop.isConnected) return;
       status.hidden = true;
-      fill(
-        custom,
-        catalog.custom.map((c) => ({ name: c.name, emoji: `:${c.name}:`, image: c.image })),
-      );
-      fill(
-        standard,
-        catalog.standard.map((e) => ({ name: e.name, emoji: e.emoji, image: null })),
-      );
+      fill(custom, built.custom);
+      fill(standard, built.standard);
       filter();
     },
     (error) => {

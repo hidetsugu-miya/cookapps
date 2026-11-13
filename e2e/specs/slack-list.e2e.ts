@@ -2115,6 +2115,26 @@ describe("slack list: the history of a channel (S-20)", () => {
       expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#sc-feed .reaction")].map((r) => `${r.tagName}:${r.tabIndex}`))).toEqual(["BUTTON:0", "BUTTON:0"]);
     });
 
+    it("keeps the history as the press in the thread left it: the message the thread opened from has the new count and frame when the thread is left", async () => {
+      await open();
+      await mock("slack_thread", slackThread([threadMessage(firstTs, "Alice Example", "first", { reactions: [reaction("tada", "🎉", 3), reaction("eyes", "👀", 1, null, true)] })]));
+      const react = await mock("slack_react", true);
+      await $("#sc-feed .feed-thread-open").click();
+      await expect($("#slack-thread")).toBeDisplayed();
+      await browser.execute(() => document.querySelector<HTMLElement>('#st-msgs .reaction[data-name="tada"]')!.click());
+      await waitForCalls(react);
+      await browser.waitUntil(async () => (await textsOf('#st-msgs .reaction[data-name="tada"] .reaction-count'))[0] === "4");
+      await $("#st-back").click();
+      await expect($("#slack-channel")).toBeDisplayed();
+      expect(await chips()).toEqual([["tada", "4", true, "true", false], ["eyes", "1", true, "true", false]]);
+      // The next press on the row takes it off, not adds it again.
+      await browser.execute(() => document.querySelector<HTMLElement>('#sc-feed .reaction[data-name="tada"]')!.click());
+      expect(await waitForCalls(react, 2)).toEqual([
+        { teamId: workspace.teamId, channel: "C0123ABCD", ts: firstTs, name: "tada", add: true },
+        { teamId: workspace.teamId, channel: "C0123ABCD", ts: firstTs, name: "tada", add: false },
+      ]);
+    });
+
     describe("the emoji picker", () => {
       const catalog = () => emojiCatalog([["tada", "🎉"], ["eyes", "👀"], ["thinking_face", "🤔"]], [["partyparrot", "https://emoji.slack-edge.com/T1/partyparrot/abc.gif"]]);
       const addButton = (row: number) => browser.execute((i) => document.querySelectorAll("#sc-feed .feed-item")[i].querySelector<HTMLElement>(".reaction-add")!.click(), row);
@@ -2207,8 +2227,8 @@ describe("slack list: the history of a channel (S-20)", () => {
     // Only the two replies carry it; the others draw nothing.
     expect(await textsOf("#sc-feed .feed-thread-reply")).toEqual(["スレッドに返信済み: @here release notes", "スレッドに返信済み"]);
     expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .feed-item")].map((i) => i.querySelectorAll(".feed-thread-reply").length))).toEqual([0, 0, 1, 1]);
-    // It is above the text, and muted (the same color as the time).
-    expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .feed-item")[2].querySelector(".feed-main")!.children].map((e) => e.className.split(" ")[0]))).toEqual(["feed-meta", "feed-thread-reply", "feed-text"]);
+    // It is above the text, and muted (the same color as the time); every row has the box of the reactions (S-25) after the text.
+    expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .feed-item")[2].querySelector(".feed-main")!.children].map((e) => e.className.split(" ")[0]))).toEqual(["feed-meta", "feed-thread-reply", "feed-text", "reactions"]);
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#sc-feed .feed-thread-reply")!).color === getComputedStyle(document.querySelector("#sc-feed .feed-meta span")!).color)).toBe(true);
     // The press goes through it to the row: the thread opens, the thread's own `ts`.
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#sc-feed .feed-thread-reply")!).pointerEvents)).toBe("none");

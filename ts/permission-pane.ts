@@ -7,6 +7,7 @@ import { code, lockFoot, stepList } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { openPane, closePane } from "./pane.js";
 import { renderWorkspaces } from "./settings.js";
+import { forgetEmojiCatalogs } from "./slack-emoji-picker.js";
 import { getSlackWorkspaces } from "./slack-workspaces.js";
 
 // The history scopes, each with the conversations it reads.
@@ -86,6 +87,7 @@ export function openPermissionPane(w: Workspace, missing: string[]) {
     submit.disabled = true;
     try {
       const list = await invoke("slack_add_workspace", { token });
+      forgetEmojiCatalogs();
       // Another workspace's token is added as it is (the list grows, or this workspace is gone); the pane says so and stays.
       const other = list.length > getSlackWorkspaces()!.length || !list.some((x) => x.teamId === w.teamId);
       renderWorkspaces(list);

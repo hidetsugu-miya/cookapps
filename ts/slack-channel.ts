@@ -11,7 +11,7 @@ import { invoke } from "./ipc.js";
 import { createSlackEditor } from "./slack-editor.js";
 import { historyItem, watchedKeys } from "./slack-list.js";
 import { openSlackThread } from "./slack-thread.js";
-import { loadIcons, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
+import { applyReactionChange, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { toast } from "./toast.js";
 import { show } from "./view.js";
 
@@ -277,6 +277,10 @@ export function redrawSlackChannel() {
 
 export function initSlackChannel() {
   $("sc-reply").append(editor.el);
+  // A reaction changed on the message in a thread opened from here: the history shown when the thread is left holds it too (S-25).
+  onReactionChange((target, ts, change, done) => {
+    if (chosen?.teamId === target.teamId && chosen.channel === target.channel) applyReactionChange(messages ?? [], ts, change, done);
+  });
   feed().addEventListener("scroll", () => {
     if (!$("slack-channel").hidden) scroll = feed().scrollTop;
   });

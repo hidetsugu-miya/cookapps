@@ -2163,7 +2163,7 @@ struct Raw {
     has_files: bool,
     /// Set only by `history_rows`, for a reply also sent to the channel.
     broadcast: Option<Broadcast>,
-    /// The fields the screen draws (`thread_slim`), shared: a read clones every message it holds, and only the rows listed are drawn.
+    /// The fields the screen draws (`list_slim`, or `thread_slim` for a row of the history), shared: a read clones every message it holds, and only the rows listed are drawn.
     source: Arc<Value>,
 }
 
@@ -2248,6 +2248,8 @@ struct TimelineCache {
     groups: Mutex<GroupCache>,
     /// The custom emoji of each workspace (`emoji.list`), for the images of the reactions (S-26).
     emoji: Mutex<EmojiCache>,
+    /// team -> the gate that lets one `emoji.list` request of the workspace run at a time, so that a second call waits for the first one's answer.
+    emoji_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// (team, channel) -> when its last read was and the messages that read listed, which stand in for a channel that is not read now.
     history: Mutex<TeamsHistory>,
     /// team -> until when Slack's rate limit stops its timeline reads.
@@ -2279,6 +2281,7 @@ impl TimelineCache {
         self.users.lock().unwrap().retain(|(t, _), _| t != team_id);
         self.groups.lock().unwrap().remove(team_id);
         self.emoji.lock().unwrap().remove(team_id);
+        self.emoji_gates.lock().unwrap().remove(team_id);
         self.history
             .lock()
             .unwrap()
@@ -2481,6 +2484,16 @@ impl TimelineCache {
         emoji
             .get(team_id)
             .is_none_or(|(at, found)| !user_fresh(at.elapsed(), found.is_some()))
+    }
+
+    fn emoji_gate(&self, team_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(
+            self.emoji_gates
+                .lock()
+                .unwrap()
+                .entry(team_id.to_owned())
+                .or_default(),
+        )
     }
 
     fn put_emoji(&self, team_id: &str, found: Option<EmojiList>) {
@@ -3735,6 +3748,11 @@ fn reply_users_of(m: &Value) -> Vec<String> {
 
 /// The message as a `Raw`, whatever its kind: the thread's own message of a watched thread is shown as it is.
 fn raw_from(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
+    raw_with(team_id, channel, m, list_slim)
+}
+
+/// `raw_from` with the fields kept by `slim`: `thread_slim` keeps who gave the reactions, for a row of a channel's history (`history_rows`).
+fn raw_with(team_id: &str, channel: &Channel, m: &Value, slim: fn(&Value) -> Value) -> Option<Raw> {
     let ts = m["ts"].as_str().filter(|t| valid_ts(t))?;
     Some(Raw {
         team_id: team_id.to_owned(),
@@ -3762,7 +3780,7 @@ fn raw_from(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
             .map(str::to_owned),
         has_files: m["files"].as_array().is_some_and(|f| !f.is_empty()),
         broadcast: None,
-        source: Arc::new(thread_slim(m)),
+        source: Arc::new(slim(m)),
     })
 }
 
@@ -3775,7 +3793,10 @@ fn history_rows(reply: &Value, team_id: &str, channel: &Channel) -> Vec<Raw> {
     let mut rows = newest_first(
         page.iter()
             .filter_map(|m| {
-                let mut raw = raw_of(team_id, channel, m)?;
+                // The history draws the reactions, so it keeps who gave them (S-25).
+                let mut raw = is_listed(m)
+                    .then(|| raw_with(team_id, channel, m, thread_slim))
+                    .flatten()?;
                 raw.broadcast = broadcast_of(m, page);
                 Some(raw)
             })
@@ -4294,8 +4315,17 @@ fn file_of(file: &Value) -> Option<ThreadFile> {
     })
 }
 
-/// The fields of a message of `conversations.replies` that the thread screen uses.
+/// The fields of a message of `conversations.replies` that the thread screen uses, with the people who gave each reaction.
 fn thread_slim(m: &Value) -> Value {
+    slimmed(m, true)
+}
+
+/// The same for a row of the list, whose timers keep it: without the people who gave each reaction (up to 100 for each), which only the thread and the history read.
+fn list_slim(m: &Value) -> Value {
+    slimmed(m, false)
+}
+
+fn slimmed(m: &Value, users: bool) -> Value {
     json!({
         "ts": m["ts"],
         "user": m["user"],
@@ -4306,10 +4336,16 @@ fn thread_slim(m: &Value) -> Value {
         "attachments": m["attachments"],
         "username": m["username"],
         "bot_profile": m["bot_profile"],
-        // The name and the count, and the people who gave it only for `reactions_of` to tell which ones are the user's own (S-25): the screen never gets them.
+        // The name and the count, and the people who gave it (`users`) only for `reactions_of` to tell which ones are the user's own (S-25): the screen never gets them.
         "reactions": m["reactions"].as_array().map(|list| {
             list.iter()
-                .map(|r| json!({"name": r["name"], "count": r["count"], "users": r["users"]}))
+                .map(|r| {
+                    if users {
+                        json!({"name": r["name"], "count": r["count"], "users": r["users"]})
+                    } else {
+                        json!({"name": r["name"], "count": r["count"]})
+                    }
+                })
                 .collect::<Vec<_>>()
         }),
     })
@@ -4615,6 +4651,12 @@ async fn lookup_emoji(
         .map(|(team, token)| {
             let (api_url, http, cache) = (api_url.to_owned(), http.clone(), Arc::clone(cache));
             async move {
+                // A call that finds another one asking waits for its answer, and asks again only if that left none.
+                let gate = cache.emoji_gate(&team);
+                let _asking = gate.lock().await;
+                if !cache.needs_emoji(&team) {
+                    return;
+                }
                 let found = fetch_emoji(&api_url, &http, &token, &team).await;
                 cache.put_emoji(&team, found);
             }
@@ -5364,14 +5406,16 @@ fn history_messages(
     workspaces: &[Workspace],
     rows: &[Raw],
 ) -> Vec<TimelineMessage> {
+    // A history is one channel's: the workspace's emoji and user are read once, not for each row.
+    let team = rows.first().map(|raw| raw.team_id.as_str());
+    let custom = team.map(|t| cache.custom_emoji(t));
+    let own = team.and_then(|t| cache.own_user(t));
     rows.iter()
         .filter_map(|raw| {
             let mut m = message_of(cache, workspaces, raw, false)?;
-            m.reactions = reactions_of(
-                &raw.source,
-                &cache.custom_emoji(&raw.team_id),
-                cache.own_user(&raw.team_id).as_deref(),
-            );
+            if let Some(custom) = &custom {
+                m.reactions = reactions_of(&raw.source, custom, own.as_deref());
+            }
             Some(m)
         })
         .collect()
@@ -10973,6 +11017,10 @@ mod tests {
             ],
         });
         let raw = raw_from("T1", &channel("C1"), &m).unwrap();
+        // The list's copy keeps no people (up to 100 for each reaction); the history's does.
+        assert!(raw.source["reactions"][0].get("users").is_none());
+        let history =
+            history_rows(&json!({"messages": [m.clone()]}), "T1", &channel("C1")).remove(0);
         let name_of = |_: &str| None;
         let w = workspace("T1", "https://one.slack.com/");
         let cache = TimelineCache::default();
@@ -10998,7 +11046,7 @@ mod tests {
         let row = timeline_message(&raw, &w, None, &name_of, false);
         assert!(row.reactions.is_empty());
         // A row of a channel's history does, as a thread message does, with the images of its workspace's custom emoji.
-        let rows = history_messages(&cache, &[w], &[raw]);
+        let rows = history_messages(&cache, &[w], &[history]);
         assert_eq!(rows.len(), 1);
         let thread = thread_message(
             &thread_slim(&m),
@@ -11044,6 +11092,41 @@ mod tests {
         cache.forget("T1");
         assert!(cache.needs_emoji("T1"));
         assert!(cache.custom_emoji("T1").is_empty());
+    }
+
+    #[test]
+    fn two_calls_for_one_workspace_send_one_emoji_list_request() {
+        let (url, server) = serve_reply(
+            r#"{"ok":true,"emoji":{"partyparrot":"https://emoji.slack-edge.com/T1/partyparrot/abc.gif"}}"#,
+        );
+        let cache = Arc::new(TimelineCache::default());
+        let http = reqwest::Client::new();
+        let ask = || {
+            lookup_emoji(
+                &url,
+                &http,
+                &cache,
+                vec![("T1".to_owned(), "xoxp-token".to_owned())],
+            )
+        };
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async { tokio::join!(ask(), ask()) });
+        // The server answers one connection only: a second request would have been refused and would have replaced the list with a miss.
+        server.join().unwrap();
+        assert_eq!(cache.custom_emoji("T1").len(), 1);
+        assert!(Arc::ptr_eq(
+            &cache.emoji_gate("T1"),
+            &cache.emoji_gate("T1")
+        ));
+        assert!(!Arc::ptr_eq(
+            &cache.emoji_gate("T1"),
+            &cache.emoji_gate("T2")
+        ));
+        cache.forget("T1");
+        assert!(!cache.emoji_gates.lock().unwrap().contains_key("T1"));
     }
 
     #[test]

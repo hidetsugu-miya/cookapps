@@ -12,6 +12,7 @@ import { closeHint, code, confirmUnlink, hintPopup, toggleHint } from "./hint.js
 import { invoke } from "./ipc.js";
 import { appsLink, OPTIONAL_KINDS, openPermissionPane, scopesBlock, SLACK_SCOPES } from "./permission-pane.js";
 import { bumpSlackList, setSlackWorkspaces } from "./slack-workspaces.js";
+import { forgetEmojiCatalogs } from "./slack-emoji-picker.js";
 import { workspaceColor } from "./slack-view.js";
 import { updateAddMode } from "./todo-add.js";
 import { showTokenForm } from "./todo.js";
@@ -112,6 +113,7 @@ function workspaceRow(w: Workspace, result: Check | null) {
       $("error").hidden = true;
       try {
         const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
+        forgetEmojiCatalogs();
         wsChecks.delete(w.teamId);
         renderWorkspaces(left);
         // The channels kept off the list go with their workspace.
@@ -345,7 +347,10 @@ export function initSettings() {
     input.value = "";
     $("error").hidden = true;
     try {
-      renderWorkspaces(await invoke("slack_add_workspace", { token }));
+      const list = await invoke("slack_add_workspace", { token });
+      // A token pasted again may reach other emoji.
+      forgetEmojiCatalogs();
+      renderWorkspaces(list);
     } catch (err) {
       showError(err);
     }

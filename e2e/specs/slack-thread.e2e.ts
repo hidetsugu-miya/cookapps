@@ -941,6 +941,26 @@ describe("slack thread: add and take off a reaction (S-25)", () => {
     expect(await callsOf(react)).toHaveLength(1);
   });
 
+  it("keeps the press when the thread is read again while it is on its way: a later redraw of the box still has it", async () => {
+    await openDetail({}, thread());
+    const react = await mock("slack_react", holds);
+    await chip(0, "tada");
+    await waitForCalls(react);
+    // A reply posted meanwhile reads the thread again; Slack has not seen the press, so the read shows 3.
+    await mock("slack_reply", true);
+    await mock("slack_thread", slackThread([...thread().messages, threadMessage(slackTs(0), "Alice Example", "Thanks, will do")]));
+    await write("Thanks, will do");
+    await pressReply();
+    await waitForCount("#st-msgs .st-msg", 3);
+    await release(react, true);
+    await browser.waitUntil(async () => (await chips())[0][0][1] === "4");
+    // Another press draws the box from the message that read made: it has the first press too.
+    await mock("slack_react", true);
+    await chip(0, "eyes");
+    await browser.waitUntil(async () => (await chips())[0].length === 2);
+    expect((await chips())[0][0]).toEqual(["tada", "4", true, "true", false]);
+  });
+
   it("is a button the keyboard reaches, and keeps the focus on the reaction when the press is done", async () => {
     await openDetail({}, thread());
     expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#st-msgs .reaction")].map((r) => r.tabIndex))).toEqual([0, 0, 0, 0]);
@@ -984,6 +1004,8 @@ describe("slack thread: the emoji picker (S-25)", () => {
     ]);
   // The "add a reaction" button of a message (the box of a message with no reaction takes no room, so the press is a script's).
   const addButton = (message: number) => browser.execute((i) => document.querySelectorAll("#st-msgs .st-msg")[i].querySelector<HTMLElement>(".reaction-add")!.click(), message);
+  // A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a menu (as in todo.e2e.ts).
+  const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
   const picker = async (fixtures: Record<string, unknown> = {}) => {
     await openDetail({ fetch_images: { [partyUrl]: pngUri, [sutekiUrl]: pngUri }, ...fixtures }, thread());
     const read = await mock("slack_emoji_catalog", catalog());
@@ -1091,9 +1113,9 @@ describe("slack thread: the emoji picker (S-25)", () => {
     const react = await mock("slack_react", true);
     await $('.emoji-pop .emoji-cell[data-name="tada"]').click();
     expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: reply1, name: "tada", add: true }]);
-    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:nth-child(2) .reaction")) === 1);
-    await expect($("#st-msgs .st-msg:nth-child(2) .reactions")).not.toHaveElementClass("empty");
-    expect(await textsOf("#st-msgs .st-msg:nth-child(2) .reaction-count")).toEqual(["1"]);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:last-child .reaction")) === 1);
+    await expect($("#st-msgs .st-msg:last-child .reactions")).not.toHaveElementClass("empty");
+    expect(await textsOf("#st-msgs .st-msg:last-child .reaction-count")).toEqual(["1"]);
     expect(await callsOf("slack_thread")).toHaveLength(1);
   });
 
@@ -1107,7 +1129,8 @@ describe("slack thread: the emoji picker (S-25)", () => {
     expect(await count("#st-msgs .st-msg:first-child .reaction")).toBe(2);
     // The user's own, picked again: Slack says it was so already (false), and the count stays.
     await addButton(0);
-    await waitForCount(".emoji-pop .emoji-cell", 7);
+    // The tada just added is in 最近 now.
+    await waitForCount(".emoji-pop .emoji-cell", 8);
     await mock("slack_react", false);
     await $('.emoji-pop .emoji-cell[data-name="eyes"]').click();
     await waitForCalls("slack_react");
@@ -1139,12 +1162,12 @@ describe("slack thread: the emoji picker (S-25)", () => {
     await waitForCount(".emoji-pop .emoji-cell", 8);
     await $('.emoji-pop .emoji-cell[data-name="+1"]').click();
     await waitForCalls(react, 2);
-    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:nth-child(2) .reaction")) === 1);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:last-child .reaction")) === 1);
     await addButton(1);
     await waitForCount(".emoji-pop .emoji-cell", 9);
     await $('.emoji-pop .emoji-sec:nth-child(1) .emoji-cell[data-name="grinning"]').click();
     await waitForCalls(react, 3);
-    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:nth-child(2) .reaction")) === 2);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:last-child .reaction")) === 2);
     await addButton(0);
     await waitForCount(".emoji-pop .emoji-cell", 9);
     expect(await cells(".emoji-pop .emoji-sec:nth-child(1) .emoji-cell")).toEqual(["grinning", "+1"]);
@@ -1166,7 +1189,7 @@ describe("slack thread: the emoji picker (S-25)", () => {
     await expect($(".emoji-pop")).not.toExist();
     await addButton(0);
     await waitForCount(".emoji-pop .emoji-cell", 7);
-    await $("#st-msgs .st-text").click();
+    await press($("#st-msgs .st-text"));
     await expect($(".emoji-pop")).not.toExist();
     await browser.pause(200);
     expect(await callsOf(react)).toEqual([]);
@@ -1185,6 +1208,18 @@ describe("slack thread: the emoji picker (S-25)", () => {
     await addButton(0);
     await waitForCount(".emoji-pop .emoji-cell", 7);
     expect(await sectionTitles()).toEqual(["カスタム", "標準"]);
+  });
+
+  it("asks again the next time when the workspace has no custom emoji in its list", async () => {
+    await openDetail({}, thread());
+    const list = await mock("slack_emoji_catalog", emojiCatalog([["grinning", "😀"]], []));
+    await addButton(0);
+    await waitForCount(".emoji-pop .emoji-cell", 1);
+    await browser.keys("Escape");
+    await expect($(".emoji-pop")).not.toExist();
+    await addButton(0);
+    await waitForCount(".emoji-pop .emoji-cell", 1);
+    expect(await callsOf(list)).toHaveLength(2);
   });
 
   it("shows the error in the picker when the list cannot be read, and asks again the next time", async () => {

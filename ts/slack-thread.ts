@@ -18,7 +18,7 @@ import { attachmentNode, blocksNode } from "./slack-blocks.js";
 import { createSlackEditor } from "./slack-editor.js";
 import { richNodes } from "./slack-rich.js";
 import { revealSlackList, seeThread } from "./slack-list.js";
-import { decorateAvatar, loadIcons, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
+import { applyReactionChange, decorateAvatar, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { initSplit } from "./split.js";
 import { toast } from "./toast.js";
 import { HandoffPane } from "./orca-handoff.js";
@@ -535,6 +535,10 @@ export function initSlackThread() {
   };
   $("st-todo").onclick = makeTodo;
   $("st-reply").append(editor.el);
+  // A reaction changed on a copy of the message that a read has replaced meanwhile, or in the history: the thread held now takes it too (S-25).
+  onReactionChange((target, ts, change, done) => {
+    if (thread?.teamId === target.teamId && thread.channel === target.channel) applyReactionChange(thread.messages, ts, change, done);
+  });
   chat.init();
   const box = $("st-msgs");
   // The user moved up from the bottom: stop following. Moving down to within BOTTOM_PX of the bottom follows again; a position cut by a redraw is not a move down.
