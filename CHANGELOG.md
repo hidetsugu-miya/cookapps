@@ -3,6 +3,11 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.68.1
+
+S-11: in a thread, a channel's history and the Slack list, the text of an attachment of 700 characters or more, or of 5 line breaks or more, is folded to its first 5 lines (up to 700 characters), as Slack does, and 「もっと表示する」 shows the whole text (#564).
+S-11: in a post that shares another message, the link to that message in the text is drawn as a link labeled 「メッセージ」, not as its address, when the shared message's attachment unfolds it below; only an https address of Slack is labeled, and the address is the link's tooltip (#565).
+
 ## v0.68.0
 
 S-26: in a thread and in a channel's history, a reaction of a custom emoji is drawn as the emoji's image, not as `:name:` (#559). An alias of a custom emoji draws the image it points to, and an alias of a standard emoji draws that emoji. An image that cannot be fetched leaves `:name:`. The text of a message keeps `:name:` for a custom emoji as before. This needs the User Token Scope `emoji:read`; a token without it draws `:name:` as before, and every other feature works.
