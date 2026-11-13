@@ -43,6 +43,8 @@ describe("thread", () => {
       const box = (s: string) => document.querySelector(s)!.getBoundingClientRect();
       const ids = (s: string) => [...document.querySelectorAll(s)].map((b) => b.id);
       const first = document.querySelector<HTMLElement>("#thread-actions > button:not([hidden])")!;
+      const shown = [...document.querySelectorAll<HTMLElement>("#thread-actions > button:not([hidden])")];
+      const last = shown[shown.length - 1]!;
       return {
         header: ids("#mail-header > *"),
         headerHeight: box("#mail-header").height,
@@ -50,7 +52,7 @@ describe("thread", () => {
         actionsInHeader: document.querySelector("#mail-header #thread-actions") !== null,
         size: [first.getBoundingClientRect().width, first.getBoundingClientRect().height],
         icon: [first.querySelector("svg")!.getBoundingClientRect().width, first.querySelector("svg")!.getBoundingClientRect().height],
-        leftOfSubject: Math.round(first.getBoundingClientRect().left - box("#thread-head").left),
+        rightOfSubject: Math.round(last.getBoundingClientRect().right - box("#thread-head").right),
         aboveSubject: box("#thread-actions").bottom <= box("#thread-head").top,
       };
     });
@@ -61,7 +63,7 @@ describe("thread", () => {
       actionsInHeader: false,
       size: [34, 34],
       icon: [20, 20],
-      leftOfSubject: 0,
+      rightOfSubject: 0,
       aboveSubject: true,
     });
   });

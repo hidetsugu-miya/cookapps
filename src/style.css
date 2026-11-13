@@ -127,8 +127,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #slack-header .icon-btn { color: #444746; border-radius: 50%; }
 #unread-heading .text-btn:disabled { opacity: .4; cursor: default; }
 #unread-heading .text-btn:disabled:hover { background: #fff; }
-/* The operations of the open mail: a row of icons lined up with the subject (56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding (and sticks 8px above its content box, WebKit measuring from there) and has the color of the body, so that nothing shows through it. The line before "ゴミ箱へ移動" is drawn by the button itself, so it is not there when the buttons that take a row out are hidden. */
-#thread-actions { position: sticky; top: -8px; z-index: 2; display: flex; align-items: center; gap: 4px; margin: 0 -24px 0 -32px; padding: 4px 24px 4px 88px; background: var(--surface); }
+/* The operations of the open mail: a row of icons at the right end of the body (its left padding keeps them right of the subject's column, 56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding (and sticks 8px above its content box, WebKit measuring from there) and has the color of the body, so that nothing shows through it. The line before "ゴミ箱へ移動" is drawn by the button itself, so it is not there when the buttons that take a row out are hidden. */
+#thread-actions { position: sticky; top: -8px; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: 0 -24px 0 -32px; padding: 4px 24px 4px 88px; background: var(--surface); }
 #thread-actions .icon-btn { width: 34px; height: 34px; color: var(--ink-soft); border-radius: 50%; }
 #thread-actions .icon-btn svg { width: 20px; height: 20px; }
 #thread-actions #trash { position: relative; margin-left: 10px; }
