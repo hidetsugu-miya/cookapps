@@ -5,7 +5,7 @@ The project was named cookup until v0.14.6.
 
 ## v0.67.1
 
-S-5: the rows of the Slack list show the whole body, with no limit of 2 or 12 lines; so do the unread replies under a row and the rows of a channel's history (#541). A thread's row shows the icons of up to 5 people who replied before 「N 件の返信」, and the time of the newest reply after it, as 「最終返信 15:02」 (#542). A thread for which Slack names no repliers shows 「N 件の返信」 alone.
+S-5: the rows of the Slack list show the whole body, with no limit of 2 or 12 lines; so do the unread replies under a row and the rows of a channel's history (#541). A thread's row shows the icons of up to 5 people who replied before the reply count (「N 件の返信」, or 「返信 N 件」 in the watch), and the time of the newest reply after it, as 「最終返信 15:02」 (#542). A thread for which Slack names no repliers, or none of them can be named (a token without `users:read`, for example), shows the count alone.
 
 Inside: the saving of the settings files goes through one function, the internal functions take the settings folder, the colors of the screen come from the color variables, and the checks before a push run the self-test of the push gate when its tools change (#543, #544, #546 to #554). Nothing of the app's behavior changes.
 
