@@ -3,14 +3,17 @@
 # 検出語は、このファイル自身が検査に掛からないよう、わざと分けて書いている。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
-hook_log_begin
 input=$(cat)
+tauri='__TAURI'
+# 生の入力を grep 1 回で絞る: 下の検査が見る語（記録の場所 .claude/e2e と .claude/ci、Tauri、__e2e、@wdio、モックの語）のどれも無い呼び出しは、jq も起こさず、ログも書かずに通す。
+# 最後の \u は、JSON のエスケープで語が隠れた入力を絞りから漏らさないため（その入力は下の検査まで進む）。
+grep -q -E "\\.claude/(e2e|ci)|${tauri}|__e2e|@wdio|mock[I]PC|\\\\u" <<< "$input" || exit 0
+hook_log_begin
 path=$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<< "$input")
 cmd=$(jq -r '.tool_input.command // empty' <<< "$input")
 # 書き込む中身: Bash のコマンド、Write の content、Edit・MultiEdit の new_string、NotebookEdit の new_source。
 text=$(jq -r '[.tool_input.command, .tool_input.content, .tool_input.new_string, .tool_input.new_source, (.tool_input.edits[]?.new_string)] | map(select(. != null)) | join("\n")' <<< "$input")
 
-tauri='__TAURI'
 tauri_g="${tauri}(_INTERNALS)?__"
 # window の Tauri を差し替える・モックする書き方。読むだけの `const { invoke } = window.<tauri>.core` は含めない。
 replace="${tauri_g}(\\.[A-Za-z_.]+)?[[:space:]]*(\\?\\?|\\|\\||&&)?=[^=]|(defineProperty|assign)\\([^)]*${tauri}|mock[I]PC"
