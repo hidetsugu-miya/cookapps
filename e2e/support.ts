@@ -512,6 +512,8 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
   showText: true,
   attachments: [],
   replyCount: 0,
+  repliers: [],
+  latestReply: null,
   permalink: permalinkOf(ts),
   hasFiles: false,
   unread: false,

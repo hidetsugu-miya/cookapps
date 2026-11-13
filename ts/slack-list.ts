@@ -338,7 +338,7 @@ function rowOf(m: TimelineMessage, key: string, grouped: boolean, open?: (m: Tim
   const status = m.watch?.status ?? "ok";
   const note = status === "unreadable" ? "このスレッドは読めません（削除されたか、チャンネルを抜けた可能性があります）" : status === "pending" ? "読み込んでいます…" : null;
   main.append(meta, note === null ? bodyOf(m) : tag("div", "feed-text muted", note));
-  if (status === "ok" && m.replyCount > 0) main.append(grouped ? threadButton(m, open) : tag("span", "feed-replies", `返信 ${m.replyCount} 件`));
+  if (status === "ok" && m.replyCount > 0) main.append(threadLine(m, grouped ? threadButton(m, open) : tag("span", "feed-replies", `返信 ${m.replyCount} 件`)));
   if (m.watch && m.watch.newReplies > 0) main.append(tag("span", "feed-new", `新しい返信 ${m.watch.newReplies} 件`));
   // New replies that could not be counted (a thread longer than the page Rust reads): no number.
   else if (m.watch?.uncounted) main.append(tag("span", "feed-new", "新しい返信あり"));
@@ -370,6 +370,25 @@ function threadButton(m: TimelineMessage, open?: (m: TimelineMessage) => void) {
   button.type = "button";
   button.onclick = (e) => (open ? open(m) : openRow(m, e));
   return button;
+}
+
+// The line of a row's thread: the icons of the people who replied, `link` ("N 件の返信" or "返信 N 件") and the time of the newest reply, as Slack has them.
+// A thread Slack named no repliers for has `link` alone. The line lets the press through, as the row does (the CSS holds this).
+function threadLine(m: TimelineMessage, link: HTMLElement) {
+  if (!m.repliers.length) return link;
+  const icons = tag("span", "feed-repliers");
+  for (const r of m.repliers) {
+    const icon = tag("span", "avatar feed-replier");
+    decorateAvatar(icon, r.name, r.iconUrl);
+    icon.title = r.name;
+    icon.setAttribute("role", "img");
+    icon.setAttribute("aria-label", r.name);
+    icons.append(icon);
+  }
+  const line = tag("div", "feed-thread-line");
+  line.append(icons, link);
+  if (m.latestReply) line.append(tag("span", "feed-last-reply", `最終返信 ${formatDate(slackMs(m.latestReply))}`));
+  return line;
 }
 
 // The time of a message in a group, "9:05".
@@ -802,7 +821,7 @@ function drawFeed() {
     }
     target.focus({ preventScroll: true });
   }
-  if (fresh.size) loadIcons([...messages, ...watched].filter((m) => fresh.has(m)).flatMap((m) => [m.iconUrl, ...(m.unreadReplies?.replies ?? []).map((r) => r.iconUrl)]));
+  if (fresh.size) loadIcons([...messages, ...watched].filter((m) => fresh.has(m)).flatMap((m) => [m.iconUrl, ...m.repliers.map((r) => r.iconUrl), ...(m.unreadReplies?.replies ?? []).map((r) => r.iconUrl)]));
 }
 
 // A thread with no more unread replies starts open the next time it has some.

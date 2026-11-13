@@ -1317,6 +1317,12 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .feed-thread-reply { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); font-weight: normal; color: var(--muted); }
 .feed-thread-open { display: block; margin-top: 3px; padding: 0; border: 0; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); font-weight: bold; color: var(--accent); cursor: pointer; }
 .feed-thread-open:hover { text-decoration: underline; }
+.feed-thread-line { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+.feed-thread-line .feed-thread-open, .feed-thread-line .feed-replies { margin-top: 0; }
+.feed-repliers { display: flex; gap: 3px; }
+.feed-replier { width: 20px; height: 20px; border-radius: 5px; overflow: hidden; font-size: calc(9px * var(--fs)); }
+.feed-replier .av-img { border-radius: 0; }
+.feed-last-reply { font-size: calc(12px * var(--fs)); color: var(--muted); white-space: nowrap; }
 .feed-meta b { font-weight: 600; }
 .feed-row.unread { font-weight: bold; }
 .feed-row.unread .feed-meta b { font-weight: 700; }

@@ -1818,6 +1818,8 @@ const REFRESH_LIVE_SECS: u32 = 300;
 /// How long a workspace's timeline reads stop after Slack rate-limits one: the `Retry-After` it gave, else `RATE_LIMIT_DEFAULT`, never more than `RATE_LIMIT_MAX`.
 const RATE_LIMIT_DEFAULT: Duration = Duration::from_secs(60);
 const RATE_LIMIT_MAX: Duration = Duration::from_secs(10 * 60);
+/// The most people shown as having replied in a thread (S-5); Slack lists at most 5 in `reply_users` too.
+const REPLIERS_MAX: usize = 5;
 /// Shown for a user, channel or mention Slack could not name.
 pub(crate) const UNKNOWN_NAME: &str = "不明";
 /// Where a link goes when the workspace's own address is not known.
@@ -1849,6 +1851,10 @@ pub struct TimelineMessage {
     attachments: Vec<ThreadAttachment>,
     reactions: Vec<Reaction>,
     reply_count: u32,
+    /// The people who replied in the thread (`reply_users` of the parent message, S-5), at most `REPLIERS_MAX`, in Slack's order; empty when Slack gave none or none could be named.
+    repliers: Vec<Replier>,
+    /// The `ts` of the thread's newest reply (`latest_reply`), when Slack gave a usable one.
+    latest_reply: Option<String>,
     permalink: String,
     has_files: bool,
     /// Whether the message is past the channel's `last_read` (`is_unread`).
@@ -1859,6 +1865,16 @@ pub struct TimelineMessage {
     unread_replies: Option<UnreadReplies>,
     /// Set only for a row of a channel's history (S-20) that is a reply also sent to the channel (`thread_broadcast`).
     thread_reply: Option<ThreadReply>,
+}
+
+/// A person who replied in a thread, as the row draws their icon: the name is the icon's `title` and its reading, the icon address is an https one of an allowed host (`icon_url`).
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct Replier {
+    name: String,
+    icon_url: Option<String>,
 }
 
 /// What a row of a channel's history says of the thread it replied to (S-20): `parent` is the start of the thread's own message as one line of plain text (`headline`), `None` when it is not known.
@@ -2095,6 +2111,9 @@ struct Raw {
     bot: Option<SlackUser>,
     text: String,
     reply_count: u32,
+    /// The users who replied in the thread (`reply_users`, `reply_users_of`) and its newest reply (`latest_reply`); both stay empty on a message that is no thread's parent or that Slack gave none for.
+    reply_users: Vec<String>,
+    latest_reply: Option<String>,
     has_files: bool,
     /// Set only by `history_rows`, for a reply also sent to the channel.
     broadcast: Option<Broadcast>,
@@ -2933,6 +2952,8 @@ fn watch_row(
         bot: None,
         text: String::new(),
         reply_count: 0,
+        reply_users: Vec::new(),
+        latest_reply: None,
         has_files: false,
         broadcast: None,
         source: Arc::new(Value::Null),
@@ -3618,6 +3639,21 @@ fn raw_of(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
     raw_from(team_id, channel, m)
 }
 
+/// The users who replied in the thread whose parent message is `m` (`reply_users`): the valid IDs, each once, in Slack's order, the first `REPLIERS_MAX`.
+/// A message with no such field (`conversations.history` may leave it out) has none.
+fn reply_users_of(m: &Value) -> Vec<String> {
+    let mut seen = HashSet::new();
+    m["reply_users"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|u| valid_channel(u) && seen.insert(*u))
+        .take(REPLIERS_MAX)
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The message as a `Raw`, whatever its kind: the thread's own message of a watched thread is shown as it is.
 fn raw_from(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
     let ts = m["ts"].as_str().filter(|t| valid_ts(t))?;
@@ -3640,6 +3676,11 @@ fn raw_from(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
         reply_count: m["reply_count"]
             .as_u64()
             .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
+        reply_users: reply_users_of(m),
+        latest_reply: m["latest_reply"]
+            .as_str()
+            .filter(|t| valid_ts(t))
+            .map(str::to_owned),
         has_files: m["files"].as_array().is_some_and(|f| !f.is_empty()),
         broadcast: None,
         source: Arc::new(thread_slim(m)),
@@ -4104,6 +4145,9 @@ fn timeline_message(
         // Only a row of a channel's history draws them (`history_messages`); the list does not.
         reactions: Vec::new(),
         reply_count: raw.reply_count,
+        // Named by `message_of`, which holds the cache.
+        repliers: Vec::new(),
+        latest_reply: raw.latest_reply.clone(),
         permalink: permalink(
             &workspace.url,
             &raw.channel,
@@ -5073,7 +5117,21 @@ fn message_of(
         .as_deref()
         .and_then(|u| cache.user(&raw.team_id, u));
     let name_of = |id: &str| cache.name_of(&raw.team_id, id);
-    Some(timeline_message(raw, workspace, user, &name_of, unread))
+    let mut message = timeline_message(raw, workspace, user, &name_of, unread);
+    message.repliers = repliers_of(cache, raw);
+    Some(message)
+}
+
+/// The people who replied in the thread of `raw` that the cache can name, in Slack's order; one it cannot name is left out, as an icon of "不明" says nothing.
+fn repliers_of(cache: &TimelineCache, raw: &Raw) -> Vec<Replier> {
+    raw.reply_users
+        .iter()
+        .filter_map(|id| cache.user(&raw.team_id, id))
+        .map(|u| Replier {
+            name: u.name,
+            icon_url: u.icon_url,
+        })
+        .collect()
 }
 
 /// The unread replies of a row as the screen draws them, with the names the cache holds.
@@ -5415,9 +5473,9 @@ pub async fn slack_timeline(
     });
     let picked = pick_timeline(&state.timeline, all, &watched, threads);
 
-    // Names: the senders and the people the rows and their unread replies draw, once each, in the order the list shows them.
+    // Names: the senders and the people the rows and their unread replies draw, once each, in the order the list shows them; the people who replied in a thread (S-5) come after all of them, so that they never take a sender's place in the `USER_LOOKUPS`.
     let mut seen = HashSet::new();
-    let wanted = picked
+    let drawn: Vec<&Raw> = picked
         .top
         .iter()
         .flat_map(|row| {
@@ -5425,12 +5483,21 @@ pub async fn slack_timeline(
         })
         .chain(rows.iter().map(|r| &r.raw))
         .chain(arrived.iter())
+        .collect();
+    let wanted = drawn
+        .iter()
         .flat_map(|m| {
             people_of(m)
                 .into_iter()
                 .map(|user| (m.team_id.clone(), user))
                 .collect::<Vec<_>>()
         })
+        .chain(drawn.iter().flat_map(|m| {
+            m.reply_users
+                .iter()
+                .map(|user| (m.team_id.clone(), user.clone()))
+                .collect::<Vec<_>>()
+        }))
         .filter(|(team, _)| !no_names.contains(team.as_str()))
         .filter(|pair| seen.insert(pair.clone()));
     let wanted: Vec<(String, String, String)> = needing_lookup(
@@ -6057,6 +6124,7 @@ pub async fn slack_channel_history(
     let wanted: Vec<(String, String, String)> = needing_lookup(
         rows.iter()
             .flat_map(people_of)
+            .chain(rows.iter().flat_map(|m| m.reply_users.iter().cloned()))
             .filter(|user| seen.insert(user.clone())),
         |user| state.timeline.needs_lookup(&team_id, user),
         USER_LOOKUPS,
@@ -7061,6 +7129,8 @@ mod tests {
             bot: None,
             text: "t".into(),
             reply_count: 0,
+            reply_users: Vec::new(),
+            latest_reply: None,
             has_files: false,
             broadcast: None,
             source: Arc::new(Value::Null),
@@ -9784,6 +9854,90 @@ mod tests {
             json!({"type": "message", "ts": "9.000001", "text": " ", "files": [{"id": "F1"}]}),
         ];
         assert_eq!(parent_of(&m, &blank_parent), Some(None));
+    }
+
+    #[test]
+    fn the_people_who_replied_are_the_first_five_valid_ids_once_each() {
+        let ids = |v: Value| reply_users_of(&json!({ "reply_users": v }));
+        assert_eq!(ids(json!(["U1", "U2"])), ["U1", "U2"]);
+        // More than Slack's five, a repeat, something that is no ID and a non-string: only the first five usable ones.
+        assert_eq!(
+            ids(json!([
+                "U1", "U1", "bad id", 7, "U2", "U3", "U4", "U5", "U6", "U7"
+            ])),
+            ["U1", "U2", "U3", "U4", "U5"]
+        );
+        assert_eq!(ids(json!([])), Vec::<String>::new());
+        // `conversations.history` may leave the field out, or give something else.
+        assert!(reply_users_of(&json!({"ts": "1.1"})).is_empty());
+        assert!(ids(json!("U1")).is_empty());
+    }
+
+    #[test]
+    fn a_thread_parent_keeps_who_replied_and_its_newest_reply() {
+        let channel = channel("C1");
+        let parent = json!({
+            "ts": "10.000001", "thread_ts": "10.000001", "user": "U1", "text": "p",
+            "reply_count": 2, "reply_users": ["U2", "U3"], "latest_reply": "15.000001",
+        });
+        let raw = raw_from("T1", &channel, &parent).unwrap();
+        assert_eq!(raw.reply_users, ["U2", "U3"]);
+        assert_eq!(raw.latest_reply.as_deref(), Some("15.000001"));
+        // Without the fields, or with a `latest_reply` that is no `ts`, the row stays as it was.
+        let plain = json!({"ts": "10.000001", "user": "U1", "text": "p", "reply_count": 2, "latest_reply": "soon"});
+        let raw = raw_from("T1", &channel, &plain).unwrap();
+        assert!(raw.reply_users.is_empty());
+        assert_eq!(raw.latest_reply, None);
+    }
+
+    #[test]
+    fn a_row_names_the_repliers_the_cache_knows_and_leaves_the_others_out() {
+        let cache = TimelineCache::default();
+        let named = |name: &str, icon: Option<&str>| SlackUser {
+            name: name.into(),
+            icon_url: icon.map(str::to_owned),
+        };
+        cache.put_user(
+            "T1",
+            "U2",
+            Some(named("Bob", Some("https://avatars.slack-edge.com/b.png"))),
+        );
+        cache.put_user("T1", "U3", None);
+        cache.put_user("T1", "U4", Some(named("Cy", None)));
+        let mut parent = raw("C1", "10.000001");
+        parent.reply_count = 3;
+        parent.reply_users = vec!["U2".into(), "U3".into(), "U4".into(), "U5".into()];
+        parent.latest_reply = Some("15.000001".into());
+        let row = message_of(
+            &cache,
+            &[workspace("T1", "https://x.slack.com/")],
+            &parent,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            row.repliers,
+            [
+                Replier {
+                    name: "Bob".into(),
+                    icon_url: Some("https://avatars.slack-edge.com/b.png".into())
+                },
+                Replier {
+                    name: "Cy".into(),
+                    icon_url: None
+                },
+            ]
+        );
+        assert_eq!(row.latest_reply.as_deref(), Some("15.000001"));
+        // A message with no thread says nothing of one.
+        let alone = message_of(
+            &cache,
+            &[workspace("T1", "https://x.slack.com/")],
+            &raw("C1", "11.000001"),
+            true,
+        )
+        .unwrap();
+        assert!(alone.repliers.is_empty() && alone.latest_reply.is_none());
     }
 
     #[test]

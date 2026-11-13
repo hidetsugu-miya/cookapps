@@ -222,7 +222,7 @@ function draw(end = false) {
     }
     target.focus({ preventScroll: true });
   }
-  loadIcons((messages ?? []).map((m) => m.iconUrl));
+  loadIcons((messages ?? []).flatMap((m) => [m.iconUrl, ...m.repliers.map((r) => r.iconUrl)]));
 }
 
 // Reads the history of the chosen channel (`toEnd`: and goes to its newest message). Only the latest read draws; a read that fails keeps the messages held.
