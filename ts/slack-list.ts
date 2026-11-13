@@ -69,6 +69,8 @@ let noticeKey = "";
 const drawn = new Map<string, { sig: string; node: HTMLElement }>();
 // The keys drawn by the pass that is on its way.
 let used = new Set<string>();
+// The messages whose rows that pass made new: a row kept from the last pass has had its icons asked for already, and a URL that cannot be fetched is not asked for again.
+let fresh = new Set<TimelineMessage>();
 // The threads whose unread replies were folded with their toggle (they start open). Kept through redraws and a return from a thread, and forgotten when the thread has no more unread replies.
 const closedThreads = new Set<string>();
 // Where the list was scrolled to (it is hidden while a thread or another screen is shown, which forgets the position).
@@ -693,7 +695,10 @@ function place(parent: HTMLElement, nodes: Node[]) {
 // A row of the list, made again only when the message, the fold of its replies or the day changed.
 function keptItem(m: TimelineMessage, key: string, grouped: boolean, day: string) {
   const folded = !!m.unreadReplies && closedThreads.has(threadKeyOf(m));
-  return kept(`i/${key}`, JSON.stringify([m, grouped, folded, day]), () => itemOf(m, key, grouped));
+  return kept(`i/${key}`, JSON.stringify([m, grouped, folded, day]), () => {
+    fresh.add(m);
+    return itemOf(m, key, grouped);
+  });
 }
 
 // The nodes of the unread section: a group for each channel, its messages under the day they were sent.
@@ -742,6 +747,7 @@ function drawFeed() {
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
   used = new Set();
+  fresh = new Set();
   // The key of a watched row has a prefix: the same message may be in both sections for a moment.
   const watch = watched.map((m) => keptItem(m, `w/${threadKeyOf(m)}`, false, day));
   const heading = (label: string, svg: string) => kept(`h/${label}`, "", () => sectionHeading(label, svg));
@@ -765,7 +771,7 @@ function drawFeed() {
     }
     target.focus({ preventScroll: true });
   }
-  loadIcons([...messages, ...watched].flatMap((m) => [m.iconUrl, ...(m.unreadReplies?.replies ?? []).map((r) => r.iconUrl)]));
+  if (fresh.size) loadIcons([...messages, ...watched].filter((m) => fresh.has(m)).flatMap((m) => [m.iconUrl, ...(m.unreadReplies?.replies ?? []).map((r) => r.iconUrl)]));
 }
 
 // A thread with no more unread replies starts open the next time it has some.
