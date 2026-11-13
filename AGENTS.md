@@ -169,7 +169,7 @@ npm run e2e         # WebdriverIO
 scripts/check-version.sh   # the source version is the fixed one: 0.0.0 in Cargo.toml and Cargo.lock, none in tauri.conf.json
 ```
 
-`.claude/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.claude/tools/run-e2e.sh` does the same for E2E.
+`.claude/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.claude/tools/run-e2e.sh` does the same for E2E, and runs `run-ci.sh` beside its wdio run after `e2e:build` when HEAD has no passing CI record.
 Before a push, `pre-git.sh` only checks that both records exist for HEAD.
 
 ## CI

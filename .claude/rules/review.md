@@ -17,22 +17,22 @@ Bad:  the reviewer and release-verifier both check in round 2 that the same find
 
 ## Flow
 
-### Run CI first, then start E2E and the reviewers together, and launch release-verifier when both are back
+### Start E2E and the reviewers together on the HEAD to be reviewed, and launch release-verifier when both are back
 
-Run `.claude/tools/run-ci.sh` (static checks and unit tests; it stops at the first failing check) on the HEAD to be reviewed, and fix a failure first.
-CI goes first, so that a fix for a type, lint, clippy or unit test failure lands before anyone reads the code.
-When CI passes, start `.claude/tools/run-e2e.sh` (in the background; `e2e.md`) and the reviewers in the same message, and launch `release-verifier` only when both have come back (at the owner's instruction, 2026-11-12; #485. It replaces "E2E passes before the reviewers start", under which the reviewers waited for E2E).
-`release-verifier` checks the CI and E2E records of HEAD, so it is not launched on a HEAD whose E2E failed. In the first round, the reviewers' replies and the E2E failure go straight to the fix, and the release-verifier that follows the second round rates them.
-A failed E2E is handled as a blocking finding of the first round: find the cause (`run-e2e.sh --only {spec}` runs the failed spec alone, `e2e.md`), fix it, and put the fix into the diff of the second round with the other blocking fixes.
-When the reviewers had no blocking finding and E2E alone failed by chance, so that no code needs a fix, run `run-e2e.sh` again, and launch release-verifier when it passes. A code fix for an E2E-only failure is read in the second round.
+Start `.claude/tools/run-e2e.sh` (in the background; `e2e.md`) and the reviewers in the same message, and launch `release-verifier` only when both have come back (at the owner's instruction, 2026-11-12; #485. It replaces "E2E passes before the reviewers start", under which the reviewers waited for E2E).
+After `e2e:build`, `run-e2e.sh` runs `.claude/tools/run-ci.sh` (static checks and unit tests; it stops at the first failing check) beside the wdio run, unless HEAD already has a passing CI record (`check-ci.sh`), and both write their records as before (#420).
+The CI runs beside E2E and not before it because it never failed in its 113 records since 2026-11-09, so waiting for it only added its time (median 24 seconds) to every HEAD. Measured on 2026-11-14 (#420), a run of E2E took 159 to 161 seconds alone and 159 to 160 seconds with clippy and `cargo test` beside it, with no failure and no `script_timeouts` in either.
+`release-verifier` checks the CI and E2E records of HEAD, so it is not launched on a HEAD whose CI or E2E failed. In the first round, the reviewers' replies and the CI or E2E failure go straight to the fix, and the release-verifier that follows the second round rates them.
+A failed CI or E2E is handled as a blocking finding of the first round: find the cause (the log of the failed gate in `.claude/ci/{HEAD SHA}.log`; `run-e2e.sh --only {spec}` runs a failed E2E spec alone, `e2e.md`), fix it, and put the fix into the diff of the second round with the other blocking fixes.
+When the reviewers had no blocking finding and E2E alone failed by chance, so that no code needs a fix, run `run-e2e.sh` again (it finds the passing CI record of HEAD and does not run CI again), and launch release-verifier when it passes. A code fix for an E2E-only failure is read in the second round.
 
 ```text
-Good: commit -> run-ci.sh passes -> run-e2e.sh (background) and the reviewers together -> release-verifier
-Good: E2E fails in the first round -> no release-verifier -> fix with the reviewers' blocking findings -> run-ci.sh -> run-e2e.sh and code-reviewer together -> release-verifier
-Good: E2E alone fails by chance and no code needs a fix -> run-e2e.sh --only passes -> run-e2e.sh again passes -> release-verifier
-Bad:  commit -> reviewers -> run-ci.sh fails -> fix -> the reviewers read the old code
+Good: commit -> run-e2e.sh (background, with run-ci.sh beside wdio) and the reviewers together -> release-verifier
+Good: E2E fails in the first round -> no release-verifier -> fix with the reviewers' blocking findings -> run-e2e.sh and code-reviewer together -> release-verifier
+Good: E2E alone fails by chance and no code needs a fix -> run-e2e.sh --only passes -> run-e2e.sh again passes (CI is not run again) -> release-verifier
+Bad:  run-ci.sh and then run-e2e.sh, one after the other, on the HEAD to be reviewed
 Bad:  launch release-verifier while run-e2e.sh is still running
-Bad:  launch release-verifier on a HEAD whose E2E failed, only to rate the findings
+Bad:  launch release-verifier on a HEAD whose CI or E2E failed, only to rate the findings
 ```
 
 ### In the first round, review the whole range to be pushed, with only the reviewers that are needed
@@ -61,7 +61,7 @@ The range runs from the HEAD reviewed in the previous round to the new HEAD (`{p
 Always launch code-reviewer.
 Launch performance-reviewer only when it has an open blocking finding.
 Launch security-reviewer only when it has an open blocking finding, or when the fixing diff touches any of the conditions of the first round.
-Run `run-ci.sh` on the new HEAD first, then `run-e2e.sh` and these reviewers together, as in the first round.
+Start `run-e2e.sh` (with its CI) and these reviewers together on the new HEAD, as in the first round.
 Pass the reviewers the list of blocking findings still open, so that they do not report them again. They look only for new blocking findings that the fixing diff created.
 Whether an open finding is fixed is confirmed only by release-verifier, which gets the open blocking findings and the replies of this round.
 When the whole range was reviewed again, fine-grained findings that had not appeared before came up new every time, and the review never ended.
@@ -154,25 +154,25 @@ A rebuilt diff produces new findings in the second round.
 
 ## CI and E2E records
 
-### Run CI before the reviewers and E2E before release-verifier, on every HEAD
+### Run CI and E2E before release-verifier, on every HEAD
 
-Run `.claude/tools/run-ci.sh` on a HEAD before you hand it to the reviewers, and `.claude/tools/run-e2e.sh` before you hand it to release-verifier; E2E may run while the reviewers read (`testing.md`, `e2e.md`).
+Run `.claude/tools/run-e2e.sh` on a HEAD while the reviewers read it, and hand the HEAD to release-verifier when it and the reviewers are back; its CI (`run-ci.sh`) runs beside wdio and writes the CI record (`testing.md`, `e2e.md`). `run-ci.sh` alone writes the same record where no E2E is run, such as the check of each bundle in `ship`.
 release-verifier and `pre-git.sh` call `.claude/tools/check-ci.sh` and `.claude/tools/check-e2e.sh`, which require a passing, clean record for HEAD (`.claude/ci/{HEAD SHA}`, `.claude/e2e/{HEAD SHA}`) with the version of that commit. Without either, release-verifier fails.
 Reviewers cannot confirm screen behavior by reading the diff, and `pre-git.sh` runs none of the checks, so a push is stopped when the record of HEAD is missing.
 
 ```text
-Good: commit -> run-ci.sh -> run-e2e.sh and the reviewers together -> fix High -> run-ci.sh -> run-e2e.sh and the second-round review together -> release-verifier -> pass
+Good: commit -> run-e2e.sh (its CI beside wdio) and the reviewers together -> fix High -> run-e2e.sh and the second-round review together -> release-verifier -> pass
 Bad:  launch release-verifier without running CI or E2E
-Bad:  run CI only after the reviewers, and fix its failure under them
+Bad:  start run-ci.sh after the reviewers have read the code, and fix its failure under them
 ```
 
 ### Rerun CI and E2E every time a commit is added
 
-A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-ci.sh` and `run-e2e.sh` before handing it to release-verifier.
+A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-e2e.sh` (and with it `run-ci.sh`) before handing it to release-verifier.
 The records are per HEAD SHA, and the previous HEAD's record cannot be used for the new HEAD.
 
 ```text
-Good: pass -> fix Low and commit -> run-ci.sh -> run-e2e.sh -> release-verifier (range check) -> push
+Good: pass -> fix Low and commit -> run-e2e.sh (its CI beside wdio) -> release-verifier (range check) -> push
 Bad:  after a Low fix, push with the previous HEAD's CI or E2E record
 ```
 
