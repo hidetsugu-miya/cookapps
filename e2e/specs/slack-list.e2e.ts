@@ -1773,8 +1773,8 @@ const historyScroll = () => browser.execute(() => document.getElementById("sc-fe
 const pressedChannels = () => browser.execute(() => [...document.querySelectorAll("#slack-side .slack-side-btn")].map((b) => b.getAttribute("aria-pressed")));
 
 describe("slack list: the history of a channel (S-20)", () => {
-  async function openHistory(messages = historySample(), extra: Parameters<typeof timeline>[1] = {}) {
-    await openList(timeline(unreadSample(), { side: sideSample(), ...extra }));
+  async function openHistory(messages = historySample(), extra: Parameters<typeof timeline>[1] = {}, unread = unreadSample()) {
+    await openList(timeline(unread, { side: sideSample(), ...extra }));
     await waitForCount("#slack-feed .feed-row", 3);
     const history = await mock("slack_channel_history", messages);
     await mock("slack_thread", slackThread([threadMessage(slackTs(20), "Alice Example", "first")]));
@@ -1782,7 +1782,8 @@ describe("slack list: the history of a channel (S-20)", () => {
   }
 
   it("shows the history of the channel pressed: slack_channel_history is called with the workspace and the channel, the header is the channel and the workspace only, and the channel is the one pressed", async () => {
-    const history = await openHistory();
+    const rows = unreadSample();
+    const history = await openHistory(historySample(), {}, rows);
     const mark = await mock("slack_mark_read", true);
     // What Rust holds once the position is set: dev has nothing unread any more.
     await mock("slack_timeline", timeline([unreadSample()[1]], { side: [sideWorkspace([sideChannel("C0123ABCD", "dev"), sideChannel("G2", "ops", { private: true }), sideChannel("C3", "announce")]), sideWorkspace([sideChannel("C9", "random")], { teamId: "T2", team: "Lakeside" })] }));
@@ -1800,8 +1801,8 @@ describe("slack list: the history of a channel (S-20)", () => {
     expect(days[1]).toBe("今日");
     expect(await textsOf("#sc-feed .feed-thread-open")).toEqual(["2 件の返信"]);
     expect(await pressedChannels()).toEqual(["true", "false", "false", "false"]);
-    // The press reads the channel (S-15): the position goes to its newest unread message and the unread numbers fall.
-    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: slackTs(3) }]);
+    // The press reads the channel (S-15): the position goes to its newest unread message ("first") and the unread numbers fall.
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: rows[0].ts }]);
     await browser.waitUntil(async () => (await sideLayout())[4] === "read:hash:dev");
     expect((await sideLayout()).slice(0, 2)).toEqual(["button:未読メッセージ 1", "button:ウォッチ"]);
   });
@@ -1811,13 +1812,15 @@ describe("slack list: the history of a channel (S-20)", () => {
 
     it("calls slack_mark_read with the newest unread message of the channel and slack_thread_seen for each thread with unread replies, and opens the history", async () => {
       const message = withReplies();
-      await openList(timeline([...unreadSample(), message], { side: sideSample() }));
+      const rows = unreadSample();
+      await openList(timeline([...rows, message], { side: sideSample() }));
       await waitForCount("#slack-feed .feed-row", 4);
       const history = await mock("slack_channel_history", historySample());
       const mark = await mock("slack_mark_read", true);
       const seen = await mock("slack_thread_seen", true);
       await pressChannel();
-      expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: slackTs(3) }]);
+      // The newest unread message of dev is "first".
+      expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: rows[0].ts }]);
       expect(await waitForCalls(seen)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: message.ts, latestTs: replyTwo }]);
       expect(await waitForCalls(history)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD" }]);
       await expect($("#slack-channel")).toBeDisplayed();

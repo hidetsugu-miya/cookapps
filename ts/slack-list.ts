@@ -155,12 +155,17 @@ function drawSide() {
 }
 
 // The heading of a workspace in the side menu was pressed: fold it, or open it again.
+// A press before the saved folds are read waits for them, so that the two do not mix. The saves go one after another, each with the set as it is when it is sent, so that the last press is what is kept.
 function foldWorkspace(teamId: string) {
-  if (!foldedTeams.delete(teamId)) foldedTeams.add(teamId);
-  drawSide();
-  // A failed save leaves the fold as pressed: it only is not kept for the next start.
-  invoke("slack_set_side_folded", { teamIds: [...foldedTeams] }).catch(showError);
+  foldsRead.then(() => {
+    if (!foldedTeams.delete(teamId)) foldedTeams.add(teamId);
+    drawSide();
+    // A failed save leaves the fold as pressed: it only is not kept for the next start.
+    foldsSaved = foldsSaved.then(() => invoke("slack_set_side_folded", { teamIds: [...foldedTeams] })).catch(showError);
+  });
 }
+let foldsRead: Promise<void> = Promise.resolve();
+let foldsSaved: Promise<unknown> = Promise.resolve();
 
 // The folds saved by an earlier run, taken at the start. A file that cannot be read folds nothing (Rust answers an empty list).
 async function loadFolded() {
@@ -973,7 +978,7 @@ async function start() {
 }
 
 export function initSlackList() {
-  loadFolded();
+  foldsRead = loadFolded();
   start();
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", refresh);
