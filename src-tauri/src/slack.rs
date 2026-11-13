@@ -29,6 +29,7 @@ use crate::{
         ThreadAttachment, ThreadBlock,
     },
     slack_emoji,
+    slack_markdown::to_mrkdwn,
     slack_mrkdwn::{self, Rich},
 };
 
@@ -574,7 +575,7 @@ fn thread_of(
 }
 
 /// Slack's mrkdwn treats these three characters as markup.
-fn escape_mrkdwn(s: &str) -> String {
+pub(crate) fn escape_mrkdwn(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -614,15 +615,28 @@ fn mail_text(subject: &str, from: &str, date: &str, body: &str) -> String {
     parts.join("\n\n")
 }
 
-/// The text to post, escaped for Slack (`*` stays markup), or why it cannot be posted: blank, or past `POST_LIMIT` characters.
-fn post_text(text: &str) -> Result<String, String> {
-    if text.trim().is_empty() {
+/// The text to post, or why it cannot be posted: blank, or past `POST_LIMIT` characters.
+/// `markdown` false: `text` is plain text, escaped for Slack (`*` stays markup), and the limit is counted on `text`.
+/// `markdown` true: `text` is the Markdown of the rich field (S-6, S-21), turned into mrkdwn first, and blank and the limit are judged on the mrkdwn that is sent.
+fn post_text(text: &str, markdown: bool) -> Result<String, String> {
+    let too_long = || format!("貼る内容が長すぎます（{POST_LIMIT} 文字まで）");
+    if !markdown {
+        if text.trim().is_empty() {
+            return Err("貼る内容が空です".into());
+        }
+        if text.chars().count() > POST_LIMIT {
+            return Err(too_long());
+        }
+        return Ok(escape_mrkdwn(text.trim()));
+    }
+    let text = to_mrkdwn(text);
+    if text.is_empty() {
         return Err("貼る内容が空です".into());
     }
     if text.chars().count() > POST_LIMIT {
-        return Err(format!("貼る内容が長すぎます（{POST_LIMIT} 文字まで）"));
+        return Err(too_long());
     }
-    Ok(escape_mrkdwn(text.trim()))
+    Ok(text)
 }
 
 /// The message for the UI of a Slack error code. Slack answers 200 with `ok: false`.
@@ -1340,7 +1354,7 @@ pub fn slack_preview(subject: &str, from: &str, date: &str, body: &str) -> Strin
     mail_text(subject, from, date, body)
 }
 
-/// Checks the destination and the text, and posts `text` to the channel or as a reply in `thread_ts`'s thread. A failure is logged under `command` and returned.
+/// Checks the destination and the text, and posts `text` (`markdown`: the Markdown of the rich field, see `post_text`) to the channel or as a reply in `thread_ts`'s thread. A failure is logged under `command` and returned.
 /// The text goes to Slack only here, on the user's click.
 async fn send_post(
     http: &reqwest::Client,
@@ -1349,6 +1363,7 @@ async fn send_post(
     channel: &str,
     thread_ts: Option<&str>,
     text: &str,
+    markdown: bool,
 ) -> Result<(), String> {
     if token_key(team_id).is_err()
         || !valid_channel(channel)
@@ -1356,7 +1371,7 @@ async fn send_post(
     {
         return Err(log_failure(command, team_id, BAD_TARGET));
     }
-    let text = post_text(text).map_err(|e| log_failure(command, team_id, e))?;
+    let text = post_text(text, markdown).map_err(|e| log_failure(command, team_id, e))?;
     let token = token_of(team_id)
         .await
         .map_err(|e| log_failure(command, team_id, e))?;
@@ -1395,6 +1410,7 @@ pub async fn slack_post(
         &channel,
         thread_ts.as_deref(),
         &text,
+        false,
     )
     .await?;
     // The post is done: failing to remember where is only logged.
@@ -5583,17 +5599,27 @@ pub async fn slack_channel_post(
     team_id: String,
     channel: String,
     text: String,
+    markdown: Option<bool>,
 ) -> Result<bool, String> {
     let command = "slack_channel_post";
     if token_key(&team_id).is_err() || held_channel(&state, &team_id, &channel).is_none() {
         return Err(log_failure(command, &team_id, BAD_TARGET));
     }
-    send_post(auth.http(), command, &team_id, &channel, None, &text).await?;
+    send_post(
+        auth.http(),
+        command,
+        &team_id,
+        &channel,
+        None,
+        &text,
+        markdown.unwrap_or(false),
+    )
+    .await?;
     Ok(true)
 }
 
 /// Posts `text` as a reply in the thread `thread_ts` of `channel`, as S-1 posts (the same checks, `unfurl_*` off, the same Japanese errors).
-/// The recent destinations of S-1 are not touched. The text goes to Slack only here, on the user's click.
+/// The recent destinations of S-1 are not touched. `markdown` is as for `slack_channel_post`. The text goes to Slack only here, on the user's click.
 #[tauri::command]
 pub async fn slack_reply(
     auth: State<'_, Auth>,
@@ -5601,6 +5627,7 @@ pub async fn slack_reply(
     channel: String,
     thread_ts: String,
     text: String,
+    markdown: Option<bool>,
 ) -> Result<bool, String> {
     send_post(
         auth.http(),
@@ -5609,6 +5636,7 @@ pub async fn slack_reply(
         &channel,
         Some(&thread_ts),
         &text,
+        markdown.unwrap_or(false),
     )
     .await?;
     Ok(true)
@@ -5965,19 +5993,40 @@ mod tests {
     #[test]
     fn the_edited_text_is_escaped_but_keeps_its_bold_markup() {
         assert_eq!(
-            post_text("  *見積 <1>*\nA <a@x.jp> & 本文\n").as_deref(),
+            post_text("  *見積 <1>*\nA <a@x.jp> & 本文\n", false).as_deref(),
             Ok("*見積 &lt;1&gt;*\nA &lt;a@x.jp&gt; &amp; 本文")
         );
     }
 
     #[test]
     fn a_blank_or_too_long_text_is_refused_in_japanese() {
-        assert_eq!(post_text(" \n ").unwrap_err(), "貼る内容が空です");
-        assert!(post_text(&"あ".repeat(POST_LIMIT)).is_ok());
+        assert_eq!(post_text(" \n ", false).unwrap_err(), "貼る内容が空です");
+        assert!(post_text(&"あ".repeat(POST_LIMIT), false).is_ok());
         assert_eq!(
-            post_text(&"あ".repeat(POST_LIMIT + 1)).unwrap_err(),
+            post_text(&"あ".repeat(POST_LIMIT + 1), false).unwrap_err(),
             "貼る内容が長すぎます（10000 文字まで）"
         );
+    }
+
+    #[test]
+    fn a_markdown_text_is_turned_into_mrkdwn_and_judged_after_it() {
+        assert_eq!(
+            post_text("**見積** <1> & [表](https://a.jp/)\n\n- 一\n- 二\n", true).as_deref(),
+            Ok("*見積* &lt;1&gt; &amp; <https://a.jp/|表>\n\n- 一\n- 二")
+        );
+        assert_eq!(post_text(" \n ", true).unwrap_err(), "貼る内容が空です");
+        // The limit counts the text that is sent: `<` grows to `&lt;`, and a link's address shrinks to its label.
+        assert!(post_text(&"あ".repeat(POST_LIMIT), true).is_ok());
+        let long = "あ".repeat(POST_LIMIT - 3) + "<";
+        assert_eq!(
+            post_text(&long, true).unwrap_err(),
+            "貼る内容が長すぎます（10000 文字まで）"
+        );
+        assert!(post_text(&long, false).is_ok());
+        let link = format!("[{}](https://example.com/{})", "あ", "x".repeat(POST_LIMIT));
+        assert!(post_text(&link, true).is_err());
+        let short = "[あ](https://a.jp/)";
+        assert_eq!(post_text(short, true).as_deref(), Ok("<https://a.jp/|あ>"));
     }
 
     #[test]
