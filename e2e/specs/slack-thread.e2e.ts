@@ -1,7 +1,7 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
 import {
   attachment, boot, callsOf, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
-  copiedTexts, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings,
+  copiedTexts, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings, heightOf, TOOLS,
 } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
@@ -18,7 +18,6 @@ const listMessage = () => timelineMessage(root, "Alice Example", "dev", rootText
 const field = () => $("#st-input .ProseMirror");
 const send = () => $("#st-send");
 const tool = (name: string) => $(`#st-tools [aria-label="${name}"]`);
-const TOOLS = ["太字", "斜体", "取り消し線", "リンク", "番号付きリスト", "箇条書き", "引用", "コード", "コードブロック"];
 const editable = () => field().getAttribute("contenteditable");
 // Types `text` in the field, once Milkdown has made it editable.
 const write = async (text: string) => {
@@ -57,7 +56,6 @@ const pressReply = () =>
     document.querySelector("#st-input .ProseMirror")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: isMac, ctrlKey: !isMac, bubbles: true, cancelable: true }));
   }, onceId());
 
-const heightOf = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().height, selector);
 
 describe("slack thread", () => {
   it("opens from a row of the list and reads its thread with the workspace, the channel and the message's own timestamp", async () => {

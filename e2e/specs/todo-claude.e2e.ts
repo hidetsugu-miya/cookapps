@@ -1,18 +1,11 @@
 import type { TodoChatReply } from "../../ts/bindings/TodoChatReply";
-import { boot, callsOf, claudeLoggedOut, composerLayout, claudeReady, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, claudeLoggedOut, composerLayout, claudeReady, count, holds, inbox, mock, onceId, rejects, release, slackLoad, slackMessageUrl, slackSummary, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo } from "../support";
 
 // The Claude pane of the Todo screen (T-7).
 const pane = "#todo-claude";
 const log = "#todo-claude-log";
 const input = () => $("#todo-claude-input");
 const send = () => $("#todo-claude-send");
-
-// The app with Todoist connected and the Todo screen open.
-async function openTodo(claude: unknown = claudeReady) {
-  await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claude });
-  await $("#nav-todo").click();
-  await waitForCount("#todo-list li.task", 1);
-}
 
 // The pane is open from the start: the icon of the right side only chooses it again.
 const openPane = async () => {

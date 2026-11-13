@@ -1,4 +1,4 @@
-import { boot, callsOf, composerLayout, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForCount, waitForText } from "../support";
+import { boot, callsOf, composerLayout, count, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, holds, inbox, mock, onceId, promptEdit, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForCount, waitForText, heightOf } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 // What Claude answers when the request changes nothing.
@@ -47,7 +47,6 @@ const fillLines = (lines: number) =>
     area.dispatchEvent(new Event("input", { bubbles: true }));
   }, lines);
 
-const heightOf = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().height, selector);
 
 // Asks Claude for `text` and waits until the `replies`th reply is drawn.
 async function ask(text: string, reply: unknown = promptEdit, replies = 1) {

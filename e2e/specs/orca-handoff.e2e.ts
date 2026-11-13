@@ -9,6 +9,7 @@ import {
   count,
   fire,
   handoffSummary,
+  heightOf,
   holds,
   huge,
   image,
@@ -112,7 +113,6 @@ const termText = (screen: Screen) => $(`${screen.pane} .ho-term .orca-term-box:n
 const sendButton = (screen: Screen) => $(`${screen.pane} .ho-form .chat-send`);
 // The model and effort of the summary, in the frame of the field.
 const selectOf = (screen: Screen, kind: "model" | "effort") => $(`${screen.pane} #handoff-model select[data-purpose="orcaHandoff"][data-kind="${kind}"]`);
-const heightOf = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().height, selector);
 
 // Picks the project named `name` in the menu of its chip: the worktree is then the project's own folder (default).
 async function chooseProject(screen: Screen, name: string) {

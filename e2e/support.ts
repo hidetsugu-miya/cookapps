@@ -159,6 +159,18 @@ export const waitForText = (selector: string, text: string) =>
 export const waitForCount = (selector: string, n: number) =>
   browser.waitUntil(async () => (await count(selector)) === n, { timeoutMsg: `expected ${n} of ${selector}` });
 
+// The app with Todoist connected and the Todo screen open.
+export async function openTodo(claude: unknown = claudeReady) {
+  await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claude });
+  await $("#nav-todo").click();
+  await waitForCount("#todo-list li.task", 1);
+}
+
+export const heightOf = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().height, selector);
+
+// The aria-labels of the buttons of a rich field's toolbar (S-6, S-21).
+export const TOOLS = ["太字", "斜体", "取り消し線", "リンク", "番号付きリスト", "箇条書き", "引用", "コード", "コードブロック"];
+
 // Replaces navigator.clipboard.writeText with a function that keeps the text in the page, so a spec never touches the real clipboard. A reload undoes it.
 export const stubClipboard = () =>
   browser.execute(() => {
