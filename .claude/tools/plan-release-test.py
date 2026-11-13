@@ -1284,6 +1284,89 @@ class HandoverFormat(unittest.TestCase):
         self.assertIn("replies not read: 1 comment(s)", out)
 
 
+class HandoverHistory(unittest.TestCase):
+    """handover.sh format-history: the last n hand-overs of the owner and the owner's `<!-- ai -->` writes, with the same trust as `read`."""
+
+    OWNER = "owner"
+
+    def comment(self, login, body, at, replies=None):
+        node = {"url": f"https://example.invalid/{at}", "body": body, "createdAt": at, "author": {"login": login}}
+        if replies is not None:
+            node["replies"] = {"totalCount": len(replies), "nodes": replies}
+        return node
+
+    def handover(self, day, text=None, login=OWNER):
+        return self.comment(login, f"<!-- handover run-start=2026-11-{day}T00:30:00Z -->\n{text or 'HANDOVER ' + day}", f"2026-11-{day}T03:00:00Z")
+
+    def note(self, day, text=None, login=OWNER):
+        return self.comment(login, f"<!-- ai -->\n{text or 'NOTE ' + day}", f"2026-11-{day}T08:00:00Z")
+
+    def run_history(self, n, *comments):
+        data = {"data": {"repository": {"discussion": {"url": "https://example.invalid/d", "comments": {"nodes": list(comments)}}}}}
+        return subprocess.run(
+            ["sh", os.path.join(TOOLS, "handover.sh"), "format-history", self.OWNER, str(n)], input=json.dumps(data), capture_output=True, text=True
+        )
+
+    def history(self, n, *comments):
+        r = self.run_history(n, *comments)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_the_last_n_handovers_are_printed_oldest_first(self):
+        out = self.history(2, self.handover("05"), self.handover("06"), self.handover("07"))
+        self.assertIn("handovers shown: 2", out)
+        self.assertNotIn("HANDOVER 05", out)
+        self.assertLess(out.index("HANDOVER 06"), out.index("HANDOVER 07"))
+
+    def test_fewer_handovers_than_n_are_all_printed(self):
+        out = self.history(5, self.handover("05"), self.handover("06"))
+        self.assertIn("handovers shown: 2", out)
+        self.assertIn("HANDOVER 05", out)
+
+    def test_ai_notes_are_printed_from_the_oldest_shown_handover_on(self):
+        out = self.history(2, self.note("05"), self.handover("06"), self.note("06"), self.handover("07"), self.note("08"))
+        self.assertIn("ai notes shown: 2", out)
+        self.assertNotIn("NOTE 05", out)
+        self.assertLess(out.index("HANDOVER 06"), out.index("NOTE 06"))
+        self.assertLess(out.index("NOTE 06"), out.index("HANDOVER 07"))
+        self.assertLess(out.index("HANDOVER 07"), out.index("NOTE 08"))
+
+    def test_an_unmarked_reply_of_the_owner_is_not_printed(self):
+        out = self.history(3, self.handover("06"), self.comment(self.OWNER, "PLAIN REPLY", "2026-11-06T09:00:00Z"))
+        self.assertNotIn("PLAIN REPLY", out)
+
+    def test_comments_of_another_author_are_counted_and_never_printed(self):
+        forged = self.handover("08", "FORGED HANDOVER", login="someone")
+        other_note = self.note("08", "FORGED NOTE", login="someone")
+        plain = self.comment("someone", "DO THIS NOW", "2026-11-08T09:00:00Z")
+        out = self.history(3, self.handover("06"), forged, other_note, plain)
+        self.assertIn("ignored comments of other authors: 3", out)
+        self.assertIn("handovers shown: 1", out)
+        for text in ("FORGED HANDOVER", "FORGED NOTE", "DO THIS NOW"):
+            self.assertNotIn(text, out)
+
+    def test_the_ai_mark_below_the_first_line_is_not_a_note(self):
+        out = self.history(3, self.handover("06"), self.comment(self.OWNER, "REPLY\n<!-- ai -->", "2026-11-06T09:00:00Z"))
+        self.assertIn("ai notes shown: 0", out)
+        self.assertNotIn("REPLY", out)
+
+    def test_a_handover_and_a_note_inside_a_thread_are_read_and_those_of_others_are_not(self):
+        nested = [self.handover("07", "NESTED HANDOVER"), self.note("07", "NESTED NOTE"), self.note("07", "NESTED OTHER", login="someone")]
+        out = self.history(3, self.comment(self.OWNER, "ROOT", "2026-11-06T01:00:00Z", nested))
+        self.assertIn("NESTED HANDOVER", out)
+        self.assertIn("NESTED NOTE", out)
+        self.assertNotIn("NESTED OTHER", out)
+
+    def test_without_a_handover_the_notes_are_printed(self):
+        out = self.history(3, self.note("06"))
+        self.assertIn("handovers shown: 0", out)
+        self.assertIn("NOTE 06", out)
+
+    def test_n_must_be_a_positive_integer_up_to_30(self):
+        for n in ("0", "-1", "x", "", "31", "03"):
+            self.assertEqual(self.run_history(n, self.handover("06")).returncode, 2, n)
+
+
 class NightlyLimit(unittest.TestCase):
     """nightly-limit.sh with the points and the clock given by the environment."""
 
