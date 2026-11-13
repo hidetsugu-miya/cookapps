@@ -240,10 +240,11 @@ function modelBlock() {
 }
 
 // The two selects of a Claude pane's request field, without a frame: the model and effort of the pane's purpose, the same values as the settings'.
-// The prompt screen's pane (the prompt conversation) and the Slack thread's pane (the Slack thread conversation) have them in the frame of the field (composer.ts).
+// The prompt screen's pane (the prompt conversation), the Slack compose screen's pane (S-4, the proofreading) and the Slack thread's pane (the Slack thread conversation) have them in the frame of the field (composer.ts).
 // The Todo draft page's pane (S-18) has them for the Slack summary's purpose; the page is not always open, so a slot that is not in the page is skipped.
 // The Todo screen's Claude pane (T-7) has them for the Todo conversation's purpose.
-const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["reply-model", "slackReply"], ["draft-model", "slackSummary"], ["todo-claude-model", "todoChat"]];
+// The pane of A-9 has them in the frame of its field for the summary of a handoff.
+const MODEL_SLOTS: [string, Purpose][] = [["prompt-model", "promptChat"], ["slack-model", "proofread"], ["reply-model", "slackReply"], ["draft-model", "slackSummary"], ["todo-claude-model", "todoChat"], ["handoff-model", "orcaHandoff"]];
 
 function redrawModelSlot(id: string) {
   const purpose = MODEL_SLOTS.find(([slot]) => slot === id)![1];

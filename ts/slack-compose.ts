@@ -5,7 +5,9 @@ import type { Recent } from "./bindings/Recent";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Target } from "./bindings/Target";
 import type { Workspace } from "./bindings/Workspace";
+import { showModelSlot } from "./claude.js";
 import { createChat } from "./claude-chat.js";
+import { createComposer } from "./composer.js";
 import { $, tag } from "./dom.js";
 import { unescapeHtml } from "./format.js";
 import { invoke } from "./ipc.js";
@@ -62,6 +64,7 @@ const chat = createChat({
   ask: (text, history, instruction) => invoke("claude_proofread_slack", { text, history, instruction }),
   changed: refreshSlackCompose,
   locked: () => posting,
+  keyHint: false,
 });
 
 function disarmReset() {
@@ -244,6 +247,8 @@ async function openCompose() {
   $("slack-subject").textContent = current.subject || "(件名なし)";
   $("slack-error").hidden = true;
   drawTarget();
+  // The selects in the frame of the request field need the model settings.
+  showModelSlot("slack-model");
   showComposeScreen();
   // The log is drawn already (by the answers, or by the new draft's reset); only its scroll position was lost while the screen was hidden.
   refreshSlackCompose();
@@ -314,7 +319,17 @@ export function initSlackCompose() {
     refreshSlackCompose();
   };
   $("slack-reset").onblur = disarmReset;
-  $("slack-proofread").onclick = () => chat.send("校正してください");
+  // The form is the shared composer's, with the 校正する button above its frame.
+  const proofread = tag("div", "proofread-row");
+  const proofreadButton = tag("button", "text-btn", "校正する");
+  proofreadButton.id = "slack-proofread";
+  proofreadButton.type = "button";
+  proofreadButton.disabled = true;
+  proofread.append(proofreadButton);
+  const composer = createComposer({ prefix: "slack", label: "Claude への依頼" });
+  composer.prepend(proofread);
+  $("slack-chat-note").after(composer);
+  proofreadButton.onclick = () => chat.send("校正してください");
   chat.init();
   initSplit($("slack-main"), $("slack-split"));
   drawTarget();

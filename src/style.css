@@ -816,7 +816,6 @@ button.status:hover { filter: brightness(.95); }
 /* ts/composer.ts: the row in the frame of a Claude pane's request field holds the model and effort at the left and the send button at the right. */
 .composer-end { justify-content: flex-end; }
 .composer-foot .chat-model { margin: 0 auto 0 0; }
-.composer-hint { flex: 1; min-width: 0; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .composer-foot .text-btn { height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
 .chat-clear:disabled, .chat-send:disabled { opacity: .4; cursor: default; }
 .chat-clear:disabled:hover { background: #fff; }
@@ -1128,15 +1127,9 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .ho-form .chat-note { padding: 0; border-top: 0; background: none; }
 .ho-form { display: flex; flex-direction: column; gap: 8px; }
 .ho-form .pending { margin: 0; }
-.ho-form .chat-input { flex: 1; min-width: 0; }
-.ho-form .icon-btn.chat-send-icon { width: 32px; height: 32px; }
-/* The form before a hand-over, from the top down; the field of the instruction takes the height that is left (at least 120px, and the form scrolls when the rest leaves less), with the arrow over its bottom right corner. */
+/* The form before a hand-over, from the top down; the frame of the field (composer.ts) sits at the bottom, and the form scrolls when the rest leaves too little height. */
 .ho-form.ho-fill { flex: 1; min-height: 0; overflow-y: auto; gap: 10px; padding: 12px 14px 14px; }
-.ho-compose { position: relative; flex: 1 0 120px; display: flex; }
-.ho-compose .chat-input { flex: 1; height: auto; max-height: none; box-sizing: border-box; padding: 10px 12px 48px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); overflow-y: auto; }
-.ho-compose .chat-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-.ho-compose .chat-input:disabled { background: var(--bar); }
-.ho-compose .chat-send-icon { position: absolute; right: 8px; bottom: 8px; }
+.ho-form .composer { margin-top: auto; }
 /* A-10: the files attached to an instruction, above the composer (an image as a thumbnail, any other file by its name); a file dragged over the pane or the terminal outlines it. */
 .attachments { display: flex; flex-wrap: wrap; gap: 8px; }
 .attachment { position: relative; width: 64px; height: 64px; border: 1px solid var(--chip-line); border-radius: 12px; background: #fff; overflow: hidden; }
