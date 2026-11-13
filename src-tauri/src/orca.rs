@@ -96,8 +96,6 @@ pub struct OrcaRow {
     pub pane_key: Option<String>,
     /// The worktree's path.
     pub path: String,
-    /// The latest action: `{tool}: {first line of its input}`, else the first line of the last answer, else empty (A-8).
-    pub activity: String,
     /// The icon of the row (A-8).
     pub status: OrcaStatus,
     /// The project the row belongs to (`OrcaProject::key`); empty when its worktree has none.
@@ -408,22 +406,6 @@ fn worktree_status(worktree: &Value) -> OrcaStatus {
     status_of(word, OrcaStatus::Idle)
 }
 
-/// The latest action of an agent: `{toolName}: {first line of toolInput}`, else the first line of its last answer, cut to `LINE_LIMIT` characters.
-fn activity_of(agent: &Value) -> String {
-    match text_of(agent, "toolName") {
-        Some(tool) => {
-            let line = match agent["toolInput"].as_str().and_then(first_line) {
-                Some(input) => format!("{tool}: {input}"),
-                None => tool.to_owned(),
-            };
-            line.chars().take(LINE_LIMIT).collect()
-        }
-        None => text_of(agent, "lastAssistantMessage")
-            .and_then(first_line)
-            .unwrap_or_default(),
-    }
-}
-
 const LOCAL_HOST: &str = "local";
 
 /// The id of the host a worktree is on; one with none is this machine's.
@@ -505,7 +487,6 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                     handle,
                     pane_key: pane_key.map(str::to_owned),
                     path: text_of(worktree, "path").unwrap_or_default().to_owned(),
-                    activity: activity_of(agent),
                     status: agent_status(agent),
                     project_key: project_key_of(worktree).unwrap_or_default(),
                     environment: None,
@@ -2061,7 +2042,6 @@ mod tests {
                 handle: Some("term_1".into()),
                 pane_key: Some("tabA:leaf1".into()),
                 path: "/work/example".into(),
-                activity: String::new(),
                 status: OrcaStatus::Working,
                 project_key: "repo1".into(),
                 environment: None,
@@ -2329,7 +2309,6 @@ mod tests {
                 handle: None,
                 pane_key: None,
                 path: String::new(),
-                activity: String::new(),
                 status: OrcaStatus::Working,
                 project_key: String::new(),
                 environment: None,
@@ -3597,31 +3576,9 @@ mod tests {
     }
 
     #[test]
-    fn the_activity_is_the_tool_and_its_input_else_the_last_answer() {
-        let mut a = agent("tabA:leaf1", "working");
-        assert_eq!(activity_of(&a), "");
-        a["lastAssistantMessage"] = json!("\nAnswer\nmore");
-        assert_eq!(activity_of(&a), "Answer");
-        a["toolName"] = json!("Bash");
-        assert_eq!(activity_of(&a), "Bash");
-        a["toolInput"] = json!("\ncargo test --all-features\nsecond");
-        assert_eq!(activity_of(&a), "Bash: cargo test --all-features");
-        // A tool is named whatever the state; an input that is not text, or blank, leaves the name alone.
-        a["toolInput"] = json!({"command": "x"});
-        assert_eq!(activity_of(&a), "Bash");
-        a["toolInput"] = json!("  ");
-        assert_eq!(activity_of(&a), "Bash");
-        a["toolInput"] = json!("あ".repeat(LINE_LIMIT + 50));
-        assert_eq!(activity_of(&a).chars().count(), LINE_LIMIT);
-    }
-
-    #[test]
-    fn a_row_carries_its_activity_status_and_project() {
-        let mut a = agent("tabA:leaf1", "waiting");
-        a["toolName"] = json!("Edit");
-        a["toolInput"] = json!("ts/orca.ts");
+    fn a_row_carries_its_status_and_project() {
+        let a = agent("tabA:leaf1", "waiting");
         let row = &rows_of(&ps(&[a]), &terminals())[0];
-        assert_eq!(row.activity, "Edit: ts/orca.ts");
         assert_eq!(row.status, OrcaStatus::Question);
         assert_eq!(row.project_key, "repo1");
         // The group still follows A-6: waiting is 入力待ち whatever the icon.

@@ -665,7 +665,7 @@ const GROUP_STATUS: Record<OrcaRow["group"], OrcaStatus> = { waiting: "question"
 export const orcaRow = (repo: string, branch: string, line: string, extra: Partial<OrcaRow> & { minutes?: number } = {}): OrcaRow => {
   const { minutes = 2, ...rest } = extra;
   const group = rest.group ?? "working";
-  return { group, repo, branch, line, atMs: Date.now() - minutes * 60_000 - 5_000, handle: `term_${repo}`, paneKey: `tab_${repo}:leaf_1`, path: `/work/${repo}`, activity: "", status: GROUP_STATUS[group], projectKey: `proj_${repo}`, ...rest };
+  return { group, repo, branch, line, atMs: Date.now() - minutes * 60_000 - 5_000, handle: `term_${repo}`, paneKey: `tab_${repo}:leaf_1`, path: `/work/${repo}`, status: GROUP_STATUS[group], projectKey: `proj_${repo}`, ...rest };
 };
 
 // A worktree of the project `proj_{repo}`, on the git branch of its name (`extra.gitBranch` gives another one, or "" for a detached HEAD); `extra` gives another path (a second worktree of the same project, which is not the main one) or another project (an SSH host's `ssh:{id}`).

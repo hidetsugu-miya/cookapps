@@ -881,22 +881,17 @@ button.status:hover { filter: brightness(.95); }
 #orca { flex: 1; min-height: 0; display: flex; }
 #orca-list { flex: none; width: clamp(20%, var(--list-w, 25%), 50%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
 #orca-split { flex: none; }
-/* A-12: a header of the height of every header, level with the tab strip of the work pane: the bell (with its number) and the reload at the right. */
+/* A-12: a header of the height of every header, level with the tab strip of the work pane: the reload at the right. */
 #orca-header { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); }
 #orca-header .icon-btn { flex: none; width: auto; min-width: var(--header-btn); gap: 3px; padding: 0 4px; color: var(--ink-soft); }
 #orca-header .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
-/* A-23: the button that closes and opens the list. It is first in the header, pushed to the left (the bell and the reload keep the right), and (while the list is closed) at the left end of the tab strip of the pane at the left edge. */
+/* A-23: the button that closes and opens the list. It is first in the header, pushed to the left (the reload keeps the right), and (while the list is closed) at the left end of the tab strip of the pane at the left edge. */
 .list-toggle { flex: none; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
 .list-toggle svg { width: var(--header-ic); height: var(--header-ic); }
 #orca-header .list-toggle { margin-right: auto; }
 .orca-tabbar .list-toggle { margin-left: 6px; }
 /* A-23, Todo: first in the list of projects, level with the buttons of the header beside it; while the list is closed, first in that header. */
 #projects .list-toggle { display: flex; margin: calc((var(--header-h) - var(--header-btn)) / 2) 0 8px; }
-/* Beside the bell: the question icon (or the working mark) and the number. */
-#orca-bell-badge { display: flex; align-items: center; gap: 2px; font-size: calc(11px * var(--fs)); font-weight: 600; }
-#orca-bell-badge .orca-ic { width: 10px; height: 10px; }
-#orca-bell-badge .orca-ic svg { width: 10px; height: 10px; stroke-width: 3; }
-#orca-bell-badge .orca-mark.working { width: 5px; height: 5px; border-width: 1.5px; }
 button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cursor: pointer; }
 /* A-19: the search field under the header, level with the list: the icon, the field and (while something is typed) the button that clears it. The row the keys are on has a line in the accent color; the matched letters are bold. */
 #orca-search { flex: none; display: flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; margin: 8px 8px 0; padding: 0 4px 0 10px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: var(--muted); }
@@ -924,26 +919,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-mark.failed { background: var(--agent-failed); }
 .orca-mark.interrupted { background: var(--agent-muted); }
 @media (prefers-reduced-motion: reduce) { .orca-mark.working { animation: none; } }
-.orca-group { flex: none; margin: 6px 0 0; font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--ink-soft); }
-.orca-group-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
-.orca-group-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.orca-group-arrow { display: flex; flex: none; }
-.orca-group-arrow svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-.orca-group-btn[aria-expanded="true"] .orca-group-arrow svg { transform: rotate(90deg); }
-.orca-group .orca-count { margin-left: auto; min-width: 20px; height: 18px; line-height: calc(18px * var(--fs)); text-align: center; border-radius: 9px; background: rgba(23, 54, 42, .08); font-weight: normal; font-size: calc(11px * var(--fs)); color: var(--muted); }
-/* A row of the working view: the icon, the title and the time; the latest action; Claude's mark and the worktree. */
-.orca-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; column-gap: 8px; row-gap: 3px; width: 100%; box-sizing: border-box; margin-bottom: 2px; padding: 8px; border: 0; border-radius: 12px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
-.orca-row:hover:not(:disabled) { background: var(--hover); }
-.orca-row[aria-pressed="true"] { background: var(--soft); }
-.orca-row:disabled { cursor: default; opacity: .6; }
-.orca-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.orca-row > .orca-ic { margin-top: 3px; }
-.orca-prompt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.orca-time { font-size: calc(12px * var(--fs)); color: var(--muted); }
-.orca-activity { grid-column: 2 / 4; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--ink-soft); }
-.orca-where { grid-column: 2 / 4; display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
-.orca-where svg { flex: none; width: 13px; height: 13px; fill: none; stroke: var(--claude); stroke-width: 2.2; stroke-linecap: round; }
-.orca-activity:empty { display: none; }
 /* A row of the project view. */
 .orca-project { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; box-sizing: border-box; margin-bottom: 1px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .orca-project:hover { background: var(--hover); }
