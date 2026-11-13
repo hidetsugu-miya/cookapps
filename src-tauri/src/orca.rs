@@ -17,7 +17,7 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use crate::{
-    accounts::write_synced,
+    accounts::write_atomic,
     auth::config_dir,
     orca_handoff::{compose, handoff_instruction, HandoffContext},
     orca_stream::{clamp_viewport, OrcaViewport},
@@ -38,7 +38,6 @@ pub(crate) const TEXT_LIMIT: usize = 100_000;
 /// Characters of the line a row shows; the screen cuts it with an ellipsis, this only keeps a long message from crossing the IPC.
 const LINE_LIMIT: usize = 200;
 const SETTINGS_FILE: &str = "orca-settings.json";
-const SETTINGS_TMP_FILE: &str = "orca-settings.json.tmp";
 
 /// Where `orca` is looked for. A GUI app does not inherit the shell's PATH, so the places Orca installs it come first and last.
 fn locations() -> Vec<PathBuf> {
@@ -722,12 +721,8 @@ fn save_target(dir: &Path, environment: Option<&str>) -> Result<(), String> {
     let target = environment.map_or(Target::Local, |name| Target::Environment {
         name: name.to_owned(),
     });
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(SETTINGS_FILE), dir.join(SETTINGS_TMP_FILE));
     let text = serde_json::to_string_pretty(&target).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, SETTINGS_FILE, &text)
 }
 
 /// The environment to talk to (`None`: this machine). Only when no file was saved yet the first saved environment is used, else this machine.

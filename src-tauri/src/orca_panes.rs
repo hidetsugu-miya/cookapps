@@ -18,10 +18,9 @@ use tauri::AppHandle;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{accounts::write_synced, auth::config_dir};
+use crate::{accounts::write_atomic, auth::config_dir};
 
 const FILE: &str = "orca-panes.json";
-const TMP_FILE: &str = "orca-panes.json.tmp";
 const VERSION: u32 = 1;
 /// A layout deeper than this, or with more tabs, was not written by this app: it is dropped and made again from the tabs.
 const MAX_DEPTH: usize = 32;
@@ -496,12 +495,8 @@ fn load(dir: &Path) -> Store {
 }
 
 fn save(dir: &Path, store: &Store) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(FILE), dir.join(TMP_FILE));
     let text = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, FILE, &text)
 }
 
 /// The layout of the project `project` of `environment`, with the terminals that changed kind followed, mended against `live` and changed by `op`, saved when it differs from the saved one (a project with no tab leaves no entry).
@@ -1013,7 +1008,7 @@ mod tests {
         assert_eq!(update(&dir, None, "proj", &live, &no, None).unwrap(), split);
         let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
         assert!(text.contains("\"version\": 1"), "{text}");
-        assert!(!dir.join(TMP_FILE).exists());
+        assert!(!dir.join("orca-panes.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

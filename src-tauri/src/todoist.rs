@@ -17,7 +17,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::{
-    accounts::write_synced,
+    accounts::write_atomic,
     auth::{config_dir, delete_entry, keyring_entry, Auth},
     claude::{self, Summary},
     gmail::{log_failure, ApiError},
@@ -393,17 +393,11 @@ struct CacheFile {
 }
 
 const CACHE_FILE: &str = "todoist-cache.json";
-const CACHE_TMP_FILE: &str = "todoist-cache.json.tmp";
 
 fn save_cache(dir: &Path, todo: &Todo, fetched_at: &str) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(CACHE_FILE), dir.join(CACHE_TMP_FILE));
     let text = serde_json::to_string(&json!({"fetched_at": fetched_at, "todo": todo}))
         .map_err(|e| e.to_string())?;
-    // Rename over the target so a crash mid-write leaves the old file, not a truncated one.
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, CACHE_FILE, &text)
 }
 
 /// `None` when the file is missing or unreadable: the cache is only a fallback, so a broken one is as good as none.
@@ -3302,7 +3296,7 @@ mod tests {
         let loaded = load_cache(&dir).unwrap();
         assert_eq!(loaded.fetched_at, "2026-10-29T01:02:03Z");
         assert_eq!(loaded.todo, todo);
-        assert!(!dir.join(CACHE_TMP_FILE).exists());
+        assert!(!dir.join("todoist-cache.json.tmp").exists());
         remove_cache(&dir).unwrap();
         assert!(load_cache(&dir).is_none());
         // Removing what is not there is not a failure.
@@ -3316,7 +3310,7 @@ mod tests {
         let todo = cached_todo();
         save_cache(&dir, &todo, "old").unwrap();
         // A directory in the temporary file's place makes the write fail before the rename.
-        std::fs::create_dir(dir.join(CACHE_TMP_FILE)).unwrap();
+        std::fs::create_dir(dir.join("todoist-cache.json.tmp")).unwrap();
         assert!(save_cache(&dir, &todo, "new").is_err());
         assert_eq!(load_cache(&dir).unwrap().fetched_at, "old");
         std::fs::remove_dir_all(&dir).unwrap();

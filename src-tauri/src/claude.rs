@@ -15,7 +15,7 @@ use tokio::sync::Semaphore;
 use ts_rs::TS;
 
 use crate::{
-    accounts::write_synced,
+    accounts::write_atomic,
     auth::config_dir,
     claude_auth::{
         self, key_state, key_state_or_unverified, ApiKeyState, Connection, EnvChange, Method,
@@ -33,7 +33,6 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 const HIGH_EFFORT_TIMEOUT: Duration = Duration::from_secs(300);
 /// The model and effort of each purpose; absent until the first save.
 const SETTINGS_FILE: &str = "claude-settings.json";
-const SETTINGS_TMP_FILE: &str = "claude-settings.json.tmp";
 /// Characters of a message that reach the model.
 const INPUT_LIMIT: usize = 10_000;
 /// Characters of a Slack thread's first message that reach the summary when the thread does not fit `INPUT_LIMIT`.
@@ -84,7 +83,6 @@ const PROMPT_LIMIT: usize = 10_000;
 const PROJECTS_LIMIT: usize = 8_000;
 /// The summary instructions the user edited; absent while they are the default.
 const PROMPT_FILE: &str = "todo-prompt.json";
-const PROMPT_TMP_FILE: &str = "todo-prompt.json.tmp";
 /// How much of the conversation reaches the model when the instructions or the text are edited: the last turns, each cut at this many characters.
 const CHAT_TURNS: usize = 20;
 const CHAT_TURN_LIMIT: usize = 2_000;
@@ -916,15 +914,11 @@ fn save_prompt(dir: &Path, body: &str) -> Result<(), String> {
     if body == default_body() {
         return remove_prompt(dir);
     }
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(PROMPT_FILE), dir.join(PROMPT_TMP_FILE));
     let text = serde_json::to_string_pretty(&PromptFile {
         body: body.to_owned(),
     })
     .map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, PROMPT_FILE, &text)
 }
 
 fn todo_prompt(dir: &Path) -> TodoPrompt {
@@ -994,12 +988,8 @@ fn save_settings(
         },
     };
     let settings = load_settings(dir).with(purpose, chosen);
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(SETTINGS_FILE), dir.join(SETTINGS_TMP_FILE));
     let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))?;
+    write_atomic(dir, SETTINGS_FILE, &text)?;
     Ok(settings)
 }
 
@@ -3658,7 +3648,7 @@ mod tests {
         assert_eq!(got.body, "my own body\nline 2");
         assert_eq!(got.default_body, default_body());
         assert!(got.edited);
-        assert!(!dir.join(PROMPT_TMP_FILE).exists());
+        assert!(!dir.join("todo-prompt.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4907,7 +4897,7 @@ mod tests {
             )
         );
         assert_eq!(load_settings(&dir), saved);
-        assert!(!dir.join(SETTINGS_TMP_FILE).exists());
+        assert!(!dir.join("claude-settings.json.tmp").exists());
         assert!(std::fs::read_to_string(dir.join(SETTINGS_FILE))
             .unwrap()
             .contains("\"opus\""));

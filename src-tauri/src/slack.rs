@@ -19,7 +19,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::{
-    accounts::write_synced,
+    accounts::write_atomic,
     auth::{config_dir, delete_entry, Auth},
     claude::Thread,
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
@@ -889,13 +889,8 @@ fn load_list<T: DeserializeOwned>(dir: &Path, file: &str, key: &str) -> Result<V
 }
 
 fn save_list<T: Serialize>(dir: &Path, file: &str, key: &str, items: &[T]) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(file), dir.join(format!("{file}.tmp")));
     let text = serde_json::to_string_pretty(&json!({ key: items })).map_err(|e| e.to_string())?;
-    // Rename over the target so a crash mid-write leaves the old file, not a truncated one.
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, file, &text)
 }
 
 async fn load_workspaces(dir: &Path) -> Result<Vec<Workspace>, String> {

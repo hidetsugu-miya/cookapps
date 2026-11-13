@@ -30,7 +30,7 @@ use tauri_plugin_dialog::DialogExt;
 use ts_rs::TS;
 
 use crate::{
-    accounts::write_synced,
+    accounts::write_atomic,
     auth::config_dir,
     orca::{forget_worktree_host, worktree_host, worktree_host_cached},
     orca_attach::{worktree_params, Rpc},
@@ -40,7 +40,6 @@ use crate::{
 };
 
 const SETTINGS_FILE: &str = "editor-settings.json";
-const SETTINGS_TMP_FILE: &str = "editor-settings.json.tmp";
 /// The time of the automatic save: the range, the step and the first value, in milliseconds.
 const AUTOSAVE_MIN: i64 = 100;
 const AUTOSAVE_MAX: i64 = 3000;
@@ -1603,12 +1602,8 @@ fn save_settings(dir: &Path, autosave_ms: i64) -> Result<EditorSettings, String>
     let settings = EditorSettings {
         autosave_ms: clamp_autosave(autosave_ms),
     };
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(SETTINGS_FILE), dir.join(SETTINGS_TMP_FILE));
     let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))?;
+    write_atomic(dir, SETTINGS_FILE, &text)?;
     Ok(settings)
 }
 
@@ -3596,7 +3591,7 @@ mod tests {
         assert_eq!(load_settings(&dir).autosave_ms, 500);
         assert_eq!(save_settings(&dir, 99_999).unwrap().autosave_ms, 3000);
         assert_eq!(load_settings(&dir).autosave_ms, 3000);
-        assert!(!dir.join(SETTINGS_TMP_FILE).exists());
+        assert!(!dir.join("editor-settings.json.tmp").exists());
         let text = std::fs::read_to_string(dir.join(SETTINGS_FILE)).unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(&text).unwrap(),

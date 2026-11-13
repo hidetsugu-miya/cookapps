@@ -6,10 +6,9 @@ use serde::Deserialize;
 use tauri::{AppHandle, State};
 use tokio::{sync::Mutex, task::spawn_blocking};
 
-use crate::{accounts::write_synced, auth::config_dir};
+use crate::{accounts::write_atomic, auth::config_dir};
 
 const FILE: &str = "image_senders.json";
-const TMP_FILE: &str = "image_senders.json.tmp";
 
 #[derive(Deserialize)]
 struct SendersFile {
@@ -120,14 +119,9 @@ fn load(dir: &Path) -> Result<Vec<String>, String> {
 }
 
 fn save(dir: &Path, senders: &[String]) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(FILE), dir.join(TMP_FILE));
     let text = serde_json::to_string_pretty(&serde_json::json!({ "senders": senders }))
         .map_err(|e| e.to_string())?;
-    // Rename over the target so a crash mid-write leaves the old file, not a truncated one.
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, FILE, &text)
 }
 
 /// The remembered senders, read from the file on first use. The lock is held through a write, so changes keep their order.
@@ -328,7 +322,7 @@ mod tests {
         assert_eq!(load(&dir), Ok(vec!["a@x.com".to_string()]));
         save(&dir, &["b@x.com".to_string()]).unwrap();
         assert_eq!(load(&dir), Ok(vec!["b@x.com".to_string()]));
-        assert!(!dir.join(TMP_FILE).exists());
+        assert!(!dir.join("image_senders.json.tmp").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -337,7 +331,7 @@ mod tests {
         let dir = temp_dir("atomic");
         save(&dir, &["a@x.com".to_string()]).unwrap();
         // A directory in the temporary file's place makes the write fail before the rename.
-        std::fs::create_dir(dir.join(TMP_FILE)).unwrap();
+        std::fs::create_dir(dir.join("image_senders.json.tmp")).unwrap();
         assert!(save(&dir, &["b@x.com".to_string()]).is_err());
         assert_eq!(load(&dir), Ok(vec!["a@x.com".to_string()]));
         std::fs::remove_dir_all(&dir).unwrap();
