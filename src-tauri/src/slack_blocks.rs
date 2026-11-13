@@ -12,7 +12,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::slack::{emojify, mention_ids, plain_text, unescape, UNKNOWN_NAME};
-use crate::slack_mrkdwn::{parse, plain, rich_plain, Rich};
+use crate::slack_mrkdwn::{parse, plain, rich_plain, Rich, RichBlock, Span};
 
 /// Looks a user or a user group up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -95,6 +95,7 @@ pub struct ThreadField {
 }
 
 /// An attachment, as drawn. `color` is `#rrggbb` (or `#rgb`); `fallback` is set only when nothing else of the attachment can be drawn.
+/// `text_short` is the first lines of a long `text` (`fold_rich`), set only when `text` is long enough to be folded; the screen draws it with a button that swaps in `text` (S-11).
 #[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -106,6 +107,7 @@ pub struct ThreadAttachment {
     title: Option<String>,
     title_link: Option<String>,
     text: Option<Rich>,
+    text_short: Option<Rich>,
     fields: Vec<ThreadField>,
     footer: Option<String>,
     actions: Vec<ThreadButton>,
@@ -403,6 +405,84 @@ fn color(c: Option<&str>) -> Option<String> {
     }
 }
 
+/// Slack folds an attachment's text of 5 line breaks or more, or of over 700 characters, and shows "Show more" for the rest.
+const FOLD_LINES: usize = 5;
+const FOLD_CHARS: usize = 700;
+
+/// How much of a text is still shown: the line breaks and the characters seen so far.
+#[derive(Default)]
+struct Fold {
+    breaks: usize,
+    chars: usize,
+}
+
+impl Fold {
+    /// Counts `c` and says whether it is still shown. A line break that would be the 5th, and any character past the 700th, is not.
+    fn admit(&mut self, c: char) -> bool {
+        if self.chars >= FOLD_CHARS || (c == '\n' && self.breaks + 1 >= FOLD_LINES) {
+            return false;
+        }
+        self.chars += 1;
+        self.breaks += usize::from(c == '\n');
+        true
+    }
+
+    /// The part of `text` that is shown, and whether all of it is.
+    fn take(&mut self, text: &str) -> (String, bool) {
+        let mut kept = String::new();
+        for c in text.chars() {
+            if !self.admit(c) {
+                return (kept, false);
+            }
+            kept.push(c);
+        }
+        (kept, true)
+    }
+}
+
+/// The first 5 lines, and at most 700 characters, of a text, with its styles and blocks; `None` when nothing is cut.
+/// The break between two blocks is a line break too. Pure, so the screen decides nothing (S-11).
+pub(crate) fn fold_rich(rich: &Rich) -> Option<Rich> {
+    let mut fold = Fold::default();
+    let mut out = Rich::new();
+    let mut whole = true;
+    for (i, block) in rich.iter().enumerate() {
+        if i > 0 && !fold.admit('\n') {
+            whole = false;
+            break;
+        }
+        let shown = match block {
+            RichBlock::Code { text } => {
+                let (text, all) = fold.take(text);
+                whole = all;
+                (!text.is_empty()).then_some(RichBlock::Code { text })
+            }
+            RichBlock::Paragraph { spans } | RichBlock::Quote { spans } => {
+                let mut kept = Vec::new();
+                for s in spans {
+                    let (text, all) = fold.take(&s.text);
+                    if !text.is_empty() {
+                        kept.push(Span { text, ..s.clone() });
+                    }
+                    if !all {
+                        whole = false;
+                        break;
+                    }
+                }
+                (!kept.is_empty()).then_some(match block {
+                    RichBlock::Quote { .. } => RichBlock::Quote { spans: kept },
+                    _ => RichBlock::Paragraph { spans: kept },
+                })
+            }
+        };
+        out.extend(shown);
+        if !whole {
+            break;
+        }
+    }
+    (!whole).then_some(out)
+}
+
 fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
     if !a.is_object() {
         return None;
@@ -412,6 +492,7 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
     let styled = |key: &str| items(&a["mrkdwn_in"]).iter().any(|k| k == key);
     let rich = |key: &str| rich_of(&a[key], name_of, styled(key));
     let title = text("title");
+    let body = rich("text");
     let mut out = ThreadAttachment {
         color: color(a["color"].as_str()),
         pretext: rich("pretext"),
@@ -420,7 +501,8 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
             .as_ref()
             .and_then(|_| http_url(a["title_link"].as_str())),
         title,
-        text: rich("text"),
+        text_short: body.as_ref().and_then(fold_rich),
+        text: body,
         fields: a["fields"]
             .as_array()
             .into_iter()
@@ -691,7 +773,6 @@ pub(crate) fn message_plain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slack_mrkdwn::{RichBlock, Span};
     use serde_json::json;
 
     fn blocks(v: Value) -> Vec<ThreadBlock> {
@@ -1227,6 +1308,7 @@ mod tests {
             title: None,
             title_link: None,
             text: None,
+            text_short: None,
             fields: vec![],
             footer: None,
             actions: vec![],
@@ -1263,6 +1345,7 @@ mod tests {
                 title: Some("Job #1".into()),
                 title_link: Some("https://a.example/job/1".into()),
                 text: Some(p("Passed & done")),
+                text_short: None,
                 fields: vec![
                     ThreadField {
                         title: "Project".into(),
@@ -1413,6 +1496,89 @@ mod tests {
         );
         assert_eq!(alt_only[0].thumb, None);
         assert_eq!(alt_only[0].fallback, None);
+    }
+
+    fn lines(n: usize) -> String {
+        (1..=n)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_text_of_five_line_breaks_or_over_700_characters_is_folded() {
+        // 4 breaks and 700 characters stay whole; 5 breaks fold to the first 5 lines, and 701 characters to 700.
+        assert_eq!(fold_rich(&p(&lines(5))), None);
+        assert_eq!(fold_rich(&p(&lines(6))), Some(p(&lines(5))));
+        assert_eq!(fold_rich(&p(&"a".repeat(700))), None);
+        assert_eq!(fold_rich(&p(&"a".repeat(701))), Some(p(&"a".repeat(700))));
+        // Characters, not bytes.
+        assert_eq!(fold_rich(&p(&"日".repeat(701))), Some(p(&"日".repeat(700))));
+        // Both limits at once: the cut is where the first of them is reached.
+        let text = format!(
+            "{}\n{}\n{}",
+            "a".repeat(300),
+            "b".repeat(300),
+            "c".repeat(300)
+        );
+        let cut = format!(
+            "{}\n{}\n{}",
+            "a".repeat(300),
+            "b".repeat(300),
+            "c".repeat(98)
+        );
+        assert_eq!(fold_rich(&p(&text)), Some(p(&cut)));
+    }
+
+    #[test]
+    fn a_folded_text_keeps_its_styles_and_blocks() {
+        let span = |text: &str, bold: bool| Span {
+            text: text.to_owned(),
+            bold,
+            ..Span::default()
+        };
+        let rich = vec![
+            RichBlock::Paragraph {
+                spans: vec![span("head ", true), span("x\ny", false)],
+            },
+            RichBlock::Code {
+                text: "c1\nc2\nc3\nc4".to_owned(),
+            },
+            RichBlock::Quote {
+                spans: vec![span("never reached", false)],
+            },
+        ];
+        // The break between blocks is a line too: 1 in the paragraph, 1 between, and the code is cut before its 3rd break.
+        assert_eq!(
+            fold_rich(&rich),
+            Some(vec![
+                rich[0].clone(),
+                RichBlock::Code {
+                    text: "c1\nc2\nc3".to_owned()
+                },
+            ])
+        );
+        // A cut inside a span leaves the style of its first part, and a block the cut reaches first is dropped.
+        let long = vec![RichBlock::Paragraph {
+            spans: vec![span(&"a".repeat(699), true), span("bc", false)],
+        }];
+        assert_eq!(
+            fold_rich(&long),
+            Some(vec![RichBlock::Paragraph {
+                spans: vec![span(&"a".repeat(699), true), span("b", false)],
+            }])
+        );
+    }
+
+    #[test]
+    fn an_attachment_keeps_its_full_text_and_folds_a_long_one() {
+        let long = attachments(json!([{"text": lines(8)}]));
+        assert_eq!(long[0].text, Some(p(&lines(8))));
+        assert_eq!(long[0].text_short, Some(p(&lines(5))));
+        let short = attachments(json!([{"text": lines(5)}]));
+        assert_eq!(short[0].text_short, None);
+        let none = attachments(json!([{"title": "t"}]));
+        assert_eq!(none[0].text_short, None);
     }
 
     #[test]

@@ -487,6 +487,17 @@ describe("slack thread: blocks and attachments", () => {
     expect(await browser.execute(() => document.querySelector("#st-msgs .st-msg > div > .st-text")!.compareDocumentPosition(document.querySelector("#st-msgs .st-att")!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
   });
 
+  it("draws the folded text of a long attachment with a button, and the whole text after a press (S-11)", async () => {
+    const whole = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join("\n");
+    const first = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`).join("\n");
+    await openDetail({}, bot({ attachments: [attachment({ title: "Shared", text: plain(whole), textShort: plain(first) }), attachment({ title: "Short", text: plain("One line") })] }));
+    expect(await textsOf("#st-msgs .st-att > .st-text")).toEqual([first, "One line"]);
+    expect(await textsOf("#st-msgs .st-att .st-more")).toEqual(["もっと表示する"]);
+    await $("#st-msgs .st-att .st-more").click();
+    expect(await textsOf("#st-msgs .st-att > .st-text")).toEqual([whole, "One line"]);
+    expect(await count("#st-msgs .st-more")).toBe(0);
+  });
+
   it("draws an attachment: the color bar, pretext, author, linked title, text, fields, buttons and footer", async () => {
     const full = attachment({
       color: "#36a64f",

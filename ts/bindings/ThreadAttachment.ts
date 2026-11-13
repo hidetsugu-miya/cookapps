@@ -7,8 +7,9 @@ import type { ThreadImage } from "./ThreadImage";
 
 /**
  * An attachment, as drawn. `color` is `#rrggbb` (or `#rgb`); `fallback` is set only when nothing else of the attachment can be drawn.
+ * `text_short` is the first lines of a long `text` (`fold_rich`), set only when `text` is long enough to be folded; the screen draws it with a button that swaps in `text` (S-11).
  */
-export type ThreadAttachment = { color: string | null, pretext: Array<RichBlock> | null, authorName: string | null, title: string | null, titleLink: string | null, text: Array<RichBlock> | null, fields: Array<ThreadField>, footer: string | null, actions: Array<ThreadButton>, blocks: Array<ThreadBlock>, 
+export type ThreadAttachment = { color: string | null, pretext: Array<RichBlock> | null, authorName: string | null, title: string | null, titleLink: string | null, text: Array<RichBlock> | null, textShort: Array<RichBlock> | null, fields: Array<ThreadField>, footer: string | null, actions: Array<ThreadButton>, blocks: Array<ThreadBlock>, 
 /**
  * The attachment's own `image_url` and `thumb_url`, with the `fallback` as their description.
  */
