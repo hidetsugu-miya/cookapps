@@ -1015,6 +1015,35 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-file[data-open="true"] .orca-file-ic { color: var(--accent); }
 .orca-file-note { margin: 0; padding: 2px 8px 2px calc(24px + var(--depth, 0) * 14px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
 .orca-file-note.fail { color: var(--warn); }
+/* A-27: the buttons that choose the files or the history in the top row of the file pane, and the history (the commits above, the files of the chosen commit below). */
+.orca-files-mode { flex: none; width: var(--header-btn); height: var(--header-btn); margin-left: 6px; color: var(--ink-soft); }
+.orca-files-mode:first-child { margin-left: 12px; }
+.orca-files-mode svg { width: var(--header-ic); height: var(--header-ic); }
+.orca-files-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+#orca-history { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1.2fr) minmax(0, 1fr); }
+#orca-history-list, #orca-history-files { min-height: 0; overflow: auto; padding: 4px 4px 8px; }
+#orca-history-files { border-top: 1px solid var(--line); }
+#orca-history .pending { margin: 4px; }
+.orca-commit { display: flex; flex-direction: column; gap: 1px; width: 100%; min-width: 0; box-sizing: border-box; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
+.orca-commit:hover { background: var(--hover); }
+.orca-commit:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-commit[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+.orca-commit-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-commit-meta { display: flex; gap: 8px; font-size: calc(11.5px * var(--fs)); color: var(--muted); }
+.orca-commit-id { font-family: var(--ff-mono, ) ui-monospace, monospace; }
+.orca-hfile { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
+.orca-hfile:hover { background: var(--hover); }
+.orca-hfile:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-hfile[aria-pressed="true"] { background: var(--soft); }
+.orca-hfile-st { flex: none; width: 14px; text-align: center; font-size: calc(11px * var(--fs)); font-weight: 700; color: var(--muted); }
+.orca-hfile[data-status="added"] .orca-hfile-st { color: var(--ins); }
+.orca-hfile[data-status="deleted"] .orca-hfile-st { color: var(--del); }
+.orca-hfile-name { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; }
+.orca-hfile-dir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
+.orca-hfile-n { flex: none; display: flex; gap: 4px; font-size: calc(11.5px * var(--fs)); }
+.orca-hfile-add { color: var(--ins); }
+.orca-hfile-del { color: var(--del); }
+.orca-diff-commit { flex: none; margin-right: 8px; padding: 0 6px; border-radius: 8px; background: var(--soft); color: var(--accent); font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
 .orca-files-toggle { flex: none; margin: 0 6px 0 auto; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
 .orca-files-toggle svg { width: var(--header-ic); height: var(--header-ic); }
 .orca-files-toggle[aria-pressed="true"] { background: var(--soft); color: var(--accent); }

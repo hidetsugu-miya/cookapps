@@ -54,3 +54,4 @@ export const UP_SVG = svgOf('<path d="m6 15 6-6 6 6"/>');
 export const DOWN_SVG = svgOf('<path d="m6 9 6 6 6-6"/>');
 export const RELOAD_SVG = svgOf('<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>');
 export const CODE_SVG = svgOf('<path d="m8 8-4 4 4 4M16 8l4 4-4 4"/>');
+export const BRANCH_SVG = svgOf('<path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>');

@@ -1,13 +1,16 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`); this module draws the folder at once, marks the ignored entries when the answer comes, and takes the presses.
 // A folder is read the first time it is opened and drawn from what was read after that, and the reload button reads the root and then the open folders again, side by side (at most `reads()` at a time). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
+// The top row also has the two buttons that choose what the pane shows under the heading, the files or the history of the worktree (A-27, orca-history.ts); the choice is kept in memory only, and the heading and its reload button serve both.
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, tag } from "./dom.js";
-import { CHEVRON_SVG, COPY_PATH_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
+import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
+import type { DiffCommit } from "./orca-diff.js";
+import { initHistory, reloadHistory, syncHistory } from "./orca-history.js";
 import { toast } from "./toast.js";
 import { copyText, showError } from "./view.js";
 
@@ -28,6 +31,8 @@ interface Listing {
 }
 
 let shown = false;
+// What the pane shows under the heading.
+let mode: "files" | "history" = "files";
 let context: FilesContext | null = null;
 // A new tree (another worktree) ends the reads of the old one.
 let generation = 0;
@@ -52,6 +57,25 @@ export function toggleFiles() {
   shown = !shown;
   $("orca-files").hidden = !shown;
   $("orca-files-split").hidden = !shown;
+  syncModes();
+}
+
+// Shows the part of the pane that is chosen, with the reload button for it, and starts the read of it that is due: the history is read only while it is shown, the root of the tree only while the files are.
+function syncModes() {
+  const history = mode === "history";
+  $("orca-files-tree").hidden = history;
+  $("orca-history").hidden = !history;
+  $("orca-files-mode-files").setAttribute("aria-pressed", String(!history));
+  $("orca-files-mode-history").setAttribute("aria-pressed", String(history));
+  $("orca-files-reload").setAttribute("aria-label", history ? "履歴を読み直す" : "ファイルを読み直す");
+  syncHistory(context === null ? null : { target: context.target, path: context.path }, shown && history);
+  if (shown && !history && context !== null && !listings.has("")) void readDir("");
+}
+
+function chooseMode(next: "files" | "history") {
+  if (mode === next) return;
+  mode = next;
+  syncModes();
 }
 
 // Whether the list marked the folder `dir` as ignored (what it holds is ignored then, and Rust does not ask git).
@@ -242,6 +266,7 @@ function openBranches(anchor: Element) {
   if (here === null || here.branch === null) return;
   openBranchDialog(anchor, { target: here.target, path: here.path, repo: here.project, branch: here.branch }, () => {
     void reload();
+    reloadHistory();
     branchSwitched();
   });
 }
@@ -292,15 +317,20 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
     closeBranchDialog();
   }
   context = next;
-  if (shown && context !== null && !listings.has("")) void readDir("");
+  syncModes();
   draw();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; toggle: () => void; switched: () => void }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void }) {
   openFile = on.open;
   openDiff = on.diff;
   branchSwitched = on.switched;
+  initHistory({ open: on.commitDiff });
   $("orca-files-toggle").innerHTML = FOLDER_SVG;
   $("orca-files-toggle").onclick = on.toggle;
-  $("orca-files-reload").onclick = () => void reload();
+  $("orca-files-mode-files").innerHTML = FILE_SVG;
+  $("orca-files-mode-files").onclick = () => chooseMode("files");
+  $("orca-files-mode-history").innerHTML = BRANCH_SVG;
+  $("orca-files-mode-history").onclick = () => chooseMode("history");
+  $("orca-files-reload").onclick = () => (mode === "history" ? reloadHistory() : void reload());
 }

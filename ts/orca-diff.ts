@@ -1,5 +1,5 @@
-// The diff tab of the Orca screen (A-24): the difference of a file of a worktree from HEAD, as a tab of the work pane, side by side (HEAD on the left, the working tree on the right, the numbers of the lines between them) or in one column.
-// Rust reads the two texts and compares them (`orca_file_diff`): the rows of both views, the blocks of changes and the language to color by; this module draws them, colors the text with the highlighter of the editor (A-21), and takes the presses of the buttons of the tab.
+// The diff tab of the Orca screen (A-24): the difference of a file of a worktree from HEAD, as a tab of the work pane, side by side (HEAD on the left, the working tree on the right, the numbers of the lines between them) or in one column. A file of a commit in the history (A-27) opens the same tab: the parent on the left, the commit on the right, and the short id of the commit in the heading.
+// Rust reads the two texts and compares them (`orca_file_diff`, and `orca_commit_file_diff` for a commit): the rows of both views, the blocks of changes and the language to color by; this module draws them, colors the text with the highlighter of the editor (A-21), and takes the presses of the buttons of the tab.
 // The tabs are kept in memory only, by target and project, as the tabs of the work pane (their ids are `diff:{n}`), as the files of the editor are (`file:{n}`). The view chosen (side by side or in one column) is one choice for all the tabs.
 import type { OrcaDiffRow } from "./bindings/OrcaDiffRow";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
@@ -8,6 +8,14 @@ import { COLUMNS_SVG, DOWN_SVG, LINES_SVG, RELOAD_SVG, UP_SVG } from "./icons.js
 import { invoke } from "./ipc.js";
 import { highlightReady, loadHighlight } from "./vendor-load.js";
 
+// The commit a tab shows a file of (A-27): its full id and short one, its first parent (null for the first commit), and the path the file had at the parent when it was renamed.
+export interface DiffCommit {
+  id: string;
+  shortId: string;
+  parentId: string | null;
+  oldRelative: string | null;
+}
+
 interface DiffTab {
   id: string;
   target: string | null;
@@ -15,6 +23,7 @@ interface DiffTab {
   // The worktree, and the file in it (relative).
   path: string;
   relative: string;
+  commit: DiffCommit | null;
   read: "loading" | "ready" | "failed";
   // The answer of Rust, and the lines of both sides as HTML (colored, else escaped), found when the answer comes.
   diff: OrcaFileDiff | null;
@@ -175,7 +184,8 @@ async function load(d: DiffTab) {
   d.read = "loading";
   d.reload.disabled = true;
   try {
-    const diff = await invoke("orca_file_diff", { path: d.path, relative: d.relative, environment: d.target });
+    const c = d.commit;
+    const diff = c === null ? await invoke("orca_file_diff", { path: d.path, relative: d.relative, environment: d.target }) : await invoke("orca_commit_file_diff", { path: d.path, commitId: c.id, parentId: c.parentId, relative: d.relative, oldRelative: c.oldRelative, environment: d.target });
     if (mine !== d.seq) return;
     d.diff = diff;
     paint(d, diff);
@@ -204,7 +214,7 @@ async function load(d: DiffTab) {
   }
 }
 
-function create(id: string, target: string | null, project: string, path: string, relative: string): DiffTab {
+function create(id: string, target: string | null, project: string, path: string, relative: string, commit: DiffCommit | null): DiffTab {
   const el = tag("div", "orca-diff");
   el.dataset.diff = id;
   const head = tag("div", "orca-edit-head orca-diff-head");
@@ -221,13 +231,15 @@ function create(id: string, target: string | null, project: string, path: string
   const next = button("次の変更", DOWN_SVG);
   const view = button("1 列で表示", LINES_SVG);
   const reload = button("読み直す", RELOAD_SVG);
-  head.append(tag("span", "orca-edit-path", relative), count, previous, next, view, reload);
+  head.append(tag("span", "orca-edit-path", relative));
+  if (commit !== null) head.append(tag("span", "orca-diff-commit", commit.shortId));
+  head.append(count, previous, next, view, reload);
   const note = tag("p", "orca-empty feed-empty");
   note.hidden = true;
   const rows = tag("div", "orca-diff-rows");
   rows.hidden = true;
   el.append(head, note, rows);
-  const d: DiffTab = { id, target, project, path, relative, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, stale: false, pending: false, seq: 0, cancelColor: null, el, note, count, rows, previous, next, view, reload };
+  const d: DiffTab = { id, target, project, path, relative, commit, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, stale: false, pending: false, seq: 0, cancelColor: null, el, note, count, rows, previous, next, view, reload };
   previous.onclick = () => goTo(d, d.current - 1);
   next.onclick = () => goTo(d, d.current + 1);
   reload.onclick = () => void load(d);
@@ -247,14 +259,14 @@ function create(id: string, target: string | null, project: string, path: string
   return d;
 }
 
-// Opens the difference of the file as a tab of the project and gives its id; a file whose difference is open already is read again, not opened twice.
-export function openDiff(target: string | null, project: string, path: string, relative: string) {
-  const open = [...diffs.values()].find((d) => d.target === target && d.project === project && d.path === path && d.relative === relative);
+// Opens the difference of the file as a tab of the project and gives its id (with `commit`, the file as that commit changed it); a file whose difference is open already (in the same commit) is read again, not opened twice.
+export function openDiff(target: string | null, project: string, path: string, relative: string, commit: DiffCommit | null = null) {
+  const open = [...diffs.values()].find((d) => d.target === target && d.project === project && d.path === path && d.relative === relative && (d.commit?.id ?? null) === (commit?.id ?? null));
   if (open) {
     void load(open);
     return open.id;
   }
-  const d = create(`diff:${++lastId}`, target, project, path, relative);
+  const d = create(`diff:${++lastId}`, target, project, path, relative, commit);
   diffs.set(d.id, d);
   void load(d);
   return d.id;

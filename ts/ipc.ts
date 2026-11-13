@@ -27,6 +27,8 @@ import type { HandoffSummary } from "./bindings/HandoffSummary";
 import type { SlackChatReply } from "./bindings/SlackChatReply";
 import type { TodoChatReply } from "./bindings/TodoChatReply";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
+import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
+import type { OrcaCommitList } from "./bindings/OrcaCommitList";
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
 import type { OrcaFileText } from "./bindings/OrcaFileText";
@@ -292,6 +294,12 @@ export interface Commands {
   orca_file_write: { args: { path: string; relative: string; content: string; crlf: boolean; signature: string; environment: string | null }; result: OrcaSaved };
   // A-24: the diff of the file `relative` of the worktree, HEAD against the working tree: the rows of both views, the blocks of changes and the language to color by.
   orca_file_diff: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileDiff };
+  // A-27: `limit` (1 to 200) commits of the worktree at `path` from HEAD, the newest first, after the first `skip`.
+  orca_git_history: { args: { path: string; limit: number; skip: number; environment: string | null }; result: OrcaCommitList };
+  // A-27: the files the commit `commitId` (a full id) changed against its first parent.
+  orca_commit_files: { args: { path: string; commitId: string; environment: string | null }; result: OrcaCommitFiles };
+  // A-27: the diff of the file `relative` in the commit `commitId` from `parentId` (none for the first commit), as the diff tab draws it (`oldRelative`: where a renamed file came from).
+  orca_commit_file_diff: { args: { path: string; commitId: string; parentId: string | null; relative: string; oldRelative: string | null; environment: string | null }; result: OrcaFileDiff };
   // A-25: the local branches of the worktree at `path`, the current one first, each with whether another worktree has it checked out.
   orca_local_branches: { args: { path: string; environment: string | null }; result: OrcaLocalBranch[] };
   // A-25: the remote branches (at most 50) whose names hold `query`, of the project `repo` (`OrcaProject.key`) of the worktree at `path`.
