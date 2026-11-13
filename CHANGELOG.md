@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.65.1
+
+S-19: in the Slack side menu, pressing a workspace's name folds it (#523, #524). A folded workspace hides its channels with nothing unread, and keeps the unread ones and the one whose history is shown. Press it again to open it. The folded workspaces are kept in `slack-side.json` and stay folded after a restart.
+
+S-19, S-15: pressing a channel in the Slack side menu reads it, as 「既読にする」 of its heading in the unread list does, and opens its history (#525).
+
 ## v0.65.0
 
 S-22: a message in a channel's history and in a thread shows its reactions under it, each emoji with its count (#468, #469). A custom emoji shows as its `:name:`. It is display only; reactions cannot be added or removed.
