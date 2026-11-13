@@ -1612,6 +1612,56 @@ describe("slack list: the side menu (S-19)", () => {
     await expect($("#slack-screen")).not.toBeDisplayed();
   });
 
+  describe("the heading of a workspace", () => {
+    const headings = () => browser.execute(() => [...document.querySelectorAll("#slack-side .slack-side-group")].map((g) => `${g.tagName}:${g.getAttribute("type")}:${g.getAttribute("aria-expanded")}`));
+    const pressHeading = (team: string) => $(`#slack-side .slack-side-group[data-key="${team}/fold"]`).click();
+    const openSide = async () => {
+      await openList(timeline(unreadSample(), { side: sideSample() }));
+      await waitForCount("#slack-feed .feed-row", 3);
+    };
+    const all = ["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "group:Lakeside", "read:hash:random"];
+
+    it("is a button with aria-expanded and a mark that turns; pressing it folds the workspace to its unread channels, and pressing it again brings the others back", async () => {
+      await openSide();
+      expect(await headings()).toEqual(["BUTTON:button:true", "BUTTON:button:true"]);
+      expect(await count("#slack-side .slack-side-group svg")).toBe(2);
+      const turn = () => browser.execute(() => getComputedStyle(document.querySelector("#slack-side .slack-side-group svg")!).transform);
+      const open = await turn();
+      await pressHeading("T1");
+      expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "group:Lakeside", "read:hash:random"]);
+      expect(await headings()).toEqual(["BUTTON:button:false", "BUTTON:button:true"]);
+      expect(await turn()).not.toBe(open);
+      await pressHeading("T1");
+      expect(await sideLayout()).toEqual(all);
+      expect(await headings()).toEqual(["BUTTON:button:true", "BUTTON:button:true"]);
+    });
+
+    it("folds only the workspace pressed, keeps the heading of a workspace with no unread channel, and keeps the fold through a redraw", async () => {
+      await openSide();
+      await pressHeading("T2");
+      expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "group:Lakeside"]);
+      expect(await headings()).toEqual(["BUTTON:button:true", "BUTTON:button:false"]);
+      await mock("slack_timeline", timeline(unreadSample(), { side: sideSample() }));
+      await emitEvent("slack-timeline-dirty");
+      await waitForCalls("slack_timeline");
+      await browser.pause(200);
+      expect(await headings()).toEqual(["BUTTON:button:true", "BUTTON:button:false"]);
+      expect(await count("#slack-side .slack-side-btn")).toBe(3);
+    });
+
+    it("keeps the channel whose history is shown when the workspace is folded, and keeps the focus on the heading", async () => {
+      await openSide();
+      await mock("slack_channel_history", [timelineMessage(slackTs(1), "Alice Example", "ops", "secret", { channel: "G2" })]);
+      await $('#slack-side .slack-side-btn[data-key="T1/G2"]').click();
+      await waitForCount("#sc-feed .feed-row", 1);
+      await browser.execute(() => document.querySelector<HTMLElement>('#slack-side .slack-side-group[data-key="T1/fold"]')!.focus());
+      await pressHeading("T1");
+      expect(await sideLayout()).toEqual(["button:未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "group:Lakeside", "read:hash:random"]);
+      expect(await browser.execute(() => document.activeElement?.getAttribute("data-key"))).toBe("T1/fold");
+      expect(await browser.execute(() => document.querySelector('#slack-side .slack-side-btn[data-key="T1/G2"]')!.getAttribute("aria-pressed"))).toBe("true");
+    });
+  });
+
   it("shows the button that keeps a channel off the list beside it, hidden unless the mouse is over the channel or the focus is in it, as a circle with a minus", async () => {
     await openList(timeline(unreadSample(), { side: sideSample() }));
     await waitForCount("#slack-feed .feed-row", 3);

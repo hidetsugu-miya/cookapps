@@ -77,6 +77,8 @@ const closedThreads = new Set<string>();
 let listScroll = 0;
 // The section the side menu chose (S-19); it stays through redraws, a thread and other screens.
 let section: SlackSection = "unread";
+// The workspaces whose channels the side menu folds (`teamId`s), in memory only.
+const foldedTeams = new Set<string>();
 
 const feed = () => $("slack-feed");
 
@@ -149,7 +151,13 @@ function drawBadge() {
 // The side menu (S-19), while the Slack screen is shown (the list or a thread).
 function drawSide() {
   if ($("slack-screen").hidden) return;
-  drawSlackSide({ section, unread: unreadCount, channel: selectedChannel(), workspaces: timeline?.side ?? [] }, { choose: chooseSection, open: openChannel, hide: hideChannel });
+  drawSlackSide({ section, unread: unreadCount, channel: selectedChannel(), workspaces: timeline?.side ?? [], folded: [...foldedTeams] }, { choose: chooseSection, open: openChannel, hide: hideChannel, fold: foldWorkspace });
+}
+
+// The heading of a workspace in the side menu was pressed: fold it, or open it again.
+function foldWorkspace(teamId: string) {
+  if (!foldedTeams.delete(teamId)) foldedTeams.add(teamId);
+  drawSide();
 }
 
 // Takes `n` off the unread number of a channel in the side menu, for what the screen moves to read at once (the next read of the cache has the number itself).
