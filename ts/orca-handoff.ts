@@ -6,9 +6,10 @@
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
-import { getClaude } from "./claude.js";
+import { getClaude, showModelSlot } from "./claude.js";
+import { createComposer } from "./composer.js";
 import { composing, isMac, tag } from "./dom.js";
-import { ARROW_UP_SVG, CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
+import { CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
 import { type HandoffContext, type HandoffDestination, invoke } from "./ipc.js";
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
@@ -106,6 +107,12 @@ function iconButton(label: string, svg: string, className = "icon-btn") {
   button.setAttribute("aria-label", label);
   button.innerHTML = svg;
   return button;
+}
+
+// The field is one line high and grows with its text, up to the `max-height` of `.chat-input` (then it scrolls). A field that is not shown reads 0 and keeps its height.
+function growInput(input: HTMLTextAreaElement) {
+  input.style.height = "auto";
+  if (input.scrollHeight > 0) input.style.height = `${input.scrollHeight}px`;
 }
 
 export class HandoffPane {
@@ -403,19 +410,23 @@ export class HandoffPane {
     const cardBox = tag("div", "ho-card-box");
     const strip = tag("div", "attachments");
     strip.hidden = true;
-    const input = tag("textarea", "chat-input");
-    input.rows = 3;
-    input.autocomplete = "off";
+    // The frame of the field (composer.ts) goes in this form, not its own form: the arrow submits this one.
+    const frame = createComposer({ prefix: "handoff", label: "Orca への指示" }).firstElementChild as HTMLElement;
+    const input = frame.querySelector<HTMLTextAreaElement>(".chat-input")!;
     input.spellcheck = false;
-    input.setAttribute("aria-label", "Orca への指示");
-    const send = iconButton("Orca に渡す", ARROW_UP_SVG, "icon-btn chat-send chat-send-icon");
+    const send = frame.querySelector<HTMLButtonElement>(".chat-send")!;
     send.type = "submit";
-    input.oninput = () => this.updateSend();
+    send.setAttribute("aria-label", "Orca に渡す");
+    form.id = "handoff-form";
+    input.oninput = () => {
+      growInput(input);
+      this.updateSend();
+    };
     form.onsubmit = (e) => {
       e.preventDefault();
       this.handOver();
     };
-    return { form, error, cardBox, strip, input, send };
+    return { form, error, cardBox, strip, frame, input, send };
   }
 
   private buildForm() {
@@ -591,11 +602,8 @@ export class HandoffPane {
       e.preventDefault();
       this.handOver();
     };
-    // The field takes the height that is left, and the arrow is over its bottom right corner.
-    const compose = tag("div", "ho-compose");
-    compose.append(parts.input, parts.send);
     parts.form.classList.add("ho-fill");
-    parts.form.append(notice, fresh, freshBox, claudeNote, parts.error, parts.cardBox, parts.strip, compose);
+    parts.form.append(notice, fresh, freshBox, claudeNote, parts.error, parts.cardBox, parts.strip, parts.frame);
     this.formMain.replaceChildren(head, parts.form);
     this.sess = null;
     this.el = { notice, chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: parts.cardBox, strip: parts.strip, error: parts.error, input: parts.input, send: parts.send };
@@ -603,6 +611,8 @@ export class HandoffPane {
     this.card = this.item?.card() ?? null;
     this.restoreDraft(parts.input);
     this.host.root.replaceChildren(this.formMain);
+    // The model and effort of the summary, in the frame of the field (they need the pane in the page).
+    showModelSlot("handoff-model");
   }
 
   // The session: its header, and the terminal under it (or the note while the terminal cannot be shown).
@@ -627,7 +637,10 @@ export class HandoffPane {
   // The text of a failed request or post goes back to its item: to the field when the item is in view and the field is empty (it was built again if the owner left and came back), else it waits for its own item.
   private keepText(key: string, text: string) {
     if (this.itemKey !== key) drafts.set(key, text);
-    else if (this.el && !this.el.input.value) this.el.input.value = text;
+    else if (this.el && !this.el.input.value) {
+      this.el.input.value = text;
+      growInput(this.el.input);
+    }
   }
 
   // Puts back the instruction of this item whose send failed while another item was in view.
@@ -635,6 +648,7 @@ export class HandoffPane {
     const draft = this.itemKey === null ? undefined : drafts.get(this.itemKey);
     if (draft === undefined) return;
     input.value = draft;
+    growInput(input);
     drafts.delete(this.itemKey!);
   }
 
