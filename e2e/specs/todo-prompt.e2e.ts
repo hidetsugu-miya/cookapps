@@ -508,10 +508,13 @@ describe("todo prompt screen: the model and effort of the conversation", () => {
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#prompt-model select")!).borderTopWidth)).toBe("0px");
   });
 
-  it("is on the prompt screen only, not on the Slack compose screen", async () => {
+  it("is the prompt conversation's on the prompt screen (S-3) and the proofreading's on the Slack compose screen (S-4), the two never mixed", async () => {
     await openPrompt();
-    expect(await count("#slack-compose select")).toBe(0);
     expect(await count("#prompt-model select")).toBe(2);
+    expect(await count('#prompt-model select[data-purpose="promptChat"]')).toBe(2);
+    expect(await count("#slack-model select")).toBe(2);
+    expect(await count('#slack-model select[data-purpose="proofread"]')).toBe(2);
+    expect(await count('#slack-compose select:not([data-purpose="proofread"])')).toBe(0);
   });
 
   it("saves a model with the purpose promptChat and no effort, an effort with both, and the settings show it", async () => {

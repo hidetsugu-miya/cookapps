@@ -609,8 +609,9 @@ export class HandoffPane {
     this.el = { notice, chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: parts.cardBox, strip: parts.strip, error: parts.error, input: parts.input, send: parts.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
-    this.restoreDraft(parts.input);
     this.host.root.replaceChildren(this.formMain);
+    // After the form is in the page, so that the field grows to the height of a text of several lines.
+    this.restoreDraft(parts.input);
     // The model and effort of the summary, in the frame of the field (they need the pane in the page).
     showModelSlot("handoff-model");
   }

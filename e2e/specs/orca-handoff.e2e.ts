@@ -275,6 +275,23 @@ describe("orca handoff", () => {
     expect(((await waitForCalls(ask)) as Asked[])[0].instruction).toBe("請求書を直して");
   });
 
+  it("draws the model and effort in the frame of every pane that is open, the mail's and the Slack thread's alike", async () => {
+    const messages = [timelineMessage(rootTs, "Alice Example", "dev-billing", "Please review the deploy notes.", { replyCount: 1 })];
+    await openMail({ slack_load: slackLoad, slack_timeline: timeline(messages) });
+    await openPane(MAIL);
+    await mock("slack_thread", slackThread([threadMessage(rootTs, "Alice Example", "Please review the deploy notes."), threadMessage(replyTs, "Bob Example", "Looks fine to me.")]));
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 1);
+    await $("#slack-feed .feed-open").click();
+    await waitForCount("#st-msgs .st-msg", 2);
+    await $(SLACK.button).click();
+    await listRead(SLACK);
+    for (const screen of [MAIL, SLACK]) {
+      await expect(selectOf(screen, "model")).toHaveValue("sonnet");
+      await expect(selectOf(screen, "effort")).toHaveValue("medium");
+    }
+  });
+
   it("hands over with Cmd+Enter (Ctrl+Enter off macOS) as the arrow does, and not while the instruction is blank", async () => {
     await openMail();
     const handoff = await mock("orca_handoff", started);
