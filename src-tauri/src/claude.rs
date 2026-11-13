@@ -1456,6 +1456,7 @@ fn parse_slack_edit(
         instruction,
         destination.as_ref(),
         chip,
+        candidates,
         current,
         text,
     ) {

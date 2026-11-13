@@ -1272,10 +1272,51 @@ fn asks_to_post(instruction: &str) -> bool {
     ["投稿", "ポスト", "post"].iter().any(|w| lower.contains(w))
 }
 
-/// Whether the owner's own request holds the channel's name, with or without `#`.
+/// Whether the owner's own request holds the channel's name as a word: with or without `#`, and with no word character just before or after it.
+/// For a name of ASCII characters only, a word character is an ASCII letter, an ASCII digit, `_` or `-` (so kana and kanji next to it end the word, as in 「#salesに投稿」); for a name with a non-ASCII character, it is any letter, digit, `_` or `-`.
+/// A name that holds a word for a post (`asks_to_post`) is taken only with `#`, so that a channel named `post` is not named by "post it".
 fn names_channel(instruction: &str, name: &str) -> bool {
     let name = name.trim().to_lowercase();
-    !name.is_empty() && instruction.to_lowercase().contains(&name)
+    if name.is_empty() {
+        return false;
+    }
+    let needs_hash = asks_to_post(&name);
+    let lower = instruction.to_lowercase();
+    let ascii_only = name.is_ascii();
+    let in_word = |c: char| {
+        matches!(c, '_' | '-')
+            || if ascii_only {
+                c.is_ascii_alphanumeric()
+            } else {
+                c.is_alphanumeric()
+            }
+    };
+    lower.match_indices(&name).any(|(at, _)| {
+        let before = lower[..at].chars().next_back();
+        let after = lower[at + name.len()..].chars().next();
+        !before.is_some_and(in_word)
+            && !after.is_some_and(in_word)
+            && (!needs_hash || before == Some('#'))
+    })
+}
+
+/// The candidates that the owner's request names: of those whose channel name it holds (`names_channel`), the ones with the longest name,
+/// so that `dev-team` is not `dev`. More than one (the same name in two workspaces, or a channel and a thread of it) cannot be told apart.
+fn named_candidates<'a>(instruction: &str, candidates: &'a [Candidate]) -> Vec<&'a Target> {
+    let named: Vec<&Target> = candidates
+        .iter()
+        .map(|c| &c.target)
+        .filter(|t| names_channel(instruction, &t.name))
+        .collect();
+    let longest = named
+        .iter()
+        .map(|t| t.name.trim().chars().count())
+        .max()
+        .unwrap_or(0);
+    named
+        .into_iter()
+        .filter(|t| t.name.trim().chars().count() == longest)
+        .collect()
 }
 
 /// Characters that end a link or a mention in a text.
@@ -1331,7 +1372,7 @@ fn adds_link_or_mention(current: &str, text: &str) -> bool {
 /// What the answer to a request about the Slack post does (S-23). Only a model that said `post: true` (a JSON `true` and nothing else) asks for a post,
 /// and Rust posts it only when all of these hold, whatever the model answers, because the text the model reads is untrusted:
 /// (a) the owner's own request holds a word for a post (`asks_to_post`);
-/// (b) the destination is one `pick_destination` found in the list, and it is the one in the destination chip (`chip`) or its channel name is in the owner's request (`names_channel`);
+/// (b) the destination is one `pick_destination` found in the list (`candidates`), and it is the one in the destination chip (`chip`) or the one and only candidate that the owner's request names (`named_candidates`);
 /// (c) the text to post (`text`) holds no link and no Slack mention that the text the owner sent (`current`) does not.
 /// A model that asked for a post and was refused gives `Refused`, so that the screen can say that nothing was posted.
 pub fn post_decision(
@@ -1339,6 +1380,7 @@ pub fn post_decision(
     instruction: &str,
     destination: Option<&Target>,
     chip: Option<&Target>,
+    candidates: &[Candidate],
     current: &str,
     text: &str,
 ) -> PostDecision {
@@ -1348,7 +1390,7 @@ pub fn post_decision(
     match destination {
         Some(to)
             if asks_to_post(instruction)
-                && (chip == Some(to) || names_channel(instruction, &to.name))
+                && (chip == Some(to) || named_candidates(instruction, candidates) == [to])
                 && !adds_link_or_mention(current, text) =>
         {
             PostDecision::Post(to.clone())
@@ -10121,11 +10163,30 @@ mod tests {
         }
     }
 
+    fn listed(targets: &[&Target]) -> Vec<Candidate> {
+        targets
+            .iter()
+            .map(|t| Candidate {
+                target: (*t).clone(),
+                label: t.name.clone(),
+            })
+            .collect()
+    }
+
     #[test]
     fn a_post_needs_a_post_word_in_the_request_of_the_owner() {
         let to = named("sales");
+        let list = listed(&[&to]);
         let post = |instruction: &str| {
-            post_decision(&json!(true), instruction, Some(&to), Some(&to), "T", "T")
+            post_decision(
+                &json!(true),
+                instruction,
+                Some(&to),
+                Some(&to),
+                &list,
+                "T",
+                "T",
+            )
         };
         for ok in [
             "投稿して",
@@ -10145,8 +10206,9 @@ mod tests {
     #[test]
     fn a_post_goes_to_the_chip_or_to_a_channel_the_request_names() {
         let (sales, other) = (named("sales"), named("random"));
+        let list = listed(&[&sales, &other]);
         let post = |instruction: &str, to: Option<&Target>, chip: Option<&Target>| {
-            post_decision(&json!(true), instruction, to, chip, "T", "T")
+            post_decision(&json!(true), instruction, to, chip, &list, "T", "T")
         };
         // The chip needs no name in the request.
         assert_eq!(
@@ -10154,7 +10216,12 @@ mod tests {
             PostDecision::Post(sales.clone())
         );
         // Another destination needs its name in the request, with or without #, in any case.
-        for ok in ["#random に投稿して", "random に投稿して", "#Random に投稿"] {
+        for ok in [
+            "#random に投稿して",
+            "random に投稿して",
+            "#Random に投稿",
+            "#randomに投稿して",
+        ] {
             assert_eq!(
                 post(ok, Some(&other), Some(&sales)),
                 PostDecision::Post(other.clone()),
@@ -10178,10 +10245,158 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_is_named_as_a_word_and_the_longest_name_wins() {
+        let dev = named("dev");
+        let dev_team = Target {
+            name: "dev-team".into(),
+            channel: "C2".into(),
+            ..dev.clone()
+        };
+        let list = listed(&[&dev, &dev_team]);
+        let chip = named("elsewhere");
+        let post = |instruction: &str, to: &Target| {
+            post_decision(
+                &json!(true),
+                instruction,
+                Some(to),
+                Some(&chip),
+                &list,
+                "T",
+                "T",
+            )
+        };
+        // `dev-team` is named, not `dev`.
+        assert_eq!(
+            post("#dev-team に投稿", &dev_team),
+            PostDecision::Post(dev_team.clone())
+        );
+        assert_eq!(post("#dev-team に投稿", &dev), PostDecision::Refused);
+        assert_eq!(post("#dev に投稿", &dev), PostDecision::Post(dev.clone()));
+        assert_eq!(post("#dev に投稿", &dev_team), PostDecision::Refused);
+        // Kana and kanji next to an ASCII name end the word.
+        assert_eq!(
+            post("#devに投稿して", &dev),
+            PostDecision::Post(dev.clone())
+        );
+        assert_eq!(
+            post("これを#devへ投稿", &dev),
+            PostDecision::Post(dev.clone())
+        );
+        assert_eq!(post("#dev-teamに投稿", &dev), PostDecision::Refused);
+        assert_eq!(
+            post("#dev-teamに投稿", &dev_team),
+            PostDecision::Post(dev_team.clone())
+        );
+        // A name with a non-ASCII character keeps letters as word characters.
+        let jp = Target {
+            name: "営業".into(),
+            channel: "C3".into(),
+            ..dev.clone()
+        };
+        let list = listed(&[&jp]);
+        let decide = |instruction: &str| {
+            post_decision(
+                &json!(true),
+                instruction,
+                Some(&jp),
+                Some(&chip),
+                &list,
+                "T",
+                "T",
+            )
+        };
+        assert_eq!(decide("#営業 に投稿"), PostDecision::Post(jp.clone()));
+        assert_eq!(decide("#営業部に投稿"), PostDecision::Refused);
+        // A name inside a longer word is not named.
+        for no in [
+            "#developers に投稿",
+            "#devx に投稿",
+            "#my_dev に投稿",
+            "#dev2 に投稿",
+        ] {
+            assert_eq!(post(no, &dev), PostDecision::Refused, "{no}");
+        }
+    }
+
+    #[test]
+    fn the_same_channel_name_in_two_workspaces_is_refused() {
+        let one = Target {
+            name: "general".into(),
+            ..target("T1", "C1", None)
+        };
+        let two = Target {
+            name: "general".into(),
+            ..target("T2", "C9", None)
+        };
+        let list = listed(&[&one, &two]);
+        let chip = named("elsewhere");
+        for to in [&one, &two] {
+            assert_eq!(
+                post_decision(
+                    &json!(true),
+                    "#general に投稿",
+                    Some(to),
+                    Some(&chip),
+                    &list,
+                    "T",
+                    "T"
+                ),
+                PostDecision::Refused
+            );
+        }
+        // The chip still posts without a name.
+        assert_eq!(
+            post_decision(
+                &json!(true),
+                "投稿して",
+                Some(&one),
+                Some(&one),
+                &list,
+                "T",
+                "T"
+            ),
+            PostDecision::Post(one.clone())
+        );
+    }
+
+    #[test]
+    fn a_channel_named_with_a_post_word_is_named_only_with_a_hash() {
+        let post_channel = named("post");
+        let list = listed(&[&post_channel]);
+        let chip = named("elsewhere");
+        let decide = |instruction: &str| {
+            post_decision(
+                &json!(true),
+                instruction,
+                Some(&post_channel),
+                Some(&chip),
+                &list,
+                "T",
+                "T",
+            )
+        };
+        assert_eq!(decide("post it"), PostDecision::Refused);
+        assert_eq!(decide("post に投稿"), PostDecision::Refused);
+        assert_eq!(
+            decide("#post に投稿"),
+            PostDecision::Post(post_channel.clone())
+        );
+    }
+
+    #[test]
     fn only_a_json_true_asks_for_a_post() {
         let to = named("sales");
+        let list = listed(&[&to]);
         assert_eq!(
-            post_decision(&json!(true), "投稿して", Some(&to), Some(&to), "T", "T"),
+            post_decision(
+                &json!(true),
+                "投稿して",
+                Some(&to),
+                Some(&to),
+                &list,
+                "T",
+                "T"
+            ),
             PostDecision::Post(to.clone())
         );
         for not in [
@@ -10192,7 +10407,7 @@ mod tests {
             json!([true]),
         ] {
             assert_eq!(
-                post_decision(&not, "投稿して", Some(&to), Some(&to), "T", "T"),
+                post_decision(&not, "投稿して", Some(&to), Some(&to), &list, "T", "T"),
                 PostDecision::Skip,
                 "{not}"
             );
@@ -10202,12 +10417,14 @@ mod tests {
     #[test]
     fn a_post_is_refused_when_its_text_adds_a_link_or_a_mention() {
         let to = named("sales");
+        let list = listed(&[&to]);
         let post = |current: &str, text: &str| {
             post_decision(
                 &json!(true),
                 "投稿して",
                 Some(&to),
                 Some(&to),
+                &list,
                 current,
                 text,
             )
