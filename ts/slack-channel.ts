@@ -4,10 +4,11 @@
 // The history is read when the channel is pressed, and again when it is pressed once more; a read that fails shows the error and "再読み込み". Everything is held in memory only.
 // Under the history is a field to post to the channel (S-21, `slack_channel_post`): what is written is kept per channel in memory, and a post that works empties it and reads the history again.
 import type { TimelineMessage } from "./bindings/TimelineMessage";
-import { $, composing, isMac, tag } from "./dom.js";
+import { $, tag } from "./dom.js";
 import { formatDay } from "./format.js";
 import { HASH_SVG, LOCK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { createSlackEditor } from "./slack-editor.js";
 import { historyItem, watchedKeys } from "./slack-list.js";
 import { openSlackThread } from "./slack-thread.js";
 import { loadIcons, reactionsNode, slackMs } from "./slack-view.js";
@@ -32,12 +33,26 @@ let readSeq = 0;
 let drawn = "";
 let scroll = 0;
 
-// What is written for each channel (`{teamId}/{channel}`), and the channel whose post is on its way.
+// What is written for each channel (`{teamId}/{channel}`) as the Markdown of the rich field (a blank text is not kept), and the channel whose post is on its way.
 const drafts = new Map<string, string>();
 let posting: string | null = null;
+// The channel whose text the field holds now (null: none, the field is empty).
+let shownKey: string | null = null;
 
 const feed = () => $("sc-feed");
-const input = () => $<HTMLTextAreaElement>("sc-input");
+const editor = createSlackEditor({
+  prefix: "sc",
+  label: "チャンネルに投稿",
+  onChange: () => {
+    const key = selectedChannel();
+    if (!key) return;
+    if (editor.blank()) drafts.delete(key);
+    else drafts.set(key, editor.markdown());
+    $("sc-error").hidden = true;
+    drawReply();
+  },
+  onSubmit: () => post(),
+});
 
 // The chosen channel as `{teamId}/{channel}`, for the side menu.
 export const selectedChannel = () => (chosen ? `${chosen.teamId}/${chosen.channel}` : null);
@@ -50,17 +65,25 @@ export function closeSlackChannel() {
   drawn = "";
 }
 
-// Draws the field and the button for the chosen channel: its own text, off while its post is on its way, and the button off while any post is (a post is never sent twice).
-// The field is three lines high and grows with its text up to six (the CSS holds the limit); a hidden field measures 0, which is left alone.
+// Draws the field and the arrow for the chosen channel: its own text, off while its post is on its way, and the arrow off while any post is (a post is never sent twice) or the text is blank.
+// The field is put right only when another channel's text is in it, or after a post emptied the draft; typing never rewrites it.
 function drawReply() {
   const key = selectedChannel();
   const text = (key && drafts.get(key)) || "";
-  const field = input();
-  if (field.value !== text) field.value = text;
-  field.disabled = posting !== null && posting === key;
-  $<HTMLButtonElement>("sc-send").disabled = posting !== null || !text.trim();
-  field.style.height = "auto";
-  field.style.height = field.scrollHeight > 0 ? `${field.scrollHeight}px` : "";
+  if (editor.ready() && (shownKey !== key || (!text && !editor.blank()))) {
+    editor.set(text);
+    shownKey = key;
+  }
+  editor.setBusy(posting !== null && posting === key);
+  editor.setSendDisabled(posting !== null || !text);
+}
+
+// Reads the rich field the first time the channel screen is shown, and draws the text of the channel in it when it is there.
+function loadReply() {
+  editor.ensure().then(drawReply, (e) => {
+    $("sc-error").textContent = `エディターを読み込めませんでした: ${e}`;
+    $("sc-error").hidden = false;
+  });
 }
 
 // Posts the chosen channel's text. A failure shows the error (a toast when the channel is no longer on screen) and keeps the text; a success empties the field and reads the history again, at its newest message.
@@ -75,7 +98,7 @@ async function post() {
   drawReply();
   const shown = () => selectedChannel() === key && !$("slack-channel").hidden;
   try {
-    await invoke("slack_channel_post", { teamId, channel, text });
+    await invoke("slack_channel_post", { teamId, channel, text, markdown: true });
   } catch (e) {
     posting = null;
     drawReply();
@@ -196,6 +219,7 @@ export function openSlackChannel(teamId: string, team: string, c: { id: string; 
   drawn = "";
   draw();
   drawReply();
+  loadReply();
   feed().scrollTop = scroll;
   read();
 }
@@ -215,21 +239,7 @@ export function redrawSlackChannel() {
 }
 
 export function initSlackChannel() {
-  $("sc-send").onclick = post;
-  input().oninput = () => {
-    const key = selectedChannel();
-    if (!key) return;
-    if (input().value) drafts.set(key, input().value);
-    else drafts.delete(key);
-    $("sc-error").hidden = true;
-    drawReply();
-  };
-  // Enter is a line break; Cmd+Enter (Ctrl+Enter off macOS) posts, unless it only confirms an IME conversion.
-  input().onkeydown = (e) => {
-    if (e.key !== "Enter" || composing(e) || !(isMac ? e.metaKey : e.ctrlKey)) return;
-    e.preventDefault();
-    post();
-  };
+  $("sc-reply").append(editor.el);
   feed().addEventListener("scroll", () => {
     if (!$("slack-channel").hidden) scroll = feed().scrollTop;
   });

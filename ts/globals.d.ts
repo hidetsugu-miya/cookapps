@@ -22,7 +22,22 @@ interface MilkdownView {
   markdown(): string;
   edit(onEdit: () => void): void;
 }
-declare const CookappsMilkdown: { mount(root: HTMLElement, markdown: string): Promise<MilkdownView>; normalize(markdown: string): Promise<string> };
+// `compose` makes an editable editor for writing a message (S-21): `onChange` is called after each change of the document (also one made by `set`), `blank` is true when it holds no text but spaces, `set` replaces the content, `run` runs one command of the toolbar and gives the focus back to the text (`link` takes `{ href }`), and `setEditable` turns the typing on or off.
+type MilkdownCommand = "bold" | "italic" | "strike" | "link" | "orderedList" | "bulletList" | "quote" | "code" | "codeBlock";
+interface MilkdownComposer {
+  destroy(): Promise<unknown>;
+  markdown(): string;
+  blank(): boolean;
+  set(markdown: string): void;
+  focus(): void;
+  setEditable(on: boolean): void;
+  run(name: MilkdownCommand, payload?: { href: string }): void;
+}
+declare const CookappsMilkdown: {
+  mount(root: HTMLElement, markdown: string): Promise<MilkdownView>;
+  normalize(markdown: string): Promise<string>;
+  compose(root: HTMLElement, onChange: () => void): Promise<MilkdownComposer>;
+};
 declare const DOMPurify: { sanitize(html: string, config?: Record<string, unknown>): string };
 
 // xterm.js (src/vendor/xterm.js), its fit addon (src/vendor/addon-fit.js), its Unicode 11 addon (src/vendor/addon-unicode11.js) and its web links addon (src/vendor/addon-web-links.js): only what the terminals of the Orca screen use.
