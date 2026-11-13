@@ -46,7 +46,7 @@ Every claim must be true of the code and `docs/privacy/index.md`. Check each one
 "$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/skills/readme-product/shots/shots.sh"
 ```
 
-The data and the steps are in `shots/readme-shots.e2e.ts`. A screen that changed may need its steps or data changed there. The result is the same bytes for the same screens, except for what depends on the date.
+The data and the steps are in `shots/readme-shots.e2e.ts`. A screen that changed may need its steps or data changed there, on a `docs/{summary}` branch (Steps 1 to 4), because the spec is not release-only (`review.md`). Never change it in `release/next`. The result is the same bytes for the same screens, except for what depends on the date.
 
 Data rules, because the photos are public:
 - No real person, company, address or product. Domains are `example.com` and `example.org`; people are made-up Japanese names; the work is a made-up web service.
@@ -64,4 +64,7 @@ Read every photo with `Read` before committing it. Add a new photo only if the R
 5. Report what changed, what was not checked (the page as GitHub draws it, unless it was looked at), and the URL.
 
 When the Release PR is prepared ("After the owner merges the Release PR", step 1, in `issues.md`), read the README against the changes that go out. When one makes a photo or a claim out of date, do steps 2 and 3 in `release/next`, and let the Release PR carry them instead of steps 1 and 4. When none does, change nothing, and say so in the Release PR body.
+In `release/next`, change only `README.md` and `docs/`, so that the diff stays release-only (`issues.md`); do not change `shots/`.
+When the spec does not fit the current screen and a photo cannot be taken, take no photo for that screen, file an issue with `issue-plan` (label `documentation`) so that it is fixed on an ordinary branch, and name the screen in the Release PR body as one that could not be photographed.
+The Release PR carries only the photos that were taken.
 Either way, the Release PR shows the photos of the screens its changes touch, in its body or in a comment, by the raw URL of the commit that holds them (`issues.md`, "Keep one Release PR open while changes wait").
