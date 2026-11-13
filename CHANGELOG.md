@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.65.2
+
+M-2: the row of buttons above the subject of an open mail (the AI summary, Slack, Todo, Orca, trash and archive) sits at the right end of the body (#529).
+
 ## v0.65.1
 
 S-19: in the Slack side menu, pressing a workspace's name folds it (#523, #524). A folded workspace hides its channels with nothing unread, and keeps the unread ones and the one whose history is shown. Press it again to open it. The folded workspaces are kept in `slack-side.json` and stay folded after a restart.
