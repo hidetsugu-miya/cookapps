@@ -512,17 +512,17 @@ describe("inbox", () => {
     });
 
     it("does not let the timer of a closed popup close the next popup of the same thread", async () => {
-      // A popup stays 10 seconds in the app and 1 second here.
-      await boot({ inbox: inbox(), ...timers({ arrival: 1000 }) });
+      // A popup stays 10 seconds in the app and 3 seconds here.
+      await boot({ inbox: inbox(), ...timers({ arrival: 3000 }) });
       await waitForCount("#unread-threads li", 2);
       await arrive(arrivedThread);
       await $('.arrival button[aria-label="閉じる"]').click();
       await waitForCount(".arrival", 0);
-      // The first card would have gone at 1 second; the second one arrives 0.6 seconds after the first.
-      await browser.pause(600);
+      // The first card would have gone at 3 seconds; the second one arrives 1.8 seconds after the first.
+      await browser.pause(1800);
       await arrive(arrivedThread);
       await waitForCount(".arrival", 1);
-      await browser.pause(600);
+      await browser.pause(1500);
       expect(await cards()).toHaveLength(1);
       await browser.waitUntil(async () => (await cards()).length === 0, { timeout: 15_000, timeoutMsg: "the popup did not go by itself" });
     });
