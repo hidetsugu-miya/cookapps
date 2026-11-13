@@ -15,6 +15,8 @@ import type { FontSettings } from "./bindings/FontSettings";
 import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
+import type { LogEntry } from "./bindings/LogEntry";
+import type { LogLevel } from "./bindings/LogLevel";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
 import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
@@ -340,6 +342,10 @@ export interface Commands {
   skill_save: { args: { skill: Skill }; result: Skill };
   // Deletes a skill; an error when there is none or the name is not a valid one. Answers null.
   skill_delete: { args: { name: string }; result: null };
+  // A-28: adds a line to the app's log (`app-log.jsonl` in the config folder): the weight, the place and a few words of what happened, never a token, a mail, a message, what a terminal printed or what was typed. The text is cut to 500 characters and a word shaped like a token is masked. An empty text is an error in Japanese. Answers null.
+  log_write: { args: { level: LogLevel; source: string; message: string }; result: null };
+  // A-28: the lines of the log of the last 30 days, the newest first.
+  log_read: { args: undefined; result: LogEntry[] };
   // A-13: the import of Ghostty's settings saved last, null before the first one.
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.

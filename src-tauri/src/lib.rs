@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod app_log;
 pub mod auth;
 pub mod calendar;
 pub mod claude;
@@ -352,6 +353,8 @@ pub fn run() {
             ghostty::ghostty_import,
             orca_theme::terminal_themes,
             orca_theme::terminal_theme_set,
+            app_log::log_write,
+            app_log::log_read,
             update::app_info,
             update::update_mode,
             update::set_update_mode,
