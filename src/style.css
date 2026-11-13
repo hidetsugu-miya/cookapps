@@ -870,10 +870,9 @@ button.status:hover { filter: brightness(.95); }
 #orca-header { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-height: var(--header-h); box-sizing: border-box; padding: 0 6px; border-bottom: 1px solid var(--line); }
 #orca-header .icon-btn { flex: none; width: auto; min-width: var(--header-btn); gap: 3px; padding: 0 4px; color: var(--ink-soft); }
 #orca-header .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
-/* A-23: the button that closes and opens the list. It is first in the header, pushed to the left (the bell and the reload keep the right), and (while the list is closed) at the left end of the tab strip of the pane at the left edge. */
+/* A-23: the button that closes and opens the list. On the Orca screen it is at the left end of the tab strip of the pane at the left edge, open or closed. */
 .list-toggle { flex: none; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
 .list-toggle svg { width: var(--header-ic); height: var(--header-ic); }
-#orca-header .list-toggle { margin-right: auto; }
 .orca-tabbar .list-toggle { margin-left: 6px; }
 /* A-23, Todo: first in the list of projects, level with the buttons of the header beside it; while the list is closed, first in that header. */
 #projects .list-toggle { display: flex; margin: calc((var(--header-h) - var(--header-btn)) / 2) 0 8px; }

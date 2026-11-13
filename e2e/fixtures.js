@@ -7,6 +7,7 @@
 // Every command the app calls at startup has a harmless base answer, so no test can reach Gmail, the keychain or Slack.
 // To change what the app sees at startup, put {command: value} in sessionStorage["e2e-fixtures"] and reload (`boot` in e2e/support.ts does it).
 // A mock value of the form {__e2e_reject__: text} makes the command fail with that text, as a Rust `Err(String)` reaches the app.
+// {e2e_timers: {...}} is no command: it sets the periods of the app's timers for the spec (`timers` in e2e/support.ts).
 // A mock or fixture value {__e2e_hold__: true} makes the command wait until `release` in e2e/support.ts answers it, so a spec decides when the answer arrives.
 // Calls held at the same time are answered by `release` in the order they were made.
 // An unmocked command is also recorded in window.__e2e_unmocked__: the app swallows some rejections, and wdio.conf.ts prints the list when a test fails.
@@ -35,6 +36,8 @@ window.__e2e_once__ = (id) => !ran.has(id) && !!ran.add(id);
 const core = window.__TAURI__.core;
 const real = core.invoke.bind(core);
 const fixtures = JSON.parse(sessionStorage.getItem("e2e-fixtures") ?? "{}");
+// The periods of the timers that a spec shortens (`timers` in e2e/support.ts): the app reads them with `periodMs` (ts/e2e-timers.ts), and only this build has them.
+window.__e2e_timers__ = fixtures.e2e_timers;
 const answers = {
   inbox_cached: null,
   calendar_cached: [],

@@ -164,10 +164,6 @@ class Ordering(unittest.TestCase):
         j = pr.issue_json(mk(2, ["importance:high"]))
         self.assertEqual((j["urgency"], j["importance"], j["points"]), ("normal", "high", None))
 
-    def test_a_milestone_named_for_a_version_is_not_given_to_the_planner(self):
-        self.assertIsNone(pr.issue_json(mk(1, milestone="v0.56.0"))["milestone"])
-        self.assertEqual(pr.issue_json(mk(2, milestone="Orca files"))["milestone"], "Orca files")
-
 
 class Validation(unittest.TestCase):
     def setUp(self):
@@ -419,48 +415,12 @@ class Unsplit(unittest.TestCase):
         ]
         self.assertEqual(numbers(pr.unsplit(issues)), [1, 2])
 
-    def test_a_big_issue_in_a_milestone_named_for_a_version_is_unsplit(self):
-        issues = [
-            mk(1, ["point:5"], milestone="v0.56.0", ms_number=3),
-            mk(2, ["point:8"], milestone="Orca files", ms_number=7),
-            mk(3, ["point:3"], milestone="v0.56.0", ms_number=3),
-            mk(4, ["point:5", "needs:owner"], milestone="v0.56.0", ms_number=3),
-        ]
-        self.assertEqual(numbers(pr.unsplit(issues)), [1])
-
     def test_an_issue_in_hand_is_not_unsplit(self):
-        issues = [mk(1, ["point:5"]), mk(2, ["point:8"], milestone="v0.56.0"), mk(3, ["point:5"]), mk(4, ["point:5"])]
+        issues = [mk(1, ["point:5"]), mk(2, ["point:8"]), mk(3, ["point:5"]), mk(4, ["point:5"])]
         self.assertEqual(numbers(pr.unsplit(issues, pr_closing={2}, mine={3})), [1, 4])
 
     def test_nothing_is_unsplit_once_every_big_issue_is_split_or_waits_for_the_owner(self):
         self.assertEqual(pr.unsplit([mk(1, ["point:2"]), mk(2, ["point:5", "needs:owner"])]), [])
-
-
-class Migration(unittest.TestCase):
-    def ms(self, number, title, open_issues, closed_issues=0):
-        return {"number": number, "title": title, "open_issues": open_issues, "closed_issues": closed_issues}
-
-    def test_a_version_milestone_is_taken_off_an_issue_of_less_than_5_points(self):
-        issues = [
-            mk(1, ["point:3"], milestone="v0.56.0"),
-            mk(2, ["point:5"], milestone="v0.56.0"),
-            mk(3, ["point:8", "needs:owner"], milestone="v0.56.0"),
-            mk(4, ["point:2"], milestone="Orca files"),
-            mk(5, ["point:1"]),
-            mk(6, [], milestone="v0.57.0"),
-            mk(7, ["point:2"], milestone="v0.56.0", state="closed"),
-        ]
-        out = pr.migration(issues, [self.ms(1, "v0.56.0", 3, 1), self.ms(2, "v0.57.0", 1), self.ms(3, "Orca files", 1)])
-        self.assertEqual(out["clear"], [1, 6])
-
-    def test_a_version_milestone_with_no_open_issue_left_is_closed(self):
-        issues = [mk(1, ["point:3"], milestone="v0.56.0"), mk(2, ["point:5"], milestone="v0.57.0")]
-        milestones = [self.ms(1, "v0.56.0", 1), self.ms(2, "v0.57.0", 1), self.ms(3, "v0.58.0", 0, 2), self.ms(4, "Orca files", 0, 2)]
-        self.assertEqual(pr.migration(issues, milestones)["close"], ["v0.56.0", "v0.58.0"])
-
-    def test_a_version_milestone_that_holds_an_issue_of_someone_else_stays_open(self):
-        issues = [mk(1, ["point:3"], milestone="v0.56.0")]
-        self.assertEqual(pr.migration(issues, [self.ms(1, "v0.56.0", 2)])["close"], [])
 
 
 class Prune(unittest.TestCase):
