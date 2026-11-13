@@ -24,6 +24,7 @@ import type { Comment } from "./bindings/Comment";
 import type { MonthGrid } from "./bindings/MonthGrid";
 import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
+import type { SlackChatReply } from "./bindings/SlackChatReply";
 import type { TodoChatReply } from "./bindings/TodoChatReply";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaDir } from "./bindings/OrcaDir";
@@ -226,6 +227,10 @@ export interface Commands {
   // Claude's answer to a request about Todo tasks: a short reply and the tasks it proposes (name, date `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, project ID; a project or a date that is not valid is null, and a task with a bad date or name is not returned). Nothing is created in Todoist.
   // `history` is the conversation so far and `instruction` the new request. The Todoist projects of the last load are sent from Rust. The model and effort are those of `todoChat`. Nothing is saved.
   claude_chat_todo: { args: { history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoChatReply };
+  // S-24: Claude's answer on the Slack screen: a short reply, and the draft of a post when the request asked for one (`draft` is null otherwise). Nothing is posted.
+  // `channel` is the channel the screen has open (null in the unread list and the watch, and then no Slack text is sent): `teamId` and `channel` must be a connected workspace and a channel of its list (a refusal is a Japanese message),
+  // and `messages` are its recent messages as the screen draws them (`text` of `TimelineMessage`), oldest first. The model and effort are those of `slackChat`. Nothing is saved.
+  claude_chat_slack: { args: { channel: { teamId: string; channel: string; messages: { name: string; ts: string; text: string }[] } | null; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: SlackChatReply };
   // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions, with the `destination` it chose from the list Rust gave it (S-4).
   // `posted` is true when the request asked to post (S-23) and Rust posted the new text (or `text`) to `destination` by the path of `slack_post`; the screen then goes on as after "投稿". Nothing is saved.
   claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; target: Target | null; targetByClaude: boolean }; result: SlackEdit };

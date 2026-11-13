@@ -4,4 +4,4 @@ import type { ModelSettings } from "./ModelSettings";
 /**
  * The model and effort of every purpose (A-2).
  */
-export type ClaudeSettings = { slackSummary: ModelSettings, mailSummary: ModelSettings, promptChat: ModelSettings, proofread: ModelSettings, slackReply: ModelSettings, orcaHandoff: ModelSettings, todoChat: ModelSettings, };
+export type ClaudeSettings = { slackSummary: ModelSettings, mailSummary: ModelSettings, promptChat: ModelSettings, proofread: ModelSettings, slackReply: ModelSettings, orcaHandoff: ModelSettings, todoChat: ModelSettings, slackChat: ModelSettings, };

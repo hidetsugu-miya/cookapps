@@ -70,7 +70,7 @@ const NAME_LIMIT: usize = 80;
 /// Characters of the mail's text that the post starts out with.
 const BODY_LIMIT: usize = 3000;
 /// The most characters the user may post in one message.
-const POST_LIMIT: usize = 10_000;
+pub(crate) const POST_LIMIT: usize = 10_000;
 /// Messages `conversations.replies` answers with per page, and how many pages are read: a thread past `REPLY_PAGES * REPLY_PAGE_SIZE` messages is read to there.
 const REPLY_PAGE_SIZE: &str = "200";
 const REPLY_PAGES: usize = 20;
@@ -5972,6 +5972,37 @@ fn held_channel(state: &SlackState, team_id: &str, channel: &str) -> Option<Chan
         .and_then(|(_, list)| list.iter().find(|c| c.id == channel).cloned())
 }
 
+/// What the Claude conversation of the Slack screen (S-24) calls the channel it is about, `ワークスペース / #チャンネル` (the form of `Candidate::label`), or why it cannot be one:
+/// `team_id` must be the ID of a connected workspace and `channel` the form of a channel ID, and `held` (the channel in the workspace's channel list, if it is in it) must be there (the checks of S-20).
+fn chat_channel_label(
+    workspaces: &[Workspace],
+    held: Option<&Channel>,
+    team_id: &str,
+    channel: &str,
+) -> Result<String, &'static str> {
+    if token_key(team_id).is_err() || !valid_channel(channel) {
+        return Err(BAD_TARGET);
+    }
+    let workspace = workspaces
+        .iter()
+        .find(|w| w.team_id == team_id)
+        .ok_or(NO_WORKSPACE)?;
+    let held = held.ok_or("チャンネルが見つかりません")?;
+    Ok(format!("{} / #{}", workspace.team, held.name))
+}
+
+/// `chat_channel_label` for the channel a Claude conversation names (S-24): the workspaces are the connected ones and the channel list is the one the side menu is made of. Nothing is called of Slack.
+pub(crate) async fn chat_channel(
+    dir: &Path,
+    state: &SlackState,
+    team_id: &str,
+    channel: &str,
+) -> Result<String, String> {
+    let workspaces = load_workspaces(dir).await?;
+    let held = held_channel(state, team_id, channel);
+    chat_channel_label(&workspaces, held.as_ref(), team_id, channel).map_err(str::to_owned)
+}
+
 /// The newest `CHANNEL_HISTORY_LIMIT` messages of a channel the workspace's user has joined (S-20), oldest first, drawn as the rows of the list are, with the names of their senders.
 /// It reads `conversations.history` of that one channel and changes no read position. `unread` is false for every message: the history is not the unread list.
 #[tauri::command]
@@ -10654,5 +10685,37 @@ mod tests {
             post("#sales に投稿して", true),
             PostDecision::Post(sales.clone())
         );
+    }
+
+    #[test]
+    fn the_chat_channel_is_named_only_for_a_connected_workspace_and_a_channel_of_its_list() {
+        let list = [workspace("T1", "https://a.slack.com/")];
+        let held = channel("C1");
+        assert_eq!(
+            chat_channel_label(&list, Some(&held), "T1", "C1"),
+            Ok("team T1 / #name C1".to_owned())
+        );
+        // A workspace that is not connected, a channel the list does not hold, and values of no valid form.
+        assert_eq!(
+            chat_channel_label(&list, Some(&held), "T2", "C1"),
+            Err(NO_WORKSPACE)
+        );
+        assert_eq!(
+            chat_channel_label(&list, None, "T1", "C1"),
+            Err("チャンネルが見つかりません")
+        );
+        for (team, chan) in [
+            ("t1", "C1"),
+            ("", "C1"),
+            ("T1", "c1"),
+            ("T1", ""),
+            ("T1", "C1 "),
+        ] {
+            assert_eq!(
+                chat_channel_label(&list, Some(&held), team, chan),
+                Err(BAD_TARGET),
+                "{team:?} {chan:?}"
+            );
+        }
     }
 }
