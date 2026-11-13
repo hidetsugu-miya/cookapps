@@ -2,7 +2,7 @@
 //!
 //! `app-log.jsonl` holds one JSON object a line: the time, the weight (`error`, `warn`, `info`), the place and the text.
 //! What goes in is only what the caller says happened, in a few words: never a token, a mail, a message, what a terminal printed or what was typed.
-//! The module helps that and does not promise it: the text is cut to `MESSAGE_MAX` characters, a line break becomes a space, and a word that has the shape of a token is masked (`redact`).
+//! The module helps that and does not promise it: the text is cut to `MESSAGE_MAX` characters, a line break becomes a space, and a word that has the shape of a token, or is long enough to be one, is masked (`redact`).
 //! Old lines are dropped (`MAX_AGE_DAYS`) and the file is kept under `MAX_BYTES`, the newest lines staying (`compact`).
 //! The decisions are pure functions that take the time as an argument; the commands and `write` only read the clock and the file.
 
@@ -64,7 +64,7 @@ pub struct LogEntry {
 }
 
 /// Words that are a secret when they start a word or follow `Bearer`.
-const SECRET_PREFIXES: [&str; 12] = [
+const SECRET_PREFIXES: [&str; 13] = [
     "xoxb-",
     "xoxp-",
     "xoxa-",
@@ -73,11 +73,16 @@ const SECRET_PREFIXES: [&str; 12] = [
     "xoxe-",
     "xapp-",
     "ya29.",
+    // A Google refresh token.
+    "1//",
     "sk-ant-",
     "ghp_",
     "github_pat_",
     "AIza",
 ];
+/// A run of this many characters or more of letters, digits, `_` and `-` that holds a digit is masked as a token whatever service it is of
+/// (a Todoist token is 40 hexadecimal digits, a base64url one is longer). Without a digit it is a word of text, as a long name is.
+const LONG_RUN: usize = 32;
 /// A name before `=` or `:` whose value is a secret.
 const SECRET_NAMES: [&str; 7] = [
     "token",
@@ -142,6 +147,32 @@ fn mask_prefixes(word: &str) -> String {
     out
 }
 
+/// Adds `run` to `out`, masked when it is a long run with a digit (`LONG_RUN`), and empties it.
+fn flush_run(out: &mut String, run: &mut String) {
+    if run.len() >= LONG_RUN && run.bytes().any(|b| b.is_ascii_digit()) {
+        out.push_str(MASK);
+    } else {
+        out.push_str(run);
+    }
+    run.clear();
+}
+
+/// `word` with every long run of token characters masked (`LONG_RUN`). A `.`, `/` or `:` ends a run, so a path or an address is not one.
+fn mask_long_runs(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    let mut run = String::new();
+    for c in word.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            run.push(c);
+        } else {
+            flush_run(&mut out, &mut run);
+            out.push(c);
+        }
+    }
+    flush_run(&mut out, &mut run);
+    out
+}
+
 /// Where the value of a secret name starts in `word` (just after its `=` or `:`) and the name, for the earliest one.
 /// `name`, `name=`, `"name":` and `name:` count; `name` alone does not.
 fn secret_value(word: &str) -> Option<(usize, &'static str)> {
@@ -163,8 +194,8 @@ fn secret_value(word: &str) -> Option<(usize, &'static str)> {
     best
 }
 
-/// `text` with the words that look like a secret masked: a token of a known service, the value of `token=`, `secret:`, `password=` and the like (the next word when the value is apart), and the word after `Bearer`.
-/// The spaces are collapsed. It is a net for what slips through, not a promise: callers do not pass secrets.
+/// `text` with the words that look like a secret masked: a token of a known service, a long run of token characters, the value of `token=`, `secret:`, `password=` and the like (the next word when the value is apart), and the word after `Bearer`.
+/// The spaces are collapsed. It is a net for what slips through, not a promise: callers do not pass secrets (`write`).
 fn redact(text: &str) -> String {
     let mut pending = 0;
     let mut out: Vec<String> = Vec::new();
@@ -189,7 +220,7 @@ fn redact(text: &str) -> String {
         {
             pending = 1;
         }
-        out.push(mask_prefixes(&word));
+        out.push(mask_long_runs(&mask_prefixes(&word)));
     }
     out.join(" ")
 }
@@ -270,6 +301,9 @@ fn log_path(dir: &Path) -> PathBuf {
 }
 
 /// Appends a line for what the caller reported, now. The log is in `dir`, the config directory.
+///
+/// The caller must not pass a secret (a token, a key, a password, the text of a mail or a message): that is the contract.
+/// The masking of the text (`redact`) is a net for what slips through and does not keep the contract for the caller.
 pub fn write(dir: &Path, level: LogLevel, source: &str, message: &str) -> Result<(), String> {
     write_at(dir, Utc::now(), level, source, message)
 }
@@ -391,6 +425,7 @@ mod tests {
             "xoxb-123-456-abc",
             "xapp-1-A0B-123-def",
             "ya29.a0AfB_byC-D",
+            "1//0gAbC-d_eF",
             "sk-ant-api03-AbC_d",
             "ghp_abcDEF123",
             "AIzaSyA-bcd_123",
@@ -400,6 +435,37 @@ mod tests {
                 "failed with *** today"
             );
         }
+    }
+
+    #[test]
+    fn a_long_run_of_token_characters_with_a_digit_is_masked() {
+        let hex = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            redact(&format!("todoist {hex} failed")),
+            "todoist *** failed"
+        );
+        let base64url = "Ab-_Cd0123456789EfGhIjKlMnOpQrStUvWxYz012";
+        assert_eq!(redact(base64url), "***");
+        assert_eq!(redact(&format!("({hex})")), "(***)");
+        assert_eq!(redact(&format!("t={hex}&x=1")), "t=***&x=1");
+        // The edge: 32 is masked and 31 is not.
+        assert_eq!(redact(&"a1".repeat(16)), "***");
+        assert_eq!(
+            redact(&format!("{}1", "a".repeat(30))),
+            format!("{}1", "a".repeat(30))
+        );
+    }
+
+    #[test]
+    fn a_long_word_without_a_digit_and_a_path_or_an_address_stay() {
+        let long = "a-very-long-kebab-case-name-with-no-number";
+        assert_eq!(redact(long), long);
+        let camel = "ThisIsALongIdentifierWithoutAnyNumber";
+        assert_eq!(redact(camel), camel);
+        let path = "/Users/a/Library/Application/Support/cookapps/notion-accounts-0001.json";
+        assert_eq!(redact(path), path);
+        let url = "https://mcp.notion.com/some/path/with/segments/v1/and-more";
+        assert_eq!(redact(url), url);
     }
 
     #[test]

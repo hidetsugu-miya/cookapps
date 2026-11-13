@@ -337,7 +337,7 @@ export interface Commands {
   font_families: { args: undefined; result: string[] };
   // A-20: saves the font of one place (`family` null is the app's own; `ghostty` only for orcaWork) and answers the settings saved. A family this Mac lacks is an error; a size is brought into 8 to 32 px in steps of 0.5.
   font_settings_set: { args: { area: FontArea; family: string | null; size: number; ghostty: boolean }; result: FontSettings };
-  // The skills (`skills/{name}/SKILL.md` in the config folder), by name. A folder that is not a skill is left out.
+  // The skills (`claude-plugin/skills/{name}/SKILL.md` in the config folder), by name. A folder that is not a skill is left out.
   skill_list: { args: undefined; result: Skill[] };
   // One skill by its name; an error when there is none or the name is not a valid one.
   skill_get: { args: { name: string }; result: Skill };

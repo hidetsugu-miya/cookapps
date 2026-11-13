@@ -1,8 +1,9 @@
 //! The skills of cookapps: instructions the owner writes once and has Claude follow on the screens that talk to it.
 //!
-//! A skill is a `SKILL.md` in the shape Claude Code reads, at `skills/{name}/SKILL.md` in the app config directory.
-//! The config directory is also a Claude Code plugin named `cookapps` (`.claude-plugin/plugin.json`, written with the first save),
+//! A skill is a `SKILL.md` in the shape Claude Code reads, at `claude-plugin/skills/{name}/SKILL.md` in the app config directory.
+//! `claude-plugin/` is a Claude Code plugin named `cookapps` of its own (`.claude-plugin/plugin.json`, written with the first save),
 //! so a later call can pass it with `--plugin-dir` and run a skill by `/cookapps:{name}`.
+//! The plugin has a folder of its own, so that the rest of the config directory (the client secret, the settings) is never the root Claude Code reads hooks, MCP servers and agents from.
 //! The front matter holds `name`, `description` (the keys Claude Code reads) and `cookapps-display-name` and `cookapps-screens` (cookapps's own);
 //! the body is the instructions.
 //! The name is the folder's, and it is checked before any path is made of it (`validate_name`), so a name never points outside `skills/`.
@@ -20,7 +21,9 @@ use ts_rs::TS;
 
 use crate::{accounts::write_atomic, auth::config_dir};
 
-/// The folder of the skills, in the config directory.
+/// The root of the plugin, in the config directory.
+const PLUGIN_DIR: &str = "claude-plugin";
+/// The folder of the skills, in the plugin.
 const DIR: &str = "skills";
 const FILE: &str = "SKILL.md";
 /// The plugin's name: the `cookapps` of `/cookapps:{name}`.
@@ -163,6 +166,50 @@ fn scalar(value: &str) -> String {
     value.to_string()
 }
 
+/// `|` (literal) or `>` (folded) when `value` opens a YAML block scalar, with or without a chomping or indent mark (`|-`, `>+`, `|2`).
+fn block_style(value: &str) -> Option<char> {
+    let value = value.trim();
+    let style = value.chars().next().filter(|c| matches!(c, '|' | '>'))?;
+    value[1..]
+        .chars()
+        .all(|c| matches!(c, '+' | '-') || c.is_ascii_digit())
+        .then_some(style)
+}
+
+/// The lines of a block scalar: the indented (or blank) lines that follow, with their common indent taken off.
+/// A literal block keeps its line breaks; a folded one joins its lines with a space, and a blank line is one line break.
+fn block(lines: &mut std::iter::Peekable<std::str::Lines<'_>>, style: char) -> String {
+    let mut raw = Vec::new();
+    while let Some(line) = lines.next_if(|l| l.trim().is_empty() || l.starts_with([' ', '\t'])) {
+        raw.push(line);
+    }
+    let indent = raw
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    let rows = raw.iter().map(|l| l.get(indent..).unwrap_or("").trim_end());
+    if style == '|' {
+        return rows.collect::<Vec<_>>().join("\n").trim().to_string();
+    }
+    let mut text = String::new();
+    let mut after_text = false;
+    for row in rows {
+        if row.is_empty() {
+            text.push('\n');
+            after_text = false;
+        } else {
+            if after_text {
+                text.push(' ');
+            }
+            text.push_str(row);
+            after_text = true;
+        }
+    }
+    text.trim().to_string()
+}
+
 /// A skill from the text of its `SKILL.md`, which a hand may have written, as Claude Code's own are: `name` is the folder's,
 /// a missing display name is the name, and a missing front matter makes the whole text the instructions.
 fn parse(name: &str, text: &str) -> Skill {
@@ -174,7 +221,8 @@ fn parse(name: &str, text: &str) -> Skill {
     let mut display_name = None;
     let mut description = String::new();
     let mut screens = Vec::new();
-    for line in front.lines() {
+    let mut lines = front.lines().peekable();
+    while let Some(line) = lines.next() {
         // An indented line is a continuation of a value the reader does not take.
         if line.starts_with([' ', '\t']) {
             continue;
@@ -183,7 +231,12 @@ fn parse(name: &str, text: &str) -> Skill {
             continue;
         };
         match key.trim() {
-            "description" => description = scalar(value),
+            "description" => {
+                description = match block_style(value) {
+                    Some(style) => block(&mut lines, style),
+                    None => scalar(value),
+                }
+            }
             "cookapps-display-name" => display_name = Some(scalar(value)),
             "cookapps-screens" => {
                 screens = SkillScreen::ALL
@@ -220,8 +273,13 @@ fn split_front_matter(text: &str) -> (&str, &str) {
     ("", text)
 }
 
+/// The plugin's root: the folder `--plugin-dir` is given.
+fn plugin_dir(dir: &Path) -> PathBuf {
+    dir.join(PLUGIN_DIR)
+}
+
 fn skills_dir(dir: &Path) -> PathBuf {
-    dir.join(DIR)
+    plugin_dir(dir).join(DIR)
 }
 
 /// The skills saved, by name. A folder whose name is not a valid one, or with no readable `SKILL.md`, is left out.
@@ -260,14 +318,14 @@ fn manifest() -> String {
     format!("{{\"name\": {}}}\n", quoted(PLUGIN_NAME))
 }
 
-/// Makes the config directory a plugin named `cookapps`, unless `plugin.json` already says so.
+/// Makes `claude-plugin/` a plugin named `cookapps`, unless `plugin.json` already says so.
 fn ensure_manifest(dir: &Path) -> Result<(), String> {
     let wanted = manifest();
-    let path = dir.join(MANIFEST_DIR).join(MANIFEST_FILE);
-    if std::fs::read_to_string(&path).is_ok_and(|now| now == wanted) {
+    let manifest_dir = plugin_dir(dir).join(MANIFEST_DIR);
+    if std::fs::read_to_string(manifest_dir.join(MANIFEST_FILE)).is_ok_and(|now| now == wanted) {
         return Ok(());
     }
-    write_atomic(&dir.join(MANIFEST_DIR), MANIFEST_FILE, &wanted)
+    write_atomic(&manifest_dir, MANIFEST_FILE, &wanted)
 }
 
 /// Saves a skill (a new one, or the one of that name replaced) and answers it as it was saved.
@@ -463,6 +521,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_reads_a_description_written_as_a_literal_block() {
+        let text = "---\nname: a\ndescription: |\n  Line one\n    indented\n\n  Line two\ncookapps-display-name: \"校正\"\n---\nbody";
+        let parsed = parse("a", text);
+        assert_eq!(parsed.description, "Line one\n  indented\n\nLine two");
+        assert_eq!(parsed.display_name, "校正");
+        assert_eq!(parsed.instructions, "body");
+        let clipped = "---\ndescription: |-\n  one\n  two\n---\nbody";
+        assert_eq!(parse("a", clipped).description, "one\ntwo");
+    }
+
+    #[test]
+    fn parse_reads_a_description_written_as_a_folded_block() {
+        let text = "---\ndescription: >\n  Line one\n  line two\n\n  Line three\ncookapps-screens: slack-paste\n---\nbody";
+        let parsed = parse("a", text);
+        assert_eq!(parsed.description, "Line one line two\nLine three");
+        assert_eq!(parsed.screens, vec![SkillScreen::SlackPaste]);
+        let empty = "---\ndescription: >\ncookapps-screens: slack-paste\n---\nbody";
+        assert_eq!(parse("a", empty).description, "");
+    }
+
+    #[test]
     fn a_saved_skill_is_listed_and_read_and_a_deleted_one_is_gone() {
         let dir = temp_dir("flow");
         assert_eq!(list_skills(&dir).unwrap(), Vec::<Skill>::new());
@@ -477,7 +556,7 @@ mod tests {
         assert_eq!(read_skill(&dir, "proofread").unwrap(), first);
 
         delete_skill(&dir, "proofread").unwrap();
-        assert!(!dir.join("skills/proofread").exists());
+        assert!(!dir.join("claude-plugin/skills/proofread").exists());
         let names: Vec<_> = list_skills(&dir)
             .unwrap()
             .into_iter()
@@ -505,7 +584,7 @@ mod tests {
             read_skill(&dir, "proofread").unwrap().instructions,
             "別の指示"
         );
-        let files: Vec<_> = std::fs::read_dir(dir.join("skills/proofread"))
+        let files: Vec<_> = std::fs::read_dir(dir.join("claude-plugin/skills/proofread"))
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
@@ -513,10 +592,10 @@ mod tests {
     }
 
     #[test]
-    fn the_first_save_makes_the_config_folder_a_plugin_named_cookapps() {
+    fn the_first_save_makes_a_folder_of_its_own_a_plugin_named_cookapps() {
         let dir = temp_dir("manifest");
         save_skill(&dir, &skill("proofread")).unwrap();
-        let path = dir.join(".claude-plugin/plugin.json");
+        let path = dir.join("claude-plugin/.claude-plugin/plugin.json");
         let value: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["name"], "cookapps");
@@ -526,6 +605,11 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["name"], "cookapps");
+        // The config folder itself is not the plugin's root.
+        assert!(!dir.join(".claude-plugin").exists());
+        assert!(dir
+            .join("claude-plugin/skills/proofread/SKILL.md")
+            .is_file());
     }
 
     #[test]
@@ -550,20 +634,20 @@ mod tests {
     #[test]
     fn a_delete_never_takes_a_folder_that_is_not_a_skill() {
         let dir = temp_dir("not-a-skill");
-        std::fs::create_dir_all(dir.join("skills/notes")).unwrap();
-        std::fs::write(dir.join("skills/notes/keep.txt"), "x").unwrap();
+        std::fs::create_dir_all(dir.join("claude-plugin/skills/notes")).unwrap();
+        std::fs::write(dir.join("claude-plugin/skills/notes/keep.txt"), "x").unwrap();
         assert!(delete_skill(&dir, "notes").is_err());
-        assert!(dir.join("skills/notes/keep.txt").exists());
+        assert!(dir.join("claude-plugin/skills/notes/keep.txt").exists());
     }
 
     #[test]
     fn the_list_leaves_out_folders_that_are_not_skills() {
         let dir = temp_dir("list-skips");
         save_skill(&dir, &skill("proofread")).unwrap();
-        std::fs::create_dir_all(dir.join("skills/empty")).unwrap();
-        std::fs::create_dir_all(dir.join("skills/Bad Name")).unwrap();
-        std::fs::write(dir.join("skills/Bad Name/SKILL.md"), "x").unwrap();
-        std::fs::write(dir.join("skills/stray.md"), "x").unwrap();
+        std::fs::create_dir_all(dir.join("claude-plugin/skills/empty")).unwrap();
+        std::fs::create_dir_all(dir.join("claude-plugin/skills/Bad Name")).unwrap();
+        std::fs::write(dir.join("claude-plugin/skills/Bad Name/SKILL.md"), "x").unwrap();
+        std::fs::write(dir.join("claude-plugin/skills/stray.md"), "x").unwrap();
         let names: Vec<_> = list_skills(&dir)
             .unwrap()
             .into_iter()

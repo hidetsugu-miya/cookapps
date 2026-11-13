@@ -3,7 +3,7 @@
 # ビルドと E2E の出力は .claude/e2e/{HEAD の SHA}.log に残す（同じ HEAD で再実行すると上書き）。後から回数や失敗を検証するため。
 # e2e:build が終わったら、HEAD に合格した CI の記録（check-ci.sh）が無いときだけ、wdio の実行と同時に run-ci.sh を回す（記録は run-ci.sh が今までどおり書く。#420）。
 #   cargo が target/debug のロックを取るのは e2e:build までで、wdio は cargo を回さないので、取り合わない。CI の失敗でも終了コードは 0 にならない（E2E の記録の passed は E2E だけの結果）。
-# 使い方: run-e2e.sh [checkout のパス]（省略時はカレント）。終了コードは E2E の結果。
+# 使い方: run-e2e.sh [checkout のパス]（省略時はカレント）。終了コードは E2E の結果、E2E が通ったときは同時に回した CI の結果。
 #        run-e2e.sh --only {spec の名前} [checkout のパス]  e2e/specs/{名前}.e2e.ts を 1 つのアプリだけで流す。落ちた spec を直るまで回すための入口（.claude/rules/e2e.md）。
 #          記録は書かず（作業ツリーが汚れていてもよい）、出力は only-{名前}.log に残す。記録の代わりにはならないので、通ったら引数なしで 1 回回す。
 # 作業ツリーが汚れていれば、記録を書かずに exit 2 で止まる（記録は HEAD のコミットの中身についてだけ言うため）。
@@ -52,7 +52,7 @@ if [ "$code" -eq 0 ]; then
     echo "CI: HEAD ${sha:0:7} の合格した記録があるので、回しません"
   else
     ci_out=$(mktemp) || exit 2
-    "$here/run-ci.sh" "$root" >"$ci_out" 2>&1 &
+    nice -n 10 "$here/run-ci.sh" "$root" >"$ci_out" 2>&1 &
     ci_pid=$!
   fi
   mise exec -- npm run e2e >>"$log" 2>&1

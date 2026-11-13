@@ -189,9 +189,9 @@ A feature branch that takes in a moved main is not release-only, and it goes thr
 Only release-verifier still writes pass records.
 
 ```text
-Good: release/next writes CHANGELOG -> run-ci.sh -> run-e2e.sh -> push (the diff is release-only)
+Good: release/next writes CHANGELOG -> run-e2e.sh (its run-ci.sh beside wdio) -> push (the diff is release-only)
 Bad:  a feature branch merges main with other commits in -> push without a review
-Bad:  release/next writes CHANGELOG -> push without run-ci.sh
+Bad:  release/next writes CHANGELOG -> push without run-e2e.sh (and the CI run beside it)
 ```
 
 ## Scope of a version

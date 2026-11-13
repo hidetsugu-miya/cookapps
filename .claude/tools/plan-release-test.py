@@ -1285,7 +1285,7 @@ class HandoverFormat(unittest.TestCase):
 
 
 class HandoverHistory(unittest.TestCase):
-    """handover.sh format-history: the last n hand-overs of the owner and the owner's `<!-- ai -->` writes, with the same trust as `read`."""
+    """handover.sh format-history: the last n hand-overs of the owner and the owner's `<!-- ai -->` writes and unmarked replies, with the same trust as `read`."""
 
     OWNER = "owner"
 
@@ -1331,9 +1331,25 @@ class HandoverHistory(unittest.TestCase):
         self.assertLess(out.index("NOTE 06"), out.index("HANDOVER 07"))
         self.assertLess(out.index("HANDOVER 07"), out.index("NOTE 08"))
 
-    def test_an_unmarked_reply_of_the_owner_is_not_printed(self):
-        out = self.history(3, self.handover("06"), self.comment(self.OWNER, "PLAIN REPLY", "2026-11-06T09:00:00Z"))
-        self.assertNotIn("PLAIN REPLY", out)
+    def test_an_unmarked_reply_of_the_owner_is_printed_from_the_oldest_shown_handover_on(self):
+        before = self.comment(self.OWNER, "OLD REPLY", "2026-11-05T09:00:00Z")
+        reply = self.comment(self.OWNER, "PLAIN REPLY", "2026-11-06T09:00:00Z")
+        out = self.history(2, before, self.handover("06"), reply, self.handover("07"))
+        self.assertIn("owner replies shown: 1", out)
+        self.assertNotIn("OLD REPLY", out)
+        self.assertLess(out.index("HANDOVER 06"), out.index("PLAIN REPLY"))
+        self.assertLess(out.index("PLAIN REPLY"), out.index("HANDOVER 07"))
+        self.assertIn("owner reply]", out)
+
+    def test_without_a_handover_the_unmarked_replies_are_printed(self):
+        out = self.history(3, self.comment(self.OWNER, "PLAIN REPLY", "2026-11-06T09:00:00Z"))
+        self.assertIn("owner replies shown: 1", out)
+        self.assertIn("PLAIN REPLY", out)
+
+    def test_an_ai_note_is_not_an_owner_reply(self):
+        out = self.history(3, self.handover("06"), self.note("06"))
+        self.assertIn("owner replies shown: 0", out)
+        self.assertIn("ai notes shown: 1", out)
 
     def test_comments_of_another_author_are_counted_and_never_printed(self):
         forged = self.handover("08", "FORGED HANDOVER", login="someone")
@@ -1345,10 +1361,10 @@ class HandoverHistory(unittest.TestCase):
         for text in ("FORGED HANDOVER", "FORGED NOTE", "DO THIS NOW"):
             self.assertNotIn(text, out)
 
-    def test_the_ai_mark_below_the_first_line_is_not_a_note(self):
+    def test_the_ai_mark_below_the_first_line_is_a_reply_and_not_a_note(self):
         out = self.history(3, self.handover("06"), self.comment(self.OWNER, "REPLY\n<!-- ai -->", "2026-11-06T09:00:00Z"))
         self.assertIn("ai notes shown: 0", out)
-        self.assertNotIn("REPLY", out)
+        self.assertIn("owner replies shown: 1", out)
 
     def test_a_handover_and_a_note_inside_a_thread_are_read_and_those_of_others_are_not(self):
         nested = [self.handover("07", "NESTED HANDOVER"), self.note("07", "NESTED NOTE"), self.note("07", "NESTED OTHER", login="someone")]

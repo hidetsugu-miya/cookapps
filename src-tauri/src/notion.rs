@@ -2,7 +2,13 @@
 //! (PKCE S256, loopback redirect), the tokens in the keychain, and one call of an MCP tool.
 //! It reads and writes no page yet; no screen uses it.
 
-use std::{collections::HashMap, fmt, path::Path, sync::Mutex, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -98,11 +104,11 @@ pub struct NotionState {
     http: reqwest::Client,
     tokens: Mutex<HashMap<String, Stored>>,
     /// Per workspace, held while its token is read, refreshed or removed: a refresh token is good for one use.
-    turns: Mutex<HashMap<String, std::sync::Arc<AsyncMutex<()>>>>,
+    turns: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     /// Held for a whole connection, so two logins do not register two clients or race for the file.
     connecting: AsyncMutex<()>,
     /// Held for a read-modify-write of `notion-accounts.json`.
-    file: Mutex<()>,
+    file: Arc<Mutex<()>>,
 }
 
 impl Default for NotionState {
@@ -116,7 +122,7 @@ impl Default for NotionState {
             tokens: Mutex::default(),
             turns: Mutex::default(),
             connecting: AsyncMutex::default(),
-            file: Mutex::default(),
+            file: Arc::default(),
         }
     }
 }
@@ -132,7 +138,7 @@ impl NotionState {
         rejected: &str,
     ) -> Result<Option<String>, String> {
         // The names the keychain is asked for are the registered ones only.
-        if !self.is_registered(dir, workspace)? {
+        if !is_registered(dir, workspace).await? {
             return Ok(None);
         }
         let turn = self.turn(workspace);
@@ -141,7 +147,7 @@ impl NotionState {
         let cached = self.tokens.lock().unwrap().get(workspace).cloned();
         let stored = match cached {
             Some(s) => s,
-            None => match read_stored(workspace)? {
+            None => match read_stored_async(workspace).await? {
                 Some(s) => {
                     self.tokens
                         .lock()
@@ -155,7 +161,8 @@ impl NotionState {
         if usable(&stored, rejected, now) {
             return Ok(Some(stored.access_token));
         }
-        let client_id = load_file(dir)?
+        let client_id = load_file_async(dir)
+            .await?
             .client_id
             .ok_or("Notion のクライアントが登録されていません")?;
         match refresh_pair(&self.http, TOKEN_URL, &client_id, &stored, now).await? {
@@ -165,12 +172,12 @@ impl NotionState {
                     .lock()
                     .unwrap()
                     .insert(workspace.to_owned(), new.clone());
-                write_stored(workspace, &new)?;
+                write_stored_async(workspace, &new).await?;
                 Ok(Some(new.access_token))
             }
             None => {
                 self.tokens.lock().unwrap().remove(workspace);
-                delete_entry(&entry(workspace)?)?;
+                delete_stored_async(workspace).await?;
                 Ok(None)
             }
         }
@@ -204,16 +211,10 @@ impl NotionState {
     }
 
     /// The connected workspaces, each with whether it needs a new connection. Asks Notion nothing.
-    fn accounts(&self, dir: &Path) -> Result<Vec<NotionAccount>, String> {
-        load_file(dir)?
-            .workspaces
-            .into_iter()
-            .map(|w| {
-                let kept = self.tokens.lock().unwrap().contains_key(&w.id)
-                    || read_stored(&w.id)?.is_some();
-                Ok(account_of(w, !kept))
-            })
-            .collect()
+    async fn accounts(&self, dir: &Path) -> Result<Vec<NotionAccount>, String> {
+        let held: HashSet<String> = self.tokens.lock().unwrap().keys().cloned().collect();
+        let dir = dir.to_owned();
+        blocking(move || accounts_of(&dir, &held)).await
     }
 
     /// Opens the browser for Notion's consent and keeps what comes back.
@@ -271,8 +272,31 @@ impl NotionState {
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| id.clone());
         // Saved before the first use, so a failed write never leaves a token only in memory.
-        write_stored(&id, &stored)?;
-        self.tokens.lock().unwrap().insert(id.clone(), stored);
+        // The workspace's turn is held, so a refresh or a disconnect of it waits, and the pair it replaces is the one in hand.
+        let previous = {
+            let turn = self.turn(&id);
+            let _turn = turn.lock().await;
+            let cached = self.tokens.lock().unwrap().get(&id).cloned();
+            let previous = match cached {
+                Some(s) => Some(s),
+                None => read_stored_async(&id).await.unwrap_or_else(|e| {
+                    eprintln!("cookapps: notion connect workspace={id} status=- error={e}");
+                    None
+                }),
+            };
+            write_stored_async(&id, &stored).await?;
+            self.tokens
+                .lock()
+                .unwrap()
+                .insert(id.clone(), stored.clone());
+            previous
+        };
+        // The grant of the pair that was replaced is given back, once the new one is kept.
+        if let Some(old) = replaced_refresh_token(previous.as_ref(), &stored) {
+            if let Err(e) = revoke(&self.http, TOKEN_URL, &client_id, old).await {
+                eprintln!("cookapps: notion revoke workspace={id} status=- error={e}");
+            }
+        }
         let mut workspace = Workspace {
             id: id.clone(),
             name,
@@ -301,7 +325,7 @@ impl NotionState {
 
     /// Revokes the grant at Notion (a failure is logged, not fatal), then forgets the token and the workspace.
     async fn disconnect(&self, dir: &Path, workspace: &str) -> Result<(), String> {
-        if !self.is_registered(dir, workspace)? {
+        if !is_registered(dir, workspace).await? {
             return Err("登録されていないワークスペースです".into());
         }
         let turn = self.turn(workspace);
@@ -309,17 +333,22 @@ impl NotionState {
         let cached = self.tokens.lock().unwrap().get(workspace).cloned();
         let stored = match cached {
             Some(s) => Some(s),
-            None => read_stored(workspace)?,
+            None => read_stored_async(workspace).await?,
         };
-        if let (Some(stored), Some(client_id)) = (stored, load_file(dir)?.client_id) {
+        if let (Some(stored), Some(client_id)) = (stored, load_file_async(dir).await?.client_id) {
             if let Err(e) = revoke(&self.http, TOKEN_URL, &client_id, &stored.refresh_token).await {
                 eprintln!("cookapps: notion revoke workspace={workspace} status=- error={e}");
             }
         }
-        delete_entry(&entry(workspace)?)?;
+        delete_stored_async(workspace).await?;
         self.tokens.lock().unwrap().remove(workspace);
-        self.update_file(dir, |f| remove_workspace(&mut f.workspaces, workspace))?;
-        Ok(())
+        let (lock, dir, workspace) = (self.file.clone(), dir.to_owned(), workspace.to_owned());
+        blocking(move || {
+            edit_file(&lock, &dir, |f| {
+                remove_workspace(&mut f.workspaces, &workspace)
+            })
+        })
+        .await
     }
 
     /// The registered client's id; the client is registered the first time and its id is kept, since registering again leaves the earlier connections hanging.
@@ -332,7 +361,7 @@ impl NotionState {
         Ok(id)
     }
 
-    fn turn(&self, workspace: &str) -> std::sync::Arc<AsyncMutex<()>> {
+    fn turn(&self, workspace: &str) -> Arc<AsyncMutex<()>> {
         self.turns
             .lock()
             .unwrap()
@@ -341,16 +370,81 @@ impl NotionState {
             .clone()
     }
 
-    fn is_registered(&self, dir: &Path, workspace: &str) -> Result<bool, String> {
-        Ok(load_file(dir)?.workspaces.iter().any(|w| w.id == workspace))
-    }
-
     fn update_file(&self, dir: &Path, change: impl FnOnce(&mut NotionFile)) -> Result<(), String> {
-        let _held = self.file.lock().unwrap();
-        let mut file = load_file(dir)?;
-        change(&mut file);
-        accounts::write_atomic(dir, FILE, &render_file(&file)?)
+        edit_file(&self.file, dir, change)
     }
+}
+
+/// A read-modify-write of `notion-accounts.json` under `lock`.
+fn edit_file(
+    lock: &Mutex<()>,
+    dir: &Path,
+    change: impl FnOnce(&mut NotionFile),
+) -> Result<(), String> {
+    let _held = lock.lock().unwrap();
+    let mut file = load_file(dir)?;
+    change(&mut file);
+    accounts::write_atomic(dir, FILE, &render_file(&file)?)
+}
+
+/// Runs file or keychain work off the async threads.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r)
+}
+
+async fn is_registered(dir: &Path, workspace: &str) -> Result<bool, String> {
+    let (dir, workspace) = (dir.to_owned(), workspace.to_owned());
+    blocking(move || {
+        Ok(load_file(&dir)?
+            .workspaces
+            .iter()
+            .any(|w| w.id == workspace))
+    })
+    .await
+}
+
+async fn load_file_async(dir: &Path) -> Result<NotionFile, String> {
+    let dir = dir.to_owned();
+    blocking(move || load_file(&dir)).await
+}
+
+async fn read_stored_async(workspace: &str) -> Result<Option<Stored>, String> {
+    let workspace = workspace.to_owned();
+    blocking(move || read_stored(&workspace)).await
+}
+
+async fn write_stored_async(workspace: &str, stored: &Stored) -> Result<(), String> {
+    let (workspace, stored) = (workspace.to_owned(), stored.clone());
+    blocking(move || write_stored(&workspace, &stored)).await
+}
+
+async fn delete_stored_async(workspace: &str) -> Result<(), String> {
+    let workspace = workspace.to_owned();
+    blocking(move || delete_entry(&entry(&workspace)?)).await
+}
+
+/// The workspaces of the file, each with whether it needs a new connection (`held`: the ones with a token in memory).
+fn accounts_of(dir: &Path, held: &HashSet<String>) -> Result<Vec<NotionAccount>, String> {
+    load_file(dir)?
+        .workspaces
+        .into_iter()
+        .map(|w| {
+            let kept = held.contains(&w.id) || read_stored(&w.id)?.is_some();
+            Ok(account_of(w, !kept))
+        })
+        .collect()
+}
+
+/// The refresh token of the pair a new connection replaces, when it is not the new pair's own: the one to revoke.
+fn replaced_refresh_token<'a>(previous: Option<&'a Stored>, new: &Stored) -> Option<&'a str> {
+    previous
+        .map(|p| p.refresh_token.as_str())
+        .filter(|old| *old != new.refresh_token)
 }
 
 /// The workspaces connected, with whether each needs a new connection.
@@ -359,7 +453,7 @@ pub async fn notion_accounts(
     app: AppHandle,
     state: State<'_, NotionState>,
 ) -> Result<Vec<NotionAccount>, String> {
-    state.accounts(&config_dir(&app)?).map_err(|e| {
+    state.accounts(&config_dir(&app)?).await.map_err(|e| {
         eprintln!("cookapps: notion_accounts workspace=- status=- error={e}");
         e
     })
@@ -1285,6 +1379,67 @@ mod tests {
         let dir = temp_dir("notion-disconnect");
         let err = run(NotionState::default().disconnect(&dir, "w1")).unwrap_err();
         assert!(err.contains("登録されていない"), "{err}");
+    }
+
+    #[test]
+    fn only_a_replaced_pair_with_another_refresh_token_is_revoked() {
+        let new = stored("a1", "r1", 0);
+        assert_eq!(replaced_refresh_token(None, &new), None);
+        assert_eq!(
+            replaced_refresh_token(Some(&stored("a0", "r0", 0)), &new),
+            Some("r0")
+        );
+        assert_eq!(
+            replaced_refresh_token(Some(&stored("a0", "r1", 0)), &new),
+            None
+        );
+    }
+
+    #[test]
+    fn the_replaced_refresh_token_is_posted_to_the_revoke_endpoint() {
+        let (url, server) = serve(vec![json_http("200 OK", "")]);
+        let old = stored("a0", "r0", 0);
+        let new = stored("a1", "r1", 0);
+        let token = replaced_refresh_token(Some(&old), &new).unwrap();
+        assert_eq!(
+            run(revoke(&reqwest::Client::new(), &url, "cid", token)),
+            Ok(())
+        );
+        let request = &server.join().unwrap()[0];
+        assert!(request.ends_with("token=r0&token_type_hint=refresh_token&client_id=cid"));
+        assert!(!request.contains("r1"));
+    }
+
+    #[test]
+    fn the_accounts_say_reconnect_only_for_a_workspace_with_no_token_in_memory_and_none_kept() {
+        let dir = temp_dir("notion-accounts");
+        let state = NotionState::default();
+        assert_eq!(run(state.accounts(&dir)), Ok(vec![]));
+        state
+            .update_file(&dir, |f| {
+                f.workspaces.push(Workspace {
+                    id: "w1".into(),
+                    name: "Team".into(),
+                    user_name: Some("Ann".into()),
+                    user_email: None,
+                });
+            })
+            .unwrap();
+        state
+            .tokens
+            .lock()
+            .unwrap()
+            .insert("w1".into(), stored("a", "r", 0));
+        let accounts = run(state.accounts(&dir)).unwrap();
+        assert_eq!(
+            accounts,
+            vec![account_of(
+                load_file(&dir).unwrap().workspaces[0].clone(),
+                false
+            )]
+        );
+        assert_eq!(accounts[0].user_name.as_deref(), Some("Ann"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

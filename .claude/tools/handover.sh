@@ -2,7 +2,7 @@
 # The hand-over between the runs of ship: one fixed Discussion (Ideas, titled 自走の引き継ぎ), one comment per run (issues.md).
 # Usage: handover.sh ensure          prints the Discussion's URL; creates the Discussion when it does not exist yet
 #        handover.sh read            ensure, then prints the last hand-over and the owner's replies since the run that wrote it started
-#        handover.sh history [n]     ensure, then prints the last n hand-overs (default 3, 1 to 30) and the `<!-- ai -->` writes since the oldest of them, oldest first
+#        handover.sh history [n]     ensure, then prints the last n hand-overs (default 3, 1 to 30) and the `<!-- ai -->` writes and the owner's unmarked replies since the oldest of them, oldest first
 #        handover.sh write <file>    posts the file as a hand-over comment and prints the comment's URL
 #        handover.sh note <file>     posts the file as a comment that is not a hand-over: first line `<!-- ai -->`, prints the comment's URL
 #        handover.sh format <owner>  reads the JSON of a Discussion (the query of `read`) from stdin and prints what `read` prints; no network
@@ -120,7 +120,7 @@ discussion_json() {
   gh api graphql -f query="$q" -f o="$owner" -f n="$name" -F num="$dnum"
 }
 
-# $1: the owner's login, $2: how many hand-overs. stdin: the same JSON as `format`; stdout: the last $2 hand-overs of the owner, and the owner's `<!-- ai -->` writes that are not older than the oldest of them, oldest first
+# $1: the owner's login, $2: how many hand-overs. stdin: the same JSON as `format`; stdout: the last $2 hand-overs of the owner, and the owner's `<!-- ai -->` writes and unmarked replies that are not older than the oldest of them, oldest first
 format_history() {
   jq -r --arg mark "$mark" --arg owner "$1" --argjson n "$2" '
     .data.repository.discussion as $d
@@ -131,10 +131,12 @@ format_history() {
     | ($marked | .[-$n:]) as $picked
     | (if ($picked | length) == 0 then "" else $picked[0].createdAt end) as $from
     | ($mine | map(select((.body | contains($mark) | not) and (.body | split("\n")[0] | test("^<!-- ai -->[ \\t\\r]*$")) and .createdAt >= $from))) as $notes
-    | ([($picked[] | . + {kind: "handover"}), ($notes[] | . + {kind: "ai note"})] | sort_by(.createdAt)) as $shown
+    | ($mine | map(select((.body | contains($mark) | not) and (.body | split("\n")[0] | test("^<!-- ai -->[ \\t\\r]*$") | not) and .createdAt >= $from))) as $replies
+    | ([($picked[] | . + {kind: "handover"}), ($notes[] | . + {kind: "ai note"}), ($replies[] | . + {kind: "owner reply"})] | sort_by(.createdAt)) as $shown
     | "discussion: \($d.url)",
       "handovers shown: \($picked | length)",
       "ai notes shown: \($notes | length)",
+      "owner replies shown: \($replies | length)",
       "ignored comments of other authors: \($ignored)",
       ($shown[] | "\n[\(.createdAt) \(.kind)] \(.url)\n---\n\(.body)\n---")
   '
