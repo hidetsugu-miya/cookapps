@@ -984,7 +984,8 @@ pub async fn slack_load(
         .await
         .map_err(|e| log_failure("slack_load", "-", e))?;
     // The list only saves a search, so a broken file is logged and left out.
-    let recent = blocking(move || load_list::<Recent>(&dir, RECENT_FILE, RECENT_KEY))
+    let recent_dir = dir.to_path_buf();
+    let recent = blocking(move || load_list::<Recent>(&recent_dir, RECENT_FILE, RECENT_KEY))
         .await
         .unwrap_or_else(|e| {
             log_failure("slack_load", "-", e);
@@ -1465,27 +1466,21 @@ async fn joined_channels(
 /// The destinations Claude may choose from on the Slack compose screen (S-4): the destination now in the chip (`current`), the recent destinations and the joined channels of every connected workspace.
 /// It is a help for a proofreading, so whatever cannot be read (the list of workspaces, the recent file, a workspace's channels) is logged and left out, and the call goes on.
 pub async fn destination_candidates(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     state: &SlackState,
     current: Option<&Target>,
 ) -> Vec<Candidate> {
     let command = "claude_proofread_slack";
-    let dir = match config_dir(app) {
-        Ok(dir) => dir,
-        Err(e) => {
-            log_failure(command, "-", e);
-            return vec![];
-        }
-    };
-    let workspaces = match load_workspaces(&dir).await {
+    let workspaces = match load_workspaces(dir).await {
         Ok(workspaces) => workspaces,
         Err(e) => {
             log_failure(command, "-", e);
             return vec![];
         }
     };
-    let recent = blocking(move || load_list::<Recent>(&dir, RECENT_FILE, RECENT_KEY))
+    let recent_dir = dir.to_path_buf();
+    let recent = blocking(move || load_list::<Recent>(&recent_dir, RECENT_FILE, RECENT_KEY))
         .await
         .unwrap_or_else(|e| {
             log_failure(command, "-", e);
@@ -1711,7 +1706,7 @@ async fn send_post(
 /// Posts `text` to `target` (the channel, or a reply in its thread) by `send_post`, and remembers the destination. A failure of the post is logged under `command` and returned.
 /// It is the one path of S-1: the "投稿" button (`slack_post`) and a request to Claude that asks for a post (S-23, `claude_proofread_slack`) both end here.
 pub(crate) async fn post_and_remember(
-    app: &AppHandle,
+    dir: &Path,
     http: &reqwest::Client,
     command: &str,
     target: Target,
@@ -1735,19 +1730,15 @@ pub(crate) async fn post_and_remember(
         name: target.name.trim().chars().take(NAME_LIMIT).collect(),
         thread_ts: target.thread_ts,
     };
-    let remembered = match config_dir(app) {
-        Ok(dir) => {
-            blocking(move || {
-                let list = remember(
-                    load_list(&dir, RECENT_FILE, RECENT_KEY).unwrap_or_default(),
-                    new,
-                );
-                save_list(&dir, RECENT_FILE, RECENT_KEY, &list)
-            })
-            .await
-        }
-        Err(e) => Err(e),
-    };
+    let dir = dir.to_path_buf();
+    let remembered = blocking(move || {
+        let list = remember(
+            load_list(&dir, RECENT_FILE, RECENT_KEY).unwrap_or_default(),
+            new,
+        );
+        save_list(&dir, RECENT_FILE, RECENT_KEY, &list)
+    })
+    .await;
     if let Err(e) = remembered {
         log_failure(command, &team_id, e);
     }
@@ -1766,13 +1757,15 @@ pub async fn slack_post(
     name: String,
     text: String,
 ) -> Result<bool, String> {
+    let command = "slack_post";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let target = Target {
         team_id,
         channel,
         name,
         thread_ts,
     };
-    post_and_remember(&app, auth.http(), "slack_post", target, &text).await?;
+    post_and_remember(&dir, auth.http(), command, target, &text).await?;
     Ok(true)
 }
 

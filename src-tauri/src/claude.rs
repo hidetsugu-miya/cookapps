@@ -2565,9 +2565,9 @@ pub async fn claude_proofread_slack(
     target_by_claude: bool,
 ) -> Result<SlackEdit, String> {
     let command = "claude_proofread_slack";
-    let candidates =
-        crate::slack::destination_candidates(&app, &auth, &slack, target.as_ref()).await;
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
+    let candidates =
+        crate::slack::destination_candidates(&dir, &auth, &slack, target.as_ref()).await;
     let out = chat_ask(
         &dir,
         command,
@@ -2600,7 +2600,7 @@ pub async fn claude_proofread_slack(
     })?;
     if let Some(target) = answer.post_to.take() {
         let posted = answer.edit.body.as_deref().unwrap_or(&text);
-        crate::slack::post_and_remember(&app, auth.http(), command, target, posted).await?;
+        crate::slack::post_and_remember(&dir, auth.http(), command, target, posted).await?;
         answer.posted = true;
     }
     Ok(answer)
