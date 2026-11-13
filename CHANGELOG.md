@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.66.0
+
+A-26: a Markdown file opened in the editor of the Orca screen opens in a rich view, with its headings, lists, tables, code and task lists drawn as a document (#384, #381, #382). Two buttons at the right of the editor's heading switch between the source (`<>`) and the rich view (the pencil). The rich view can be edited, and it is saved automatically as typing in the source is: only the lines that changed are written into the file, so every other line, the front matter included, stays as it was. A file whose notation the rich view cannot keep opens in the source, and its rich view is read only.
+
+S-1, S-4: the Slack compose screen has the preview of the post on the left and the conversation with Claude on the right (#341, #342, #343). Pressing the preview opens the field to edit it, and the button that posts is 「投稿」, at the bottom of the left pane. 「校正する」 is gone: Claude is asked by typing the request. An answer of Claude that changes the text goes into the preview at once, with the number of lines it changed and 「元に戻す」, and posts nothing. Asked, Claude can also choose the destination, from the one in the chip, the recent destinations and the joined channels; the names of those channels are sent to Claude with the request.
+
+S-23: a request to Claude on the Slack compose screen can post the text, for example 「#sales-inquiry に要点だけ投稿して」 (#344). The app, not Claude, decides whether to post: the request itself holds 投稿, ポスト or post, the destination is the one the owner chose in the chip or the one channel the request names, and the text adds no link or mention it did not have. Otherwise nothing is posted, and 「投稿されませんでした」 is shown. A post returns to the mail, as 「投稿」 does.
+
 ## v0.65.2
 
 M-2: the row of buttons above the subject of an open mail (the AI summary, Slack, Todo, Orca, trash and archive) sits at the right end of the body (#529).
