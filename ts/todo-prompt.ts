@@ -3,6 +3,7 @@
 import type { TodoPrompt } from "./bindings/TodoPrompt";
 import { createChat } from "./claude-chat.js";
 import { redrawPromptRow, showModelSlot } from "./claude.js";
+import { createComposer } from "./composer.js";
 import { $, tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 import { setScreen, showPromptScreen } from "./nav.js";
@@ -31,6 +32,7 @@ const chat = createChat({
   },
   ask: (body, history, instruction) => invoke("claude_edit_todo_prompt", { body, history, instruction }),
   changed: refreshPrompt,
+  keyHint: false,
 });
 
 // The settings' Claude card row: the state of the instructions and the way in.
@@ -99,7 +101,7 @@ function disarmReset() {
 async function openPrompt() {
   showPromptScreen();
   $("prompt-error").hidden = true;
-  // The selects under the request field need the model settings.
+  // The selects in the frame of the request field need the model settings.
   showModelSlot("prompt-model");
   if (draft === null) {
     if (saved === null) await loadPromptState();
@@ -150,5 +152,6 @@ export function initPrompt() {
     refreshPrompt();
   };
   $("prompt-reset").onblur = disarmReset;
+  $("prompt-chat-note").after(createComposer({ prefix: "prompt", label: "Claude への指示" }));
   chat.init();
 }
