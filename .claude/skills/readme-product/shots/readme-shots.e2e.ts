@@ -387,7 +387,7 @@ function feed() {
   const unread: TimelineMessage[] = [
     timelineMessage(tsAgo(4, 2), "田中 蓮", "support", "請求書の件、お客さまへの回答は明日の午前で調整しました。原因が分かりしだい共有をお願いします。", { ...inWs(wsA, "C1"), unread: true }),
     timelineMessage(tsAgo(52, 19), "佐藤 葵", "support", "請求書の再発行は、経理の確認が取れてから送ります。", { ...inWs(wsA, "C1"), unread: true }),
-    timelineMessage(tsAgo(11, 3), "鈴木 陽菜", "dev-shop", "ログインの修正をテスト環境に入れました。スマートフォンでの確認をお願いできますか？", { ...inWs(wsA, "C2"), unread: true, replyCount: 1 }),
+    timelineMessage(tsAgo(11, 3), "鈴木 陽菜", "dev-shop", "ログインの修正をテスト環境に入れました。スマートフォンでの確認をお願いできますか？", { ...inWs(wsA, "C2"), unread: true, replyCount: 2, repliers: [{ name: "伊藤 結衣", iconUrl: null }, { name: "小林 樹", iconUrl: null }], latestReply: tsAgo(6, 21) }),
     timelineMessage(tsAgo(24, 4), "高橋 湊", "general", "明日の定例は 11 時からに変更します。議題は共有シートへお願いします。", { ...inWs(wsA, "C3"), unread: true }),
     timelineMessage(tsAgo(38, 5), "山本 悠", "lab-雑談", "来週の勉強会、テーマの案があれば書いてください。", { ...inWs(wsB, "D1"), unread: true }),
     timelineMessage(rootTs, "渡辺 大和", "dev-billing", "夜間バッチの集計が、昨日から 20 分ほど遅くなっています。心当たりのある方はいますか？", {
