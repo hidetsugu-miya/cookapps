@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.68.0
+
+S-26: in a thread and in a channel's history, a reaction of a custom emoji is drawn as the emoji's image, not as `:name:` (#559). An alias of a custom emoji draws the image it points to, and an alias of a standard emoji draws that emoji. An image that cannot be fetched leaves `:name:`. The text of a message keeps `:name:` for a custom emoji as before. This needs the User Token Scope `emoji:read`; a token without it draws `:name:` as before, and every other feature works.
+
+S-25: the reactions under a message in a thread and in a channel's history are buttons (#560). Pressing a reaction you have not given adds it, and pressing one you gave takes it off; your own reactions have the accent color on their frame, and the count follows at once. A failure shows the reason in a toast and changes nothing. This needs the User Token Scope `reactions:write`; a token without it still shows the reactions, and a press says that the scope is missing.
+
+S-25: the last button of a message's reactions, a smile with a plus, opens an emoji picker (#561). It has a search field, and lists the emoji you added recently in this run of the app, the workspace's custom emoji and the standard emoji, in that order; Enter picks the first one that matches. On a message with no reaction the button shows only while the pointer is on the message. The custom emoji need `emoji:read`; without it the picker offers the standard emoji alone.
+
 ## v0.67.1
 
 S-5: the rows of the Slack list show the whole body, with no limit of 2 or 12 lines; so do the unread replies under a row and the rows of a channel's history (#541). A thread's row shows the icons of up to 5 people who replied before the reply count (「N 件の返信」, or 「返信 N 件」 in the watch), and the time of the newest reply after it, as 「最終返信 15:02」 (#542). A thread for which Slack names no repliers, or none of them can be named (a token without `users:read`, for example), shows the count alone.
