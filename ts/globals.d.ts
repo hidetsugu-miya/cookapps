@@ -16,6 +16,13 @@ interface Window {
 declare const marked: { parse(markdown: string, options?: { breaks?: boolean }): string };
 // highlight.js (src/vendor/highlight.min.js and highlight-languages.js): only what the editor of the Orca screen uses (A-21). `value` is the text with its tokens in `<span class="hljs-...">`, the text itself escaped.
 declare const hljs: { highlight(code: string, options: { language: string; ignoreIllegals?: boolean }): { value: string } };
+// Milkdown (src/vendor/milkdown.js, bundled by scripts/build-milkdown.mjs, A-26). `mount` draws a Markdown text in `root`, read only: `markdown()` is what the editor exports now, `edit(onEdit)` makes it editable and calls `onEdit` after each change of the document, and `destroy` takes the editor out of `root`. `normalize` is the export of a text by an editor that is drawn nowhere.
+interface MilkdownView {
+  destroy(): Promise<unknown>;
+  markdown(): string;
+  edit(onEdit: () => void): void;
+}
+declare const CookappsMilkdown: { mount(root: HTMLElement, markdown: string): Promise<MilkdownView>; normalize(markdown: string): Promise<string> };
 declare const DOMPurify: { sanitize(html: string, config?: Record<string, unknown>): string };
 
 // xterm.js (src/vendor/xterm.js), its fit addon (src/vendor/addon-fit.js), its Unicode 11 addon (src/vendor/addon-unicode11.js) and its web links addon (src/vendor/addon-web-links.js): only what the terminals of the Orca screen use.

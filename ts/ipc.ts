@@ -15,6 +15,8 @@ import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
 import type { MailSummary } from "./bindings/MailSummary";
+import type { MarkdownParts } from "./bindings/MarkdownParts";
+import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
 import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
@@ -39,6 +41,7 @@ import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
+import type { SlackEdit } from "./bindings/SlackEdit";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
 import type { SocketStatus } from "./bindings/SocketStatus";
@@ -223,8 +226,9 @@ export interface Commands {
   // Claude's answer to a request about Todo tasks: a short reply and the tasks it proposes (name, date `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, project ID; a project or a date that is not valid is null, and a task with a bad date or name is not returned). Nothing is created in Todoist.
   // `history` is the conversation so far and `instruction` the new request. The Todoist projects of the last load are sent from Rust. The model and effort are those of `todoChat`. Nothing is saved.
   claude_chat_todo: { args: { history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoChatReply };
-  // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions. Nothing is saved.
-  claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
+  // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions, with the `destination` it chose from the list Rust gave it (S-4).
+  // `posted` is true when the request asked to post (S-23) and Rust posted the new text (or `text`) to `destination` by the path of `slack_post`; the screen then goes on as after "投稿". Nothing is saved.
+  claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; target: Target | null; targetByClaude: boolean }; result: SlackEdit };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
   // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread).
   claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
@@ -273,6 +277,10 @@ export interface Commands {
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.
   orca_files_list: { args: { path: string; dir: string; ignored: boolean; environment: string | null }; result: OrcaDir };
   orca_files_ignored: { args: { path: string; paths: string[]; environment: string | null }; result: string[] };
+  // A-26: cuts the front matter off a Markdown text; the rich view is given the body only.
+  markdown_split: { args: { text: string }; result: MarkdownParts };
+  // A-26: puts the edit of the rich view into the original text. `before` and `after` are what the editor exported for the body when it was loaded and now; `conflict` when the edit cannot be put into the original.
+  markdown_patch: { args: { original: string; before: string; after: string }; result: MarkdownPatchResult };
   // A-18: the text of the file `relative` of the worktree, for the editor, with LF line ends (`crlf`: the file has CRLF) and the signature of what the disk holds. A binary file, one over 384 KiB and one that is not UTF-8 are errors.
   orca_file_read: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileText };
   // A-18: saves `content` over the file only if the disk still holds the text with `signature` (`crlf`: write CRLF). `state` says whether it was written (`saved`, with the new signature) or the disk had changed (`changed`, `missing`, `not-utf8`: nothing written).

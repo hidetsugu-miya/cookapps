@@ -4,12 +4,13 @@
 // The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-form` and `-chat-note`, and `-keys` unless `keyHint` is false.
 import type { DiffLine } from "./bindings/DiffLine";
 import type { PromptEdit } from "./bindings/PromptEdit";
+import type { Target } from "./bindings/Target";
 import type { TodoTaskProposal } from "./bindings/TodoTaskProposal";
 import { getClaude } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
 
-// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`) or proposed tasks.
-export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[] };
+// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, or the destination it chose and whether a post it asked for was refused (the Slack compose screen, S-4, S-23).
+export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; destination?: Target | null; postRefused?: boolean };
 
 export interface ChatTurnPayload {
   role: "user" | "assistant";
@@ -26,6 +27,8 @@ export interface ChatConfig {
   apply: (text: string) => void;
   // Asks Claude about `text` with the conversation so far and the new request. Nothing is saved.
   ask: (text: string, history: ChatTurnPayload[], instruction: string) => Promise<ChatAnswer>;
+  // Called with an answer that is kept (not one that arrives after the conversation was forgotten, nor a failure), before the text is changed and the log is drawn.
+  answered?: (answer: ChatAnswer) => void;
   // Draws the tasks an answer proposes, under its reply; without it `tasks` is not drawn.
   cards?: (tasks: TodoTaskProposal[]) => HTMLElement;
   // The lines (one per task) that tell Claude what an earlier answer proposed; they are added to that answer's text in the history it is sent, because the cards are not text. Without it only the text is sent.
@@ -38,6 +41,11 @@ export interface ChatConfig {
   copy?: (text: string) => void;
   // Whether the `-keys` element tells the keys of the request field (default true); the owner that says it elsewhere, or not at all, passes false and has no such element.
   keyHint?: boolean;
+  // True when the request field keeps the height the CSS gives it and scrolls inside (default false: it grows with its text).
+  fixedInput?: boolean;
+  // True when an answer that changes the text is put into it at once (default false: the proposal waits for "適用"). The log then keeps the number of changed lines and "元に戻す" instead of the diff.
+  // An answer that arrives after the text was changed, or while the text is locked, is not put in: it stays a proposal that cannot be applied.
+  autoApply?: boolean;
 }
 
 // A change Claude proposed: the whole new text, the lines that differ, and the text when it was asked (an `open` proposal applies only to that text).
@@ -45,7 +53,9 @@ interface Proposal {
   body: string;
   diff: DiffLine[];
   base: string;
-  state: "open" | "applied" | "rejected";
+  state: "open" | "applied" | "rejected" | "reverted";
+  // Put into the text at once (`autoApply`): drawn as a count and "元に戻す", and the text it made is `body`.
+  auto?: boolean;
 }
 export interface Turn {
   role: "user" | "assistant";
@@ -71,6 +81,8 @@ export function createChat(cfg: ChatConfig) {
   let clearTimer = 0;
   // The apply buttons of the open proposals drawn now, with the line that says why one is disabled.
   let applyControls: { proposal: Proposal; apply: HTMLButtonElement; stale: HTMLElement }[] = [];
+  // The "元に戻す" buttons of the proposals put in at once: one works only while the text is still the one that proposal made.
+  let undoControls: { proposal: Proposal; undo: HTMLButtonElement }[] = [];
 
   function disarmClear() {
     clearTimeout(clearTimer);
@@ -92,12 +104,36 @@ export function createChat(cfg: ChatConfig) {
     $(id("chat-note")).hidden = ready;
     for (const { proposal, apply, stale } of applyControls) {
       apply.disabled = proposal.base !== text || (cfg.locked?.() ?? false);
-      stale.hidden = proposal.base === text;
+      // No text while the post of "投稿" is on its way is not a changed text.
+      stale.hidden = proposal.base === text || text === null;
     }
+    for (const { proposal, undo } of undoControls) undo.disabled = proposal.body !== text || (cfg.locked?.() ?? false);
     return on;
   }
 
+  // What stays in the log of a proposal that was put in at once: how many lines it changed, and "元に戻す" while the text is still the one it made.
+  function appliedCard(p: Proposal) {
+    const card = tag("div", "chat-diff");
+    const foot = tag("div", "diff-foot");
+    if (p.state === "reverted") {
+      foot.append(tag("span", "diff-state", "元に戻しました"));
+    } else {
+      const lines = Math.max(1, p.diff.filter((d) => d.kind === "del").length, p.diff.filter((d) => d.kind === "ins").length);
+      const undo = tag("button", "text-btn", "元に戻す");
+      undo.onclick = () => {
+        cfg.apply(p.base);
+        p.state = "reverted";
+        draw();
+      };
+      undoControls.push({ proposal: p, undo });
+      foot.append(tag("span", "diff-count", `${lines} 行を変えました`), undo);
+    }
+    card.append(foot);
+    return card;
+  }
+
   function diffCard(p: Proposal) {
+    if (p.auto) return appliedCard(p);
     const card = tag("div", "chat-diff");
     for (const d of p.diff) card.append(tag("div", d.kind === "del" ? "diff-del" : "diff-ins", `${d.kind === "del" ? "-" : "+"} ${d.text}`));
     const foot = tag("div", "diff-foot");
@@ -136,6 +172,7 @@ export function createChat(cfg: ChatConfig) {
 
   function draw() {
     applyControls = [];
+    undoControls = [];
     const thinking = tag("div", "pending");
     thinking.append(tag("span", "spin"), tag("span", "sp", "Claude が考えています…"));
     const log = $(id("log"));
@@ -154,6 +191,7 @@ export function createChat(cfg: ChatConfig) {
   // The layout is read only when the line count may have changed: when the text got shorter, or the field is too short for it.
   let typedLength = 0;
   function growInput() {
+    if (cfg.fixedInput) return;
     const [input, log] = [$<HTMLTextAreaElement>(id("input")), $(id("log"))];
     const shorter = input.value.length < typedLength;
     typedLength = input.value.length;
@@ -187,8 +225,9 @@ export function createChat(cfg: ChatConfig) {
     sendingGeneration = mine;
     draw();
     let turn: Turn;
+    let answer: ChatAnswer | undefined;
     try {
-      const answer = await cfg.ask(body, history, instruction);
+      answer = await cfg.ask(body, history, instruction);
       turn = {
         role: "assistant",
         text: answer.reply,
@@ -201,6 +240,13 @@ export function createChat(cfg: ChatConfig) {
     sending = false;
     // The conversation was forgotten meanwhile: the answer is dropped, and the request field is free again.
     if (mine !== generation) return cfg.changed();
+    if (answer) cfg.answered?.(answer);
+    const proposal = turn.proposal;
+    if (cfg.autoApply && proposal && proposal.body !== body && cfg.text() === body && !cfg.locked?.()) {
+      cfg.apply(proposal.body);
+      proposal.state = "applied";
+      proposal.auto = true;
+    }
     addTurn(turn);
     draw();
   }

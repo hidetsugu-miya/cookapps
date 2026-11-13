@@ -10,6 +10,7 @@ pub mod gmail;
 pub mod image_senders;
 pub mod images;
 pub mod mail_address;
+pub mod markdown_patch;
 pub mod orca;
 pub mod orca_attach;
 pub mod orca_diff;
@@ -329,6 +330,8 @@ pub fn run() {
             fonts::font_settings,
             fonts::font_families,
             fonts::font_settings_set,
+            markdown_patch::markdown_split,
+            markdown_patch::markdown_patch,
             ghostty::ghostty_saved,
             ghostty::ghostty_import,
             orca_theme::terminal_themes,

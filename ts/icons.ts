@@ -53,3 +53,4 @@ export const COLUMNS_SVG = svgOf('<rect x="3" y="4" width="18" height="16" rx="2
 export const UP_SVG = svgOf('<path d="m6 15 6-6 6 6"/>');
 export const DOWN_SVG = svgOf('<path d="m6 9 6 6 6-6"/>');
 export const RELOAD_SVG = svgOf('<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>');
+export const CODE_SVG = svgOf('<path d="m8 8-4 4 4 4M16 8l4 4-4 4"/>');

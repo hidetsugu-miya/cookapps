@@ -1,5 +1,5 @@
-// The Slack compose screen, opened by "Slack に貼る" in the thread's header: the destination, the text to post (it starts as the mail's latest message and the user edits it),
-// and a conversation with Claude that proofreads it. Nothing leaves the app until "貼る".
+// The Slack compose screen, opened by "Slack に貼る" in the thread's header. Two panes: on the left the preview of the post (it starts as the mail's latest message; pressing it opens the field to edit it)
+// with the destination and "元の内容に戻す" above it and "投稿" below, and on the right a conversation with Claude that proofreads it. Nothing leaves the app until "投稿".
 import type { Channel } from "./bindings/Channel";
 import type { Recent } from "./bindings/Recent";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -26,6 +26,8 @@ interface Draft {
   original: string;
   text: string;
   target: Target | null;
+  // The destination in the chip is one that Claude's answer put there, not one the owner chose: a post then needs the destination named in the request (S-23).
+  byClaude: boolean;
 }
 let draft: Draft | null = null;
 
@@ -53,18 +55,61 @@ const slackDate = (ms: number) => {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
+// The destination when the request that is on its way was sent: Claude's choice is put in only if the chip is still that.
+let askedTarget: Target | null = null;
+let askedByClaude = false;
+// A request to Claude of this screen is on its way, and may post the text: "投稿" waits for it, so the text is not posted twice.
+let asking = false;
+
 const chat = createChat({
   prefix: "slack",
   loginNote: "設定の Claude タブで接続すると、校正できます",
-  text: () => draft?.text ?? null,
+  // Null while the post of "投稿" is on its way: a request to Claude could post the same text again.
+  text: () => (draft && !posting ? draft.text : null),
   apply: (text) => {
     draft!.text = text;
     $<HTMLTextAreaElement>("slack-body").value = text;
+    $("slack-preview").textContent = text;
   },
-  ask: (text, history, instruction) => invoke("claude_proofread_slack", { text, history, instruction }),
+  // A request that asks to post is posted by Rust (S-23): the post is finished here, before the chat sees the answer, and `finishPost` forgets the conversation, so the chat drops the answer.
+  ask: async (text, history, instruction) => {
+    const d = draft;
+    askedTarget = d?.target ?? null;
+    askedByClaude = d?.byClaude ?? false;
+    asking = true;
+    refreshSlackCompose();
+    try {
+      const answer = await invoke("claude_proofread_slack", { text, history, instruction, target: askedTarget, targetByClaude: askedByClaude });
+      if (answer.posted && answer.destination) finishPost(d, answer.destination);
+      return answer;
+    } finally {
+      asking = false;
+    }
+  },
+  // The destination Claude chose (Rust kept it to the list it was given) goes into the chip, unless the user chose another meanwhile or the post is on its way.
+  // A post that Claude asked for and Rust refused (S-23) is said not to have been made.
+  answered: (answer) => {
+    const d = draft;
+    if (!d) return;
+    if (answer.destination && !posting && d.target === askedTarget) {
+      // Claude naming the destination that the chip already holds does not make it Claude's.
+      const t = d.target;
+      const same = t && t.teamId === answer.destination.teamId && t.channel === answer.destination.channel && t.threadTs === answer.destination.threadTs;
+      if (!same) d.byClaude = true;
+      d.target = answer.destination;
+      $("slack-error").hidden = true;
+      drawTarget();
+    }
+    if (answer.postRefused) {
+      if (currentScreen() === "compose") showComposeError("投稿されませんでした");
+      else toast("投稿されませんでした");
+    }
+  },
   changed: refreshSlackCompose,
   locked: () => posting,
   keyHint: false,
+  fixedInput: true,
+  autoApply: true,
 });
 
 function disarmReset() {
@@ -85,15 +130,22 @@ function drawTarget() {
   $("slack-target").textContent = t ? `${wsName(t.teamId)} ・ ${label(t)}` : "選んでください";
 }
 
-// Draws what follows from the state: the buttons, and whether Claude can be asked.
+// The preview is shown, or the field it opens (pressing the preview opens it, leaving the field closes it).
+function setEditing(on: boolean) {
+  $("slack-preview").hidden = on;
+  $<HTMLTextAreaElement>("slack-body").hidden = !on;
+}
+
+// Draws what follows from the state: the preview, the buttons, and whether Claude can be asked.
 export function refreshSlackCompose() {
   const d = draft;
+  $("slack-preview").textContent = d?.text ?? "";
   $<HTMLTextAreaElement>("slack-body").disabled = posting;
-  $<HTMLButtonElement>("slack-post").disabled = !d?.target || !d.text.trim() || posting;
+  $<HTMLButtonElement>("slack-post").disabled = !d?.target || !d.text.trim() || posting || asking;
   const same = !d || d.text === d.original;
   $<HTMLButtonElement>("slack-reset").disabled = same;
   if (same) disarmReset();
-  $<HTMLButtonElement>("slack-proofread").disabled = !chat.refresh();
+  chat.refresh();
 }
 
 // The picker under the destination chip: the workspace, recent destinations, a channel search, and a link. A pick closes it.
@@ -108,6 +160,7 @@ function openPicker() {
   };
   const choose = (t: Target) => {
     d.target = t;
+    d.byClaude = false;
     $("slack-error").hidden = true;
     closeMenu();
     drawTarget();
@@ -205,10 +258,11 @@ async function newDraft(key: string, current: OpenThread, stale: () => boolean) 
     body: latestText(current),
   });
   if (stale()) return;
-  draft = { key, original, text: original, target: null };
+  draft = { key, original, text: original, target: null, byClaude: false };
   chat.reset();
   chat.clearInput();
   $<HTMLTextAreaElement>("slack-body").value = original;
+  $("slack-preview").textContent = original;
 }
 
 // The latest call of `openCompose`; an earlier one still waiting for a command goes no further.
@@ -247,6 +301,7 @@ async function openCompose() {
   $("slack-subject").textContent = current.subject || "(件名なし)";
   $("slack-error").hidden = true;
   drawTarget();
+  setEditing(false);
   // The selects in the frame of the request field need the model settings.
   showModelSlot("slack-model");
   showComposeScreen();
@@ -263,6 +318,19 @@ function back() {
   // The frames of the messages fit again after they are shown, which can shorten the page for a moment: restore the position once more after that.
   $("main").scrollTop = threadScroll;
   requestAnimationFrame(() => ($("main").scrollTop = threadScroll));
+}
+
+// The post of `d` to `t` is done, by "投稿" or by Claude's answer (S-23): the toast, and the draft goes (unless another mail's draft has taken its place); the screen goes back only if it is still the one shown.
+function finishPost(d: Draft | null, t: Target) {
+  toast(`${wsName(t.teamId)} の ${label(t)} に貼りました`);
+  if (d && draft === d) {
+    draft = null;
+    chat.reset();
+    chat.clearInput();
+    drawTarget();
+    if (currentScreen() === "compose") back();
+  }
+  refreshSlackCompose();
 }
 
 async function post() {
@@ -282,16 +350,7 @@ async function post() {
     return toast(`${wsName(t.teamId)} の ${label(t)} に貼れませんでした: ${e}`);
   }
   posting = false;
-  toast(`${wsName(t.teamId)} の ${label(t)} に貼りました`);
-  // The post is done, so the draft goes (unless another mail's draft has taken its place); the screen goes back only if it is still the one shown.
-  if (draft === d) {
-    draft = null;
-    chat.reset();
-    chat.clearInput();
-    drawTarget();
-    if (currentScreen() === "compose") back();
-  }
-  refreshSlackCompose();
+  finishPost(d, t);
 }
 
 export function initSlackCompose() {
@@ -299,6 +358,18 @@ export function initSlackCompose() {
   $("slack-back").onclick = back;
   $("slack-post").onclick = post;
   $("slack-target").onclick = openPicker;
+  const startEditing = () => {
+    if (posting || !draft) return;
+    setEditing(true);
+    $<HTMLTextAreaElement>("slack-body").focus();
+  };
+  $("slack-preview").onclick = startEditing;
+  $("slack-preview").onkeydown = (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    startEditing();
+  };
+  $<HTMLTextAreaElement>("slack-body").onblur = () => setEditing(false);
   $<HTMLTextAreaElement>("slack-body").oninput = (e) => {
     draft!.text = (e.currentTarget as HTMLTextAreaElement).value;
     $("slack-error").hidden = true;
@@ -319,17 +390,8 @@ export function initSlackCompose() {
     refreshSlackCompose();
   };
   $("slack-reset").onblur = disarmReset;
-  // The form is the shared composer's, with the 校正する button above its frame.
-  const proofread = tag("div", "proofread-row");
-  const proofreadButton = tag("button", "text-btn", "校正する");
-  proofreadButton.id = "slack-proofread";
-  proofreadButton.type = "button";
-  proofreadButton.disabled = true;
-  proofread.append(proofreadButton);
-  const composer = createComposer({ prefix: "slack", label: "Claude への依頼" });
-  composer.prepend(proofread);
-  $("slack-chat-note").after(composer);
-  proofreadButton.onclick = () => chat.send("校正してください");
+  // The form is the shared composer's; the field is three lines high and scrolls inside.
+  $("slack-chat-note").after(createComposer({ prefix: "slack", label: "Claude への依頼" }));
   chat.init();
   initSplit($("slack-main"), $("slack-split"));
   drawTarget();
