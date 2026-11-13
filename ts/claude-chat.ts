@@ -9,8 +9,8 @@ import type { TodoTaskProposal } from "./bindings/TodoTaskProposal";
 import { getClaude } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
 
-// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, or the destination it chose (the Slack compose screen, S-4).
-export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; destination?: Target | null };
+// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, or the destination it chose and whether a post it asked for was refused (the Slack compose screen, S-4, S-23).
+export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; destination?: Target | null; postRefused?: boolean };
 
 export interface ChatTurnPayload {
   role: "user" | "assistant";

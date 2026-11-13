@@ -55,11 +55,14 @@ const slackDate = (ms: number) => {
 
 // The destination when the request that is on its way was sent: Claude's choice is put in only if the chip is still that.
 let askedTarget: Target | null = null;
+// A request to Claude of this screen is on its way, and may post the text: "投稿" waits for it, so the text is not posted twice.
+let asking = false;
 
 const chat = createChat({
   prefix: "slack",
   loginNote: "設定の Claude タブで接続すると、校正できます",
-  text: () => draft?.text ?? null,
+  // Null while the post of "投稿" is on its way: a request to Claude could post the same text again.
+  text: () => (draft && !posting ? draft.text : null),
   apply: (text) => {
     draft!.text = text;
     $<HTMLTextAreaElement>("slack-body").value = text;
@@ -69,17 +72,30 @@ const chat = createChat({
   ask: async (text, history, instruction) => {
     const d = draft;
     askedTarget = d?.target ?? null;
-    const answer = await invoke("claude_proofread_slack", { text, history, instruction });
-    if (answer.posted && answer.destination) finishPost(d, answer.destination);
-    return answer;
+    asking = true;
+    refreshSlackCompose();
+    try {
+      const answer = await invoke("claude_proofread_slack", { text, history, instruction, target: askedTarget });
+      if (answer.posted && answer.destination) finishPost(d, answer.destination);
+      return answer;
+    } finally {
+      asking = false;
+    }
   },
   // The destination Claude chose (Rust kept it to the list it was given) goes into the chip, unless the user chose another meanwhile or the post is on its way.
+  // A post that Claude asked for and Rust refused (S-23) is said not to have been made.
   answered: (answer) => {
     const d = draft;
-    if (!d || !answer.destination || posting || d.target !== askedTarget) return;
-    d.target = answer.destination;
-    $("slack-error").hidden = true;
-    drawTarget();
+    if (!d) return;
+    if (answer.destination && !posting && d.target === askedTarget) {
+      d.target = answer.destination;
+      $("slack-error").hidden = true;
+      drawTarget();
+    }
+    if (answer.postRefused) {
+      if (currentScreen() === "compose") showComposeError("投稿されませんでした");
+      else toast("投稿されませんでした");
+    }
   },
   changed: refreshSlackCompose,
   locked: () => posting,
@@ -117,7 +133,7 @@ export function refreshSlackCompose() {
   const d = draft;
   $("slack-preview").textContent = d?.text ?? "";
   $<HTMLTextAreaElement>("slack-body").disabled = posting;
-  $<HTMLButtonElement>("slack-post").disabled = !d?.target || !d.text.trim() || posting;
+  $<HTMLButtonElement>("slack-post").disabled = !d?.target || !d.text.trim() || posting || asking;
   const same = !d || d.text === d.original;
   $<HTMLButtonElement>("slack-reset").disabled = same;
   if (same) disarmReset();
