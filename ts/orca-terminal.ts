@@ -20,6 +20,7 @@ import type { TerminalColors } from "./bindings/TerminalColors";
 import type { TerminalSettings } from "./bindings/TerminalSettings";
 import type { TextKeybind } from "./bindings/TextKeybind";
 import { $, composing } from "./dom.js";
+import { periodMs } from "./e2e-timers.js";
 import { invoke } from "./ipc.js";
 import { listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import { loadTerminalLibs, terminalLibsReady } from "./vendor-load.js";
@@ -432,7 +433,7 @@ function startMirror(instance: Instance) {
   // A hidden window reads nothing; it starts again when the window is shown (`initOrcaTerminal`).
   if (instance.timer !== null || document.hidden) return;
   readFrame(instance);
-  instance.timer = window.setInterval(() => readFrame(instance), instance.source.environment === null ? MIRROR_MS : MIRROR_ENV_MS);
+  instance.timer = window.setInterval(() => readFrame(instance), instance.source.environment === null ? periodMs("orcaMirror", MIRROR_MS) : MIRROR_ENV_MS);
 }
 
 function stopMirror(instance: Instance) {

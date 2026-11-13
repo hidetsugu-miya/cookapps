@@ -51,6 +51,7 @@ import {
   terminalThemes,
   textsOf,
   threadDetail,
+  timers,
   waitForCalls,
   waitForCount,
 } from "../support";
@@ -245,7 +246,7 @@ describe("orca", () => {
     // The bell and the reload stay buttons that take the press.
     await expect($("#orca-bell")).not.toHaveAttribute("data-tauri-drag-region");
     await expect($("#orca-refresh")).not.toHaveAttribute("data-tauri-drag-region");
-    await expect($("#orca-list-toggle")).not.toHaveAttribute("data-tauri-drag-region");
+    await expect($(".orca-tabbar .list-toggle")).not.toHaveAttribute("data-tauri-drag-region");
   });
 
   it("counts nothing while the agents only work", async () => {
@@ -520,14 +521,14 @@ describe("orca", () => {
     expect(box.header).toBe(40);
     expect(box.tabs).toBe(40);
     expect(box.tabsTop).toBe(box.headerTop);
-    expect(box.buttons).toEqual([24, 24, 24]);
-    // No label and no 「新規」: the button of the list (A-23) at the left, the bell and the reload at the right.
+    expect(box.buttons).toEqual([24, 24]);
+    // No label and no 「新規」: the bell and the reload at the right (the button of the list, A-23, is in the tab bar).
     expect(await count("#orca-heading")).toBe(0);
     expect(await count("#orca-new")).toBe(0);
     await expect($("#orca-refresh")).toHaveAttribute("aria-label", "読み直す");
     const order = await browser.execute(() => [...document.querySelectorAll("#orca-header button")].map((b) => b.id));
-    expect(order).toEqual(["orca-list-toggle", "orca-bell", "orca-refresh"]);
-    // The plus is in the tab bar, after the strip of tabs (the button that opens the list is before the strip, and hidden while the list is open); it is a menu button, and waits for a project.
+    expect(order).toEqual(["orca-bell", "orca-refresh"]);
+    // The plus is in the tab bar, after the strip of tabs (the button of the list, A-23, is before the strip); it is a menu button, and waits for a project.
     await expect($(".orca-plus")).toHaveAttribute("aria-label", "セッションを始める");
     await expect($(".orca-plus")).toHaveAttribute("aria-haspopup", "menu");
     await expect($(".orca-plus")).toBeDisabled();
@@ -869,15 +870,15 @@ describe("orca", () => {
 
   it("says the command is missing, and does not read again by the clock", async () => {
     // The base answer is the one with no orca command.
-    await boot({ inbox: inbox() });
+    await boot({ inbox: inbox(), ...timers({ orcaClock: 1000 }) });
     await $("#nav-orca").click();
     await expect($("#orca-status")).toHaveText("未インストール");
     expect(await classOf("#orca-status")).toContain("off");
     await expect($("#orca-notice")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
     await expect($(".orca-plus")).toBeDisabled();
-    // The start and showing the screen read; the clock (every 10 seconds on this screen) reads no more.
+    // The start and showing the screen read; the clock (every 10 seconds on this screen, 1 second here) reads no more.
     const before = (await callsOf("orca_overview")).length;
-    await browser.pause(12_000);
+    await browser.pause(1200);
     expect(await callsOf("orca_overview")).toHaveLength(before);
     // The reload button looks again.
     await $("#orca-refresh").click();
@@ -1015,20 +1016,22 @@ describe("orca: closing the list (A-23)", () => {
     return { left: r.left, right: r.right, width: r.width };
   }, selector);
 
-  it("has the button first in the header of the list, open, with the bell and the reload kept at the right", async () => {
+  const toggleSel = ".orca-tabbar .list-toggle";
+
+  it("has the button at the left end of the tab strip of the left pane while the list is open, and none in the header, which keeps the bell and the reload at the right", async () => {
     await openOrca();
-    const button = $("#orca-list-toggle");
+    const button = $(toggleSel);
     await expect(button).toBeDisplayed();
     await expect(button).toHaveAttribute("aria-label", "プロジェクト一覧");
     await expect(button).toHaveAttribute("aria-expanded", "true");
-    expect(await classOf("#orca-list-toggle")).toContain("icon-btn");
-    const [toggle, bell, refresh, header] = await Promise.all(["#orca-list-toggle", "#orca-bell", "#orca-refresh", "#orca-header"].map(rect));
-    // At the left end of the header, and the bell and the reload at the right end, as before.
-    expect(toggle.left - header.left).toBeLessThan(10);
-    expect(toggle.right).toBeLessThan(bell.left);
+    expect(await classOf(toggleSel)).toContain("icon-btn");
+    expect(await count("#orca-header .list-toggle")).toBe(0);
+    await expect($("#orca-list")).toBeDisplayed();
+    const [toggle, tabs, bar, refresh, header] = await Promise.all([toggleSel, ".orca-tabs", ".orca-tabbar", "#orca-refresh", "#orca-header"].map(rect));
+    expect(toggle.left).toBeGreaterThanOrEqual(bar.left);
+    expect(toggle.right).toBeLessThanOrEqual(tabs.left + 1);
     expect(header.right - refresh.right).toBeLessThan(10);
-    // The button of the tab strip is for the closed list only.
-    await expect($(".orca-tabbar .list-toggle")).not.toBeDisplayed();
+    expect(await browser.execute(() => document.querySelector(".orca-tabbar")!.firstElementChild!.classList.contains("list-toggle"))).toBe(true);
   });
 
   it("closes the list with its divider and the bell and the reload, widens the work pane, and opens the list again at the width it had", async () => {
@@ -1036,7 +1039,7 @@ describe("orca: closing the list (A-23)", () => {
     await dragDivider(0.4);
     const before = await rect("#orca-list");
     expect(before.width / (await rect("#orca")).width).toBeCloseTo(0.4, 2);
-    await $("#orca-list-toggle").click();
+    await $(toggleSel).click();
     await expect($("#orca-list")).not.toBeDisplayed();
     await expect($("#orca-split")).not.toBeDisplayed();
     await expect($("#orca-bell")).not.toBeDisplayed();
@@ -1044,12 +1047,12 @@ describe("orca: closing the list (A-23)", () => {
     // The work pane takes the width up to the green column.
     const [screen, work] = await Promise.all(["#orca", "#orca-work"].map(rect));
     expect(work.left).toBeCloseTo(screen.left, 0);
-    // The button is now at the left end of the tab strip of the pane at the left edge.
-    const closed = $(".orca-tabbar .list-toggle");
+    // The button stays at the left end of the tab strip of the pane at the left edge.
+    const closed = $(toggleSel);
     await expect(closed).toBeDisplayed();
     await expect(closed).toHaveAttribute("aria-expanded", "false");
     await expect(closed).toHaveAttribute("aria-label", "プロジェクト一覧");
-    const [button, tabs, bar] = await Promise.all([".orca-tabbar .list-toggle", ".orca-tabs", ".orca-tabbar"].map(rect));
+    const [button, tabs, bar] = await Promise.all([toggleSel, ".orca-tabs", ".orca-tabbar"].map(rect));
     expect(button.left).toBeGreaterThanOrEqual(bar.left);
     expect(button.right).toBeLessThanOrEqual(tabs.left + 1);
     expect(await browser.execute(() => document.querySelector(".orca-tabbar")!.firstElementChild!.classList.contains("list-toggle"))).toBe(true);
@@ -1061,15 +1064,14 @@ describe("orca: closing the list (A-23)", () => {
     await expect($("#orca-split")).toBeDisplayed();
     await expect($("#orca-bell")).toBeDisplayed();
     await expect($("#orca-refresh")).toBeDisplayed();
-    await expect($("#orca-list-toggle")).toHaveAttribute("aria-expanded", "true");
-    await expect($(".orca-tabbar .list-toggle")).not.toBeDisplayed();
+    await expect($(toggleSel)).toHaveAttribute("aria-expanded", "true");
     expect((await rect("#orca-list")).width).toBeCloseTo(before.width, 0);
     await expect($("#orca-split")).toHaveAttribute("aria-valuenow", "40");
   });
 
   it("keeps the list closed while the screen is left and shown again, and opens it again when the app starts", async () => {
     await openOrca();
-    await $("#orca-list-toggle").click();
+    await $(toggleSel).click();
     await expect($("#orca-list")).not.toBeDisplayed();
     await $("#nav-mail").click();
     await $("#nav-orca").click();
@@ -1078,19 +1080,18 @@ describe("orca: closing the list (A-23)", () => {
     // Nothing is saved: a start gives the open list.
     await openOrca();
     await expect($("#orca-list")).toBeDisplayed();
-    await expect($("#orca-list-toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect($(toggleSel)).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("gives the focus to the button that is shown after a press", async () => {
+  it("keeps the focus on the button after a press", async () => {
     await openOrca();
-    await $("#orca-list-toggle").click();
-    await browser.execute(() => document.querySelector<HTMLElement>(".orca-tabbar .list-toggle")!.focus());
+    await browser.execute((q) => document.querySelector<HTMLElement>(q)!.focus(), toggleSel);
     // The harness's synthesized Enter does not run the default action of a button (the keydown and keyup come, the keypress does not), so the focused button is clicked, as the keyboard would.
     await browser.execute(() => (document.activeElement as HTMLElement).click());
-    await expect($("#orca-list")).toBeDisplayed();
-    expect(await browser.execute(() => document.activeElement?.id)).toBe("orca-list-toggle");
-    await browser.execute(() => (document.activeElement as HTMLElement).click());
     await expect($("#orca-list")).not.toBeDisplayed();
+    expect(await browser.execute(() => document.activeElement?.classList.contains("list-toggle"))).toBe(true);
+    await browser.execute(() => (document.activeElement as HTMLElement).click());
+    await expect($("#orca-list")).toBeDisplayed();
     expect(await browser.execute(() => document.activeElement?.classList.contains("list-toggle"))).toBe(true);
   });
 });
@@ -1728,26 +1729,26 @@ describe("orca: projects", () => {
     });
 
     it("stops reading while another tab shows", async () => {
-      await openOrca(orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] }));
+      await openOrca(orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] }), timers({ orcaMirror: 250 }));
       await project("example-app").click();
       const read = await mock("orca_terminal_read", ["$"]);
       await tabOf(zsh).$(".orca-tab-btn").click();
       await waitForCalls(read);
       await project("example-api").click();
       await mock("orca_terminal_read", ["$"]);
-      await browser.pause(2500);
+      await browser.pause(300);
       // Only the terminal shown is read.
       expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle === "term_example-api")).toBe(true);
     });
 
     it("stops reading while the window is hidden, and reads at once and goes on when it is shown", async () => {
-      await openOrca(withTerminals());
+      await openOrca(withTerminals(), timers({ orcaMirror: 250 }));
       await project("example-app").click();
       await tabOf(zsh).$(".orca-tab-btn").click();
       await waitForCalls("orca_terminal_read");
       await setWindowHidden(true);
       await mock("orca_terminal_read", ["$"]);
-      await browser.pause(2500);
+      await browser.pause(300);
       expect(await callsOf("orca_terminal_read")).toEqual([]);
       await setWindowHidden(false);
       expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_example-app_zsh" });
@@ -1794,7 +1795,7 @@ describe("orca: a saved environment's stream", () => {
   const viewportOf = (call: unknown) => (call as { viewport: { cols: number; rows: number } }).viewport;
 
   it("opens the stream of the saved environment, draws each list it sends, and reads nothing by the clock", async () => {
-    await openOrca(orcaOverview([], [], studioOnly));
+    await openOrca(orcaOverview([], [], studioOnly), timers({ orcaClock: 1000 }));
     expect(await channelCalls("orca_stream_open")).toEqual([{ environment: "Studio", channel: true }]);
     await sendStream(streamList(sample(), worktrees()));
     await waitForCount("#orca-feed .orca-project", 4);
@@ -1804,9 +1805,9 @@ describe("orca: a saved environment's stream", () => {
     // The next list replaces it.
     await sendStream(streamList([working("example-app"), finished("example-api")], worktrees()));
     await waitForCount("#orca-feed .orca-project", 2);
-    // The clock reads this screen every 10 seconds; a streamed list is not read.
+    // The clock reads this screen every 10 seconds (1 second here); a streamed list is not read.
     const overview = await mock("orca_overview", orcaOverview([], [], studioOnly));
-    await browser.pause(12_000);
+    await browser.pause(1200);
     expect(await callsOf(overview)).toEqual([]);
   });
 
@@ -2789,16 +2790,18 @@ describe("orca: split panes (A-17)", () => {
     await browser.waitUntil(async () => (await browser.execute(() => document.querySelector(".orca-split-node")?.getAttribute("data-direction"))) === "column", { timeoutMsg: "the column never drew" });
   });
 
-  it("puts the button that opens the list (A-23) in the strip of the pane at the left edge only: the first pane of a row, the top pane of a column", async () => {
+  it("puts the button of the list (A-23) in the strip of the pane at the left edge only, open or closed: the first pane of a row, the top pane of a column", async () => {
     await openSplit();
-    await $("#orca-list-toggle").click();
+    await expect($('.orca-pane[data-pane="p1"] .list-toggle')).toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p2"] .list-toggle')).not.toBeDisplayed();
+    await $('.orca-pane[data-pane="p1"] .list-toggle').click();
+    await expect($("#orca-list")).not.toBeDisplayed();
     await expect($('.orca-pane[data-pane="p1"] .list-toggle')).toBeDisplayed();
     await expect($('.orca-pane[data-pane="p2"] .list-toggle')).not.toBeDisplayed();
     await $('.orca-pane[data-pane="p1"] .list-toggle').click();
     await expect($("#orca-list")).toBeDisplayed();
-    await expect($('.orca-pane[data-pane="p1"] .list-toggle')).not.toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p1"] .list-toggle')).toBeDisplayed();
     await openSplit(overview(), layout(column(pane("p1", [claude, bash]), row(pane("p2", [zsh]), pane("p3", [apiTab]))), "p1"));
-    await $("#orca-list-toggle").click();
     await expect($('.orca-pane[data-pane="p1"] .list-toggle')).toBeDisplayed();
     await expect($('.orca-pane[data-pane="p2"] .list-toggle')).not.toBeDisplayed();
     await expect($('.orca-pane[data-pane="p3"] .list-toggle')).not.toBeDisplayed();
@@ -2893,7 +2896,7 @@ describe("orca: split panes (A-17)", () => {
   });
 
   it("asks again, with the tabs now listed, when a tab leaves, and draws the layout without its pane", async () => {
-    await openSplit();
+    await openSplit(overview(), saved(), timers({ orcaMirror: 250 }));
     // The shell of the second pane is closed in Orca: the list no longer has it, and Rust answers a layout of one pane.
     const panes = await mock("orca_panes", layout(pane("p1", [claude, bash]), "p1"));
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
@@ -2904,7 +2907,7 @@ describe("orca: split panes (A-17)", () => {
     expect(await paneTabs("p1")).toEqual(["Write the docs", "bash"]);
     // The terminal of the pane that closed is no longer read.
     await mock("orca_terminal_read", ["$"]);
-    await browser.pause(2500);
+    await browser.pause(300);
     expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle !== "term_example-app_zsh")).toBe(true);
   });
 
@@ -5358,7 +5361,7 @@ describe("orca: search the list (A-19)", () => {
 
   it("opens a closed list (A-23) with Cmd+J before it takes the field", async () => {
     await openOrca(overview());
-    await $("#orca-list-toggle").click();
+    await $(".orca-tabbar .list-toggle").click();
     await expect($("#orca-list")).not.toBeDisplayed();
     await cmdJ();
     await expect($("#orca-list")).toBeDisplayed();

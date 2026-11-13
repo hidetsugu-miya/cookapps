@@ -19,9 +19,9 @@ import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
+import { periodMs } from "./e2e-timers.js";
 import { CHEVRON_SVG, CLAUDE_SVG, DIFF_SVG, FILE_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
@@ -42,6 +42,8 @@ const ACTIVITY_SVG = svgOf('<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36
 const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const THIS_MACHINE = "このマシン";
 const SHOWN_MS = 10_000;
+// The clock ticks once a second, and a spec that shortens `SHOWN_MS` (`periodMs`) shortens the tick in the same proportion.
+const shownMs = () => periodMs("orcaClock", SHOWN_MS);
 const HIDDEN_MS = 60_000;
 
 // The last read, or null before the first. A failed read keeps the rows and worktrees of the one before it while the target is the same.
@@ -834,7 +836,7 @@ function refresh() {
   if (document.hidden || loading || streaming()) return;
   // A missing command is not looked for again by the clock.
   if (view?.state === "missing") return;
-  if (Date.now() - lastTry >= (shown() ? SHOWN_MS : HIDDEN_MS)) load(clockScope());
+  if (Date.now() - lastTry >= (shown() ? shownMs() : HIDDEN_MS)) load(clockScope());
 }
 
 // ---- the side pane's share (A-9) ----
@@ -1130,18 +1132,12 @@ function toggleFilesAndDraw() {
 }
 
 // Closes the list of projects with its divider, or opens it again (A-23). The divider's ratio is kept, so the list opens at the width it had.
-// The pressed button is hidden by it, so the focus goes on to the button that is shown now.
+// The button is in the tab strip of the pane at the left edge, which is not rebuilt by this, so it keeps the focus.
 function toggleList() {
-  const focused = document.activeElement?.classList.contains("list-toggle") ?? false;
   listOpen = !listOpen;
   $("orca-list").hidden = !listOpen;
   $("orca-split").hidden = !listOpen;
-  drawListToggle($("orca-list-toggle"), listOpen);
   draw();
-  if (focused) {
-    const shown = [...document.querySelectorAll<HTMLElement>(".list-toggle")].find((b) => b.offsetParent !== null);
-    shown?.focus({ preventScroll: true });
-  }
 }
 
 // ---- the search field (A-19) ----
@@ -1224,17 +1220,13 @@ export function initOrca() {
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError });
   initOrcaFiles({ open: openFile, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw, switched: () => void refreshOrca(true) });
-  setInterval(refresh, 1000);
+  setInterval(refresh, (1000 * shownMs()) / SHOWN_MS);
   document.addEventListener("visibilitychange", () => {
     // A session shown again after the window was hidden is seen.
     drawBadge();
     refresh();
   });
   initSearch();
-  const toggle = listToggle("プロジェクト一覧", toggleList);
-  toggle.id = "orca-list-toggle";
-  drawListToggle(toggle, listOpen);
-  $("orca-header").prepend(toggle);
   $("orca-refresh").onclick = () => load("full", true);
   $("orca-bell").onclick = () => {
     working = !working;

@@ -1,4 +1,4 @@
-import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, threadLoaded, waitForCalls, waitForCount } from "../support";
+import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, timers, thread, threadDetail, threadLoaded, waitForCalls, waitForCount } from "../support";
 import type { ThreadItem } from "../../ts/bindings/ThreadItem";
 
 // Fires the event the app's sync round listens for (the window is shown again), which runs one round at once.
@@ -512,14 +512,17 @@ describe("inbox", () => {
     });
 
     it("does not let the timer of a closed popup close the next popup of the same thread", async () => {
+      // A popup stays 10 seconds in the app and 3 seconds here.
+      await boot({ inbox: inbox(), ...timers({ arrival: 3000 }) });
+      await waitForCount("#unread-threads li", 2);
       await arrive(arrivedThread);
       await $('.arrival button[aria-label="閉じる"]').click();
       await waitForCount(".arrival", 0);
-      // The first card would have gone at 10 seconds; the second one arrives 6 seconds after the first.
-      await browser.pause(6000);
+      // The first card would have gone at 3 seconds; the second one arrives 1.8 seconds after the first.
+      await browser.pause(1800);
       await arrive(arrivedThread);
       await waitForCount(".arrival", 1);
-      await browser.pause(5000);
+      await browser.pause(1500);
       expect(await cards()).toHaveLength(1);
       await browser.waitUntil(async () => (await cards()).length === 0, { timeout: 15_000, timeoutMsg: "the popup did not go by itself" });
     });
