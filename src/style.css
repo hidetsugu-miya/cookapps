@@ -1029,6 +1029,35 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-state[data-state="saved"] { color: var(--accent); }
 .orca-edit-state[data-state="changed"], .orca-edit-state[data-state="missing"], .orca-edit-state[data-state="not-utf8"], .orca-edit-state[data-state="error"] { color: var(--warn); }
 .orca-edit .orca-empty { margin: 0; padding: 48px 24px; }
+.orca-edit-modes { flex: none; display: inline-flex; gap: 2px; }
+.orca-edit-mode { width: calc(22px * var(--fs)); height: calc(22px * var(--fs)); }
+.orca-edit-mode svg { width: calc(14px * var(--fs)); height: calc(14px * var(--fs)); }
+.orca-edit-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+/* A-26: the rich view of a Markdown file. Milkdown draws read-only ProseMirror content here; there is no theme, so the elements get their looks below. */
+.orca-edit-rich { position: relative; flex: 1; min-height: 0; overflow: auto; background: var(--surface); }
+.orca-edit-rich .ProseMirror { box-sizing: border-box; max-width: 860px; margin: 0 auto; padding: 16px 24px 48px; outline: none; white-space: pre-wrap; word-wrap: break-word; font-family: var(--ff-base); line-height: 1.7; user-select: text; -webkit-user-select: text; }
+.orca-edit-rich .ProseMirror > :first-child { margin-top: 0; }
+.orca-edit-rich h1, .orca-edit-rich h2, .orca-edit-rich h3, .orca-edit-rich h4, .orca-edit-rich h5, .orca-edit-rich h6 { margin: 1.4em 0 .5em; line-height: 1.35; }
+.orca-edit-rich h1 { font-size: 1.7em; padding-bottom: .2em; border-bottom: 1px solid var(--line); }
+.orca-edit-rich h2 { font-size: 1.4em; padding-bottom: .2em; border-bottom: 1px solid var(--line); }
+.orca-edit-rich h3 { font-size: 1.2em; }
+.orca-edit-rich h4, .orca-edit-rich h5, .orca-edit-rich h6 { font-size: 1em; }
+.orca-edit-rich p { margin: .7em 0; }
+.orca-edit-rich ul, .orca-edit-rich ol { margin: .7em 0; padding-left: 1.6em; }
+.orca-edit-rich li > p { margin: .2em 0; }
+.orca-edit-rich li[data-item-type="task"] { list-style: none; position: relative; }
+.orca-edit-rich li[data-item-type="task"]::before { content: "\2610"; position: absolute; left: -1.4em; color: var(--muted); }
+.orca-edit-rich li[data-item-type="task"][data-checked="true"]::before { content: "\2611"; color: var(--accent); }
+.orca-edit-rich blockquote { margin: .7em 0; padding: 0 1em; border-left: 3px solid var(--line); color: var(--muted); }
+.orca-edit-rich hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
+.orca-edit-rich a { color: var(--accent); }
+.orca-edit-rich img { max-width: 100%; }
+.orca-edit-rich code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: .9em; padding: .1em .3em; border-radius: 4px; background: var(--soft); }
+.orca-edit-rich pre { margin: .7em 0; padding: 10px 12px; border-radius: 8px; background: var(--soft); overflow-x: auto; white-space: pre; }
+.orca-edit-rich pre code { padding: 0; background: transparent; font-size: .9em; }
+.orca-edit-rich table { border-collapse: collapse; margin: .7em 0; }
+.orca-edit-rich th, .orca-edit-rich td { padding: 4px 10px; border: 1px solid var(--line); }
+.orca-edit-rich th { background: var(--soft); }
 /* A-21: the editor is two layers of the same text. The textarea is on top with its text transparent (the caret and the selection show), and under it a `pre` carries the same text in colors, moved by the scroll of the textarea; both take the same font, padding and line height, so the letters sit on one another. */
 .orca-edit-body { position: relative; flex: 1; min-height: 0; display: flex; background: var(--surface); }
 /* A numbers box at the left (as wide as the digits of its last number: `--digits` of them in ch, set by the script, and the padding of the numbers and the border) and the two layers of the text beside it. The numbers take the font of the text, are not selected, and follow the vertical scroll only. */

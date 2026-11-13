@@ -1,3 +1,4 @@
+import type { MarkdownParts } from "../../ts/bindings/MarkdownParts";
 import type { OrcaDiffRow } from "../../ts/bindings/OrcaDiffRow";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileDiff } from "../../ts/bindings/OrcaFileDiff";
@@ -3224,6 +3225,94 @@ describe("orca: files and editor (A-18)", () => {
     await openFileWith(text('<img src=x onerror="alert(1)"> &amp;\n', "sig-1", "plaintext", null));
     expect(await count(".orca-edit-hl img")).toBe(0);
     expect(await layerText()).toBe('<img src=x onerror="alert(1)"> &amp;\n');
+  });
+
+  // A-26: a Markdown file (the language Rust names `markdown`) opens in the rich view that Milkdown draws, read only, and has the buttons of the source (`<>`) and the rich view (the pencil) in its heading. `markdown_split` is Rust's cut of the front matter: the mock answers it, and the spec checks what the page sends and draws.
+  const markdown = (content: string) => text(content, "sig-1", "markdown", "markdown");
+  const parts = (body: string, front = ""): MarkdownParts => ({ front, body });
+  const modeButton = (label: string) => $(`.orca-edit-mode[aria-label="${label}"]`);
+  const rich = (selector: string) => textsOf(`.orca-edit-rich .ProseMirror ${selector}`);
+  // Opens a.rs as a Markdown file whose body (the text after its front matter) is `body`, and waits for the rich view to be drawn.
+  async function openMarkdown(content: string, body = content, front = "") {
+    await mock("markdown_split", parts(body, front));
+    await mock("orca_file_read", markdown(content));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await doublePress("a.rs");
+    await waitForCount(".orca-edit-rich .ProseMirror", 1);
+  }
+  const mdSample = "# 見出し\n\n本文の **太字** と `code`\n\n- [x] 済み\n- [ ] 未\n\n| a | b |\n| - | - |\n| 1 | 2 |\n";
+
+  it("opens a Markdown file in the rich view, which Milkdown draws and which cannot be edited (A-26)", async () => {
+    await openFiles();
+    await openMarkdown(mdSample);
+    expect(await rich("h1")).toEqual(["見出し"]);
+    expect(await rich("strong")).toEqual(["太字"]);
+    expect(await rich("p code")).toEqual(["code"]);
+    expect(await rich("th")).toEqual(["a", "b"]);
+    expect(await count('.orca-edit-rich li[data-item-type="task"]')).toBe(2);
+    await expect($(".orca-edit-rich .ProseMirror")).toHaveAttribute("contenteditable", "false");
+    await expect($(".orca-edit-rich")).toBeDisplayed();
+    await expect($(".orca-edit-body")).not.toBeDisplayed();
+    await expect(modeButton("リッチ")).toHaveAttribute("aria-pressed", "true");
+    await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "false");
+    expect(await callsOf("markdown_split")).toEqual([{ text: mdSample }]);
+  });
+
+  it("reads Milkdown from vendor/ when the first Markdown file is drawn, and not at the start (A-26)", async () => {
+    const read = () => browser.execute("return typeof CookappsMilkdown !== 'undefined'");
+    await openFiles();
+    expect(await read()).toBe(false);
+    await openMarkdown("# a\n");
+    expect(await read()).toBe(true);
+  });
+
+  it("gives Milkdown the body without the front matter, which Rust cuts off (A-26)", async () => {
+    const content = "---\ntitle: 題\n---\n# 本文\n";
+    await openFiles();
+    await openMarkdown(content, "# 本文\n", "---\ntitle: 題\n---\n");
+    expect(await callsOf("markdown_split")).toEqual([{ text: content }]);
+    expect(await rich("h1")).toEqual(["本文"]);
+    expect(await browser.execute(() => document.querySelector(".orca-edit-rich")!.textContent)).not.toContain("title");
+  });
+
+  it("switches a Markdown file to its source and back to the rich view with the buttons (A-26)", async () => {
+    await openFiles();
+    await openMarkdown("# 見出し\n");
+    await modeButton("ソース").click();
+    await expect($(".orca-edit-body")).toBeDisplayed();
+    await expect($(".orca-edit-rich")).not.toBeDisplayed();
+    await expect($(".orca-edit-area")).toHaveValue("# 見出し\n", { trim: false });
+    await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
+    await expect(modeButton("リッチ")).toHaveAttribute("aria-pressed", "false");
+    expect(await count(".orca-edit-rich .ProseMirror")).toBe(0);
+    // The typing in the source is what the rich view draws next.
+    await mock("orca_file_write", saved("sig-2"));
+    await type("追記\n");
+    await modeButton("リッチ").click();
+    await waitForCount(".orca-edit-rich .ProseMirror", 1);
+    await expect($(".orca-edit-rich")).toBeDisplayed();
+    await expect($(".orca-edit-body")).not.toBeDisplayed();
+    expect(await callsOf("markdown_split")).toEqual([{ text: "# 見出し\n" }, { text: "# 見出し\n追記\n" }]);
+  });
+
+  it("keeps the view of a Markdown file while it is open, when another tab is shown and the file again (A-26)", async () => {
+    await openFiles();
+    await openMarkdown("# 見出し\n");
+    await modeButton("ソース").click();
+    await tabOf(claude).$(".orca-tab-btn").click();
+    await tabOf("file:1").$(".orca-tab-btn").click();
+    await expect($(".orca-edit-area")).toBeDisplayed();
+    await expect($(".orca-edit-rich")).not.toBeDisplayed();
+    await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows no buttons for a file that is not Markdown, and its text stays in the editor (A-26)", async () => {
+    await openFiles();
+    await openFileWith(rust("fn main() {}\n"));
+    await expect($(".orca-edit-modes")).not.toBeDisplayed();
+    await expect($(".orca-edit-rich")).not.toBeDisplayed();
+    await expect($(".orca-edit-area")).toBeDisplayed();
+    expect(await callsOf("markdown_split")).toEqual([]);
   });
 
   it("colors the text again at each key, and the layer keeps the text of the textarea (A-21)", async () => {

@@ -52,6 +52,7 @@ A library that only one screen uses is read by `ts/vendor-load.ts` the first tim
 It is in neither a module nor npm, so TS uses it through a declaration in `globals.d.ts`.
 Keep the version and license notice in the comment at the top of the distribution file.
 This lets us use a library the owner chose to adopt without having a bundler (2026-10-31: marked and DOMPurify were adopted to render descriptions as Markdown).
+A library with no single-file distribution is bundled into one file of `src/vendor/` by a script in `scripts/`, run by hand, and the file is committed; the app's build still has no bundler (Milkdown: `scripts/build-milkdown.mjs`, `npm run vendor:milkdown`, the owner's issue #384).
 
 ```html
 <!-- Good -->

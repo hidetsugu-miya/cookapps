@@ -5,6 +5,7 @@
     "tauri": "tauri",
     "build:ts": "tsc -p ts/tsconfig.json",
     "watch:ts": "tsc -p ts/tsconfig.json --watch --preserveWatchOutput",
+    "vendor:milkdown": "node scripts/build-milkdown.mjs",
     "e2e:build": "npm run build:ts && node e2e/assemble.mjs && tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json",
     "e2e": "wdio run wdio.conf.ts",
     "lint": "biome lint .",
@@ -12,6 +13,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
+    "@milkdown/kit": "^7.23.0",
     "@tauri-apps/cli": "^2",
     "@types/node": "^26.6.6",
     "@wdio/cli": "^9.32.0",
@@ -20,6 +22,7 @@
     "@wdio/spec-reporter": "^9.32.0",
     "@wdio/tauri-plugin": "^1.5.1",
     "@wdio/tauri-service": "^1.5.1",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "webdriverio": "^9.32.0"

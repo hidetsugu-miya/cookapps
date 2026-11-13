@@ -3,9 +3,11 @@
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
+// A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter, and it is read only. The choice is kept for the file while it is open, in memory only.
 import { tag } from "./dom.js";
+import { CODE_SVG, EDIT_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { highlightReady, loadHighlight } from "./vendor-load.js";
+import { highlightReady, loadHighlight, loadMilkdown } from "./vendor-load.js";
 
 // What the heading says of the save: nothing yet, waiting for the typing to stop, on its way, done, or not done (and why).
 type Save = "idle" | "pending" | "saving" | "saved" | "changed" | "missing" | "not-utf8" | "error";
@@ -44,6 +46,16 @@ interface EditorFile {
   // The grammar of the highlighter for the file (null: none, drawn plain), and how to cancel the drawing of the layer that waits for the next frame or for the wait of a long text (null: none waits).
   highlight: string | null;
   cancelPaint: (() => void) | null;
+  // A Markdown file: the buttons of the heading (`modes`, hidden for another file), the view that is shown (`mode`; "rich" is the start), the box of the text and numbers (`body`), the box of the rich view (`rich`) with the Milkdown editor in it (`view`, null: none), and the count that tells a drawing of the rich view that waits for the library that it is out of date.
+  markdown: boolean;
+  mode: "rich" | "source";
+  modes: HTMLElement;
+  sourceButton: HTMLButtonElement;
+  richButton: HTMLButtonElement;
+  body: HTMLElement;
+  rich: HTMLElement;
+  view: { destroy(): Promise<unknown> } | null;
+  richTurn: number;
   el: HTMLElement;
   area: HTMLTextAreaElement;
   // The layer under the textarea that carries the same text in colors.
@@ -215,17 +227,65 @@ function schedule(f: EditorFile) {
   f.timer = window.setTimeout(() => void flush(f), autosaveMs);
 }
 
+// Takes the Milkdown editor out of the rich view, and cancels a drawing of it that waits.
+function clearRich(f: EditorFile) {
+  f.richTurn++;
+  const view = f.view;
+  f.view = null;
+  void view?.destroy().catch(() => {});
+  f.rich.replaceChildren();
+}
+
+// Draws the text of the file in the rich view: Milkdown is read the first time, and the front matter is cut off by Rust and kept out of the editor. A drawing that is out of date when the library or the cut comes (the view was left, the file closed) is dropped.
+async function drawRich(f: EditorFile) {
+  clearRich(f);
+  const turn = f.richTurn;
+  try {
+    const [{ body }] = await Promise.all([invoke("markdown_split", { text: f.area.value }), loadMilkdown()]);
+    if (turn !== f.richTurn) return;
+    const host = tag("div");
+    f.rich.append(host);
+    const view = await CookappsMilkdown.mount(host, body);
+    if (turn !== f.richTurn) {
+      void view.destroy().catch(() => {});
+      host.remove();
+      return;
+    }
+    f.view = view;
+  } catch (e) {
+    if (turn !== f.richTurn) return;
+    // The text stays readable: the source is shown.
+    setMode(f, "source");
+    fail(e);
+  }
+}
+
+// Shows the source or the rich view of a Markdown file (a file of another language has only its text).
+function setMode(f: EditorFile, mode: "rich" | "source") {
+  f.mode = mode;
+  const rich = f.markdown && mode === "rich";
+  f.modes.hidden = !f.markdown;
+  f.sourceButton.setAttribute("aria-pressed", String(!rich));
+  f.richButton.setAttribute("aria-pressed", String(rich));
+  f.body.hidden = rich;
+  f.rich.hidden = !rich;
+  if (rich) void drawRich(f);
+  else clearRich(f);
+}
+
 async function load(f: EditorFile) {
   try {
     const text = await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
     f.highlight = text.highlight;
+    f.markdown = text.language === "markdown";
     paint(f);
     numberLines(f, f.area.value);
     f.crlf = text.crlf;
     f.signature = text.signature;
     f.read = "ready";
     f.area.disabled = false;
+    setMode(f, f.mode);
   } catch (e) {
     f.read = "failed";
     f.note.textContent = String(e);
@@ -242,7 +302,18 @@ function create(id: string, target: string | null, project: string, path: string
   const head = tag("div", "orca-edit-head");
   const state = tag("span", "orca-edit-state");
   state.setAttribute("role", "status");
-  head.append(tag("span", "orca-edit-path", relative), state);
+  const sourceButton = tag("button", "icon-btn orca-edit-mode");
+  sourceButton.type = "button";
+  sourceButton.setAttribute("aria-label", "ソース");
+  sourceButton.innerHTML = CODE_SVG;
+  const richButton = tag("button", "icon-btn orca-edit-mode");
+  richButton.type = "button";
+  richButton.setAttribute("aria-label", "リッチ");
+  richButton.innerHTML = EDIT_SVG;
+  const modes = tag("span", "orca-edit-modes");
+  modes.hidden = true;
+  modes.append(sourceButton, richButton);
+  head.append(tag("span", "orca-edit-path", relative), state, modes);
   const note = tag("p", "orca-empty feed-empty");
   note.hidden = true;
   const area = tag("textarea", "orca-edit-area");
@@ -263,8 +334,10 @@ function create(id: string, target: string | null, project: string, path: string
   gutter.append(numbers);
   const body = tag("div", "orca-edit-body");
   body.append(gutter, text);
-  el.append(head, note, body);
-  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, el, area, code, nums, numbers, gutter, lines: 1, state, note };
+  const rich = tag("div", "orca-edit-rich");
+  rich.hidden = true;
+  el.append(head, note, body, rich);
+  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, el, area, code, nums, numbers, gutter, lines: 1, state, note };
   area.oninput = () => {
     const value = area.value;
     repaint(f, value);
@@ -276,6 +349,15 @@ function create(id: string, target: string | null, project: string, path: string
     schedule(f);
   };
   area.onscroll = () => followScroll(f);
+  sourceButton.onclick = () => {
+    if (f.mode === "source") return;
+    setMode(f, "source");
+    f.wantFocus = false;
+    area.focus({ preventScroll: true });
+  };
+  richButton.onclick = () => {
+    if (f.mode !== "rich") setMode(f, "rich");
+  };
   // The wheel over the numbers scrolls the text, as it does over the text: by pixels, by lines (the line height of the text) or by pages (the height of the textarea), as the event counts.
   gutter.onwheel = (e) => {
     const unit = e.deltaMode === 1 ? Number.parseFloat(getComputedStyle(area).lineHeight) : e.deltaMode === 2 ? area.clientHeight : 1;
@@ -316,6 +398,7 @@ export async function closeFile(id: string) {
   if (f.dirty && !f.blocked) return false;
   clearTimer(f);
   cancelPaint(f);
+  clearRich(f);
   f.el.remove();
   files.delete(id);
   return true;
@@ -333,7 +416,7 @@ export function showEditors(placements: { id: string; host: HTMLElement }[]) {
       // A textarea that was out of the page starts at the top again.
       followScroll(f);
     }
-    if (f.wantFocus && !f.area.disabled && !f.area.hidden) {
+    if (f.wantFocus && !f.area.disabled && !f.area.hidden && !f.body.hidden) {
       f.wantFocus = false;
       f.area.focus({ preventScroll: true });
     }
