@@ -274,6 +274,8 @@ pub fn run() {
             slack::slack_channel_history,
             slack::slack_channel_post,
             slack::slack_reply,
+            slack::slack_react,
+            slack::slack_emoji_catalog,
             slack::slack_file_images,
             slack::slack_icons,
             slack::socket::slack_app_token_set,

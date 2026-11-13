@@ -7,6 +7,7 @@ import { code, lockFoot, stepList } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { openPane, closePane } from "./pane.js";
 import { renderWorkspaces } from "./settings.js";
+import { forgetEmojiCatalogs } from "./slack-emoji-picker.js";
 import { getSlackWorkspaces } from "./slack-workspaces.js";
 
 // The history scopes, each with the conversations it reads.
@@ -17,12 +18,14 @@ const HISTORY_KINDS: Record<string, string> = {
   "mpim:history": "グループ DM",
 };
 const HISTORY_SCOPES = Object.keys(HISTORY_KINDS);
-// The scopes the token can do without: the Slack list shows names, icons and attached images only with them, and opening a message sets the channel's read position in Slack only with the write ones.
+// The scopes the token can do without: the Slack list shows names, icons, attached images, the images of custom emoji and adding or taking off a reaction only with them, and opening a message sets the channel's read position in Slack only with the write ones.
 export const OPTIONAL_KINDS: Record<string, string> = {
   "users:read": "送信者の名前とアイコン",
   "files:read": "添付画像",
   "channels:write": "公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
   "groups:write": "非公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
+  "emoji:read": "カスタム絵文字のリアクションの画像",
+  "reactions:write": "リアクションの付け外し",
 };
 // `usergroups:read` is optional as well, but it is not in `OPTIONAL_KINDS`: settings does not show it as lacking.
 export const SLACK_SCOPES = ["chat:write", "channels:read", "groups:read", ...HISTORY_SCOPES, ...Object.keys(OPTIONAL_KINDS), "usergroups:read"];
@@ -84,6 +87,7 @@ export function openPermissionPane(w: Workspace, missing: string[]) {
     submit.disabled = true;
     try {
       const list = await invoke("slack_add_workspace", { token });
+      forgetEmojiCatalogs();
       // Another workspace's token is added as it is (the list grows, or this workspace is gone); the pane says so and stays.
       const other = list.length > getSlackWorkspaces()!.length || !list.some((x) => x.teamId === w.teamId);
       renderWorkspaces(list);

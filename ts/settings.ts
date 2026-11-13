@@ -12,6 +12,7 @@ import { closeHint, code, confirmUnlink, hintPopup, toggleHint } from "./hint.js
 import { invoke } from "./ipc.js";
 import { appsLink, OPTIONAL_KINDS, openPermissionPane, scopesBlock, SLACK_SCOPES } from "./permission-pane.js";
 import { bumpSlackList, setSlackWorkspaces } from "./slack-workspaces.js";
+import { forgetEmojiCatalogs } from "./slack-emoji-picker.js";
 import { workspaceColor } from "./slack-view.js";
 import { updateAddMode } from "./todo-add.js";
 import { showTokenForm } from "./todo.js";
@@ -112,6 +113,7 @@ function workspaceRow(w: Workspace, result: Check | null) {
       $("error").hidden = true;
       try {
         const left = await invoke("slack_remove_workspace", { teamId: w.teamId });
+        forgetEmojiCatalogs();
         wsChecks.delete(w.teamId);
         renderWorkspaces(left);
         // The channels kept off the list go with their workspace.
@@ -345,7 +347,10 @@ export function initSettings() {
     input.value = "";
     $("error").hidden = true;
     try {
-      renderWorkspaces(await invoke("slack_add_workspace", { token }));
+      const list = await invoke("slack_add_workspace", { token });
+      // A token pasted again may reach other emoji.
+      forgetEmojiCatalogs();
+      renderWorkspaces(list);
     } catch (err) {
       showError(err);
     }
@@ -358,7 +363,7 @@ export function initSettings() {
         [
           [appsLink(), " で、ワークスペースごとにアプリを作る"],
           ["「User Token Scopes」に次を足す", ...scopesBlock(SLACK_SCOPES)],
-          [code("users:read"), "、", code("files:read"), "、", code("usergroups:read"), " は、Slack の画面に送信者の名前とアイコン、添付画像、ユーザーグループへのメンションの名前を出すために使います。なくても、ほかのことはできます。", code("channels:write"), " と ", code("groups:write"), " は、Slack の画面でメッセージを開いたときやチャンネルの「既読にする」を押したとき、Slack 側のそのチャンネルも既読にするために使います。Slack の仕様で、この 2 つにはチャンネルの管理権限も含まれますが、cookapps は既読位置を送る呼び出し（conversations.mark）にしか使いません。足さなくても、既読を Slack と同期すること以外はできます"],
+          [code("users:read"), "、", code("files:read"), "、", code("usergroups:read"), "、", code("emoji:read"), " は、Slack の画面に送信者の名前とアイコン、添付画像、ユーザーグループへのメンションの名前、リアクションのカスタム絵文字の画像を出すために使います。なくても、ほかのことはできます。", code("reactions:write"), " は、Slack の画面でリアクションを付けたり外したりするために使います。なくても、ほかのことはできます。", code("channels:write"), " と ", code("groups:write"), " は、Slack の画面でメッセージを開いたときやチャンネルの「既読にする」を押したとき、Slack 側のそのチャンネルも既読にするために使います。Slack の仕様で、この 2 つにはチャンネルの管理権限も含まれますが、cookapps は既読位置を送る呼び出し（conversations.mark）にしか使いません。足さなくても、既読を Slack と同期すること以外はできます"],
           ["ワークスペースにインストールし、", code("xoxp-"), " で始まるトークンを下の欄に貼る"],
         ],
         "トークンは OS の資格情報の保管場所に入れ、画面には出しません",

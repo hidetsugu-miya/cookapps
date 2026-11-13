@@ -42,6 +42,7 @@ export const ORCA_SVG = $("nav-orca").querySelector("svg")!.outerHTML;
 export const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const ARROW_UP_SVG = svgOf('<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>');
 export const INBOX_SVG = $("nav-mail").querySelector("svg")!.outerHTML;
+export const SMILE_PLUS_SVG = svgOf('<circle cx="11" cy="13" r="8"/><path d="M7.5 14.5a4 4 0 0 0 7 0"/><path d="M8.5 11h.01M13.5 11h.01"/><path d="M19 2v6M16 5h6"/>');
 export const PLUS_SVG = svgOf('<path d="M12 5v14M5 12h14"/>');
 export const DELETE_SVG = svgOf('<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/>');
 export const FILE_SVG = svgOf('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>');

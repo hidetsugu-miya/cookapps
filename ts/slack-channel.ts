@@ -11,7 +11,7 @@ import { invoke } from "./ipc.js";
 import { createSlackEditor } from "./slack-editor.js";
 import { historyItem, watchedKeys } from "./slack-list.js";
 import { openSlackThread } from "./slack-thread.js";
-import { loadIcons, reactionsNode, slackMs } from "./slack-view.js";
+import { applyReactionChange, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { toast } from "./toast.js";
 import { show } from "./view.js";
 
@@ -171,9 +171,9 @@ function messageNodes(rows: TimelineMessage[]) {
       nodes.push(sep);
     }
     const item = historyItem(m, `c/${m.ts}`, openThread);
-    // The reactions (S-22) sit under the text, above "N 件の返信".
-    const reactions = reactionsNode(m.reactions);
-    if (reactions) item.querySelector(".feed-main > .feed-text")?.after(reactions);
+    // The reactions (S-22, S-25) sit under the text, above "N 件の返信".
+    const reactions = reactionsNode(m, { teamId: m.teamId, channel: m.channel });
+    item.querySelector(".feed-main > .feed-text")?.after(reactions);
     // A reply also sent to the channel says which thread it answered, above its text (#467).
     if (m.threadReply) item.querySelector(".feed-main > .feed-text")?.before(tag("div", "feed-thread-reply", m.threadReply.parent === null ? "スレッドに返信済み" : `スレッドに返信済み: ${m.threadReply.parent}`));
     nodes.push(item);
@@ -222,7 +222,7 @@ function draw(end = false) {
     }
     target.focus({ preventScroll: true });
   }
-  loadIcons((messages ?? []).flatMap((m) => [m.iconUrl, ...m.repliers.map((r) => r.iconUrl)]));
+  loadIcons((messages ?? []).flatMap((m) => [m.iconUrl, ...m.repliers.map((r) => r.iconUrl)]).concat(reactionImages(messages ?? [])));
 }
 
 // Reads the history of the chosen channel (`toEnd`: and goes to its newest message). Only the latest read draws; a read that fails keeps the messages held.
@@ -277,6 +277,10 @@ export function redrawSlackChannel() {
 
 export function initSlackChannel() {
   $("sc-reply").append(editor.el);
+  // A reaction changed on the message in a thread opened from here: the history shown when the thread is left holds it too (S-25).
+  onReactionChange((target, ts, change, done) => {
+    if (chosen?.teamId === target.teamId && chosen.channel === target.channel) applyReactionChange(messages ?? [], ts, change, done);
+  });
   feed().addEventListener("scroll", () => {
     if (!$("slack-channel").hidden) scroll = feed().scrollTop;
   });

@@ -18,7 +18,7 @@ import { attachmentNode, blocksNode } from "./slack-blocks.js";
 import { createSlackEditor } from "./slack-editor.js";
 import { richNodes } from "./slack-rich.js";
 import { revealSlackList, seeThread } from "./slack-list.js";
-import { decorateAvatar, loadIcons, reactionsNode, slackMs } from "./slack-view.js";
+import { applyReactionChange, decorateAvatar, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { initSplit } from "./split.js";
 import { toast } from "./toast.js";
 import { HandoffPane } from "./orca-handoff.js";
@@ -252,7 +252,7 @@ function messageNode(m: ThreadMessage) {
     files.append(...m.files.map(fileNode));
     body.append(files);
   }
-  const reactions = reactionsNode(m.reactions);
+  const reactions = thread ? reactionsNode(m, { teamId: thread.teamId, channel: thread.channel }) : null;
   if (reactions) body.append(reactions);
   row.dataset.ts = m.ts;
   row.append(avatar, body);
@@ -336,7 +336,7 @@ function drawMessages(where: "keep" | "end") {
   }
   box.replaceChildren(...nodes);
   if (thread) {
-    loadIcons(thread.messages.map((m) => m.iconUrl));
+    loadIcons([...thread.messages.map((m) => m.iconUrl), ...reactionImages(thread.messages)]);
     // The thumbnails already here replace their placeholders at once, which changes the height before the position is set.
     loadThumbs(thread, current!.key);
   }
@@ -535,6 +535,10 @@ export function initSlackThread() {
   };
   $("st-todo").onclick = makeTodo;
   $("st-reply").append(editor.el);
+  // A reaction changed on a copy of the message that a read has replaced meanwhile, or in the history: the thread held now takes it too (S-25).
+  onReactionChange((target, ts, change, done) => {
+    if (thread?.teamId === target.teamId && thread.channel === target.channel) applyReactionChange(thread.messages, ts, change, done);
+  });
   chat.init();
   const box = $("st-msgs");
   // The user moved up from the bottom: stop following. Moving down to within BOTTOM_PX of the bottom follows again; a position cut by a redraw is not a move down.
