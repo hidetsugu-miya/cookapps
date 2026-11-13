@@ -1,7 +1,7 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
 import {
   attachment, boot, callsOf, emojiCatalog, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, reaction, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
-  copiedTexts, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings, heightOf, TOOLS,
+  copiedTexts, linkSpan, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings, heightOf, TOOLS,
 } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
@@ -741,6 +741,14 @@ describe("slack thread: styles of a text (S-12)", () => {
     await expect($("#st-msgs .st-text em a")).toHaveAttribute("href", url);
     expect(await count("#st-msgs .st-text code a")).toBe(0);
     expect(await count("#st-msgs .st-text a")).toBe(2);
+  });
+
+  it("draws a span with a link as a link labeled with its text, and not the address (S-11)", async () => {
+    const shared = "https://example.slack.com/archives/C1/p123";
+    await openDetail({}, withRich({ rich: [para(span("see "), linkSpan("メッセージ", shared), span(` ${url}`))] }));
+    expect(await textsOf("#st-msgs .st-text a")).toEqual(["メッセージ", url]);
+    await expect($("#st-msgs .st-text a")).toHaveAttribute("href", shared);
+    expect(await textsOf("#st-msgs .st-text")).toEqual([`see メッセージ ${url}`]);
   });
 
   it("draws an HTML tag in a styled text as text", async () => {

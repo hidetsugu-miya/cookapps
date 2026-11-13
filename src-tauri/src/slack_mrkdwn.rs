@@ -12,7 +12,10 @@ use crate::slack::{emojify, pieces, token_text, unescape, url_len, Piece};
 /// Looks a user or a user group up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 
-/// A run of text with one style. `code` is an inline code: its text is drawn as it is, with no link made of an address in it.
+/// The label of a link to a message that an attachment of the same message unfurls (S-11): Slack draws the address as a chip and the message below.
+const UNFURLED_LABEL: &str = "メッセージ";
+
+/// A run of text with one style. `code` is an inline code: its text is drawn as it is, with no link made of an address in it. `link` is the address the text is a link to (S-11): the screen draws that text as the link, and not the addresses in it.
 #[derive(Serialize, Debug, PartialEq, Clone, Default)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -23,6 +26,7 @@ pub struct Span {
     pub(crate) italic: bool,
     pub(crate) strike: bool,
     pub(crate) code: bool,
+    pub(crate) link: Option<String>,
 }
 
 /// A block of a text. A line break inside a `Paragraph` or a `Quote` is a `\n` in the text of a span; the break between two blocks is not in any text.
@@ -104,6 +108,8 @@ enum Atom {
     Ch(char),
     Code(String),
     Lit(String),
+    /// A link to a message that the message unfurls: the address, drawn as `UNFURLED_LABEL`.
+    Link(String),
 }
 
 /// A piece of the result before neighbours with the same style are joined; `raw` text still needs its entities undone and its emoji converted.
@@ -111,6 +117,7 @@ struct Part {
     text: String,
     raw: bool,
     code: bool,
+    link: Option<String>,
     style: Style,
 }
 
@@ -138,7 +145,8 @@ fn without_mark_tail(url: &str) -> &str {
 }
 
 /// A line cut into characters, inline codes (closed on the line) and `<…>` tokens and web addresses (copied as they are). A mark at the end of an address is not part of it.
-fn atoms(line: &str, name_of: NameOf) -> Vec<Atom> {
+/// A `<address>` with no label whose address is one of `unfurled` is a `Link`.
+fn atoms(line: &str, name_of: NameOf, unfurled: &[String]) -> Vec<Atom> {
     let (mut out, mut rest, mut prev) = (Vec::new(), line, None::<char>);
     while let Some(c) = rest.chars().next() {
         let after = &rest[c.len_utf8()..];
@@ -148,7 +156,16 @@ fn atoms(line: &str, name_of: NameOf) -> Vec<Atom> {
                 _ => (Atom::Ch(c), 1),
             },
             '<' => match after.find('>') {
-                Some(end) => (Atom::Lit(token_text(&after[..end], name_of)), end + 2),
+                Some(end) => {
+                    let token = &after[..end];
+                    let address = unescape(token);
+                    let atom = if !token.contains('|') && unfurled.contains(&address) {
+                        Atom::Link(address)
+                    } else {
+                        Atom::Lit(token_text(token, name_of))
+                    };
+                    (atom, end + 2)
+                }
                 None => (Atom::Ch(c), 1),
             },
             _ => match url_len(rest, prev) {
@@ -223,18 +240,28 @@ fn styled(atoms: &[Atom], lo: usize, hi: usize, style: Style, out: &mut Vec<Part
                 text: c.to_string(),
                 raw: true,
                 code: false,
+                link: None,
                 style,
             },
             Atom::Code(t) => Part {
                 text: t.clone(),
                 raw: false,
                 code: true,
+                link: None,
                 style,
             },
             Atom::Lit(t) => Part {
                 text: t.clone(),
                 raw: false,
                 code: false,
+                link: None,
+                style,
+            },
+            Atom::Link(url) => Part {
+                text: UNFURLED_LABEL.to_owned(),
+                raw: false,
+                code: false,
+                link: Some(url.clone()),
                 style,
             },
         });
@@ -264,11 +291,14 @@ fn spans(parts: Vec<Part>) -> Vec<Span> {
             italic: p.style.italic,
             strike: p.style.strike,
             code: p.code,
+            link: p.link,
         };
         match out.last_mut() {
             Some(last)
                 if !last.code
                     && !span.code
+                    && last.link.is_none()
+                    && span.link.is_none()
                     && (last.bold, last.italic, last.strike)
                         == (span.bold, span.italic, span.strike) =>
             {
@@ -282,7 +312,7 @@ fn spans(parts: Vec<Part>) -> Vec<Span> {
 }
 
 /// Lines (their `&gt;` already taken off, for a quote) as spans, one `\n` between two.
-fn lines_spans(lines: &[&str], name_of: NameOf) -> Vec<Span> {
+fn lines_spans(lines: &[&str], name_of: NameOf, unfurled: &[String]) -> Vec<Span> {
     let mut parts = Vec::new();
     for (n, line) in lines.iter().enumerate() {
         if n > 0 {
@@ -290,10 +320,11 @@ fn lines_spans(lines: &[&str], name_of: NameOf) -> Vec<Span> {
                 text: "\n".to_owned(),
                 raw: true,
                 code: false,
+                link: None,
                 style: Style::default(),
             });
         }
-        let atoms = atoms(line, name_of);
+        let atoms = atoms(line, name_of, unfurled);
         styled(&atoms, 0, atoms.len(), Style::default(), &mut parts);
     }
     spans(parts)
@@ -309,7 +340,7 @@ fn quoted(line: &str) -> Option<&str> {
 }
 
 /// Text with no code block: runs of quoted lines are quotes, the other lines paragraphs.
-fn text_blocks(text: &str, name_of: NameOf, out: &mut Rich) {
+fn text_blocks(text: &str, name_of: NameOf, unfurled: &[String], out: &mut Rich) {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut at = 0;
     while at < lines.len() {
@@ -323,11 +354,11 @@ fn text_blocks(text: &str, name_of: NameOf, out: &mut Rich) {
         if quote {
             let inner: Vec<&str> = run.iter().filter_map(|l| quoted(l)).collect();
             out.push(RichBlock::Quote {
-                spans: lines_spans(&inner, name_of),
+                spans: lines_spans(&inner, name_of, unfurled),
             });
         } else {
             // A paragraph with nothing to see (blank lines, or a token that is no text) is not drawn.
-            let spans = lines_spans(run, name_of);
+            let spans = lines_spans(run, name_of, unfurled);
             if spans.iter().any(|s| !s.text.trim().is_empty()) {
                 out.push(RichBlock::Paragraph { spans });
             }
@@ -336,7 +367,8 @@ fn text_blocks(text: &str, name_of: NameOf, out: &mut Rich) {
 }
 
 /// Slack's mrkdwn `raw` as the blocks to draw. The code blocks (```` ```…``` ````) are cut out first; the rest goes by lines.
-pub(crate) fn parse(raw: &str, name_of: NameOf) -> Rich {
+/// `unfurled` is the addresses of the messages the same message unfurls in its attachments (`unfurled_urls`, S-11); a link without a label to one of them is drawn as a link labeled `UNFURLED_LABEL`.
+pub(crate) fn parse(raw: &str, name_of: NameOf, unfurled: &[String]) -> Rich {
     // Text and code alternate, and a mark with no partner is text.
     let (mut segments, mut rest) = (Vec::new(), raw);
     while let Some(start) = rest.find("```") {
@@ -361,7 +393,7 @@ pub(crate) fn parse(raw: &str, name_of: NameOf) -> Rich {
         } else {
             text
         };
-        text_blocks(text, name_of, &mut out);
+        text_blocks(text, name_of, unfurled, &mut out);
         skip_newline = code.is_some();
         if let Some(code) = code {
             let code = code.strip_prefix('\n').unwrap_or(code);
@@ -381,7 +413,12 @@ mod tests {
     use super::*;
 
     fn read(raw: &str) -> Rich {
-        parse(raw, &|id| (id == "U1").then(|| "Alice".to_owned()))
+        parse(raw, &|id| (id == "U1").then(|| "Alice".to_owned()), &[])
+    }
+
+    fn read_unfurled(raw: &str, unfurled: &[&str]) -> Rich {
+        let unfurled: Vec<String> = unfurled.iter().map(|u| (*u).to_owned()).collect();
+        parse(raw, &|_| None, &unfurled)
     }
 
     /// A span; `style` holds `b`, `i`, `s` and `c` for bold, italic, strike and code.
@@ -392,6 +429,7 @@ mod tests {
             italic: style.contains('i'),
             strike: style.contains('s'),
             code: style.contains('c'),
+            link: None,
         }
     }
 
@@ -691,6 +729,77 @@ mod tests {
         assert_eq!(
             read("```\n&gt; a\n```\n&gt; b"),
             vec![code("> a"), quote(vec![sp("b", "")])]
+        );
+    }
+
+    fn link(text: &str, url: &str) -> Span {
+        Span {
+            link: Some(url.to_owned()),
+            ..sp(text, "")
+        }
+    }
+
+    #[test]
+    fn a_link_to_an_unfurled_message_is_a_labeled_link() {
+        let url = "https://one.slack.com/archives/C1/p123";
+        assert_eq!(
+            read_unfurled(&format!("see <{url}> now"), &[url]),
+            vec![para(vec![
+                sp("see ", ""),
+                link("メッセージ", url),
+                sp(" now", "")
+            ])]
+        );
+        // A message of a link alone, and the styles around it.
+        assert_eq!(
+            read_unfurled(&format!("*<{url}>*"), &[url]),
+            vec![para(vec![Span {
+                bold: true,
+                ..link("メッセージ", url)
+            }])]
+        );
+        // The address is compared once its entities are undone.
+        let with_amp = "https://one.slack.com/archives/C1/p123?a=1&b=2";
+        assert_eq!(
+            read_unfurled(
+                "<https://one.slack.com/archives/C1/p123?a=1&amp;b=2>",
+                &[with_amp]
+            ),
+            vec![para(vec![link("メッセージ", with_amp)])]
+        );
+        // Two links to the same message stay two links.
+        assert_eq!(
+            read_unfurled(&format!("<{url}><{url}>"), &[url]),
+            vec![para(vec![link("メッセージ", url), link("メッセージ", url)])]
+        );
+    }
+
+    #[test]
+    fn a_link_that_is_not_unfurled_or_has_a_label_is_as_before() {
+        let url = "https://one.slack.com/archives/C1/p123";
+        let other = "https://one.slack.com/archives/C1/p999";
+        // Not in the unfurled addresses, or no attachment at all.
+        assert_eq!(
+            read_unfurled(&format!("<{url}>"), &[other]),
+            vec![para(vec![sp(url, "")])]
+        );
+        assert_eq!(
+            read_unfurled(&format!("<{url}>"), &[]),
+            vec![para(vec![sp(url, "")])]
+        );
+        // A label of its own stays: `label (URL)`.
+        assert_eq!(
+            read_unfurled(&format!("<{url}|here>"), &[url]),
+            vec![para(vec![sp(&format!("here ({url})"), "")])]
+        );
+        // An address in a code is not a link of the chip.
+        assert_eq!(
+            read_unfurled(&format!("`<{url}>`"), &[url]),
+            vec![para(vec![sp(url, "c")])]
+        );
+        assert_eq!(
+            read_unfurled(&format!("```\n<{url}>\n```"), &[url]),
+            vec![code(url)]
         );
     }
 }

@@ -193,7 +193,7 @@ fn rich_of(v: &Value, name_of: NameOf, string_is_mrkdwn: bool) -> Option<Rich> {
     };
     if formatted {
         // Read once; nothing to draw is no text.
-        return Some(parse(raw, name_of)).filter(|rich| !rich.is_empty());
+        return Some(parse(raw, name_of, &[])).filter(|rich| !rich.is_empty());
     }
     text_of(v, name_of).map(plain)
 }
@@ -557,6 +557,24 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
         out.fallback = Some(text("fallback")?);
     }
     Some(out)
+}
+
+/// The addresses of the messages that the attachments of a message unfurl (`is_msg_unfurl`, with `from_url` and `original_url`, S-11), once each. The text of the same message draws a link to one of them as a link labeled "メッセージ".
+pub(crate) fn unfurled_urls(attachments: &Value) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    for a in attachments.as_array().into_iter().flatten() {
+        if a["is_msg_unfurl"] != true {
+            continue;
+        }
+        for key in ["from_url", "original_url"] {
+            if let Some(url) = a[key].as_str().filter(|u| !u.is_empty()) {
+                if !urls.iter().any(|seen| seen == url) {
+                    urls.push(url.to_owned());
+                }
+            }
+        }
+    }
+    urls
 }
 
 /// The attachments that can be drawn.
@@ -1659,6 +1677,24 @@ mod tests {
         let (b, show_text) = message_blocks(&m["blocks"], draw_rich_text, &|_| None);
         let a = message_attachments(&m["attachments"], &|_| None);
         message_plain(text, show_text, &b, &a)
+    }
+
+    #[test]
+    fn the_unfurled_addresses_are_those_of_the_attachments_that_unfurl_a_message() {
+        let a = json!([
+            {"is_msg_unfurl": true, "from_url": "https://a/1", "original_url": "https://a/1"},
+            {"is_msg_unfurl": true, "from_url": "https://a/2"},
+            {"is_msg_unfurl": true, "original_url": "https://a/3", "from_url": ""},
+            {"from_url": "https://a/4", "original_url": "https://a/4"},
+            {"is_msg_unfurl": false, "from_url": "https://a/5"},
+            {"is_msg_unfurl": true},
+        ]);
+        assert_eq!(
+            unfurled_urls(&a),
+            ["https://a/1", "https://a/2", "https://a/3"]
+        );
+        assert!(unfurled_urls(&json!(null)).is_empty());
+        assert!(unfurled_urls(&json!([])).is_empty());
     }
 
     #[test]

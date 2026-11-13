@@ -26,7 +26,7 @@ use crate::{
     images::{fetch_slack_files, run_limited, SlackFileCache},
     slack_blocks::{
         image_urls, mentioned_users, message_attachments, message_blocks, message_plain,
-        ThreadAttachment, ThreadBlock,
+        unfurled_urls, ThreadAttachment, ThreadBlock,
     },
     slack_emoji,
     slack_markdown::to_mrkdwn,
@@ -4444,7 +4444,7 @@ fn drawn_of(m: &Value, name_of: &dyn Fn(&str) -> Option<String>) -> Drawn {
         rich: if m["mrkdwn"] == false {
             slack_mrkdwn::plain(plain_text(text, name_of))
         } else {
-            slack_mrkdwn::parse(text, name_of)
+            slack_mrkdwn::parse(text, name_of, &unfurled_urls(&m["attachments"]))
         },
         attachments: message_attachments(&m["attachments"], name_of),
         blocks,
@@ -8856,6 +8856,25 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert!(!spans[0].bold);
         assert_eq!(spans[0].text, "*hi* @Alice a_b_c");
+        // A link to a message that an attachment of the same message unfurls is a link labeled "メッセージ", in the thread and in a row; what goes to Claude stays on the text.
+        let url = "https://one.slack.com/archives/C1/p123";
+        let shared = message(json!({
+            "text": format!("see <{url}>"),
+            "attachments": [{"is_msg_unfurl": true, "from_url": url, "original_url": url, "text": "inner"}],
+        }));
+        assert!(shared.text.starts_with(&format!("see {url}")));
+        let slack_mrkdwn::RichBlock::Paragraph { spans } = &shared.rich[0] else {
+            panic!("a paragraph")
+        };
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[1].text, "メッセージ");
+        assert_eq!(spans[1].link.as_deref(), Some(url));
+        let unshared = message(json!({"text": format!("see <{url}>")}));
+        let slack_mrkdwn::RichBlock::Paragraph { spans } = &unshared.rich[0] else {
+            panic!("a paragraph")
+        };
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].text, format!("see {url}"));
         // `thread_slim` keeps the flag, or the message above would always be read.
         assert_eq!(thread_slim(&json!({"mrkdwn": false}))["mrkdwn"], false);
     }

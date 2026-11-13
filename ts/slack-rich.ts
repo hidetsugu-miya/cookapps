@@ -12,9 +12,14 @@ function wrap(name: "strong" | "em" | "s" | "code", nodes: (Node | string)[]) {
   return [el];
 }
 
-// A span with no style is its text (and links) alone.
+// A span with no style is its text (and links) alone. A span with a `link` is that link, labeled with its text.
 function spanNodes(s: Span) {
   let nodes: (Node | string)[] = s.code ? [s.text] : linkify(s.text);
+  if (s.link !== null) {
+    const a = tag("a", "", s.text);
+    a.href = s.link;
+    nodes = [a];
+  }
   if (s.code) nodes = wrap("code", nodes);
   if (s.strike) nodes = wrap("s", nodes);
   if (s.italic) nodes = wrap("em", nodes);
