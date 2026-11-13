@@ -25,6 +25,7 @@ import type { Comment } from "./bindings/Comment";
 import type { MonthGrid } from "./bindings/MonthGrid";
 import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
+import type { Skill } from "./bindings/Skill";
 import type { SlackChatReply } from "./bindings/SlackChatReply";
 import type { TodoChatReply } from "./bindings/TodoChatReply";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
@@ -324,6 +325,14 @@ export interface Commands {
   font_families: { args: undefined; result: string[] };
   // A-20: saves the font of one place (`family` null is the app's own; `ghostty` only for orcaWork) and answers the settings saved. A family this Mac lacks is an error; a size is brought into 8 to 32 px in steps of 0.5.
   font_settings_set: { args: { area: FontArea; family: string | null; size: number; ghostty: boolean }; result: FontSettings };
+  // The skills (`skills/{name}/SKILL.md` in the config folder), by name. A folder that is not a skill is left out.
+  skill_list: { args: undefined; result: Skill[] };
+  // One skill by its name; an error when there is none or the name is not a valid one.
+  skill_get: { args: { name: string }; result: Skill };
+  // Saves a skill (a new one, or the one of that name replaced) and answers it as saved: trimmed, the screens in a fixed order. A name or text that cannot be saved is an error in Japanese.
+  skill_save: { args: { skill: Skill }; result: Skill };
+  // Deletes a skill; an error when there is none or the name is not a valid one. Answers null.
+  skill_delete: { args: { name: string }; result: null };
   // A-13: the import of Ghostty's settings saved last, null before the first one.
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.

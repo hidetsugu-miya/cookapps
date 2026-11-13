@@ -22,6 +22,7 @@ pub mod orca_link;
 pub mod orca_panes;
 pub mod orca_stream;
 pub mod orca_theme;
+pub mod skills;
 pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
@@ -336,6 +337,10 @@ pub fn run() {
             fonts::font_settings,
             fonts::font_families,
             fonts::font_settings_set,
+            skills::skill_list,
+            skills::skill_get,
+            skills::skill_save,
+            skills::skill_delete,
             markdown_patch::markdown_split,
             markdown_patch::markdown_patch,
             ghostty::ghostty_saved,
