@@ -19,4 +19,8 @@ projectKey: string,
 /**
  * Whether it is the repository's own folder (`isMainWorktree` of Orca), which the file pane shows for a project with no tab (A-18).
  */
-isMain: boolean, };
+isMain: boolean, 
+/**
+ * Where it is: `None` for this machine, else the name of the saved environment.
+ */
+environment?: string | null, };

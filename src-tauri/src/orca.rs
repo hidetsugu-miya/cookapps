@@ -102,6 +102,9 @@ pub struct OrcaRow {
     pub status: OrcaStatus,
     /// The project the row belongs to (`OrcaProject::key`); empty when its worktree has none.
     pub project_key: String,
+    /// Where it is: `None` for this machine, else the name of the saved environment.
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub environment: Option<String>,
 }
 
 /// The session a launch or a handoff reached (A-9), as far as Orca's reply says: a field the reply lacks (or holds in a shape that is not one) is `None`.
@@ -135,6 +138,9 @@ pub struct OrcaTerminal {
     pub project_key: String,
     /// The worktree's path, where an image dropped on the terminal is put (A-10).
     pub path: String,
+    /// Where it is: `None` for this machine, else the name of the saved environment.
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub environment: Option<String>,
 }
 
 /// A row of the project list (A-8): a repository of this machine (`key` is its id), or an SSH host (`key` is `ssh:{id}`, and only what its worktrees show: its name comes from `OrcaSshTarget`).
@@ -152,6 +158,9 @@ pub struct OrcaProject {
     /// The last activity (epoch milliseconds, 0 when unknown); the list is newest first.
     #[cfg_attr(test, ts(type = "number"))]
     pub at_ms: i64,
+    /// Where it is: `None` for this machine, else the name of the saved environment.
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub environment: Option<String>,
 }
 
 /// A host of `~/.ssh/config` that Orca knows (`ssh.listEditableTargets` of this machine), for its row in the project list.
@@ -180,6 +189,33 @@ pub struct OrcaWorktree {
     pub project_key: String,
     /// Whether it is the repository's own folder (`isMainWorktree` of Orca), which the file pane shows for a project with no tab (A-18).
     pub is_main: bool,
+    /// Where it is: `None` for this machine, else the name of the saved environment.
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub environment: Option<String>,
+}
+
+/// Where an item of a list is (A-6): `None` for this machine, else the name of a saved environment. A list read from a target says it of every item.
+pub(crate) trait Placed {
+    fn place(&mut self) -> &mut Option<String>;
+}
+
+macro_rules! placed {
+    ($($item:ty),*) => {$(
+        impl Placed for $item {
+            fn place(&mut self) -> &mut Option<String> {
+                &mut self.environment
+            }
+        }
+    )*};
+}
+
+placed!(OrcaRow, OrcaTerminal, OrcaProject, OrcaWorktree);
+
+/// Puts every item of `items` in `environment` (`None`: this machine).
+pub(crate) fn place_in<T: Placed>(items: &mut [T], environment: Option<&str>) {
+    for item in items {
+        *item.place() = environment.map(str::to_owned);
+    }
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
@@ -216,6 +252,37 @@ pub struct OrcaOverview {
     pub ssh: Vec<OrcaSshTarget>,
     /// Whether this read says what the target and the environments are. A poll of the screen or of the badge does not read them, and a failed `environment list` cannot: the screen then keeps the ones it had.
     pub known: bool,
+    /// This machine's lists, read at the same time when `target` is a saved environment (`None` when `target` is this machine, whose lists are the ones above). Its state is its own: a failed read of one side does not stop the other. Every item of it has no `environment`, and every item above has the target's name.
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub local: Option<OrcaLocal>,
+}
+
+/// This machine's lists beside a saved environment's, with the state of their own read.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct OrcaLocal {
+    pub state: OrcaState,
+    pub message: String,
+    pub rows: Vec<OrcaRow>,
+    pub worktrees: Vec<OrcaWorktree>,
+    pub projects: Vec<OrcaProject>,
+    pub hosts: Vec<OrcaProject>,
+    pub terminals: Vec<OrcaTerminal>,
+}
+
+impl From<OrcaOverview> for OrcaLocal {
+    fn from(view: OrcaOverview) -> Self {
+        Self {
+            state: view.state,
+            message: view.message,
+            rows: view.rows,
+            worktrees: view.worktrees,
+            projects: view.projects,
+            hosts: view.hosts,
+            terminals: view.terminals,
+        }
+    }
 }
 
 impl OrcaOverview {
@@ -232,6 +299,15 @@ impl OrcaOverview {
             terminals: Vec::new(),
             ssh: Vec::new(),
             known: true,
+            local: None,
+        }
+    }
+
+    /// Adds this machine's read beside the target's, which stays as it is.
+    fn with_local(self, local: Self) -> Self {
+        Self {
+            local: Some(local.into()),
+            ..self
         }
     }
 }
@@ -432,6 +508,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                     activity: activity_of(agent),
                     status: agent_status(agent),
                     project_key: project_key_of(worktree).unwrap_or_default(),
+                    environment: None,
                 },
             ));
         }
@@ -462,6 +539,7 @@ pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
                 git_branch: git_branch_of(w),
                 project_key: project_key_of(w).unwrap_or_default(),
                 is_main: w["isMainWorktree"] == true,
+                environment: None,
             })
         })
         .collect()
@@ -531,6 +609,7 @@ pub fn plain_terminals_of(ps: &Value, terminals: &Value, rows: &[OrcaRow]) -> Ve
                     .to_owned(),
                 project_key: key.clone(),
                 path: path.to_owned(),
+                environment: None,
             })
         })
         .collect()
@@ -568,6 +647,7 @@ pub fn projects_of(
             status,
             sessions: 0,
             at_ms,
+            environment: None,
         });
     }
     for project in &mut projects {
@@ -1107,23 +1187,15 @@ fn failed_overview(
     }
 }
 
-/// True when the lists of this machine may be read at the same time as the saved environments: the file says this machine, so `resolve_target` cannot choose another target whatever the environments are.
-fn reads_local_lists_early(saved: &Saved) -> bool {
-    matches!(saved, Saved::Target(Target::Local))
-}
-
 fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview {
     // Only a full read asks for the environments and resolves the target; the others use the one the screen holds.
     let (target, environments, known, early) = if scope == OrcaScope::Full {
         let saved = load_target(dir);
-        let (listed, early) = if reads_local_lists_early(&saved) {
-            std::thread::scope(|threads| {
-                let lists = threads.spawn(|| read_lists(None, true));
-                (read_environments(), Some(lists.join().unwrap()))
-            })
-        } else {
-            (read_environments(), None)
-        };
+        // This machine's lists are read at the same time as the environments, whichever target is resolved: they are the target's own, or the lists beside it.
+        let (listed, early) = std::thread::scope(|threads| {
+            let lists = threads.spawn(|| read_lists(None, true));
+            (read_environments(), lists.join().unwrap())
+        });
         let environments = match listed {
             Ok(environments) => environments,
             Err(RunError::Missing) => return OrcaOverview::empty(OrcaState::Missing),
@@ -1137,17 +1209,34 @@ fn overview(dir: &Path, scope: OrcaScope, held: Option<String>) -> OrcaOverview 
         };
         worktree_hosts().retain_environments(&environments);
         match resolve_target(&saved, &environments) {
-            // The lists read early are of this machine: they are thrown away when another target was resolved.
-            Ok(target) => {
-                let early = early.filter(|_| target.is_none());
-                (target, environments, true, early)
-            }
+            Ok(target) => (target, environments, true, Some(early)),
             Err(message) => return failed_overview(message, saved_name(&saved), environments),
         }
     } else {
         (held, Vec::new(), false, None)
     };
-    read_overview(target, environments, known, scope, early)
+    read_both(target, environments, known, scope, early)
+}
+
+/// The lists of `target`, and, when it is a saved environment, this machine's beside them, read side by side (`local`). `early` is the pair `read_lists(None, ...)` gave for this machine and `scope`, when it was read already.
+fn read_both(
+    target: Option<String>,
+    environments: Vec<String>,
+    known: bool,
+    scope: OrcaScope,
+    early: Option<Lists>,
+) -> OrcaOverview {
+    if target.is_none() {
+        return read_overview(target, environments, known, scope, early);
+    }
+    let (view, local) = std::thread::scope(|threads| {
+        let local = threads.spawn(|| read_overview(None, Vec::new(), false, scope, early));
+        (
+            read_overview(target, environments, known, scope, None),
+            local.join().unwrap(),
+        )
+    });
+    view.with_local(local)
 }
 
 /// The lists of `target` (the agents with their terminals, the worktrees, the projects), drawn as `scope` asks. `early` is the pair `read_lists` gave for the same target and scope, when it was read already.
@@ -1158,25 +1247,44 @@ fn read_overview(
     scope: OrcaScope,
     early: Option<Lists>,
 ) -> OrcaOverview {
-    let (ps, terminals) =
-        early.unwrap_or_else(|| read_lists(target.as_deref(), scope != OrcaScope::Badge));
+    let lists = early.unwrap_or_else(|| read_lists(target.as_deref(), scope != OrcaScope::Badge));
+    if let (Ok(ps), Ok(_)) = &lists {
+        worktree_hosts().sync(target.as_deref(), ps);
+    }
+    assemble(target, environments, known, scope, lists)
+}
+
+/// The overview of `target` from the two lists read for it: every item is placed in the target's environment.
+fn assemble(
+    target: Option<String>,
+    environments: Vec<String>,
+    known: bool,
+    scope: OrcaScope,
+    (ps, terminals): Lists,
+) -> OrcaOverview {
     match (ps, terminals) {
         (Ok(ps), Ok(terminals)) => {
-            worktree_hosts().sync(target.as_deref(), &ps);
-            let rows = rows_of(&ps, &terminals);
+            let mut rows = rows_of(&ps, &terminals);
+            let mut worktrees = worktrees_of(&ps);
             // The count alone is wanted by a `Badge` read: its terminals and projects would not be drawn.
-            let (plain, projects, hosts) = if scope == OrcaScope::Badge {
+            let (mut plain, mut projects, mut hosts) = if scope == OrcaScope::Badge {
                 (Vec::new(), Vec::new(), Vec::new())
             } else {
                 let plain = plain_terminals_of(&ps, &terminals, &rows);
                 let (projects, hosts) = projects_of(&ps, &rows, &plain);
                 (plain, projects, hosts)
             };
+            let place = target.as_deref();
+            place_in(&mut rows, place);
+            place_in(&mut worktrees, place);
+            place_in(&mut plain, place);
+            place_in(&mut projects, place);
+            place_in(&mut hosts, place);
             OrcaOverview {
                 target,
                 environments,
                 rows,
-                worktrees: worktrees_of(&ps),
+                worktrees,
                 projects,
                 hosts,
                 terminals: plain,
@@ -1932,6 +2040,7 @@ mod tests {
                 activity: String::new(),
                 status: OrcaStatus::Working,
                 project_key: "repo1".into(),
+                environment: None,
             }]
         );
     }
@@ -2199,6 +2308,7 @@ mod tests {
                 activity: String::new(),
                 status: OrcaStatus::Working,
                 project_key: String::new(),
+                environment: None,
             }]
         );
     }
@@ -2242,7 +2352,8 @@ mod tests {
                     branch: "main".into(),
                     git_branch: "main".into(),
                     project_key: "repo-a".into(),
-                    is_main: true
+                    is_main: true,
+                    environment: None,
                 },
                 OrcaWorktree {
                     path: "/work/b".into(),
@@ -2250,7 +2361,8 @@ mod tests {
                     branch: String::new(),
                     git_branch: String::new(),
                     project_key: String::new(),
-                    is_main: false
+                    is_main: false,
+                    environment: None,
                 },
                 OrcaWorktree {
                     path: "/ssh/c".into(),
@@ -2258,7 +2370,8 @@ mod tests {
                     branch: "dev".into(),
                     git_branch: "feat/dev".into(),
                     project_key: "ssh:box".into(),
-                    is_main: false
+                    is_main: false,
+                    environment: None,
                 },
                 // A worktree made with a name keeps it as `displayName`, so the git branch is read from `branch`.
                 OrcaWorktree {
@@ -2267,7 +2380,8 @@ mod tests {
                     branch: "fix-login".into(),
                     git_branch: "feat/x".into(),
                     project_key: String::new(),
-                    is_main: false
+                    is_main: false,
+                    environment: None,
                 },
                 // A `branch` that is not `refs/heads/...` is not a local branch.
                 OrcaWorktree {
@@ -2276,7 +2390,8 @@ mod tests {
                     branch: "e".into(),
                     git_branch: String::new(),
                     project_key: String::new(),
-                    is_main: false
+                    is_main: false,
+                    environment: None,
                 },
             ]
         );
@@ -2579,13 +2694,208 @@ mod tests {
         assert!(made.take(None, "/work/b", t0));
     }
 
+    /// The two lists of one target: a worktree of a repository with a Claude agent, and a worktree of an SSH host.
+    fn lists_with_a_host() -> Lists {
+        let mut ps = ps(&[agent("tabA:leaf1", "working")]);
+        ps["worktrees"].as_array_mut().unwrap().push(json!({
+            "path": "/home/e", "repo": "e", "hostId": "box", "displayName": "main", "agents": [],
+        }));
+        let mut terminals = terminals();
+        terminals["terminals"].as_array_mut().unwrap().push(
+            json!({"handle": "term_sh", "tabId": "tabC", "leafId": "leaf3", "worktreePath": "/work/example", "title": "zsh"}),
+        );
+        (Ok(ps), Ok(terminals))
+    }
+
+    /// The place of every item of the target's lists, in the order rows, worktrees, projects, hosts, terminals.
+    fn places_of(view: &OrcaOverview) -> Vec<Option<&str>> {
+        [
+            view.rows
+                .iter()
+                .map(|i| i.environment.as_deref())
+                .collect::<Vec<_>>(),
+            view.worktrees
+                .iter()
+                .map(|i| i.environment.as_deref())
+                .collect(),
+            view.projects
+                .iter()
+                .map(|i| i.environment.as_deref())
+                .collect(),
+            view.hosts
+                .iter()
+                .map(|i| i.environment.as_deref())
+                .collect(),
+            view.terminals
+                .iter()
+                .map(|i| i.environment.as_deref())
+                .collect(),
+        ]
+        .concat()
+    }
+
     #[test]
-    fn the_lists_of_this_machine_are_read_early_only_when_the_file_says_this_machine() {
-        let env = Saved::Target(Target::Environment { name: "Lab".into() });
-        assert!(reads_local_lists_early(&Saved::Target(Target::Local)));
-        for other in [Saved::Nothing, Saved::Unusable, env] {
-            assert!(!reads_local_lists_early(&other), "{other:?}");
-        }
+    fn every_item_of_a_saved_environment_has_its_name_and_this_machines_has_none() {
+        let view = assemble(
+            Some("Lab".into()),
+            vec!["Lab".into()],
+            true,
+            OrcaScope::Screen,
+            lists_with_a_host(),
+        );
+        let places = places_of(&view);
+        // The row, the two worktrees, the project, the host and the plain terminal.
+        assert_eq!(places.len(), 6);
+        assert!(places.iter().all(|p| *p == Some("Lab")), "{places:?}");
+        let here = assemble(
+            None,
+            Vec::new(),
+            false,
+            OrcaScope::Screen,
+            lists_with_a_host(),
+        );
+        assert_eq!(places_of(&here).len(), 6);
+        assert!(places_of(&here).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn the_lists_of_this_machine_come_beside_those_of_the_environment_with_no_place() {
+        let lab = assemble(
+            Some("Lab".into()),
+            vec!["Lab".into()],
+            true,
+            OrcaScope::Screen,
+            lists_with_a_host(),
+        );
+        let here = assemble(
+            None,
+            Vec::new(),
+            false,
+            OrcaScope::Screen,
+            lists_with_a_host(),
+        );
+        let view = lab.with_local(here);
+        assert_eq!(view.state, OrcaState::Ready);
+        assert_eq!(view.target.as_deref(), Some("Lab"));
+        let local = view.local.expect("this machine's lists");
+        assert_eq!(local.state, OrcaState::Ready);
+        assert_eq!(local.rows.len(), 1);
+        assert_eq!(local.worktrees.len(), 2);
+        assert_eq!(local.projects.len(), 1);
+        assert_eq!(local.hosts.len(), 1);
+        assert_eq!(local.terminals.len(), 1);
+        let none = |places: Vec<Option<&String>>| places.iter().all(Option::is_none);
+        assert!(none(
+            local.rows.iter().map(|i| i.environment.as_ref()).collect()
+        ));
+        assert!(none(
+            local
+                .worktrees
+                .iter()
+                .map(|i| i.environment.as_ref())
+                .collect()
+        ));
+        assert!(none(
+            local
+                .projects
+                .iter()
+                .map(|i| i.environment.as_ref())
+                .collect()
+        ));
+        assert!(none(
+            local.hosts.iter().map(|i| i.environment.as_ref()).collect()
+        ));
+        assert!(none(
+            local
+                .terminals
+                .iter()
+                .map(|i| i.environment.as_ref())
+                .collect()
+        ));
+        assert_eq!(view.rows[0].environment.as_deref(), Some("Lab"));
+    }
+
+    #[test]
+    fn a_failed_read_of_this_machine_leaves_the_environment_as_it_was_read() {
+        let lab = assemble(
+            Some("Lab".into()),
+            vec!["Lab".into()],
+            true,
+            OrcaScope::Screen,
+            lists_with_a_host(),
+        );
+        let broken = assemble(
+            None,
+            Vec::new(),
+            false,
+            OrcaScope::Screen,
+            (
+                Err(RunError::Failed("socket is gone".into())),
+                Ok(Value::Null),
+            ),
+        );
+        let view = lab.clone().with_local(broken);
+        let local = view.local.clone().expect("this machine's state");
+        assert_eq!(local.state, OrcaState::Failed);
+        assert_eq!(local.message, "socket is gone");
+        assert!(local.rows.is_empty() && local.worktrees.is_empty());
+        assert_eq!(
+            OrcaOverview {
+                local: None,
+                ..view
+            },
+            lab,
+            "the environment's side is untouched"
+        );
+    }
+
+    #[test]
+    fn a_failed_read_of_the_environment_leaves_this_machines_lists() {
+        let failed = assemble(
+            Some("Lab".into()),
+            vec!["Lab".into()],
+            true,
+            OrcaScope::Screen,
+            (Ok(Value::Null), Err(RunError::Failed("offline".into()))),
+        );
+        let here = assemble(
+            None,
+            Vec::new(),
+            false,
+            OrcaScope::Screen,
+            lists_with_a_host(),
+        );
+        let view = failed.with_local(here);
+        assert_eq!(view.state, OrcaState::Failed);
+        assert_eq!(view.message, "offline");
+        assert_eq!(view.target.as_deref(), Some("Lab"));
+        let local = view.local.expect("this machine's lists");
+        assert_eq!(local.state, OrcaState::Ready);
+        assert_eq!(local.rows.len(), 1);
+    }
+
+    #[test]
+    fn a_missing_command_is_said_by_each_side_alone() {
+        let view = assemble(
+            None,
+            Vec::new(),
+            false,
+            OrcaScope::Screen,
+            (Err(RunError::Missing), Ok(Value::Null)),
+        );
+        assert_eq!(view.state, OrcaState::Missing);
+        let with = OrcaOverview::empty(OrcaState::Ready).with_local(view);
+        assert_eq!(with.state, OrcaState::Ready);
+        assert_eq!(with.local.map(|l| l.state), Some(OrcaState::Missing));
+    }
+
+    #[test]
+    fn items_are_placed_in_the_environment_given_or_in_this_machine() {
+        let mut rows = rows_of(&ps(&[agent("tabA:leaf1", "working")]), &terminals());
+        place_in(&mut rows, Some("Lab"));
+        assert_eq!(rows[0].environment.as_deref(), Some("Lab"));
+        place_in(&mut rows, None);
+        assert_eq!(rows[0].environment, None);
     }
 
     #[test]
@@ -3358,7 +3668,8 @@ mod tests {
                 title: "zsh".into(),
                 branch: "main".into(),
                 project_key: "rb".into(),
-                path: "/work/b".into()
+                path: "/work/b".into(),
+                environment: None,
             }
         );
         assert_eq!(plain[1].project_key, "ra");
