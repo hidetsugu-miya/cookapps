@@ -2590,7 +2590,7 @@ pub async fn claude_proofread_slack(
     })?;
     if let Some(target) = answer.post_to.take() {
         let posted = answer.edit.body.as_deref().unwrap_or(&text);
-        crate::slack::post_and_remember(&dir, auth.http(), command, target, posted).await?;
+        crate::slack::post_and_remember(Ok(&dir), auth.http(), command, target, posted).await?;
         answer.posted = true;
     }
     Ok(answer)

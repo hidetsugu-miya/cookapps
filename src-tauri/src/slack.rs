@@ -1700,8 +1700,9 @@ async fn send_post(
 
 /// Posts `text` to `target` (the channel, or a reply in its thread) by `send_post`, and remembers the destination. A failure of the post is logged under `command` and returned.
 /// It is the one path of S-1: the "投稿" button (`slack_post`) and a request to Claude that asks for a post (S-23, `claude_proofread_slack`) both end here.
+/// `dir` is the config folder when it could be found; without it the post still goes and only the remembering is skipped (and logged).
 pub(crate) async fn post_and_remember(
-    dir: &Path,
+    dir: Result<&Path, String>,
     http: &reqwest::Client,
     command: &str,
     target: Target,
@@ -1725,15 +1726,20 @@ pub(crate) async fn post_and_remember(
         name: target.name.trim().chars().take(NAME_LIMIT).collect(),
         thread_ts: target.thread_ts,
     };
-    let dir = dir.to_path_buf();
-    let remembered = blocking(move || {
-        let list = remember(
-            load_list(&dir, RECENT_FILE, RECENT_KEY).unwrap_or_default(),
-            new,
-        );
-        save_list(&dir, RECENT_FILE, RECENT_KEY, &list)
-    })
-    .await;
+    let remembered = match dir {
+        Ok(dir) => {
+            let dir = dir.to_path_buf();
+            blocking(move || {
+                let list = remember(
+                    load_list(&dir, RECENT_FILE, RECENT_KEY).unwrap_or_default(),
+                    new,
+                );
+                save_list(&dir, RECENT_FILE, RECENT_KEY, &list)
+            })
+            .await
+        }
+        Err(e) => Err(e),
+    };
     if let Err(e) = remembered {
         log_failure(command, &team_id, e);
     }
@@ -1753,14 +1759,21 @@ pub async fn slack_post(
     text: String,
 ) -> Result<bool, String> {
     let command = "slack_post";
-    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let target = Target {
         team_id,
         channel,
         name,
         thread_ts,
     };
-    post_and_remember(&dir, auth.http(), command, target, &text).await?;
+    let dir = config_dir(&app);
+    post_and_remember(
+        dir.as_deref().map_err(Clone::clone),
+        auth.http(),
+        command,
+        target,
+        &text,
+    )
+    .await?;
     Ok(true)
 }
 
