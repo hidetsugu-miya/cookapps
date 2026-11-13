@@ -65,10 +65,27 @@ function putEmoji(node: HTMLElement, uri: string) {
 // The reaction emoji (and picker slots) waiting for the image of a custom emoji (S-26), by its address.
 const emojiWaiting = new Map<string, Set<HTMLElement>>();
 
+// The URLs drawn while their icon was not here, and the ones `loadIcons` has on its way: the first are fetched together, once, right after the drawing that asked for them (`requestIcon`).
+const wantedIcons = new Set<string>();
+const loading = new Set<string>();
+
+// Asks for the icon of `url`, which a drawing found missing (never fetched, or pushed out of `icons`), so that a drawing made without a `loadIcons` of its own does not leave an initial or a `:name:`.
+function requestIcon(url: string) {
+  if (wantedIcons.size === 0) {
+    queueMicrotask(() => {
+      const urls = [...wantedIcons].filter((u) => !loading.has(u));
+      wantedIcons.clear();
+      if (urls.length) void loadIcons(urls);
+    });
+  }
+  wantedIcons.add(url);
+}
+
 // Puts the image of the custom emoji `url` in `node` when it is here, and when it comes later (`loadIcons`) otherwise.
 export function awaitEmoji(node: HTMLElement, url: string) {
   const uri = iconOf(url);
   if (uri) return putEmoji(node, uri);
+  requestIcon(url);
   const nodes = emojiWaiting.get(url) ?? new Set<HTMLElement>();
   nodes.add(node);
   emojiWaiting.set(url, nodes);
@@ -97,6 +114,7 @@ export function paintIcons() {
 // Fetches the icons and the custom emoji images of `urls` that are not here yet (https only), then paints. A URL that cannot be fetched stays an initial.
 export function loadIcons(urls: (string | null)[]) {
   const wanted = [...new Set(urls.filter((u): u is string => !!u && u.startsWith("https://")))];
+  for (const u of wanted) loading.add(u);
   chain = chain.then(async () => {
     const missing = wanted.filter((u) => !icons.has(u));
     for (let i = 0; i < missing.length; i += BATCH) {
@@ -107,6 +125,7 @@ export function loadIcons(urls: (string | null)[]) {
         // The initial stays.
       }
     }
+    for (const u of wanted) loading.delete(u);
     paintIcons();
     for (const url of wanted) paintEmoji(url);
   });
@@ -121,7 +140,10 @@ export function decorateAvatar(node: HTMLElement, name: string, iconUrl: string 
   // An icon already fetched goes on the node itself, which may not be in the page yet (`paintIcons` looks only in the page); the others wait for `loadIcons`.
   const uri = iconOf(iconUrl);
   if (uri) putIcon(node, uri);
-  else node.dataset.icon = iconUrl;
+  else {
+    node.dataset.icon = iconUrl;
+    requestIcon(iconUrl);
+  }
   return node;
 }
 
@@ -146,6 +168,8 @@ type Reacted = { ts: string; reactions: Reaction[] };
 function applyChange(m: Reacted, c: ReactionChange) {
   const r = m.reactions.find((x) => x.name === c.name);
   if (r) {
+    // A copy read again while the press was on its way may hold the change already (Slack had taken it): it is not counted twice.
+    if (r.mine === c.add) return;
     r.mine = c.add;
     if (c.changed) r.count += c.add ? 1 : -1;
     if (r.count <= 0) m.reactions = m.reactions.filter((x) => x !== r);

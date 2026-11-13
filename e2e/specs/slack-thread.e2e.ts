@@ -961,6 +961,40 @@ describe("slack thread: add and take off a reaction (S-25)", () => {
     expect((await chips())[0][0]).toEqual(["tada", "4", true, "true", false]);
   });
 
+  // The thread read again while the press is on its way already holds the press (Slack took it first): the answer does not count it a second time.
+  const rereadMeanwhile = async (before: ReturnType<typeof threadMessage>, after: ReturnType<typeof threadMessage>, name: string) => {
+    await openDetail({}, slackThread([before]));
+    const react = await mock("slack_react", holds);
+    await chip(0, name);
+    await waitForCalls(react);
+    await mock("slack_reply", true);
+    await mock("slack_thread", slackThread([after, threadMessage(reply1, "Bob Example", "Thanks, will do")]));
+    await write("Thanks, will do");
+    await pressReply();
+    await waitForCount("#st-msgs .st-msg", 2);
+    await release(react, true);
+    await browser.pause(300);
+    return (await chips())[0];
+  };
+
+  it("counts an add once when the thread read again while it was on its way already has it", async () => {
+    const first = await rereadMeanwhile(
+      threadMessage(root, "Alice Example", rootText, { reactions: [reaction("tada", "🎉", 3)] }),
+      threadMessage(root, "Alice Example", rootText, { reactions: [reaction("tada", "🎉", 4, null, true)] }),
+      "tada",
+    );
+    expect(first).toEqual([["tada", "4", true, "true", false]]);
+  });
+
+  it("counts a take-off once when the thread read again while it was on its way already lacks it, and keeps a reaction others still give", async () => {
+    const first = await rereadMeanwhile(
+      threadMessage(root, "Alice Example", rootText, { reactions: [reaction("tada", "🎉", 3, null, true)] }),
+      threadMessage(root, "Alice Example", rootText, { reactions: [reaction("tada", "🎉", 2)] }),
+      "tada",
+    );
+    expect(first).toEqual([["tada", "2", false, "false", false]]);
+  });
+
   it("is a button the keyboard reaches, and keeps the focus on the reaction when the press is done", async () => {
     await openDetail({}, thread());
     expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#st-msgs .reaction")].map((r) => r.tabIndex))).toEqual([0, 0, 0, 0]);
