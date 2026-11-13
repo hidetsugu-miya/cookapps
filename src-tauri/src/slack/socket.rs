@@ -869,6 +869,8 @@ async fn refresh_channel(
         }
     };
     let mut people: Vec<String> = found.iter().flat_map(people_of).collect();
+    // The people who replied in a thread (S-5) come after the senders, as in the list, so that they never take a sender's place in the `USER_LOOKUPS`.
+    people.extend(found.iter().flat_map(|m| m.reply_users.iter().cloned()));
     // The threads the events name: the watched ones are checked as they are, the others with the reply count on their parent message in what was just read.
     let watched = if request.threads.is_empty() {
         Vec::new()

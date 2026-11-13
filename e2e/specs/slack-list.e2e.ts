@@ -221,9 +221,9 @@ describe("slack list", () => {
     ];
     const old = `${Math.floor(Date.now() / 1000) - 40 * 86400}.000100`;
     const messages = [
-      timelineMessage(slackTs(5, 1), "Alice Example", "dev", "Please review the deploy notes.", { unread: true, replyCount: 3, repliers, latestReply: slackTs(2, 5) }),
+      timelineMessage(slackTs(7, 1), "Alice Example", "dev", "Please review the deploy notes.", { unread: true, replyCount: 3, repliers, latestReply: slackTs(2, 5) }),
       timelineMessage(slackTs(6, 2), "Erin Example", "dev", "Older thread.", { unread: true, replyCount: 1, repliers: [repliers[1]], latestReply: old }),
-      timelineMessage(slackTs(7, 3), "Frank Example", "dev", "No repliers named.", { unread: true, replyCount: 2 }),
+      timelineMessage(slackTs(5, 3), "Frank Example", "dev", "No repliers named.", { unread: true, replyCount: 2 }),
     ];
     await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady, slack_timeline: timeline(messages) });
     const fetch = await mock("fetch_images", { [bobIcon]: pngUri });
@@ -231,7 +231,7 @@ describe("slack list", () => {
     await waitForCount("#slack-feed .feed-row", 3);
     // Only the rows with repliers have the line; the icons carry the name as their title and their reading.
     expect(await count("#slack-feed .feed-thread-line")).toBe(2);
-    expect(await count("#slack-feed .feed-row:nth-of-type(1) .feed-replier")).toBeGreaterThanOrEqual(0);
+    expect(await browser.execute(() => document.querySelector("#slack-feed .feed-thread-line")!.querySelectorAll(".feed-replier").length)).toBe(3);
     const first = await browser.execute(() => {
       const line = document.querySelector("#slack-feed .feed-thread-line")!;
       return {
@@ -252,7 +252,7 @@ describe("slack list", () => {
     // The fetched icon replaces the initial of the first; the others keep theirs.
     expect(await waitForCalls(fetch)).toEqual([{ urls: [bobIcon] }]);
     await browser.waitUntil(async () => (await count("#slack-feed .feed-replier img.av-img")) === 1);
-    expect(await textsOf("#slack-feed .feed-thread-line:first-of-type .feed-replier .av-text")).toEqual(expect.arrayContaining(["CE", "DE"]));
+    expect(await browser.execute(() => [...document.querySelector("#slack-feed .feed-thread-line")!.querySelectorAll(".feed-replier .av-text")].map((e) => e.textContent))).toEqual(expect.arrayContaining(["CE", "DE"]));
     expect(first.size).toEqual([20, 20]);
     // A reply of today shows the time, an old one the date as the list does.
     expect(first.last).toMatch(/^最終返信 \d{1,2}:\d{2}$/);
