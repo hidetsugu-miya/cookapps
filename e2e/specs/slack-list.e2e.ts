@@ -2581,11 +2581,10 @@ describe("slack list: the Claude pane (S-24)", () => {
 
   it("calls claude_chat_slack with no channel in the unread list and in the watch, and draws the reply with its line breaks", async () => {
     await openPane();
-    const chat = await ask("要点を教えて", "1 行目\n2 行目", 1, "投稿の下書き");
+    const chat = await ask("要点を教えて", "1 行目\n2 行目");
     expect(await callsOf(chat)).toEqual([{ channel: null, history: [], instruction: "要点を教えて" }]);
     expect(await textsOf(`${log} .chat-user`)).toEqual(["要点を教えて"]);
     expect(await textsOf(`${log} .chat-ai`)).toEqual(["1 行目\n2 行目"]);
-    // The draft is not drawn by this pane.
     expect(await count(`${log} .chat-diff, ${log} .chat-task`)).toBe(0);
     await showWatch();
     const again = await ask("もう一度", "二つ目", 2);
@@ -2622,6 +2621,61 @@ describe("slack list: the Claude pane (S-24)", () => {
     const sent = (await callsOf(other))[0] as { channel: { channel: string; messages: unknown[] } };
     expect(sent.channel.channel).toBe("G2");
     expect(sent.channel.messages).toEqual([{ name: "Alice Example", ts: slackTs(1), text: "secret" }]);
+  });
+
+  it("draws no card for an answer without a draft, and shows the draft as text, not as HTML", async () => {
+    await openPane();
+    await ask("要点を教えて", "答えだけ");
+    expect(await count(`${log} .chat-draft`)).toBe(0);
+    await ask("書いて", "下書きです", 2, "<b>太字</b>\n二行目");
+    expect(await count(`${log} .chat-draft`)).toBe(1);
+    expect(await count(`${log} .chat-draft b`)).toBe(0);
+    expect(await textsOf(`${log} .chat-draft-text`)).toEqual(["<b>太字</b>\n二行目"]);
+    // The list has no post field to put it in: the text only, and no button, in the list and in the watch.
+    await expect($(`${log} .chat-draft-put`)).not.toBeDisplayed();
+    await showWatch();
+    await expect($(`${log} .chat-draft-put`)).not.toBeDisplayed();
+  });
+
+  it("puts the draft into the post field of the channel shown when 投稿欄に入れる is pressed, and posts nothing", async () => {
+    await openPane();
+    await mock("slack_channel_history", historySample());
+    await pressChannel();
+    await waitForCount("#sc-feed .feed-row", 3);
+    await browser.waitUntil(async () => (await editable()) === "true");
+    const post = await mock("slack_channel_post", true);
+    await ask("お知らせを書いて", "書きました", 1, "**明日**の予定です");
+    await expect($(`${log} .chat-draft-put`)).toBeDisplayed();
+    await expect($(`${log} .chat-draft-put`)).toHaveText("投稿欄に入れる");
+    await $(`${log} .chat-draft-put`).click();
+    await expect($("#sc-input strong")).toHaveText("明日");
+    expect(await fieldText()).toBe("明日の予定です");
+    await expect(sendButton()).toBeEnabled();
+    expect(await callsOf(post)).toEqual([]);
+    // The field keeps it for the channel: a section in between does not lose it.
+    await showWatch();
+    await expect($(`${log} .chat-draft-put`)).not.toBeDisplayed();
+    expect(await callsOf(post)).toEqual([]);
+    // Only the arrow posts it, as Markdown.
+    await mock("slack_channel_history", historySample());
+    await pressChannel();
+    await waitForCount("#sc-feed .feed-row", 3);
+    expect(await fieldText()).toBe("明日の予定です");
+    await sendButton().click();
+    expect(await waitForCalls(post)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", text: "**明日**の予定です\n", markdown: true }]);
+  });
+
+  it("adds the draft after what the field already holds, with a blank line between, and does not replace it", async () => {
+    await openPane();
+    await mock("slack_channel_history", historySample());
+    await pressChannel();
+    await waitForCount("#sc-feed .feed-row", 3);
+    await browser.waitUntil(async () => (await editable()) === "true");
+    await write("最初の文");
+    await ask("続きを書いて", "書きました", 1, "追加の文");
+    await $(`${log} .chat-draft-put`).click();
+    await browser.waitUntil(async () => (await count("#sc-input .ProseMirror p")) === 2);
+    expect(await textsOf("#sc-input .ProseMirror p")).toEqual(["最初の文", "追加の文"]);
   });
 
   it("keeps the conversation through the list, a channel and a thread, and forgets it at クリア", async () => {

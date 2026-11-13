@@ -1238,6 +1238,12 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #slack-claude { flex: none; width: clamp(25%, var(--slack-claude-w, 30%), 40%); min-height: 0; }
 #slack-claude .chat-head { box-sizing: border-box; min-height: var(--header-h); padding: 0 16px; background: var(--soft); border-bottom: 2px solid var(--accent); }
 #slack-claude .chat-ai { white-space: pre-wrap; }
+/* The draft of a post under a reply: a card; "投稿欄に入れる" is there only while a channel's history is shown. */
+.chat-draft { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.chat-draft-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-draft .text-btn { align-self: flex-end; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; }
+.chat-draft-put { display: none; }
+#slack-screen:has(#slack-channel:not([hidden])) .chat-draft-put { display: block; }
 #slack-pending { padding: 8px 32px 0; }
 #slack-notice:not(:empty) { padding-top: 8px; }
 #slack-feed, #sc-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }

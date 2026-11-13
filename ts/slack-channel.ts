@@ -63,6 +63,24 @@ export function slackChannelForClaude() {
   return { teamId: chosen.teamId, channel: chosen.channel, messages: (messages ?? []).map(({ name, ts, text }) => ({ name, ts, text })) };
 }
 
+// Puts the draft Claude wrote (S-24) into the field of the chosen channel, as Markdown, after what the field already holds (a blank line between); nothing is posted and nothing is replaced.
+// Nothing is done while no channel's history is shown, or while that channel's post is on its way.
+export function putSlackDraft(draft: string) {
+  const key = selectedChannel();
+  if (!key || $("slack-channel").hidden || posting === key) return;
+  const have = drafts.get(key) ?? "";
+  const next = `${have ? `${have.trimEnd()}\n\n` : ""}${draft.trim()}\n`;
+  if (editor.ready()) {
+    editor.set(next);
+    shownKey = key;
+    drafts.set(key, editor.markdown());
+  } else {
+    drafts.set(key, next);
+  }
+  $("sc-error").hidden = true;
+  drawReply();
+}
+
 export function closeSlackChannel() {
   chosen = null;
   messages = null;
