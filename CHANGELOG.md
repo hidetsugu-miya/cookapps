@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.69.0
+
+A-23: on the Orca screen, the button that closes and opens the list of projects is at the left end of the list's header while the list is open, and at the left end of the tab strip of the pane at the left edge while it is closed, at the same x, so the button does not move sideways when it is pressed; the bell and the reload stay at the right of the header (#570). This takes back the place of v0.68.1 (#437).
+
+S-11: in a post that shares another message, an attachment whose long text is folded no longer shows the whole text again under 「もっと表示する」; the folded text alone shows until the button is pressed (#572).
+
+A-28: the app keeps a log in `app-log.jsonl` in its settings folder, one line for each entry with its time, weight (error, warning or information), place and a short text of at most 500 characters; lines older than 30 days are dropped and the file stays at 1 MiB or under (#432). No screen writes to it or shows it yet. It never holds a token, a mail, a Slack message, a Todo or what a terminal printed, and a word shaped like a secret is masked.
+
+No change in what the app shows yet, as groundwork for coming features: while a saved environment is the target, the Orca list also reads the lists of this Mac beside it, and each item knows where it is (#335); the skills, texts of instructions for the Claude calls of the screens, are saved and read in the settings folder (#339); the app connects to Notion through Notion's MCP server with OAuth and keeps the tokens in the keychain (#367); and a command sends a new mail or a reply with the Gmail API, with the scope the app already has (#487).
+
 ## v0.68.1
 
 S-11: in a thread, a channel's history and the Slack list, the text of an attachment of 700 characters or more, or of 5 line breaks or more, is folded to its first 5 lines (up to 700 characters), as Slack does, and 「もっと表示する」 shows the whole text (#564).
