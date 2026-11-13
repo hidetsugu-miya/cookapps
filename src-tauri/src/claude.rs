@@ -2532,9 +2532,11 @@ pub async fn claude_edit_todo_prompt(
     history: Vec<ChatTurn>,
     instruction: String,
 ) -> Result<PromptEdit, String> {
+    let command = "claude_edit_todo_prompt";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     chat_edit(
-        &app,
-        "claude_edit_todo_prompt",
+        &dir,
+        command,
         ("指示", edit_args, ModelPurpose::PromptChat),
         None,
         body,
@@ -2565,8 +2567,9 @@ pub async fn claude_proofread_slack(
     let command = "claude_proofread_slack";
     let candidates =
         crate::slack::destination_candidates(&app, &auth, &slack, target.as_ref()).await;
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::Proofread,
         proofread_args,
@@ -2615,10 +2618,12 @@ pub async fn claude_chat_thread(
     history: Vec<ChatTurn>,
     instruction: String,
 ) -> Result<PromptEdit, String> {
+    let command = "claude_chat_thread";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let thread = thread_section(&thread, truncated, &chrono::Local);
     chat_edit(
-        &app,
-        "claude_chat_thread",
+        &dir,
+        command,
         ("返信欄の文章", thread_chat_args, ModelPurpose::SlackReply),
         thread.as_deref(),
         text,
@@ -2641,8 +2646,9 @@ pub async fn claude_edit_todo_draft(
     instruction: String,
 ) -> Result<TodoDraftEdit, String> {
     let command = "claude_edit_todo_draft";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::SlackSummary,
         draft_edit_args,
@@ -2665,13 +2671,13 @@ type ArgsFor = fn(&str, ModelSettings) -> Vec<String>;
 /// The call behind the conversations, up to the model's answer: the settings of `purpose`, a random boundary, the input `input` makes from that boundary, and `args` with its system prompt.
 /// Returns what `claude` printed; the answer is read by the caller.
 async fn chat_ask(
-    app: &tauri::AppHandle,
+    dir: &Path,
     command: &str,
     purpose: ModelPurpose,
     args: impl FnOnce(&str, ModelSettings) -> Vec<String>,
     input: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<String, String> {
-    let dir = config_dir(app).map_err(|e| log_failure(command, "-", e))?;
+    let dir = dir.to_path_buf();
     let (settings, connection) = tokio::task::spawn_blocking(move || {
         Ok::<_, String>((
             load_settings(&dir).for_purpose(purpose),
@@ -2695,7 +2701,7 @@ async fn chat_ask(
 
 /// The call behind the conversations: `target` is what `body` is called, the arguments that carry its system prompt, and the purpose whose model and effort it uses.
 async fn chat_edit(
-    app: &tauri::AppHandle,
+    dir: &Path,
     command: &str,
     target: (&str, ArgsFor, ModelPurpose),
     thread: Option<&str>,
@@ -2704,7 +2710,7 @@ async fn chat_edit(
     instruction: String,
 ) -> Result<PromptEdit, String> {
     let (noun, args, purpose) = target;
-    let out = chat_ask(app, command, purpose, args, |boundary| {
+    let out = chat_ask(dir, command, purpose, args, |boundary| {
         edit_input(noun, thread, &body, &history, &instruction, boundary)
     })
     .await?;
@@ -2728,8 +2734,9 @@ pub async fn claude_summarize_handoff(
 ) -> Result<HandoffSummary, String> {
     let command = "claude_summarize_handoff";
     crate::orca_handoff::check_length(&instruction, &context)?;
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::OrcaHandoff,
         |_, settings| handoff_args(settings),
@@ -2753,9 +2760,10 @@ pub async fn claude_chat_todo(
     instruction: String,
 ) -> Result<TodoChatReply, String> {
     let command = "claude_chat_todo";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let projects = state.projects();
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::TodoChat,
         |boundary, settings| todo_chat_args(&today(), &projects, boundary, settings),
@@ -2780,9 +2788,9 @@ pub async fn claude_chat_slack(
     instruction: String,
 ) -> Result<SlackChatReply, String> {
     let command = "claude_chat_slack";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let named = match &channel {
         Some(c) => {
-            let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
             let name = crate::slack::chat_channel(&dir, &state, &c.team_id, &c.channel)
                 .await
                 .map_err(|e| log_failure(command, "-", e))?;
@@ -2791,7 +2799,7 @@ pub async fn claude_chat_slack(
         None => None,
     };
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::SlackChat,
         slack_chat_args,
