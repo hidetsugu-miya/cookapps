@@ -87,6 +87,16 @@ const openRow = async (text: string) => {
   throw new Error(`no row with ${text}`);
 };
 const scrollTop = () => browser.execute(() => document.getElementById("slack-feed")!.scrollTop);
+// Marks the elements of the rows drawn now; a row that is made again has no mark.
+const markRows = () =>
+  browser.execute(() => {
+    for (const e of document.querySelectorAll("#slack-feed .feed-item")) (e as HTMLElement & { __kept?: boolean }).__kept = true;
+  });
+// "kept:text" for a row that still is the element marked by `markRows`, "new:text" for one made again, in the order they are drawn.
+const keptRows = () =>
+  browser.execute(() =>
+    [...document.querySelectorAll<HTMLElement & { __kept?: boolean }>("#slack-feed .feed-item")].map((e) => `${e.__kept ? "kept" : "new"}:${e.querySelector(".feed-text")!.textContent!.trim()}`),
+  );
 // What a press at the middle of `selector` lands on, by the page's own hit test (WebDriver's click goes to the element it is given, whatever lies above it).
 const hitAt = (selector: string) =>
   browser.execute((s) => {
@@ -349,6 +359,50 @@ describe("slack list", () => {
     expect(await count("#slack-feed .feed-row")).toBe(20);
     expect(await scrollTop()).toBe(300);
     await expect($("#slack-list")).toBeDisplayed();
+  });
+
+  // Four unread messages of #dev, "message 0" the newest.
+  const fourMessages = () => Array.from({ length: 4 }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `message ${i}`, { unread: true }));
+
+  it("makes again only the row that changed on a read, and keeps the elements of the others", async () => {
+    await openList(timeline(fourMessages(), { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 4);
+    await markRows();
+    const changed = fourMessages();
+    changed[2] = timelineMessage(changed[2].ts, "Person 2", "dev", "edited", { unread: true });
+    await mock("slack_timeline", timeline(changed, { refreshSecs: 1 }));
+    await waitForText("#slack-feed .feed-text", "edited");
+    expect(await keptRows()).toEqual(["kept:message 3", "new:edited", "kept:message 1", "kept:message 0"]);
+  });
+
+  it("keeps the rows and their focus in place when a read brings a group before them", async () => {
+    await openList(timeline(fourMessages(), { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 4);
+    const active = () => browser.execute(() => (document.activeElement as HTMLElement & { __kept?: boolean }).__kept === true && (document.activeElement as HTMLElement).dataset.key);
+    const second = fourMessages()[1];
+    await browser.execute((key) => document.querySelector<HTMLElement>(`#slack-feed .feed-open[data-key="${key}"]`)!.focus(), `${workspace.teamId}/C0123ABCD/${second.ts}`);
+    await markRows();
+    const before = await browser.execute(() => (document.activeElement as HTMLElement).dataset.key);
+    expect(before).toBe(`${workspace.teamId}/C0123ABCD/${second.ts}`);
+    await browser.execute(() => {
+      (document.activeElement as HTMLElement & { __kept?: boolean }).__kept = true;
+    });
+    const fresh = timelineMessage(slackTs(0, 9), "Fresh Person", "random", "fresh", { unread: true, channel: "C9" });
+    await mock("slack_timeline", timeline([fresh, ...fourMessages()], { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 5);
+    expect(await keptRows()).toEqual(["new:fresh", "kept:message 3", "kept:message 2", "kept:message 1", "kept:message 0"]);
+    expect(await active()).toBe(before);
+  });
+
+  it("keeps the elements of the rows that did not change on the return from a thread", async () => {
+    const messages = unreadSample();
+    const mark = await openUnread(messages);
+    await markRows();
+    await openRow("second");
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[2].ts }]);
+    await $("#st-back").click();
+    await expect($("#slack-list")).toBeDisplayed();
+    expect(await keptRows()).toEqual(["kept:first", "kept:other"]);
   });
 
   it("goes on reading every refreshSecs while another screen is shown, without drawing the list there or switching the screen", async () => {

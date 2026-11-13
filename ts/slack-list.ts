@@ -63,9 +63,12 @@ let answers = 0;
 // The unread messages among all the ones held (`unreadTotal` of the last answer, lowered at once by what the screen moves to read or hides): the Slack button's badge, which shows 20+ above this.
 let unreadCount = 0;
 const BADGE_CAP = 20;
-// What the list and the notice show now; they are drawn again only when this changes.
-let feedKey = "";
+// What the notice shows now; it is drawn again only when this changes.
 let noticeKey = "";
+// The elements the list drew, by the key of the row, the heading, the group or the separator, each with the key of what it was drawn from. Only an element whose key changed is made again.
+const drawn = new Map<string, { sig: string; node: HTMLElement }>();
+// The keys drawn by the pass that is on its way.
+let used = new Set<string>();
 // The threads whose unread replies were folded with their toggle (they start open). Kept through redraws and a return from a thread, and forgotten when the thread has no more unread replies.
 const closedThreads = new Set<string>();
 // Where the list was scrolled to (it is hidden while a thread or another screen is shown, which forgets the position).
@@ -643,6 +646,7 @@ function groupsOf(messages: TimelineMessage[]) {
 
 // The heading of a channel's group: its mark (# or a lock), its name, the workspace (muted), the number of its unread messages and the button "既読にする".
 // The button is drawn only where pressing it changes something: the token of the workspace may write the position and a message is unread, or a thread of the channel has unread replies (S-14, which need no scope).
+// Pressing the button reads the channel's info held at that moment, so that a heading that is kept stays right.
 function channelHead(first: TimelineMessage, info: UnreadChannel | undefined, priv: boolean) {
   const head = tag("div", "feed-chan");
   const mark = tag("span", "feed-chan-ic");
@@ -660,31 +664,65 @@ function channelHead(first: TimelineMessage, info: UnreadChannel | undefined, pr
     // A double click is two clicks (the second has `detail` 2): the first removes the group, so the second must not press the button of the group that moved under the pointer.
     read.onclick = (e) => {
       if (e.detail > 1) return;
-      readChannel(info);
+      const held = timeline?.unreadChannels.find((x) => x.teamId === first.teamId && x.channel === first.channel);
+      if (held) readChannel(held);
     };
     head.append(read);
   }
   return head;
 }
 
+// The element for `key`, kept from the last pass when `sig` (what it is drawn from) is the same, else made by `build`.
+function kept(key: string, sig: string, build: () => HTMLElement) {
+  used.add(key);
+  const held = drawn.get(key);
+  if (held?.sig === sig) return held.node;
+  const node = build();
+  drawn.set(key, { sig, node });
+  return node;
+}
+
+// Makes `nodes` the children of `parent`. A node that is in its place is not touched, so it keeps its focus.
+function place(parent: HTMLElement, nodes: Node[]) {
+  nodes.forEach((node, i) => {
+    if (parent.childNodes[i] !== node) parent.insertBefore(node, parent.childNodes[i] ?? null);
+  });
+  while (parent.childNodes.length > nodes.length) parent.lastChild!.remove();
+}
+
+// A row of the list, made again only when the message, the fold of its replies or the day changed.
+function keptItem(m: TimelineMessage, key: string, grouped: boolean, day: string) {
+  const folded = !!m.unreadReplies && closedThreads.has(threadKeyOf(m));
+  return kept(`i/${key}`, JSON.stringify([m, grouped, folded, day]), () => itemOf(m, key, grouped));
+}
+
 // The nodes of the unread section: a group for each channel, its messages under the day they were sent.
-function unreadNodes(messages: TimelineMessage[], privates: Set<string>) {
+function unreadNodes(messages: TimelineMessage[], privates: Set<string>, day0: string) {
   const today = Date.now();
   const infos = new Map((timeline?.unreadChannels ?? []).map((c) => [`${c.teamId}/${c.channel}`, c]));
   return groupsOf(messages).map(({ key, rows }) => {
-    const group = tag("section", "feed-group");
-    group.append(channelHead(rows[0], infos.get(key), privates.has(key)));
+    const first = rows[0];
+    const info = infos.get(key);
+    const priv = privates.has(key);
+    const head = kept(`c/${key}`, JSON.stringify([first.team, first.channelName, priv, info?.messages, info?.to, info?.threads.length, canWrite(first.teamId)]), () => channelHead(first, info, priv));
+    const nodes: HTMLElement[] = [head];
     let day = "";
     for (const m of rows) {
       const label = formatDay(slackMs(m.ts), today);
       if (label !== day) {
         day = label;
-        const sep = tag("div", "feed-day");
-        sep.append(tag("span", "", label));
-        group.append(sep);
+        nodes.push(
+          kept(`d/${key}/${label}`, "", () => {
+            const sep = tag("div", "feed-day");
+            sep.append(tag("span", "", label));
+            return sep;
+          }),
+        );
       }
-      group.append(itemOf(m, threadKeyOf(m), true));
+      nodes.push(keptItem(m, threadKeyOf(m), true, day0));
     }
+    const group = kept(`g/${key}`, "", () => tag("section", "feed-group"));
+    place(group, nodes);
     return group;
   });
 }
@@ -692,27 +730,30 @@ function unreadNodes(messages: TimelineMessage[], privates: Set<string>) {
 // The private channels of the side menu, as `{teamId}/{channel}`: the lock of a group's heading is all the unread section takes from the side menu.
 const privateChannels = () => new Set((timeline?.side ?? []).flatMap((w) => w.channels.filter((c) => c.private).map((c) => `${w.teamId}/${c.id}`)));
 
-// Draws the rows where they are: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
+// Draws the rows where they are: the scroll position and the focused row stay, and only the rows that changed are made again (the others stay in the page, in their new places).
 function drawFeed() {
   // The side menu's section: the other one is not drawn.
   const messages = section === "unread" ? (timeline?.messages ?? []) : [];
   const watched = section === "watch" ? (timeline?.watched ?? []) : [];
   const privates = section === "unread" ? privateChannels() : new Set<string>();
   forgetClosedThreads();
-  const key = JSON.stringify([section, messages, watched, section === "unread" ? timeline?.unreadChannels : null, [...privates], [...closedThreads], loadError, workspaces?.length ?? null, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? [], timeline?.missing.map((x) => [x.teamId, x.scopes]) ?? [], new Date().toDateString()]);
-  if (key === feedKey) return;
-  feedKey = key;
+  const day = new Date().toDateString();
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
+  used = new Set();
   // The key of a watched row has a prefix: the same message may be in both sections for a moment.
-  const watch = watched.map((m) => itemOf(m, `w/${threadKeyOf(m)}`));
+  const watch = watched.map((m) => keptItem(m, `w/${threadKeyOf(m)}`, false, day));
+  const heading = (label: string, svg: string) => kept(`h/${label}`, "", () => sectionHeading(label, svg));
+  const emptySig = JSON.stringify([workspaces?.length ?? null, loadError, timeline === null, timeline?.failed.map((f) => [f.team, f.error]) ?? []]);
   // A heading for each section that has rows.
-  box.replaceChildren(
-    ...(messages.length || watched.length
-      ? [...(messages.length ? [sectionHeading("未読", DOT_SVG), ...unreadNodes(messages, privates)] : []), ...(watch.length ? [sectionHeading("ウォッチ", BOOKMARK_SVG), ...watch] : [])]
-      : [emptyNode()]),
+  place(
+    box,
+    messages.length || watched.length
+      ? [...(messages.length ? [heading("未読", DOT_SVG), ...unreadNodes(messages, privates, day)] : []), ...(watch.length ? [heading("ウォッチ", BOOKMARK_SVG), ...watch] : [])]
+      : [kept("empty", emptySig, emptyNode)],
   );
+  for (const key of drawn.keys()) if (!used.has(key)) drawn.delete(key);
   box.scrollTop = top;
   const target = focused ? box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`) : null;
   if (target) {
@@ -837,7 +878,6 @@ function adoptWorkspaces(list: Workspace[]) {
 export function revealSlackList() {
   if (selectedChannel()) return revealSlackChannel();
   show("slack-list");
-  feedKey = "";
   draw();
   feed().scrollTop = listScroll;
 }
