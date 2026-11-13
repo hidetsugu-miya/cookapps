@@ -10,7 +10,7 @@ body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #todo-body, #todo-handoff, #todo-claude { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
-#slack-side, #slack-list, #slack-channel, #slack-thread, #slack-compose { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#slack-side, #slack-list, #slack-channel, #slack-claude, #slack-thread, #slack-compose { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-list { --fs: var(--fs-orca-list, 1); font-family: var(--ff-orca-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-work, #orca-files { --fs: var(--fs-orca-pane, 1); font-family: var(--ff-orca-pane, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -1234,6 +1234,10 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .slack-side-item:hover .slack-side-hide, .slack-side-item:focus-within .slack-side-hide, .slack-side-item.keep .slack-side-hide { visibility: visible; }
 .slack-side-item:hover .slack-side-n, .slack-side-item:focus-within .slack-side-n, .slack-side-item.keep .slack-side-n { visibility: hidden; }
 #slack-list, #slack-channel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* S-24: the Claude pane on the right of the list, the watch and a channel's history: 30% of the screen at first, between 25% and 40% (ts/split.ts; the clamp holds the same range). Its head is the band of T-7: --soft with a 2px line of --accent. */
+#slack-claude { flex: none; width: clamp(25%, var(--slack-claude-w, 30%), 40%); min-height: 0; }
+#slack-claude .chat-head { box-sizing: border-box; min-height: var(--header-h); padding: 0 16px; background: var(--soft); border-bottom: 2px solid var(--accent); }
+#slack-claude .chat-ai { white-space: pre-wrap; }
 #slack-pending { padding: 8px 32px 0; }
 #slack-notice:not(:empty) { padding-top: 8px; }
 #slack-feed, #sc-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }

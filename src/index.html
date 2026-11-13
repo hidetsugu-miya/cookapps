@@ -457,6 +457,17 @@
           </aside>
         </section>
       </div>
+      <div id="slack-claude-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="25" aria-valuemax="40" aria-valuenow="30" tabindex="0"><span></span></div>
+      <aside id="slack-claude" class="chat-pane" aria-label="Claude">
+        <div class="chat-head">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>Claude
+          <button id="slack-claude-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
+        </div>
+        <div id="slack-claude-log" class="chat-log"></div>
+        <div class="chat-foot">
+          <p id="slack-claude-chat-note" class="chat-note" hidden></p>
+        </div>
+      </aside>
     </section>
     <section id="orca" class="split-main" hidden>
       <aside id="orca-list" aria-label="プロジェクト">

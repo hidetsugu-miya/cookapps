@@ -57,6 +57,12 @@ const editor = createSlackEditor({
 // The chosen channel as `{teamId}/{channel}`, for the side menu.
 export const selectedChannel = () => (chosen ? `${chosen.teamId}/${chosen.channel}` : null);
 
+// The channel the Claude pane (S-24) talks about, with its messages as the history draws them, oldest first; null while the list, the watch or a thread is shown.
+export function slackChannelForClaude() {
+  if (!chosen || $("slack-channel").hidden) return null;
+  return { teamId: chosen.teamId, channel: chosen.channel, messages: (messages ?? []).map(({ name, ts, text }) => ({ name, ts, text })) };
+}
+
 export function closeSlackChannel() {
   chosen = null;
   messages = null;

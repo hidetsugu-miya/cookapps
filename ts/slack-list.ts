@@ -23,6 +23,7 @@ import { BOOKMARK_SVG, CHECK_ALL_SVG, CHEVRON_SVG, DOT_SVG, HASH_SVG, LOCK_SVG, 
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { closeSlackChannel, openSlackChannel, redrawSlackChannel, revealSlackChannel, selectedChannel } from "./slack-channel.js";
+import { showSlackClaudeModels } from "./slack-claude.js";
 import { drawSlackSide, type SlackSection } from "./slack-side.js";
 import { attachmentNode, blocksNode } from "./slack-blocks.js";
 import { richNodes } from "./slack-rich.js";
@@ -921,6 +922,7 @@ export function revealSlackList() {
 // The Slack screen is shown: the workspaces and the user's icons are read, then the messages. What was read before stays on screen meanwhile.
 export async function showSlackList() {
   revealSlackList();
+  showSlackClaudeModels();
   try {
     adoptWorkspaces((await invoke("slack_load")).workspaces);
   } catch (e) {
