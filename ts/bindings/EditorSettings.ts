@@ -7,4 +7,16 @@ export type EditorSettings = {
 /**
  * How long after the typing stops the file is saved, in milliseconds.
  */
-autosaveMs: number, };
+autosaveMs: number, 
+/**
+ * The least time `autosave_ms` can be, in milliseconds.
+ */
+autosaveMin: number, 
+/**
+ * The greatest time `autosave_ms` can be, in milliseconds.
+ */
+autosaveMax: number, 
+/**
+ * The step of `autosave_ms`, in milliseconds.
+ */
+autosaveStep: number, };
