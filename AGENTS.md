@@ -151,6 +151,7 @@ npm run lint        # Biome (lint only)
 npm run build:ts    # tsc (ts)
 npm run e2e:check   # tsc (e2e)
 cd src-tauri && cargo fmt --check
+npx tsc --noEmit -p .claude/skills/readme-product/shots/tsconfig.json   # tsc (the spec of the README photos)
 cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 cd src-tauri && cargo test --all-features    # also writes the ts-rs types to ts/bindings/
 npm run e2e:build   # build the app for E2E (feature e2e)

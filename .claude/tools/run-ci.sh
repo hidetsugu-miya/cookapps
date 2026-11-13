@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 静的検査と unit（版の一致、tsc の ts と e2e、Biome、cargo fmt、clippy、cargo test、bindings の差分）を回し、結果を main の checkout の .claude/ci/{HEAD の SHA} に JSON で書く（.claude/rules/review.md、check-ci.sh が読む。pre-git.sh、post-checks.sh と release-verifier は check-ci.sh を呼ぶ）。
+# 静的検査と unit（版の一致、tsc の ts と e2e と README の撮影用 spec、Biome、cargo fmt、clippy、cargo test、bindings の差分）を回し、結果を main の checkout の .claude/ci/{HEAD の SHA} に JSON で書く（.claude/rules/review.md、check-ci.sh が読む。pre-git.sh、post-checks.sh と release-verifier は check-ci.sh を呼ぶ）。
 # 各検査の出力は .claude/ci/{HEAD の SHA}.log に残す（同じ HEAD で再実行すると上書き）。検査は最初の失敗で止まる。
 # 使い方: run-ci.sh [checkout のパス]（省略時はカレント）。終了コードは検査の結果。
 # 作業ツリーが汚れていれば、記録を書かずに exit 2 で止まる（記録は HEAD のコミットの中身についてだけ言うため）。
@@ -42,6 +42,8 @@ gate() {
 gate "ソースの版が固定値" scripts/check-version.sh
 gate "tsc (ts)" mise exec -- npm run build:ts
 gate "tsc (e2e)" mise exec -- npm run e2e:check
+# README の撮影用 spec は e2e/ の外にあり e2e:check に入らない。Rust の型が変わっても撮影まで気づけないので、ここで検査する。
+gate "tsc (README の撮影用 spec)" mise exec -- npx tsc --noEmit -p .claude/skills/readme-product/shots/tsconfig.json
 gate "Biome lint" mise exec -- npm run lint
 gate "cargo fmt --check" bash -c 'cd src-tauri && mise exec -- cargo fmt --check'
 # 検査は 1 回しか走らないので、差分ビルド用のデータは要らない（CARGO_INCREMENTAL=0）。
