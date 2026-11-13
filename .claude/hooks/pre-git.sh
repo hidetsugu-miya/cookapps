@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash): commit/tag は公開禁止語の検査、push はさらに CI・E2E・レビューの合格記録を確かめる（CI と E2E の検査そのものは走らせない。CI は run-ci.sh、E2E は run-e2e.sh が回す）。
-# push の範囲が、各 hook・tool の自己テストの対象（guard-e2e.sh、pre-git.sh、hook-log.sh、check-guard-e2e.sh、check-pre-git.sh、plan-release*.py、nightly-limit.sh、use-worktree.sh、handover.sh、post-gh.sh）に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
+# push の範囲が、各 hook・tool の自己テストの対象（guard-e2e.sh、pre-git.sh、hook-log.sh、check-guard-e2e.sh、check-pre-git.sh、check-ci.sh、check-e2e.sh、release-only-diff.sh、plan-release*.py、nightly-limit.sh、use-worktree.sh、handover.sh、post-gh.sh）に触れるときだけ、その自己テストをこの checkout の写しで走らせる。
 # 検査する checkout は hook 入力の cwd（先頭の cd DIR && か cd DIR; と、git の -C があればその場所）の checkout で、CLAUDE_PROJECT_DIR ではない（#310）。記録の置き場所だけは --git-common-dir の main の checkout。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
@@ -67,7 +67,7 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   fi
   grep -q -E '^\.claude/(hooks/(guard-e2e|hook-log)\.sh|tools/check-guard-e2e\.sh)$' <<< "$changed" \
     && gate "guard-e2e.sh の自己テスト" "$top/.claude/tools/check-guard-e2e.sh"
-  grep -q -E '^\.claude/(hooks/(pre-git|hook-log)\.sh|tools/check-pre-git\.sh)$' <<< "$changed" \
+  grep -q -E '^\.claude/(hooks/(pre-git|hook-log)\.sh|tools/(check-pre-git|check-ci|check-e2e|release-only-diff)\.sh)$' <<< "$changed" \
     && gate "pre-git.sh の自己テスト" "$top/.claude/tools/check-pre-git.sh"
   grep -q -E '^\.claude/tools/plan-release[^/]*\.py$|^\.claude/(tools/(nightly-limit|use-worktree|handover)\.sh|hooks/post-gh\.sh)$' <<< "$changed" \
     && gate "plan-release.py の自己テスト" python3 -I "$top/.claude/tools/plan-release-test.py"

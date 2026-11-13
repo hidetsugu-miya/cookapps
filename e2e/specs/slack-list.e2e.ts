@@ -1,4 +1,4 @@
-import { attachment, boot, callsOf, claudeReady, composerLayout, count, emitEvent, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, thread as mailThread, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace } from "../support";
+import { attachment, boot, callsOf, claudeReady, composerLayout, count, emitEvent, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, thread as mailThread, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS } from "../support";
 
 import type { TimelineMessage } from "../../ts/bindings/TimelineMessage";
 
@@ -2393,7 +2393,6 @@ describe("slack list: the popups for a new Slack message (S-17)", () => {
 const field = () => $("#sc-input .ProseMirror");
 const sendButton = () => $("#sc-send");
 const tool = (name: string) => $(`#sc-tools [aria-label="${name}"]`);
-const TOOLS = ["太字", "斜体", "取り消し線", "リンク", "番号付きリスト", "箇条書き", "引用", "コード", "コードブロック"];
 // Types `text` in the field.
 const write = async (text: string) => {
   await field().click();

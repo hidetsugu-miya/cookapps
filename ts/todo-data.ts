@@ -50,8 +50,8 @@ export const todoState = {
   openTasks: new Set<string>(),
 };
 
-// The Todoist apps' colors for priorities 1 to 4.
-export const PRIORITY_COLORS: Record<number, string> = { 1: "#d1453b", 2: "#eb8909", 3: "#246fe0", 4: "#b4b9c2" };
+// The Todoist apps' colors for priorities 1 to 4 (the values are `--priority-1` to `--priority-4` in style.css).
+export const PRIORITY_COLORS: Record<number, string> = { 1: "var(--priority-1)", 2: "var(--priority-2)", 3: "var(--priority-3)", 4: "var(--priority-4)" };
 export const TODO_GROUPS = [["overdue", "期限切れ"], ["today", "今日"], ["upcoming", "明日以降"], ["none", "期限なし"]] as const;
 
 // What a task change sends to Todoist: `dueString` is a text Todoist reads ("明日 15時"), or `YYYY-MM-DD` from the calendar.

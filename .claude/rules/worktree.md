@@ -15,7 +15,7 @@ Bad:  a second worktree for the same repository, so that two pieces of work run 
 
 ### Add features and fix bugs on a branch of that worktree
 
-Name the branch `feat/{requirement ID}` or `fix/{summary}`, or `docs/{summary}` for documentation only. The night run's branch is `night/{YYYY-MM-DD}`, and it holds the commits of several issues.
+Name the branch `feat/{requirement ID}` or `fix/{summary}`, or `docs/{summary}` for documentation only. The night run's branch is `night/{YYYY-MM-DD}`, and it holds the commits of several issues. `improvement-proposal` works on `proposal/{date and time}`, which it does not push, and the Release PR is `release/next`.
 Every branch reaches main through a pull request (`issues.md`).
 
 ### Take the worktree with `use-worktree.sh`, and give it back with `--park`

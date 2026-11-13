@@ -1,13 +1,6 @@
 import {
-  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettings, comment, composerLayout, connection, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, todoDraftEdit, waitForCalls, waitForCount, waitForText,
+  boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, claudeSettings, comment, composerLayout, connection, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, todoDraftEdit, waitForCalls, waitForCount, waitForText, openTodo,
 } from "../support";
-
-// The app with Todoist connected and the Todo screen open.
-async function openTodo(claude: unknown = claudeReady) {
-  await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claude });
-  await $("#nav-todo").click();
-  await waitForCount("#todo-list li.task", 1);
-}
 
 // A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a popover (as in calendar.e2e.ts).
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();

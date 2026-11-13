@@ -18,7 +18,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::{
-    accounts::{self, write_synced},
+    accounts::{self, write_atomic},
     auth::{config_dir, Auth},
     disk_cache,
     gmail::{log_failure, send_json_refreshing, ApiError},
@@ -455,7 +455,6 @@ fn week_start(date: NaiveDate, first_day: u8) -> Result<NaiveDate, String> {
 }
 
 const SETTINGS_FILE: &str = "calendar-settings.json";
-const SETTINGS_TMP_FILE: &str = "calendar-settings.json.tmp";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -479,13 +478,9 @@ fn load_first_day(dir: &Path) -> u8 {
 
 fn save_first_day(dir: &Path, first_day: u8) -> Result<(), String> {
     let first_day = check_first_day(first_day)?;
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(SETTINGS_FILE), dir.join(SETTINGS_TMP_FILE));
     let text =
         serde_json::to_string_pretty(&SettingsFile { first_day }).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, SETTINGS_FILE, &text)
 }
 
 /// The first day of the week: 0 = Sunday (the default) to 6 = Saturday.

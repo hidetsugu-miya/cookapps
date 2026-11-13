@@ -5,11 +5,10 @@ import { createChat } from "./claude-chat.js";
 import { showModelSlot } from "./claude.js";
 import { createComposer } from "./composer.js";
 import { $, tag } from "./dom.js";
-import { DATE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { CARD_DUE } from "./todo-add.js";
+import { CARD_DUE, drawDueChip } from "./todo-add.js";
 import { dueLabel, inboxOf, projectName, projectOf, todoState } from "./todo-data.js";
-import { openDueEditor, openProjectPicker } from "./todo-detail.js";
+import { openProjectPicker } from "./todo-detail.js";
 import { todoCall } from "./todo-write.js";
 
 // What the owner has done with a proposed task: the values on its card (name, date as text, project; null is the inbox), and where the card is.
@@ -87,21 +86,10 @@ function card(s: Card) {
   const dueChip = tag("button", "review-chip chat-task-due");
   dueChip.type = "button";
   dueChip.disabled = busy;
-  dueChip.insertAdjacentHTML("beforeend", DATE_SVG);
-  dueChip.append(dueText(s) || "期限なし");
-  dueChip.onclick = () => {
-    const picked = CARD_DUE.exec(s.due);
-    openDueEditor(dueChip, {
-      text: s.due,
-      date: picked?.[1] ?? null,
-      time: picked?.[2] ?? null,
-      recurring: false,
-      commit: (text) => {
-        s.due = text.trim();
-        show(s);
-      },
-    });
-  };
+  drawDueChip(dueChip, dueText(s) || "期限なし", s.due, (text) => {
+    s.due = text.trim();
+    show(s);
+  });
 
   const project = shownProject(s);
   const projectChip = tag("button", "review-chip chat-task-project");

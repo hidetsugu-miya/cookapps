@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Tests of the pure functions of plan-release.py, and of the shell tools around the nightly run (nightly-limit.sh, use-worktree.sh, handover.sh) and the hook post-gh.sh.
 No network and no gh.
+The hook and the tools it runs are this checkout's own copies (the ones beside this file), not the main checkout's, and the hooks write their log to a temporary directory (COOKAPPS_HOOK_LOG_DIR), never to the real logs/.
 Run: python3 -I .claude/tools/plan-release-test.py
 """
+import atexit
 import contextlib
 import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1011,11 +1014,13 @@ class Stream(unittest.TestCase):
         self.assertEqual(pr.parse_stream(""), [])
 
 
-_common = subprocess.run(
-    ["git", "-C", here, "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, check=True
-).stdout.strip()
-HOOK = os.path.join(os.path.dirname(_common), ".claude", "hooks", "post-gh.sh")
+HOOK = os.path.join(here, "..", "hooks", "post-gh.sh")
 TOOLS = here
+
+# Every hook and tool started below inherits this, so a test never adds a line to the real logs/hooks-*.log.
+_hook_log_dir = tempfile.mkdtemp()
+os.environ["COOKAPPS_HOOK_LOG_DIR"] = _hook_log_dir
+atexit.register(shutil.rmtree, _hook_log_dir, ignore_errors=True)
 
 
 class Hook(unittest.TestCase):

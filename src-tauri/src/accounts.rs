@@ -3,7 +3,6 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 const FILE: &str = "accounts.json";
-const TMP_FILE: &str = "accounts.json.tmp";
 
 #[derive(Serialize, Deserialize)]
 struct AccountsFile {
@@ -23,10 +22,15 @@ pub fn load(dir: &Path) -> Result<Option<Vec<String>>, String> {
 }
 
 pub fn save(dir: &Path, accounts: &[String]) -> Result<(), String> {
+    write_atomic(dir, FILE, &render(accounts)?)
+}
+
+/// Writes `text` to `file` in `dir` (made when missing) through `{file}.tmp` and a rename.
+/// Renaming over the target means a crash mid-write leaves the old file, not a truncated one.
+pub(crate) fn write_atomic(dir: &Path, file: &str, text: &str) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(FILE), dir.join(TMP_FILE));
-    // Rename over the target so a crash mid-write leaves the old file, not a truncated one.
-    write_synced(&tmp, &render(accounts)?)
+    let (path, tmp) = (dir.join(file), dir.join(format!("{file}.tmp")));
+    write_synced(&tmp, text)
         .and_then(|()| std::fs::rename(&tmp, &path))
         .map_err(|e| format!("{} を書けません: {e}", path.display()))
 }
@@ -118,7 +122,7 @@ mod tests {
         let dir = temp_dir("atomic");
         save(&dir, &["a@example.com".to_string()]).unwrap();
         // A directory in the temporary file's place makes the write fail before the rename.
-        std::fs::create_dir(dir.join(TMP_FILE)).unwrap();
+        std::fs::create_dir(dir.join("accounts.json.tmp")).unwrap();
         assert!(save(&dir, &["b@example.com".to_string()]).is_err());
         assert_eq!(load(&dir), Ok(Some(vec!["a@example.com".to_string()])));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -130,7 +134,29 @@ mod tests {
         save(&dir, &["a@example.com".to_string()]).unwrap();
         save(&dir, &["b@example.com".to_string()]).unwrap();
         assert_eq!(load(&dir), Ok(Some(vec!["b@example.com".to_string()])));
-        assert!(!dir.join(TMP_FILE).exists());
+        assert!(!dir.join("accounts.json.tmp").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_atomic_makes_the_folder_and_replaces_the_file_without_a_temporary_one() {
+        let dir = temp_dir("write-atomic").join("nested");
+        write_atomic(&dir, "a.json", "one").unwrap();
+        write_atomic(&dir, "a.json", "two").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("a.json")).unwrap(), "two");
+        assert!(!dir.join("a.json.tmp").exists());
+        std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn write_atomic_keeps_the_old_file_and_names_the_path_when_the_write_fails() {
+        let dir = temp_dir("write-atomic-fail");
+        write_atomic(&dir, "a.json", "one").unwrap();
+        // A directory in the temporary file's place makes the write fail before the rename.
+        std::fs::create_dir(dir.join("a.json.tmp")).unwrap();
+        let err = write_atomic(&dir, "a.json", "two").unwrap_err();
+        assert!(err.starts_with(&format!("{} を書けません", dir.join("a.json").display())));
+        assert_eq!(std::fs::read_to_string(dir.join("a.json")).unwrap(), "one");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

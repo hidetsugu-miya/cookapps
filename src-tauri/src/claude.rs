@@ -15,7 +15,7 @@ use tokio::sync::Semaphore;
 use ts_rs::TS;
 
 use crate::{
-    accounts::write_synced,
+    accounts::write_atomic,
     auth::config_dir,
     claude_auth::{
         self, key_state, key_state_or_unverified, ApiKeyState, Connection, EnvChange, Method,
@@ -33,7 +33,6 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 const HIGH_EFFORT_TIMEOUT: Duration = Duration::from_secs(300);
 /// The model and effort of each purpose; absent until the first save.
 const SETTINGS_FILE: &str = "claude-settings.json";
-const SETTINGS_TMP_FILE: &str = "claude-settings.json.tmp";
 /// Characters of a message that reach the model.
 const INPUT_LIMIT: usize = 10_000;
 /// Characters of a Slack thread's first message that reach the summary when the thread does not fit `INPUT_LIMIT`.
@@ -84,7 +83,6 @@ const PROMPT_LIMIT: usize = 10_000;
 const PROJECTS_LIMIT: usize = 8_000;
 /// The summary instructions the user edited; absent while they are the default.
 const PROMPT_FILE: &str = "todo-prompt.json";
-const PROMPT_TMP_FILE: &str = "todo-prompt.json.tmp";
 /// How much of the conversation reaches the model when the instructions or the text are edited: the last turns, each cut at this many characters.
 const CHAT_TURNS: usize = 20;
 const CHAT_TURN_LIMIT: usize = 2_000;
@@ -916,15 +914,11 @@ fn save_prompt(dir: &Path, body: &str) -> Result<(), String> {
     if body == default_body() {
         return remove_prompt(dir);
     }
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(PROMPT_FILE), dir.join(PROMPT_TMP_FILE));
     let text = serde_json::to_string_pretty(&PromptFile {
         body: body.to_owned(),
     })
     .map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, PROMPT_FILE, &text)
 }
 
 fn todo_prompt(dir: &Path) -> TodoPrompt {
@@ -994,12 +988,8 @@ fn save_settings(
         },
     };
     let settings = load_settings(dir).with(purpose, chosen);
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(SETTINGS_FILE), dir.join(SETTINGS_TMP_FILE));
     let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))?;
+    write_atomic(dir, SETTINGS_FILE, &text)?;
     Ok(settings)
 }
 
@@ -2532,9 +2522,11 @@ pub async fn claude_edit_todo_prompt(
     history: Vec<ChatTurn>,
     instruction: String,
 ) -> Result<PromptEdit, String> {
+    let command = "claude_edit_todo_prompt";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     chat_edit(
-        &app,
-        "claude_edit_todo_prompt",
+        &dir,
+        command,
         ("指示", edit_args, ModelPurpose::PromptChat),
         None,
         body,
@@ -2563,10 +2555,11 @@ pub async fn claude_proofread_slack(
     target_by_claude: bool,
 ) -> Result<SlackEdit, String> {
     let command = "claude_proofread_slack";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let candidates =
-        crate::slack::destination_candidates(&app, &auth, &slack, target.as_ref()).await;
+        crate::slack::destination_candidates(&dir, &auth, &slack, target.as_ref()).await;
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::Proofread,
         proofread_args,
@@ -2597,7 +2590,7 @@ pub async fn claude_proofread_slack(
     })?;
     if let Some(target) = answer.post_to.take() {
         let posted = answer.edit.body.as_deref().unwrap_or(&text);
-        crate::slack::post_and_remember(&app, auth.http(), command, target, posted).await?;
+        crate::slack::post_and_remember(Ok(&dir), auth.http(), command, target, posted).await?;
         answer.posted = true;
     }
     Ok(answer)
@@ -2615,10 +2608,12 @@ pub async fn claude_chat_thread(
     history: Vec<ChatTurn>,
     instruction: String,
 ) -> Result<PromptEdit, String> {
+    let command = "claude_chat_thread";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let thread = thread_section(&thread, truncated, &chrono::Local);
     chat_edit(
-        &app,
-        "claude_chat_thread",
+        &dir,
+        command,
         ("返信欄の文章", thread_chat_args, ModelPurpose::SlackReply),
         thread.as_deref(),
         text,
@@ -2641,8 +2636,9 @@ pub async fn claude_edit_todo_draft(
     instruction: String,
 ) -> Result<TodoDraftEdit, String> {
     let command = "claude_edit_todo_draft";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::SlackSummary,
         draft_edit_args,
@@ -2665,13 +2661,13 @@ type ArgsFor = fn(&str, ModelSettings) -> Vec<String>;
 /// The call behind the conversations, up to the model's answer: the settings of `purpose`, a random boundary, the input `input` makes from that boundary, and `args` with its system prompt.
 /// Returns what `claude` printed; the answer is read by the caller.
 async fn chat_ask(
-    app: &tauri::AppHandle,
+    dir: &Path,
     command: &str,
     purpose: ModelPurpose,
     args: impl FnOnce(&str, ModelSettings) -> Vec<String>,
     input: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<String, String> {
-    let dir = config_dir(app).map_err(|e| log_failure(command, "-", e))?;
+    let dir = dir.to_path_buf();
     let (settings, connection) = tokio::task::spawn_blocking(move || {
         Ok::<_, String>((
             load_settings(&dir).for_purpose(purpose),
@@ -2695,7 +2691,7 @@ async fn chat_ask(
 
 /// The call behind the conversations: `target` is what `body` is called, the arguments that carry its system prompt, and the purpose whose model and effort it uses.
 async fn chat_edit(
-    app: &tauri::AppHandle,
+    dir: &Path,
     command: &str,
     target: (&str, ArgsFor, ModelPurpose),
     thread: Option<&str>,
@@ -2704,7 +2700,7 @@ async fn chat_edit(
     instruction: String,
 ) -> Result<PromptEdit, String> {
     let (noun, args, purpose) = target;
-    let out = chat_ask(app, command, purpose, args, |boundary| {
+    let out = chat_ask(dir, command, purpose, args, |boundary| {
         edit_input(noun, thread, &body, &history, &instruction, boundary)
     })
     .await?;
@@ -2728,8 +2724,9 @@ pub async fn claude_summarize_handoff(
 ) -> Result<HandoffSummary, String> {
     let command = "claude_summarize_handoff";
     crate::orca_handoff::check_length(&instruction, &context)?;
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::OrcaHandoff,
         |_, settings| handoff_args(settings),
@@ -2753,9 +2750,10 @@ pub async fn claude_chat_todo(
     instruction: String,
 ) -> Result<TodoChatReply, String> {
     let command = "claude_chat_todo";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let projects = state.projects();
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::TodoChat,
         |boundary, settings| todo_chat_args(&today(), &projects, boundary, settings),
@@ -2780,9 +2778,9 @@ pub async fn claude_chat_slack(
     instruction: String,
 ) -> Result<SlackChatReply, String> {
     let command = "claude_chat_slack";
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
     let named = match &channel {
         Some(c) => {
-            let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
             let name = crate::slack::chat_channel(&dir, &state, &c.team_id, &c.channel)
                 .await
                 .map_err(|e| log_failure(command, "-", e))?;
@@ -2791,7 +2789,7 @@ pub async fn claude_chat_slack(
         None => None,
     };
     let out = chat_ask(
-        &app,
+        &dir,
         command,
         ModelPurpose::SlackChat,
         slack_chat_args,
@@ -3650,7 +3648,7 @@ mod tests {
         assert_eq!(got.body, "my own body\nline 2");
         assert_eq!(got.default_body, default_body());
         assert!(got.edited);
-        assert!(!dir.join(PROMPT_TMP_FILE).exists());
+        assert!(!dir.join("todo-prompt.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4899,7 +4897,7 @@ mod tests {
             )
         );
         assert_eq!(load_settings(&dir), saved);
-        assert!(!dir.join(SETTINGS_TMP_FILE).exists());
+        assert!(!dir.join("claude-settings.json.tmp").exists());
         assert!(std::fs::read_to_string(dir.join(SETTINGS_FILE))
             .unwrap()
             .contains("\"opus\""));

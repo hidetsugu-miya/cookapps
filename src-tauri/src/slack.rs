@@ -19,7 +19,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::{
-    accounts::write_synced,
+    accounts::write_atomic,
     auth::{config_dir, delete_entry, Auth},
     claude::Thread,
     gmail::{log_failure, parse_retry_after, retry_wait, ApiError, MAX_RETRIES},
@@ -889,13 +889,8 @@ fn load_list<T: DeserializeOwned>(dir: &Path, file: &str, key: &str) -> Result<V
 }
 
 fn save_list<T: Serialize>(dir: &Path, file: &str, key: &str, items: &[T]) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(file), dir.join(format!("{file}.tmp")));
     let text = serde_json::to_string_pretty(&json!({ key: items })).map_err(|e| e.to_string())?;
-    // Rename over the target so a crash mid-write leaves the old file, not a truncated one.
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, file, &text)
 }
 
 async fn load_workspaces(dir: &Path) -> Result<Vec<Workspace>, String> {
@@ -984,7 +979,8 @@ pub async fn slack_load(
         .await
         .map_err(|e| log_failure("slack_load", "-", e))?;
     // The list only saves a search, so a broken file is logged and left out.
-    let recent = blocking(move || load_list::<Recent>(&dir, RECENT_FILE, RECENT_KEY))
+    let recent_dir = dir.to_path_buf();
+    let recent = blocking(move || load_list::<Recent>(&recent_dir, RECENT_FILE, RECENT_KEY))
         .await
         .unwrap_or_else(|e| {
             log_failure("slack_load", "-", e);
@@ -1465,27 +1461,21 @@ async fn joined_channels(
 /// The destinations Claude may choose from on the Slack compose screen (S-4): the destination now in the chip (`current`), the recent destinations and the joined channels of every connected workspace.
 /// It is a help for a proofreading, so whatever cannot be read (the list of workspaces, the recent file, a workspace's channels) is logged and left out, and the call goes on.
 pub async fn destination_candidates(
-    app: &AppHandle,
+    dir: &Path,
     auth: &Auth,
     state: &SlackState,
     current: Option<&Target>,
 ) -> Vec<Candidate> {
     let command = "claude_proofread_slack";
-    let dir = match config_dir(app) {
-        Ok(dir) => dir,
-        Err(e) => {
-            log_failure(command, "-", e);
-            return vec![];
-        }
-    };
-    let workspaces = match load_workspaces(&dir).await {
+    let workspaces = match load_workspaces(dir).await {
         Ok(workspaces) => workspaces,
         Err(e) => {
             log_failure(command, "-", e);
             return vec![];
         }
     };
-    let recent = blocking(move || load_list::<Recent>(&dir, RECENT_FILE, RECENT_KEY))
+    let recent_dir = dir.to_path_buf();
+    let recent = blocking(move || load_list::<Recent>(&recent_dir, RECENT_FILE, RECENT_KEY))
         .await
         .unwrap_or_else(|e| {
             log_failure(command, "-", e);
@@ -1710,8 +1700,9 @@ async fn send_post(
 
 /// Posts `text` to `target` (the channel, or a reply in its thread) by `send_post`, and remembers the destination. A failure of the post is logged under `command` and returned.
 /// It is the one path of S-1: the "投稿" button (`slack_post`) and a request to Claude that asks for a post (S-23, `claude_proofread_slack`) both end here.
+/// `dir` is the config folder when it could be found; without it the post still goes and only the remembering is skipped (and logged).
 pub(crate) async fn post_and_remember(
-    app: &AppHandle,
+    dir: Result<&Path, String>,
     http: &reqwest::Client,
     command: &str,
     target: Target,
@@ -1735,8 +1726,9 @@ pub(crate) async fn post_and_remember(
         name: target.name.trim().chars().take(NAME_LIMIT).collect(),
         thread_ts: target.thread_ts,
     };
-    let remembered = match config_dir(app) {
+    let remembered = match dir {
         Ok(dir) => {
+            let dir = dir.to_path_buf();
             blocking(move || {
                 let list = remember(
                     load_list(&dir, RECENT_FILE, RECENT_KEY).unwrap_or_default(),
@@ -1766,13 +1758,22 @@ pub async fn slack_post(
     name: String,
     text: String,
 ) -> Result<bool, String> {
+    let command = "slack_post";
     let target = Target {
         team_id,
         channel,
         name,
         thread_ts,
     };
-    post_and_remember(&app, auth.http(), "slack_post", target, &text).await?;
+    let dir = config_dir(&app);
+    post_and_remember(
+        dir.as_deref().map_err(Clone::clone),
+        auth.http(),
+        command,
+        target,
+        &text,
+    )
+    .await?;
     Ok(true)
 }
 

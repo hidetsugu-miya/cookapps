@@ -6,10 +6,9 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{accounts::write_synced, auth::delete_entry};
+use crate::{accounts::write_atomic, auth::delete_entry};
 
 const AUTH_FILE: &str = "claude-auth.json";
-const AUTH_TMP_FILE: &str = "claude-auth.json.tmp";
 const KEY_SERVICE: &str = "jp.mysis.cookapps.claude";
 const KEY_USER: &str = "api-key";
 /// The host the key is checked against; `check_key` takes it as an argument so a test can use a local port.
@@ -52,12 +51,8 @@ pub fn load_method(dir: &Path) -> Method {
 
 /// Saves `method` through a temporary file and a rename.
 pub fn save_method(dir: &Path, method: Method) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(AUTH_FILE), dir.join(AUTH_TMP_FILE));
     let text = serde_json::to_string_pretty(&AuthFile { method }).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, AUTH_FILE, &text)
 }
 
 /// An environment variable of the `claude` child process: set to a value, or taken out of what it inherits.
@@ -382,7 +377,7 @@ mod tests {
         assert_eq!(load_method(&dir), Method::Subscription);
         save_method(&dir, Method::ApiKey).unwrap();
         assert_eq!(load_method(&dir), Method::ApiKey);
-        assert!(!dir.join(AUTH_TMP_FILE).exists());
+        assert!(!dir.join("claude-auth.json.tmp").exists());
         save_method(&dir, Method::Subscription).unwrap();
         assert_eq!(load_method(&dir), Method::Subscription);
         std::fs::write(dir.join(AUTH_FILE), "broken").unwrap();

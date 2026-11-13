@@ -23,14 +23,13 @@ use tauri::AppHandle;
 use ts_rs::TS;
 
 use crate::{
-    accounts::write_synced,
+    accounts::write_atomic,
     auth::config_dir,
     ghostty::{PaletteColor, TerminalColors},
     orca_link::orca_dir,
 };
 
 const SELECTION_FILE: &str = "terminal-theme.json";
-const SELECTION_TMP_FILE: &str = "terminal-theme.json.tmp";
 const CATALOG: &str = include_str!("orca_themes.json");
 
 /// The app's default for the light appearance, which is also Orca's.
@@ -209,12 +208,8 @@ fn load(dir: &Path) -> Option<ThemeSelection> {
 }
 
 fn save(dir: &Path, selection: &ThemeSelection) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(SELECTION_FILE), dir.join(SELECTION_TMP_FILE));
     let text = serde_json::to_string_pretty(selection).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, SELECTION_FILE, &text)
 }
 
 /// The choice in use: the saved one, else the one Orca's settings make (saved then), else the default (not saved, so that the next start reads Orca again).
@@ -501,7 +496,7 @@ mod tests {
         assert_eq!(load(&dir), None);
         save(&dir, &selection("One Light", "Dracula")).unwrap();
         assert_eq!(load(&dir), Some(selection("One Light", "Dracula")));
-        assert!(!dir.join(SELECTION_TMP_FILE).exists());
+        assert!(!dir.join("terminal-theme.json.tmp").exists());
         let json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join(SELECTION_FILE)).unwrap())
                 .unwrap();

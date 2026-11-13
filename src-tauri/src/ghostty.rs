@@ -14,10 +14,9 @@ use tauri::AppHandle;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::{accounts::write_synced, auth::config_dir};
+use crate::{accounts::write_atomic, auth::config_dir};
 
 const SETTINGS_FILE: &str = "ghostty-settings.json";
-const SETTINGS_TMP_FILE: &str = "ghostty-settings.json.tmp";
 /// Orca refuses a config file over a million bytes, and a theme file over 256 KiB.
 const CONFIG_LIMIT: u64 = 1_000_000;
 const THEME_LIMIT: u64 = 262_144;
@@ -677,12 +676,8 @@ fn load(dir: &Path) -> Option<GhosttyImport> {
 }
 
 fn save(dir: &Path, import: &GhosttyImport) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let (path, tmp) = (dir.join(SETTINGS_FILE), dir.join(SETTINGS_TMP_FILE));
     let text = serde_json::to_string_pretty(import).map_err(|e| e.to_string())?;
-    write_synced(&tmp, &text)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .map_err(|e| format!("{} を書けません: {e}", path.display()))
+    write_atomic(dir, SETTINGS_FILE, &text)
 }
 
 fn places_from_env() -> Result<Places, String> {
@@ -1338,7 +1333,7 @@ mod tests {
         );
         save(&dir, &import).unwrap();
         assert_eq!(load(&dir), Some(import));
-        assert!(!dir.join(SETTINGS_TMP_FILE).exists());
+        assert!(!dir.join("ghostty-settings.json.tmp").exists());
         // A file that cannot be used is as good as none.
         std::fs::write(dir.join(SETTINGS_FILE), "{").unwrap();
         assert_eq!(load(&dir), None);
