@@ -208,6 +208,23 @@ function reviewField(label: string, control: HTMLElement) {
 // The day and the time in a due text the calendar of the card's popover wrote (`YYYY-MM-DD`, with ` HH:MM`), to open the popover on them again. It reads back the popover's own text and decides nothing about the task.
 export const CARD_DUE = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?$/;
 
+// Draws a due chip (the date icon and `label`) and makes a press open the popover of the task detail on `due`; `commit` gets the text the popover wrote. The classes, the text for an empty date and `disabled` stay with the caller.
+export function drawDueChip(chip: HTMLButtonElement, label: string, due: string, commit: (text: string) => void) {
+  chip.replaceChildren();
+  chip.insertAdjacentHTML("beforeend", DATE_SVG);
+  chip.append(label);
+  chip.onclick = () => {
+    const picked = CARD_DUE.exec(due);
+    openDueEditor(chip, {
+      text: due,
+      date: picked?.[1] ?? null,
+      time: picked?.[2] ?? null,
+      recurring: false,
+      commit,
+    });
+  };
+}
+
 // The card that asks the user to confirm Claude's summary in the Slack thread: name, description, due date and project can be changed, the link cannot (it ends the description).
 export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks) {
   const name = tag("input", "review-name");
@@ -218,25 +235,12 @@ export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks)
   let dueText = summary.due ?? "";
   const dueChip = tag("button", "review-chip review-due");
   dueChip.type = "button";
-  const showDue = () => {
-    dueChip.replaceChildren();
-    dueChip.insertAdjacentHTML("beforeend", DATE_SVG);
-    dueChip.append(dueText || (job.today ? "空なら今日" : "期限なし"));
-  };
-  showDue();
-  dueChip.onclick = () => {
-    const picked = CARD_DUE.exec(dueText);
-    openDueEditor(dueChip, {
-      text: dueText,
-      date: picked?.[1] ?? null,
-      time: picked?.[2] ?? null,
-      recurring: false,
-      commit: (text) => {
-        dueText = text.trim();
-        showDue();
-      },
+  const showDue = () =>
+    drawDueChip(dueChip, dueText || (job.today ? "空なら今日" : "期限なし"), dueText, (text) => {
+      dueText = text.trim();
+      showDue();
     });
-  };
+  showDue();
   const project = tag("button", "review-chip review-project");
   project.type = "button";
   const showProject = () => {

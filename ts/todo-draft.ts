@@ -11,13 +11,13 @@ import { showModelSlot } from "./claude.js";
 import { createComposer } from "./composer.js";
 import { $, composing, isMac, tag } from "./dom.js";
 import { hostOf } from "./format.js";
-import { CLAUDE_SVG, DATE_SVG, PLUS_SVG, SLACK_SVG } from "./icons.js";
+import { CLAUDE_SVG, PLUS_SVG, SLACK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { getSlackWorkspaces } from "./slack-workspaces.js";
 import { initSplit } from "./split.js";
-import { addSlackTodo, CARD_DUE, type ReviewJob } from "./todo-add.js";
+import { addSlackTodo, drawDueChip, type ReviewJob } from "./todo-add.js";
 import { inboxOf, projectName, projectOf, todoState } from "./todo-data.js";
-import { field, openDueEditor, openProjectPicker } from "./todo-detail.js";
+import { field, openProjectPicker } from "./todo-detail.js";
 import { renderTodo } from "./todo.js";
 
 // What the owner of the draft does with it: drop it (破棄, the back button), and learn that the task was added (`added` is its name; null when Todoist needs a token).
@@ -94,25 +94,12 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   let dueText = summary.due ?? "";
   const dueButton = tag("button", "field-value draft-due");
   dueButton.type = "button";
-  const showDue = () => {
-    dueButton.replaceChildren();
-    dueButton.insertAdjacentHTML("beforeend", DATE_SVG);
-    dueButton.append(dueText || (job.today ? "空なら今日" : "期限なし"));
-  };
-  showDue();
-  dueButton.onclick = () => {
-    const picked = CARD_DUE.exec(dueText);
-    openDueEditor(dueButton, {
-      text: dueText,
-      date: picked?.[1] ?? null,
-      time: picked?.[2] ?? null,
-      recurring: false,
-      commit: (text) => {
-        dueText = text.trim();
-        showDue();
-      },
+  const showDue = () =>
+    drawDueChip(dueButton, dueText || (job.today ? "空なら今日" : "期限なし"), dueText, (text) => {
+      dueText = text.trim();
+      showDue();
     });
-  };
+  showDue();
 
   const add = tag("button", "draft-add");
   add.type = "button";
