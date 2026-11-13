@@ -1371,13 +1371,13 @@ describe("settings: editor (the Orca tab, A-18)", () => {
   });
 
   it("shows the time that was saved", async () => {
-    await openOrcaTab({ editor_settings: { autosaveMs: 2500 } });
+    await openOrcaTab({ editor_settings: { autosaveMs: 2500, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 } });
     await expect($("#editor-autosave")).toHaveValue("2500");
   });
 
   it("sends the number typed and shows the value Rust answers", async () => {
     await openOrcaTab();
-    const set = await mock("editor_settings_set", { autosaveMs: 100 });
+    const set = await mock("editor_settings_set", { autosaveMs: 100, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 });
     await typeMs("50");
     expect(await waitForCalls(set)).toEqual([{ autosaveMs: 50 }]);
     await expect($("#editor-autosave")).toHaveValue("100");
@@ -1387,7 +1387,7 @@ describe("settings: editor (the Orca tab, A-18)", () => {
 
   it("sends nothing for what is not a number, and shows the time held", async () => {
     await openOrcaTab();
-    const set = await mock("editor_settings_set", { autosaveMs: 100 });
+    const set = await mock("editor_settings_set", { autosaveMs: 100, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 });
     await typeMs("");
     await expect($("#editor-autosave")).toHaveValue("1000");
     expect(await callsOf(set)).toEqual([]);

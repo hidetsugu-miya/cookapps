@@ -29,6 +29,7 @@ import re
 import subprocess
 import sys
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 PLAN_FILE = os.path.join(".claude", "plan.json")
@@ -632,6 +633,16 @@ def gh(*args):
     return r.stdout
 
 
+def parallel(calls, workers=10):
+    """Runs the callables at the same time and returns their results in the order given.
+    The first failure in that order is raised, after every call has ended."""
+    if not calls:
+        return []
+    with ThreadPoolExecutor(max_workers=min(workers, len(calls))) as pool:
+        futures = [pool.submit(c) for c in calls]
+        return [f.result() for f in futures]
+
+
 def api(path, method="GET", fields=None, paginate=False):
     args = ["api", path]
     if method != "GET":
@@ -682,22 +693,38 @@ def released_at(repo, tags, last_tag):
     return api(f"repos/{repo}/commits/{sha}")["commit"]["committer"]["date"] if sha else None
 
 
-def load_state(blockers=True):
-    """`blockers` False leaves `blocked_by` empty: only `snapshot`, `apply` and `next` read it, and it costs one request for each open issue."""
-    repo = gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
-    owner = gh("repo", "view", "--json", "owner", "--jq", ".owner.login").strip()
+def read_tags_and_closed(repo):
+    """-> (tags, since, closed issues): the tags, the time of the last release, and what closed after it.
+    Each step needs the one before it, so they run in order."""
     tags = api(f"repos/{repo}/tags?per_page=100", paginate=True)
+    last_tag = highest_tag([t["name"] for t in tags])
+    since = released_at(repo, tags, last_tag) if last_tag else None
+    closed = api(f"repos/{repo}/issues?state=closed&since={since}&per_page=100", paginate=True) if since else []
+    return tags, since, closed
+
+
+def load_state(blockers=True):
+    """`blockers` False leaves `blocked_by` empty: only `snapshot`, `apply` and `next` read it, and it costs one request for each open issue.
+    The requests that do not depend on each other are made at the same time."""
+    view, prs = parallel(
+        [
+            lambda: json.loads(gh("repo", "view", "--json", "nameWithOwner,owner")),
+            lambda: json.loads(gh("pr", "list", "--state", "open", "--limit", "200", "--json", "author,closingIssuesReferences")),
+        ]
+    )
+    repo = view["nameWithOwner"]
+    owner = view["owner"]["login"]
+    opened, (tags, since, closed) = parallel(
+        [
+            lambda: api(f"repos/{repo}/issues?state=open&per_page=100", paginate=True),
+            lambda: read_tags_and_closed(repo),
+        ]
+    )
     names = [t["name"] for t in tags]
     last_tag = highest_tag(names)
-    since = released_at(repo, tags, last_tag) if last_tag else None
 
-    raw = [r for r in api(f"repos/{repo}/issues?state=open&per_page=100", paginate=True) if "pull_request" not in r]
-    if since:
-        raw += [
-            r
-            for r in api(f"repos/{repo}/issues?state=closed&since={since}&per_page=100", paginate=True)
-            if "pull_request" not in r and (r.get("closed_at") or "") > since
-        ]
+    raw = [r for r in opened if "pull_request" not in r]
+    raw += [r for r in closed if "pull_request" not in r and (r.get("closed_at") or "") > since]
     skipped = sum(1 for r in raw if r["user"]["login"] != owner)
     issues = {r["number"]: to_issue(r) for r in raw if r["user"]["login"] == owner}
 
@@ -705,10 +732,10 @@ def load_state(blockers=True):
     states = {n: i.state for n, i in issues.items()}
     # The list already says how many blockers an issue has, open or closed; an issue with none is not asked.
     unblocked = {r["number"] for r in raw if (r.get("issue_dependencies_summary") or {}).get("total_blocked_by") == 0}
-    for n, i in issues.items():
-        if not blockers or i.state != "open" or n in unblocked:
-            continue
-        for b in api(f"repos/{repo}/issues/{n}/dependencies/blocked_by?per_page=100", paginate=True):
+    asked = [i for n, i in issues.items() if blockers and i.state == "open" and n not in unblocked]
+    found = parallel([lambda n=i.number: api(f"repos/{repo}/issues/{n}/dependencies/blocked_by?per_page=100", paginate=True) for i in asked])
+    for i, bs in zip(asked, found):
+        for b in bs:
             if not b["repository_url"].endswith("/" + repo):
                 continue
             ids.setdefault(b["number"], b["id"])
@@ -716,7 +743,6 @@ def load_state(blockers=True):
             if b["state"] == "open":
                 i.blocked_by.append(b["number"])
 
-    prs = json.loads(gh("pr", "list", "--state", "open", "--limit", "200", "--json", "author,closingIssuesReferences"))
     pr_closing = {
         ref["number"] for p in prs if p["author"]["login"] == owner for ref in p.get("closingIssuesReferences", [])
     }
@@ -817,15 +843,15 @@ def read_plan(path):
 
 def closed_states(repo, numbers):
     """-> {number: "closed"} for the numbers GitHub says are closed. The issues closed before the last release are not in the state, and a plan made earlier may still name them."""
-    out = {}
-    for n in sorted(numbers):
+    def read(n):
         try:
-            raw = api(f"repos/{repo}/issues/{n}")
+            return api(f"repos/{repo}/issues/{n}")
         except GhError:
-            continue
-        if isinstance(raw, dict) and raw.get("state") == "closed":
-            out[n] = "closed"
-    return out
+            return None
+
+    asked = sorted(numbers)
+    found = parallel([lambda n=n: read(n) for n in asked])
+    return {n: "closed" for n, raw in zip(asked, found) if isinstance(raw, dict) and raw.get("state") == "closed"}
 
 
 def cmd_apply(args):
@@ -883,9 +909,8 @@ def cmd_unsplit(args):
     print(json.dumps(found, ensure_ascii=False, indent=2))
 
 
-def release_pr_of(owner):
-    """-> the open Release PR of the owner, or None."""
-    found = json.loads(gh("pr", "list", "--state", "open", "--head", RELEASE_BRANCH, "--json", "number,title,url,author,labels"))
+def release_pr_of(owner, found):
+    """-> the open Release PR of the owner among `found` (what `gh pr list --head release/next` printed, parsed), or None."""
     found = [p for p in found if p["author"]["login"] == owner]
     if not found:
         return None
@@ -894,16 +919,24 @@ def release_pr_of(owner):
 
 
 def cmd_release(args):
-    state = load_state(blockers=False)
-    facts = release_facts(list(state.issues.values()), release_pr_of(state.owner), state.last_tag)
-    merged = json.loads(gh("pr", "list", "--state", "merged", "--head", RELEASE_BRANCH, "--limit", "10", "--json", "number,author,mergedAt,mergeCommit"))
+    state, open_prs, merged = parallel(
+        [
+            lambda: load_state(blockers=False),
+            lambda: json.loads(gh("pr", "list", "--state", "open", "--head", RELEASE_BRANCH, "--json", "number,title,url,author,labels")),
+            lambda: json.loads(gh("pr", "list", "--state", "merged", "--head", RELEASE_BRANCH, "--limit", "10", "--json", "number,author,mergedAt,mergeCommit")),
+        ]
+    )
+    facts = release_facts(list(state.issues.values()), release_pr_of(state.owner, open_prs), state.last_tag)
     merged = [p for p in merged if p["author"]["login"] == state.owner]
+    versions = {}  # commit -> version: tag_due and follow_up_due read the same one
 
     def read_version(oid):
-        try:
-            return changelog_version(gh("api", f"repos/{state.repo}/contents/CHANGELOG.md?ref={oid}", "-H", "Accept: application/vnd.github.raw+json"))
-        except GhError:
-            return None
+        if oid not in versions:
+            try:
+                versions[oid] = changelog_version(gh("api", f"repos/{state.repo}/contents/CHANGELOG.md?ref={oid}", "-H", "Accept: application/vnd.github.raw+json"))
+            except GhError:
+                versions[oid] = None
+        return versions[oid]
 
     def is_marked(number, tag):
         comments = json.loads(gh("pr", "view", str(number), "--json", "comments"))["comments"]

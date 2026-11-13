@@ -93,7 +93,7 @@ const answers = {
   },
   font_families: ["Hiragino Sans", "Menlo", "Times New Roman"],
   // A-18: the files and the editor are answered by the spec that opens them; the settings are read at the start.
-  editor_settings: { autosaveMs: 1000 },
+  editor_settings: { autosaveMs: 1000, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 },
   orca_stream_open: null,
   orca_stream_close: null,
   orca_stream_terminal: null,

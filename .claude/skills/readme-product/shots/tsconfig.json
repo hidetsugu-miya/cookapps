@@ -1,0 +1,8 @@
+{
+  "extends": "../../../../e2e/tsconfig.json",
+  "compilerOptions": {
+    "rootDirs": ["../..", "../../../..", "..", "../../../../e2e"]
+  },
+  "include": ["./readme-shots.e2e.ts"],
+  "exclude": []
+}

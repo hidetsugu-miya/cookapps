@@ -37,4 +37,8 @@ status: OrcaStatus,
 /**
  * The project the row belongs to (`OrcaProject::key`); empty when its worktree has none.
  */
-projectKey: string, };
+projectKey: string, 
+/**
+ * Where it is: `None` for this machine, else the name of the saved environment.
+ */
+environment?: string | null, };

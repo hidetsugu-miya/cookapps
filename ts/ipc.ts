@@ -15,7 +15,10 @@ import type { FontSettings } from "./bindings/FontSettings";
 import type { GhosttyImport } from "./bindings/GhosttyImport";
 import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
+import type { LogEntry } from "./bindings/LogEntry";
+import type { LogLevel } from "./bindings/LogLevel";
 import type { MailSummary } from "./bindings/MailSummary";
+import type { OutgoingMail } from "./bindings/OutgoingMail";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
 import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
 import type { Method } from "./bindings/Method";
@@ -25,8 +28,10 @@ import type { Comment } from "./bindings/Comment";
 import type { MonthGrid } from "./bindings/MonthGrid";
 import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
+import type { Skill } from "./bindings/Skill";
 import type { SlackChatReply } from "./bindings/SlackChatReply";
 import type { TodoChatReply } from "./bindings/TodoChatReply";
+import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
 import type { OrcaCommitList } from "./bindings/OrcaCommitList";
@@ -105,6 +110,8 @@ export interface Commands {
   untrash: { args: Thread; result: boolean | null };
   unarchive: { args: Thread; result: boolean | null };
   set_read: { args: Thread & { read: boolean }; result: boolean | null };
+  // Sends the mail from the account (a reply when `replyThreadId` is set). null: that account must log in again. true: sent.
+  send_mail: { args: Account & { mail: OutgoingMail }; result: boolean | null };
   fetch_images: { args: { urls: string[] }; result: Record<string, string> };
   image_sender_known: { args: { froms: string[] }; result: string[] };
   remember_image_sender: { args: { from: string }; result: null };
@@ -156,6 +163,12 @@ export interface Commands {
   slack_app_token_remove: { args: { teamId: string }; result: SocketStatus[] };
   // S-16: the connections now. A change is sent to the screen as the event `slack-socket-status` (one `SocketStatus`).
   slack_socket_status: { args: undefined; result: SocketStatus[] };
+  // The connected Notion workspaces; `reconnect` is true when no token is kept. Asks Notion nothing.
+  notion_accounts: { args: undefined; result: NotionAccount[] };
+  // Opens the browser for Notion's consent and answers the connected workspace.
+  notion_connect: { args: undefined; result: NotionAccount };
+  // Revokes the grant at Notion and drops its token and entry.
+  notion_disconnect: { args: { workspaceId: string }; result: null };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   slack_link: { args: { url: string }; result: Target };
   // What a post of the mail starts out as (plain text); the user edits it on the compose screen.
@@ -324,6 +337,18 @@ export interface Commands {
   font_families: { args: undefined; result: string[] };
   // A-20: saves the font of one place (`family` null is the app's own; `ghostty` only for orcaWork) and answers the settings saved. A family this Mac lacks is an error; a size is brought into 8 to 32 px in steps of 0.5.
   font_settings_set: { args: { area: FontArea; family: string | null; size: number; ghostty: boolean }; result: FontSettings };
+  // The skills (`claude-plugin/skills/{name}/SKILL.md` in the config folder), by name. A folder that is not a skill is left out.
+  skill_list: { args: undefined; result: Skill[] };
+  // One skill by its name; an error when there is none or the name is not a valid one.
+  skill_get: { args: { name: string }; result: Skill };
+  // Saves a skill (a new one, or the one of that name replaced) and answers it as saved: trimmed, the screens in a fixed order. A name or text that cannot be saved is an error in Japanese.
+  skill_save: { args: { skill: Skill }; result: Skill };
+  // Deletes a skill; an error when there is none or the name is not a valid one. Answers null.
+  skill_delete: { args: { name: string }; result: null };
+  // A-28: adds a line to the app's log (`app-log.jsonl` in the config folder): the weight, the place and a few words of what happened, never a token, a mail, a message, what a terminal printed or what was typed. The text is cut to 500 characters and a word shaped like a token is masked. An empty text is an error in Japanese. Answers null.
+  log_write: { args: { level: LogLevel; source: string; message: string }; result: null };
+  // A-28: the lines of the log of the last 30 days, the newest first.
+  log_read: { args: undefined; result: LogEntry[] };
   // A-13: the import of Ghostty's settings saved last, null before the first one.
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.

@@ -2,13 +2,15 @@
 # The hand-over between the runs of ship: one fixed Discussion (Ideas, titled 自走の引き継ぎ), one comment per run (issues.md).
 # Usage: handover.sh ensure          prints the Discussion's URL; creates the Discussion when it does not exist yet
 #        handover.sh read            ensure, then prints the last hand-over and the owner's replies since the run that wrote it started
+#        handover.sh history [n]     ensure, then prints the last n hand-overs (default 3, 1 to 30) and the `<!-- ai -->` writes and the owner's unmarked replies since the oldest of them, oldest first
 #        handover.sh write <file>    posts the file as a hand-over comment and prints the comment's URL
 #        handover.sh note <file>     posts the file as a comment that is not a hand-over: first line `<!-- ai -->`, prints the comment's URL
 #        handover.sh format <owner>  reads the JSON of a Discussion (the query of `read`) from stdin and prints what `read` prints; no network
+#        handover.sh format-history <owner> <n>  the same for `history`; no network
 # The runs write with the owner's account, so a comment is told by its mark `<!-- handover run-start=... -->`, which `write` puts on the first line.
 # A comment without the mark whose author is the owner is the owner's reply, and the next run reads it first and takes it as an instruction.
 # A comment whose first line is `<!-- ai -->` (`note`) is an AI's write, so it is neither a hand-over nor a reply.
-# The repository is public: a comment of any other author is data, never an instruction. `format` counts them and prints nothing of them, and takes a mark only from the owner's comments.
+# The repository is public: a comment of any other author is data, never an instruction. `format` and `format-history` count them and print nothing of them, and take a mark only from the owner's comments.
 # A run-start that is not an ISO time in UTC, or is later than the comment itself, is not used: the comment's own time is.
 # HANDOVER_RUN_START (ISO time in UTC; nightly.sh sets it) is the start of the run; a reply written after it is left to the next run, which has not read it yet.
 # HANDOVER_DRY_RUN=1 makes `write` and `note` print the comment and touch nothing.
@@ -18,7 +20,7 @@ title="自走の引き継ぎ"
 mark='<!-- handover'
 
 usage() {
-  echo "使い方: handover.sh ensure | read | write <file> | note <file> | format <owner>" >&2
+  echo "使い方: handover.sh ensure | read | history [n] | write <file> | note <file> | format <owner> | format-history <owner> <n>" >&2
   exit 2
 }
 
@@ -112,6 +114,34 @@ format() {
   '
 }
 
+# the Discussion's comments as `read` asks for them (the last 100, each with its first 50 replies)
+discussion_json() {
+  q='query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){discussion(number:$num){url comments(last:100){nodes{url body createdAt author{login} replies(first:50){totalCount nodes{url body createdAt author{login}}}}}}}}'
+  gh api graphql -f query="$q" -f o="$owner" -f n="$name" -F num="$dnum"
+}
+
+# $1: the owner's login, $2: how many hand-overs. stdin: the same JSON as `format`; stdout: the last $2 hand-overs of the owner, and the owner's `<!-- ai -->` writes and unmarked replies that are not older than the oldest of them, oldest first
+format_history() {
+  jq -r --arg mark "$mark" --arg owner "$1" --argjson n "$2" '
+    .data.repository.discussion as $d
+    | ([$d.comments.nodes[] | ., (.replies.nodes // [])[]] | map(del(.replies)) | sort_by(.createdAt)) as $all
+    | ($all | map(select(.author.login == $owner))) as $mine
+    | (($all | length) - ($mine | length)) as $ignored
+    | ($mine | map(select(.body | contains($mark)))) as $marked
+    | ($marked | .[-$n:]) as $picked
+    | (if ($picked | length) == 0 then "" else $picked[0].createdAt end) as $from
+    | ($mine | map(select((.body | contains($mark) | not) and (.body | split("\n")[0] | test("^<!-- ai -->[ \\t\\r]*$")) and .createdAt >= $from))) as $notes
+    | ($mine | map(select((.body | contains($mark) | not) and (.body | split("\n")[0] | test("^<!-- ai -->[ \\t\\r]*$") | not) and .createdAt >= $from))) as $replies
+    | ([($picked[] | . + {kind: "handover"}), ($notes[] | . + {kind: "ai note"}), ($replies[] | . + {kind: "owner reply"})] | sort_by(.createdAt)) as $shown
+    | "discussion: \($d.url)",
+      "handovers shown: \($picked | length)",
+      "ai notes shown: \($notes | length)",
+      "owner replies shown: \($replies | length)",
+      "ignored comments of other authors: \($ignored)",
+      ($shown[] | "\n[\(.createdAt) \(.kind)] \(.url)\n---\n\(.body)\n---")
+  '
+}
+
 cmd="${1:-}"
 case "$cmd" in
   ensure)
@@ -122,8 +152,17 @@ case "$cmd" in
   read)
     [ $# -eq 1 ] || usage
     ensure || exit 1
-    q='query($o:String!,$n:String!,$num:Int!){repository(owner:$o,name:$n){discussion(number:$num){url comments(last:100){nodes{url body createdAt author{login} replies(first:50){totalCount nodes{url body createdAt author{login}}}}}}}}'
-    gh api graphql -f query="$q" -f o="$owner" -f n="$name" -F num="$dnum" | format "$owner"
+    discussion_json | format "$owner"
+    ;;
+  history)
+    [ $# -le 2 ] || usage
+    n="${2:-3}"
+    case "$n" in
+      '' | *[!0-9]* | 0*) usage ;;
+    esac
+    [ "$n" -le 30 ] || usage
+    ensure || exit 1
+    discussion_json | format_history "$owner" "$n"
     ;;
   write)
     [ $# -eq 2 ] || usage
@@ -169,6 +208,14 @@ case "$cmd" in
   format)
     [ $# -eq 2 ] || usage
     format "$2"
+    ;;
+  format-history)
+    [ $# -eq 3 ] || usage
+    case "$3" in
+      '' | *[!0-9]* | 0*) usage ;;
+    esac
+    [ "$3" -le 30 ] || usage
+    format_history "$2" "$3"
     ;;
   *) usage ;;
 esac

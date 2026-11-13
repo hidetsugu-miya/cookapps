@@ -147,7 +147,7 @@ const specs: Spec[] = [
 const rows = () =>
   specs.map(([repo, branch, line, extra], i) => orcaRow(repo, branch, line, { handle: `term_${i}`, paneKey: `tab_${i}:leaf_1`, path: path(repo, branch), atMs: minutesAgo(extra.minutes ?? 2) - 5_000, ...extra }));
 // The worktree of `main` is the project's own folder (`isMain`), which a handoff without 新規作成 starts in (A-9).
-const worktreeOf = (repo: string, branch: string): OrcaWorktree => ({ path: path(repo, branch), repo, branch, projectKey: `proj_${repo}`, isMain: branch === "main" });
+const worktreeOf = (repo: string, branch: string): OrcaWorktree => ({ path: path(repo, branch), repo, branch, gitBranch: branch, projectKey: `proj_${repo}`, isMain: branch === "main" });
 const worktreeList = (): OrcaWorktree[] => [
   ...specs.map(([repo, branch]) => worktreeOf(repo, branch)),
   ...["billing-api", "shop-web", "mobile-api", "admin-console", "design-docs", "auth-service", "notify-worker", "data-batch", "ops-scripts", "landing-page"].map((repo) => worktreeOf(repo, "main")),

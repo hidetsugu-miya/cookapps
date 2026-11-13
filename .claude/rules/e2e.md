@@ -93,10 +93,11 @@ npm run e2e
 ### Run E2E with `.claude/tools/run-e2e.sh`, and keep a record per HEAD
 
 Run it when the working tree is clean (after a commit).
-`run-e2e.sh [checkout path]` runs `e2e:build` and `e2e`, then writes JSON (sha, version, clean, passed, tests, script_timeouts, finished_at) to `.claude/e2e/{HEAD SHA}` in the main checkout, and the full output to `.claude/e2e/{HEAD SHA}.log`.
+`run-e2e.sh [checkout path]` runs `e2e:build` and `e2e` (and, beside `e2e`, `run-ci.sh` when HEAD has no passing CI record; see below), then writes JSON (sha, version, clean, passed, tests, script_timeouts, finished_at) to `.claude/e2e/{HEAD SHA}` in the main checkout, and the full output to `.claude/e2e/{HEAD SHA}.log`.
 `script_timeouts` counts the WebDriver commands whose result never came back. A passing run can hide them behind webdriver's retry, so read this count and the log before saying anything about E2E speed or stability.
 `pre-git.sh`, `post-checks.sh` and release-verifier use this record, through `.claude/tools/check-e2e.sh`, to confirm that E2E passed for HEAD. The record of the static checks and unit tests has the same shape in `.claude/ci/{HEAD SHA}` (`run-ci.sh`, `check-ci.sh`; `testing.md`).
 `guard-e2e.sh` blocks every write to either record except a direct call of its own command (`run-e2e.sh`, `run-ci.sh`). Never write them by hand.
+After `e2e:build`, `run-e2e.sh` starts `run-ci.sh` of its own checkout in the background (under `nice -n 10`, so that wdio keeps the cores), if `check-ci.sh` finds no passing, clean CI record for HEAD, and runs `e2e` beside it (#420). cargo is used only up to `e2e:build`, and wdio runs the built binary, so the two do not wait for each other's `target/debug` lock, and `cargo test` and clippy never write `target/debug/cookapps` (no integration test builds it). The CI record is `run-ci.sh`'s as before, and the record of E2E is the result of E2E alone (`passed`, `tests`, `script_timeouts`); the exit code of `run-e2e.sh` is non-zero when either failed, and the output of `run-ci.sh` is printed after the E2E lines. `--only` runs no CI.
 
 ```sh
 .claude/tools/run-e2e.sh   # in the main checkout

@@ -42,8 +42,8 @@ Every claim must be true of the code and `docs/privacy/index.md`. Check each one
 `docs/assets/readme/`, from the mocked E2E build, so no real data can appear.
 
 ```sh
-# from the root of a worktree with node_modules installed
-"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/skills/readme-product/shots/shots.sh"
+# from the root of a worktree with node_modules installed; call the worktree's own copy, because shots.sh copies the spec from its own folder
+.claude/skills/readme-product/shots/shots.sh
 ```
 
 The data and the steps are in `shots/readme-shots.e2e.ts`. A screen that changed may need its steps or data changed there, on a `docs/{summary}` branch (Steps 1 to 4), because the spec is not release-only (`review.md`). Never change it in `release/next`. The result is the same bytes for the same screens, except for what depends on the date.

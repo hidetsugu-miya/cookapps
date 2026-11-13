@@ -16,4 +16,8 @@ sessions: number,
 /**
  * The last activity (epoch milliseconds, 0 when unknown); the list is newest first.
  */
-atMs: number, };
+atMs: number, 
+/**
+ * Where it is: `None` for this machine, else the name of the saved environment.
+ */
+environment?: string | null, };

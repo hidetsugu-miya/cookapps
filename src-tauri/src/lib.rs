@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod app_log;
 pub mod auth;
 pub mod calendar;
 pub mod claude;
@@ -10,7 +11,9 @@ pub mod gmail;
 pub mod image_senders;
 pub mod images;
 pub mod mail_address;
+pub mod mail_send;
 pub mod markdown_patch;
+pub mod notion;
 pub mod orca;
 pub mod orca_attach;
 pub mod orca_diff;
@@ -22,6 +25,7 @@ pub mod orca_link;
 pub mod orca_panes;
 pub mod orca_stream;
 pub mod orca_theme;
+pub mod skills;
 pub mod slack;
 mod slack_blocks;
 mod slack_emoji;
@@ -193,6 +197,7 @@ pub fn run() {
         .manage(calendar::CalendarCache::default())
         .manage(todoist::TodoistState::default())
         .manage(slack::SlackState::default())
+        .manage(notion::NotionState::default())
         .manage(std::sync::Mutex::new(None::<tauri_plugin_updater::Update>))
         .manage(update::Installed::default())
         .manage(orca::OrcaMirror::default())
@@ -225,6 +230,7 @@ pub fn run() {
             gmail::untrash,
             gmail::unarchive,
             gmail::set_read,
+            mail_send::send_mail,
             gmail::sync,
             images::fetch_images,
             image_senders::image_sender_known,
@@ -281,6 +287,9 @@ pub fn run() {
             slack::socket::slack_app_token_set,
             slack::socket::slack_app_token_remove,
             slack::socket::slack_socket_status,
+            notion::notion_accounts,
+            notion::notion_connect,
+            notion::notion_disconnect,
             claude::claude_status,
             claude::claude_connection,
             claude::claude_key_save,
@@ -336,12 +345,18 @@ pub fn run() {
             fonts::font_settings,
             fonts::font_families,
             fonts::font_settings_set,
+            skills::skill_list,
+            skills::skill_get,
+            skills::skill_save,
+            skills::skill_delete,
             markdown_patch::markdown_split,
             markdown_patch::markdown_patch,
             ghostty::ghostty_saved,
             ghostty::ghostty_import,
             orca_theme::terminal_themes,
             orca_theme::terminal_theme_set,
+            app_log::log_write,
+            app_log::log_read,
             update::app_info,
             update::update_mode,
             update::set_update_mode,

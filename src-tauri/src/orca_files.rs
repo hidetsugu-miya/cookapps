@@ -41,9 +41,9 @@ use crate::{
 
 const SETTINGS_FILE: &str = "editor-settings.json";
 /// The time of the automatic save: the range, the step and the first value, in milliseconds.
-const AUTOSAVE_MIN: i64 = 100;
-const AUTOSAVE_MAX: i64 = 3000;
-const AUTOSAVE_STEP: i64 = 100;
+const AUTOSAVE_MIN: u32 = 100;
+const AUTOSAVE_MAX: u32 = 3000;
+const AUTOSAVE_STEP: u32 = 100;
 const AUTOSAVE_DEFAULT: u32 = 1000;
 /// The most entries one `files.readDir` answers (Orca's page limit).
 pub(crate) const LIST_LIMIT: usize = 5000;
@@ -255,6 +255,19 @@ pub struct OrcaSaved {
 pub struct EditorSettings {
     /// How long after the typing stops the file is saved, in milliseconds.
     pub autosave_ms: u32,
+    /// The least time `autosave_ms` can be, in milliseconds.
+    pub autosave_min: u32,
+    /// The greatest time `autosave_ms` can be, in milliseconds.
+    pub autosave_max: u32,
+    /// The step of `autosave_ms`, in milliseconds.
+    pub autosave_step: u32,
+}
+
+/// What `editor-settings.json` holds.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSettings {
+    autosave_ms: u32,
 }
 
 // ---- paths ----
@@ -1581,30 +1594,38 @@ pub async fn orca_file_download(
 
 /// The time of the automatic save a value gives: into the range, to the nearest step.
 fn clamp_autosave(ms: i64) -> u32 {
-    let ms = ms.clamp(AUTOSAVE_MIN, AUTOSAVE_MAX);
-    let stepped = (ms + AUTOSAVE_STEP / 2) / AUTOSAVE_STEP * AUTOSAVE_STEP;
+    let step = i64::from(AUTOSAVE_STEP);
+    let ms = ms.clamp(i64::from(AUTOSAVE_MIN), i64::from(AUTOSAVE_MAX));
+    let stepped = (ms + step / 2) / step * step;
     u32::try_from(stepped).unwrap_or(AUTOSAVE_DEFAULT)
+}
+
+/// The settings Rust answers: the time and the range it is kept in.
+fn settings_of(autosave_ms: u32) -> EditorSettings {
+    EditorSettings {
+        autosave_ms,
+        autosave_min: AUTOSAVE_MIN,
+        autosave_max: AUTOSAVE_MAX,
+        autosave_step: AUTOSAVE_STEP,
+    }
 }
 
 /// The saved settings; a missing or unreadable file gives the first value, and a value out of the range is brought into it.
 fn load_settings(dir: &Path) -> EditorSettings {
     let saved = std::fs::read_to_string(dir.join(SETTINGS_FILE))
         .ok()
-        .and_then(|text| serde_json::from_str::<EditorSettings>(&text).ok());
-    EditorSettings {
-        autosave_ms: saved.map_or(AUTOSAVE_DEFAULT, |s| {
-            clamp_autosave(i64::from(s.autosave_ms))
-        }),
-    }
+        .and_then(|text| serde_json::from_str::<StoredSettings>(&text).ok());
+    settings_of(saved.map_or(AUTOSAVE_DEFAULT, |s| {
+        clamp_autosave(i64::from(s.autosave_ms))
+    }))
 }
 
 fn save_settings(dir: &Path, autosave_ms: i64) -> Result<EditorSettings, String> {
-    let settings = EditorSettings {
-        autosave_ms: clamp_autosave(autosave_ms),
-    };
-    let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    let autosave_ms = clamp_autosave(autosave_ms);
+    let text =
+        serde_json::to_string_pretty(&StoredSettings { autosave_ms }).map_err(|e| e.to_string())?;
     write_atomic(dir, SETTINGS_FILE, &text)?;
-    Ok(settings)
+    Ok(settings_of(autosave_ms))
 }
 
 /// The settings of the editor (A-18).
@@ -3587,7 +3608,16 @@ mod tests {
     fn the_settings_are_saved_and_read_back() {
         let dir = temp_dir("settings");
         assert_eq!(load_settings(&dir).autosave_ms, 1000);
-        assert_eq!(save_settings(&dir, 450).unwrap().autosave_ms, 500);
+        let saved = save_settings(&dir, 450).unwrap();
+        assert_eq!(
+            (
+                saved.autosave_ms,
+                saved.autosave_min,
+                saved.autosave_max,
+                saved.autosave_step
+            ),
+            (500, 100, 3000, 100)
+        );
         assert_eq!(load_settings(&dir).autosave_ms, 500);
         assert_eq!(save_settings(&dir, 99_999).unwrap().autosave_ms, 3000);
         assert_eq!(load_settings(&dir).autosave_ms, 3000);

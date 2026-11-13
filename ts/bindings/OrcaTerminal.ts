@@ -7,4 +7,8 @@ export type OrcaTerminal = { handle: string, title: string, branch: string, proj
 /**
  * The worktree's path, where an image dropped on the terminal is put (A-10).
  */
-path: string, };
+path: string, 
+/**
+ * Where it is: `None` for this machine, else the name of the saved environment.
+ */
+environment?: string | null, };

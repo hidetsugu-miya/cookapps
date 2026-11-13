@@ -23,8 +23,9 @@ use ts_rs::TS;
 
 use crate::{
     orca::{
-        check_accepted, check_handle, check_keys, input_params, plain_terminals_of, projects_of,
-        rows_of, text_of, worktrees_of, OrcaProject, OrcaRow, OrcaTerminal, OrcaWorktree,
+        check_accepted, check_handle, check_keys, input_params, place_in, plain_terminals_of,
+        projects_of, rows_of, text_of, worktrees_of, OrcaProject, OrcaRow, OrcaTerminal,
+        OrcaWorktree,
     },
     orca_link::{backoff, connect_environment, reason_of, result_of, WsLink},
 };
@@ -255,6 +256,26 @@ fn list_of(ps: &Value, tabs: &HashMap<String, Value>) -> OrcaStreamEvent {
         hosts,
         terminals,
     }
+}
+
+/// A list of the saved environment `environment` with every item placed in it (A-6): the stream builds the list from the environment alone, so the screen is told where each item is.
+fn placed_in(mut event: OrcaStreamEvent, environment: &str) -> OrcaStreamEvent {
+    if let OrcaStreamEvent::List {
+        rows,
+        worktrees,
+        projects,
+        hosts,
+        terminals,
+    } = &mut event
+    {
+        let place = Some(environment);
+        place_in(rows, place);
+        place_in(worktrees, place);
+        place_in(projects, place);
+        place_in(hosts, place);
+        place_in(terminals, place);
+    }
+    event
 }
 
 /// Whether `handle` is the terminal of a tab held.
@@ -778,11 +799,12 @@ pub async fn orca_stream_open(
     }
     let (commands, receiver) = unbounded_channel();
     let closer = commands.clone();
+    let place = environment.clone();
     let task = tauri::async_runtime::spawn(run_loop(
         move || connect_environment(environment.clone()),
         receiver,
         move |event| {
-            if channel.send(event).is_err() {
+            if channel.send(placed_in(event, &place)).is_err() {
                 let _ = closer.send(StreamCommand::Close);
             }
         },
@@ -938,6 +960,40 @@ mod tests {
         apply_tabs(&mut tabs, &json!({"type": "updated", "tabs": []}));
         assert_eq!(tabs, before);
         assert_eq!(apply_tabs(&mut tabs, &Value::Null), TabsChange::Other);
+    }
+
+    #[test]
+    fn the_list_of_the_environment_is_placed_in_it_and_a_status_is_left_as_it_is() {
+        let tabs = held(&snapshots(&[(
+            "r1::/w/a",
+            vec![
+                claude_tab("t1", Some("term_c"), "working", 2_000),
+                shell_tab("t2", "term_s", "zsh"),
+            ],
+        )]));
+        let OrcaStreamEvent::List {
+            rows,
+            worktrees,
+            projects,
+            hosts,
+            terminals,
+        } = placed_in(list_of(&ps(), &tabs), "Lab")
+        else {
+            panic!()
+        };
+        let lab = Some("Lab");
+        assert!(!rows.is_empty() && !worktrees.is_empty() && !projects.is_empty());
+        assert!(!terminals.is_empty());
+        assert!(rows.iter().all(|i| i.environment.as_deref() == lab));
+        assert!(worktrees.iter().all(|i| i.environment.as_deref() == lab));
+        assert!(projects.iter().all(|i| i.environment.as_deref() == lab));
+        assert!(hosts.iter().all(|i| i.environment.as_deref() == lab));
+        assert!(terminals.iter().all(|i| i.environment.as_deref() == lab));
+        let status = OrcaStreamEvent::Status {
+            live: true,
+            message: String::new(),
+        };
+        assert_eq!(placed_in(status.clone(), "Lab"), status);
     }
 
     #[test]
