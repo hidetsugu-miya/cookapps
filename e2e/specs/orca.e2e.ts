@@ -1677,8 +1677,11 @@ describe("orca: projects", () => {
     await openOrca(withTerminals());
     await project("example-app").click();
     const close = await mock("orca_close", rejects("Orca が時間内に応答しませんでした"));
+    const overview = await mock("orca_overview", withTerminals());
     await tabOf("orca:term_example-app_zsh").$(".orca-tab-close").click();
     await waitForCalls(close);
+    // The list is read again after the failure.
+    await waitForCalls(overview);
     await expect($("#error")).toBeDisplayed();
     await expect($("#error")).toHaveText("Orca が時間内に応答しませんでした");
     expect(await tabTitles()).toHaveLength(2);
