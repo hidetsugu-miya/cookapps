@@ -1,4 +1,4 @@
-import { attachment, boot, callsOf, claudeReady, composerLayout, count, emitEvent, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, thread as mailThread, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS } from "../support";
+import { attachment, boot, callsOf, claudeReady, composerLayout, count, emitEvent, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, reaction, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, thread as mailThread, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS } from "../support";
 
 import type { TimelineMessage } from "../../ts/bindings/TimelineMessage";
 
@@ -143,7 +143,7 @@ const withReplies = (extra: Parameters<typeof timelineMessage>[4] = {}) =>
 
 describe("slack list", () => {
   it("draws no reactions in the list, although its messages carry them (S-22)", async () => {
-    await openList(timeline([timelineMessage(slackTs(5, 1), "Alice Example", "dev", "Please review the deploy notes.", { reactions: [{ emoji: "🎉", count: 3 }] })]));
+    await openList(timeline([timelineMessage(slackTs(5, 1), "Alice Example", "dev", "Please review the deploy notes.", { reactions: [reaction("tada", "🎉", 3)] })]));
     await waitForCount("#slack-feed .feed-row", 1);
     expect(await count("#slack-feed .reactions, #slack-feed .reaction")).toBe(0);
   });
@@ -2035,7 +2035,7 @@ describe("slack list: the history of a channel (S-20)", () => {
   it("draws the reactions of a message under its text and above its replies (S-22), and nothing under a message without any", async () => {
     const history = await openHistory([
       timelineMessage(oldTs, "Bob Example", "dev", "old"),
-      timelineMessage(firstTs, "Alice Example", "dev", "first", { replyCount: 2, reactions: [{ emoji: "🎉", count: 3 }, { emoji: ":partyparrot:", count: 12 }] }),
+      timelineMessage(firstTs, "Alice Example", "dev", "first", { replyCount: 2, reactions: [reaction("tada", "🎉", 3), reaction("partyparrot", ":partyparrot:", 12)] }),
     ]);
     await pressChannel();
     await waitForCalls(history);
@@ -2079,13 +2079,34 @@ describe("slack list: the history of a channel (S-20)", () => {
   });
 
   it("draws the reactions again when the history is read again and they changed", async () => {
-    await openHistory([timelineMessage(firstTs, "Alice Example", "dev", "first", { reactions: [{ emoji: "🎉", count: 3 }] })]);
+    await openHistory([timelineMessage(firstTs, "Alice Example", "dev", "first", { reactions: [reaction("tada", "🎉", 3)] })]);
     await pressChannel();
     await waitForCount("#sc-feed .reaction", 1);
-    await mock("slack_channel_history", [timelineMessage(firstTs, "Alice Example", "dev", "first", { reactions: [{ emoji: "🎉", count: 4 }, { emoji: "👀", count: 1 }] })]);
+    await mock("slack_channel_history", [timelineMessage(firstTs, "Alice Example", "dev", "first", { reactions: [reaction("tada", "🎉", 4), reaction("eyes", "👀", 1)] })]);
     await pressChannel();
     await waitForCount("#sc-feed .reaction", 2);
     expect(await textsOf("#sc-feed .reaction-count")).toEqual(["4", "1"]);
+  });
+
+  it("draws the custom emoji of a reaction as the image fetch_images gave, and keeps :name: until it is here and when it cannot be fetched (S-26)", async () => {
+    const emojiUrl = "https://emoji.slack-edge.com/T1/partyparrot/abc.gif";
+    const parrot = reaction("partyparrot", ":partyparrot:", 12, emojiUrl);
+    const emojiNodes = () => browser.execute(() => [...document.querySelectorAll("#sc-feed .reaction-emoji")].map((e) => [e.textContent, e.querySelector("img")?.getAttribute("alt") ?? null]));
+    const history = await openHistory([timelineMessage(firstTs, "Alice Example", "dev", "first", { reactions: [parrot, reaction("tada", "🎉", 3)] })]);
+    // The image cannot be fetched: the name stays.
+    const fetch = await mock("fetch_images", {});
+    await pressChannel();
+    await waitForCalls(history);
+    expect((await waitForCalls(fetch)).flatMap((c) => (c as { urls: string[] }).urls)).toEqual([emojiUrl]);
+    await waitForCount("#sc-feed .reaction", 2);
+    expect(await emojiNodes()).toEqual([[":partyparrot:", null], ["🎉", null]]);
+    // It can be fetched when the history is read again: the image replaces the name.
+    await mock("fetch_images", { [emojiUrl]: pngUri });
+    await mock("slack_channel_history", [timelineMessage(firstTs, "Alice Example", "dev", "first", { reactions: [parrot, reaction("tada", "🎉", 4)] })]);
+    await pressChannel();
+    await browser.waitUntil(async () => (await count("#sc-feed .reaction-emoji img.reaction-img")) === 1);
+    expect(await emojiNodes()).toEqual([["", ":partyparrot:"], ["🎉", null]]);
+    expect(await textsOf("#sc-feed .reaction-count")).toEqual(["12", "4"]);
   });
 
   it("shows the error with 再読み込み when the history cannot be read, and reads it again with the button", async () => {

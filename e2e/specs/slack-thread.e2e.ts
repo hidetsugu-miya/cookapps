@@ -1,6 +1,6 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
 import {
-  attachment, boot, callsOf, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
+  attachment, boot, callsOf, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, reaction, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
   copiedTexts, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings, heightOf, TOOLS,
 } from "../support";
 
@@ -768,7 +768,7 @@ describe("slack thread: reactions (S-22)", () => {
     await openDetail(
       {},
       slackThread([
-        threadMessage(root, "Alice Example", rootText, { reactions: [{ emoji: "🎉", count: 3 }, { emoji: "👍🏻", count: 1 }, { emoji: ":partyparrot:", count: 12 }] }),
+        threadMessage(root, "Alice Example", rootText, { reactions: [reaction("tada", "🎉", 3), reaction("+1::skin-tone-2", "👍🏻", 1), reaction("partyparrot", ":partyparrot:", 12)] }),
         threadMessage(reply1, "Bob Example", "Looks fine to me."),
       ]),
     );
@@ -779,8 +779,43 @@ describe("slack thread: reactions (S-22)", () => {
   });
 
   it("puts the reactions last in the message, under its text and its files", async () => {
-    await openDetail({}, slackThread([threadMessage(root, "Alice Example", rootText, { files: [slackFile("F2", "notes.pdf", { mimetype: "application/pdf" })], reactions: [{ emoji: "🎉", count: 2 }] })]));
+    await openDetail({}, slackThread([threadMessage(root, "Alice Example", rootText, { files: [slackFile("F2", "notes.pdf", { mimetype: "application/pdf" })], reactions: [reaction("tada", "🎉", 2)] })]));
     expect(await browser.execute(() => [...document.querySelector("#st-msgs .st-msg > :last-child")!.children].map((e) => e.className.split(" ")[0]))).toEqual(["st-meta", "st-text", "st-files", "reactions"]);
+  });
+
+  describe("custom emoji (S-26)", () => {
+    const emojiUrl = "https://emoji.slack-edge.com/T1/partyparrot/abc.gif";
+    const withImage = () => slackThread([threadMessage(root, "Alice Example", rootText, { reactions: [reaction("partyparrot", ":partyparrot:", 12, emojiUrl), reaction("tada", "🎉", 3)] })]);
+    const emojiNodes = () => browser.execute(() => [...document.querySelectorAll("#st-msgs .reaction-emoji")].map((e) => [e.textContent, e.querySelector("img")?.getAttribute("alt") ?? null]));
+
+    it("draws a custom emoji as the image fetch_images gave, with :name: as its alternative text, and fetches only its address", async () => {
+      await openDetail({ fetch_images: { [emojiUrl]: pngUri } }, withImage());
+      await browser.waitUntil(async () => (await count("#st-msgs .reaction-emoji img.reaction-img")) === 1);
+      expect(await emojiNodes()).toEqual([["", ":partyparrot:"], ["🎉", null]]);
+      await expect($("#st-msgs .reaction-emoji img")).toHaveAttribute("src", pngUri);
+      expect(await textsOf("#st-msgs .reaction-count")).toEqual(["12", "3"]);
+      expect((await callsOf("fetch_images")).flatMap((c) => (c as { urls: string[] }).urls)).toEqual([emojiUrl]);
+    });
+
+    it("keeps :name: when the image cannot be fetched", async () => {
+      await openDetail({}, withImage());
+      await waitForCalls("fetch_images");
+      await browser.pause(300);
+      expect(await emojiNodes()).toEqual([[":partyparrot:", null], ["🎉", null]]);
+    });
+
+    it("keeps :name: when fetch_images fails", async () => {
+      await openDetail({ fetch_images: rejects("取得できません") }, withImage());
+      await waitForCalls("fetch_images");
+      await browser.pause(300);
+      expect(await emojiNodes()).toEqual([[":partyparrot:", null], ["🎉", null]]);
+    });
+
+    it("asks for no image when no reaction has one", async () => {
+      await openDetail({}, slackThread([threadMessage(root, "Alice Example", rootText, { reactions: [reaction("tada", "🎉", 3)] })]));
+      await browser.pause(300);
+      expect(await callsOf("fetch_images")).toEqual([]);
+    });
   });
 });
 

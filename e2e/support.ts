@@ -23,6 +23,7 @@ import type { OrcaTermEvent } from "../ts/bindings/OrcaTermEvent";
 import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
+import type { Reaction } from "../ts/bindings/Reaction";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
 import type { RichBlock } from "../ts/bindings/RichBlock";
@@ -497,7 +498,7 @@ export const proofreadEdit: PromptEdit = {
 // What `slack_channels` answers: the channels of the workspace `workspace`.
 export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general", private: false }];
 
-// What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by. `missingOptional` is the same for users:read, files:read, channels:write and groups:write.
+// What `slack_check` answers; `missingScopes` null means Slack sent no scopes to judge by. `missingOptional` is the same for users:read, files:read, channels:write, groups:write and emoji:read.
 export const checked = (missingScopes: string[] | null, missingOptional: string[] | null = []): Checked => ({ ...workspace, missingScopes, missingOptional });
 
 // A Slack timestamp `minutes` minutes ago ("1700000000.000100"); `n` tells apart messages of the same minute.
@@ -600,6 +601,9 @@ export const plain = (text: string): RichBlock[] => [para(span(text))];
 
 // A message of a thread (`slack_thread`); its `rich` is its text with no style unless `extra` sets it.
 export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, rich: plain(text), files: [], blocks: [], showText: true, attachments: [], imageUrls: [], reactions: [], ...extra });
+
+// A reaction under a message (S-22): Slack's `name`, the `emoji` drawn for it, how many gave it, and, for a custom emoji, the address of its `image` (S-26).
+export const reaction = (name: string, emoji: string, count: number, image: string | null = null): Reaction => ({ name, emoji, count, image });
 
 // An attachment of a thread's message (S-11) with nothing in it; `extra` sets the parts.
 export const attachment = (extra: Partial<ThreadAttachment> = {}): ThreadAttachment => ({

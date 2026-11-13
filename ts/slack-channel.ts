@@ -11,7 +11,7 @@ import { invoke } from "./ipc.js";
 import { createSlackEditor } from "./slack-editor.js";
 import { historyItem, watchedKeys } from "./slack-list.js";
 import { openSlackThread } from "./slack-thread.js";
-import { loadIcons, reactionsNode, slackMs } from "./slack-view.js";
+import { loadIcons, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { toast } from "./toast.js";
 import { show } from "./view.js";
 
@@ -222,7 +222,7 @@ function draw(end = false) {
     }
     target.focus({ preventScroll: true });
   }
-  loadIcons((messages ?? []).flatMap((m) => [m.iconUrl, ...m.repliers.map((r) => r.iconUrl)]));
+  loadIcons((messages ?? []).flatMap((m) => [m.iconUrl, ...m.repliers.map((r) => r.iconUrl)]).concat(reactionImages(messages ?? [])));
 }
 
 // Reads the history of the chosen channel (`toEnd`: and goes to its newest message). Only the latest read draws; a read that fails keeps the messages held.

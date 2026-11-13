@@ -1,6 +1,7 @@
 // What the Slack list and the Slack thread share: a message's time, the workspace color, the users' icons, and the reactions under a message (S-22).
 // An icon is an https URL on Slack's image hosts; it is fetched by Rust's `fetch_images` (public hosts, no token) as a data: URI, so the CSP stays as it is.
 // Until it is here, or when it cannot be fetched, the avatar is the initial on a color taken from the name.
+// The image of a custom emoji in a reaction (S-26) is fetched the same way; until it is here, or when it cannot be fetched, the reaction shows `:name:`.
 import type { Reaction } from "./bindings/Reaction";
 import { tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
@@ -28,11 +29,24 @@ function putIcon(node: HTMLElement, uri: string) {
   delete node.dataset.icon;
 }
 
-// Puts the icon of `url` on every avatar in the page waiting for it, once it is here.
+// Puts the fetched image `uri` of a custom emoji in the reaction emoji `node`, in place of its `:name:`; the name stays as the image's alternative text.
+function putEmoji(node: HTMLElement, uri: string) {
+  const img = tag("img", "reaction-img");
+  img.src = uri;
+  img.alt = node.textContent ?? "";
+  node.replaceChildren(img);
+  delete node.dataset.emojiImage;
+}
+
+// Puts the icon of `url` on every avatar in the page waiting for it, and the image of a custom emoji in every reaction waiting for it, once it is here.
 export function paintIcons() {
   for (const node of document.querySelectorAll<HTMLElement>("[data-icon]")) {
     const uri = icons.get(node.dataset.icon!);
     if (uri) putIcon(node, uri);
+  }
+  for (const node of document.querySelectorAll<HTMLElement>("[data-emoji-image]")) {
+    const uri = icons.get(node.dataset.emojiImage!);
+    if (uri) putEmoji(node, uri);
   }
 }
 
@@ -66,13 +80,23 @@ export function decorateAvatar(node: HTMLElement, name: string, iconUrl: string 
   return node;
 }
 
+// The image addresses of the custom emoji in the reactions of `messages`, for `loadIcons` (S-26).
+export const reactionImages = (messages: { reactions: Reaction[] }[]) => messages.flatMap((m) => m.reactions.map((r) => r.image));
+
 // The reactions under a message (S-22): each one the emoji and how many gave it, in the order Rust gave. Display only. null for a message that has none.
+// A custom emoji (S-26) is its image once `loadIcons` has fetched it (at once when it was fetched before); the `:name:` Rust gave is drawn until then.
 export function reactionsNode(reactions: Reaction[]) {
   if (!reactions.length) return null;
   const box = tag("div", "reactions");
   for (const r of reactions) {
     const chip = tag("span", "reaction");
-    chip.append(tag("span", "reaction-emoji", r.emoji), tag("span", "reaction-count", String(r.count)));
+    const emoji = tag("span", "reaction-emoji", r.emoji);
+    if (r.image) {
+      const uri = icons.get(r.image);
+      if (uri) putEmoji(emoji, uri);
+      else emoji.dataset.emojiImage = r.image;
+    }
+    chip.append(emoji, tag("span", "reaction-count", String(r.count)));
     box.append(chip);
   }
   return box;

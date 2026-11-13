@@ -401,9 +401,16 @@ fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
     missing_scopes(scopes, &HISTORY_SCOPES)
 }
 
-/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`) and the read position that opening a message or "既読にする" sets (`channels:write`, `groups:write`).
-/// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`.
-const OPTIONAL_SCOPES: [&str; 4] = ["users:read", "files:read", "channels:write", "groups:write"];
+/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`), the read position that opening a message or "既読にする" sets (`channels:write`, `groups:write`)
+/// and the images of custom emoji in the reactions (`emoji:read`, S-26).
+/// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`. `emoji:read` is not in `TIMELINE_SCOPES`: the list does not warn of it.
+const OPTIONAL_SCOPES: [&str; 5] = [
+    "users:read",
+    "files:read",
+    "channels:write",
+    "groups:write",
+    "emoji:read",
+];
 
 /// Every scope the timeline wants, which the list answer says a workspace's token lacks.
 const TIMELINE_SCOPES: [&str; 8] = [
@@ -993,7 +1000,7 @@ pub async fn slack_load(
 }
 
 /// A workspace as `auth.test` describes it now. `missing_scopes` is `None` when Slack sent no scopes to judge by.
-/// `missing_optional` is the same for `OPTIONAL_SCOPES` (`users:read`, `files:read`, `channels:write`, `groups:write`), which the token can do without.
+/// `missing_optional` is the same for `OPTIONAL_SCOPES` (`users:read`, `files:read`, `channels:write`, `groups:write`, `emoji:read`), which the token can do without.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -1887,7 +1894,8 @@ pub struct ThreadReply {
     parent: Option<String>,
 }
 
-/// A reaction under a message: the emoji drawn as text (`emojify`; a custom emoji stays `:name:`) and how many people gave it.
+/// A reaction under a message: the emoji drawn as text (`emojify`; a custom emoji stays `:name:`, and an alias of a standard emoji is the Unicode emoji), how many people gave it,
+/// Slack's `name` of it, and, for a custom emoji, the address of its image (S-26).
 #[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -1895,6 +1903,10 @@ pub struct ThreadReply {
 pub struct Reaction {
     emoji: String,
     count: u32,
+    /// The reaction's name as Slack gives it (`tada`, `+1::skin-tone-2`, `partyparrot`), without the colons.
+    name: String,
+    /// The image of a custom emoji: `https://…` of an allowed host (`icon_host_ok`), once `emoji.list` said so; the screen fetches it as it fetches an icon. `None`: `emoji` is drawn.
+    image: Option<String>,
 }
 
 /// The unread replies of a row's thread (S-14). `uncounted`: the thread is longer than the page that was read and its newest reply is after the position, so `count` says nothing (it is 0).
@@ -2134,6 +2146,12 @@ type UserCache = HashMap<(String, String), (Instant, Option<SlackUser>)>;
 /// team -> when `usergroups.list` was asked, and the handle of each user group by ID (`None`: it could not say).
 type GroupCache = HashMap<String, (Instant, Option<HashMap<String, String>>)>;
 
+/// The custom emoji of a workspace as `emoji.list` gives them: the name -> an image address, or `alias:` and the name it stands for.
+type EmojiList = HashMap<String, String>;
+
+/// team -> when `emoji.list` was asked, and the answer (`None`: it could not say).
+type EmojiCache = HashMap<String, (Instant, Option<Arc<EmojiList>>)>;
+
 /// A workspace's channels -> when each was read and the messages that read listed.
 type History = HashMap<String, (Instant, Vec<Raw>)>;
 /// (team, channel) -> the same, for every workspace.
@@ -2195,6 +2213,8 @@ struct TimelineCache {
     users: Mutex<UserCache>,
     /// The user groups of each workspace (`usergroups.list`), for the mentions of a group.
     groups: Mutex<GroupCache>,
+    /// The custom emoji of each workspace (`emoji.list`), for the images of the reactions (S-26).
+    emoji: Mutex<EmojiCache>,
     /// (team, channel) -> when its last read was and the messages that read listed, which stand in for a channel that is not read now.
     history: Mutex<TeamsHistory>,
     /// team -> until when Slack's rate limit stops its timeline reads.
@@ -2225,6 +2245,7 @@ impl TimelineCache {
     fn forget(&self, team_id: &str) {
         self.users.lock().unwrap().retain(|(t, _), _| t != team_id);
         self.groups.lock().unwrap().remove(team_id);
+        self.emoji.lock().unwrap().remove(team_id);
         self.history
             .lock()
             .unwrap()
@@ -2410,6 +2431,30 @@ impl TimelineCache {
             .lock()
             .unwrap()
             .insert(team_id.to_owned(), (Instant::now(), found));
+    }
+
+    /// The workspace's custom emoji as `emoji.list` gave them; empty when it never did or could not. A picker (the emoji of `resolve_emoji` by name) reads them here too.
+    fn custom_emoji(&self, team_id: &str) -> Arc<EmojiList> {
+        let emoji = self.emoji.lock().unwrap();
+        emoji
+            .get(team_id)
+            .and_then(|(_, found)| found.clone())
+            .unwrap_or_default()
+    }
+
+    /// Whether Slack should be asked for the workspace's custom emoji: it never was, or the answer is old (`USER_TTL`, `USER_MISS_TTL` after a miss).
+    fn needs_emoji(&self, team_id: &str) -> bool {
+        let emoji = self.emoji.lock().unwrap();
+        emoji
+            .get(team_id)
+            .is_none_or(|(at, found)| !user_fresh(at.elapsed(), found.is_some()))
+    }
+
+    fn put_emoji(&self, team_id: &str, found: Option<EmojiList>) {
+        self.emoji
+            .lock()
+            .unwrap()
+            .insert(team_id.to_owned(), (Instant::now(), found.map(Arc::new)));
     }
 
     /// The workspace's remembered channels.
@@ -4237,9 +4282,44 @@ fn thread_slim(m: &Value) -> Value {
     })
 }
 
-/// The reactions of a message (`reactions` of `conversations.history` and `conversations.replies`), in Slack's order: the emoji as `emojify` draws `:name:` (a skin tone comes as `+1::skin-tone-2` in the name) and the count.
+/// How many `alias:` links `resolve_emoji` follows before it gives a name up (an alias that loops, or a chain no one made).
+const EMOJI_ALIAS_HOPS: usize = 5;
+
+/// What a custom emoji's name draws as (S-26).
+#[derive(Debug, PartialEq, Clone)]
+enum EmojiLook {
+    /// The image of a custom emoji: `https://…` of an allowed host (`icon_host_ok`).
+    Image(String),
+    /// An alias that ends on a standard emoji: the Unicode emoji.
+    Standard(String),
+}
+
+/// What `name` draws as among the custom emoji `list` of a workspace: its image, or the Unicode emoji when it is an alias of a standard one.
+/// `alias:` links are followed up to `EMOJI_ALIAS_HOPS` times. `None`: `name` is not a custom emoji, or its image has no allowed address, or the chain has no end.
+fn resolve_emoji(list: &EmojiList, name: &str) -> Option<EmojiLook> {
+    let mut current = name;
+    for hops in 0..=EMOJI_ALIAS_HOPS {
+        let Some(value) = list.get(current) else {
+            // Only an alias can end on a name the list lacks: that is a standard emoji, or nothing.
+            if hops == 0 {
+                return None;
+            }
+            let code = format!(":{current}:");
+            let emoji = emojify(&code);
+            return (emoji != code).then_some(EmojiLook::Standard(emoji));
+        };
+        match value.strip_prefix("alias:") {
+            Some(next) => current = next.trim(),
+            None => return icon_url(Some(value)).map(EmojiLook::Image),
+        }
+    }
+    None
+}
+
+/// The reactions of a message (`reactions` of `conversations.history` and `conversations.replies`), in Slack's order: the emoji as `emojify` draws `:name:` (a skin tone comes as `+1::skin-tone-2` in the name), the count,
+/// the name, and, for a custom emoji of the workspace (`custom`, its `emoji.list`), the address of its image; an alias of a standard emoji is the Unicode emoji.
 /// An entry with no name or no positive count is left out.
-fn reactions_of(m: &Value) -> Vec<Reaction> {
+fn reactions_of(m: &Value, custom: &EmojiList) -> Vec<Reaction> {
     m["reactions"]
         .as_array()
         .into_iter()
@@ -4247,12 +4327,26 @@ fn reactions_of(m: &Value) -> Vec<Reaction> {
         .filter_map(|r| {
             let name = r["name"].as_str().filter(|n| !n.is_empty())?;
             let count = u32::try_from(r["count"].as_u64()?).unwrap_or(u32::MAX);
-            (count > 0).then(|| Reaction {
-                emoji: emojify(&format!(":{name}:")),
-                count,
+            (count > 0).then(|| {
+                let (emoji, image) = match resolve_emoji(custom, name) {
+                    Some(EmojiLook::Image(url)) => (format!(":{name}:"), Some(url)),
+                    Some(EmojiLook::Standard(emoji)) => (emoji, None),
+                    None => (emojify(&format!(":{name}:")), None),
+                };
+                Reaction {
+                    emoji,
+                    count,
+                    name: name.to_owned(),
+                    image,
+                }
             })
         })
         .collect()
+}
+
+/// Whether a message carries a reaction entry.
+fn has_reactions(m: &Value) -> bool {
+    m["reactions"].as_array().is_some_and(|a| !a.is_empty())
 }
 
 /// What the screen draws of a message (`thread_slim`), in the thread and in the list.
@@ -4287,6 +4381,7 @@ fn thread_message(
     m: &Value,
     user: Option<SlackUser>,
     name_of: &dyn Fn(&str) -> Option<String>,
+    custom: &EmojiList,
 ) -> ThreadMessage {
     let sender = bot_of(m).or(user);
     let text = m["text"].as_str().unwrap_or_default();
@@ -4303,7 +4398,7 @@ fn thread_message(
         blocks,
         show_text,
         attachments,
-        reactions: reactions_of(m),
+        reactions: reactions_of(m, custom),
         ts: m["ts"].as_str().unwrap_or_default().to_owned(),
         user: m["user"]
             .as_str()
@@ -4416,6 +4511,71 @@ async fn lookup_groups(
             async move {
                 let found = fetch_groups(&api_url, &http, &token, &team).await;
                 cache.put_groups(&team, found);
+            }
+        });
+    run_limited(jobs, USER_CONCURRENCY).await;
+}
+
+/// Whether an `x-oauth-scopes` header (`None`: not known) says the token lacks `emoji:read`.
+fn lacks_emoji_read(scopes: Option<&str>) -> bool {
+    scopes.is_some_and(|s| !missing_scopes(s, &["emoji:read"]).is_empty())
+}
+
+/// The custom emoji in an `emoji.list` reply; an entry whose value is not a string is left out.
+fn emoji_of(reply: &Value) -> EmojiList {
+    reply["emoji"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
+        .collect()
+}
+
+/// Asks Slack for the custom emoji of a workspace (`emoji.list`). `None` when Slack could not say.
+/// Without `emoji:read` every call fails alike: that is the token's state, not worth a line.
+async fn fetch_emoji(
+    api_url: &str,
+    http: &reqwest::Client,
+    token: &str,
+    team_id: &str,
+) -> Option<EmojiList> {
+    match call_scoped_at(
+        api_url,
+        http,
+        token,
+        "emoji.list",
+        Payload::Empty,
+        MAX_RETRIES,
+    )
+    .await
+    {
+        Ok((reply, _)) => Some(emoji_of(&reply)),
+        Err(e) if e.code.as_deref() == Some("missing_scope") => None,
+        Err(e) => {
+            log_failure("slack_emoji", team_id, e);
+            None
+        }
+    }
+}
+
+/// Asks about the custom emoji of the `(team, token)` entries of `wanted` that the cache has no fresh answer for, and keeps the answers.
+/// A workspace whose token is known to lack `emoji:read` (from the scopes its last read saw) is not asked.
+async fn lookup_emoji(
+    api_url: &str,
+    http: &reqwest::Client,
+    cache: &Arc<TimelineCache>,
+    wanted: Vec<(String, String)>,
+) {
+    let jobs = wanted
+        .into_iter()
+        .filter(|(team, _)| {
+            cache.needs_emoji(team) && !lacks_emoji_read(cache.scopes(team).as_deref())
+        })
+        .map(|(team, token)| {
+            let (api_url, http, cache) = (api_url.to_owned(), http.clone(), Arc::clone(cache));
+            async move {
+                let found = fetch_emoji(&api_url, &http, &token, &team).await;
+                cache.put_emoji(&team, found);
             }
         });
     run_limited(jobs, USER_CONCURRENCY).await;
@@ -5166,7 +5326,7 @@ fn history_messages(
     rows.iter()
         .filter_map(|raw| {
             let mut m = message_of(cache, workspaces, raw, false)?;
-            m.reactions = reactions_of(&raw.source);
+            m.reactions = reactions_of(&raw.source, &cache.custom_emoji(&raw.team_id));
             Some(m)
         })
         .collect()
@@ -6006,19 +6166,27 @@ pub async fn slack_thread(
     .map(|user| (team_id.clone(), token.clone(), user))
     .collect();
     let teams = vec![(team_id.clone(), token.clone())];
+    // The custom emoji are asked for only when a message of the thread has a reaction (S-26).
+    let emoji_teams = if pages.iter().any(has_reactions) {
+        teams.clone()
+    } else {
+        Vec::new()
+    };
     tokio::join!(
         lookup_users(auth.http(), &state.timeline, wanted),
         lookup_groups(API_URL, auth.http(), &state.timeline, teams),
+        lookup_emoji(API_URL, auth.http(), &state.timeline, emoji_teams),
     );
 
     let name_of = |id: &str| state.timeline.name_of(&team_id, id);
+    let custom = state.timeline.custom_emoji(&team_id);
     let messages = pages
         .iter()
         .map(|m| {
             let user = m["user"]
                 .as_str()
                 .and_then(|u| state.timeline.user(&team_id, u));
-            thread_message(m, user, &name_of)
+            thread_message(m, user, &name_of, &custom)
         })
         .collect();
     Ok(SlackThread {
@@ -6134,9 +6302,16 @@ pub async fn slack_channel_history(
     .map(|user| (team_id.clone(), token.clone(), user))
     .collect();
     let teams = vec![(team_id.clone(), token.clone())];
+    // The custom emoji are asked for only when a message of the history has a reaction (S-26).
+    let emoji_teams = if rows.iter().any(|r| has_reactions(&r.source)) {
+        teams.clone()
+    } else {
+        Vec::new()
+    };
     tokio::join!(
         lookup_users(auth.http(), &state.timeline, wanted),
         lookup_groups(API_URL, auth.http(), &state.timeline, teams),
+        lookup_emoji(API_URL, auth.http(), &state.timeline, emoji_teams),
     );
     Ok(history_messages(&state.timeline, &workspaces, &rows))
 }
@@ -8057,18 +8232,21 @@ mod tests {
             "channels:read,groups:read,channels:history,groups:history,users:read,files:read";
         assert_eq!(
             missing_scopes(scopes, &OPTIONAL_SCOPES),
-            ["channels:write", "groups:write"]
+            ["channels:write", "groups:write", "emoji:read"]
         );
+        // `emoji:read` is optional but the list does not warn of it (S-26).
         assert_eq!(
             missing_scopes(scopes, &TIMELINE_SCOPES),
             ["channels:write", "groups:write"]
         );
-        let all = format!("{scopes},channels:write,groups:write");
+        let all = format!("{scopes},channels:write,groups:write,emoji:read");
         assert!(missing_scopes(&all, &OPTIONAL_SCOPES).is_empty());
         assert!(missing_scopes(&all, &TIMELINE_SCOPES).is_empty());
         // The history scopes stay what a token must have; the write scopes are not among them.
         assert!(!HISTORY_SCOPES.contains(&"channels:write"));
         assert!(!HISTORY_SCOPES.contains(&"groups:write"));
+        assert!(!HISTORY_SCOPES.contains(&"emoji:read"));
+        assert!(!TIMELINE_SCOPES.contains(&"emoji:read"));
     }
 
     #[test]
@@ -8327,7 +8505,7 @@ mod tests {
             m.as_object_mut()
                 .unwrap()
                 .extend(extra.as_object().unwrap().clone());
-            thread_message(&m, None, &name_of)
+            thread_message(&m, None, &name_of, &EmojiList::new())
         };
         let read = message(json!({}));
         assert_eq!(read.text, "*hi* @Alice a_b_c");
@@ -10013,7 +10191,7 @@ mod tests {
         let name_of = |id: &str| (id == "U7").then(|| "Grace".to_owned());
         let w = workspace("T1", "https://one.slack.com/");
         let row = timeline_message(&raw, &w, None, &name_of, true);
-        let thread = thread_message(&raw.source, None, &name_of);
+        let thread = thread_message(&raw.source, None, &name_of, &EmojiList::new());
         assert_eq!(row.blocks, thread.blocks);
         assert!(!row.blocks.is_empty());
         assert_eq!(row.attachments, thread.attachments);
@@ -10213,9 +10391,11 @@ mod tests {
 
     #[test]
     fn reactions_are_read_as_emoji_and_count_in_slacks_order() {
-        let reaction = |emoji: &str, count: u32| Reaction {
+        let reaction = |emoji: &str, count: u32, name: &str| Reaction {
             emoji: emoji.to_owned(),
             count,
+            name: name.to_owned(),
+            image: None,
         };
         let m = json!({"type": "message", "ts": "1.000001", "reactions": [
             {"name": "tada", "count": 3, "users": ["U1", "U2", "U3"]},
@@ -10223,22 +10403,23 @@ mod tests {
             {"name": "partyparrot", "count": 12, "users": ["U1"]},
         ]});
         let want = [
-            reaction("🎉", 3),
-            reaction("👍🏻", 1),
-            reaction(":partyparrot:", 12),
+            reaction("🎉", 3, "tada"),
+            reaction("👍🏻", 1, "+1::skin-tone-2"),
+            reaction(":partyparrot:", 12, "partyparrot"),
         ];
-        assert_eq!(reactions_of(&m), want);
+        assert_eq!(reactions_of(&m, &EmojiList::new()), want);
         // The slim copy a read keeps gives the same, without the users.
         let slim = thread_slim(&m);
-        assert_eq!(reactions_of(&slim), want);
+        assert_eq!(reactions_of(&slim, &EmojiList::new()), want);
         assert!(slim["reactions"][0].get("users").is_none());
     }
 
     #[test]
     fn a_message_without_usable_reactions_has_none() {
-        assert!(reactions_of(&json!({"ts": "1.000001"})).is_empty());
-        assert!(reactions_of(&json!({"reactions": "tada"})).is_empty());
-        assert!(reactions_of(&json!({"reactions": []})).is_empty());
+        let none = EmojiList::new();
+        assert!(reactions_of(&json!({"ts": "1.000001"}), &none).is_empty());
+        assert!(reactions_of(&json!({"reactions": "tada"}), &none).is_empty());
+        assert!(reactions_of(&json!({"reactions": []}), &none).is_empty());
         assert!(thread_slim(&json!({"ts": "1.000001"}))["reactions"].is_null());
         let m = json!({"reactions": [
             {"name": "", "count": 2},
@@ -10249,11 +10430,142 @@ mod tests {
             {"name": "eyes", "count": 2},
         ]});
         assert_eq!(
-            reactions_of(&m),
+            reactions_of(&m, &none),
             [Reaction {
                 emoji: "👀".to_owned(),
-                count: 2
+                count: 2,
+                name: "eyes".to_owned(),
+                image: None,
             }]
+        );
+    }
+
+    fn custom(entries: &[(&str, &str)]) -> EmojiList {
+        entries
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    const PARROT: &str = "https://emoji.slack-edge.com/T1/partyparrot/abc.gif";
+
+    #[test]
+    fn a_custom_emoji_is_its_image_and_an_alias_is_followed() {
+        let list = custom(&[
+            ("partyparrot", PARROT),
+            ("parrot", "alias:partyparrot"),
+            ("parrot2", "alias:parrot"),
+            ("ok", "alias:white_check_mark"),
+            ("ok2", "alias:ok"),
+            ("gone", "alias:no_such_emoji_anywhere"),
+            ("spaced", "alias: partyparrot"),
+        ]);
+        let image = Some(EmojiLook::Image(PARROT.to_owned()));
+        assert_eq!(resolve_emoji(&list, "partyparrot"), image);
+        assert_eq!(resolve_emoji(&list, "parrot"), image);
+        assert_eq!(resolve_emoji(&list, "parrot2"), image);
+        assert_eq!(resolve_emoji(&list, "spaced"), image);
+        // An alias of a standard emoji is the Unicode emoji, at any depth.
+        let check = Some(EmojiLook::Standard("✅".to_owned()));
+        assert_eq!(resolve_emoji(&list, "ok"), check);
+        assert_eq!(resolve_emoji(&list, "ok2"), check);
+        // A name the list lacks is no custom emoji, even a standard one; an alias to nothing known draws nothing.
+        assert_eq!(resolve_emoji(&list, "tada"), None);
+        assert_eq!(resolve_emoji(&list, "unknown"), None);
+        assert_eq!(resolve_emoji(&list, "gone"), None);
+    }
+
+    #[test]
+    fn an_alias_chain_has_a_limit_and_a_loop_ends() {
+        let mut entries = vec![("a0".to_owned(), PARROT.to_owned())];
+        for i in 1..=EMOJI_ALIAS_HOPS + 1 {
+            entries.push((format!("a{i}"), format!("alias:a{}", i - 1)));
+        }
+        let list: EmojiList = entries.into_iter().collect();
+        // EMOJI_ALIAS_HOPS links are followed; one more is given up.
+        let image = Some(EmojiLook::Image(PARROT.to_owned()));
+        assert_eq!(resolve_emoji(&list, &format!("a{EMOJI_ALIAS_HOPS}")), image);
+        assert_eq!(
+            resolve_emoji(&list, &format!("a{}", EMOJI_ALIAS_HOPS + 1)),
+            None
+        );
+        let looped = custom(&[("a", "alias:b"), ("b", "alias:a"), ("me", "alias:me")]);
+        assert_eq!(resolve_emoji(&looped, "a"), None);
+        assert_eq!(resolve_emoji(&looped, "me"), None);
+    }
+
+    #[test]
+    fn only_an_https_address_of_an_allowed_host_is_an_image() {
+        let list = custom(&[
+            ("plain", "http://emoji.slack-edge.com/T1/plain/a.png"),
+            ("other", "https://example.com/other.png"),
+            ("lookalike", "https://slack-edge.com.example.com/x.png"),
+            ("data", "data:image/png;base64,AAAA"),
+            ("text", "not a url"),
+            ("alias_to_other", "alias:other"),
+            ("ok", "https://emoji.slack-edge.com/T1/ok/a.png"),
+        ]);
+        for name in [
+            "plain",
+            "other",
+            "lookalike",
+            "data",
+            "text",
+            "alias_to_other",
+        ] {
+            assert_eq!(resolve_emoji(&list, name), None, "{name}");
+        }
+        assert_eq!(
+            resolve_emoji(&list, "ok"),
+            Some(EmojiLook::Image(
+                "https://emoji.slack-edge.com/T1/ok/a.png".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_reaction_of_a_custom_emoji_carries_its_name_and_image() {
+        let list = custom(&[
+            ("partyparrot", PARROT),
+            ("parrot", "alias:partyparrot"),
+            ("ok", "alias:white_check_mark"),
+            ("bad", "http://emoji.slack-edge.com/T1/bad/a.png"),
+            // A custom emoji may take a standard emoji's name: the workspace's own wins.
+            ("tada", PARROT),
+        ]);
+        let m = json!({"reactions": [
+            {"name": "partyparrot", "count": 12},
+            {"name": "parrot", "count": 2},
+            {"name": "ok", "count": 1},
+            {"name": "bad", "count": 1},
+            {"name": "plain_custom_not_listed", "count": 4},
+            {"name": "+1::skin-tone-2", "count": 1},
+            {"name": "tada", "count": 3},
+        ]});
+        let got: Vec<_> = reactions_of(&m, &list)
+            .into_iter()
+            .map(|r| (r.name, r.emoji, r.image, r.count))
+            .collect();
+        let parrot = Some(PARROT.to_owned());
+        let row = |name: &str, emoji: &str, image: Option<String>, count: u32| {
+            (name.to_owned(), emoji.to_owned(), image, count)
+        };
+        assert_eq!(
+            got,
+            [
+                row("partyparrot", ":partyparrot:", parrot.clone(), 12),
+                row("parrot", ":parrot:", parrot.clone(), 2),
+                row("ok", "✅", None, 1),
+                row("bad", ":bad:", None, 1),
+                row(
+                    "plain_custom_not_listed",
+                    ":plain_custom_not_listed:",
+                    None,
+                    4
+                ),
+                row("+1::skin-tone-2", "👍🏻", None, 1),
+                row("tada", ":tada:", parrot, 3),
+            ]
         );
     }
 
@@ -10261,24 +10573,132 @@ mod tests {
     fn only_a_history_row_and_a_thread_message_carry_the_reactions() {
         let m = json!({
             "type": "message", "ts": "10.000001", "user": "U1", "text": "hi <@U7>",
-            "reactions": [{"name": "tada", "count": 2, "users": ["U1", "U2"]}],
+            "reactions": [
+                {"name": "tada", "count": 2, "users": ["U1", "U2"]},
+                {"name": "partyparrot", "count": 1, "users": ["U1"]},
+            ],
         });
         let raw = raw_from("T1", &channel("C1"), &m).unwrap();
         let name_of = |_: &str| None;
         let w = workspace("T1", "https://one.slack.com/");
-        let want = [Reaction {
-            emoji: "🎉".to_owned(),
-            count: 2,
-        }];
+        let cache = TimelineCache::default();
+        cache.put_emoji("T1", Some(custom(&[("partyparrot", PARROT)])));
+        let want = [
+            Reaction {
+                emoji: "🎉".to_owned(),
+                count: 2,
+                name: "tada".to_owned(),
+                image: None,
+            },
+            Reaction {
+                emoji: ":partyparrot:".to_owned(),
+                count: 1,
+                name: "partyparrot".to_owned(),
+                image: Some(PARROT.to_owned()),
+            },
+        ];
         // A row of the list carries none.
         let row = timeline_message(&raw, &w, None, &name_of, false);
         assert!(row.reactions.is_empty());
-        // A row of a channel's history does, as a thread message does.
-        let rows = history_messages(&TimelineCache::default(), &[w], &[raw]);
+        // A row of a channel's history does, as a thread message does, with the images of its workspace's custom emoji.
+        let rows = history_messages(&cache, &[w], &[raw]);
         assert_eq!(rows.len(), 1);
-        let thread = thread_message(&thread_slim(&m), None, &name_of);
+        let thread = thread_message(&thread_slim(&m), None, &name_of, &cache.custom_emoji("T1"));
         assert_eq!(rows[0].reactions, want);
         assert_eq!(rows[0].reactions, thread.reactions);
+        // Another workspace's emoji are not used.
+        assert!(cache.custom_emoji("T2").is_empty());
+    }
+
+    #[test]
+    fn the_custom_emoji_are_read_from_an_emoji_list_reply() {
+        let reply = json!({"ok": true, "emoji": {
+            "partyparrot": PARROT,
+            "parrot": "alias:partyparrot",
+            "number": 1,
+            "nothing": null,
+        }});
+        assert_eq!(
+            emoji_of(&reply),
+            custom(&[("partyparrot", PARROT), ("parrot", "alias:partyparrot")])
+        );
+        assert!(emoji_of(&json!({"ok": true})).is_empty());
+        assert!(emoji_of(&json!({"ok": true, "emoji": ["a"]})).is_empty());
+    }
+
+    #[test]
+    fn the_emoji_are_asked_again_after_the_user_ttl_and_forgotten_with_the_workspace() {
+        let cache = TimelineCache::default();
+        assert!(cache.needs_emoji("T1"));
+        assert!(cache.custom_emoji("T1").is_empty());
+        cache.put_emoji("T1", Some(custom(&[("partyparrot", PARROT)])));
+        assert!(!cache.needs_emoji("T1"));
+        assert_eq!(cache.custom_emoji("T1").len(), 1);
+        cache.put_emoji("T1", None);
+        assert!(!cache.needs_emoji("T1"));
+        assert!(cache.custom_emoji("T1").is_empty());
+        cache.put_emoji("T1", Some(custom(&[("partyparrot", PARROT)])));
+        cache.forget("T1");
+        assert!(cache.needs_emoji("T1"));
+        assert!(cache.custom_emoji("T1").is_empty());
+    }
+
+    #[test]
+    fn a_token_without_emoji_read_is_known_from_its_scopes() {
+        assert!(lacks_emoji_read(Some("channels:read,users:read")));
+        assert!(lacks_emoji_read(Some("")));
+        assert!(!lacks_emoji_read(Some("users:read, emoji:read")));
+        assert!(!lacks_emoji_read(None));
+    }
+
+    fn ask_emoji(url: &str, cache: &Arc<TimelineCache>) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(lookup_emoji(
+                url,
+                &reqwest::Client::new(),
+                cache,
+                vec![("T1".to_owned(), "xoxp-token".to_owned())],
+            ));
+    }
+
+    #[test]
+    fn the_emoji_a_workspace_lists_are_kept_and_not_asked_again_while_fresh() {
+        let (url, server) = serve_reply(
+            r#"{"ok":true,"emoji":{"partyparrot":"https://emoji.slack-edge.com/T1/partyparrot/abc.gif","parrot":"alias:partyparrot"}}"#,
+        );
+        let cache = Arc::new(TimelineCache::default());
+        ask_emoji(&url, &cache);
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /emoji.list "), "{request}");
+        assert!(!cache.needs_emoji("T1"));
+        assert_eq!(
+            resolve_emoji(&cache.custom_emoji("T1"), "parrot"),
+            Some(EmojiLook::Image(PARROT.to_owned()))
+        );
+        // A fresh answer is not asked for again: nothing listens at this address.
+        ask_emoji("http://127.0.0.1:1", &cache);
+        assert_eq!(cache.custom_emoji("T1").len(), 2);
+    }
+
+    #[test]
+    fn a_token_without_emoji_read_leaves_the_names_as_they_are_and_is_not_asked_again() {
+        let (url, server) = serve_reply(
+            r#"{"ok":false,"error":"missing_scope","needed":"emoji:read","provided":"users:read"}"#,
+        );
+        let cache = Arc::new(TimelineCache::default());
+        ask_emoji(&url, &cache);
+        server.join().unwrap();
+        assert!(cache.custom_emoji("T1").is_empty());
+        // The answer is kept as a miss, so the next read does not ask at once.
+        assert!(!cache.needs_emoji("T1"));
+        // A token whose scopes are known to lack it is not asked at all: nothing listens at this address.
+        let cache = Arc::new(TimelineCache::default());
+        cache.put_scopes("T1", "channels:read,users:read");
+        ask_emoji("http://127.0.0.1:1", &cache);
+        assert!(cache.needs_emoji("T1"));
     }
 
     #[test]

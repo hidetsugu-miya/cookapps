@@ -18,7 +18,7 @@ import { attachmentNode, blocksNode } from "./slack-blocks.js";
 import { createSlackEditor } from "./slack-editor.js";
 import { richNodes } from "./slack-rich.js";
 import { revealSlackList, seeThread } from "./slack-list.js";
-import { decorateAvatar, loadIcons, reactionsNode, slackMs } from "./slack-view.js";
+import { decorateAvatar, loadIcons, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { initSplit } from "./split.js";
 import { toast } from "./toast.js";
 import { HandoffPane } from "./orca-handoff.js";
@@ -336,7 +336,7 @@ function drawMessages(where: "keep" | "end") {
   }
   box.replaceChildren(...nodes);
   if (thread) {
-    loadIcons(thread.messages.map((m) => m.iconUrl));
+    loadIcons([...thread.messages.map((m) => m.iconUrl), ...reactionImages(thread.messages)]);
     // The thumbnails already here replace their placeholders at once, which changes the height before the position is set.
     loadThumbs(thread, current!.key);
   }

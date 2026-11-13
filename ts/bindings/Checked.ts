@@ -2,7 +2,7 @@
 
 /**
  * A workspace as `auth.test` describes it now. `missing_scopes` is `None` when Slack sent no scopes to judge by.
- * `missing_optional` is the same for `OPTIONAL_SCOPES` (`users:read`, `files:read`, `channels:write`, `groups:write`), which the token can do without.
+ * `missing_optional` is the same for `OPTIONAL_SCOPES` (`users:read`, `files:read`, `channels:write`, `groups:write`, `emoji:read`), which the token can do without.
  */
 export type Checked = { missingScopes: Array<string> | null, missingOptional: Array<string> | null, teamId: string, team: string, user: string, 
 /**
