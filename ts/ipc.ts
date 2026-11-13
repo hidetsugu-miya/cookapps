@@ -41,6 +41,7 @@ import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
+import type { SlackEdit } from "./bindings/SlackEdit";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
 import type { SocketStatus } from "./bindings/SocketStatus";
@@ -225,8 +226,9 @@ export interface Commands {
   // Claude's answer to a request about Todo tasks: a short reply and the tasks it proposes (name, date `YYYY-MM-DD` or `YYYY-MM-DD HH:MM`, project ID; a project or a date that is not valid is null, and a task with a bad date or name is not returned). Nothing is created in Todoist.
   // `history` is the conversation so far and `instruction` the new request. The Todoist projects of the last load are sent from Rust. The model and effort are those of `todoChat`. Nothing is saved.
   claude_chat_todo: { args: { history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: TodoChatReply };
-  // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions. Nothing is saved.
-  claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
+  // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions, with the `destination` it chose from the list Rust gave it (S-4).
+  // `posted` is true when the request asked to post (S-23) and Rust posted the new text (or `text`) to `destination` by the path of `slack_post`; the screen then goes on as after "投稿". Nothing is saved.
+  claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: SlackEdit };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
   // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread).
   claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };

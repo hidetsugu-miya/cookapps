@@ -1250,6 +1250,19 @@ pub fn pick_destination(chosen: &Value, candidates: &[Candidate]) -> Option<Targ
         .map(|c| c.target.clone())
 }
 
+/// Where the answer to a request about the Slack post is posted (S-23), or `None` for no post: the model must have said `post: true` (a JSON `true` and nothing else),
+/// the owner's request must not be blank, and the destination must be one `pick_destination` found in the list the model was given.
+pub fn post_destination(
+    post: &Value,
+    instruction: &str,
+    destination: Option<&Target>,
+) -> Option<Target> {
+    if *post != Value::Bool(true) || instruction.trim().is_empty() {
+        return None;
+    }
+    destination.cloned()
+}
+
 /// The workspace's joined channels: the list kept in memory if it is fresh, else read from Slack (and kept).
 async fn joined_channels(
     auth: &Auth,
@@ -1508,37 +1521,34 @@ async fn send_post(
     Ok(())
 }
 
-/// Posts `text` (what the user edited) to the channel, or as a reply in `thread_ts`'s thread, and remembers the destination.
-/// The text goes to Slack only here, on the user's click.
-#[tauri::command]
-pub async fn slack_post(
-    app: AppHandle,
-    auth: State<'_, Auth>,
-    team_id: String,
-    channel: String,
-    thread_ts: Option<String>,
-    name: String,
-    text: String,
-) -> Result<bool, String> {
-    let command = "slack_post";
+/// Posts `text` to `target` (the channel, or a reply in its thread) by `send_post`, and remembers the destination. A failure of the post is logged under `command` and returned.
+/// It is the one path of S-1: the "投稿" button (`slack_post`) and a request to Claude that asks for a post (S-23, `claude_proofread_slack`) both end here.
+pub(crate) async fn post_and_remember(
+    app: &AppHandle,
+    http: &reqwest::Client,
+    command: &str,
+    target: Target,
+    text: &str,
+) -> Result<(), String> {
     send_post(
-        auth.http(),
+        http,
         command,
-        &team_id,
-        &channel,
-        thread_ts.as_deref(),
-        &text,
+        &target.team_id,
+        &target.channel,
+        target.thread_ts.as_deref(),
+        text,
         false,
     )
     .await?;
     // The post is done: failing to remember where is only logged.
+    let team_id = target.team_id.clone();
     let new = Recent {
-        team_id: team_id.clone(),
-        channel,
-        name: name.trim().chars().take(NAME_LIMIT).collect(),
-        thread_ts,
+        team_id: target.team_id,
+        channel: target.channel,
+        name: target.name.trim().chars().take(NAME_LIMIT).collect(),
+        thread_ts: target.thread_ts,
     };
-    let remembered = match config_dir(&app) {
+    let remembered = match config_dir(app) {
         Ok(dir) => {
             blocking(move || {
                 let list = remember(
@@ -1554,6 +1564,28 @@ pub async fn slack_post(
     if let Err(e) = remembered {
         log_failure(command, &team_id, e);
     }
+    Ok(())
+}
+
+/// Posts `text` (what the user edited) to the channel, or as a reply in `thread_ts`'s thread, and remembers the destination.
+/// The text goes to Slack only here, on the user's click (and in the request to Claude that asks for it, S-23).
+#[tauri::command]
+pub async fn slack_post(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    team_id: String,
+    channel: String,
+    thread_ts: Option<String>,
+    name: String,
+    text: String,
+) -> Result<bool, String> {
+    let target = Target {
+        team_id,
+        channel,
+        name,
+        thread_ts,
+    };
+    post_and_remember(&app, auth.http(), "slack_post", target, &text).await?;
     Ok(true)
 }
 
@@ -9972,5 +10004,34 @@ mod tests {
             assert_eq!(pick_destination(&bad, &got), None, "{bad}");
         }
         assert_eq!(pick_destination(&json!(1), &[]), None);
+    }
+
+    #[test]
+    fn a_post_needs_post_true_a_request_and_a_verified_destination() {
+        let to = target("T1", "C1", None);
+        assert_eq!(
+            post_destination(&json!(true), "投稿して", Some(&to)),
+            Some(to.clone())
+        );
+        // A blank request posts nothing, whatever the model says.
+        for blank in ["", "  ", "\n\u{3000}\t"] {
+            assert_eq!(
+                post_destination(&json!(true), blank, Some(&to)),
+                None,
+                "{blank:?}"
+            );
+        }
+        // No destination in the list (none named, or not in the list): nothing is posted.
+        assert_eq!(post_destination(&json!(true), "投稿して", None), None);
+        // Only a JSON true asks for a post.
+        for not in [
+            json!(false),
+            json!(null),
+            json!("true"),
+            json!(1),
+            json!([true]),
+        ] {
+            assert_eq!(post_destination(&not, "投稿して", Some(&to)), None, "{not}");
+        }
     }
 }

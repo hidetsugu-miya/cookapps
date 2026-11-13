@@ -3,6 +3,7 @@ import type { DiffLine } from "./DiffLine";
 import type { Target } from "./Target";
 
 /**
- * Claude's answer to a request about the text of a Slack post (S-4): the `PromptEdit` fields, and the destination it chose from the list it was given (`None` when it chose none, or one that is not in the list).
+ * Claude's answer to a request about the text of a Slack post (S-4): the `PromptEdit` fields, the destination it chose from the list it was given (`None` when it chose none, or one that is not in the list),
+ * and whether the post was made (S-23: `posted` is true only after Rust posted the text to `destination`; `post_to` is where it is to post, decided by `parse_slack_edit`, and never reaches the screen).
  */
-export type SlackEdit = { destination: Target | null, reply: string, body: string | null, diff: Array<DiffLine>, };
+export type SlackEdit = { destination: Target | null, posted: boolean, reply: string, body: string | null, diff: Array<DiffLine>, };

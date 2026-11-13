@@ -6,7 +6,7 @@ import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Target } from "./bindings/Target";
 import type { Workspace } from "./bindings/Workspace";
 import { showModelSlot } from "./claude.js";
-import { type ChatAnswer, createChat } from "./claude-chat.js";
+import { createChat } from "./claude-chat.js";
 import { createComposer } from "./composer.js";
 import { $, tag } from "./dom.js";
 import { unescapeHtml } from "./format.js";
@@ -65,10 +65,13 @@ const chat = createChat({
     $<HTMLTextAreaElement>("slack-body").value = text;
     $("slack-preview").textContent = text;
   },
-  // The answer carries `destination` (a `SlackEdit`, S-4) that the command's declared type does not name.
+  // A request that asks to post is posted by Rust (S-23): the post is finished here, before the chat sees the answer, and `finishPost` forgets the conversation, so the chat drops the answer.
   ask: async (text, history, instruction) => {
-    askedTarget = draft?.target ?? null;
-    return (await invoke("claude_proofread_slack", { text, history, instruction })) as ChatAnswer;
+    const d = draft;
+    askedTarget = d?.target ?? null;
+    const answer = await invoke("claude_proofread_slack", { text, history, instruction });
+    if (answer.posted && answer.destination) finishPost(d, answer.destination);
+    return answer;
   },
   // The destination Claude chose (Rust kept it to the list it was given) goes into the chip, unless the user chose another meanwhile or the post is on its way.
   answered: (answer) => {
@@ -292,6 +295,19 @@ function back() {
   requestAnimationFrame(() => ($("main").scrollTop = threadScroll));
 }
 
+// The post of `d` to `t` is done, by "投稿" or by Claude's answer (S-23): the toast, and the draft goes (unless another mail's draft has taken its place); the screen goes back only if it is still the one shown.
+function finishPost(d: Draft | null, t: Target) {
+  toast(`${wsName(t.teamId)} の ${label(t)} に貼りました`);
+  if (d && draft === d) {
+    draft = null;
+    chat.reset();
+    chat.clearInput();
+    drawTarget();
+    if (currentScreen() === "compose") back();
+  }
+  refreshSlackCompose();
+}
+
 async function post() {
   const d = draft;
   const t = d?.target;
@@ -309,16 +325,7 @@ async function post() {
     return toast(`${wsName(t.teamId)} の ${label(t)} に貼れませんでした: ${e}`);
   }
   posting = false;
-  toast(`${wsName(t.teamId)} の ${label(t)} に貼りました`);
-  // The post is done, so the draft goes (unless another mail's draft has taken its place); the screen goes back only if it is still the one shown.
-  if (draft === d) {
-    draft = null;
-    chat.reset();
-    chat.clearInput();
-    drawTarget();
-    if (currentScreen() === "compose") back();
-  }
-  refreshSlackCompose();
+  finishPost(d, t);
 }
 
 export function initSlackCompose() {

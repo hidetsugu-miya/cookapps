@@ -432,6 +432,44 @@ describe("slack compose screen: proofreading with Claude", () => {
     expect(await callsOf(slackPost)).toEqual([]);
   });
 
+  it("goes on as after 投稿 when the answer says Rust posted, without posting from the screen", async () => {
+    await openCompose();
+    const slackPost = await mock("slack_post", true);
+    const edit = await mock("claude_proofread_slack", {
+      reply: "投稿しました",
+      body: proofreadEdit.body,
+      diff: proofreadEdit.diff,
+      destination: general,
+      posted: true,
+    });
+    await $("#slack-input").setValue("#general に要点だけ投稿して");
+    await $("#slack-send").click();
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "#general に要点だけ投稿して" }]);
+    await expect($(".toast")).toHaveText("Example Team の #general に貼りました");
+    await expect($("#thread")).toBeDisplayed();
+    await expect($("#thread-subject")).toHaveText("First unread");
+    await threadLoaded();
+    await expect($("#slack-compose")).not.toBeDisplayed();
+    // Rust posted: the screen calls no post of its own.
+    expect(await callsOf(slackPost)).toEqual([]);
+    // The draft and the conversation are gone, as after 投稿: opening it again starts from the mail's text, with no destination.
+    await pressSlack();
+    await expect(body()).toHaveValue(slackPreview);
+    await expect(target()).toHaveText("選んでください");
+    expect(await count("#slack-log .chat-user, #slack-log .chat-ai")).toBe(0);
+  });
+
+  it("keeps the compose screen when the answer did not post", async () => {
+    await openCompose();
+    await mock("claude_proofread_slack", { ...proofreadEdit, destination: general, posted: false });
+    await $("#slack-input").setValue("#general に貼り先を変えて");
+    await $("#slack-send").click();
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect($("#slack-compose")).toBeDisplayed();
+    await expect(target()).toHaveText("Example Team ・ #general");
+    await expect(body()).toHaveValue(proofreadEdit.body as string);
+  });
+
   it("shows a thread as the destination Claude chose, and changes a destination that was chosen before", async () => {
     await openCompose();
     await chooseGeneral();
