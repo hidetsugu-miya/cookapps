@@ -833,15 +833,27 @@ button.status:hover { filter: brightness(.95); }
    The Slack thread has the same three parts. The Claude pane is a third to a half as wide as `.split-main`. `--chat-w` (ts/split.ts) is where the divider put it, and the clamp holds it to that range whatever is set. */
 #slack-main { flex: 1; min-height: 0; display: flex; }
 .split-main.dragging { user-select: none; -webkit-user-select: none; cursor: col-resize; }
-#slack-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
-.slack-target { display: flex; align-items: center; gap: 10px; }
-.slack-target .prompt-label { margin-bottom: 0; }
-.slack-body-head { display: flex; align-items: center; margin-bottom: 4px; }
-.slack-body-head .prompt-label { flex: 1; margin-bottom: 0; }
-#slack-reset { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
+/* Both panes have the same three parts: a head, a part that scrolls, and a foot fixed at the bottom. The two feet are one height, `--slack-foot`: the request field's frame is 3 lines high (the field never grows), its row 36px, and the paddings and borders around them. */
+#slack-compose { --slack-foot: calc(89px + 60px * var(--fs)); --slack-head: 48px; }
+#slack-edit { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#slack-edit-head, #slack-chat .chat-head { flex: none; box-sizing: border-box; height: var(--slack-head); }
+#slack-edit-head { display: flex; align-items: center; gap: 10px; padding: 0 16px 0 24px; border-bottom: 1px solid var(--line); }
+#slack-edit-head .prompt-label { margin-bottom: 0; }
+#slack-reset { margin-left: auto; height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
 #slack-reset:disabled { opacity: .4; cursor: default; }
 #slack-reset:disabled:hover { background: #fff; }
-#slack-body { font: inherit; line-height: 1.7; overflow-wrap: anywhere; }
+#slack-edit-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 16px 24px; }
+#slack-preview { flex: 1 0 auto; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: #222; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+#slack-preview:hover { border-color: var(--chip-line); }
+#slack-preview:focus-visible { outline: 2px solid var(--accent); }
+#slack-body { flex: 1; font: inherit; line-height: 1.7; overflow-wrap: anywhere; }
+#slack-edit-foot { flex: none; box-sizing: border-box; height: var(--slack-foot); display: flex; align-items: center; justify-content: flex-end; padding: 0 16px; border-top: 1px solid var(--line); background: var(--bar); }
+#slack-edit-foot .text-btn { height: 36px; padding: 0 20px; border-radius: 18px; font: inherit; font-weight: bold; }
+#slack-edit-foot .text-btn:disabled { opacity: .4; cursor: default; }
+#slack-chat .chat-form { box-sizing: border-box; height: var(--slack-foot); }
+#slack-chat .chat-note:not([hidden]) + .chat-form { border-top: 0; padding-top: 12px; }
+#slack-input { height: calc(60px * var(--fs)); max-height: none; }
+#slack-form .composer-foot { height: 36px; }
 .split-bar { flex: none; width: 7px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border-left: 1px solid var(--line); background: var(--bar); cursor: col-resize; touch-action: none; }
 .split-bar span { width: 3px; height: 32px; border-radius: 2px; background: var(--chip-line); }
 .split-bar:hover span, .split-bar:focus-visible span, .dragging .split-bar span { background: var(--accent-dim); }
@@ -849,10 +861,6 @@ button.status:hover { filter: brightness(.95); }
 .split-chat { flex: none; width: clamp(33.3333%, var(--chat-w, 33.3333%), 50%); }
 .header-sub { min-width: 0; font-size: calc(12px * var(--fs)); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .back-text { display: inline-flex; align-items: center; gap: 4px; padding: 0 12px 0 6px; border-color: transparent; background: transparent; }
-.proofread-row { margin-bottom: 8px; }
-.proofread-row .text-btn { height: 28px; padding: 0 12px; border-color: var(--accent); color: var(--accent); font-size: calc(12px * var(--fs)); font-weight: bold; }
-.proofread-row .text-btn:disabled { opacity: .4; cursor: default; }
-.proofread-row .text-btn:disabled:hover { background: #fff; }
 
 /* The Orca screen (A-6, A-8, A-12): the list on the left (`--list-w` is where the divider put it, 20% to 50% of the screen), a divider, and the work pane: the tabs of the selected project and the terminal of the selected tab. */
 #orca { flex: 1; min-height: 0; display: flex; }

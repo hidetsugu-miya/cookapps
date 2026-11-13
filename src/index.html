@@ -522,22 +522,21 @@
         </button>
         <h1>Slack に貼る</h1>
         <span id="slack-subject" class="header-sub"></span>
-        <span class="grow"></span>
-        <button id="slack-post" class="text-btn primary" disabled>貼る</button>
       </header>
       <p id="slack-error" class="pending fail" role="alert" hidden></p>
       <div id="slack-main" class="split-main">
-        <section id="slack-edit" aria-label="貼る内容">
-          <div class="slack-target">
+        <section id="slack-edit" aria-label="投稿する内容">
+          <div id="slack-edit-head">
             <span class="prompt-label">貼り付け先</span>
             <button id="slack-target" class="review-chip" aria-haspopup="menu">選んでください</button>
+            <button id="slack-reset" class="text-btn" disabled>元の内容に戻す</button>
           </div>
-          <div class="prompt-body-box">
-            <div class="slack-body-head">
-              <label class="prompt-label" for="slack-body">貼る内容（編集できます）</label>
-              <button id="slack-reset" class="text-btn" disabled>元の内容に戻す</button>
-            </div>
-            <textarea id="slack-body" spellcheck="false"></textarea>
+          <div id="slack-edit-body">
+            <div id="slack-preview" role="button" tabindex="0" aria-label="投稿する内容"></div>
+            <textarea id="slack-body" spellcheck="false" aria-label="投稿する内容" hidden></textarea>
+          </div>
+          <div id="slack-edit-foot">
+            <button id="slack-post" class="text-btn primary" disabled>投稿</button>
           </div>
         </section>
         <div id="slack-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>

@@ -38,6 +38,8 @@ export interface ChatConfig {
   copy?: (text: string) => void;
   // Whether the `-keys` element tells the keys of the request field (default true); the owner that says it elsewhere, or not at all, passes false and has no such element.
   keyHint?: boolean;
+  // True when the request field keeps the height the CSS gives it and scrolls inside (default false: it grows with its text).
+  fixedInput?: boolean;
 }
 
 // A change Claude proposed: the whole new text, the lines that differ, and the text when it was asked (an `open` proposal applies only to that text).
@@ -154,6 +156,7 @@ export function createChat(cfg: ChatConfig) {
   // The layout is read only when the line count may have changed: when the text got shorter, or the field is too short for it.
   let typedLength = 0;
   function growInput() {
+    if (cfg.fixedInput) return;
     const [input, log] = [$<HTMLTextAreaElement>(id("input")), $(id("log"))];
     const shorter = input.value.length < typedLength;
     typedLength = input.value.length;

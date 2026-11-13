@@ -1,5 +1,5 @@
-// The Slack compose screen, opened by "Slack に貼る" in the thread's header: the destination, the text to post (it starts as the mail's latest message and the user edits it),
-// and a conversation with Claude that proofreads it. Nothing leaves the app until "貼る".
+// The Slack compose screen, opened by "Slack に貼る" in the thread's header. Two panes: on the left the preview of the post (it starts as the mail's latest message; pressing it opens the field to edit it)
+// with the destination and "元の内容に戻す" above it and "投稿" below, and on the right a conversation with Claude that proofreads it. Nothing leaves the app until "投稿".
 import type { Channel } from "./bindings/Channel";
 import type { Recent } from "./bindings/Recent";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -60,11 +60,13 @@ const chat = createChat({
   apply: (text) => {
     draft!.text = text;
     $<HTMLTextAreaElement>("slack-body").value = text;
+    $("slack-preview").textContent = text;
   },
   ask: (text, history, instruction) => invoke("claude_proofread_slack", { text, history, instruction }),
   changed: refreshSlackCompose,
   locked: () => posting,
   keyHint: false,
+  fixedInput: true,
 });
 
 function disarmReset() {
@@ -85,15 +87,22 @@ function drawTarget() {
   $("slack-target").textContent = t ? `${wsName(t.teamId)} ・ ${label(t)}` : "選んでください";
 }
 
-// Draws what follows from the state: the buttons, and whether Claude can be asked.
+// The preview is shown, or the field it opens (pressing the preview opens it, leaving the field closes it).
+function setEditing(on: boolean) {
+  $("slack-preview").hidden = on;
+  $<HTMLTextAreaElement>("slack-body").hidden = !on;
+}
+
+// Draws what follows from the state: the preview, the buttons, and whether Claude can be asked.
 export function refreshSlackCompose() {
   const d = draft;
+  $("slack-preview").textContent = d?.text ?? "";
   $<HTMLTextAreaElement>("slack-body").disabled = posting;
   $<HTMLButtonElement>("slack-post").disabled = !d?.target || !d.text.trim() || posting;
   const same = !d || d.text === d.original;
   $<HTMLButtonElement>("slack-reset").disabled = same;
   if (same) disarmReset();
-  $<HTMLButtonElement>("slack-proofread").disabled = !chat.refresh();
+  chat.refresh();
 }
 
 // The picker under the destination chip: the workspace, recent destinations, a channel search, and a link. A pick closes it.
@@ -209,6 +218,7 @@ async function newDraft(key: string, current: OpenThread, stale: () => boolean) 
   chat.reset();
   chat.clearInput();
   $<HTMLTextAreaElement>("slack-body").value = original;
+  $("slack-preview").textContent = original;
 }
 
 // The latest call of `openCompose`; an earlier one still waiting for a command goes no further.
@@ -247,6 +257,7 @@ async function openCompose() {
   $("slack-subject").textContent = current.subject || "(件名なし)";
   $("slack-error").hidden = true;
   drawTarget();
+  setEditing(false);
   // The selects in the frame of the request field need the model settings.
   showModelSlot("slack-model");
   showComposeScreen();
@@ -299,6 +310,18 @@ export function initSlackCompose() {
   $("slack-back").onclick = back;
   $("slack-post").onclick = post;
   $("slack-target").onclick = openPicker;
+  const startEditing = () => {
+    if (posting || !draft) return;
+    setEditing(true);
+    $<HTMLTextAreaElement>("slack-body").focus();
+  };
+  $("slack-preview").onclick = startEditing;
+  $("slack-preview").onkeydown = (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    startEditing();
+  };
+  $<HTMLTextAreaElement>("slack-body").onblur = () => setEditing(false);
   $<HTMLTextAreaElement>("slack-body").oninput = (e) => {
     draft!.text = (e.currentTarget as HTMLTextAreaElement).value;
     $("slack-error").hidden = true;
@@ -319,17 +342,8 @@ export function initSlackCompose() {
     refreshSlackCompose();
   };
   $("slack-reset").onblur = disarmReset;
-  // The form is the shared composer's, with the 校正する button above its frame.
-  const proofread = tag("div", "proofread-row");
-  const proofreadButton = tag("button", "text-btn", "校正する");
-  proofreadButton.id = "slack-proofread";
-  proofreadButton.type = "button";
-  proofreadButton.disabled = true;
-  proofread.append(proofreadButton);
-  const composer = createComposer({ prefix: "slack", label: "Claude への依頼" });
-  composer.prepend(proofread);
-  $("slack-chat-note").after(composer);
-  proofreadButton.onclick = () => chat.send("校正してください");
+  // The form is the shared composer's; the field is three lines high and scrolls inside.
+  $("slack-chat-note").after(createComposer({ prefix: "slack", label: "Claude への依頼" }));
   chat.init();
   initSplit($("slack-main"), $("slack-split"));
   drawTarget();
