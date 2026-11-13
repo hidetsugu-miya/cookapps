@@ -1,6 +1,7 @@
-// What the Slack list and the Slack thread share: a message's time, the workspace color, and the users' icons.
+// What the Slack list and the Slack thread share: a message's time, the workspace color, the users' icons, and the reactions under a message (S-22).
 // An icon is an https URL on Slack's image hosts; it is fetched by Rust's `fetch_images` (public hosts, no token) as a data: URI, so the CSP stays as it is.
 // Until it is here, or when it cannot be fetched, the avatar is the initial on a color taken from the name.
+import type { Reaction } from "./bindings/Reaction";
 import { tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
 import { invoke } from "./ipc.js";
@@ -63,4 +64,16 @@ export function decorateAvatar(node: HTMLElement, name: string, iconUrl: string 
   if (uri) putIcon(node, uri);
   else node.dataset.icon = iconUrl;
   return node;
+}
+
+// The reactions under a message (S-22): each one the emoji and how many gave it, in the order Rust gave. Display only. null for a message that has none.
+export function reactionsNode(reactions: Reaction[]) {
+  if (!reactions.length) return null;
+  const box = tag("div", "reactions");
+  for (const r of reactions) {
+    const chip = tag("span", "reaction");
+    chip.append(tag("span", "reaction-emoji", r.emoji), tag("span", "reaction-count", String(r.count)));
+    box.append(chip);
+  }
+  return box;
 }

@@ -142,6 +142,12 @@ const withReplies = (extra: Parameters<typeof timelineMessage>[4] = {}) =>
   });
 
 describe("slack list", () => {
+  it("draws no reactions in the list, although its messages carry them (S-22)", async () => {
+    await openList(timeline([timelineMessage(slackTs(5, 1), "Alice Example", "dev", "Please review the deploy notes.", { reactions: [{ emoji: "🎉", count: 3 }] })]));
+    await waitForCount("#slack-feed .feed-row", 1);
+    expect(await count("#slack-feed .reactions, #slack-feed .reaction")).toBe(0);
+  });
+
   it("reads the timeline when the screen is shown and draws a group per channel with a row per message, the channels in the order they came", async () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);
@@ -1804,6 +1810,32 @@ describe("slack list: the history of a channel (S-20)", () => {
     await browser.execute(() => document.querySelectorAll("#sc-feed .feed-item")[2].classList.add("feed-keep"));
     await $$("#sc-feed .feed-item .feed-watch")[2].click();
     expect(await waitForCalls(unwatch)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: firstTs }]);
+  });
+
+  it("draws the reactions of a message under its text and above its replies (S-22), and nothing under a message without any", async () => {
+    const history = await openHistory([
+      timelineMessage(oldTs, "Bob Example", "dev", "old"),
+      timelineMessage(firstTs, "Alice Example", "dev", "first", { replyCount: 2, reactions: [{ emoji: "🎉", count: 3 }, { emoji: ":partyparrot:", count: 12 }] }),
+    ]);
+    await pressChannel();
+    await waitForCalls(history);
+    await waitForCount("#sc-feed .feed-row", 2);
+    expect(await count("#sc-feed .reactions")).toBe(1);
+    expect(await textsOf("#sc-feed .reaction-emoji")).toEqual(["🎉", ":partyparrot:"]);
+    expect(await textsOf("#sc-feed .reaction-count")).toEqual(["3", "12"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .feed-item")[1].querySelector(".feed-main")!.children].map((e) => e.className.split(" ")[0]))).toEqual(["feed-meta", "feed-text", "reactions", "feed-thread-open"]);
+    // The reactions take no press: the row still opens its thread.
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#sc-feed .reactions")!).pointerEvents)).toBe("none");
+  });
+
+  it("draws the reactions again when the history is read again and they changed", async () => {
+    await openHistory([timelineMessage(firstTs, "Alice Example", "dev", "first", { reactions: [{ emoji: "🎉", count: 3 }] })]);
+    await pressChannel();
+    await waitForCount("#sc-feed .reaction", 1);
+    await mock("slack_channel_history", [timelineMessage(firstTs, "Alice Example", "dev", "first", { reactions: [{ emoji: "🎉", count: 4 }, { emoji: "👀", count: 1 }] })]);
+    await pressChannel();
+    await waitForCount("#sc-feed .reaction", 2);
+    expect(await textsOf("#sc-feed .reaction-count")).toEqual(["4", "1"]);
   });
 
   it("shows the error with 再読み込み when the history cannot be read, and reads it again with the button", async () => {

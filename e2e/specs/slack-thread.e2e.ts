@@ -748,6 +748,29 @@ describe("slack thread: styles of a text (S-12)", () => {
   });
 });
 
+describe("slack thread: reactions (S-22)", () => {
+  const reactionTexts = (n: number) => browser.execute((i) => [...document.querySelectorAll("#st-msgs .st-msg")[i].querySelectorAll(".reaction")].map((r) => [r.querySelector(".reaction-emoji")?.textContent, r.querySelector(".reaction-count")?.textContent]), n);
+
+  it("draws the emoji and the count of each reaction under the message in the order given, a custom emoji as :name:, and nothing under a message without any", async () => {
+    await openDetail(
+      {},
+      slackThread([
+        threadMessage(root, "Alice Example", rootText, { reactions: [{ emoji: "🎉", count: 3 }, { emoji: "👍🏻", count: 1 }, { emoji: ":partyparrot:", count: 12 }] }),
+        threadMessage(reply1, "Bob Example", "Looks fine to me."),
+      ]),
+    );
+    expect(await reactionTexts(0)).toEqual([["🎉", "3"], ["👍🏻", "1"], [":partyparrot:", "12"]]);
+    expect(await reactionTexts(1)).toEqual([]);
+    expect(await count("#st-msgs .reactions")).toBe(1);
+    expect(await count("#st-msgs .reaction button, #st-msgs .reaction a")).toBe(0);
+  });
+
+  it("puts the reactions last in the message, under its text and its files", async () => {
+    await openDetail({}, slackThread([threadMessage(root, "Alice Example", rootText, { files: [slackFile("F2", "notes.pdf", { mimetype: "application/pdf" })], reactions: [{ emoji: "🎉", count: 2 }] })]));
+    expect(await browser.execute(() => [...document.querySelector("#st-msgs .st-msg > :last-child")!.children].map((e) => e.className.split(" ")[0]))).toEqual(["st-meta", "st-text", "st-files", "reactions"]);
+  });
+});
+
 describe("slack thread: reply", () => {
   it("has a three-line field with the placeholder スレッドに返信, and 返信する is off while it is blank", async () => {
     await openDetail();

@@ -1299,6 +1299,10 @@ a.icon-btn { text-decoration: none; }
 .st-pre code { font: inherit; }
 .st-sep { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .st-sep::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+/* S-22: the reactions under a message, in the thread and in the history of a channel. They are display only. */
+.reactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border: 1px solid var(--chip-line); border-radius: 999px; background: var(--bar); font-size: calc(12px * var(--fs)); line-height: 1.4; color: var(--ink-soft); }
+.reaction-count { color: var(--muted); font-weight: 600; }
 .st-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .st-thumb { display: flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 160px; min-height: 100px; max-width: 360px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bar); }
 .st-thumb.loading { width: 240px; height: 140px; }
