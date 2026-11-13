@@ -6,8 +6,8 @@ set -uo pipefail
 input=$(cat)
 tauri='__TAURI'
 # 生の入力を grep 1 回で絞る: 下の検査が見る語（記録の場所 .claude/e2e と .claude/ci、Tauri、__e2e、@wdio、モックの語）のどれも無い呼び出しは、jq も起こさず、ログも書かずに通す。
-# 最後の \u は、JSON のエスケープで語が隠れた入力を絞りから漏らさないため（その入力は下の検査まで進む）。
-grep -q -E "\\.claude/(e2e|ci)|${tauri}|__e2e|@wdio|mock[I]PC|\\\\u" <<< "$input" || exit 0
+# 最後の \u と \/ は、JSON のエスケープで語が隠れた入力を絞りから漏らさないため（その入力は下の検査まで進む）。語の中の文字で JSON が逃がせるのは、\uXXXX（どの文字も）と \/（記録の場所の / だけ）の 2 つである。
+grep -q -E "\\.claude/(e2e|ci)|${tauri}|__e2e|@wdio|mock[I]PC|\\\\[u/]" <<< "$input" || exit 0
 hook_log_begin
 path=$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<< "$input")
 cmd=$(jq -r '.tool_input.command // empty' <<< "$input")

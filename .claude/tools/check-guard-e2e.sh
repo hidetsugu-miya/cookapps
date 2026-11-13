@@ -73,4 +73,14 @@ check_log 1 "止める入力もログを書く" Bash "$(bash_in 'echo {} > .clau
 check_log 1 "差し替えの語を含む入力はログを書く" Write "$(file_in /repo/e2e/fixtures.js "$T.core = {};")"
 check_log 1 "@wdio の語を含む入力はログを書く" Write "$(file_in /repo/e2e/x.ts 'import "@wdio/globals";')"
 check_log 1 "JSON のエスケープを含む入力は検査まで進む" Bash "$(bash_in $'echo a\x01b')"
+# 生の JSON の \/ で記録の場所が隠れた入力も、前段で通さずに検査まで進めて止める（jq で戻すと .claude/e2e、.claude/ci になる）
+raw_check() {
+  local want=$1 name=$2 got
+  printf '%s' "$3" | "$guard" >/dev/null 2>&1
+  got=$?
+  [ "$got" -eq "$want" ] && echo "ok   $name" || { echo "FAIL $name (期待 ${want}、結果 ${got})"; fail=1; }
+}
+raw_check 2 "生の JSON の \\/ で隠した E2E の記録への書き込み" '{"tool_name":"Bash","tool_input":{"command":"echo {} > .claude\/e2e\/abc"}}'
+raw_check 2 "生の JSON の \\/ で隠した CI の記録への書き込み" '{"tool_name":"Bash","tool_input":{"command":"echo {} > .claude\/ci\/abc"}}'
+raw_check 0 "生の JSON の \\/ で隠した記録を読むだけ" '{"tool_name":"Bash","tool_input":{"command":"cat .claude\/e2e\/abc"}}'
 exit $fail
