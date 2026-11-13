@@ -401,15 +401,16 @@ fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
     missing_scopes(scopes, &HISTORY_SCOPES)
 }
 
-/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`), the read position that opening a message or "既読にする" sets (`channels:write`, `groups:write`)
-/// and the images of custom emoji in the reactions (`emoji:read`, S-26).
-/// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`. `emoji:read` is not in `TIMELINE_SCOPES`: the list does not warn of it.
-const OPTIONAL_SCOPES: [&str; 5] = [
+/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`), the read position that opening a message or "既読にする" sets (`channels:write`, `groups:write`),
+/// the images of custom emoji in the reactions (`emoji:read`, S-26) and adding or taking off a reaction (`reactions:write`, S-25).
+/// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`. `emoji:read` and `reactions:write` are not in `TIMELINE_SCOPES`: the list does not warn of them.
+const OPTIONAL_SCOPES: [&str; 6] = [
     "users:read",
     "files:read",
     "channels:write",
     "groups:write",
     "emoji:read",
+    "reactions:write",
 ];
 
 /// Every scope the timeline wants, which the list answer says a workspace's token lacks.
@@ -1000,7 +1001,7 @@ pub async fn slack_load(
 }
 
 /// A workspace as `auth.test` describes it now. `missing_scopes` is `None` when Slack sent no scopes to judge by.
-/// `missing_optional` is the same for `OPTIONAL_SCOPES` (`users:read`, `files:read`, `channels:write`, `groups:write`, `emoji:read`), which the token can do without.
+/// `missing_optional` is the same for `OPTIONAL_SCOPES` (`users:read`, `files:read`, `channels:write`, `groups:write`, `emoji:read`, `reactions:write`), which the token can do without.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -1895,7 +1896,7 @@ pub struct ThreadReply {
 }
 
 /// A reaction under a message: the emoji drawn as text (`emojify`; a custom emoji stays `:name:`, and an alias of a standard emoji is the Unicode emoji), how many people gave it,
-/// Slack's `name` of it, and, for a custom emoji, the address of its image (S-26).
+/// Slack's `name` of it, for a custom emoji the address of its image (S-26), and whether the user gave it themselves (S-25).
 #[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -1907,6 +1908,8 @@ pub struct Reaction {
     name: String,
     /// The image of a custom emoji: `https://…` of an allowed host (`icon_host_ok`), once `emoji.list` said so; the screen fetches it as it fetches an icon. `None`: `emoji` is drawn.
     image: Option<String>,
+    /// Whether the token's own user is among the people who gave the reaction (S-25). They are not kept: this is all the screen gets of them.
+    mine: bool,
 }
 
 /// The unread replies of a row's thread (S-14). `uncounted`: the thread is longer than the page that was read and its newest reply is after the position, so `count` says nothing (it is 0).
@@ -4273,10 +4276,10 @@ fn thread_slim(m: &Value) -> Value {
         "attachments": m["attachments"],
         "username": m["username"],
         "bot_profile": m["bot_profile"],
-        // Only the name and the count: the people who gave a reaction are not drawn.
+        // The name and the count, and the people who gave it only for `reactions_of` to tell which ones are the user's own (S-25): the screen never gets them.
         "reactions": m["reactions"].as_array().map(|list| {
             list.iter()
-                .map(|r| json!({"name": r["name"], "count": r["count"]}))
+                .map(|r| json!({"name": r["name"], "count": r["count"], "users": r["users"]}))
                 .collect::<Vec<_>>()
         }),
     })
@@ -4318,8 +4321,9 @@ fn resolve_emoji(list: &EmojiList, name: &str) -> Option<EmojiLook> {
 
 /// The reactions of a message (`reactions` of `conversations.history` and `conversations.replies`), in Slack's order: the emoji as `emojify` draws `:name:` (a skin tone comes as `+1::skin-tone-2` in the name), the count,
 /// the name, and, for a custom emoji of the workspace (`custom`, its `emoji.list`), the address of its image; an alias of a standard emoji is the Unicode emoji.
+/// `own` is the token's user (`own_user_id`): a reaction whose `users` holds it is `mine` (S-25); without `own` none is. `users` is read for that and not kept.
 /// An entry with no name or no positive count is left out.
-fn reactions_of(m: &Value, custom: &EmojiList) -> Vec<Reaction> {
+fn reactions_of(m: &Value, custom: &EmojiList, own: Option<&str>) -> Vec<Reaction> {
     m["reactions"]
         .as_array()
         .into_iter()
@@ -4333,11 +4337,17 @@ fn reactions_of(m: &Value, custom: &EmojiList) -> Vec<Reaction> {
                     Some(EmojiLook::Standard(emoji)) => (emoji, None),
                     None => (emojify(&format!(":{name}:")), None),
                 };
+                let mine = own.is_some_and(|me| {
+                    r["users"]
+                        .as_array()
+                        .is_some_and(|users| users.iter().any(|u| u.as_str() == Some(me)))
+                });
                 Reaction {
                     emoji,
                     count,
                     name: name.to_owned(),
                     image,
+                    mine,
                 }
             })
         })
@@ -4382,6 +4392,7 @@ fn thread_message(
     user: Option<SlackUser>,
     name_of: &dyn Fn(&str) -> Option<String>,
     custom: &EmojiList,
+    own: Option<&str>,
 ) -> ThreadMessage {
     let sender = bot_of(m).or(user);
     let text = m["text"].as_str().unwrap_or_default();
@@ -4398,7 +4409,7 @@ fn thread_message(
         blocks,
         show_text,
         attachments,
-        reactions: reactions_of(m, custom),
+        reactions: reactions_of(m, custom, own),
         ts: m["ts"].as_str().unwrap_or_default().to_owned(),
         user: m["user"]
             .as_str()
@@ -5326,7 +5337,11 @@ fn history_messages(
     rows.iter()
         .filter_map(|raw| {
             let mut m = message_of(cache, workspaces, raw, false)?;
-            m.reactions = reactions_of(&raw.source, &cache.custom_emoji(&raw.team_id));
+            m.reactions = reactions_of(
+                &raw.source,
+                &cache.custom_emoji(&raw.team_id),
+                cache.own_user(&raw.team_id).as_deref(),
+            );
             Some(m)
         })
         .collect()
@@ -6167,15 +6182,25 @@ pub async fn slack_thread(
     .collect();
     let teams = vec![(team_id.clone(), token.clone())];
     // The custom emoji are asked for only when a message of the thread has a reaction (S-26).
-    let emoji_teams = if pages.iter().any(has_reactions) {
+    let has_reaction = pages.iter().any(has_reactions);
+    let emoji_teams = if has_reaction {
         teams.clone()
     } else {
         Vec::new()
     };
-    tokio::join!(
+    // Who the token is, to tell the reactions the user gave themselves (S-25), only when a message has one.
+    let own = async {
+        if has_reaction {
+            own_user_id(auth.http(), &state.timeline, &team_id, &token).await
+        } else {
+            None
+        }
+    };
+    let (_, _, _, own) = tokio::join!(
         lookup_users(auth.http(), &state.timeline, wanted),
         lookup_groups(API_URL, auth.http(), &state.timeline, teams),
         lookup_emoji(API_URL, auth.http(), &state.timeline, emoji_teams),
+        own,
     );
 
     let name_of = |id: &str| state.timeline.name_of(&team_id, id);
@@ -6186,7 +6211,7 @@ pub async fn slack_thread(
             let user = m["user"]
                 .as_str()
                 .and_then(|u| state.timeline.user(&team_id, u));
-            thread_message(m, user, &name_of, &custom)
+            thread_message(m, user, &name_of, &custom, own.as_deref())
         })
         .collect();
     Ok(SlackThread {
@@ -6303,15 +6328,23 @@ pub async fn slack_channel_history(
     .collect();
     let teams = vec![(team_id.clone(), token.clone())];
     // The custom emoji are asked for only when a message of the history has a reaction (S-26).
-    let emoji_teams = if rows.iter().any(|r| has_reactions(&r.source)) {
+    let has_reaction = rows.iter().any(|r| has_reactions(&r.source));
+    let emoji_teams = if has_reaction {
         teams.clone()
     } else {
         Vec::new()
+    };
+    // Who the token is (kept in the cache `history_messages` reads), to tell the reactions the user gave themselves (S-25), only when a message has one.
+    let own = async {
+        if has_reaction {
+            own_user_id(auth.http(), &state.timeline, &team_id, &token).await;
+        }
     };
     tokio::join!(
         lookup_users(auth.http(), &state.timeline, wanted),
         lookup_groups(API_URL, auth.http(), &state.timeline, teams),
         lookup_emoji(API_URL, auth.http(), &state.timeline, emoji_teams),
+        own,
     );
     Ok(history_messages(&state.timeline, &workspaces, &rows))
 }
@@ -6366,6 +6399,125 @@ pub async fn slack_reply(
     )
     .await?;
     Ok(true)
+}
+
+/// The longest name of a reaction, not counting a skin tone (Slack's custom emoji names stop at 100 characters).
+const REACTION_NAME_MAX: usize = 100;
+
+/// Whether `name` can be a reaction's name (S-25): the form `reactions_of` gives it back in `Reaction::name`. The emoji's own name is one or more letters or digits of any script (a custom emoji may be named in Japanese),
+/// `_`, `-`, `+` or `'`, never upper case, with no colon or space, at most `REACTION_NAME_MAX` characters; it may be followed by `::skin-tone-2` to `::skin-tone-6`.
+fn valid_reaction_name(name: &str) -> bool {
+    let (base, tone) = name.split_once("::").unzip();
+    let base = base.unwrap_or(name);
+    let tone_ok = tone.is_none_or(|t| {
+        t.strip_prefix("skin-tone-")
+            .is_some_and(|n| matches!(n, "2" | "3" | "4" | "5" | "6"))
+    });
+    tone_ok
+        && !base.is_empty()
+        && base.chars().count() <= REACTION_NAME_MAX
+        && base.chars().all(|c| {
+            (c.is_alphanumeric() && !c.is_uppercase()) || matches!(c, '_' | '-' | '+' | '\'')
+        })
+}
+
+/// Whether the target of a reaction has the form it must have before anything is sent (S-25): a workspace ID, a conversation ID (a channel, a DM or a group DM), a message timestamp and a reaction name.
+fn valid_reaction_target(team_id: &str, channel: &str, ts: &str, name: &str) -> bool {
+    token_key(team_id).is_ok()
+        && valid_channel(channel)
+        && valid_ts(ts)
+        && valid_reaction_name(name)
+}
+
+/// The message for a failed `reactions.add` or `reactions.remove`: the ones the user can act on, in Japanese; the others as `error_message` words them.
+fn react_error(e: SlackError) -> String {
+    match e.code.as_deref() {
+        Some("missing_scope") => format!(
+            "Slack アプリに {} のスコープがありません。追加して、トークンを貼り直してください",
+            if e.needed.is_empty() {
+                "reactions:write"
+            } else {
+                &e.needed
+            }
+        ),
+        Some("too_many_reactions") => {
+            "このメッセージにはこれ以上リアクションを付けられません".into()
+        }
+        Some("too_many_emoji") => {
+            "このメッセージにはこれ以上違う絵文字のリアクションを付けられません".into()
+        }
+        Some("invalid_name") => "この絵文字はリアクションに使えません".into(),
+        Some("message_not_found") => "メッセージが見つかりません".into(),
+        Some("thread_locked") => "このスレッドはロックされています".into(),
+        Some("is_archived") => {
+            "アーカイブされたチャンネルのメッセージにはリアクションを付けられません".into()
+        }
+        Some("not_reactable") => "このメッセージにはリアクションを付けられません".into(),
+        _ => e.message,
+    }
+}
+
+/// Adds (`add`) or takes off the reaction `name` of the user on the message `ts` of `channel` (`reactions.add`, `reactions.remove`) at the Web API `api_url` (a local address in the tests).
+/// `Ok(true)`: Slack changed it. `Ok(false)`: it was so already (`already_reacted` when adding, `no_reaction` when taking off), which is the state the user asked for, so it is no failure.
+async fn react_at(
+    api_url: &str,
+    http: &reqwest::Client,
+    token: &str,
+    channel: &str,
+    ts: &str,
+    name: &str,
+    add: bool,
+) -> Result<bool, SlackError> {
+    let body = json!({"channel": channel, "timestamp": ts, "name": name});
+    let (method, already) = if add {
+        ("reactions.add", "already_reacted")
+    } else {
+        ("reactions.remove", "no_reaction")
+    };
+    match call_scoped_at(
+        api_url,
+        http,
+        token,
+        method,
+        Payload::Json(&body),
+        MAX_RETRIES,
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(e) if e.code.as_deref() == Some(already) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Adds (`add`) or takes off the user's reaction `name` on the message `ts` of `channel` (S-25), under the user's own name. The thread may be in a channel, a DM or a group DM, so only the form of `channel` and `ts` is checked, and the workspace must be a connected one.
+/// `true`: Slack changed it; `false`: it was so already. A failure is logged and returned in Japanese. The call is made only here, on the user's click.
+#[tauri::command]
+pub async fn slack_react(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    team_id: String,
+    channel: String,
+    ts: String,
+    name: String,
+    add: bool,
+) -> Result<bool, String> {
+    let command = "slack_react";
+    if !valid_reaction_target(&team_id, &channel, &ts, &name) {
+        return Err(log_failure(command, &team_id, BAD_TARGET));
+    }
+    let workspaces = load_workspaces(&config_dir(&app)?)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    if !workspaces.iter().any(|w| w.team_id == team_id) {
+        return Err(log_failure(command, &team_id, NO_WORKSPACE));
+    }
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    react_at(API_URL, auth.http(), &token, &channel, &ts, &name, add)
+        .await
+        .map_err(|e| log_failure(command, &team_id, react_error(e)))
 }
 
 /// The attached images at `urls` (a thread's `thumb_url`s) as data: URIs by URL. The workspace's token goes to `files.slack.com` and nowhere else
@@ -8232,14 +8384,19 @@ mod tests {
             "channels:read,groups:read,channels:history,groups:history,users:read,files:read";
         assert_eq!(
             missing_scopes(scopes, &OPTIONAL_SCOPES),
-            ["channels:write", "groups:write", "emoji:read"]
+            [
+                "channels:write",
+                "groups:write",
+                "emoji:read",
+                "reactions:write"
+            ]
         );
-        // `emoji:read` is optional but the list does not warn of it (S-26).
+        // `emoji:read` and `reactions:write` are optional but the list does not warn of them (S-26, S-25).
         assert_eq!(
             missing_scopes(scopes, &TIMELINE_SCOPES),
             ["channels:write", "groups:write"]
         );
-        let all = format!("{scopes},channels:write,groups:write,emoji:read");
+        let all = format!("{scopes},channels:write,groups:write,emoji:read,reactions:write");
         assert!(missing_scopes(&all, &OPTIONAL_SCOPES).is_empty());
         assert!(missing_scopes(&all, &TIMELINE_SCOPES).is_empty());
         // The history scopes stay what a token must have; the write scopes are not among them.
@@ -8247,6 +8404,7 @@ mod tests {
         assert!(!HISTORY_SCOPES.contains(&"groups:write"));
         assert!(!HISTORY_SCOPES.contains(&"emoji:read"));
         assert!(!TIMELINE_SCOPES.contains(&"emoji:read"));
+        assert!(!TIMELINE_SCOPES.contains(&"reactions:write"));
     }
 
     #[test]
@@ -8505,7 +8663,7 @@ mod tests {
             m.as_object_mut()
                 .unwrap()
                 .extend(extra.as_object().unwrap().clone());
-            thread_message(&m, None, &name_of, &EmojiList::new())
+            thread_message(&m, None, &name_of, &EmojiList::new(), None)
         };
         let read = message(json!({}));
         assert_eq!(read.text, "*hi* @Alice a_b_c");
@@ -10191,7 +10349,7 @@ mod tests {
         let name_of = |id: &str| (id == "U7").then(|| "Grace".to_owned());
         let w = workspace("T1", "https://one.slack.com/");
         let row = timeline_message(&raw, &w, None, &name_of, true);
-        let thread = thread_message(&raw.source, None, &name_of, &EmojiList::new());
+        let thread = thread_message(&raw.source, None, &name_of, &EmojiList::new(), None);
         assert_eq!(row.blocks, thread.blocks);
         assert!(!row.blocks.is_empty());
         assert_eq!(row.attachments, thread.attachments);
@@ -10391,11 +10549,12 @@ mod tests {
 
     #[test]
     fn reactions_are_read_as_emoji_and_count_in_slacks_order() {
-        let reaction = |emoji: &str, count: u32, name: &str| Reaction {
+        let reaction = |emoji: &str, count: u32, name: &str, mine: bool| Reaction {
             emoji: emoji.to_owned(),
             count,
             name: name.to_owned(),
             image: None,
+            mine,
         };
         let m = json!({"type": "message", "ts": "1.000001", "reactions": [
             {"name": "tada", "count": 3, "users": ["U1", "U2", "U3"]},
@@ -10403,23 +10562,52 @@ mod tests {
             {"name": "partyparrot", "count": 12, "users": ["U1"]},
         ]});
         let want = [
-            reaction("🎉", 3, "tada"),
-            reaction("👍🏻", 1, "+1::skin-tone-2"),
-            reaction(":partyparrot:", 12, "partyparrot"),
+            reaction("🎉", 3, "tada", false),
+            reaction("👍🏻", 1, "+1::skin-tone-2", false),
+            reaction(":partyparrot:", 12, "partyparrot", false),
         ];
-        assert_eq!(reactions_of(&m, &EmojiList::new()), want);
-        // The slim copy a read keeps gives the same, without the users.
+        assert_eq!(reactions_of(&m, &EmojiList::new(), None), want);
+        // The slim copy a read keeps gives the same.
         let slim = thread_slim(&m);
-        assert_eq!(reactions_of(&slim, &EmojiList::new()), want);
-        assert!(slim["reactions"][0].get("users").is_none());
+        assert_eq!(reactions_of(&slim, &EmojiList::new(), None), want);
+    }
+
+    #[test]
+    fn a_reaction_is_mine_when_the_own_user_is_among_the_people_who_gave_it() {
+        let m = json!({"reactions": [
+            {"name": "tada", "count": 3, "users": ["U1", "U2", "U3"]},
+            {"name": "eyes", "count": 1, "users": ["U1"]},
+            {"name": "fire", "count": 2},
+            {"name": "bow", "count": 1, "users": "U2"},
+            {"name": "joy", "count": 1, "users": [2, null]},
+        ]});
+        let mine = |m: &Value, own: Option<&str>| -> Vec<bool> {
+            reactions_of(m, &EmojiList::new(), own)
+                .iter()
+                .map(|r| r.mine)
+                .collect()
+        };
+        assert_eq!(mine(&m, Some("U2")), [true, false, false, false, false]);
+        assert_eq!(mine(&m, Some("U1")), [true, true, false, false, false]);
+        // Nobody gave it, or the user is not known: none is mine.
+        assert_eq!(mine(&m, Some("U9")), [false; 5]);
+        assert_eq!(mine(&m, None), [false; 5]);
+        // The slim copy a read keeps holds the people for this, and the reaction that is drawn holds none of them.
+        let slim = thread_slim(&m);
+        assert_eq!(mine(&slim, Some("U2")), mine(&m, Some("U2")));
+        assert_eq!(slim["reactions"][0]["users"], json!(["U1", "U2", "U3"]));
+        let json =
+            serde_json::to_value(&reactions_of(&m, &EmojiList::new(), Some("U2"))[0]).unwrap();
+        assert_eq!(json["mine"], true);
+        assert!(json.get("users").is_none());
     }
 
     #[test]
     fn a_message_without_usable_reactions_has_none() {
         let none = EmojiList::new();
-        assert!(reactions_of(&json!({"ts": "1.000001"}), &none).is_empty());
-        assert!(reactions_of(&json!({"reactions": "tada"}), &none).is_empty());
-        assert!(reactions_of(&json!({"reactions": []}), &none).is_empty());
+        assert!(reactions_of(&json!({"ts": "1.000001"}), &none, None).is_empty());
+        assert!(reactions_of(&json!({"reactions": "tada"}), &none, None).is_empty());
+        assert!(reactions_of(&json!({"reactions": []}), &none, None).is_empty());
         assert!(thread_slim(&json!({"ts": "1.000001"}))["reactions"].is_null());
         let m = json!({"reactions": [
             {"name": "", "count": 2},
@@ -10430,12 +10618,13 @@ mod tests {
             {"name": "eyes", "count": 2},
         ]});
         assert_eq!(
-            reactions_of(&m, &none),
+            reactions_of(&m, &none, None),
             [Reaction {
                 emoji: "👀".to_owned(),
                 count: 2,
                 name: "eyes".to_owned(),
                 image: None,
+                mine: false,
             }]
         );
     }
@@ -10542,7 +10731,7 @@ mod tests {
             {"name": "+1::skin-tone-2", "count": 1},
             {"name": "tada", "count": 3},
         ]});
-        let got: Vec<_> = reactions_of(&m, &list)
+        let got: Vec<_> = reactions_of(&m, &list, None)
             .into_iter()
             .map(|r| (r.name, r.emoji, r.image, r.count))
             .collect();
@@ -10583,18 +10772,21 @@ mod tests {
         let w = workspace("T1", "https://one.slack.com/");
         let cache = TimelineCache::default();
         cache.put_emoji("T1", Some(custom(&[("partyparrot", PARROT)])));
+        cache.put_own_user("T1", "U2");
         let want = [
             Reaction {
                 emoji: "🎉".to_owned(),
                 count: 2,
                 name: "tada".to_owned(),
                 image: None,
+                mine: true,
             },
             Reaction {
                 emoji: ":partyparrot:".to_owned(),
                 count: 1,
                 name: "partyparrot".to_owned(),
                 image: Some(PARROT.to_owned()),
+                mine: false,
             },
         ];
         // A row of the list carries none.
@@ -10603,7 +10795,13 @@ mod tests {
         // A row of a channel's history does, as a thread message does, with the images of its workspace's custom emoji.
         let rows = history_messages(&cache, &[w], &[raw]);
         assert_eq!(rows.len(), 1);
-        let thread = thread_message(&thread_slim(&m), None, &name_of, &cache.custom_emoji("T1"));
+        let thread = thread_message(
+            &thread_slim(&m),
+            None,
+            &name_of,
+            &cache.custom_emoji("T1"),
+            cache.own_user("T1").as_deref(),
+        );
         assert_eq!(rows[0].reactions, want);
         assert_eq!(rows[0].reactions, thread.reactions);
         // Another workspace's emoji are not used.
@@ -10699,6 +10897,241 @@ mod tests {
         cache.put_scopes("T1", "channels:read,users:read");
         ask_emoji("http://127.0.0.1:1", &cache);
         assert!(cache.needs_emoji("T1"));
+    }
+
+    #[test]
+    fn a_reaction_name_is_a_slack_emoji_name_with_an_optional_skin_tone() {
+        for name in [
+            "tada",
+            "+1",
+            "-1",
+            "+1::skin-tone-2",
+            "wave::skin-tone-6",
+            "t-rex",
+            "flag-jp",
+            "partyparrot_2",
+            "woman's_hat",
+            "ステキ",
+            "ありがとう_ございます",
+            "感謝",
+        ] {
+            assert!(valid_reaction_name(name), "{name}");
+        }
+        assert!(valid_reaction_name(&"a".repeat(REACTION_NAME_MAX)));
+        assert!(valid_reaction_name(&format!(
+            "{}::skin-tone-3",
+            "あ".repeat(REACTION_NAME_MAX)
+        )));
+        for name in [
+            "",
+            " ",
+            "tada ",
+            "ta da",
+            ":tada:",
+            ":tada",
+            "tada:",
+            "ta:da",
+            "::skin-tone-2",
+            "tada::",
+            "tada::skin-tone-1",
+            "tada::skin-tone-7",
+            "tada::skin-tone-2::skin-tone-3",
+            "tada::skin-tone-",
+            "tada::other",
+            "Tada",
+            "TADA",
+            "ta/da",
+            "ta.da",
+            "ta\nda",
+            "ta\u{200b}da",
+            "ta\u{202e}da",
+            "ta\u{0}da",
+            "😀",
+            "ta,da",
+            "ta<da>",
+        ] {
+            assert!(!valid_reaction_name(name), "{name:?}");
+        }
+        assert!(!valid_reaction_name(&"a".repeat(REACTION_NAME_MAX + 1)));
+        assert!(!valid_reaction_name(&"あ".repeat(REACTION_NAME_MAX + 1)));
+    }
+
+    #[test]
+    fn a_reaction_target_must_have_the_form_of_a_workspace_a_conversation_a_message_and_a_name() {
+        assert!(valid_reaction_target("T1", "C1", "1.000001", "tada"));
+        // A DM and a group DM are conversations too.
+        assert!(valid_reaction_target(
+            "T1",
+            "D0123",
+            "1761785520.123456",
+            "+1::skin-tone-2"
+        ));
+        assert!(valid_reaction_target("T1", "G0123", "1.000001", "ステキ"));
+        for (team, channel, ts, name) in [
+            ("", "C1", "1.000001", "tada"),
+            ("t1", "C1", "1.000001", "tada"),
+            ("T1", "", "1.000001", "tada"),
+            ("T1", "c1", "1.000001", "tada"),
+            ("T1", "C1/x", "1.000001", "tada"),
+            ("T1", "C1", "", "tada"),
+            ("T1", "C1", "1000001", "tada"),
+            ("T1", "C1", "1.0000a1", "tada"),
+            ("T1", "C1", "1.000001", ""),
+            ("T1", "C1", "1.000001", ":tada:"),
+        ] {
+            assert!(
+                !valid_reaction_target(team, channel, ts, name),
+                "{team} {channel} {ts} {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_reaction_is_worded_in_japanese() {
+        let coded = |code: &str, needed: &str| {
+            let mut e = failure(Some(code));
+            e.needed = needed.to_owned();
+            react_error(e)
+        };
+        assert_eq!(
+            coded("missing_scope", ""),
+            "Slack アプリに reactions:write のスコープがありません。追加して、トークンを貼り直してください"
+        );
+        assert_eq!(
+            coded("missing_scope", "reactions:write"),
+            coded("missing_scope", "")
+        );
+        for code in [
+            "too_many_reactions",
+            "too_many_emoji",
+            "invalid_name",
+            "message_not_found",
+            "thread_locked",
+            "is_archived",
+            "not_reactable",
+        ] {
+            let message = coded(code, "");
+            assert!(!message.is_empty() && message != "元の文", "{code}");
+            assert!(!message.contains(code), "{code}");
+        }
+        // The others keep the message `error_message` made.
+        assert_eq!(coded("channel_not_found", ""), "元の文");
+        assert_eq!(react_error(failure(None)), "元の文");
+    }
+
+    /// Answers one request on a local port with `body`, and returns the address and the whole request, headers and body.
+    fn serve_reply_full(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                request.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&request).into_owned();
+                if let Some((head, rest)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if rest.len() >= length {
+                        break;
+                    }
+                }
+                assert!(n > 0, "the request ended early");
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (url, handle)
+    }
+
+    /// `react_at` against a local port that answers `body`; the result and the request it got.
+    fn react_against(body: &'static str, add: bool) -> (Result<bool, SlackError>, String) {
+        let (url, server) = serve_reply_full(body);
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(react_at(
+                &url,
+                &reqwest::Client::new(),
+                "xoxp-token",
+                "C1",
+                "1761785520.123456",
+                "+1::skin-tone-2",
+                add,
+            ));
+        (result, server.join().unwrap())
+    }
+
+    /// What `react_at` answered when it did not fail.
+    fn changed(result: Result<bool, SlackError>) -> bool {
+        result.unwrap_or_else(|e| panic!("{}", e.message))
+    }
+
+    #[test]
+    fn a_reaction_is_added_and_taken_off_with_the_channel_the_message_and_the_name() {
+        for (add, method) in [(true, "reactions.add"), (false, "reactions.remove")] {
+            let (result, request) = react_against(r#"{"ok":true}"#, add);
+            assert!(changed(result), "{method}");
+            assert!(
+                request.starts_with(&format!("POST /{method} ")),
+                "{request}"
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer xoxp-token"),
+                "{request}"
+            );
+            let (_, body) = request.split_once("\r\n\r\n").unwrap();
+            let body: Value = serde_json::from_str(body).unwrap();
+            assert_eq!(
+                body,
+                json!({"channel": "C1", "timestamp": "1761785520.123456", "name": "+1::skin-tone-2"})
+            );
+        }
+    }
+
+    #[test]
+    fn a_reaction_that_is_in_the_asked_state_already_is_no_failure() {
+        let (result, _) = react_against(r#"{"ok":false,"error":"already_reacted"}"#, true);
+        assert!(!changed(result));
+        let (result, _) = react_against(r#"{"ok":false,"error":"no_reaction"}"#, false);
+        assert!(!changed(result));
+        // The other state's answer is a failure: taking off what is on is not "already reacted", and adding is not "no reaction".
+        let (result, _) = react_against(r#"{"ok":false,"error":"already_reacted"}"#, false);
+        assert_eq!(result.unwrap_err().code.as_deref(), Some("already_reacted"));
+        let (result, _) = react_against(r#"{"ok":false,"error":"no_reaction"}"#, true);
+        assert_eq!(result.unwrap_err().code.as_deref(), Some("no_reaction"));
+    }
+
+    #[test]
+    fn a_reaction_a_token_may_not_write_fails_with_the_scope_to_add() {
+        let (result, _) = react_against(
+            r#"{"ok":false,"error":"missing_scope","needed":"reactions:write","provided":"users:read"}"#,
+            true,
+        );
+        let message = react_error(result.unwrap_err());
+        assert!(message.contains("reactions:write"), "{message}");
+        assert!(message.contains("スコープ"), "{message}");
+        let (result, _) = react_against(r#"{"ok":false,"error":"too_many_reactions"}"#, true);
+        assert_eq!(
+            react_error(result.unwrap_err()),
+            "このメッセージにはこれ以上リアクションを付けられません"
+        );
     }
 
     #[test]

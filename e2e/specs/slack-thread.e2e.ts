@@ -775,7 +775,8 @@ describe("slack thread: reactions (S-22)", () => {
     expect(await reactionTexts(0)).toEqual([["🎉", "3"], ["👍🏻", "1"], [":partyparrot:", "12"]]);
     expect(await reactionTexts(1)).toEqual([]);
     expect(await count("#st-msgs .reactions")).toBe(1);
-    expect(await count("#st-msgs .reaction button, #st-msgs .reaction a")).toBe(0);
+    // Each one is a button (S-25).
+    expect(await browser.execute(() => [...document.querySelectorAll("#st-msgs .reaction")].map((r) => `${r.tagName}:${r.getAttribute("type")}`))).toEqual(["BUTTON:button", "BUTTON:button", "BUTTON:button"]);
   });
 
   it("puts the reactions last in the message, under its text and its files", async () => {
@@ -816,6 +817,153 @@ describe("slack thread: reactions (S-22)", () => {
       await browser.pause(300);
       expect(await callsOf("fetch_images")).toEqual([]);
     });
+  });
+});
+
+describe("slack thread: add and take off a reaction (S-25)", () => {
+  const emojiUrl = "https://emoji.slack-edge.com/T1/sutekina/abc.gif";
+  // [name, count, mine, aria-pressed, disabled] of the reactions of each message.
+  const chips = () =>
+    browser.execute(() =>
+      [...document.querySelectorAll("#st-msgs .st-msg")].map((m) =>
+        [...m.querySelectorAll<HTMLButtonElement>(".reaction")].map((r) => [r.dataset.name, r.querySelector(".reaction-count")!.textContent, r.classList.contains("mine"), r.getAttribute("aria-pressed"), r.disabled]),
+      ),
+    );
+  const chip = (message: number, name: string) =>
+    browser.execute((i, n) => document.querySelectorAll("#st-msgs .st-msg")[i].querySelector<HTMLElement>(`.reaction[data-name="${CSS.escape(n)}"]`)!.click(), message, name);
+  const thread = () =>
+    slackThread([
+      threadMessage(root, "Alice Example", rootText, { reactions: [reaction("tada", "🎉", 3), reaction("eyes", "👀", 1, null, true), reaction("ステキ", ":ステキ:", 2, emojiUrl)] }),
+      threadMessage(reply1, "Bob Example", "Looks fine to me.", { reactions: [reaction("+1::skin-tone-2", "👍🏻", 1)] }),
+    ]);
+
+  it("marks the reactions the user gave with the accent frame and aria-pressed, and the others not", async () => {
+    await openDetail({}, thread());
+    expect(await chips()).toEqual([
+      [["tada", "3", false, "false", false], ["eyes", "1", true, "true", false], ["ステキ", "2", false, "false", false]],
+      [["+1::skin-tone-2", "1", false, "false", false]],
+    ]);
+    const borders = await browser.execute(() => [...document.querySelectorAll("#st-msgs .st-msg:first-child .reaction")].map((r) => getComputedStyle(r).borderTopColor));
+    expect(borders[1]).not.toBe(borders[0]);
+    expect(borders[0]).toBe(borders[2]);
+  });
+
+  it("adds a reaction the user did not give: slack_react gets the workspace, the conversation, the message's ts, the name and add true, and the count and the frame change in place with no new read", async () => {
+    const read = await openDetail({}, thread());
+    const react = await mock("slack_react", true);
+    await $$("#st-msgs .st-msg")[0].$(".reaction").click();
+    expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, name: "tada", add: true }]);
+    await browser.waitUntil(async () => (await chips())[0][0][1] === "4");
+    expect((await chips())[0][0]).toEqual(["tada", "4", true, "true", false]);
+    expect((await chips())[0].slice(1)).toEqual([["eyes", "1", true, "true", false], ["ステキ", "2", false, "false", false]]);
+    expect(await callsOf(read)).toHaveLength(1);
+  });
+
+  it("takes off the reaction the user gave: add false, the count goes down and the frame goes, and a reaction nobody else gave disappears", async () => {
+    await openDetail({}, thread());
+    const react = await mock("slack_react", true);
+    await chip(0, "eyes");
+    expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, name: "eyes", add: false }]);
+    await browser.waitUntil(async () => (await chips())[0].length === 2);
+    expect((await chips())[0]).toEqual([["tada", "3", false, "false", false], ["ステキ", "2", false, "false", false]]);
+    // Add one and take it off again: back to what it was.
+    await chip(0, "tada");
+    await browser.waitUntil(async () => (await chips())[0][0][1] === "4");
+    await chip(0, "tada");
+    await waitForCalls(react, 3);
+    await browser.waitUntil(async () => (await chips())[0][0][1] === "3");
+    expect((await chips())[0][0]).toEqual(["tada", "3", false, "false", false]);
+    expect((await callsOf(react)).map((c) => (c as { add: boolean }).add)).toEqual([false, true, false]);
+  });
+
+  it("sends the name of the reaction as Rust gave it (a skin tone, a custom emoji's own name) and the ts of the message it is under", async () => {
+    await openDetail({}, thread());
+    const react = await mock("slack_react", true);
+    await chip(1, "+1::skin-tone-2");
+    await waitForCalls(react);
+    await chip(0, "ステキ");
+    expect(await waitForCalls(react, 2)).toEqual([
+      { teamId: workspace.teamId, channel: "C0123ABCD", ts: reply1, name: "+1::skin-tone-2", add: true },
+      { teamId: workspace.teamId, channel: "C0123ABCD", ts: root, name: "ステキ", add: true },
+    ]);
+  });
+
+  it("reacts in a DM or a group DM, whose conversation is not in the channel list", async () => {
+    await openDetail({}, { ...thread(), channel: "D0123ABCD" });
+    const react = await mock("slack_react", true);
+    await chip(0, "tada");
+    expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "D0123ABCD", ts: root, name: "tada", add: true }]);
+  });
+
+  it("takes an answer of false (it was so already) as done: the frame changes and the count stays", async () => {
+    await openDetail({}, thread());
+    const react = await mock("slack_react", false);
+    await chip(0, "tada");
+    await waitForCalls(react);
+    await browser.waitUntil(async () => (await chips())[0][0][2] === true);
+    expect((await chips())[0][0]).toEqual(["tada", "3", true, "true", false]);
+    await chip(0, "eyes");
+    await waitForCalls(react, 2);
+    await browser.waitUntil(async () => (await chips())[0].some((c) => c[0] === "eyes" && c[2] === false));
+    expect((await chips())[0][1]).toEqual(["eyes", "1", false, "false", false]);
+  });
+
+  it("shows the error and changes nothing when slack_react fails, and the reaction can be pressed again", async () => {
+    await openDetail({}, thread());
+    const before = await chips();
+    const react = await mock("slack_react", rejects("Slack アプリに reactions:write のスコープがありません。追加して、トークンを貼り直してください"));
+    await chip(0, "tada");
+    await waitForCalls(react);
+    await expect($(".toast")).toHaveText(expect.stringContaining("リアクションを変えられませんでした: Slack アプリに reactions:write のスコープがありません"));
+    expect(await chips()).toEqual(before);
+    await mock("slack_react", true);
+    await chip(0, "tada");
+    await browser.waitUntil(async () => (await chips())[0][0][1] === "4");
+  });
+
+  it("sends a press once while it is on its way: the button is off until Rust answers", async () => {
+    await openDetail({}, thread());
+    const react = await mock("slack_react", holds);
+    await chip(0, "tada");
+    await waitForCalls(react);
+    await browser.waitUntil(async () => (await chips())[0][0][4] === true);
+    await chip(0, "tada");
+    await browser.pause(200);
+    expect(await callsOf(react)).toHaveLength(1);
+    // Nothing changes until the answer; the other reactions can be pressed.
+    expect((await chips())[0][0]).toEqual(["tada", "3", false, "false", true]);
+    expect((await chips())[0][1][4]).toBe(false);
+    await release(react, true);
+    await browser.waitUntil(async () => (await chips())[0][0][1] === "4");
+    expect((await chips())[0][0]).toEqual(["tada", "4", true, "true", false]);
+    expect(await callsOf(react)).toHaveLength(1);
+  });
+
+  it("is a button the keyboard reaches, and keeps the focus on the reaction when the press is done", async () => {
+    await openDetail({}, thread());
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#st-msgs .reaction")].map((r) => r.tabIndex))).toEqual([0, 0, 0, 0]);
+    const react = await mock("slack_react", true);
+    // The press a key makes on a focused button is its click.
+    await browser.execute(() => {
+      const r = document.querySelector<HTMLElement>('#st-msgs .reaction[data-name="tada"]')!;
+      r.focus();
+      r.click();
+    });
+    expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, name: "tada", add: true }]);
+    await browser.waitUntil(async () => (await chips())[0][0][1] === "4");
+    expect(await browser.execute(() => (document.activeElement as HTMLElement).dataset.name)).toBe("tada");
+  });
+
+  it("does not take the focus from the reply field when the answer comes", async () => {
+    await openDetail({}, thread());
+    const react = await mock("slack_react", holds);
+    await chip(0, "tada");
+    await waitForCalls(react);
+    await browser.waitUntil(async () => (await editable()) === "true");
+    await field().click();
+    await release(react, true);
+    await browser.waitUntil(async () => (await chips())[0][0][1] === "4");
+    expect(await browser.execute(() => !!document.activeElement?.closest("#st-input"))).toBe(true);
   });
 });
 

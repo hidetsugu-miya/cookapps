@@ -2044,8 +2044,75 @@ describe("slack list: the history of a channel (S-20)", () => {
     expect(await textsOf("#sc-feed .reaction-emoji")).toEqual(["🎉", ":partyparrot:"]);
     expect(await textsOf("#sc-feed .reaction-count")).toEqual(["3", "12"]);
     expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .feed-item")[1].querySelector(".feed-main")!.children].map((e) => e.className.split(" ")[0]))).toEqual(["feed-meta", "feed-text", "reactions", "feed-thread-open"]);
-    // The reactions take no press: the row still opens its thread.
+    // The row's press goes through the box of the reactions to the row (it still opens its thread); only each reaction, a button (S-25), takes its own press.
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#sc-feed .reactions")!).pointerEvents)).toBe("none");
+    expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .reaction")].map((r) => `${r.tagName}:${getComputedStyle(r).pointerEvents}`))).toEqual(["BUTTON:auto", "BUTTON:auto"]);
+  });
+
+  describe("add and take off a reaction (S-25)", () => {
+    const chips = () =>
+      browser.execute(() =>
+        [...document.querySelectorAll<HTMLButtonElement>("#sc-feed .reaction")].map((r) => [r.dataset.name, r.querySelector(".reaction-count")!.textContent, r.classList.contains("mine"), r.getAttribute("aria-pressed"), r.disabled]),
+      );
+    const reacted = () => [timelineMessage(firstTs, "Alice Example", "dev", "first", { replyCount: 2, reactions: [reaction("tada", "🎉", 3), reaction("eyes", "👀", 1, null, true)] })];
+    const open = async () => {
+      const history = await openHistory(reacted());
+      await pressChannel();
+      await waitForCalls(history);
+      await waitForCount("#sc-feed .reaction", 2);
+      return history;
+    };
+
+    it("adds a reaction with a press: slack_react gets the workspace, the channel, the row's ts, the name and add true, the count and the frame change in place, and the row's thread does not open", async () => {
+      const history = await open();
+      const thread = await mock("slack_thread", slackThread([threadMessage(slackTs(20), "Alice Example", "first")]));
+      const react = await mock("slack_react", true);
+      await $$("#sc-feed .reaction")[0].click();
+      expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: firstTs, name: "tada", add: true }]);
+      await browser.waitUntil(async () => (await chips())[0][1] === "4");
+      expect(await chips()).toEqual([["tada", "4", true, "true", false], ["eyes", "1", true, "true", false]]);
+      expect(await callsOf(thread)).toEqual([]);
+      await expect($("#slack-thread")).not.toBeDisplayed();
+      expect(await callsOf(history)).toHaveLength(1);
+    });
+
+    it("takes off the reaction the user gave, and the reaction nobody else gave is gone", async () => {
+      await open();
+      const react = await mock("slack_react", true);
+      await $$("#sc-feed .reaction")[1].click();
+      expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: firstTs, name: "eyes", add: false }]);
+      await waitForCount("#sc-feed .reaction", 1);
+      expect(await chips()).toEqual([["tada", "3", false, "false", false]]);
+    });
+
+    it("shows the error and changes nothing when slack_react fails", async () => {
+      await open();
+      const before = await chips();
+      const react = await mock("slack_react", rejects("このメッセージにはこれ以上リアクションを付けられません"));
+      await $$("#sc-feed .reaction")[0].click();
+      await waitForCalls(react);
+      await expect($(".toast")).toHaveText(expect.stringContaining("リアクションを変えられませんでした: このメッセージにはこれ以上リアクションを付けられません"));
+      expect(await chips()).toEqual(before);
+    });
+
+    it("sends a press once while it is on its way: the button is off until Rust answers", async () => {
+      await open();
+      const react = await mock("slack_react", holds);
+      await $$("#sc-feed .reaction")[0].click();
+      await waitForCalls(react);
+      await browser.waitUntil(async () => (await chips())[0][4] === true);
+      await browser.execute(() => document.querySelector<HTMLElement>("#sc-feed .reaction")!.click());
+      await browser.pause(200);
+      expect(await callsOf(react)).toHaveLength(1);
+      await release(react, true);
+      await browser.waitUntil(async () => (await chips())[0][1] === "4");
+      expect(await chips()).toEqual([["tada", "4", true, "true", false], ["eyes", "1", true, "true", false]]);
+    });
+
+    it("is a button the keyboard reaches", async () => {
+      await open();
+      expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#sc-feed .reaction")].map((r) => `${r.tagName}:${r.tabIndex}`))).toEqual(["BUTTON:0", "BUTTON:0"]);
+    });
   });
 
   it('draws "スレッドに返信済み" above the text of a reply also sent to the channel, with the start of its parent when Rust gave it, and opens the thread with the press (#467)', async () => {

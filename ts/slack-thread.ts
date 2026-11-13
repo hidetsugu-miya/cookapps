@@ -252,7 +252,7 @@ function messageNode(m: ThreadMessage) {
     files.append(...m.files.map(fileNode));
     body.append(files);
   }
-  const reactions = reactionsNode(m.reactions);
+  const reactions = thread ? reactionsNode(m, { teamId: thread.teamId, channel: thread.channel }) : null;
   if (reactions) body.append(reactions);
   row.dataset.ts = m.ts;
   row.append(avatar, body);

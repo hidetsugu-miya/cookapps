@@ -1,4 +1,4 @@
-// What the Slack list and the Slack thread share: a message's time, the workspace color, the users' icons, and the reactions under a message (S-22).
+// What the Slack list and the Slack thread share: a message's time, the workspace color, the users' icons, and the reactions under a message (S-22, S-25).
 // An icon is an https URL on Slack's image hosts; it is fetched by Rust's `fetch_images` (public hosts, no token) as a data: URI, so the CSP stays as it is.
 // Until it is here, or when it cannot be fetched, the avatar is the initial on a color taken from the name.
 // The image of a custom emoji in a reaction (S-26) is fetched the same way; until it is here, or when it cannot be fetched, the reaction shows `:name:`.
@@ -6,6 +6,7 @@ import type { Reaction } from "./bindings/Reaction";
 import { tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
 import { invoke } from "./ipc.js";
+import { toast } from "./toast.js";
 
 // A Slack timestamp ("1700000000.123456") as epoch milliseconds.
 export const slackMs = (ts: string) => Number(ts.split(".")[0]) * 1000;
@@ -83,13 +84,58 @@ export function decorateAvatar(node: HTMLElement, name: string, iconUrl: string 
 // The image addresses of the custom emoji in the reactions of `messages`, for `loadIcons` (S-26).
 export const reactionImages = (messages: { reactions: Reaction[] }[]) => messages.flatMap((m) => m.reactions.map((r) => r.image));
 
-// The reactions under a message (S-22): each one the emoji and how many gave it, in the order Rust gave. Display only. null for a message that has none.
+// Where a message's reactions are pressed (S-25): its workspace and conversation (a channel, a DM or a group DM).
+export type ReactionTarget = { teamId: string; channel: string };
+
+// The reactions whose press is on its way, by workspace, conversation, message and name: a second press waits for the first, even on a node drawn again meanwhile.
+const reacting = new Set<string>();
+
+const reactKey = (target: ReactionTarget, ts: string, name: string) => `${target.teamId}/${target.channel}/${ts}/${name}`;
+
+// Adds the user's reaction `name` to the message `m`, or takes it off when it is theirs (S-25), then draws `m`'s reactions again in place of `box`, so that the scroll position stays.
+// Only a success changes `m.reactions` (Rust says whether Slack changed anything: `false` is "it was so already", which moves the color and not the count); a failure shows the error and leaves them.
+async function pressReaction(m: { ts: string; reactions: Reaction[] }, target: ReactionTarget, name: string, box: HTMLElement) {
+  const key = reactKey(target, m.ts, name);
+  const r = m.reactions.find((x) => x.name === name);
+  if (!r || reacting.has(key)) return;
+  const add = !r.mine;
+  // A disabled button gives up the focus, so ask now whether the keyboard is in this box.
+  const focused = box.contains(document.activeElement);
+  reacting.add(key);
+  box.querySelector<HTMLButtonElement>(`[data-name="${CSS.escape(name)}"]`)?.setAttribute("disabled", "");
+  try {
+    const changed = await invoke("slack_react", { ...target, ts: m.ts, name, add });
+    r.mine = add;
+    if (changed) r.count += add ? 1 : -1;
+    if (r.count <= 0) m.reactions = m.reactions.filter((x) => x !== r);
+  } catch (e) {
+    toast(`リアクションを変えられませんでした: ${e}`);
+  } finally {
+    reacting.delete(key);
+  }
+  // The box may have been drawn again while the press was on its way: find it by the message.
+  const live = box.isConnected ? box : document.querySelector<HTMLElement>(`.reactions[data-key="${CSS.escape(reactKey(target, m.ts, ""))}"]`);
+  if (!live) return;
+  const next = reactionsNode(m, target);
+  if (next) live.replaceWith(next);
+  else live.remove();
+  if (focused) next?.querySelector<HTMLElement>(`[data-name="${CSS.escape(name)}"]`)?.focus({ preventScroll: true });
+}
+
+// The reactions under a message (S-22): each one a button with the emoji and how many gave it, in the order Rust gave; the ones the user gave themselves (S-25) have another frame color.
+// Pressing one takes the user's off when it is theirs and adds it otherwise (`pressReaction`). null for a message that has none.
 // A custom emoji (S-26) is its image once `loadIcons` has fetched it (at once when it was fetched before); the `:name:` Rust gave is drawn until then.
-export function reactionsNode(reactions: Reaction[]) {
-  if (!reactions.length) return null;
+export function reactionsNode(m: { ts: string; reactions: Reaction[] }, target: ReactionTarget) {
+  if (!m.reactions.length) return null;
   const box = tag("div", "reactions");
-  for (const r of reactions) {
-    const chip = tag("span", "reaction");
+  box.dataset.key = reactKey(target, m.ts, "");
+  for (const r of m.reactions) {
+    const chip = tag("button", r.mine ? "reaction mine" : "reaction");
+    chip.type = "button";
+    chip.dataset.name = r.name;
+    chip.setAttribute("aria-pressed", String(r.mine));
+    chip.disabled = reacting.has(reactKey(target, m.ts, r.name));
+    chip.onclick = () => void pressReaction(m, target, r.name, box);
     const emoji = tag("span", "reaction-emoji", r.emoji);
     if (r.image) {
       const uri = icons.get(r.image);

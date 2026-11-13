@@ -194,6 +194,9 @@ export interface Commands {
   slack_channel_post: { args: { teamId: string; channel: string; text: string; markdown?: boolean }; result: boolean };
   // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched). `markdown` as for `slack_channel_post`.
   slack_reply: { args: { teamId: string; channel: string; threadTs: string; text: string; markdown?: boolean }; result: boolean };
+  // Adds (`add` true) or takes off (false) the user's reaction `name` (Slack's name of it: `tada`, `+1::skin-tone-2`, a custom emoji's name) on the message `ts` of `channel`, a channel, a DM or a group DM (S-25).
+  // True when Slack changed it, false when it was so already (`already_reacted`, `no_reaction`).
+  slack_react: { args: { teamId: string; channel: string; ts: string; name: string; add: boolean }; result: boolean };
   // The attached images (a thread file's `thumbUrl`) as data: URIs by URL; the token goes to files.slack.com only. What cannot be fetched is not in the map.
   slack_file_images: { args: { teamId: string; urls: string[] }; result: Record<string, string> };
   // The user's own icon in each workspace.

@@ -2,7 +2,7 @@
 
 /**
  * A reaction under a message: the emoji drawn as text (`emojify`; a custom emoji stays `:name:`, and an alias of a standard emoji is the Unicode emoji), how many people gave it,
- * Slack's `name` of it, and, for a custom emoji, the address of its image (S-26).
+ * Slack's `name` of it, for a custom emoji the address of its image (S-26), and whether the user gave it themselves (S-25).
  */
 export type Reaction = { emoji: string, count: number, 
 /**
@@ -12,4 +12,8 @@ name: string,
 /**
  * The image of a custom emoji: `https://…` of an allowed host (`icon_host_ok`), once `emoji.list` said so; the screen fetches it as it fetches an icon. `None`: `emoji` is drawn.
  */
-image: string | null, };
+image: string | null, 
+/**
+ * Whether the token's own user is among the people who gave the reaction (S-25). They are not kept: this is all the screen gets of them.
+ */
+mine: boolean, };
