@@ -1183,7 +1183,11 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .slack-side-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slack-side-n { margin-left: auto; flex: none; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 6px; border-radius: 9px; background: var(--dot); font-size: calc(11px * var(--fs)); font-weight: 700; line-height: calc(18px * var(--fs)); text-align: center; color: var(--on-accent); }
 .slack-side-sep { height: 1px; margin: 8px 4px; background: var(--line); }
-.slack-side-group { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; padding: 0 10px; font-size: calc(12px * var(--fs)); font-weight: 600; color: #444; }
+.slack-side-group { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; box-sizing: border-box; margin: 10px 0 2px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); font-weight: 600; color: #444; text-align: left; cursor: pointer; }
+.slack-side-group:hover { background: var(--hover); }
+.slack-side-group:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.slack-side-group .slack-side-ic svg { transition: transform 0.12s; }
+.slack-side-group[aria-expanded="true"] .slack-side-ic svg { transform: rotate(90deg); }
 .slack-side-ws { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .slack-side-item { position: relative; }
 .slack-side-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: var(--muted); text-align: left; cursor: pointer; }

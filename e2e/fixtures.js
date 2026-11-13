@@ -59,6 +59,8 @@ const answers = {
   slack_thread_seen: false,
   slack_hidden_list: [],
   slack_hide_channel: true,
+  slack_side_folded: [],
+  slack_set_side_folded: true,
   slack_unhide_channel: true,
   slack_icons: [],
   slack_socket_status: [],

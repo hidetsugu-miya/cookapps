@@ -77,6 +77,8 @@ const closedThreads = new Set<string>();
 let listScroll = 0;
 // The section the side menu chose (S-19); it stays through redraws, a thread and other screens.
 let section: SlackSection = "unread";
+// The workspaces whose channels the side menu folds (`teamId`s); `slack-side.json` keeps them (read at the start, saved at each change).
+const foldedTeams = new Set<string>();
 
 const feed = () => $("slack-feed");
 
@@ -149,7 +151,30 @@ function drawBadge() {
 // The side menu (S-19), while the Slack screen is shown (the list or a thread).
 function drawSide() {
   if ($("slack-screen").hidden) return;
-  drawSlackSide({ section, unread: unreadCount, channel: selectedChannel(), workspaces: timeline?.side ?? [] }, { choose: chooseSection, open: openChannel, hide: hideChannel });
+  drawSlackSide({ section, unread: unreadCount, channel: selectedChannel(), workspaces: timeline?.side ?? [], folded: [...foldedTeams] }, { choose: chooseSection, open: openChannel, hide: hideChannel, fold: foldWorkspace });
+}
+
+// The heading of a workspace in the side menu was pressed: fold it, or open it again.
+// A press before the saved folds are read waits for them, so that the two do not mix. The saves go one after another, each with the set as it is when it is sent, so that the last press is what is kept.
+function foldWorkspace(teamId: string) {
+  foldsRead.then(() => {
+    if (!foldedTeams.delete(teamId)) foldedTeams.add(teamId);
+    drawSide();
+    // A failed save leaves the fold as pressed: it only is not kept for the next start.
+    foldsSaved = foldsSaved.then(() => invoke("slack_set_side_folded", { teamIds: [...foldedTeams] })).catch(showError);
+  });
+}
+let foldsRead: Promise<void> = Promise.resolve();
+let foldsSaved: Promise<unknown> = Promise.resolve();
+
+// The folds saved by an earlier run, taken at the start. A file that cannot be read folds nothing (Rust answers an empty list).
+async function loadFolded() {
+  try {
+    for (const teamId of await invoke("slack_side_folded")) foldedTeams.add(teamId);
+  } catch {
+    return;
+  }
+  drawSide();
 }
 
 // Takes `n` off the unread number of a channel in the side menu, for what the screen moves to read at once (the next read of the cache has the number itself).
@@ -167,10 +192,12 @@ function chooseSection(next: SlackSection) {
   revealSlackList();
 }
 
-// The side menu chose a channel (S-20): its history fills the body, also when a thread is shown.
+// The side menu chose a channel (S-20): its history fills the body, also when a thread is shown. The channel is read at the press, as "既読にする" of S-15 reads it, where that changes something.
 function openChannel(teamId: string, team: string, c: SideWorkspace["channels"][number]) {
   openSlackChannel(teamId, team, c);
   drawSide();
+  const held = timeline?.unreadChannels.find((x) => x.teamId === teamId && x.channel === c.id);
+  if (held && readChanges(held)) readChannel(held);
 }
 
 // What a row's unread replies add to the badge (Rust's `share`).
@@ -428,6 +455,9 @@ async function readChannel(c: UnreadChannel) {
   load(true);
 }
 
+// Whether reading the channel changes something: the token of its workspace may write the position and a message is unread, or a thread of it has unread replies (S-14, which need no scope).
+const readChanges = (c: UnreadChannel) => (c.to !== null && canWrite(c.teamId)) || c.threads.length > 0;
+
 // The unread replies of the channel's threads count as read here: the rows go at once (one that is still unread itself, when the token cannot write the position, stays without them) and the badge drops by them.
 function seeChannelReplies(teamId: string, channel: string, threads: UnreadChannel["threads"]) {
   if (!timeline) return [];
@@ -657,7 +687,7 @@ function channelHead(first: TimelineMessage, info: UnreadChannel | undefined, pr
   dot.style.background = workspaceColor(first.team);
   head.append(mark, tag("b", "feed-chan-name", first.channelName), dot, tag("span", "feed-chan-team", first.team));
   if (info && info.messages > 0) head.append(tag("span", "feed-chan-count", `${info.messages} 件のメッセージ`));
-  if (info && ((info.to !== null && canWrite(first.teamId)) || info.threads.length > 0)) {
+  if (info && readChanges(info)) {
     const read = tag("button", "icon-btn feed-chan-read");
     read.type = "button";
     read.setAttribute("aria-label", "既読にする");
@@ -948,6 +978,7 @@ async function start() {
 }
 
 export function initSlackList() {
+  foldsRead = loadFolded();
   start();
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", refresh);
