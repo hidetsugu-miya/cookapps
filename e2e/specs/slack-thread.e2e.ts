@@ -748,6 +748,8 @@ describe("slack thread: styles of a text (S-12)", () => {
     await openDetail({}, withRich({ rich: [para(span("see "), linkSpan("メッセージ", shared), span(` ${url}`))] }));
     expect(await textsOf("#st-msgs .st-text a")).toEqual(["メッセージ", url]);
     await expect($("#st-msgs .st-text a")).toHaveAttribute("href", shared);
+    // The address is the title, so the label hides nowhere.
+    await expect($("#st-msgs .st-text a")).toHaveAttribute("title", shared);
     expect(await textsOf("#st-msgs .st-text")).toEqual([`see メッセージ ${url}`]);
   });
 

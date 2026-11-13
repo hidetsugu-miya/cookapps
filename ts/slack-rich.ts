@@ -18,6 +18,7 @@ function spanNodes(s: Span) {
   if (s.link !== null) {
     const a = tag("a", "", s.text);
     a.href = s.link;
+    a.title = a.href;
     nodes = [a];
   }
   if (s.code) nodes = wrap("code", nodes);

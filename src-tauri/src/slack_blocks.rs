@@ -405,21 +405,35 @@ fn color(c: Option<&str>) -> Option<String> {
     }
 }
 
-/// Slack folds an attachment's text of 5 line breaks or more, or of over 700 characters, and shows "Show more" for the rest.
+/// Slack folds an attachment's text of 5 line breaks or more, or of 700 characters or more, and shows "Show more" for the rest.
 const FOLD_LINES: usize = 5;
 const FOLD_CHARS: usize = 700;
 
-/// How much of a text is still shown: the line breaks and the characters seen so far.
-#[derive(Default)]
+/// How much of a text is still shown: the line breaks and the characters seen so far, and the most characters that are shown.
 struct Fold {
     breaks: usize,
     chars: usize,
+    max_chars: usize,
 }
 
 impl Fold {
-    /// Counts `c` and says whether it is still shown. A line break that would be the 5th, and any character past the 700th, is not.
+    /// A text of `total` characters: at most 700 are shown, and when it has 700 or more, at least one is left for the button.
+    fn new(total: usize) -> Self {
+        let max_chars = if total >= FOLD_CHARS {
+            FOLD_CHARS.min(total - 1)
+        } else {
+            FOLD_CHARS
+        };
+        Fold {
+            breaks: 0,
+            chars: 0,
+            max_chars,
+        }
+    }
+
+    /// Counts `c` and says whether it is still shown. A line break that would be the 5th, and any character past the most shown, is not.
     fn admit(&mut self, c: char) -> bool {
-        if self.chars >= FOLD_CHARS || (c == '\n' && self.breaks + 1 >= FOLD_LINES) {
+        if self.chars >= self.max_chars || (c == '\n' && self.breaks + 1 >= FOLD_LINES) {
             return false;
         }
         self.chars += 1;
@@ -440,10 +454,23 @@ impl Fold {
     }
 }
 
-/// The first 5 lines, and at most 700 characters, of a text, with its styles and blocks; `None` when nothing is cut.
+/// The characters of a text, the break between two blocks counted as one.
+fn rich_chars(rich: &Rich) -> usize {
+    let chars = |spans: &[Span]| spans.iter().map(|s| s.text.chars().count()).sum::<usize>();
+    let blocks: usize = rich
+        .iter()
+        .map(|block| match block {
+            RichBlock::Code { text } => text.chars().count(),
+            RichBlock::Paragraph { spans } | RichBlock::Quote { spans } => chars(spans),
+        })
+        .sum();
+    blocks + rich.len().saturating_sub(1)
+}
+
+/// The first 5 lines, and at most 700 characters, of a text of 5 line breaks or 700 characters or more, with its styles and blocks; `None` when nothing is cut.
 /// The break between two blocks is a line break too. Pure, so the screen decides nothing (S-11).
 pub(crate) fn fold_rich(rich: &Rich) -> Option<Rich> {
-    let mut fold = Fold::default();
+    let mut fold = Fold::new(rich_chars(rich));
     let mut out = Rich::new();
     let mut whole = true;
     for (i, block) in rich.iter().enumerate() {
@@ -559,7 +586,20 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
     Some(out)
 }
 
-/// The addresses of the messages that the attachments of a message unfurl (`is_msg_unfurl`, with `from_url` and `original_url`, S-11), once each. The text of the same message draws a link to one of them as a link labeled "メッセージ".
+/// `url` as it is when it is an https address of Slack (`slack.com` or a host under it, with no port and no user name), else `None`: the link of a message's text is labeled and opened, so it must be somewhere Slack is.
+fn slack_url(url: &str) -> Option<String> {
+    let url = http_url(Some(url))?;
+    let parsed = Url::parse(&url).ok()?;
+    let host = parsed.host_str()?;
+    (parsed.scheme() == "https"
+        && (host == "slack.com" || host.ends_with(".slack.com"))
+        && parsed.port().is_none()
+        && parsed.username().is_empty()
+        && parsed.password().is_none())
+    .then_some(url)
+}
+
+/// The addresses of the messages that the attachments of a message unfurl (`is_msg_unfurl`, with `from_url` and `original_url`, S-11), once each, only those that are https addresses of Slack (`slack_url`). The text of the same message draws a link to one of them as a link labeled "メッセージ"; any other stays the address.
 pub(crate) fn unfurled_urls(attachments: &Value) -> Vec<String> {
     let mut urls: Vec<String> = Vec::new();
     for a in attachments.as_array().into_iter().flatten() {
@@ -567,9 +607,9 @@ pub(crate) fn unfurled_urls(attachments: &Value) -> Vec<String> {
             continue;
         }
         for key in ["from_url", "original_url"] {
-            if let Some(url) = a[key].as_str().filter(|u| !u.is_empty()) {
-                if !urls.iter().any(|seen| seen == url) {
-                    urls.push(url.to_owned());
+            if let Some(url) = a[key].as_str().and_then(slack_url) {
+                if !urls.contains(&url) {
+                    urls.push(url);
                 }
             }
         }
@@ -1524,13 +1564,15 @@ mod tests {
     }
 
     #[test]
-    fn a_text_of_five_line_breaks_or_over_700_characters_is_folded() {
-        // 4 breaks and 700 characters stay whole; 5 breaks fold to the first 5 lines, and 701 characters to 700.
+    fn a_text_of_five_line_breaks_or_700_characters_or_more_is_folded() {
+        // 4 breaks and 699 characters stay whole; 5 breaks fold to the first 5 lines, and 700 characters or more fold to at most 700, with something always left for the button.
         assert_eq!(fold_rich(&p(&lines(5))), None);
         assert_eq!(fold_rich(&p(&lines(6))), Some(p(&lines(5))));
-        assert_eq!(fold_rich(&p(&"a".repeat(700))), None);
+        assert_eq!(fold_rich(&p(&"a".repeat(699))), None);
+        assert_eq!(fold_rich(&p(&"a".repeat(700))), Some(p(&"a".repeat(699))));
         assert_eq!(fold_rich(&p(&"a".repeat(701))), Some(p(&"a".repeat(700))));
         // Characters, not bytes.
+        assert_eq!(fold_rich(&p(&"日".repeat(700))), Some(p(&"日".repeat(699))));
         assert_eq!(fold_rich(&p(&"日".repeat(701))), Some(p(&"日".repeat(700))));
         // Both limits at once: the cut is where the first of them is reached.
         let text = format!(
@@ -1681,20 +1723,52 @@ mod tests {
 
     #[test]
     fn the_unfurled_addresses_are_those_of_the_attachments_that_unfurl_a_message() {
+        let (one, two, three) = (
+            "https://example.slack.com/archives/C1/p1",
+            "https://example.slack.com/archives/C1/p2",
+            "https://slack.com/archives/C1/p3",
+        );
         let a = json!([
-            {"is_msg_unfurl": true, "from_url": "https://a/1", "original_url": "https://a/1"},
-            {"is_msg_unfurl": true, "from_url": "https://a/2"},
-            {"is_msg_unfurl": true, "original_url": "https://a/3", "from_url": ""},
-            {"from_url": "https://a/4", "original_url": "https://a/4"},
-            {"is_msg_unfurl": false, "from_url": "https://a/5"},
+            {"is_msg_unfurl": true, "from_url": one, "original_url": one},
+            {"is_msg_unfurl": true, "from_url": two},
+            {"is_msg_unfurl": true, "original_url": three, "from_url": ""},
+            {"from_url": "https://example.slack.com/archives/C1/p4", "original_url": "https://example.slack.com/archives/C1/p4"},
+            {"is_msg_unfurl": false, "from_url": "https://example.slack.com/archives/C1/p5"},
             {"is_msg_unfurl": true},
         ]);
-        assert_eq!(
-            unfurled_urls(&a),
-            ["https://a/1", "https://a/2", "https://a/3"]
-        );
+        assert_eq!(unfurled_urls(&a), [one, two, three]);
         assert!(unfurled_urls(&json!(null)).is_empty());
         assert!(unfurled_urls(&json!([])).is_empty());
+    }
+
+    #[test]
+    fn only_an_https_address_of_slack_is_an_unfurled_address() {
+        let ok = "https://example.slack.com/archives/C1/p1";
+        let a = |url: &str| json!([{"is_msg_unfurl": true, "from_url": url, "original_url": url}]);
+        assert_eq!(unfurled_urls(&a(ok)), [ok]);
+        for bad in [
+            "javascript:alert(1)",
+            "/archives/C1/p1",
+            "archives/C1/p1",
+            "//example.slack.com/archives/C1/p1",
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/",
+            "http://example.slack.com/archives/C1/p1",
+            "https://evilslack.com/archives/C1/p1",
+            "https://slack.com.evil.com/archives/C1/p1",
+            "https://example.com/archives/C1/p1",
+            "https://user@example.slack.com/archives/C1/p1",
+            "https://example.slack.com:8443/archives/C1/p1",
+            "ftp://example.slack.com/archives/C1/p1",
+        ] {
+            assert!(unfurled_urls(&a(bad)).is_empty(), "{bad}");
+        }
+        // A good address next to a bad one stays.
+        let both = json!([
+            {"is_msg_unfurl": true, "from_url": "javascript:alert(1)", "original_url": ok},
+        ]);
+        assert_eq!(unfurled_urls(&both), [ok]);
     }
 
     #[test]

@@ -158,11 +158,12 @@ fn atoms(line: &str, name_of: NameOf, unfurled: &[String]) -> Vec<Atom> {
             '<' => match after.find('>') {
                 Some(end) => {
                     let token = &after[..end];
-                    let address = unescape(token);
-                    let atom = if !token.contains('|') && unfurled.contains(&address) {
-                        Atom::Link(address)
-                    } else {
-                        Atom::Lit(token_text(token, name_of))
+                    let address = (!unfurled.is_empty() && !token.contains('|'))
+                        .then(|| unescape(token))
+                        .filter(|address| unfurled.contains(address));
+                    let atom = match address {
+                        Some(address) => Atom::Link(address),
+                        None => Atom::Lit(token_text(token, name_of)),
                     };
                     (atom, end + 2)
                 }

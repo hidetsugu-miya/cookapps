@@ -1117,6 +1117,26 @@ describe("slack list", () => {
     for (const h of heights) expect(h).toEqual({ cut: false, over12: true, clamp: "none", overflow: "visible" });
   });
 
+  it("unfolds the folded text of an attachment in a row with its button, and opens no thread and marks nothing read (S-5, S-11)", async () => {
+    const whole = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join("\n");
+    const first = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`).join("\n");
+    await openList(timeline([timelineMessage(botTs, "CI", "dev", "post", { unread: true, attachments: [attachment({ text: plain(whole), textShort: plain(first) })] })]));
+    await waitForCount("#slack-feed .feed-row", 1);
+    const mark = await mock("slack_mark_read", true);
+    const thread = await mock("slack_thread", slackThread([threadMessage(botTs, "CI", "post")]));
+    expect(await rowTexts(".st-att > .st-text")).toEqual([first]);
+    // The button takes the press, which the row would take otherwise.
+    expect(await hitAt("#slack-feed .st-more")).toBe("BUTTON.text-btn st-more");
+    await pressAt("#slack-feed .st-more");
+    await waitForCount("#slack-feed .st-att > .st-text", 1);
+    expect(await rowTexts(".st-att > .st-text")).toEqual([whole]);
+    expect(await count("#slack-feed .st-more")).toBe(0);
+    await browser.pause(300);
+    await expect($("#slack-thread")).not.toBeDisplayed();
+    expect(await callsOf(thread)).toEqual([]);
+    expect(await callsOf(mark)).toEqual([]);
+  });
+
   it("still says （添付ファイル） for a message of files only, and shows no thumbnail", async () => {
     await openList(timeline([timelineMessage(slackTs(1), "Alice Example", "dev", "", { hasFiles: true, rich: [] })]));
     await waitForCount("#slack-feed .feed-row", 1);
