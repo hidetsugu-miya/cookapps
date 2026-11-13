@@ -1,6 +1,6 @@
 // The panes of the work pane of the Orca screen (A-17), drawn in `#orca-panes` from a tree: a pane (its tab strip, its plus, a line that says why it shows no terminal, and the host elements of its terminal and of its editor), or a split of panes side by side or one above the other.
 // The button of the file pane (A-18) is at the right end of the strip of the pane in the top right corner of the work pane.
-// While the list of projects is closed (A-23), the button that opens it is at the left end of the strip of the pane at the left edge.
+// The button that closes and opens the list of projects (A-23) is at the left end of the strip of the pane at the left edge, open or closed.
 // This module only draws and takes the user's operations: a tab dragged by the pointer (an edge of a pane splits it, its tab strip or its middle joins its tabs), and the pane that was pressed. What an operation does to the layout is decided in Rust (`orca_panes`).
 // The pane elements are kept from one drawing to the next while their pane stays, so a terminal in a pane is not made again when the tree changes elsewhere; the structure is built again only when the tree's shape changes.
 import type { Direction } from "./bindings/Direction";
@@ -14,7 +14,7 @@ const PLUS_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M
 const EDGE_SHARE = 0.25;
 const DRAG_PX = 5;
 
-// A pane to draw: its strip's tabs (made only when `key` changed since the last drawing), whether it has the focus, the line under the strip (null: none), whether its terminal shows, whether its editor shows, whether its plus is off, whether the file pane is shown (the button of the pane in the corner is pressed), and whether the list of projects is open (the button of the pane at the left edge shows while it is not).
+// A pane to draw: its strip's tabs (made only when `key` changed since the last drawing), whether it has the focus, the line under the strip (null: none), whether its terminal shows, whether its editor shows, whether its plus is off, whether the file pane is shown (the button of the pane in the corner is pressed), and whether the list of projects is open (what the button of the pane at the left edge, which always shows, says by `aria-expanded`).
 export interface PaneModel {
   id: string;
   key: string;
@@ -130,7 +130,7 @@ function drawPane(p: PaneEl, m: PaneModel, corner: boolean, edge: boolean) {
   // While the file pane is shown, its own top row has the button (A-18), so the corner pane has none.
   p.files.hidden = !corner || m.filesShown;
   p.files.setAttribute("aria-pressed", String(m.filesShown));
-  p.list.hidden = !edge || m.listOpen;
+  p.list.hidden = !edge;
   drawListToggle(p.list, m.listOpen);
 }
 

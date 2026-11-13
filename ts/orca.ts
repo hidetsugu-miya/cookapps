@@ -21,7 +21,6 @@ import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { CHEVRON_SVG, CLAUDE_SVG, DIFF_SVG, FILE_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
@@ -1130,18 +1129,12 @@ function toggleFilesAndDraw() {
 }
 
 // Closes the list of projects with its divider, or opens it again (A-23). The divider's ratio is kept, so the list opens at the width it had.
-// The pressed button is hidden by it, so the focus goes on to the button that is shown now.
+// The button is in the tab strip of the pane at the left edge, which is not rebuilt by this, so it keeps the focus.
 function toggleList() {
-  const focused = document.activeElement?.classList.contains("list-toggle") ?? false;
   listOpen = !listOpen;
   $("orca-list").hidden = !listOpen;
   $("orca-split").hidden = !listOpen;
-  drawListToggle($("orca-list-toggle"), listOpen);
   draw();
-  if (focused) {
-    const shown = [...document.querySelectorAll<HTMLElement>(".list-toggle")].find((b) => b.offsetParent !== null);
-    shown?.focus({ preventScroll: true });
-  }
 }
 
 // ---- the search field (A-19) ----
@@ -1231,10 +1224,6 @@ export function initOrca() {
     refresh();
   });
   initSearch();
-  const toggle = listToggle("プロジェクト一覧", toggleList);
-  toggle.id = "orca-list-toggle";
-  drawListToggle(toggle, listOpen);
-  $("orca-header").prepend(toggle);
   $("orca-refresh").onclick = () => load("full", true);
   $("orca-bell").onclick = () => {
     working = !working;
