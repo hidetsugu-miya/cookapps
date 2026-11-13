@@ -32,7 +32,16 @@ impl Frame {
 }
 
 /// `url` as it goes between `<` and `|`: the characters that end it are percent-encoded, `&` is escaped.
+/// Only an address with the scheme `http`, `https` or `mailto` is a link; any other (`!channel`, `@U1`, `#C1`, `javascript:`) is empty, which stands for no link,
+/// because Slack reads `<!channel|x>`, `<@U1|x>` and `<#C1|x>` as a mention.
 fn link_target(url: &str) -> String {
+    let lower = url.trim_start().to_ascii_lowercase();
+    if !["http://", "https://", "mailto:"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme))
+    {
+        return String::new();
+    }
     let encoded = url
         .replace(' ', "%20")
         .replace('<', "%3C")
@@ -43,11 +52,14 @@ fn link_target(url: &str) -> String {
 
 /// `markdown` as mrkdwn, without the blank lines at its ends.
 /// Bold, italic, strike, code, a code block, a link, a list (bulleted or numbered, nested) and a quote become Slack's. A heading becomes a bold line.
+/// Only an `http`, `https` or `mailto` address makes a link; any other leaves the text alone. A link or an image inside a link's text adds its text to it.
 /// Inside a link's text no style is kept, and the language of a code block is dropped. Anything else (a table, a task mark, HTML) stays as the text it is, escaped.
 pub(crate) fn to_mrkdwn(markdown: &str) -> String {
     let mut stack = vec![Frame::default()];
     // The link being read: where its text starts in the inline text, and its address.
     let mut link: Option<(usize, String)> = None;
+    // How many links or images are open inside that link: their text goes into its text and they make no link.
+    let mut inner_links = 0u32;
     let mut in_code_block = false;
     let mut in_heading = false;
     for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
@@ -87,6 +99,10 @@ pub(crate) fn to_mrkdwn(markdown: &str) -> String {
             Event::End(TagEnd::Emphasis) if styled => top.inline.push('_'),
             Event::Start(Tag::Strikethrough) if styled => top.inline.push('~'),
             Event::End(TagEnd::Strikethrough) if styled => top.inline.push('~'),
+            Event::Start(Tag::Link { .. } | Tag::Image { .. }) if link.is_some() => {
+                inner_links += 1;
+            }
+            Event::End(TagEnd::Link | TagEnd::Image) if inner_links > 0 => inner_links -= 1,
             // An address in angle brackets (`<a@x.jp>`) stays its text: Slack links an address by itself, and `<a@x.jp>` would not be one of its links.
             Event::Start(Tag::Link {
                 link_type: LinkType::Email,
@@ -239,6 +255,28 @@ mod tests {
         assert_eq!(
             to_mrkdwn("[**t** `c`](https://a.jp/) **[u](https://b.jp/)**"),
             "<https://a.jp/|t c> *<https://b.jp/|u>*"
+        );
+    }
+
+    #[test]
+    fn only_http_https_and_mailto_make_a_link() {
+        // Slack reads `<!channel|x>`, `<@U1|x>` and `<#C1|x>` as a mention, so an address that is not a web or mail one is only the text.
+        assert_eq!(to_mrkdwn("[了解](!channel)"), "了解");
+        assert_eq!(to_mrkdwn("[x](!here) [x](!subteam^S123)"), "x x");
+        assert_eq!(to_mrkdwn("[x](@U1) [x](#C1)"), "x x");
+        assert_eq!(to_mrkdwn("![](!here) ![a](@U1)"), "a");
+        assert_eq!(to_mrkdwn("[x](javascript:alert(1))"), "x");
+        assert_eq!(
+            to_mrkdwn("[a](HTTPS://a.jp/) [b](mailto:a@x.jp) ![c](https://a.jp/c.png)"),
+            "<HTTPS://a.jp/|a> <mailto:a@x.jp|b> <https://a.jp/c.png|c>"
+        );
+    }
+
+    #[test]
+    fn an_image_in_a_link_keeps_the_outer_address() {
+        assert_eq!(
+            to_mrkdwn("[![alt](https://a.jp/i.png)](https://b.jp/)"),
+            "<https://b.jp/|alt>"
         );
     }
 

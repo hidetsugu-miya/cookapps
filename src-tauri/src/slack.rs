@@ -3755,7 +3755,8 @@ fn timeline_message(
         blocks: drawn.blocks,
         show_text: drawn.show_text,
         attachments: drawn.attachments,
-        reactions: reactions_of(&raw.source),
+        // Only a row of a channel's history draws them (`history_messages`); the list does not.
+        reactions: Vec::new(),
         reply_count: raw.reply_count,
         permalink: permalink(
             &workspace.url,
@@ -4694,7 +4695,7 @@ fn pick_timeline(
     }
 }
 
-/// The users a message draws: its sender (a bot names itself) and the people its text, blocks and attachments mention.
+/// The users a message draws: its sender (a bot names itself) and the people its text, blocks and attachments mention, and those the start of its parent mentions (a reply also sent to the channel).
 fn people_of(m: &Raw) -> Vec<String> {
     m.bot
         .is_none()
@@ -4702,6 +4703,12 @@ fn people_of(m: &Raw) -> Vec<String> {
         .flatten()
         .into_iter()
         .chain(mention_ids(&m.text))
+        .chain(
+            m.broadcast
+                .iter()
+                .filter_map(|b| b.parent_text.as_deref())
+                .flat_map(mention_ids),
+        )
         .chain(mentioned_users(&m.source))
         .filter(|user| valid_channel(user))
         .collect()
@@ -4743,6 +4750,21 @@ fn unread_replies_of(cache: &TimelineCache, unread: &ThreadUnread) -> UnreadRepl
             })
             .collect(),
     }
+}
+
+/// The rows of a channel's history (S-20) as the screen draws them: the only rows that carry the reactions.
+fn history_messages(
+    cache: &TimelineCache,
+    workspaces: &[Workspace],
+    rows: &[Raw],
+) -> Vec<TimelineMessage> {
+    rows.iter()
+        .filter_map(|raw| {
+            let mut m = message_of(cache, workspaces, raw, false)?;
+            m.reactions = reactions_of(&raw.source);
+            Some(m)
+        })
+        .collect()
 }
 
 /// The rows as the screen draws them.
@@ -5638,10 +5660,7 @@ pub async fn slack_channel_history(
         lookup_users(auth.http(), &state.timeline, wanted),
         lookup_groups(API_URL, auth.http(), &state.timeline, teams),
     );
-    Ok(rows
-        .iter()
-        .filter_map(|raw| message_of(&state.timeline, &workspaces, raw, false))
-        .collect())
+    Ok(history_messages(&state.timeline, &workspaces, &rows))
 }
 
 /// Posts `text` to a channel of the side menu (S-21) under the user's own name, as S-1 posts (the same checks of the text and the same Japanese errors, `unfurl_*` off).
@@ -9639,23 +9658,44 @@ mod tests {
     }
 
     #[test]
-    fn a_row_and_a_thread_message_carry_the_same_reactions() {
+    fn only_a_history_row_and_a_thread_message_carry_the_reactions() {
         let m = json!({
-            "type": "message", "ts": "10.000001", "user": "U1", "text": "hi",
+            "type": "message", "ts": "10.000001", "user": "U1", "text": "hi <@U7>",
             "reactions": [{"name": "tada", "count": 2, "users": ["U1", "U2"]}],
         });
         let raw = raw_from("T1", &channel("C1"), &m).unwrap();
         let name_of = |_: &str| None;
         let w = workspace("T1", "https://one.slack.com/");
+        let want = [Reaction {
+            emoji: "🎉".to_owned(),
+            count: 2,
+        }];
+        // A row of the list carries none.
         let row = timeline_message(&raw, &w, None, &name_of, false);
+        assert!(row.reactions.is_empty());
+        // A row of a channel's history does, as a thread message does.
+        let rows = history_messages(&TimelineCache::default(), &[w], &[raw]);
+        assert_eq!(rows.len(), 1);
         let thread = thread_message(&thread_slim(&m), None, &name_of);
-        assert_eq!(
-            row.reactions,
-            [Reaction {
-                emoji: "🎉".to_owned(),
-                count: 2
-            }]
+        assert_eq!(rows[0].reactions, want);
+        assert_eq!(rows[0].reactions, thread.reactions);
+    }
+
+    #[test]
+    fn the_mentions_in_the_start_of_a_broadcasts_parent_are_looked_up() {
+        let m = broadcast_reply(
+            json!({"text": "ok <@U1>", "root": {"ts": "9.000001", "text": "<@U7> go <@U8|x>"}}),
         );
-        assert_eq!(row.reactions, thread.reactions);
+        let reply = json!({"ok": true, "messages": [m]});
+        let rows = history_rows(&reply, "T1", &channel("C1"));
+        assert_eq!(people_of(&rows[0]), ["U1", "U1", "U7", "U8"]);
+        // A message that is no broadcast names only its own people.
+        let plain = raw_from(
+            "T1",
+            &channel("C1"),
+            &json!({"ts": "1.000001", "user": "U2", "text": "x <@U3>"}),
+        )
+        .unwrap();
+        assert_eq!(people_of(&plain), ["U2", "U3"]);
     }
 }
