@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.67.1
+
+S-5: the rows of the Slack list show the whole body, with no limit of 2 or 12 lines; so do the unread replies under a row and the rows of a channel's history (#541). A thread's row shows the icons of up to 5 people who replied before 「N 件の返信」, and the time of the newest reply after it, as 「最終返信 15:02」 (#542). A thread for which Slack names no repliers shows 「N 件の返信」 alone.
+
+Inside: the saving of the settings files goes through one function, the internal functions take the settings folder, the colors of the screen come from the color variables, and the checks before a push run the self-test of the push gate when its tools change (#543, #544, #546 to #554). Nothing of the app's behavior changes.
+
 ## v0.67.0
 
 S-21, S-6: the field under a channel's history and the reply field of a thread are rich fields, as the editor of A-26 is (#456, #457). A toolbar at the top of the frame makes the selection bold, italic or struck through, a link, a numbered or bulleted list, a quote, code or a code block. The text button 「投稿する」 or 「返信する」 is gone: a round arrow at the right end of the frame, or Cmd+Enter, posts, and Enter is a line break. The text is posted as Markdown and turned into Slack's notation when it is sent; only a link to an http, https or mailto address stays a link, so a link cannot notify `@channel` or a person.
