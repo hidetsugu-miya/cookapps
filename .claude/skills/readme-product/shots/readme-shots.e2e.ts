@@ -3,7 +3,6 @@ import type { CalendarChoices } from "../../ts/bindings/CalendarChoices";
 import type { Info } from "../../ts/bindings/Info";
 import type { OrcaRow } from "../../ts/bindings/OrcaRow";
 import type { TaskItem } from "../../ts/bindings/TaskItem";
-import type { HandoffSummary } from "../../ts/bindings/HandoffSummary";
 import type { OrcaWorktree } from "../../ts/bindings/OrcaWorktree";
 import type { SideChannel } from "../../ts/bindings/SideChannel";
 import type { SideWorkspace } from "../../ts/bindings/SideWorkspace";
@@ -153,17 +152,8 @@ const worktreeList = (): OrcaWorktree[] => [
   ...specs.map(([repo, branch]) => worktreeOf(repo, branch)),
   ...["billing-api", "shop-web", "mobile-api", "admin-console", "design-docs", "auth-service", "notify-worker", "data-batch", "ops-scripts", "landing-page"].map((repo) => worktreeOf(repo, "main")),
 ];
-// What Claude answers for the instruction of the handoff photo (`claude_summarize_handoff`, A-9).
+// The instruction typed in the pane of the handoff photo (A-9).
 const INSTRUCTION = "この差額の原因を調べて、直してください。同じ条件のお客さまがほかにいないかも確かめてください。";
-const handoffPoints: HandoffSummary = {
-  points: [
-    "10 月分の請求書の金額が、画面の請求額より 1,200 円多くなる原因を調べる",
-    "割引クーポンを使ったお客さまの請求書に、割引が反映されるように直す",
-    "同じ条件のお客さま 14 件のほかに、影響を受けた請求書がないか確かめる",
-    "割引クーポンがある場合の請求書の金額のテストを足す",
-  ],
-  worktreeName: "fix-invoice-coupon",
-};
 // The target is a saved environment, so that its list and its terminal are streamed (A-12) and the terminal has colors.
 const ENVIRONMENT = "build-server";
 const streamOverview = () => orcaOverview([], [], { target: ENVIRONMENT, environments: [ENVIRONMENT], ssh: [orcaSsh("s1", "staging"), orcaSsh("s2", "ops-bastion")] });
@@ -479,11 +469,8 @@ describe("readme shots", () => {
     await expect($("#mail-handoff .ho-project")).toBeEnabled();
     await $("#mail-handoff .ho-project").click();
     await $('//div[@role="menu"]//button[normalize-space(.)="billing-api"]').click();
-    const ask = await mock("claude_summarize_handoff", handoffPoints);
     await $("#mail-handoff textarea").setValue(INSTRUCTION);
-    await $("#mail-handoff .ho-form .text-btn.primary").click();
-    await waitForCalls(ask);
-    await expect($("#mail-handoff .ho-agree")).toBeEnabled();
+    await expect($("#mail-handoff .ho-form .chat-send")).toBeEnabled();
     await shot("handoff");
   });
 
