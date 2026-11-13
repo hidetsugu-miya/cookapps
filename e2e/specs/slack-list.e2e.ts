@@ -371,21 +371,25 @@ describe("slack list", () => {
   const fourMessages = () => Array.from({ length: 4 }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `message ${i}`, { unread: true }));
 
   it("makes again only the row that changed on a read, and keeps the elements of the others", async () => {
-    await openList(timeline(fourMessages(), { refreshSecs: 1 }));
+    // Built once: `slackTs` reads the clock, and a new `ts` after a change of the second would make every row another one.
+    const messages = fourMessages();
+    await openList(timeline(messages, { refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 4);
     await markRows();
-    const changed = fourMessages();
-    changed[2] = timelineMessage(changed[2].ts, "Person 2", "dev", "edited", { unread: true });
+    const changed = [...messages];
+    changed[2] = timelineMessage(messages[2].ts, "Person 2", "dev", "edited", { unread: true });
     await mock("slack_timeline", timeline(changed, { refreshSecs: 1 }));
     await waitForText("#slack-feed .feed-text", "edited");
     expect(await keptRows()).toEqual(["kept:message 3", "new:edited", "kept:message 1", "kept:message 0"]);
   });
 
   it("keeps the rows and their focus in place when a read brings a group before them", async () => {
-    await openList(timeline(fourMessages(), { refreshSecs: 1 }));
+    // Built once, as above.
+    const messages = fourMessages();
+    await openList(timeline(messages, { refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 4);
     const active = () => browser.execute(() => (document.activeElement as HTMLElement & { __kept?: boolean }).__kept === true && (document.activeElement as HTMLElement).dataset.key);
-    const second = fourMessages()[1];
+    const second = messages[1];
     await browser.execute((key) => document.querySelector<HTMLElement>(`#slack-feed .feed-open[data-key="${key}"]`)!.focus(), `${workspace.teamId}/C0123ABCD/${second.ts}`);
     await markRows();
     const before = await browser.execute(() => (document.activeElement as HTMLElement).dataset.key);
@@ -394,7 +398,7 @@ describe("slack list", () => {
       (document.activeElement as HTMLElement & { __kept?: boolean }).__kept = true;
     });
     const fresh = timelineMessage(slackTs(0, 9), "Fresh Person", "random", "fresh", { unread: true, channel: "C9" });
-    await mock("slack_timeline", timeline([fresh, ...fourMessages()], { refreshSecs: 1 }));
+    await mock("slack_timeline", timeline([fresh, ...messages], { refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 5);
     expect(await keptRows()).toEqual(["new:fresh", "kept:message 3", "kept:message 2", "kept:message 1", "kept:message 0"]);
     expect(await active()).toBe(before);
