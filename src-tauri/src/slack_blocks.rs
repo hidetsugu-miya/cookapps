@@ -12,7 +12,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::slack::{emojify, mention_ids, plain_text, unescape, UNKNOWN_NAME};
-use crate::slack_mrkdwn::{parse, plain, rich_plain, Rich};
+use crate::slack_mrkdwn::{parse, plain, rich_plain, Rich, RichBlock, Span};
 
 /// Looks a user or a user group up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -95,6 +95,7 @@ pub struct ThreadField {
 }
 
 /// An attachment, as drawn. `color` is `#rrggbb` (or `#rgb`); `fallback` is set only when nothing else of the attachment can be drawn.
+/// `text_short` is the first lines of a long `text` (`fold_rich`), set only when `text` is long enough to be folded; the screen draws it with a button that swaps in `text` (S-11).
 #[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -106,6 +107,7 @@ pub struct ThreadAttachment {
     title: Option<String>,
     title_link: Option<String>,
     text: Option<Rich>,
+    text_short: Option<Rich>,
     fields: Vec<ThreadField>,
     footer: Option<String>,
     actions: Vec<ThreadButton>,
@@ -191,7 +193,7 @@ fn rich_of(v: &Value, name_of: NameOf, string_is_mrkdwn: bool) -> Option<Rich> {
     };
     if formatted {
         // Read once; nothing to draw is no text.
-        return Some(parse(raw, name_of)).filter(|rich| !rich.is_empty());
+        return Some(parse(raw, name_of, &[])).filter(|rich| !rich.is_empty());
     }
     text_of(v, name_of).map(plain)
 }
@@ -403,6 +405,111 @@ fn color(c: Option<&str>) -> Option<String> {
     }
 }
 
+/// Slack folds an attachment's text of 5 line breaks or more, or of 700 characters or more, and shows "Show more" for the rest.
+const FOLD_LINES: usize = 5;
+const FOLD_CHARS: usize = 700;
+
+/// How much of a text is still shown: the line breaks and the characters seen so far, and the most characters that are shown.
+struct Fold {
+    breaks: usize,
+    chars: usize,
+    max_chars: usize,
+}
+
+impl Fold {
+    /// A text of `total` characters: at most 700 are shown, and when it has 700 or more, at least one is left for the button.
+    fn new(total: usize) -> Self {
+        let max_chars = if total >= FOLD_CHARS {
+            FOLD_CHARS.min(total - 1)
+        } else {
+            FOLD_CHARS
+        };
+        Fold {
+            breaks: 0,
+            chars: 0,
+            max_chars,
+        }
+    }
+
+    /// Counts `c` and says whether it is still shown. A line break that would be the 5th, and any character past the most shown, is not.
+    fn admit(&mut self, c: char) -> bool {
+        if self.chars >= self.max_chars || (c == '\n' && self.breaks + 1 >= FOLD_LINES) {
+            return false;
+        }
+        self.chars += 1;
+        self.breaks += usize::from(c == '\n');
+        true
+    }
+
+    /// The part of `text` that is shown, and whether all of it is.
+    fn take(&mut self, text: &str) -> (String, bool) {
+        let mut kept = String::new();
+        for c in text.chars() {
+            if !self.admit(c) {
+                return (kept, false);
+            }
+            kept.push(c);
+        }
+        (kept, true)
+    }
+}
+
+/// The characters of a text, the break between two blocks counted as one.
+fn rich_chars(rich: &Rich) -> usize {
+    let chars = |spans: &[Span]| spans.iter().map(|s| s.text.chars().count()).sum::<usize>();
+    let blocks: usize = rich
+        .iter()
+        .map(|block| match block {
+            RichBlock::Code { text } => text.chars().count(),
+            RichBlock::Paragraph { spans } | RichBlock::Quote { spans } => chars(spans),
+        })
+        .sum();
+    blocks + rich.len().saturating_sub(1)
+}
+
+/// The first 5 lines, and at most 700 characters, of a text of 5 line breaks or 700 characters or more, with its styles and blocks; `None` when nothing is cut.
+/// The break between two blocks is a line break too. Pure, so the screen decides nothing (S-11).
+pub(crate) fn fold_rich(rich: &Rich) -> Option<Rich> {
+    let mut fold = Fold::new(rich_chars(rich));
+    let mut out = Rich::new();
+    let mut whole = true;
+    for (i, block) in rich.iter().enumerate() {
+        if i > 0 && !fold.admit('\n') {
+            whole = false;
+            break;
+        }
+        let shown = match block {
+            RichBlock::Code { text } => {
+                let (text, all) = fold.take(text);
+                whole = all;
+                (!text.is_empty()).then_some(RichBlock::Code { text })
+            }
+            RichBlock::Paragraph { spans } | RichBlock::Quote { spans } => {
+                let mut kept = Vec::new();
+                for s in spans {
+                    let (text, all) = fold.take(&s.text);
+                    if !text.is_empty() {
+                        kept.push(Span { text, ..s.clone() });
+                    }
+                    if !all {
+                        whole = false;
+                        break;
+                    }
+                }
+                (!kept.is_empty()).then_some(match block {
+                    RichBlock::Quote { .. } => RichBlock::Quote { spans: kept },
+                    _ => RichBlock::Paragraph { spans: kept },
+                })
+            }
+        };
+        out.extend(shown);
+        if !whole {
+            break;
+        }
+    }
+    (!whole).then_some(out)
+}
+
 fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
     if !a.is_object() {
         return None;
@@ -412,6 +519,7 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
     let styled = |key: &str| items(&a["mrkdwn_in"]).iter().any(|k| k == key);
     let rich = |key: &str| rich_of(&a[key], name_of, styled(key));
     let title = text("title");
+    let body = rich("text");
     let mut out = ThreadAttachment {
         color: color(a["color"].as_str()),
         pretext: rich("pretext"),
@@ -420,7 +528,8 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
             .as_ref()
             .and_then(|_| http_url(a["title_link"].as_str())),
         title,
-        text: rich("text"),
+        text_short: body.as_ref().and_then(fold_rich),
+        text: body,
         fields: a["fields"]
             .as_array()
             .into_iter()
@@ -475,6 +584,37 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
         out.fallback = Some(text("fallback")?);
     }
     Some(out)
+}
+
+/// `url` as it is when it is an https address of Slack (`slack.com` or a host under it, with no port and no user name), else `None`: the link of a message's text is labeled and opened, so it must be somewhere Slack is.
+fn slack_url(url: &str) -> Option<String> {
+    let url = http_url(Some(url))?;
+    let parsed = Url::parse(&url).ok()?;
+    let host = parsed.host_str()?;
+    (parsed.scheme() == "https"
+        && (host == "slack.com" || host.ends_with(".slack.com"))
+        && parsed.port().is_none()
+        && parsed.username().is_empty()
+        && parsed.password().is_none())
+    .then_some(url)
+}
+
+/// The addresses of the messages that the attachments of a message unfurl (`is_msg_unfurl`, with `from_url` and `original_url`, S-11), once each, only those that are https addresses of Slack (`slack_url`). The text of the same message draws a link to one of them as a link labeled "メッセージ"; any other stays the address.
+pub(crate) fn unfurled_urls(attachments: &Value) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    for a in attachments.as_array().into_iter().flatten() {
+        if a["is_msg_unfurl"] != true {
+            continue;
+        }
+        for key in ["from_url", "original_url"] {
+            if let Some(url) = a[key].as_str().and_then(slack_url) {
+                if !urls.contains(&url) {
+                    urls.push(url);
+                }
+            }
+        }
+    }
+    urls
 }
 
 /// The attachments that can be drawn.
@@ -691,7 +831,6 @@ pub(crate) fn message_plain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slack_mrkdwn::{RichBlock, Span};
     use serde_json::json;
 
     fn blocks(v: Value) -> Vec<ThreadBlock> {
@@ -1227,6 +1366,7 @@ mod tests {
             title: None,
             title_link: None,
             text: None,
+            text_short: None,
             fields: vec![],
             footer: None,
             actions: vec![],
@@ -1263,6 +1403,7 @@ mod tests {
                 title: Some("Job #1".into()),
                 title_link: Some("https://a.example/job/1".into()),
                 text: Some(p("Passed & done")),
+                text_short: None,
                 fields: vec![
                     ThreadField {
                         title: "Project".into(),
@@ -1415,6 +1556,91 @@ mod tests {
         assert_eq!(alt_only[0].fallback, None);
     }
 
+    fn lines(n: usize) -> String {
+        (1..=n)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_text_of_five_line_breaks_or_700_characters_or_more_is_folded() {
+        // 4 breaks and 699 characters stay whole; 5 breaks fold to the first 5 lines, and 700 characters or more fold to at most 700, with something always left for the button.
+        assert_eq!(fold_rich(&p(&lines(5))), None);
+        assert_eq!(fold_rich(&p(&lines(6))), Some(p(&lines(5))));
+        assert_eq!(fold_rich(&p(&"a".repeat(699))), None);
+        assert_eq!(fold_rich(&p(&"a".repeat(700))), Some(p(&"a".repeat(699))));
+        assert_eq!(fold_rich(&p(&"a".repeat(701))), Some(p(&"a".repeat(700))));
+        // Characters, not bytes.
+        assert_eq!(fold_rich(&p(&"日".repeat(700))), Some(p(&"日".repeat(699))));
+        assert_eq!(fold_rich(&p(&"日".repeat(701))), Some(p(&"日".repeat(700))));
+        // Both limits at once: the cut is where the first of them is reached.
+        let text = format!(
+            "{}\n{}\n{}",
+            "a".repeat(300),
+            "b".repeat(300),
+            "c".repeat(300)
+        );
+        let cut = format!(
+            "{}\n{}\n{}",
+            "a".repeat(300),
+            "b".repeat(300),
+            "c".repeat(98)
+        );
+        assert_eq!(fold_rich(&p(&text)), Some(p(&cut)));
+    }
+
+    #[test]
+    fn a_folded_text_keeps_its_styles_and_blocks() {
+        let span = |text: &str, bold: bool| Span {
+            text: text.to_owned(),
+            bold,
+            ..Span::default()
+        };
+        let rich = vec![
+            RichBlock::Paragraph {
+                spans: vec![span("head ", true), span("x\ny", false)],
+            },
+            RichBlock::Code {
+                text: "c1\nc2\nc3\nc4".to_owned(),
+            },
+            RichBlock::Quote {
+                spans: vec![span("never reached", false)],
+            },
+        ];
+        // The break between blocks is a line too: 1 in the paragraph, 1 between, and the code is cut before its 3rd break.
+        assert_eq!(
+            fold_rich(&rich),
+            Some(vec![
+                rich[0].clone(),
+                RichBlock::Code {
+                    text: "c1\nc2\nc3".to_owned()
+                },
+            ])
+        );
+        // A cut inside a span leaves the style of its first part, and a block the cut reaches first is dropped.
+        let long = vec![RichBlock::Paragraph {
+            spans: vec![span(&"a".repeat(699), true), span("bc", false)],
+        }];
+        assert_eq!(
+            fold_rich(&long),
+            Some(vec![RichBlock::Paragraph {
+                spans: vec![span(&"a".repeat(699), true), span("b", false)],
+            }])
+        );
+    }
+
+    #[test]
+    fn an_attachment_keeps_its_full_text_and_folds_a_long_one() {
+        let long = attachments(json!([{"text": lines(8)}]));
+        assert_eq!(long[0].text, Some(p(&lines(8))));
+        assert_eq!(long[0].text_short, Some(p(&lines(5))));
+        let short = attachments(json!([{"text": lines(5)}]));
+        assert_eq!(short[0].text_short, None);
+        let none = attachments(json!([{"title": "t"}]));
+        assert_eq!(none[0].text_short, None);
+    }
+
     #[test]
     fn an_empty_attachment_is_nothing() {
         assert_eq!(
@@ -1493,6 +1719,56 @@ mod tests {
         let (b, show_text) = message_blocks(&m["blocks"], draw_rich_text, &|_| None);
         let a = message_attachments(&m["attachments"], &|_| None);
         message_plain(text, show_text, &b, &a)
+    }
+
+    #[test]
+    fn the_unfurled_addresses_are_those_of_the_attachments_that_unfurl_a_message() {
+        let (one, two, three) = (
+            "https://example.slack.com/archives/C1/p1",
+            "https://example.slack.com/archives/C1/p2",
+            "https://slack.com/archives/C1/p3",
+        );
+        let a = json!([
+            {"is_msg_unfurl": true, "from_url": one, "original_url": one},
+            {"is_msg_unfurl": true, "from_url": two},
+            {"is_msg_unfurl": true, "original_url": three, "from_url": ""},
+            {"from_url": "https://example.slack.com/archives/C1/p4", "original_url": "https://example.slack.com/archives/C1/p4"},
+            {"is_msg_unfurl": false, "from_url": "https://example.slack.com/archives/C1/p5"},
+            {"is_msg_unfurl": true},
+        ]);
+        assert_eq!(unfurled_urls(&a), [one, two, three]);
+        assert!(unfurled_urls(&json!(null)).is_empty());
+        assert!(unfurled_urls(&json!([])).is_empty());
+    }
+
+    #[test]
+    fn only_an_https_address_of_slack_is_an_unfurled_address() {
+        let ok = "https://example.slack.com/archives/C1/p1";
+        let a = |url: &str| json!([{"is_msg_unfurl": true, "from_url": url, "original_url": url}]);
+        assert_eq!(unfurled_urls(&a(ok)), [ok]);
+        for bad in [
+            "javascript:alert(1)",
+            "/archives/C1/p1",
+            "archives/C1/p1",
+            "//example.slack.com/archives/C1/p1",
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/",
+            "http://example.slack.com/archives/C1/p1",
+            "https://evilslack.com/archives/C1/p1",
+            "https://slack.com.evil.com/archives/C1/p1",
+            "https://example.com/archives/C1/p1",
+            "https://user@example.slack.com/archives/C1/p1",
+            "https://example.slack.com:8443/archives/C1/p1",
+            "ftp://example.slack.com/archives/C1/p1",
+        ] {
+            assert!(unfurled_urls(&a(bad)).is_empty(), "{bad}");
+        }
+        // A good address next to a bad one stays.
+        let both = json!([
+            {"is_msg_unfurl": true, "from_url": "javascript:alert(1)", "original_url": ok},
+        ]);
+        assert_eq!(unfurled_urls(&both), [ok]);
     }
 
     #[test]

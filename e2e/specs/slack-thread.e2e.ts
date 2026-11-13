@@ -1,7 +1,7 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
 import {
   attachment, boot, callsOf, emojiCatalog, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, reaction, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
-  copiedTexts, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings, heightOf, TOOLS,
+  copiedTexts, linkSpan, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings, heightOf, TOOLS,
 } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
@@ -487,6 +487,17 @@ describe("slack thread: blocks and attachments", () => {
     expect(await browser.execute(() => document.querySelector("#st-msgs .st-msg > div > .st-text")!.compareDocumentPosition(document.querySelector("#st-msgs .st-att")!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
   });
 
+  it("draws the folded text of a long attachment with a button, and the whole text after a press (S-11)", async () => {
+    const whole = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join("\n");
+    const first = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`).join("\n");
+    await openDetail({}, bot({ attachments: [attachment({ title: "Shared", text: plain(whole), textShort: plain(first) }), attachment({ title: "Short", text: plain("One line") })] }));
+    expect(await textsOf("#st-msgs .st-att > .st-text")).toEqual([first, "One line"]);
+    expect(await textsOf("#st-msgs .st-att .st-more")).toEqual(["もっと表示する"]);
+    await $("#st-msgs .st-att .st-more").click();
+    expect(await textsOf("#st-msgs .st-att > .st-text")).toEqual([whole, "One line"]);
+    expect(await count("#st-msgs .st-more")).toBe(0);
+  });
+
   it("draws an attachment: the color bar, pretext, author, linked title, text, fields, buttons and footer", async () => {
     const full = attachment({
       color: "#36a64f",
@@ -730,6 +741,16 @@ describe("slack thread: styles of a text (S-12)", () => {
     await expect($("#st-msgs .st-text em a")).toHaveAttribute("href", url);
     expect(await count("#st-msgs .st-text code a")).toBe(0);
     expect(await count("#st-msgs .st-text a")).toBe(2);
+  });
+
+  it("draws a span with a link as a link labeled with its text, and not the address (S-11)", async () => {
+    const shared = "https://example.slack.com/archives/C1/p123";
+    await openDetail({}, withRich({ rich: [para(span("see "), linkSpan("メッセージ", shared), span(` ${url}`))] }));
+    expect(await textsOf("#st-msgs .st-text a")).toEqual(["メッセージ", url]);
+    await expect($("#st-msgs .st-text a")).toHaveAttribute("href", shared);
+    // The address is the title, so the label hides nowhere.
+    await expect($("#st-msgs .st-text a")).toHaveAttribute("title", shared);
+    expect(await textsOf("#st-msgs .st-text")).toEqual([`see メッセージ ${url}`]);
   });
 
   it("draws an HTML tag in a styled text as text", async () => {

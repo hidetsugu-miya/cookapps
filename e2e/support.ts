@@ -595,7 +595,9 @@ export const sideWorkspace = (channels: SideChannel[], extra: Partial<SideWorksp
 export const hiddenChannel = (channel: string, name: string, extra: Partial<HiddenChannel> = {}): HiddenChannel => ({ teamId: workspace.teamId, team: workspace.team, channel, name, ...extra });
 
 // A Slack text read for its styles (S-12): `plain` is a text with no style, `span` a run (`style` holds b, i, s and c for bold, italic, strike and code), `para` and `quote` hold spans.
-export const span = (text: string, style = ""): Span => ({ text, bold: style.includes("b"), italic: style.includes("i"), strike: style.includes("s"), code: style.includes("c") });
+export const span = (text: string, style = ""): Span => ({ text, bold: style.includes("b"), italic: style.includes("i"), strike: style.includes("s"), code: style.includes("c"), link: null });
+// A span that is a link to `url` (S-11): Rust labels it "メッセージ" when the message unfurls that message.
+export const linkSpan = (text: string, url: string): Span => ({ ...span(text), link: url });
 export const para = (...spans: Span[]): RichBlock => ({ type: "paragraph", spans });
 export const quote = (...spans: Span[]): RichBlock => ({ type: "quote", spans });
 export const plain = (text: string): RichBlock[] => [para(span(text))];
@@ -614,7 +616,7 @@ export const emojiCatalog = (standard: [string, string][], custom: [string, stri
 
 // An attachment of a thread's message (S-11) with nothing in it; `extra` sets the parts.
 export const attachment = (extra: Partial<ThreadAttachment> = {}): ThreadAttachment => ({
-  color: null, pretext: null, authorName: null, title: null, titleLink: null, text: null, fields: [], footer: null, actions: [], blocks: [], image: null, thumb: null, fallback: null, ...extra,
+  color: null, pretext: null, authorName: null, title: null, titleLink: null, text: null, textShort: null, fields: [], footer: null, actions: [], blocks: [], image: null, thumb: null, fallback: null, ...extra,
 });
 
 // An attached file; an image has a thumbnail URL on files.slack.com.

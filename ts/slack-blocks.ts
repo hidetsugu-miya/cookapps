@@ -1,6 +1,7 @@
 // The blocks (Block Kit) and attachments of a Slack message in the thread (S-11), drawn from what Rust made of them (src-tauri/src/slack_blocks.rs).
 // Rust decides what is drawn and which addresses may be opened or fetched; this only builds the nodes. Every text is put in as text, and only its URLs become links (`linkify`).
 // An image is drawn only after the user asked for the images of its message; until then it is left out, and with no address (or when it could not be fetched) its description is drawn as text.
+import type { RichBlock } from "./bindings/RichBlock";
 import type { ThreadAttachment } from "./bindings/ThreadAttachment";
 import type { ThreadBlock } from "./bindings/ThreadBlock";
 import type { ThreadButton } from "./bindings/ThreadButton";
@@ -112,6 +113,18 @@ export function blocksNode(blocks: ThreadBlock[], ctx: ImageContext) {
   return box;
 }
 
+// The folded text of an attachment (Rust cut it, `textShort`) and the button that swaps the whole text in for it.
+function foldedNodes(full: RichBlock[], short: RichBlock[]): Node[] {
+  const shortNodes = richNodes(short);
+  const more = tag("button", "text-btn st-more", "もっと表示する");
+  more.type = "button";
+  more.onclick = () => {
+    more.replaceWith(...richNodes(full));
+    for (const node of shortNodes) node.remove();
+  };
+  return [...shortNodes, more];
+}
+
 export function attachmentNode(a: ThreadAttachment, ctx: ImageContext) {
   const box = tag("div", "st-att");
   // Rust passes a hex color only.
@@ -126,7 +139,7 @@ export function attachmentNode(a: ThreadAttachment, ctx: ImageContext) {
       box.append(link);
     } else box.append(paragraph(a.title, "st-att-title"));
   }
-  if (a.text) box.append(...richNodes(a.text));
+  if (a.text) box.append(...(a.textShort ? foldedNodes(a.text, a.textShort) : richNodes(a.text)));
   if (a.fields.length) {
     const fields = tag("div", "st-fields");
     for (const f of a.fields) {
