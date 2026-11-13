@@ -171,17 +171,17 @@ describe("slack list", () => {
     await expect($("#slack-header")).toHaveAttribute("data-tauri-drag-region", "deep");
   });
 
-  it("stretches one real button over a row, with the text cut at two lines, and only the bookmark beside it, not in it", async () => {
+  it("stretches one real button over a row, and only the bookmark beside it, not in it", async () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);
     const row = await browser.execute(() => {
       const r = document.querySelector<HTMLElement>("#slack-feed .feed-row")!;
       const open = r.querySelector<HTMLElement>(".feed-open")!;
       const [a, b] = [r.getBoundingClientRect(), open.getBoundingClientRect()];
-      return { tag: r.tagName, open: open.tagName, covers: [a.width === b.width, a.height === b.height], clamp: getComputedStyle(r.querySelector(".feed-text")!).getPropertyValue("-webkit-line-clamp"), buttons: r.querySelectorAll("button").length, label: open.getAttribute("aria-label") };
+      return { tag: r.tagName, open: open.tagName, covers: [a.width === b.width, a.height === b.height], buttons: r.querySelectorAll("button").length, label: open.getAttribute("aria-label") };
     });
     // The first row has replies: its "N 件の返信" is the second button, and it takes the press itself.
-    expect(row).toEqual({ tag: "DIV", open: "BUTTON", covers: [true, true], clamp: "2", buttons: 2, label: "Alice Example #dev Please review the deploy notes." });
+    expect(row).toEqual({ tag: "DIV", open: "BUTTON", covers: [true, true], buttons: 2, label: "Alice Example #dev Please review the deploy notes." });
     // Pressing what is drawn is pressing the button.
     expect(await hitAt("#slack-feed .feed-text")).toBe("BUTTON.feed-open");
     expect(await hitAt("#slack-feed .feed-thread-open")).toBe("BUTTON.feed-thread-open");
@@ -210,6 +210,73 @@ describe("slack list", () => {
     await expect($("#slack-thread")).toBeDisplayed();
     expect(await callsOf(thread)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[0].ts }]);
     expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[0].ts }]);
+  });
+
+  it("draws the icons of the people who replied before N 件の返信 and 最終返信 after it, and the press on them is still the row's", async () => {
+    const bobIcon = "https://avatars.slack-edge.com/T1-U2/a_72.png";
+    const repliers = [
+      { name: "Bob Example", iconUrl: bobIcon },
+      { name: "Carol Example", iconUrl: null },
+      { name: "Dave Example", iconUrl: null },
+    ];
+    const old = `${Math.floor(Date.now() / 1000) - 40 * 86400}.000100`;
+    const messages = [
+      timelineMessage(slackTs(7, 1), "Alice Example", "dev", "Please review the deploy notes.", { unread: true, replyCount: 3, repliers, latestReply: slackTs(2, 5) }),
+      timelineMessage(slackTs(6, 2), "Erin Example", "dev", "Older thread.", { unread: true, replyCount: 1, repliers: [repliers[1]], latestReply: old }),
+      timelineMessage(slackTs(5, 3), "Frank Example", "dev", "No repliers named.", { unread: true, replyCount: 2 }),
+    ];
+    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady, slack_timeline: timeline(messages) });
+    const fetch = await mock("fetch_images", { [bobIcon]: pngUri });
+    await $("#nav-slack").click();
+    await waitForCount("#slack-feed .feed-row", 3);
+    // Only the rows with repliers have the line; the icons carry the name as their title and their reading.
+    expect(await count("#slack-feed .feed-thread-line")).toBe(2);
+    expect(await browser.execute(() => document.querySelector("#slack-feed .feed-thread-line")!.querySelectorAll(".feed-replier").length)).toBe(3);
+    const first = await browser.execute(() => {
+      const line = document.querySelector("#slack-feed .feed-thread-line")!;
+      return {
+        children: [...line.children].map((e) => e.className.split(" ")[0]),
+        titles: [...line.querySelectorAll<HTMLElement>(".feed-replier")].map((e) => e.title),
+        labels: [...line.querySelectorAll(".feed-replier")].map((e) => e.getAttribute("aria-label")),
+        initials: [...line.querySelectorAll(".feed-replier .av-text")].map((e) => e.textContent),
+        size: (() => {
+          const r = line.querySelector(".feed-replier")!.getBoundingClientRect();
+          return [r.width, r.height];
+        })(),
+        last: line.querySelector(".feed-last-reply")!.textContent,
+      };
+    });
+    expect(first.children).toEqual(["feed-repliers", "feed-thread-open", "feed-last-reply"]);
+    expect(first.titles).toEqual(["Bob Example", "Carol Example", "Dave Example"]);
+    expect(first.labels).toEqual(first.titles);
+    // The fetched icon replaces the initial of the first; the others keep theirs.
+    expect(await waitForCalls(fetch)).toEqual([{ urls: [bobIcon] }]);
+    await browser.waitUntil(async () => (await count("#slack-feed .feed-replier img.av-img")) === 1);
+    expect(await browser.execute(() => [...document.querySelector("#slack-feed .feed-thread-line")!.querySelectorAll(".feed-replier .av-text")].map((e) => e.textContent))).toEqual(expect.arrayContaining(["CE", "DE"]));
+    expect(first.size).toEqual([20, 20]);
+    // A reply of today shows the time, an old one the date as the list does.
+    expect(first.last).toMatch(/^最終返信 \d{1,2}:\d{2}$/);
+    expect(await textsOf("#slack-feed .feed-last-reply")).toHaveLength(2);
+    expect((await textsOf("#slack-feed .feed-last-reply"))[1]).toMatch(/^最終返信 (\d{1,2}月\d{1,2}日|\d{4}\/\d{1,2}\/\d{1,2})$/);
+    // The press on an icon or on the time goes to the row's button, and "N 件の返信" keeps its own.
+    expect(await hitAt("#slack-feed .feed-replier")).toBe("BUTTON.feed-open");
+    expect(await hitAt("#slack-feed .feed-last-reply")).toBe("BUTTON.feed-open");
+    expect(await hitAt("#slack-feed .feed-thread-open")).toBe("BUTTON.feed-thread-open");
+    // A thread with no repliers named is drawn as it was: the button alone.
+    expect(await textsOf("#slack-feed .feed-thread-open")).toEqual(["3 件の返信", "1 件の返信", "2 件の返信"]);
+    expect(await browser.execute(() => document.querySelectorAll("#slack-feed .feed-item")[2].querySelector(".feed-main")!.lastElementChild!.className)).toBe("feed-thread-open");
+  });
+
+  it("draws the repliers and the newest reply before 返信 N 件 of a watched row too", async () => {
+    const watched = [watchedMessage(slackTs(10), "Carol Example", "ops", "Watched read", 2, { channel: "C3", replyCount: 3, repliers: [{ name: "Bob Example", iconUrl: null }], latestReply: slackTs(1, 4) })];
+    await openList(timeline([], { watched }));
+    await showWatch();
+    await waitForCount("#slack-feed .feed-row", 1);
+    expect(await browser.execute(() => [...document.querySelector("#slack-feed .feed-thread-line")!.children].map((e) => `${e.className.split(" ")[0]}:${e.textContent}`))).toEqual([
+      expect.stringMatching(/^feed-repliers:BE$/),
+      "feed-replies:返信 3 件",
+      expect.stringMatching(/^feed-last-reply:最終返信 \d{1,2}:\d{2}$/),
+    ]);
   });
 
   it("shows a message of files only as 添付ファイル, and attached images never in a row", async () => {
@@ -1036,7 +1103,7 @@ describe("slack list", () => {
     expect(await count("#slack-feed .st-img")).toBe(0);
   });
 
-  it("keeps two lines for paragraphs alone, and about 12 lines for blocks, attachments, a code block or a quote, so that a long post cannot take the screen", async () => {
+  it("draws a long body in full, whether it is paragraphs alone, a quote, blocks or an attachment", async () => {
     const lines = Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n");
     const long = [
       timelineMessage(slackTs(1), "Paragraphs", "dev", lines, { unread: true, channel: "C1" }),
@@ -1046,9 +1113,8 @@ describe("slack list", () => {
     ];
     await openList(timeline(long));
     await waitForCount("#slack-feed .feed-row", 4);
-    const heights = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#slack-feed .feed-text")].map((t) => ({ lines: Math.round(t.clientHeight / Number.parseFloat(getComputedStyle(t).lineHeight)), clamp: getComputedStyle(t).getPropertyValue("-webkit-line-clamp"), overflow: getComputedStyle(t).overflowY })));
-    expect(heights[0]).toEqual({ lines: 2, clamp: "2", overflow: "hidden" });
-    for (const h of heights.slice(1)) expect(h).toEqual({ lines: 12, clamp: "none", overflow: "hidden" });
+    const heights = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#slack-feed .feed-text")].map((t) => ({ cut: t.scrollHeight > t.clientHeight, over12: t.clientHeight > Number.parseFloat(getComputedStyle(t).lineHeight) * 12, clamp: getComputedStyle(t).getPropertyValue("-webkit-line-clamp"), overflow: getComputedStyle(t).overflowY })));
+    for (const h of heights) expect(h).toEqual({ cut: false, over12: true, clamp: "none", overflow: "visible" });
   });
 
   it("still says （添付ファイル） for a message of files only, and shows no thumbnail", async () => {
