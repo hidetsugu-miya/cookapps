@@ -31,7 +31,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
    Together these are the list "of existing issues, closed proposals and Discussions" for the scouts.
 4. **Take photos for the UI evidence**, only when a screen is the evidence. Write a temporary spec with made-up data, the way `readme-product` does (`.claude/skills/readme-product/shots/`), run it with `npm run e2e:build` and `npm run e2e`, and delete the spec. Do not commit it. The photos stay in the scratchpad.
 5. **Launch the scouts in one message:** `refactor-scout`, `harness-scout` and `ux-scout`.
-   Each prompt carries the absolute worktree path, the list of step 3 and the limit of 5 candidates. `harness-scout` also gets the absolute path of `.claude/nightly/` in the main checkout (the logs are not in the worktree). `ux-scout` also gets the photo paths.
+   Each prompt carries the absolute worktree path, the list of step 3 and the limit of 5 candidates. `harness-scout` also gets the absolute paths of `.claude/nightly/` and of `logs/` (the hook logs) in the main checkout (the logs are not in the worktree), and the absolute path of the main checkout, whose `.claude/tools/handover.sh history 5` it runs. `ux-scout` also gets the photo paths.
 6. **Verify every candidate yourself.**
    - Drop a candidate that has the same purpose as an item of the step 3 list (an issue, a closed proposal, or a Discussion, open or closed).
    - Open each `path:line` of the evidence and confirm it says what the candidate says. Drop what does not hold. For a log or hand-over passage, read it again and confirm that the event happened at least twice.
