@@ -16,6 +16,7 @@ import type { Inbox } from "./bindings/Inbox";
 import type { KeySaved } from "./bindings/KeySaved";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
+import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
 import type { Method } from "./bindings/Method";
 import type { Model } from "./bindings/Model";
 import type { ClaudeSettings } from "./bindings/ClaudeSettings";
@@ -276,6 +277,8 @@ export interface Commands {
   orca_files_ignored: { args: { path: string; paths: string[]; environment: string | null }; result: string[] };
   // A-26: cuts the front matter off a Markdown text; the rich view is given the body only.
   markdown_split: { args: { text: string }; result: MarkdownParts };
+  // A-26: puts the edit of the rich view into the original text. `before` and `after` are what the editor exported for the body when it was loaded and now; `conflict` when the edit cannot be put into the original.
+  markdown_patch: { args: { original: string; before: string; after: string }; result: MarkdownPatchResult };
   // A-18: the text of the file `relative` of the worktree, for the editor, with LF line ends (`crlf`: the file has CRLF) and the signature of what the disk holds. A binary file, one over 384 KiB and one that is not UTF-8 are errors.
   orca_file_read: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileText };
   // A-18: saves `content` over the file only if the disk still holds the text with `signature` (`crlf`: write CRLF). `state` says whether it was written (`saved`, with the new signature) or the disk had changed (`changed`, `missing`, `not-utf8`: nothing written).

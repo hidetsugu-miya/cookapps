@@ -1033,9 +1033,9 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-mode { width: calc(22px * var(--fs)); height: calc(22px * var(--fs)); }
 .orca-edit-mode svg { width: calc(14px * var(--fs)); height: calc(14px * var(--fs)); }
 .orca-edit-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
-/* A-26: the rich view of a Markdown file. Milkdown draws read-only ProseMirror content here; there is no theme, so the elements get their looks below. */
+/* A-26: the rich view of a Markdown file. Milkdown draws ProseMirror content here (read only for a file that cannot be edited in it); there is no theme, so the elements get their looks below. */
 .orca-edit-rich { position: relative; flex: 1; min-height: 0; overflow: auto; background: var(--surface); }
-.orca-edit-rich .ProseMirror { box-sizing: border-box; max-width: 860px; margin: 0 auto; padding: 16px 24px 48px; outline: none; white-space: pre-wrap; word-wrap: break-word; font-family: var(--ff-base); line-height: 1.7; user-select: text; -webkit-user-select: text; }
+.orca-edit-rich .ProseMirror { box-sizing: border-box; min-height: 100%; max-width: 860px; margin: 0 auto; padding: 16px 24px 48px; outline: none; white-space: pre-wrap; word-wrap: break-word; font-family: var(--ff-base); line-height: 1.7; user-select: text; -webkit-user-select: text; }
 .orca-edit-rich .ProseMirror > :first-child { margin-top: 0; }
 .orca-edit-rich h1, .orca-edit-rich h2, .orca-edit-rich h3, .orca-edit-rich h4, .orca-edit-rich h5, .orca-edit-rich h6 { margin: 1.4em 0 .5em; line-height: 1.35; }
 .orca-edit-rich h1 { font-size: 1.7em; padding-bottom: .2em; border-bottom: 1px solid var(--line); }

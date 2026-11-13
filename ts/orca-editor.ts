@@ -3,7 +3,7 @@
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
-// A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter, and it is read only. The choice is kept for the file while it is open, in memory only.
+// A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the textarea by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
 import { tag } from "./dom.js";
 import { CODE_SVG, EDIT_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -47,6 +47,7 @@ interface EditorFile {
   highlight: string | null;
   cancelPaint: (() => void) | null;
   // A Markdown file: the buttons of the heading (`modes`, hidden for another file), the view that is shown (`mode`; "rich" is the start), the box of the text and numbers (`body`), the box of the rich view (`rich`) with the Milkdown editor in it (`view`, null: none), and the count that tells a drawing of the rich view that waits for the library that it is out of date.
+  // The edit of the rich view: `richBase` is the text of the textarea when the view was drawn and `richBefore` what the editor exported then (the edit is put into `richBase` from them, so the text of the textarea is always the base with the whole edit in it); `richPending`: the document changed and the textarea does not hold it yet, `richTimer` waits to put it there, `richSync` is the put on its way. `richFirst`: the view was not drawn yet (a file that cannot be edited in it opens in the source).
   markdown: boolean;
   mode: "rich" | "source";
   modes: HTMLElement;
@@ -54,8 +55,14 @@ interface EditorFile {
   richButton: HTMLButtonElement;
   body: HTMLElement;
   rich: HTMLElement;
-  view: { destroy(): Promise<unknown> } | null;
+  view: MilkdownView | null;
   richTurn: number;
+  richBase: string;
+  richBefore: string;
+  richPending: boolean;
+  richTimer: number | null;
+  richSync: Promise<void> | null;
+  richFirst: boolean;
   el: HTMLElement;
   area: HTMLTextAreaElement;
   // The layer under the textarea that carries the same text in colors.
@@ -73,6 +80,8 @@ interface EditorFile {
 // Up to this many characters the layer is drawn again once a frame while keys come; a longer text keeps the layer it has (old colors, old text) and is drawn again at most once in COLOR_WAIT_MS, as coloring a file of the size the editor takes (384 KiB) takes longer than a key.
 const COLOR_NOW_MAX = 30000;
 const COLOR_WAIT_MS = 150;
+// After a change of the rich view, how long it waits for more changes before the edit is put into the textarea.
+const RICH_WAIT_MS = 200;
 
 const files = new Map<string, EditorFile>();
 let lastId = 0;
@@ -188,11 +197,14 @@ function clearTimer(f: EditorFile) {
 function flush(f: EditorFile): Promise<void> {
   clearTimer(f);
   if (f.writing) return f.writing;
-  if (!canSave(f)) return Promise.resolve();
-  f.writing = write(f).finally(() => {
-    f.writing = null;
-    changed();
-  });
+  if (!f.richPending && !canSave(f)) return Promise.resolve();
+  // An edit of the rich view that is not in the textarea yet is put there first.
+  f.writing = syncRich(f)
+    .then(() => (canSave(f) ? write(f) : undefined))
+    .finally(() => {
+      f.writing = null;
+      changed();
+    });
   return f.writing;
 }
 
@@ -219,6 +231,18 @@ async function write(f: EditorFile) {
   }
 }
 
+// The text of the textarea changed (typed in the source, or put there from the rich view): draws it again, marks the file as changed and waits for the typing to stop.
+function typed(f: EditorFile) {
+  const value = f.area.value;
+  repaint(f, value);
+  numberLines(f, value);
+  if (!f.dirty) {
+    f.dirty = true;
+    changed();
+  }
+  schedule(f);
+}
+
 // Waits for the typing to stop, then saves.
 function schedule(f: EditorFile) {
   clearTimer(f);
@@ -227,9 +251,59 @@ function schedule(f: EditorFile) {
   f.timer = window.setTimeout(() => void flush(f), autosaveMs);
 }
 
+// The document of the rich view changed: the edit is put into the textarea after RICH_WAIT_MS (at most one wait at a time, so the text is put there while the typing goes on).
+function richChanged(f: EditorFile) {
+  f.richPending = true;
+  if (f.richTimer === null)
+    f.richTimer = window.setTimeout(() => {
+      f.richTimer = null;
+      void syncRich(f);
+    }, RICH_WAIT_MS);
+}
+
+// Puts the edit of the rich view into the textarea (Rust's `markdown_patch` applies it to the text the view was drawn from) and waits until it is there; a call while a put is on its way waits for it.
+function syncRich(f: EditorFile): Promise<void> {
+  if (f.richTimer !== null) clearTimeout(f.richTimer);
+  f.richTimer = null;
+  if (!f.richPending) return f.richSync ?? Promise.resolve();
+  f.richSync ??= putRich(f).finally(() => {
+    f.richSync = null;
+  });
+  return f.richSync;
+}
+
+async function putRich(f: EditorFile) {
+  while (f.richPending && f.view) {
+    f.richPending = false;
+    const turn = f.richTurn;
+    try {
+      const patched = await invoke("markdown_patch", { original: f.richBase, before: f.richBefore, after: f.view.markdown() });
+      if (turn !== f.richTurn) return;
+      if (patched.kind === "conflict") {
+        // The edit cannot be put into the text: the text stays as it is, and is edited in the source.
+        setMode(f, "source");
+        fail("リッチビューの編集を元のテキストに反映できません");
+        return;
+      }
+      if (patched.text !== f.area.value) {
+        f.area.value = patched.text;
+        typed(f);
+      }
+    } catch (e) {
+      if (turn !== f.richTurn) return;
+      setMode(f, "source");
+      fail(e);
+      return;
+    }
+  }
+}
+
 // Takes the Milkdown editor out of the rich view, and cancels a drawing of it that waits.
 function clearRich(f: EditorFile) {
   f.richTurn++;
+  if (f.richTimer !== null) clearTimeout(f.richTimer);
+  f.richTimer = null;
+  f.richPending = false;
   const view = f.view;
   f.view = null;
   void view?.destroy().catch(() => {});
@@ -237,11 +311,13 @@ function clearRich(f: EditorFile) {
 }
 
 // Draws the text of the file in the rich view: Milkdown is read the first time, and the front matter is cut off by Rust and kept out of the editor. A drawing that is out of date when the library or the cut comes (the view was left, the file closed) is dropped.
+// The view is made editable when the editor loads and exports the text to the same text twice and Rust can put the (unchanged) export into the text; else it stays read only, and a file that was just opened is shown in the source.
 async function drawRich(f: EditorFile) {
   clearRich(f);
   const turn = f.richTurn;
+  const text = f.area.value;
   try {
-    const [{ body }] = await Promise.all([invoke("markdown_split", { text: f.area.value }), loadMilkdown()]);
+    const [{ body }] = await Promise.all([invoke("markdown_split", { text }), loadMilkdown()]);
     if (turn !== f.richTurn) return;
     const host = tag("div");
     f.rich.append(host);
@@ -252,6 +328,18 @@ async function drawRich(f: EditorFile) {
       return;
     }
     f.view = view;
+    const before = view.markdown();
+    const [again, patched] = await Promise.all([CookappsMilkdown.normalize(before), invoke("markdown_patch", { original: text, before, after: before })]);
+    if (turn !== f.richTurn) return;
+    const first = f.richFirst;
+    f.richFirst = false;
+    if (again === before && patched.kind === "patched" && patched.text === text) {
+      f.richBase = text;
+      f.richBefore = before;
+      view.edit(() => richChanged(f));
+    } else if (first) {
+      setMode(f, "source");
+    }
   } catch (e) {
     if (turn !== f.richTurn) return;
     // The text stays readable: the source is shown.
@@ -337,20 +425,13 @@ function create(id: string, target: string | null, project: string, path: string
   const rich = tag("div", "orca-edit-rich");
   rich.hidden = true;
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, el, area, code, nums, numbers, gutter, lines: 1, state, note };
-  area.oninput = () => {
-    const value = area.value;
-    repaint(f, value);
-    numberLines(f, value);
-    if (!f.dirty) {
-      f.dirty = true;
-      changed();
-    }
-    schedule(f);
-  };
+  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, note };
+  area.oninput = () => typed(f);
   area.onscroll = () => followScroll(f);
-  sourceButton.onclick = () => {
+  sourceButton.onclick = async () => {
     if (f.mode === "source") return;
+    // The edit of the rich view is in the textarea before the source is shown.
+    await syncRich(f);
     setMode(f, "source");
     f.wantFocus = false;
     area.focus({ preventScroll: true });
@@ -392,6 +473,7 @@ export const openedIn = (target: string | null, project: string, path: string) =
 export async function closeFile(id: string) {
   const f = files.get(id);
   if (!f) return true;
+  await syncRich(f);
   // A save that failed before is tried again by this close (one try: a failure ends the loop below).
   if (f.save === "error") setSave(f, "pending");
   while (canSave(f)) await flush(f);
