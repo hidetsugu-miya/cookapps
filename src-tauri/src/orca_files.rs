@@ -9,7 +9,7 @@
 //! The difference of a file from HEAD (A-24, `orca_file_diff`) is Orca's `git.diff` (`staged` false, `compareAgainstHead` true): the text at HEAD and the text in the working tree, which `orca_diff.rs` turns into rows.
 //! The branches of a worktree (`orca_local_branches`, `git.localBranches`) and the remote branches found by a text (`orca_remote_branches`, `repo.searchRefs` with `namespace` `remote`) are read here too, for the branch button of the file pane.
 //! The branch of a worktree is switched here too (`orca_switch_branch`, `git.switchBranch`): a local or a remote branch, never a new one, and Orca's refusal is shown in its own words.
-//! The commits of a worktree (`orca_git_history`, `git.history`: HEAD first, the newest first, read `limit` at a time with `skip`) and the files a commit changed (`orca_commit_files`, `git.commitCompare`) are read here too, for the history of the file pane. Both only read; a subject, an author and a path are held in memory only and are in no log line. They were tried on this machine's Orca 1.4.258 over its unix socket (a saved environment was not tried).
+//! The commits of a worktree (`orca_git_history`, `git.history`: HEAD first, the newest first, read `limit` at a time with `skip`, on the history that the token of the first answer pins) and the files a commit changed (`orca_commit_files`, `git.commitCompare`) are read here too, for the history of the file pane. Both only read; a subject, an author and a path are held in memory only and are in no log line. They were tried on this machine's Orca 1.4.258 over its unix socket (a saved environment was not tried).
 //! The difference of one file of a commit (`orca_commit_file_diff`, `git.commitDiff`: the text at the first parent and at the commit, in the shape of `git.diff`) is drawn as A-24's diff is (`parse_diff`). The text is held in memory only and is in no log line.
 //! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
 
@@ -178,7 +178,7 @@ pub struct OrcaCommit {
     pub parents: Vec<String>,
 }
 
-/// A page of the history, and whether more commits follow it (`skip` by the number read so far reads them).
+/// A page of the history, and whether more commits follow it (`skip` by the number read so far reads them). `history_token` is Orca's handle of the history the first page began: given back with the next read, it keeps the read on that history whatever HEAD does after it. `history_changed` is true when Orca no longer holds that history, and the page then has no commit.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -186,6 +186,8 @@ pub struct OrcaCommit {
 pub struct OrcaCommitList {
     pub commits: Vec<OrcaCommit>,
     pub has_more: bool,
+    pub history_token: Option<String>,
+    pub history_changed: bool,
 }
 
 /// How a commit changed a file (Orca's names; a type change is `modified`).
@@ -1056,12 +1058,30 @@ fn check_history_limit(limit: u32) -> Result<(), String> {
     }
 }
 
-/// The arguments of `git.history`: the commits reachable from HEAD, `limit` of them after the first `skip`.
-fn history_params(limit: u32, skip: u32) -> Value {
-    json!({"refs": "head", "limit": limit, "skip": skip})
+/// The token of a history as Orca takes it (a string of at most 100 characters). Orca makes it a UUID; a plain word is all the app lets through.
+fn check_history_token(token: &str) -> Result<(), String> {
+    if !token.is_empty()
+        && token.len() <= 100
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        Ok(())
+    } else {
+        Err("履歴の印が正しくありません".into())
+    }
 }
 
-/// The commits of an answer of `git.history` (`{items: [{id, displayId, subject, message, author, timestamp, parentIds}], hasMore, ...}`). An item with no full id cannot be told from another, and a page with one is refused as a whole, so that `skip` by the number read never lands in the wrong place.
+/// The arguments of `git.history`: the commits reachable from HEAD, `limit` of them after the first `skip`; with `history_token`, the commits of the history that token stands for (the one HEAD was at when the first page was read).
+fn history_params(limit: u32, skip: u32, history_token: Option<&str>) -> Value {
+    let mut params = json!({"refs": "head", "limit": limit, "skip": skip});
+    if let Some(token) = history_token {
+        params["historyToken"] = json!(token);
+    }
+    params
+}
+
+/// The commits of an answer of `git.history` (`{items: [{id, displayId, subject, message, author, timestamp, parentIds}], hasMore, historyToken, historyChanged, ...}`). An item with no full id cannot be told from another, and a page with one is refused as a whole, so that `skip` by the number read never lands in the wrong place.
 fn parse_history(result: &Value) -> Result<OrcaCommitList, String> {
     let items = result["items"].as_array().ok_or(NOT_HISTORY)?;
     let commits = items
@@ -1101,6 +1121,11 @@ fn parse_history(result: &Value) -> Result<OrcaCommitList, String> {
     Ok(OrcaCommitList {
         has_more: result["hasMore"] == true && !commits.is_empty(),
         commits,
+        history_token: result["historyToken"]
+            .as_str()
+            .filter(|token| check_history_token(token).is_ok())
+            .map(str::to_owned),
+        history_changed: result["historyChanged"] == true,
     })
 }
 
@@ -1109,11 +1134,12 @@ async fn git_history(
     path: &str,
     limit: u32,
     skip: u32,
+    history_token: Option<&str>,
 ) -> Result<OrcaCommitList, String> {
     let answer = rpc
         .call(
             "git.history",
-            worktree_params(path, None, history_params(limit, skip)),
+            worktree_params(path, None, history_params(limit, skip, history_token)),
         )
         .await
         .map_err(branch_reason)?;
@@ -1404,19 +1430,30 @@ pub async fn orca_switch_branch(
     switched
 }
 
-/// The commits of the worktree at `path` from HEAD, the newest first: `limit` (1 to 200) of them after the first `skip` (the history of the file pane). A worktree that is not one of the target's list is refused as for the list.
+/// The commits of the worktree at `path` from HEAD, the newest first: `limit` (1 to 200) of them after the first `skip`, on the history `history_token` stands for when it is given (the history of the file pane). A worktree that is not one of the target's list is refused as for the list.
 #[tauri::command]
 pub async fn orca_git_history(
     path: String,
     limit: u32,
     skip: u32,
+    history_token: Option<String>,
     environment: Option<String>,
 ) -> Result<OrcaCommitList, String> {
     check_history_limit(limit)?;
+    if let Some(token) = &history_token {
+        check_history_token(token)?;
+    }
     cached_host_of(&path, environment.as_deref()).await?;
     let asked = async {
         let mut connection = Connection::open(environment.clone()).await?;
-        git_history(&mut connection, &path, limit, skip).await
+        git_history(
+            &mut connection,
+            &path,
+            limit,
+            skip,
+            history_token.as_deref(),
+        )
+        .await
     };
     forgetting(asked.await, &path, environment.as_deref())
 }
@@ -1690,9 +1727,44 @@ mod tests {
     #[test]
     fn the_history_is_asked_from_head_with_limit_and_skip() {
         assert_eq!(
-            history_params(50, 100),
+            history_params(50, 100, None),
             json!({"refs": "head", "limit": 50, "skip": 100})
         );
+    }
+
+    #[test]
+    fn the_history_is_asked_on_the_pinned_history_when_a_token_is_given() {
+        assert_eq!(
+            history_params(50, 100, Some("0b6f-41")),
+            json!({"refs": "head", "limit": 50, "skip": 100, "historyToken": "0b6f-41"})
+        );
+    }
+
+    #[test]
+    fn a_history_token_is_a_short_plain_word() {
+        assert!(check_history_token("0f8fad5b-d9cb-469f-a165-70867728950e").is_ok());
+        assert!(check_history_token(&"a".repeat(100)).is_ok());
+        for bad in ["", "a b", "a\n", "a/b", "ａ"] {
+            assert!(check_history_token(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_history_token(&"a".repeat(101)).is_err());
+    }
+
+    #[test]
+    fn the_token_and_the_change_of_the_history_come_with_the_answer() {
+        let first = parse_history(
+            &json!({"items": [{"id": ID_A}], "hasMore": true, "historyToken": "t-1"}),
+        )
+        .unwrap();
+        assert_eq!(first.history_token.as_deref(), Some("t-1"));
+        assert!(!first.history_changed);
+        let bad = parse_history(&json!({"items": [{"id": ID_A}], "historyToken": "a b"})).unwrap();
+        assert_eq!(bad.history_token, None);
+        let gone = parse_history(
+            &json!({"items": [], "hasMore": false, "historyToken": "t-1", "historyChanged": true}),
+        )
+        .unwrap();
+        assert!(gone.history_changed && gone.commits.is_empty() && !gone.has_more);
     }
 
     #[test]
@@ -1765,7 +1837,9 @@ mod tests {
             "git.history",
             Ok(json!({"items": [{"id": ID_A}], "hasMore": false})),
         )]);
-        let list = git_history(&mut orca, "/work/a", 50, 0).await.unwrap();
+        let list = git_history(&mut orca, "/work/a", 50, 0, None)
+            .await
+            .unwrap();
         assert_eq!(list.commits[0].id, ID_A);
         assert_eq!(
             orca.calls,
@@ -1786,12 +1860,16 @@ mod tests {
             )),
         )]);
         assert_eq!(
-            git_history(&mut orca, "/work/a", 50, 0).await.unwrap_err(),
+            git_history(&mut orca, "/work/a", 50, 0, None)
+                .await
+                .unwrap_err(),
             "worktree が見つかりません"
         );
         let mut orca = fake(vec![]);
         assert_eq!(
-            git_history(&mut orca, "/work/a", 50, 0).await.unwrap_err(),
+            git_history(&mut orca, "/work/a", 50, 0, None)
+                .await
+                .unwrap_err(),
             "no answer"
         );
     }

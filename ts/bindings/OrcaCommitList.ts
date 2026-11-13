@@ -2,6 +2,6 @@
 import type { OrcaCommit } from "./OrcaCommit";
 
 /**
- * A page of the history, and whether more commits follow it (`skip` by the number read so far reads them).
+ * A page of the history, and whether more commits follow it (`skip` by the number read so far reads them). `history_token` is Orca's handle of the history the first page began: given back with the next read, it keeps the read on that history whatever HEAD does after it. `history_changed` is true when Orca no longer holds that history, and the page then has no commit.
  */
-export type OrcaCommitList = { commits: Array<OrcaCommit>, hasMore: boolean, };
+export type OrcaCommitList = { commits: Array<OrcaCommit>, hasMore: boolean, historyToken: string | null, historyChanged: boolean, };

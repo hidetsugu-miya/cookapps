@@ -295,7 +295,7 @@ export interface Commands {
   // A-24: the diff of the file `relative` of the worktree, HEAD against the working tree: the rows of both views, the blocks of changes and the language to color by.
   orca_file_diff: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileDiff };
   // A-27: `limit` (1 to 200) commits of the worktree at `path` from HEAD, the newest first, after the first `skip`.
-  orca_git_history: { args: { path: string; limit: number; skip: number; environment: string | null }; result: OrcaCommitList };
+  orca_git_history: { args: { path: string; limit: number; skip: number; historyToken: string | null; environment: string | null }; result: OrcaCommitList };
   // A-27: the files the commit `commitId` (a full id) changed against its first parent.
   orca_commit_files: { args: { path: string; commitId: string; environment: string | null }; result: OrcaCommitFiles };
   // A-27: the diff of the file `relative` in the commit `commitId` from `parentId` (none for the first commit), as the diff tab draws it (`oldRelative`: where a renamed file came from).

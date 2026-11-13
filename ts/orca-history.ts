@@ -32,6 +32,10 @@ let active = false;
 // A new list (another worktree, or a read from the start) ends the reads of the old one.
 let generation = 0;
 let commits: OrcaCommit[] = [];
+// The ids of the commits in the list, so that a commit Orca gives twice is drawn once.
+let seen = new Set<string>();
+// What Orca gave with the first page: it keeps the next reads on the history that page began, whatever HEAD does after it.
+let historyToken: string | null = null;
 let hasMore = false;
 let error: string | null = null;
 let busy = false;
@@ -41,11 +45,15 @@ let selected: string | null = null;
 let changed: Changed | null = null;
 // The path of the file row pressed once.
 let picked: string | null = null;
+// What follows the rows of the list: the message of a failed read, the spinner, or the note of an empty list.
+let status: HTMLElement[] = [];
 let openFile: (relative: string, commit: DiffCommit) => void = () => {};
 
 function reset() {
   generation++;
   commits = [];
+  seen = new Set();
+  historyToken = null;
   hasMore = false;
   error = null;
   busy = false;
@@ -95,7 +103,7 @@ function fileRow(file: OrcaCommitFile, commit: OrcaCommit, parentId: string | nu
   const open = () => openFile(file.path, { id: commit.id, shortId: commit.shortId, parentId, oldRelative: file.oldPath });
   button.onclick = () => {
     picked = file.path;
-    draw();
+    markPicked();
   };
   // A file opens on a double press (or Enter), as in the tree of the files (A-18).
   button.ondblclick = open;
@@ -105,17 +113,52 @@ function fileRow(file: OrcaCommitFile, commit: OrcaCommit, parentId: string | nu
   return button;
 }
 
-// Draws the list and the files under it, keeping the scroll of both and the focus.
+// Draws the list and the files under it from nothing (a new list).
 function draw() {
+  $("orca-history-list").replaceChildren();
+  status = [];
+  renderStatus();
+  drawFiles();
+}
+
+// Puts the status under the rows again. The rows themselves are never drawn again, so the scroll and the focus of the list stay.
+function renderStatus() {
   const list = $("orca-history-list");
+  for (const node of status) node.remove();
+  status = [];
+  if (context !== null) {
+    if (error !== null) status.push(note(error, true));
+    if (busy) status.push(loading());
+    else if (error === null && started && commits.length === 0) status.push(note("コミットがありません"));
+  }
+  list.append(...status);
+  requestAnimationFrame(readMore);
+}
+
+// Adds the rows of the commits read last under the rows there are.
+function appendRows(added: OrcaCommit[]) {
+  for (const node of status) node.remove();
+  status = [];
+  $("orca-history-list").append(...added.map(commitRow));
+}
+
+// Marks the chosen commit, without drawing the rows again.
+function markChosen() {
+  const list = $("orca-history-list");
+  list.querySelector(".orca-commit[aria-pressed='true']")?.setAttribute("aria-pressed", "false");
+  if (selected !== null) list.querySelector(`.orca-commit[data-id="${CSS.escape(selected)}"]`)?.setAttribute("aria-pressed", "true");
+}
+
+// Marks the file pressed once, without drawing the rows again.
+function markPicked() {
+  for (const row of $("orca-history-files").querySelectorAll<HTMLElement>(".orca-hfile")) row.setAttribute("aria-pressed", String(row.dataset.path === picked));
+}
+
+// Draws the files of the chosen commit, keeping their scroll and the focus.
+function drawFiles() {
   const under = $("orca-history-files");
-  const tops = [list.scrollTop, under.scrollTop];
-  const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("#orca-history [data-id], #orca-history [data-path]");
-  const nodes: HTMLElement[] = commits.map(commitRow);
-  if (error !== null) nodes.push(note(error, true));
-  if (busy) nodes.push(loading());
-  else if (error === null && started && commits.length === 0) nodes.push(note("コミットがありません"));
-  list.replaceChildren(...(context === null ? [] : nodes));
+  const top = under.scrollTop;
+  const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("#orca-history-files [data-path]");
   const commit = commits.find((c) => c.id === selected);
   const parts: HTMLElement[] = [];
   if (commit !== undefined && changed !== null && changed.id === commit.id) {
@@ -130,11 +173,8 @@ function draw() {
     }
   }
   under.replaceChildren(...parts);
-  [list.scrollTop, under.scrollTop] = tops;
-  if (focused) {
-    const key = focused.dataset.id !== undefined ? `[data-id="${focused.dataset.id}"]` : `[data-path="${CSS.escape(focused.dataset.path ?? "")}"]`;
-    document.querySelector<HTMLElement>(`#orca-history ${key}`)?.focus({ preventScroll: true });
-  }
+  under.scrollTop = top;
+  if (focused) under.querySelector<HTMLElement>(`[data-path="${CSS.escape(focused.dataset.path ?? "")}"]`)?.focus({ preventScroll: true });
   requestAnimationFrame(readMore);
 }
 
@@ -152,11 +192,20 @@ async function readPage() {
   busy = true;
   started = true;
   error = null;
-  draw();
+  renderStatus();
   try {
-    const page = await invoke("orca_git_history", { path: here.path, limit: PAGE, skip: commits.length, environment: here.target });
+    const page = await invoke("orca_git_history", { path: here.path, limit: PAGE, skip: commits.length, historyToken, environment: here.target });
     if (mine !== generation) return;
-    commits = [...commits, ...page.commits];
+    // Orca no longer holds the history the list began (it was idle for long, or a commit of it is gone): the list is read again from the start.
+    if (page.historyChanged) {
+      reloadHistory();
+      return;
+    }
+    historyToken = page.historyToken ?? historyToken;
+    const added = page.commits.filter((c) => !seen.has(c.id));
+    for (const c of added) seen.add(c.id);
+    commits.push(...added);
+    appendRows(added);
     // A page with no commit ends the list, whatever it says, so that the list is not read for ever.
     hasMore = page.hasMore && page.commits.length > 0;
   } catch (e) {
@@ -164,7 +213,7 @@ async function readPage() {
     error = String(e);
   }
   busy = false;
-  draw();
+  renderStatus();
 }
 
 async function select(id: string) {
@@ -174,7 +223,8 @@ async function select(id: string) {
   selected = id;
   picked = null;
   changed = { id, read: "loading", data: null, error: null };
-  draw();
+  markChosen();
+  drawFiles();
   let next: Changed;
   try {
     next = { id, read: "ready", data: await invoke("orca_commit_files", { path: here.path, commitId: id, environment: here.target }), error: null };
@@ -184,7 +234,7 @@ async function select(id: string) {
   // An answer for a list that is gone, or for a commit that is not the chosen one any more, is dropped.
   if (mine !== generation || selected !== id) return;
   changed = next;
-  draw();
+  drawFiles();
 }
 
 // Follows the pane: the worktree it shows (null: none), and whether the history is the part that is shown. Another worktree starts a new list, and the first commits are read at once while the history is shown.
