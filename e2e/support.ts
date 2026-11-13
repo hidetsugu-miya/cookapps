@@ -516,6 +516,7 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
   unread: false,
   watch: null,
   unreadReplies: null,
+  reactions: [],
   ...extra,
 });
 
@@ -582,7 +583,7 @@ export const quote = (...spans: Span[]): RichBlock => ({ type: "quote", spans })
 export const plain = (text: string): RichBlock[] => [para(span(text))];
 
 // A message of a thread (`slack_thread`); its `rich` is its text with no style unless `extra` sets it.
-export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, rich: plain(text), files: [], blocks: [], showText: true, attachments: [], imageUrls: [], ...extra });
+export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, rich: plain(text), files: [], blocks: [], showText: true, attachments: [], imageUrls: [], reactions: [], ...extra });
 
 // An attachment of a thread's message (S-11) with nothing in it; `extra` sets the parts.
 export const attachment = (extra: Partial<ThreadAttachment> = {}): ThreadAttachment => ({

@@ -1494,6 +1494,7 @@ pub struct TimelineMessage {
     blocks: Vec<ThreadBlock>,
     show_text: bool,
     attachments: Vec<ThreadAttachment>,
+    reactions: Vec<Reaction>,
     reply_count: u32,
     permalink: String,
     has_files: bool,
@@ -1503,6 +1504,16 @@ pub struct TimelineMessage {
     watch: Option<WatchMark>,
     /// The replies of the thread that are unread (S-14). Never set in the watch section.
     unread_replies: Option<UnreadReplies>,
+}
+
+/// A reaction under a message: the emoji drawn as text (`emojify`; a custom emoji stays `:name:`) and how many people gave it.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct Reaction {
+    emoji: String,
+    count: u32,
 }
 
 /// The unread replies of a row's thread (S-14). `uncounted`: the thread is longer than the page that was read and its newest reply is after the position, so `count` says nothing (it is 0).
@@ -1671,6 +1682,7 @@ pub struct ThreadMessage {
     /// Whether the text (`rich`) is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
     show_text: bool,
     attachments: Vec<ThreadAttachment>,
+    reactions: Vec<Reaction>,
     /// The https addresses of the images of `blocks` and `attachments`, once each; the screen asks for them only when the user presses "画像を表示".
     image_urls: Vec<String>,
 }
@@ -3680,6 +3692,7 @@ fn timeline_message(
         blocks: drawn.blocks,
         show_text: drawn.show_text,
         attachments: drawn.attachments,
+        reactions: reactions_of(&raw.source),
         reply_count: raw.reply_count,
         permalink: permalink(
             &workspace.url,
@@ -3753,7 +3766,31 @@ fn thread_slim(m: &Value) -> Value {
         "attachments": m["attachments"],
         "username": m["username"],
         "bot_profile": m["bot_profile"],
+        // Only the name and the count: the people who gave a reaction are not drawn.
+        "reactions": m["reactions"].as_array().map(|list| {
+            list.iter()
+                .map(|r| json!({"name": r["name"], "count": r["count"]}))
+                .collect::<Vec<_>>()
+        }),
     })
+}
+
+/// The reactions of a message (`reactions` of `conversations.history` and `conversations.replies`), in Slack's order: the emoji as `emojify` draws `:name:` (a skin tone comes as `+1::skin-tone-2` in the name) and the count.
+/// An entry with no name or no positive count is left out.
+fn reactions_of(m: &Value) -> Vec<Reaction> {
+    m["reactions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let name = r["name"].as_str().filter(|n| !n.is_empty())?;
+            let count = u32::try_from(r["count"].as_u64()?).unwrap_or(u32::MAX);
+            (count > 0).then(|| Reaction {
+                emoji: emojify(&format!(":{name}:")),
+                count,
+            })
+        })
+        .collect()
 }
 
 /// What the screen draws of a message (`thread_slim`), in the thread and in the list.
@@ -3804,6 +3841,7 @@ fn thread_message(
         blocks,
         show_text,
         attachments,
+        reactions: reactions_of(m),
         ts: m["ts"].as_str().unwrap_or_default().to_owned(),
         user: m["user"]
             .as_str()
@@ -9334,5 +9372,72 @@ mod tests {
         assert_eq!(rows[2].thread_ts.as_deref(), Some("9.000001"));
         assert_eq!(rows[0].channel_name, "name C1");
         assert!(history_rows(&json!({"ok": true}), "T1", &channel("C1")).is_empty());
+    }
+
+    #[test]
+    fn reactions_are_read_as_emoji_and_count_in_slacks_order() {
+        let reaction = |emoji: &str, count: u32| Reaction {
+            emoji: emoji.to_owned(),
+            count,
+        };
+        let m = json!({"type": "message", "ts": "1.000001", "reactions": [
+            {"name": "tada", "count": 3, "users": ["U1", "U2", "U3"]},
+            {"name": "+1::skin-tone-2", "count": 1, "users": ["U1"]},
+            {"name": "partyparrot", "count": 12, "users": ["U1"]},
+        ]});
+        let want = [
+            reaction("🎉", 3),
+            reaction("👍🏻", 1),
+            reaction(":partyparrot:", 12),
+        ];
+        assert_eq!(reactions_of(&m), want);
+        // The slim copy a read keeps gives the same, without the users.
+        let slim = thread_slim(&m);
+        assert_eq!(reactions_of(&slim), want);
+        assert!(slim["reactions"][0].get("users").is_none());
+    }
+
+    #[test]
+    fn a_message_without_usable_reactions_has_none() {
+        assert!(reactions_of(&json!({"ts": "1.000001"})).is_empty());
+        assert!(reactions_of(&json!({"reactions": "tada"})).is_empty());
+        assert!(reactions_of(&json!({"reactions": []})).is_empty());
+        assert!(thread_slim(&json!({"ts": "1.000001"}))["reactions"].is_null());
+        let m = json!({"reactions": [
+            {"name": "", "count": 2},
+            {"count": 2},
+            {"name": "tada"},
+            {"name": "fire", "count": 0},
+            {"name": "fire", "count": -1},
+            {"name": "eyes", "count": 2},
+        ]});
+        assert_eq!(
+            reactions_of(&m),
+            [Reaction {
+                emoji: "👀".to_owned(),
+                count: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn a_row_and_a_thread_message_carry_the_same_reactions() {
+        let m = json!({
+            "type": "message", "ts": "10.000001", "user": "U1", "text": "hi",
+            "reactions": [{"name": "tada", "count": 2, "users": ["U1", "U2"]}],
+        });
+        let raw = raw_from("T1", &channel("C1"), &m).unwrap();
+        let name_of = |_: &str| None;
+        let w = workspace("T1", "https://one.slack.com/");
+        let row = timeline_message(&raw, &w, None, &name_of, false);
+        let thread = thread_message(&thread_slim(&m), None, &name_of);
+        assert_eq!(
+            row.reactions,
+            [Reaction {
+                emoji: "🎉".to_owned(),
+                count: 2
+            }]
+        );
+        assert_eq!(row.reactions, thread.reactions);
     }
 }
