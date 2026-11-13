@@ -621,7 +621,7 @@ pub fn log_failure(command: &str, account: &str, e: impl Into<ApiError>) -> Stri
 }
 
 /// `…/threads/{id}` (plus `/{action}`). The ID comes from the frontend; Gmail's are alphanumeric, so anything else is refused.
-fn thread_url(id: &str, action: Option<&str>) -> Result<String, String> {
+pub(crate) fn thread_url(id: &str, action: Option<&str>) -> Result<String, String> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err("スレッド ID が不正です".into());
     }
@@ -723,7 +723,7 @@ fn build_request(
 }
 
 /// `Ok(None)` means the token was rejected with 401. A rate-limited request is sent again up to `retries` times.
-async fn send_json<T: DeserializeOwned>(
+pub(crate) async fn send_json<T: DeserializeOwned>(
     http: &reqwest::Client,
     method: Method,
     token: &str,

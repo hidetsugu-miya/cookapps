@@ -11,6 +11,7 @@ pub mod gmail;
 pub mod image_senders;
 pub mod images;
 pub mod mail_address;
+pub mod mail_send;
 pub mod markdown_patch;
 pub mod notion;
 pub mod orca;
@@ -229,6 +230,7 @@ pub fn run() {
             gmail::untrash,
             gmail::unarchive,
             gmail::set_read,
+            mail_send::send_mail,
             gmail::sync,
             images::fetch_images,
             image_senders::image_sender_known,

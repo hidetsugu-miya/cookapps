@@ -18,6 +18,7 @@ import type { KeySaved } from "./bindings/KeySaved";
 import type { LogEntry } from "./bindings/LogEntry";
 import type { LogLevel } from "./bindings/LogLevel";
 import type { MailSummary } from "./bindings/MailSummary";
+import type { OutgoingMail } from "./bindings/OutgoingMail";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
 import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
 import type { Method } from "./bindings/Method";
@@ -109,6 +110,8 @@ export interface Commands {
   untrash: { args: Thread; result: boolean | null };
   unarchive: { args: Thread; result: boolean | null };
   set_read: { args: Thread & { read: boolean }; result: boolean | null };
+  // Sends the mail from the account (a reply when `replyThreadId` is set). null: that account must log in again. true: sent.
+  send_mail: { args: Account & { mail: OutgoingMail }; result: boolean | null };
   fetch_images: { args: { urls: string[] }; result: Record<string, string> };
   image_sender_known: { args: { froms: string[] }; result: string[] };
   remember_image_sender: { args: { from: string }; result: null };
