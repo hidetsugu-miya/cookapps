@@ -4,12 +4,13 @@
 // The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-form` and `-chat-note`, and `-keys` unless `keyHint` is false.
 import type { DiffLine } from "./bindings/DiffLine";
 import type { PromptEdit } from "./bindings/PromptEdit";
+import type { Target } from "./bindings/Target";
 import type { TodoTaskProposal } from "./bindings/TodoTaskProposal";
 import { getClaude } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
 
-// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`) or proposed tasks.
-export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[] };
+// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, or the destination it chose (the Slack compose screen, S-4).
+export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; destination?: Target | null };
 
 export interface ChatTurnPayload {
   role: "user" | "assistant";
@@ -26,6 +27,8 @@ export interface ChatConfig {
   apply: (text: string) => void;
   // Asks Claude about `text` with the conversation so far and the new request. Nothing is saved.
   ask: (text: string, history: ChatTurnPayload[], instruction: string) => Promise<ChatAnswer>;
+  // Called with an answer that is kept (not one that arrives after the conversation was forgotten, nor a failure), before the text is changed and the log is drawn.
+  answered?: (answer: ChatAnswer) => void;
   // Draws the tasks an answer proposes, under its reply; without it `tasks` is not drawn.
   cards?: (tasks: TodoTaskProposal[]) => HTMLElement;
   // The lines (one per task) that tell Claude what an earlier answer proposed; they are added to that answer's text in the history it is sent, because the cards are not text. Without it only the text is sent.
@@ -221,8 +224,9 @@ export function createChat(cfg: ChatConfig) {
     sendingGeneration = mine;
     draw();
     let turn: Turn;
+    let answer: ChatAnswer | undefined;
     try {
-      const answer = await cfg.ask(body, history, instruction);
+      answer = await cfg.ask(body, history, instruction);
       turn = {
         role: "assistant",
         text: answer.reply,
@@ -235,6 +239,7 @@ export function createChat(cfg: ChatConfig) {
     sending = false;
     // The conversation was forgotten meanwhile: the answer is dropped, and the request field is free again.
     if (mine !== generation) return cfg.changed();
+    if (answer) cfg.answered?.(answer);
     const proposal = turn.proposal;
     if (cfg.autoApply && proposal && proposal.body !== body && cfg.text() === body && !cfg.locked?.()) {
       cfg.apply(proposal.body);

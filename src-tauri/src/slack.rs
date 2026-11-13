@@ -58,6 +58,8 @@ const RECENT_KEY: &str = "recent";
 const LEGACY_FILE: &str = "slack-destinations.json";
 /// How many destinations "recent" keeps.
 const RECENT_MAX: usize = 8;
+/// How many destinations Claude is offered to choose from (S-4): the recent ones first, then the joined channels.
+const DESTINATION_LIMIT: usize = 300;
 /// `users.conversations` answers in pages of 200 channels; the channels past this many pages are left out.
 const CHANNEL_PAGES: usize = 50;
 const CHANNELS_TTL: Duration = Duration::from_secs(10 * 60);
@@ -121,15 +123,23 @@ pub struct Channel {
 }
 
 /// What a pasted Slack link points at.
-#[derive(Serialize)]
+#[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
-    team_id: String,
-    channel: String,
-    name: String,
-    thread_ts: Option<String>,
+    pub(crate) team_id: String,
+    pub(crate) channel: String,
+    pub(crate) name: String,
+    pub(crate) thread_ts: Option<String>,
+}
+
+/// A destination Claude may choose on the Slack compose screen (S-4): where it leads, and the text the prompt names it by.
+#[derive(Debug, PartialEq, Clone)]
+pub struct Candidate {
+    pub target: Target,
+    /// `ワークスペース / #チャンネル`, with `（スレッド）` after a thread.
+    pub label: String,
 }
 
 #[derive(Serialize)]
@@ -1186,6 +1196,111 @@ async fn fetch_and_keep_channels(
         .unwrap()
         .insert(team_id.to_owned(), (Instant::now(), list.clone()));
     Ok(list)
+}
+
+/// The destinations Claude may choose from (S-4), numbered by their place in the list: the recent ones that are still in a connected workspace,
+/// then each workspace's joined channels (`channels`: the workspace's ID and its list). A destination already in the list is not repeated, and the list stops at `DESTINATION_LIMIT`.
+fn candidates_of(
+    workspaces: &[Workspace],
+    recent: &[Recent],
+    channels: &[(String, Vec<Channel>)],
+) -> Vec<Candidate> {
+    let mut out: Vec<Candidate> = vec![];
+    let mut add = |target: Target| {
+        let Some(workspace) = workspaces.iter().find(|w| w.team_id == target.team_id) else {
+            return;
+        };
+        if out.len() >= DESTINATION_LIMIT || out.iter().any(|c| c.target == target) {
+            return;
+        }
+        let thread = if target.thread_ts.is_some() {
+            "（スレッド）"
+        } else {
+            ""
+        };
+        let label = format!("{} / #{}{thread}", workspace.team, target.name);
+        out.push(Candidate { target, label });
+    };
+    for r in recent {
+        add(Target {
+            team_id: r.team_id.clone(),
+            channel: r.channel.clone(),
+            name: r.name.clone(),
+            thread_ts: r.thread_ts.clone(),
+        });
+    }
+    for (team_id, list) in channels {
+        for c in list {
+            add(Target {
+                team_id: team_id.clone(),
+                channel: c.id.clone(),
+                name: c.name.clone(),
+                thread_ts: None,
+            });
+        }
+    }
+    out
+}
+
+/// The candidate that the number `chosen` (from 1, as the prompt numbers them) names; anything else (not a whole number, zero, past the end) is not a destination.
+pub fn pick_destination(chosen: &Value, candidates: &[Candidate]) -> Option<Target> {
+    let number = usize::try_from(chosen.as_u64()?).ok()?;
+    candidates
+        .get(number.checked_sub(1)?)
+        .map(|c| c.target.clone())
+}
+
+/// The workspace's joined channels: the list kept in memory if it is fresh, else read from Slack (and kept).
+async fn joined_channels(
+    auth: &Auth,
+    state: &SlackState,
+    team_id: &str,
+) -> Result<Vec<Channel>, String> {
+    if let Some(list) = fresh_channels(&state.channels, team_id) {
+        return Ok(list);
+    }
+    let token = token_of(team_id).await?;
+    fetch_and_keep_channels(auth.http(), &state.channels, team_id, &token).await
+}
+
+/// The destinations Claude may choose from on the Slack compose screen (S-4): the recent destinations and the joined channels of every connected workspace.
+/// It is a help for a proofreading, so whatever cannot be read (the list of workspaces, the recent file, a workspace's channels) is logged and left out, and the call goes on.
+pub async fn destination_candidates(
+    app: &AppHandle,
+    auth: &Auth,
+    state: &SlackState,
+) -> Vec<Candidate> {
+    let command = "claude_proofread_slack";
+    let dir = match config_dir(app) {
+        Ok(dir) => dir,
+        Err(e) => {
+            log_failure(command, "-", e);
+            return vec![];
+        }
+    };
+    let workspaces = match load_workspaces(&dir).await {
+        Ok(workspaces) => workspaces,
+        Err(e) => {
+            log_failure(command, "-", e);
+            return vec![];
+        }
+    };
+    let recent = blocking(move || load_list::<Recent>(&dir, RECENT_FILE, RECENT_KEY))
+        .await
+        .unwrap_or_else(|e| {
+            log_failure(command, "-", e);
+            vec![]
+        });
+    let mut channels = vec![];
+    for w in &workspaces {
+        match joined_channels(auth, state, &w.team_id).await {
+            Ok(list) => channels.push((w.team_id.clone(), list)),
+            Err(e) => {
+                log_failure(command, &w.team_id, e);
+            }
+        }
+    }
+    candidates_of(&workspaces, &recent, &channels)
 }
 
 /// Where a pasted Slack link leads: the connected workspace of its host, the channel, and the thread of the message.
@@ -9777,5 +9892,85 @@ mod tests {
         )
         .unwrap();
         assert_eq!(people_of(&plain), ["U2", "U3"]);
+    }
+
+    fn target(team_id: &str, channel: &str, thread_ts: Option<&str>) -> Target {
+        Target {
+            team_id: team_id.into(),
+            channel: channel.into(),
+            name: format!("name {channel}"),
+            thread_ts: thread_ts.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_candidates_are_the_recent_destinations_then_the_joined_channels_without_repeats() {
+        let workspaces = [
+            workspace("T1", "https://one.slack.com/"),
+            workspace("T2", "https://two.slack.com/"),
+        ];
+        let recents = [
+            recent("T1", "C2", None),
+            recent("T1", "C2", Some("1.2")),
+            // A workspace that is not connected any more is left out.
+            recent("T9", "C1", None),
+        ];
+        let channels = vec![
+            ("T1".to_owned(), vec![channel("C1"), channel("C2")]),
+            ("T2".to_owned(), vec![channel("C1")]),
+        ];
+        let got = candidates_of(&workspaces, &recents, &channels);
+        let targets: Vec<_> = got.iter().map(|c| c.target.clone()).collect();
+        assert_eq!(
+            targets,
+            vec![
+                target("T1", "C2", None),
+                target("T1", "C2", Some("1.2")),
+                target("T1", "C1", None),
+                target("T2", "C1", None),
+            ]
+        );
+        assert_eq!(got[0].label, "team T1 / #name C2");
+        assert_eq!(got[1].label, "team T1 / #name C2（スレッド）");
+        assert_eq!(got[3].label, "team T2 / #name C1");
+    }
+
+    #[test]
+    fn the_candidates_stop_at_the_limit() {
+        let workspaces = [workspace("T1", "https://one.slack.com/")];
+        let many: Vec<Channel> = (0..DESTINATION_LIMIT + 5)
+            .map(|i| channel(&format!("C{i}")))
+            .collect();
+        let got = candidates_of(&workspaces, &[], &[("T1".to_owned(), many)]);
+        assert_eq!(got.len(), DESTINATION_LIMIT);
+    }
+
+    #[test]
+    fn a_chosen_number_gives_that_candidate_and_anything_else_is_dropped() {
+        let workspaces = [workspace("T1", "https://one.slack.com/")];
+        let channels = vec![("T1".to_owned(), vec![channel("C1"), channel("C2")])];
+        let got = candidates_of(&workspaces, &[], &channels);
+        assert_eq!(
+            pick_destination(&json!(1), &got),
+            Some(target("T1", "C1", None))
+        );
+        assert_eq!(
+            pick_destination(&json!(2), &got),
+            Some(target("T1", "C2", None))
+        );
+        // Not in the list: zero, past the end, negative, fractional, text, a name, nothing.
+        for bad in [
+            json!(0),
+            json!(3),
+            json!(-1),
+            json!(1.5),
+            json!("1"),
+            json!("C1"),
+            json!({"channel": "C1"}),
+            json!(null),
+        ] {
+            assert_eq!(pick_destination(&bad, &got), None, "{bad}");
+        }
+        assert_eq!(pick_destination(&json!(1), &[]), None);
     }
 }

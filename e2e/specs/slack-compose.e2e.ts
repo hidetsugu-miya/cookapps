@@ -6,6 +6,8 @@ const body = () => $("#slack-body");
 const previewBox = () => $("#slack-preview");
 const post = () => $("#slack-post");
 const target = () => $("#slack-target");
+// The destination of `slackChannels` as Rust answers it when Claude chose it (S-4).
+const general = { teamId: "T1", channel: "C0123ABCD", name: "general", threadTs: null };
 
 // The app with a mail opened and "Slack に貼る" pressed; `claude` is what `claude_status` answers. `first` is the mail's text.
 async function openCompose(claude: unknown = claudeReady, first = "Hello from Alice") {
@@ -414,6 +416,70 @@ describe("slack compose screen: proofreading with Claude", () => {
     await expect(previewBox()).toHaveText(slackPreview);
     await expect($("#slack-log .diff-state")).toHaveText("元に戻しました");
     expect(await count("#slack-log .diff-foot .text-btn")).toBe(0);
+  });
+
+  it("puts the destination Claude chose into the chip, with the text it changed, and posts nothing", async () => {
+    await openCompose();
+    await expect(target()).toHaveText("選んでください");
+    const slackPost = await mock("slack_post", true);
+    const edit = await mock("claude_proofread_slack", { ...proofreadEdit, destination: general });
+    await askProofread();
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください" }]);
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect(target()).toHaveText("Example Team ・ #general");
+    await expect(post()).toBeEnabled();
+    await expect(body()).toHaveValue(proofreadEdit.body as string);
+    expect(await callsOf(slackPost)).toEqual([]);
+  });
+
+  it("shows a thread as the destination Claude chose, and changes a destination that was chosen before", async () => {
+    await openCompose();
+    await chooseGeneral();
+    await mock("claude_proofread_slack", { reply: "スレッドにしました", body: null, diff: [], destination: { ...general, name: "random", threadTs: "1761785520.123456" } });
+    await askProofread();
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect(target()).toHaveText("Example Team ・ #random（スレッド）");
+  });
+
+  it("keeps the destination when the answer names none", async () => {
+    await openCompose();
+    await chooseGeneral();
+    await mock("claude_proofread_slack", { ...proofreadEdit, destination: null });
+    await askProofread();
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect(target()).toHaveText("Example Team ・ #general");
+    // An answer from before the destination existed has no such key at all.
+    await mock("claude_proofread_slack", { ...proofreadEdit, body: null, diff: [] });
+    await askProofread();
+    await waitForCount("#slack-log .chat-ai", 2);
+    await expect(target()).toHaveText("Example Team ・ #general");
+  });
+
+  it("keeps the destination the user chose while the answer was on its way", async () => {
+    await openCompose();
+    const edit = await mock("claude_proofread_slack", holds);
+    await askProofread();
+    await waitForCalls(edit);
+    await chooseGeneral();
+    await release(edit, { ...proofreadEdit, destination: { ...general, name: "random" } });
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect(target()).toHaveText("Example Team ・ #general");
+    // The text of the answer still goes in.
+    await expect(body()).toHaveValue(proofreadEdit.body as string);
+  });
+
+  it("does not put in the destination of an answer that arrives after the conversation was forgotten", async () => {
+    await openCompose();
+    const edit = await mock("claude_proofread_slack", holds);
+    await askProofread();
+    await waitForCalls(edit);
+    await openOtherMail("Second unread", "Another text");
+    await pressSlack();
+    await release(edit, { ...proofreadEdit, destination: general });
+    // Give a wrongly kept answer the time to be drawn.
+    await browser.pause(300);
+    await expect(target()).toHaveText("選んでください");
+    expect(await count("#slack-log .chat-ai")).toBe(0);
   });
 
   it("sends the typed request on Cmd+Enter (Ctrl+Enter off macOS) with the same command and arguments as the send button", async () => {

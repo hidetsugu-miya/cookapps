@@ -6,7 +6,7 @@ import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Target } from "./bindings/Target";
 import type { Workspace } from "./bindings/Workspace";
 import { showModelSlot } from "./claude.js";
-import { createChat } from "./claude-chat.js";
+import { type ChatAnswer, createChat } from "./claude-chat.js";
 import { createComposer } from "./composer.js";
 import { $, tag } from "./dom.js";
 import { unescapeHtml } from "./format.js";
@@ -53,6 +53,9 @@ const slackDate = (ms: number) => {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
+// The destination when the request that is on its way was sent: Claude's choice is put in only if the chip is still that.
+let askedTarget: Target | null = null;
+
 const chat = createChat({
   prefix: "slack",
   loginNote: "設定の Claude タブで接続すると、校正できます",
@@ -62,7 +65,19 @@ const chat = createChat({
     $<HTMLTextAreaElement>("slack-body").value = text;
     $("slack-preview").textContent = text;
   },
-  ask: (text, history, instruction) => invoke("claude_proofread_slack", { text, history, instruction }),
+  // The answer carries `destination` (a `SlackEdit`, S-4) that the command's declared type does not name.
+  ask: async (text, history, instruction) => {
+    askedTarget = draft?.target ?? null;
+    return (await invoke("claude_proofread_slack", { text, history, instruction })) as ChatAnswer;
+  },
+  // The destination Claude chose (Rust kept it to the list it was given) goes into the chip, unless the user chose another meanwhile or the post is on its way.
+  answered: (answer) => {
+    const d = draft;
+    if (!d || !answer.destination || posting || d.target !== askedTarget) return;
+    d.target = answer.destination;
+    $("slack-error").hidden = true;
+    drawTarget();
+  },
   changed: refreshSlackCompose,
   locked: () => posting,
   keyHint: false,
