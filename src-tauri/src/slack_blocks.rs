@@ -1644,7 +1644,7 @@ mod tests {
     }
 
     #[test]
-    fn the_blocks_inside_an_attachment_are_all_drawn_even_rich_text() {
+    fn the_rich_text_inside_an_attachment_with_no_text_is_drawn() {
         let list = attachments(json!([{"blocks": [rich_section("inside"), {"type": "divider"}]}]));
         assert_eq!(
             list[0].blocks,
