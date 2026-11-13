@@ -495,6 +495,117 @@ class Prune(unittest.TestCase):
         self.assertEqual(pr.mentioned({"order": "x"}), [])
 
 
+class Parallel(unittest.TestCase):
+    def test_the_results_come_in_the_order_given_whatever_ends_first(self):
+        import threading
+
+        gate = threading.Event()
+
+        def slow():
+            gate.wait(5)
+            return "slow"
+
+        def fast():
+            gate.set()
+            return "fast"
+
+        self.assertEqual(pr.parallel([slow, fast]), ["slow", "fast"])
+        self.assertEqual(pr.parallel([]), [])
+
+    def test_the_first_failure_in_order_is_raised_after_every_call_has_ended(self):
+        ended = []
+
+        def boom(text):
+            def f():
+                raise pr.GhError(text)
+
+            return f
+
+        def last():
+            ended.append(1)
+
+        with self.assertRaises(pr.GhError) as cm:
+            pr.parallel([boom("a"), boom("b"), last])
+        self.assertEqual(str(cm.exception), "a")
+        self.assertEqual(ended, [1])
+
+
+class LoadState(unittest.TestCase):
+    """load_state asks for what does not depend on each other at the same time, and builds the same state as asking one by one."""
+
+    def run_load(self, blockers=True):
+        def raw(n, state="open", login="owner", total=0, closed_at=None):
+            return {
+                "number": n,
+                "id": 1000 + n,
+                "title": f"issue {n}",
+                "body": "",
+                "labels": [{"name": "point:2"}],
+                "milestone": None,
+                "created_at": f"2026-11-01T00:00:{n:02d}Z",
+                "closed_at": closed_at,
+                "state": state,
+                "user": {"login": login},
+                "issue_dependencies_summary": {"total_blocked_by": total},
+            }
+
+        calls = []
+
+        def fake_gh(*args):
+            calls.append(list(args))
+            if args[:2] == ("repo", "view"):
+                return json.dumps({"nameWithOwner": "o/r", "owner": {"login": "owner"}})
+            if args[:2] == ("pr", "list"):
+                return json.dumps([{"author": {"login": "owner"}, "closingIssuesReferences": [{"number": 3}]}, {"author": {"login": "bot"}, "closingIssuesReferences": [{"number": 4}]}])
+            raise AssertionError(args)
+
+        def fake_api(path, method="GET", fields=None, paginate=False):
+            calls.append(["api", path])
+            if path.endswith("/tags?per_page=100"):
+                return [{"name": "v0.1.0", "commit": {"sha": "old"}}, {"name": "v0.2.0", "commit": {"sha": "abc"}}]
+            if path.endswith("/commits/abc"):
+                return {"commit": {"committer": {"date": "2026-11-05T00:00:00Z"}}}
+            if "state=open" in path:
+                return [raw(1, total=1), raw(2, total=0), raw(3, total=2), raw(5, login="other")]
+            if "state=closed" in path:
+                return [raw(6, "closed", closed_at="2026-11-06T00:00:00Z"), raw(7, "closed", closed_at="2026-11-04T00:00:00Z")]
+            if path.endswith("/issues/1/dependencies/blocked_by?per_page=100"):
+                return [{"number": 9, "id": 9009, "state": "open", "repository_url": "https://api.github.com/repos/o/r"}]
+            if path.endswith("/issues/3/dependencies/blocked_by?per_page=100"):
+                return [
+                    {"number": 8, "id": 8008, "state": "closed", "repository_url": "https://api.github.com/repos/o/r"},
+                    {"number": 2, "id": 1002, "state": "open", "repository_url": "https://api.github.com/repos/o/r"},
+                    {"number": 4, "id": 4004, "state": "open", "repository_url": "https://api.github.com/repos/x/y"},
+                ]
+            raise AssertionError(path)
+
+        real_gh, real_api = pr.gh, pr.api
+        pr.gh, pr.api = fake_gh, fake_api
+        try:
+            return pr.load_state(blockers), calls
+        finally:
+            pr.gh, pr.api = real_gh, real_api
+
+    def test_the_state_is_the_same_as_when_asked_one_by_one(self):
+        state, calls = self.run_load()
+        self.assertEqual((state.repo, state.owner, state.last_tag), ("o/r", "owner", "v0.2.0"))
+        self.assertEqual(sorted(state.issues), [1, 2, 3, 6])  # 7 closed before the release, 5 is another author's
+        self.assertEqual(state.skipped, 1)
+        self.assertEqual(state.issues[1].blocked_by, [9])
+        self.assertEqual(state.issues[3].blocked_by, [2])  # a closed blocker and one of another repository are not blockers
+        self.assertEqual(state.states[8], "closed")
+        self.assertEqual(state.ids[9], 9009)
+        self.assertNotIn(4, state.ids)
+        self.assertEqual(state.pr_closing, {3})
+        self.assertEqual(state.tags, ["v0.1.0", "v0.2.0"])
+        self.assertEqual([c for c in calls if c[:2] == ["repo", "view"]], [["repo", "view", "--json", "nameWithOwner,owner"]])
+
+    def test_no_blockers_are_asked_when_not_wanted(self):
+        state, calls = self.run_load(blockers=False)
+        self.assertFalse(any("blocked_by" in c[-1] for c in calls if c[0] == "api"))
+        self.assertEqual(state.issues[1].blocked_by, [])
+
+
 class ReleaseFacts(unittest.TestCase):
     def facts(self, issues, release_pr=None, last_tag="v0.55.2"):
         return pr.release_facts(issues, release_pr, last_tag)
