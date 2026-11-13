@@ -26,6 +26,8 @@ interface Draft {
   original: string;
   text: string;
   target: Target | null;
+  // The destination in the chip is one that Claude's answer put there, not one the owner chose: a post then needs the destination named in the request (S-23).
+  byClaude: boolean;
 }
 let draft: Draft | null = null;
 
@@ -55,6 +57,7 @@ const slackDate = (ms: number) => {
 
 // The destination when the request that is on its way was sent: Claude's choice is put in only if the chip is still that.
 let askedTarget: Target | null = null;
+let askedByClaude = false;
 // A request to Claude of this screen is on its way, and may post the text: "投稿" waits for it, so the text is not posted twice.
 let asking = false;
 
@@ -72,10 +75,11 @@ const chat = createChat({
   ask: async (text, history, instruction) => {
     const d = draft;
     askedTarget = d?.target ?? null;
+    askedByClaude = d?.byClaude ?? false;
     asking = true;
     refreshSlackCompose();
     try {
-      const answer = await invoke("claude_proofread_slack", { text, history, instruction, target: askedTarget });
+      const answer = await invoke("claude_proofread_slack", { text, history, instruction, target: askedTarget, targetByClaude: askedByClaude });
       if (answer.posted && answer.destination) finishPost(d, answer.destination);
       return answer;
     } finally {
@@ -88,6 +92,10 @@ const chat = createChat({
     const d = draft;
     if (!d) return;
     if (answer.destination && !posting && d.target === askedTarget) {
+      // Claude naming the destination that the chip already holds does not make it Claude's.
+      const t = d.target;
+      const same = t && t.teamId === answer.destination.teamId && t.channel === answer.destination.channel && t.threadTs === answer.destination.threadTs;
+      if (!same) d.byClaude = true;
       d.target = answer.destination;
       $("slack-error").hidden = true;
       drawTarget();
@@ -152,6 +160,7 @@ function openPicker() {
   };
   const choose = (t: Target) => {
     d.target = t;
+    d.byClaude = false;
     $("slack-error").hidden = true;
     closeMenu();
     drawTarget();
@@ -249,7 +258,7 @@ async function newDraft(key: string, current: OpenThread, stale: () => boolean) 
     body: latestText(current),
   });
   if (stale()) return;
-  draft = { key, original, text: original, target: null };
+  draft = { key, original, text: original, target: null, byClaude: false };
   chat.reset();
   chat.clearInput();
   $<HTMLTextAreaElement>("slack-body").value = original;

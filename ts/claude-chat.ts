@@ -104,7 +104,8 @@ export function createChat(cfg: ChatConfig) {
     $(id("chat-note")).hidden = ready;
     for (const { proposal, apply, stale } of applyControls) {
       apply.disabled = proposal.base !== text || (cfg.locked?.() ?? false);
-      stale.hidden = proposal.base === text;
+      // No text while the post of "投稿" is on its way is not a changed text.
+      stale.hidden = proposal.base === text || text === null;
     }
     for (const { proposal, undo } of undoControls) undo.disabled = proposal.body !== text || (cfg.locked?.() ?? false);
     return on;

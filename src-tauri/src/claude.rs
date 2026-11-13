@@ -1436,7 +1436,7 @@ fn edit_of(output: &Value, current: &str) -> Result<PromptEdit, SummaryError> {
 }
 
 /// The answer of the proofreading of a Slack post: `parse_edit`, and the destination Claude chose, when it is one of `candidates` (a number outside the list, or no list, gives none).
-/// `post_to` is where the text is to be posted (S-23) and `post_refused` whether a post was asked for and refused: see `slack::post_decision`, which gets `chip`, the destination now in the chip.
+/// `post_to` is where the text is to be posted (S-23) and `post_refused` whether a post was asked for and refused: see `slack::post_decision`, which gets `chip`, the destination now in the chip that the owner set (`slack::owner_chip`).
 /// `posted` is false here; the command sets it after the post.
 fn parse_slack_edit(
     out: &str,
@@ -2443,9 +2443,11 @@ pub async fn claude_edit_todo_prompt(
 /// Has Claude proofread the text of a Slack post, choose where to post it and post it when the request asks: `text` is what the edit field holds, `history` the conversation so far, `instruction` the new request.
 /// They and the destinations to choose from (the recent ones and the joined channels, by name; no message) are sent to Anthropic through Claude Code, only when the user sent a request, and nothing is saved.
 /// `target` is the destination now in the destination chip, if any: it is put at the head of the list and marked for the model.
+/// `target_by_claude` says that a destination of Claude's own answer put it there: the post then needs the destination named in the request (`slack::owner_chip`, S-23).
 /// The model has no tools, so it only answers; a destination it names that is not in the list it was given is dropped. When it answers `post: true` and the rules of `slack::post_decision` allow it (S-23),
 /// Rust posts the new text (or `text` when it did not change it) by the path of "投稿" (`slack::post_and_remember`) and answers `posted`; a failed post is the command's error. What the model says never reaches the log.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn claude_proofread_slack(
     app: tauri::AppHandle,
     auth: tauri::State<'_, crate::auth::Auth>,
@@ -2454,6 +2456,7 @@ pub async fn claude_proofread_slack(
     history: Vec<ChatTurn>,
     instruction: String,
     target: Option<crate::slack::Target>,
+    target_by_claude: bool,
 ) -> Result<SlackEdit, String> {
     let command = "claude_proofread_slack";
     let candidates =
@@ -2479,7 +2482,8 @@ pub async fn claude_proofread_slack(
     let current = text.clone();
     let asked = instruction.clone();
     let mut answer = tokio::task::spawn_blocking(move || {
-        parse_slack_edit(&out, &current, &asked, &candidates, target.as_ref())
+        let chip = crate::slack::owner_chip(target.as_ref(), target_by_claude);
+        parse_slack_edit(&out, &current, &asked, &candidates, chip)
     })
     .await
     .map_err(|e| log_failure(command, "-", e.to_string()))?

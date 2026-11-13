@@ -396,7 +396,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     const slackPost = await mock("slack_post", true);
     const edit = await mock("claude_proofread_slack", proofreadEdit);
     await askProofread();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", target: general }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", target: general, targetByClaude: false }]);
     await waitForCount("#slack-log .chat-ai", 1);
     await expect($("#slack-log .chat-user")).toHaveText("校正してください");
     await expect(body()).toHaveValue(proofreadEdit.body as string);
@@ -428,12 +428,42 @@ describe("slack compose screen: proofreading with Claude", () => {
     const slackPost = await mock("slack_post", true);
     const edit = await mock("claude_proofread_slack", { ...proofreadEdit, destination: general });
     await askProofread();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", target: null }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", target: null, targetByClaude: false }]);
     await waitForCount("#slack-log .chat-ai", 1);
     await expect(target()).toHaveText("Example Team ・ #general");
     await expect(post()).toBeEnabled();
     await expect(body()).toHaveValue(proofreadEdit.body as string);
     expect(await callsOf(slackPost)).toEqual([]);
+  });
+
+  it("tells Rust that the destination in the chip is Claude's until the owner chooses one, and when the answer only repeats it", async () => {
+    await openCompose();
+    const edit = await mock("claude_proofread_slack", { ...proofreadEdit, destination: general });
+    await $("#slack-input").setValue("貼り先を決めて");
+    await $("#slack-send").click();
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect(target()).toHaveText("Example Team ・ #general");
+    await $("#slack-input").setValue("もう一度");
+    await $("#slack-send").click();
+    await waitForCount("#slack-log .chat-ai", 2);
+    const calls = await callsOf(edit);
+    expect((calls as { target: unknown; targetByClaude: boolean }[]).map((c) => [c.target, c.targetByClaude])).toEqual([
+      [null, false],
+      [general, true],
+    ]);
+    // The owner chooses the same destination: it is theirs, and Claude repeating it does not take it back.
+    await chooseGeneral();
+    await $("#slack-input").setValue("さらにもう一度");
+    await $("#slack-send").click();
+    await waitForCount("#slack-log .chat-ai", 3);
+    await $("#slack-input").setValue("最後");
+    await $("#slack-send").click();
+    await waitForCount("#slack-log .chat-ai", 4);
+    const later = ((await callsOf(edit)) as { target: unknown; targetByClaude: boolean }[]).slice(2);
+    expect(later.map((c) => [c.target, c.targetByClaude])).toEqual([
+      [general, false],
+      [general, false],
+    ]);
   });
 
   it("goes on as after 投稿 when the answer says Rust posted, without posting from the screen", async () => {
@@ -448,7 +478,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     });
     await $("#slack-input").setValue("#general に要点だけ投稿して");
     await $("#slack-send").click();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "#general に要点だけ投稿して", target: null }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "#general に要点だけ投稿して", target: null, targetByClaude: false }]);
     await expect($(".toast")).toHaveText("Example Team の #general に貼りました");
     await expect($("#thread")).toBeDisplayed();
     await expect($("#thread-subject")).toHaveText("First unread");
@@ -470,7 +500,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     const edit = await mock("claude_proofread_slack", { reply: "投稿します", body: null, diff: [], destination: general, posted: false, postRefused: true });
     await $("#slack-input").setValue("この内容で投稿して");
     await $("#slack-send").click();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "この内容で投稿して", target: general }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "この内容で投稿して", target: general, targetByClaude: false }]);
     await waitForCount("#slack-log .chat-ai", 1);
     await expect($("#slack-error")).toHaveText("投稿されませんでした");
     await expect($("#slack-compose")).toBeDisplayed();
@@ -574,7 +604,7 @@ describe("slack compose screen: proofreading with Claude", () => {
       const mac = /Mac/.test(navigator.platform);
       document.getElementById("slack-input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, bubbles: true, cancelable: true }));
     }, onceId());
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "敬語にして", target: null }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "敬語にして", target: null, targetByClaude: false }]);
   });
 
   it("sends a typed request with the text and the conversation so far", async () => {
@@ -582,7 +612,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     const edit = await mock("claude_proofread_slack", proofreadEdit);
     await $("#slack-input").setValue("敬語にして");
     await $("#slack-send").click();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "敬語にして", target: null }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "敬語にして", target: null, targetByClaude: false }]);
     await waitForCount("#slack-log .chat-ai", 1);
     await askProofread();
     const calls = await waitForCalls(edit, 2);
@@ -595,6 +625,7 @@ describe("slack compose screen: proofreading with Claude", () => {
       ],
       instruction: "校正してください",
       target: null,
+      targetByClaude: false,
     });
   });
 
@@ -625,12 +656,34 @@ describe("slack compose screen: proofreading with Claude", () => {
     await expect($("#slack-log .diff-stale")).toBeDisplayed();
   });
 
+  it("does not call a kept proposal stale while the post is on its way and the text has not changed", async () => {
+    await openCompose();
+    await chooseGeneral();
+    const edit = await mock("claude_proofread_slack", holds);
+    await askProofread();
+    await waitForCalls(edit);
+    await setBody(`${slackPreview} (edited)`);
+    await release(edit, proofreadEdit);
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect($("#slack-log .diff-stale")).toBeDisplayed();
+    // The text is back to the one the proposal was made from: it can be applied, and says nothing.
+    await setBody(slackPreview);
+    await expect($("#slack-log .diff-stale")).not.toBeDisplayed();
+    const slackPost = await mock("slack_post", holds);
+    await post().click();
+    await waitForCalls(slackPost);
+    await expect($("#slack-log .diff-foot .text-btn.primary")).toBeDisabled();
+    await expect($("#slack-log .diff-stale")).not.toBeDisplayed();
+    await release(slackPost, rejects("チャンネルに投稿する権限がありません"));
+    await expect($("#slack-log .diff-foot .text-btn.primary")).toBeEnabled();
+  });
+
   it("proofreads while an API key is in use", async () => {
     await openCompose(claudeKeyReady);
     await expect($("#slack-send")).toBeEnabled();
     const edit = await mock("claude_proofread_slack", proofreadEdit);
     await askProofread();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", target: null }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", target: null, targetByClaude: false }]);
     await waitForCount("#slack-log .chat-ai", 1);
   });
 
