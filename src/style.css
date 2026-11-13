@@ -1321,9 +1321,8 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .feed-row.unread { font-weight: bold; }
 .feed-row.unread .feed-meta b { font-weight: 700; }
 .feed-meta span { color: var(--muted); font-size: calc(12px * var(--fs)); }
-/* The body of a row, as the thread draws it (S-11, S-12): paragraphs alone are cut at two lines, and blocks, attachments, a code block or a quote at about 12, so that one long post of a bot cannot take the screen. Nothing in it can be selected: the press goes to the row. */
-.feed-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; line-height: 1.45; overflow-wrap: anywhere; }
-.feed-text.feed-full { display: block; -webkit-line-clamp: unset; max-height: calc(1.45em * 12); }
+/* The body of a row, as the thread draws it (S-11, S-12), in full. Nothing in it can be selected: the press goes to the row. */
+.feed-text { margin-top: 2px; line-height: 1.45; overflow-wrap: anywhere; }
 #slack-feed .feed-text, #slack-feed .feed-text *, #sc-feed .feed-text, #sc-feed .feed-text * { user-select: none; -webkit-user-select: none; }
 .feed-text .st-text { margin: 0; line-height: inherit; }
 .feed-text .st-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }

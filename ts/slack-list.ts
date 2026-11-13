@@ -264,10 +264,10 @@ async function unhideChannel(teamId: string, channel: string) {
 const NO_IMAGES = { shown: false, uris: new Map<string, string>() };
 type Drawn = Pick<TimelineMessage, "text" | "rich" | "blocks" | "showText" | "attachments" | "hasFiles">;
 
-// The body of a message as the thread draws it. Paragraphs alone are cut at two lines; blocks, attachments, a code block or a quote at about 12 lines (the CSS holds both).
+// The body of a message as the thread draws it, in full.
 function bodyOf(m: Drawn) {
   const short = !m.blocks.length && !m.attachments.length && m.rich.every((b) => b.type === "paragraph");
-  const box = tag("div", short ? "feed-text" : "feed-text feed-full");
+  const box = tag("div", "feed-text");
   if (short && !m.text.trim()) {
     box.textContent = m.hasFiles ? "（添付ファイル）" : "";
     return box;

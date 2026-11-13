@@ -171,17 +171,17 @@ describe("slack list", () => {
     await expect($("#slack-header")).toHaveAttribute("data-tauri-drag-region", "deep");
   });
 
-  it("stretches one real button over a row, with the text cut at two lines, and only the bookmark beside it, not in it", async () => {
+  it("stretches one real button over a row, and only the bookmark beside it, not in it", async () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);
     const row = await browser.execute(() => {
       const r = document.querySelector<HTMLElement>("#slack-feed .feed-row")!;
       const open = r.querySelector<HTMLElement>(".feed-open")!;
       const [a, b] = [r.getBoundingClientRect(), open.getBoundingClientRect()];
-      return { tag: r.tagName, open: open.tagName, covers: [a.width === b.width, a.height === b.height], clamp: getComputedStyle(r.querySelector(".feed-text")!).getPropertyValue("-webkit-line-clamp"), buttons: r.querySelectorAll("button").length, label: open.getAttribute("aria-label") };
+      return { tag: r.tagName, open: open.tagName, covers: [a.width === b.width, a.height === b.height], buttons: r.querySelectorAll("button").length, label: open.getAttribute("aria-label") };
     });
     // The first row has replies: its "N 件の返信" is the second button, and it takes the press itself.
-    expect(row).toEqual({ tag: "DIV", open: "BUTTON", covers: [true, true], clamp: "2", buttons: 2, label: "Alice Example #dev Please review the deploy notes." });
+    expect(row).toEqual({ tag: "DIV", open: "BUTTON", covers: [true, true], buttons: 2, label: "Alice Example #dev Please review the deploy notes." });
     // Pressing what is drawn is pressing the button.
     expect(await hitAt("#slack-feed .feed-text")).toBe("BUTTON.feed-open");
     expect(await hitAt("#slack-feed .feed-thread-open")).toBe("BUTTON.feed-thread-open");
@@ -1036,7 +1036,7 @@ describe("slack list", () => {
     expect(await count("#slack-feed .st-img")).toBe(0);
   });
 
-  it("keeps two lines for paragraphs alone, and about 12 lines for blocks, attachments, a code block or a quote, so that a long post cannot take the screen", async () => {
+  it("draws a long body in full, whether it is paragraphs alone, a quote, blocks or an attachment", async () => {
     const lines = Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n");
     const long = [
       timelineMessage(slackTs(1), "Paragraphs", "dev", lines, { unread: true, channel: "C1" }),
@@ -1046,9 +1046,8 @@ describe("slack list", () => {
     ];
     await openList(timeline(long));
     await waitForCount("#slack-feed .feed-row", 4);
-    const heights = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#slack-feed .feed-text")].map((t) => ({ lines: Math.round(t.clientHeight / Number.parseFloat(getComputedStyle(t).lineHeight)), clamp: getComputedStyle(t).getPropertyValue("-webkit-line-clamp"), overflow: getComputedStyle(t).overflowY })));
-    expect(heights[0]).toEqual({ lines: 2, clamp: "2", overflow: "hidden" });
-    for (const h of heights.slice(1)) expect(h).toEqual({ lines: 12, clamp: "none", overflow: "hidden" });
+    const heights = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#slack-feed .feed-text")].map((t) => ({ cut: t.scrollHeight > t.clientHeight, over12: t.clientHeight > Number.parseFloat(getComputedStyle(t).lineHeight) * 12, clamp: getComputedStyle(t).getPropertyValue("-webkit-line-clamp"), overflow: getComputedStyle(t).overflowY })));
+    for (const h of heights) expect(h).toEqual({ cut: false, over12: true, clamp: "none", overflow: "visible" });
   });
 
   it("still says （添付ファイル） for a message of files only, and shows no thumbnail", async () => {
