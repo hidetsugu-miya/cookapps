@@ -3249,10 +3249,18 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount(".orca-edit-rich .ProseMirror", 1);
     await $('.orca-edit-rich .ProseMirror[contenteditable="true"]').waitForExist({ timeoutMsg: "the rich view was never editable" });
   }
-  // Types `t` at the end of the last paragraph of the rich view.
+  // Types `t` at the end of the last paragraph of the rich view. The window of the E2E build has no focus, so a click does not focus the editor (and End does not move the caret): the script focuses it and puts the caret there, and the keys are real.
   async function typeRich(t: string) {
-    await $(".orca-edit-rich .ProseMirror > p:last-child").click();
-    await browser.keys(["End"]);
+    await browser.execute(() => {
+      const view = document.querySelector<HTMLElement>(".orca-edit-rich .ProseMirror")!;
+      view.focus();
+      const range = document.createRange();
+      range.selectNodeContents(view.querySelector(":scope > p:last-child")!);
+      range.collapse(false);
+      const selection = getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
     await browser.keys(t);
   }
   const mdSample = "# 見出し\n\n本文の **太字** と `code`\n\n- [x] 済み\n- [ ] 未\n\n| a | b |\n| - | - |\n| 1 | 2 |\n";
@@ -3375,6 +3383,8 @@ describe("orca: files and editor (A-18)", () => {
     // Pressed before the wait for more changes has passed: the edit is in the text area when the source is shown.
     await modeButton("ソース").click();
     await expect($(".orca-edit-area")).toHaveValue(edited, { trim: false });
+    // The layers under the text area are drawn when the source is shown, not at each edit of the rich view.
+    expect(await layerText()).toBe(edited);
     await expect($(".orca-edit-rich")).not.toBeDisplayed();
     await type("Y");
     await modeButton("リッチ").click();

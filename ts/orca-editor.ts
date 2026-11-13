@@ -233,9 +233,12 @@ async function write(f: EditorFile) {
 
 // The text of the textarea changed (typed in the source, or put there from the rich view): draws it again, marks the file as changed and waits for the typing to stop.
 function typed(f: EditorFile) {
-  const value = f.area.value;
-  repaint(f, value);
-  numberLines(f, value);
+  // The layers of the textarea are hidden while the rich view is shown: they are drawn when the source is shown (`setMode`).
+  if (!(f.markdown && f.mode === "rich")) {
+    const value = f.area.value;
+    repaint(f, value);
+    numberLines(f, value);
+  }
   if (!f.dirty) {
     f.dirty = true;
     changed();
@@ -358,7 +361,14 @@ function setMode(f: EditorFile, mode: "rich" | "source") {
   f.body.hidden = rich;
   f.rich.hidden = !rich;
   if (rich) void drawRich(f);
-  else clearRich(f);
+  else {
+    clearRich(f);
+    // The edits made in the rich view were not drawn in the layers of the textarea.
+    if (f.markdown) {
+      paint(f);
+      numberLines(f, f.area.value);
+    }
+  }
 }
 
 async function load(f: EditorFile) {

@@ -225,13 +225,18 @@ fn patch_body(original: &str, before: &str, after: &str) -> Result<String, Patch
     let before_lines = split_lines(before);
     let after_lines = split_lines(after);
     let changes = hunks(&before_lines, &after_lines);
-    if changes.is_empty() {
-        return Ok(original.to_owned());
-    }
 
     let before_keys: Vec<String> = before_lines.iter().map(|l| loose_key(l.text)).collect();
     let original_keys: Vec<String> = original_lines.iter().map(|l| loose_key(l.text)).collect();
     let bounds = Boundaries::new(&before_keys, &original_keys);
+    if changes.is_empty() {
+        // Nothing to put, but the answer tells whether an edit could be put: every boundary of `before` must stand for a place of the original.
+        return if bounds.lo.iter().all(Option::is_some) {
+            Ok(original.to_owned())
+        } else {
+            Err(PatchError::NoMatch)
+        };
+    }
 
     // Each change as a range of the original lines and the lines that replace them. The start of a replaced range skips lines only the original has, and its end stops before them, so those stay; an insertion goes right after the line before it.
     let mut edits: Vec<(usize, usize, &[String])> = Vec::new();
@@ -246,6 +251,10 @@ fn patch_body(original: &str, before: &str, after: &str) -> Result<String, Patch
             return Err(PatchError::NoMatch);
         };
         if s > e || s < floor {
+            return Err(PatchError::NoMatch);
+        }
+        // A line only the original has (a comment the editor does not write out) inside the replaced range would be dropped with it.
+        if (h.from + 1..h.to).any(|k| bounds.lo[k] != bounds.hi[k]) {
             return Err(PatchError::NoMatch);
         }
         floor = e;
@@ -286,14 +295,11 @@ fn patch_body(original: &str, before: &str, after: &str) -> Result<String, Patch
     Ok(text)
 }
 
-/// Puts the edit of the editor into the original text. `before` and `after` are what the editor exported for the body (the original without its front matter) when it was loaded and when it is saved. An edit that changed nothing gives the original as it is.
+/// Puts the edit of the editor into the original text. `before` and `after` are what the editor exported for the body (the original without its front matter) when it was loaded and when it is saved. An edit that changed nothing gives the original as it is, when its lines can be paired with the export's (`before == after` is the check that the page makes when it opens a file).
 pub fn patch_markdown(original: &str, before: &str, after: &str) -> Result<String, PatchError> {
     check_size(original)?;
     check_size(before)?;
     check_size(after)?;
-    if before == after {
-        return Ok(original.to_owned());
-    }
     let (front, body) = split_front_matter(original);
     let patched = patch_body(body, before, after)?;
     if !front.is_empty() && !front.ends_with('\n') && !patched.is_empty() {
@@ -523,6 +529,43 @@ mod tests {
         assert_eq!(
             patch_markdown(original, "a\nb\n", "a\nB\n").unwrap(),
             "a\n<!-- note -->\nB\n"
+        );
+    }
+
+    #[test]
+    fn no_match_for_an_edit_over_a_line_only_the_original_has() {
+        // The comment lies inside the replaced range: replacing the range would drop it.
+        let original = "a\n<!-- c -->\nb\n";
+        assert_eq!(
+            patch_markdown(original, "a\nb\n", "A\nB\n"),
+            Err(PatchError::NoMatch)
+        );
+        // An edit on one side of it leaves it.
+        assert_eq!(
+            patch_markdown(original, "a\nb\n", "A\nb\n").unwrap(),
+            "A\n<!-- c -->\nb\n"
+        );
+    }
+
+    #[test]
+    fn no_edit_is_no_match_when_the_lines_cannot_be_paired() {
+        // The answer of the open-time check: the original and the export do not line up.
+        assert_eq!(
+            patch_markdown("x\ny\nz\n", "a\nb\nc\nd\n", "a\nb\nc\nd\n"),
+            Err(PatchError::NoMatch)
+        );
+        assert_eq!(
+            patch_markdown("---\nt: 1\n---\nx\ny\nz\n", "a\nb\nc\nd\n", "a\nb\nc\nd\n"),
+            Err(PatchError::NoMatch)
+        );
+    }
+
+    #[test]
+    fn no_edit_is_the_original_when_the_lines_pair_up() {
+        let original = "a\n<!-- c -->\n* b\n";
+        assert_eq!(
+            patch_markdown(original, "a\n- b\n", "a\n- b\n").unwrap(),
+            original
         );
     }
 
