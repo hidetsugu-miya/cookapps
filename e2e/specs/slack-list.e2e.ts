@@ -1649,6 +1649,29 @@ describe("slack list: the side menu (S-19)", () => {
       expect(await count("#slack-side .slack-side-btn")).toBe(3);
     });
 
+    it("saves the folded workspaces as a whole set at each press, and shows an error when the save fails", async () => {
+      await openSide();
+      await mock("slack_set_side_folded", true);
+      await pressHeading("T1");
+      expect(await waitForCalls("slack_set_side_folded")).toEqual([{ teamIds: ["T1"] }]);
+      await pressHeading("T2");
+      expect(await waitForCalls("slack_set_side_folded", 2)).toEqual([{ teamIds: ["T1"] }, { teamIds: ["T1", "T2"] }]);
+      await pressHeading("T1");
+      expect(await waitForCalls("slack_set_side_folded", 3)).toEqual([{ teamIds: ["T1"] }, { teamIds: ["T1", "T2"] }, { teamIds: ["T2"] }]);
+      await mock("slack_set_side_folded", rejects("保存できません"));
+      await pressHeading("T2");
+      await waitForCalls("slack_set_side_folded");
+      await expect($("#error")).toHaveText(expect.stringContaining("保存できません"));
+      expect(await headings()).toEqual(["BUTTON:button:true", "BUTTON:button:true"]);
+    });
+
+    it("draws the folds read at the start", async () => {
+      await openList(timeline(unreadSample(), { side: sideSample() }), { slack_side_folded: ["T2"] });
+      await waitForCount("#slack-feed .feed-row", 3);
+      expect(await headings()).toEqual(["BUTTON:button:true", "BUTTON:button:false"]);
+      expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "group:Lakeside"]);
+    });
+
     it("keeps the channel whose history is shown when the workspace is folded, and keeps the focus on the heading", async () => {
       await openSide();
       await mock("slack_channel_history", [timelineMessage(slackTs(1), "Alice Example", "ops", "secret", { channel: "G2" })]);

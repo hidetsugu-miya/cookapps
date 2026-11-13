@@ -77,7 +77,7 @@ const closedThreads = new Set<string>();
 let listScroll = 0;
 // The section the side menu chose (S-19); it stays through redraws, a thread and other screens.
 let section: SlackSection = "unread";
-// The workspaces whose channels the side menu folds (`teamId`s), in memory only.
+// The workspaces whose channels the side menu folds (`teamId`s); `slack-side.json` keeps them (read at the start, saved at each change).
 const foldedTeams = new Set<string>();
 
 const feed = () => $("slack-feed");
@@ -157,6 +157,18 @@ function drawSide() {
 // The heading of a workspace in the side menu was pressed: fold it, or open it again.
 function foldWorkspace(teamId: string) {
   if (!foldedTeams.delete(teamId)) foldedTeams.add(teamId);
+  drawSide();
+  // A failed save leaves the fold as pressed: it only is not kept for the next start.
+  invoke("slack_set_side_folded", { teamIds: [...foldedTeams] }).catch(showError);
+}
+
+// The folds saved by an earlier run, taken at the start. A file that cannot be read folds nothing (Rust answers an empty list).
+async function loadFolded() {
+  try {
+    for (const teamId of await invoke("slack_side_folded")) foldedTeams.add(teamId);
+  } catch {
+    return;
+  }
   drawSide();
 }
 
@@ -956,6 +968,7 @@ async function start() {
 }
 
 export function initSlackList() {
+  loadFolded();
   start();
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", refresh);

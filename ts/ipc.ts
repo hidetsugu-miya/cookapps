@@ -166,6 +166,8 @@ export interface Commands {
   // The channels kept off the Slack list, in the order they were hidden, with the channel's name (its ID when the name is not known). Slack itself is not told (its mute cannot be read).
   slack_hidden_list: { args: undefined; result: HiddenChannel[] };
   slack_hide_channel: { args: { teamId: string; channel: string }; result: boolean };
+  slack_side_folded: { args: undefined; result: string[] };
+  slack_set_side_folded: { args: { teamIds: string[] }; result: boolean };
   slack_unhide_channel: { args: { teamId: string; channel: string }; result: boolean };
   // Sets the channel's read position to the message `ts` in Slack (`conversations.mark`), only when it is later than the one held; true when it was sent.
   slack_mark_read: { args: { teamId: string; channel: string; ts: string }; result: boolean };

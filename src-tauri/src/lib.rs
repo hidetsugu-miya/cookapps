@@ -266,6 +266,8 @@ pub fn run() {
             slack::slack_thread_seen,
             slack::slack_hidden_list,
             slack::slack_hide_channel,
+            slack::slack_side_folded,
+            slack::slack_set_side_folded,
             slack::slack_unhide_channel,
             slack::slack_thread,
             slack::slack_channel_history,

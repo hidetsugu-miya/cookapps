@@ -43,6 +43,9 @@ const WORKSPACES_KEY: &str = "workspaces";
 /// The channels kept off the Slack list: team and channel IDs only.
 const HIDDEN_FILE: &str = "slack-hidden.json";
 const HIDDEN_KEY: &str = "hidden";
+/// The workspaces the side menu folds (S-19): `team_id`s only.
+const SIDE_FILE: &str = "slack-side.json";
+const SIDE_KEY: &str = "folded";
 /// The threads the user watches (S-13): IDs and the last reply seen, never text.
 const WATCHED_FILE: &str = "slack-watched.json";
 const WATCHED_KEY: &str = "watched";
@@ -2238,6 +2241,15 @@ fn clean_hidden(list: Vec<Hidden>) -> Vec<Hidden> {
     list.into_iter()
         .filter(|h| token_key(&h.team_id).is_ok() && valid_channel(&h.channel))
         .filter(|h| seen.insert((h.team_id.clone(), h.channel.clone())))
+        .collect()
+}
+
+/// The workspaces with IDs that are valid, each once, in the order they came: what a file that was edited by hand may not guarantee.
+fn clean_folded(list: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    list.into_iter()
+        .filter(|t| token_key(t).is_ok())
+        .filter(|t| seen.insert(t.clone()))
         .collect()
 }
 
@@ -5254,6 +5266,38 @@ pub async fn slack_unhide_channel(
     Ok(true)
 }
 
+/// The workspaces the side menu folds (S-19); a file that cannot be read folds none.
+#[tauri::command]
+pub async fn slack_side_folded(app: AppHandle) -> Result<Vec<String>, String> {
+    let dir = config_dir(&app)?;
+    match blocking(move || load_list::<String>(&dir, SIDE_FILE, SIDE_KEY)).await {
+        Ok(list) => Ok(clean_folded(list)),
+        Err(e) => {
+            log_failure("slack_side_folded", "-", e);
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// Saves the workspaces the side menu folds (S-19), replacing the whole set.
+#[tauri::command]
+pub async fn slack_set_side_folded(
+    app: AppHandle,
+    state: State<'_, SlackState>,
+    team_ids: Vec<String>,
+) -> Result<bool, String> {
+    let command = "slack_set_side_folded";
+    if team_ids.iter().any(|t| token_key(t).is_err()) {
+        return Err(log_failure(command, "-", BAD_TARGET));
+    }
+    let dir = config_dir(&app)?;
+    let _files = state.files.lock().await;
+    blocking(move || save_list(&dir, SIDE_FILE, SIDE_KEY, &clean_folded(team_ids)))
+        .await
+        .map_err(|e| log_failure(command, "-", e))?;
+    Ok(true)
+}
+
 /// Starts watching the thread `ts` of `channel` (S-13): it is kept in `slack-watched.json` (IDs only) and listed in the watch section until it is let go.
 /// The replies that exist now are not new: the thread is read (`conversations.replies`) and its newest reply is where the "new" count starts.
 /// With `seen_ts` (what `slack_unwatch` answered) nothing is asked of Slack and the thread is watched from that reply on, which puts a thread back as it was.
@@ -7464,6 +7508,42 @@ mod tests {
         std::fs::write(dir.join(HIDDEN_FILE), "{not json").unwrap();
         assert!(load_list::<Hidden>(&dir, HIDDEN_FILE, HIDDEN_KEY).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_folded_file_is_written_and_read_back_and_a_missing_or_broken_one_folds_none() {
+        let dir = temp_dir("side-folded");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(load_list::<String>(&dir, SIDE_FILE, SIDE_KEY)
+            .unwrap()
+            .is_empty());
+        let list = vec!["T1".to_owned(), "T2".to_owned()];
+        save_list(&dir, SIDE_FILE, SIDE_KEY, &list).unwrap();
+        assert_eq!(
+            load_list::<String>(&dir, SIDE_FILE, SIDE_KEY).unwrap(),
+            list
+        );
+        let text = std::fs::read_to_string(dir.join(SIDE_FILE)).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["folded"], json!(["T1", "T2"]));
+        assert!(!dir.join(format!("{SIDE_FILE}.tmp")).exists());
+        save_list(&dir, SIDE_FILE, SIDE_KEY, &Vec::<String>::new()).unwrap();
+        assert!(load_list::<String>(&dir, SIDE_FILE, SIDE_KEY)
+            .unwrap()
+            .is_empty());
+        std::fs::write(dir.join(SIDE_FILE), "{not json").unwrap();
+        assert!(load_list::<String>(&dir, SIDE_FILE, SIDE_KEY).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn folded_workspaces_keep_valid_ids_once_in_order() {
+        let ids = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            clean_folded(ids(&["T2", "T1", "T2", "t3", "", "T1/x"])),
+            ids(&["T2", "T1"])
+        );
+        assert!(clean_folded(vec![]).is_empty());
     }
 
     #[test]
