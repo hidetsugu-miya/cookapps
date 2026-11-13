@@ -173,7 +173,7 @@ function messageNodes(rows: TimelineMessage[]) {
     const item = historyItem(m, `c/${m.ts}`, openThread);
     // The reactions (S-22, S-25) sit under the text, above "N 件の返信".
     const reactions = reactionsNode(m, { teamId: m.teamId, channel: m.channel });
-    if (reactions) item.querySelector(".feed-main > .feed-text")?.after(reactions);
+    item.querySelector(".feed-main > .feed-text")?.after(reactions);
     // A reply also sent to the channel says which thread it answered, above its text (#467).
     if (m.threadReply) item.querySelector(".feed-main > .feed-text")?.before(tag("div", "feed-thread-reply", m.threadReply.parent === null ? "スレッドに返信済み" : `スレッドに返信済み: ${m.threadReply.parent}`));
     nodes.push(item);

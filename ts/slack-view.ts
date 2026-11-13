@@ -5,7 +5,9 @@
 import type { Reaction } from "./bindings/Reaction";
 import { tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
+import { SMILE_PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { openEmojiPicker, type PickedEmoji, rememberEmoji } from "./slack-emoji-picker.js";
 import { toast } from "./toast.js";
 
 // A Slack timestamp ("1700000000.123456") as epoch milliseconds.
@@ -93,21 +95,25 @@ const reacting = new Set<string>();
 const reactKey = (target: ReactionTarget, ts: string, name: string) => `${target.teamId}/${target.channel}/${ts}/${name}`;
 
 // Adds the user's reaction `name` to the message `m`, or takes it off when it is theirs (S-25), then draws `m`'s reactions again in place of `box`, so that the scroll position stays.
+// `picked` is an emoji chosen in the picker: it is always an add, and a reaction the message does not have yet is put at the end of its reactions.
 // Only a success changes `m.reactions` (Rust says whether Slack changed anything: `false` is "it was so already", which moves the color and not the count); a failure shows the error and leaves them.
-async function pressReaction(m: { ts: string; reactions: Reaction[] }, target: ReactionTarget, name: string, box: HTMLElement) {
+async function pressReaction(m: { ts: string; reactions: Reaction[] }, target: ReactionTarget, name: string, box: HTMLElement, picked?: PickedEmoji) {
   const key = reactKey(target, m.ts, name);
-  const r = m.reactions.find((x) => x.name === name);
-  if (!r || reacting.has(key)) return;
-  const add = !r.mine;
+  if ((!picked && !m.reactions.some((x) => x.name === name)) || reacting.has(key)) return;
+  const add = picked ? true : !m.reactions.find((x) => x.name === name)!.mine;
   // A disabled button gives up the focus, so ask now whether the keyboard is in this box.
   const focused = box.contains(document.activeElement);
   reacting.add(key);
   box.querySelector<HTMLButtonElement>(`[data-name="${CSS.escape(name)}"]`)?.setAttribute("disabled", "");
   try {
     const changed = await invoke("slack_react", { ...target, ts: m.ts, name, add });
-    r.mine = add;
-    if (changed) r.count += add ? 1 : -1;
-    if (r.count <= 0) m.reactions = m.reactions.filter((x) => x !== r);
+    const r = m.reactions.find((x) => x.name === name);
+    if (r) {
+      r.mine = add;
+      if (changed) r.count += add ? 1 : -1;
+      if (r.count <= 0) m.reactions = m.reactions.filter((x) => x !== r);
+    } else if (picked) m.reactions.push({ emoji: picked.emoji, count: 1, name, image: picked.image, mine: true });
+    if (picked) rememberEmoji(target.teamId, picked);
   } catch (e) {
     toast(`リアクションを変えられませんでした: ${e}`);
   } finally {
@@ -117,17 +123,17 @@ async function pressReaction(m: { ts: string; reactions: Reaction[] }, target: R
   const live = box.isConnected ? box : document.querySelector<HTMLElement>(`.reactions[data-key="${CSS.escape(reactKey(target, m.ts, ""))}"]`);
   if (!live) return;
   const next = reactionsNode(m, target);
-  if (next) live.replaceWith(next);
-  else live.remove();
-  if (focused) next?.querySelector<HTMLElement>(`[data-name="${CSS.escape(name)}"]`)?.focus({ preventScroll: true });
+  live.replaceWith(next);
+  // The image of a picked custom emoji is here already when the picker showed it (it fetched the cells in view); this asks for it otherwise.
+  if (picked?.image) void loadIcons([picked.image]);
+  if (focused) next.querySelector<HTMLElement>(`[data-name="${CSS.escape(name)}"]`)?.focus({ preventScroll: true });
 }
 
 // The reactions under a message (S-22): each one a button with the emoji and how many gave it, in the order Rust gave; the ones the user gave themselves (S-25) have another frame color.
-// Pressing one takes the user's off when it is theirs and adds it otherwise (`pressReaction`). null for a message that has none.
+// Pressing one takes the user's off when it is theirs and adds it otherwise (`pressReaction`). The box ends with the button that opens the emoji picker (S-25); a message with no reaction has the box with that button alone (`.empty`, shown by CSS while the pointer or the focus is on the message).
 // A custom emoji (S-26) is its image once `loadIcons` has fetched it (at once when it was fetched before); the `:name:` Rust gave is drawn until then.
 export function reactionsNode(m: { ts: string; reactions: Reaction[] }, target: ReactionTarget) {
-  if (!m.reactions.length) return null;
-  const box = tag("div", "reactions");
+  const box = tag("div", m.reactions.length ? "reactions" : "reactions empty");
   box.dataset.key = reactKey(target, m.ts, "");
   for (const r of m.reactions) {
     const chip = tag("button", r.mine ? "reaction mine" : "reaction");
@@ -145,5 +151,12 @@ export function reactionsNode(m: { ts: string; reactions: Reaction[] }, target: 
     chip.append(emoji, tag("span", "reaction-count", String(r.count)));
     box.append(chip);
   }
+  const add = tag("button", "reaction-add");
+  add.type = "button";
+  add.setAttribute("aria-label", "リアクションを追加");
+  add.setAttribute("aria-haspopup", "dialog");
+  add.innerHTML = SMILE_PLUS_SVG;
+  add.onclick = () => openEmojiPicker(add, target.teamId, { loadImages: loadIcons, onPick: (picked) => void pressReaction(m, target, picked.name, box, picked) });
+  box.append(add);
   return box;
 }

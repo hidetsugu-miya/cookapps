@@ -1,6 +1,6 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
 import {
-  attachment, boot, callsOf, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, reaction, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
+  attachment, boot, callsOf, emojiCatalog, claudeLoggedOut, composerLayout, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, reaction, rejects, release, replyEdit, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf,
   copiedTexts, para, plain, quote, span, stubClipboard, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, claudeSettings, heightOf, TOOLS,
 } from "../support";
 
@@ -764,7 +764,7 @@ describe("slack thread: styles of a text (S-12)", () => {
 describe("slack thread: reactions (S-22)", () => {
   const reactionTexts = (n: number) => browser.execute((i) => [...document.querySelectorAll("#st-msgs .st-msg")[i].querySelectorAll(".reaction")].map((r) => [r.querySelector(".reaction-emoji")?.textContent, r.querySelector(".reaction-count")?.textContent]), n);
 
-  it("draws the emoji and the count of each reaction under the message in the order given, a custom emoji as :name:, and nothing under a message without any", async () => {
+  it("draws the emoji and the count of each reaction under the message in the order given, a custom emoji as :name:, and under a message without any only the button of the picker (S-25)", async () => {
     await openDetail(
       {},
       slackThread([
@@ -774,7 +774,9 @@ describe("slack thread: reactions (S-22)", () => {
     );
     expect(await reactionTexts(0)).toEqual([["🎉", "3"], ["👍🏻", "1"], [":partyparrot:", "12"]]);
     expect(await reactionTexts(1)).toEqual([]);
-    expect(await count("#st-msgs .reactions")).toBe(1);
+    expect(await count("#st-msgs .reactions:not(.empty)")).toBe(1);
+    expect(await count("#st-msgs .reactions.empty")).toBe(1);
+    expect(await browser.execute(() => [...document.querySelectorAll("#st-msgs .reactions.empty")].map((b) => b.children.length))).toEqual([1]);
     // Each one is a button (S-25).
     expect(await browser.execute(() => [...document.querySelectorAll("#st-msgs .reaction")].map((r) => `${r.tagName}:${r.getAttribute("type")}`))).toEqual(["BUTTON:button", "BUTTON:button", "BUTTON:button"]);
   });
@@ -964,6 +966,243 @@ describe("slack thread: add and take off a reaction (S-25)", () => {
     await release(react, true);
     await browser.waitUntil(async () => (await chips())[0][0][1] === "4");
     expect(await browser.execute(() => !!document.activeElement?.closest("#st-input"))).toBe(true);
+  });
+});
+
+describe("slack thread: the emoji picker (S-25)", () => {
+  const partyUrl = "https://emoji.slack-edge.com/T1/partyparrot/abc.gif";
+  const sutekiUrl = "https://emoji.slack-edge.com/T1/sutekina/abc.gif";
+  const catalog = () =>
+    emojiCatalog(
+      [["grinning", "😀"], ["tada", "🎉"], ["+1", "👍"], ["eyes", "👀"], ["thinking_face", "🤔"]],
+      [["partyparrot", partyUrl], ["ステキ", sutekiUrl]],
+    );
+  const thread = () =>
+    slackThread([
+      threadMessage(root, "Alice Example", rootText, { reactions: [reaction("tada", "🎉", 3), reaction("eyes", "👀", 1, null, true)] }),
+      threadMessage(reply1, "Bob Example", "Looks fine to me."),
+    ]);
+  // The "add a reaction" button of a message (the box of a message with no reaction takes no room, so the press is a script's).
+  const addButton = (message: number) => browser.execute((i) => document.querySelectorAll("#st-msgs .st-msg")[i].querySelector<HTMLElement>(".reaction-add")!.click(), message);
+  const picker = async (fixtures: Record<string, unknown> = {}) => {
+    await openDetail({ fetch_images: { [partyUrl]: pngUri, [sutekiUrl]: pngUri }, ...fixtures }, thread());
+    const read = await mock("slack_emoji_catalog", catalog());
+    await addButton(0);
+    await expect($(".emoji-pop")).toBeDisplayed();
+    await waitForCount(".emoji-pop .emoji-cell", 7);
+    return read;
+  };
+  const cells = (selector = ".emoji-pop .emoji-cell") => browser.execute((s) => [...document.querySelectorAll<HTMLElement>(s)].filter((c) => !c.hidden && !c.closest("[hidden]")).map((c) => c.dataset.name), selector);
+  const sectionTitles = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>(".emoji-pop .emoji-sec")].filter((s) => !s.hidden).map((s) => s.querySelector("h3")!.textContent));
+
+  it("has the button last in the box of a message with reactions and of one without, with a label and no text, and opens nothing by itself", async () => {
+    await openDetail({}, thread());
+    expect(await browser.execute(() => [...document.querySelectorAll("#st-msgs .st-msg")].map((m) => [...m.querySelectorAll(".reactions > *")].map((e) => e.className.split(" ")[0])))).toEqual([["reaction", "reaction", "reaction-add"], ["reaction-add"]]);
+    const buttons = await browser.execute(() => [...document.querySelectorAll<HTMLButtonElement>("#st-msgs .reaction-add")].map((b) => [b.tagName, b.type, b.getAttribute("aria-label"), b.textContent, b.querySelectorAll("svg").length]));
+    expect(buttons).toEqual([["BUTTON", "button", "リアクションを追加", "", 1], ["BUTTON", "button", "リアクションを追加", "", 1]]);
+    expect(await count(".emoji-pop")).toBe(0);
+    expect(await callsOf("slack_emoji_catalog")).toEqual([]);
+  });
+
+  it("takes no room under a message without reactions while the pointer and the focus are elsewhere, and a message with reactions always shows the button", async () => {
+    await openDetail({}, thread());
+    const height = (message: number) => browser.execute((i) => document.querySelectorAll<HTMLElement>("#st-msgs .st-msg")[i].querySelector<HTMLElement>(".reactions")!.getBoundingClientRect().height, message);
+    expect(await height(1)).toBe(0);
+    expect(await height(0)).toBeGreaterThan(0);
+    expect(await browser.execute(() => document.querySelector<HTMLElement>("#st-msgs .st-msg .reactions .reaction-add")!.getBoundingClientRect().height)).toBeGreaterThan(0);
+  });
+
+  it("opens under the button with the search field first, then 最近 (none yet), the workspace's custom emoji and the standard emoji, and asks Rust for the workspace's list once", async () => {
+    const list = await picker();
+    expect(await callsOf(list)).toEqual([{ teamId: workspace.teamId }]);
+    await expect($(".emoji-pop")).toHaveAttribute("role", "dialog");
+    await expect($(".emoji-pop input")).toHaveAttribute("aria-label", "絵文字を検索");
+    expect(await $(".emoji-pop input").getAttribute("placeholder")).toBeNull();
+    expect(await browser.execute(() => document.activeElement === document.querySelector(".emoji-pop input"))).toBe(true);
+    await expect($$("#st-msgs .reaction-add")[0]).toHaveAttribute("aria-expanded", "true");
+    expect(await sectionTitles()).toEqual(["カスタム", "標準"]);
+    expect(await cells(".emoji-pop .emoji-sec:nth-child(2) .emoji-cell")).toEqual(["partyparrot", "ステキ"]);
+    expect(await cells(".emoji-pop .emoji-sec:nth-child(3) .emoji-cell")).toEqual(["grinning", "tada", "+1", "eyes", "thinking_face"]);
+    expect(await textsOf(".emoji-pop .emoji-sec:nth-child(3) .emoji-cell")).toEqual(["😀", "🎉", "👍", "👀", "🤔"]);
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".emoji-pop .emoji-cell")].map((c) => c.getAttribute("aria-label")).slice(0, 3))).toEqual([":partyparrot:", ":ステキ:", ":grinning:"]);
+    // It opens under the button, inside the window.
+    const where = await browser.execute(() => {
+      const pop = document.querySelector(".emoji-pop")!.getBoundingClientRect();
+      const add = document.querySelector("#st-msgs .reaction-add")!.getBoundingClientRect();
+      return { near: Math.abs(pop.left - add.left) < 400, inside: pop.left >= 0 && pop.right <= innerWidth && pop.top >= 0 && pop.bottom <= innerHeight };
+    });
+    expect(where).toEqual({ near: true, inside: true });
+    // Closed and opened again: the list is not asked for again.
+    await browser.keys("Escape");
+    await expect($(".emoji-pop")).not.toExist();
+    await addButton(1);
+    await expect($(".emoji-pop")).toBeDisplayed();
+    await waitForCount(".emoji-pop .emoji-cell", 7);
+    expect(await callsOf(list)).toHaveLength(1);
+  });
+
+  it("narrows the cells by a part of the name, case ignored, hides a section with none, and says so when nothing matches", async () => {
+    await picker();
+    const input = $(".emoji-pop input");
+    await input.setValue("TH");
+    expect(await cells()).toEqual(["thinking_face"]);
+    expect(await sectionTitles()).toEqual(["標準"]);
+    await input.setValue("パーティ");
+    expect(await cells()).toEqual([]);
+    await expect($(".emoji-pop .menu-empty")).toBeDisplayed();
+    await input.setValue("ステ");
+    expect(await cells()).toEqual(["ステキ"]);
+    expect(await sectionTitles()).toEqual(["カスタム"]);
+    await expect($(".emoji-pop .menu-empty")).not.toBeDisplayed();
+    await input.setValue("");
+    expect(await cells()).toHaveLength(7);
+    await input.setValue("a");
+    expect(await cells()).toEqual(["partyparrot", "tada", "thinking_face"]);
+  });
+
+  it("fetches the images of the custom emoji in view and draws them in the cells", async () => {
+    await picker();
+    await browser.waitUntil(async () => (await count(".emoji-pop .emoji-cell img.reaction-img")) === 2);
+    expect(await browser.execute(() => [...document.querySelectorAll(".emoji-pop .emoji-cell img")].map((i) => i.getAttribute("src")))).toEqual([pngUri, pngUri]);
+    const asked = (await callsOf("fetch_images")).flatMap((c) => (c as { urls: string[] }).urls).sort();
+    expect(asked).toEqual([partyUrl, sutekiUrl].sort());
+  });
+
+  it("adds the emoji picked with slack_react and closes: the arguments, a reaction at the end of the message's reactions and the picker's button kept last", async () => {
+    await picker();
+    const react = await mock("slack_react", true);
+    await $('.emoji-pop .emoji-cell[data-name="thinking_face"]').click();
+    expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, name: "thinking_face", add: true }]);
+    await expect($(".emoji-pop")).not.toExist();
+    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:first-child .reaction")) === 3);
+    expect(await browser.execute(() => [...document.querySelectorAll("#st-msgs .st-msg:first-child .reactions > *")].map((e) => e.className.split(" ")[0] + ":" + (e as HTMLElement).dataset.name))).toEqual(["reaction:tada", "reaction:eyes", "reaction:thinking_face", "reaction-add:undefined"]);
+    const added = await browser.execute(() => {
+      const r = document.querySelector<HTMLElement>('#st-msgs .reaction[data-name="thinking_face"]')!;
+      return [r.querySelector(".reaction-emoji")!.textContent, r.querySelector(".reaction-count")!.textContent, r.classList.contains("mine"), r.getAttribute("aria-pressed")];
+    });
+    expect(added).toEqual(["🤔", "1", true, "true"]);
+  });
+
+  it("adds to a message with no reaction: the box shows the new reaction, and the message was not read again", async () => {
+    await picker();
+    await browser.keys("Escape");
+    await addButton(1);
+    await waitForCount(".emoji-pop .emoji-cell", 7);
+    const react = await mock("slack_react", true);
+    await $('.emoji-pop .emoji-cell[data-name="tada"]').click();
+    expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: reply1, name: "tada", add: true }]);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:nth-child(2) .reaction")) === 1);
+    await expect($("#st-msgs .st-msg:nth-child(2) .reactions")).not.toHaveElementClass("empty");
+    expect(await textsOf("#st-msgs .st-msg:nth-child(2) .reaction-count")).toEqual(["1"]);
+    expect(await callsOf("slack_thread")).toHaveLength(1);
+  });
+
+  it("raises the count of a reaction the message has and gives it the user's frame; an answer of false changes only the frame", async () => {
+    await picker();
+    const react = await mock("slack_react", true);
+    await $('.emoji-pop .emoji-cell[data-name="tada"]').click();
+    await waitForCalls(react);
+    await browser.waitUntil(async () => (await textsOf('#st-msgs .st-msg:first-child .reaction[data-name="tada"] .reaction-count'))[0] === "4");
+    await expect($('#st-msgs .st-msg:first-child .reaction[data-name="tada"]')).toHaveElementClass("mine");
+    expect(await count("#st-msgs .st-msg:first-child .reaction")).toBe(2);
+    // The user's own, picked again: Slack says it was so already (false), and the count stays.
+    await addButton(0);
+    await waitForCount(".emoji-pop .emoji-cell", 7);
+    await mock("slack_react", false);
+    await $('.emoji-pop .emoji-cell[data-name="eyes"]').click();
+    await waitForCalls("slack_react");
+    await browser.pause(200);
+    expect(await textsOf('#st-msgs .st-msg:first-child .reaction[data-name="eyes"] .reaction-count')).toEqual(["1"]);
+  });
+
+  it("adds a custom emoji with its name, shows its image in the reaction, and keeps it for 最近", async () => {
+    await picker();
+    const react = await mock("slack_react", true);
+    await $('.emoji-pop .emoji-cell[data-name="ステキ"]').click();
+    expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, name: "ステキ", add: true }]);
+    await browser.waitUntil(async () => (await count('#st-msgs .reaction[data-name="ステキ"]')) === 1);
+    await browser.waitUntil(async () => (await count('#st-msgs .reaction[data-name="ステキ"] img.reaction-img')) === 1);
+    // The picker of another message lists it first, under 最近, before the custom and standard emoji.
+    await addButton(1);
+    await waitForCount(".emoji-pop .emoji-cell", 8);
+    expect(await sectionTitles()).toEqual(["最近", "カスタム", "標準"]);
+    expect(await cells(".emoji-pop .emoji-sec:nth-child(1) .emoji-cell")).toEqual(["ステキ"]);
+  });
+
+  it("puts the emoji added last first in 最近, once each", async () => {
+    await picker();
+    const react = await mock("slack_react", true);
+    await $('.emoji-pop .emoji-cell[data-name="grinning"]').click();
+    await waitForCalls(react);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:first-child .reaction")) === 3);
+    await addButton(1);
+    await waitForCount(".emoji-pop .emoji-cell", 8);
+    await $('.emoji-pop .emoji-cell[data-name="+1"]').click();
+    await waitForCalls(react, 2);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:nth-child(2) .reaction")) === 1);
+    await addButton(1);
+    await waitForCount(".emoji-pop .emoji-cell", 9);
+    await $('.emoji-pop .emoji-sec:nth-child(1) .emoji-cell[data-name="grinning"]').click();
+    await waitForCalls(react, 3);
+    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:nth-child(2) .reaction")) === 2);
+    await addButton(0);
+    await waitForCount(".emoji-pop .emoji-cell", 9);
+    expect(await cells(".emoji-pop .emoji-sec:nth-child(1) .emoji-cell")).toEqual(["grinning", "+1"]);
+  });
+
+  it("picks the first cell the search leaves with Enter", async () => {
+    await picker();
+    const react = await mock("slack_react", true);
+    await $(".emoji-pop input").setValue("ey");
+    await browser.keys("Enter");
+    expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, name: "eyes", add: true }]);
+    await expect($(".emoji-pop")).not.toExist();
+  });
+
+  it("closes with Escape and with a press elsewhere, and sends nothing", async () => {
+    await picker();
+    const react = await mock("slack_react", true);
+    await browser.keys("Escape");
+    await expect($(".emoji-pop")).not.toExist();
+    await addButton(0);
+    await waitForCount(".emoji-pop .emoji-cell", 7);
+    await $("#st-msgs .st-text").click();
+    await expect($(".emoji-pop")).not.toExist();
+    await browser.pause(200);
+    expect(await callsOf(react)).toEqual([]);
+    await expect($$("#st-msgs .reaction-add")[0]).not.toHaveAttribute("aria-expanded");
+  });
+
+  it("changes nothing and shows the error when slack_react fails, and the next pick can be tried", async () => {
+    await picker();
+    const before = await count("#st-msgs .st-msg:first-child .reaction");
+    const react = await mock("slack_react", rejects("このメッセージにはこれ以上違う絵文字のリアクションを付けられません"));
+    await $('.emoji-pop .emoji-cell[data-name="grinning"]').click();
+    await waitForCalls(react);
+    await expect($(".toast")).toHaveText(expect.stringContaining("リアクションを変えられませんでした: このメッセージにはこれ以上違う絵文字のリアクションを付けられません"));
+    expect(await count("#st-msgs .st-msg:first-child .reaction")).toBe(before);
+    // A failed pick is not remembered.
+    await addButton(0);
+    await waitForCount(".emoji-pop .emoji-cell", 7);
+    expect(await sectionTitles()).toEqual(["カスタム", "標準"]);
+  });
+
+  it("shows the error in the picker when the list cannot be read, and asks again the next time", async () => {
+    await openDetail({}, thread());
+    await mock("slack_emoji_catalog", rejects("Slack に接続できません"));
+    await addButton(0);
+    await expect($(".emoji-pop .emoji-status")).toHaveText(expect.stringContaining("読み込めませんでした: Slack に接続できません"));
+    await browser.keys("Escape");
+    const list = await mock("slack_emoji_catalog", catalog());
+    await addButton(0);
+    await waitForCount(".emoji-pop .emoji-cell", 7);
+    expect(await callsOf(list)).toHaveLength(1);
+  });
+
+  it("shows no text that explains the picker: the field has no placeholder and the sections are named", async () => {
+    await picker();
+    expect(await $(".emoji-pop input").getAttribute("placeholder")).toBeNull();
+    expect(await textsOf(".emoji-pop h3")).toEqual(["最近", "カスタム", "標準"]);
   });
 });
 

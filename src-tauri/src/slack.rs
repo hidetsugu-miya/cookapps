@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -1910,6 +1910,36 @@ pub struct Reaction {
     image: Option<String>,
     /// Whether the token's own user is among the people who gave the reaction (S-25). They are not kept: this is all the screen gets of them.
     mine: bool,
+}
+
+/// A standard emoji of the emoji picker (S-25): Slack's name of it and the Unicode emoji.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogEmoji {
+    name: String,
+    emoji: String,
+}
+
+/// A custom emoji of the emoji picker (S-25): its name and the address of its image (`https://…` of an allowed host, `icon_host_ok`), which the screen fetches as it fetches an icon (S-26).
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogCustom {
+    name: String,
+    image: String,
+}
+
+/// What the emoji picker lists for a workspace (S-25): the standard emoji in the order of the Unicode groups, and the workspace's custom emoji by name.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct EmojiCatalog {
+    standard: Vec<CatalogEmoji>,
+    custom: Vec<CatalogCustom>,
 }
 
 /// The unread replies of a row's thread (S-14). `uncounted`: the thread is longer than the page that was read and its newest reply is after the position, so `count` says nothing (it is 0).
@@ -6429,6 +6459,76 @@ fn valid_reaction_target(team_id: &str, channel: &str, ts: &str, name: &str) -> 
         && valid_reaction_name(name)
 }
 
+/// An emoji without its variation selector, so that the two spellings of one emoji (`☺` and `☺️`) are the same key.
+fn emoji_key(emoji: &str) -> String {
+    emoji.replace('\u{FE0F}', "")
+}
+
+/// The standard emoji of the picker, once per emoji: those of the `emojis` crate in its order (the Unicode groups, no skin tone variants), then the ones of Slack's table that the crate lacks.
+/// An emoji Slack's table names is listed under that name (Slack's own: `thinking_face`, where the crate says `thinking`); the others under the crate's first shortcode. A name `valid_reaction_name` refuses is left out.
+fn build_standard_emoji() -> Vec<CatalogEmoji> {
+    let mut slack_names: HashMap<String, &str> = HashMap::new();
+    for (name, emoji) in slack_emoji::EMOJI {
+        slack_names.entry(emoji_key(emoji)).or_insert(name);
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    let mut push = |name: &str, emoji: &str| {
+        if valid_reaction_name(name) && seen.insert(emoji_key(emoji)) {
+            out.push(CatalogEmoji {
+                name: name.to_owned(),
+                emoji: emoji.to_owned(),
+            });
+        }
+    };
+    for e in emojis::iter() {
+        let name = slack_names
+            .get(&emoji_key(e.as_str()))
+            .copied()
+            .or_else(|| e.shortcode());
+        if let Some(name) = name {
+            push(name, e.as_str());
+        }
+    }
+    for (name, emoji) in slack_emoji::EMOJI {
+        push(name, emoji);
+    }
+    out
+}
+
+/// The standard emoji of the picker, built the first time and kept for as long as the app runs.
+fn standard_emoji() -> &'static [CatalogEmoji] {
+    static LIST: OnceLock<Vec<CatalogEmoji>> = OnceLock::new();
+    LIST.get_or_init(build_standard_emoji)
+}
+
+/// What the picker lists for a workspace whose custom emoji are `custom` (its `emoji.list`): the custom emoji with an image, by name (an `alias:` entry is not listed again, and neither is a name or an image that cannot be used,
+/// `resolve_emoji`), and the standard emoji except the names the workspace's own emoji take over.
+fn emoji_catalog(custom: &EmojiList) -> EmojiCatalog {
+    let mut listed: Vec<CatalogCustom> = custom
+        .iter()
+        .filter(|(name, value)| !value.starts_with("alias:") && valid_reaction_name(name))
+        .filter_map(|(name, _)| match resolve_emoji(custom, name) {
+            Some(EmojiLook::Image(image)) => Some(CatalogCustom {
+                name: name.clone(),
+                image,
+            }),
+            _ => None,
+        })
+        .collect();
+    listed.sort_by(|a, b| a.name.cmp(&b.name));
+    let own: HashSet<&str> = listed.iter().map(|c| c.name.as_str()).collect();
+    let standard = standard_emoji()
+        .iter()
+        .filter(|e| !own.contains(e.name.as_str()))
+        .cloned()
+        .collect();
+    EmojiCatalog {
+        standard,
+        custom: listed,
+    }
+}
+
 /// The message for a failed `reactions.add` or `reactions.remove`: the ones the user can act on, in Japanese; the others as `error_message` words them.
 fn react_error(e: SlackError) -> String {
     match e.code.as_deref() {
@@ -6518,6 +6618,36 @@ pub async fn slack_react(
     react_at(API_URL, auth.http(), &token, &channel, &ts, &name, add)
         .await
         .map_err(|e| log_failure(command, &team_id, react_error(e)))
+}
+
+/// What the emoji picker lists for the workspace (S-25): its custom emoji (`emoji.list`, kept for an hour as the reactions' are, S-26; none for a token without `emoji:read`) and the standard emoji.
+/// Only the form of `team_id` and the connected workspace are checked; nothing is sent to Slack but the one `emoji.list` call when the cache has no fresh answer.
+#[tauri::command]
+pub async fn slack_emoji_catalog(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    state: State<'_, SlackState>,
+    team_id: String,
+) -> Result<EmojiCatalog, String> {
+    let command = "slack_emoji_catalog";
+    token_key(&team_id).map_err(|e| log_failure(command, &team_id, e))?;
+    let workspaces = load_workspaces(&config_dir(&app)?)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    if !workspaces.iter().any(|w| w.team_id == team_id) {
+        return Err(log_failure(command, &team_id, NO_WORKSPACE));
+    }
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    lookup_emoji(
+        API_URL,
+        auth.http(),
+        &state.timeline,
+        vec![(team_id.clone(), token)],
+    )
+    .await;
+    Ok(emoji_catalog(&state.timeline.custom_emoji(&team_id)))
 }
 
 /// The attached images at `urls` (a thread's `thumb_url`s) as data: URIs by URL. The workspace's token goes to `files.slack.com` and nowhere else
@@ -10634,6 +10764,81 @@ mod tests {
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    #[test]
+    fn the_standard_emoji_have_slack_names_once_each_and_no_skin_tone_variant() {
+        let list = standard_emoji();
+        let emoji = |name: &str| {
+            list.iter()
+                .find(|e| e.name == name)
+                .map(|e| e.emoji.as_str())
+        };
+        assert_eq!(emoji("tada"), Some("🎉"));
+        assert_eq!(emoji("+1"), Some("👍"));
+        // Slack's name of an emoji wins over the crate's (`thinking`), and the crate's name is not listed beside it.
+        assert_eq!(emoji("thinking_face"), Some("🤔"));
+        assert_eq!(emoji("thinking"), None);
+        // Every emoji of Slack's table is there.
+        for (name, e) in slack_emoji::EMOJI {
+            assert!(
+                list.iter().any(|l| emoji_key(&l.emoji) == emoji_key(e)),
+                "{name}"
+            );
+        }
+        // A skin tone variant is not listed (a reaction name with a tone is `+1::skin-tone-2`, not an entry).
+        assert!(!list.iter().any(|e| e.emoji == "👍🏽" || e.emoji == "👍🏻"));
+        assert!(list.iter().all(|e| valid_reaction_name(&e.name)));
+        let names: HashSet<_> = list.iter().map(|e| e.name.as_str()).collect();
+        let keys: HashSet<_> = list.iter().map(|e| emoji_key(&e.emoji)).collect();
+        assert_eq!(names.len(), list.len());
+        assert_eq!(keys.len(), list.len());
+        assert!(list.len() > 1500);
+        // The crate's order comes first: faces before flags.
+        let at = |name: &str| list.iter().position(|e| e.name == name).unwrap();
+        assert!(at("grinning") < at("tada"));
+        assert!(at("tada") < at("flag-jp"));
+    }
+
+    #[test]
+    fn the_catalog_lists_custom_emoji_by_name_with_their_images_and_no_alias() {
+        let list = custom(&[
+            ("zebra", "https://emoji.slack-edge.com/T1/zebra/a.png"),
+            ("partyparrot", PARROT),
+            ("parrot", "alias:partyparrot"),
+            ("ok", "alias:white_check_mark"),
+            ("other", "https://example.com/other.png"),
+            ("Upper", "https://emoji.slack-edge.com/T1/upper/a.png"),
+            ("ステキ", "https://emoji.slack-edge.com/T1/sutekina/a.png"),
+        ]);
+        let catalog = emoji_catalog(&list);
+        let got: Vec<(&str, &str)> = catalog
+            .custom
+            .iter()
+            .map(|c| (c.name.as_str(), c.image.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("partyparrot", PARROT),
+                ("zebra", "https://emoji.slack-edge.com/T1/zebra/a.png"),
+                ("ステキ", "https://emoji.slack-edge.com/T1/sutekina/a.png"),
+            ]
+        );
+        // The standard emoji are all there.
+        assert_eq!(catalog.standard, standard_emoji());
+    }
+
+    #[test]
+    fn a_custom_emoji_takes_over_the_standard_name_it_shares() {
+        let list = custom(&[("tada", PARROT)]);
+        let catalog = emoji_catalog(&list);
+        assert_eq!(catalog.custom.len(), 1);
+        assert!(!catalog.standard.iter().any(|e| e.name == "tada"));
+        assert_eq!(catalog.standard.len() + 1, standard_emoji().len());
+        let none = emoji_catalog(&EmojiList::new());
+        assert!(none.custom.is_empty());
+        assert!(none.standard.iter().any(|e| e.name == "tada"));
     }
 
     const PARROT: &str = "https://emoji.slack-edge.com/T1/partyparrot/abc.gif";

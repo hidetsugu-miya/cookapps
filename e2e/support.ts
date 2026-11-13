@@ -8,6 +8,7 @@ import type { Claude } from "../ts/bindings/Claude";
 import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
+import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
 import type { FontSettings } from "../ts/bindings/FontSettings";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
@@ -604,6 +605,12 @@ export const threadMessage = (ts: string, name: string, text: string, extra: Par
 
 // A reaction under a message (S-22): Slack's `name`, the `emoji` drawn for it, how many gave it, for a custom emoji the address of its `image` (S-26), and whether the user gave it themselves, `mine` (S-25).
 export const reaction = (name: string, emoji: string, count: number, image: string | null = null, mine = false): Reaction => ({ name, emoji, count, image, mine });
+
+// What `slack_emoji_catalog` answers (S-25): the standard emoji by Slack's name, and the custom emoji with their image addresses (S-26).
+export const emojiCatalog = (standard: [string, string][], custom: [string, string][] = []): EmojiCatalog => ({
+  standard: standard.map(([name, emoji]) => ({ name, emoji })),
+  custom: custom.map(([name, image]) => ({ name, image })),
+});
 
 // An attachment of a thread's message (S-11) with nothing in it; `extra` sets the parts.
 export const attachment = (extra: Partial<ThreadAttachment> = {}): ThreadAttachment => ({
