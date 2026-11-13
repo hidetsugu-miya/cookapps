@@ -3,6 +3,7 @@ import type { Reaction } from "./Reaction";
 import type { RichBlock } from "./RichBlock";
 import type { ThreadAttachment } from "./ThreadAttachment";
 import type { ThreadBlock } from "./ThreadBlock";
+import type { ThreadReply } from "./ThreadReply";
 import type { UnreadReplies } from "./UnreadReplies";
 import type { WatchMark } from "./WatchMark";
 
@@ -22,4 +23,8 @@ watch: WatchMark | null,
 /**
  * The replies of the thread that are unread (S-14). Never set in the watch section.
  */
-unreadReplies: UnreadReplies | null, };
+unreadReplies: UnreadReplies | null, 
+/**
+ * Set only for a row of a channel's history (S-20) that is a reply also sent to the channel (`thread_broadcast`).
+ */
+threadReply: ThreadReply | null, };

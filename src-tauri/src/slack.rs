@@ -1520,6 +1520,17 @@ pub struct TimelineMessage {
     watch: Option<WatchMark>,
     /// The replies of the thread that are unread (S-14). Never set in the watch section.
     unread_replies: Option<UnreadReplies>,
+    /// Set only for a row of a channel's history (S-20) that is a reply also sent to the channel (`thread_broadcast`).
+    thread_reply: Option<ThreadReply>,
+}
+
+/// What a row of a channel's history says of the thread it replied to (S-20): `parent` is the start of the thread's own message as one line of plain text (`headline`), `None` when it is not known.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadReply {
+    parent: Option<String>,
 }
 
 /// A reaction under a message: the emoji drawn as text (`emojify`; a custom emoji stays `:name:`) and how many people gave it.
@@ -1748,8 +1759,16 @@ struct Raw {
     text: String,
     reply_count: u32,
     has_files: bool,
+    /// Set only by `history_rows`, for a reply also sent to the channel.
+    broadcast: Option<Broadcast>,
     /// The fields the screen draws (`thread_slim`), shared: a read clones every message it holds, and only the rows listed are drawn.
     source: Arc<Value>,
+}
+
+/// What a reply also sent to the channel (`thread_broadcast`) says of its thread: the mrkdwn text of the thread's own message when it is known (`broadcast_of`).
+#[derive(Debug, PartialEq, Clone)]
+struct Broadcast {
+    parent_text: Option<String>,
 }
 
 /// (team, user) -> when it was asked, and what Slack said (`None`: it could not say).
@@ -2569,6 +2588,7 @@ fn watch_row(
         text: String::new(),
         reply_count: 0,
         has_files: false,
+        broadcast: None,
         source: Arc::new(Value::Null),
     };
     let own = ts_key(&w.ts);
@@ -3275,22 +3295,49 @@ fn raw_from(team_id: &str, channel: &Channel, m: &Value) -> Option<Raw> {
             .as_u64()
             .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
         has_files: m["files"].as_array().is_some_and(|f| !f.is_empty()),
+        broadcast: None,
         source: Arc::new(thread_slim(m)),
     })
 }
 
 /// The messages of a `conversations.history` answer for a channel's history (S-20): the listed ones (`is_listed`), oldest first, none twice.
 fn history_rows(reply: &Value, team_id: &str, channel: &Channel) -> Vec<Raw> {
+    let page: &[Value] = reply["messages"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let mut rows = newest_first(
-        reply["messages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|m| raw_of(team_id, channel, m))
+        page.iter()
+            .filter_map(|m| {
+                let mut raw = raw_of(team_id, channel, m)?;
+                raw.broadcast = broadcast_of(m, page);
+                Some(raw)
+            })
             .collect(),
     );
     rows.reverse();
     rows
+}
+
+/// Whether the message `m` is a reply also sent to the channel (`thread_broadcast`, with a `thread_ts` other than its own `ts`), and the text of the thread's own message if it is known:
+/// the `root` the message carries, else the message of `page` (the messages of the same `conversations.history` answer) whose `ts` is the `thread_ts`. A blank text is no text.
+fn broadcast_of(m: &Value, page: &[Value]) -> Option<Broadcast> {
+    if m["subtype"] != "thread_broadcast" {
+        return None;
+    }
+    let ts = m["ts"].as_str()?;
+    let thread_ts = m["thread_ts"]
+        .as_str()
+        .filter(|t| *t != ts && valid_ts(t))?;
+    let text_of = |v: &Value| {
+        v["text"]
+            .as_str()
+            .filter(|t| !t.trim().is_empty())
+            .map(str::to_owned)
+    };
+    let parent_text = text_of(&m["root"])
+        .or_else(|| page.iter().find(|p| p["ts"] == thread_ts).and_then(text_of));
+    Some(Broadcast { parent_text })
 }
 
 /// `all` newest first by `ts` as a number, without a message listed twice (the same team, channel and `ts`).
@@ -3720,6 +3767,13 @@ fn timeline_message(
         unread,
         watch: None,
         unread_replies: None,
+        thread_reply: raw.broadcast.as_ref().map(|b| ThreadReply {
+            parent: b
+                .parent_text
+                .as_deref()
+                .map(|t| headline(t, name_of))
+                .filter(|h| !h.is_empty()),
+        }),
     }
 }
 
@@ -6580,6 +6634,7 @@ mod tests {
             text: "t".into(),
             reply_count: 0,
             has_files: false,
+            broadcast: None,
             source: Arc::new(Value::Null),
         }
     }
@@ -9210,6 +9265,120 @@ mod tests {
     }
 
     // Part 1: what a row of the list draws.
+
+    /// A reply also sent to the channel (`thread_broadcast`) in the thread `9.000001`, with `extra` merged in.
+    fn broadcast_reply(extra: Value) -> Value {
+        let mut m = json!({"type": "message", "subtype": "thread_broadcast", "ts": "13.000001", "thread_ts": "9.000001", "user": "U1", "text": "done"});
+        for (k, v) in extra.as_object().unwrap() {
+            m[k] = v.clone();
+        }
+        m
+    }
+
+    fn parent_of(m: &Value, page: &[Value]) -> Option<Option<String>> {
+        broadcast_of(m, page).map(|b| b.parent_text)
+    }
+
+    #[test]
+    fn a_broadcast_reply_takes_its_parents_text_from_its_root() {
+        let m =
+            broadcast_reply(json!({"root": {"ts": "9.000001", "text": "<!here> release *now*"}}));
+        // The page has the parent too: the root is taken first.
+        let page = [
+            m.clone(),
+            json!({"type": "message", "ts": "9.000001", "text": "from the page"}),
+        ];
+        assert_eq!(
+            parent_of(&m, &page),
+            Some(Some("<!here> release *now*".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_broadcast_reply_without_a_root_takes_its_parents_text_from_the_page() {
+        let m = broadcast_reply(json!({}));
+        let page = [
+            m.clone(),
+            json!({"type": "message", "ts": "10.000001", "text": "other"}),
+            json!({"type": "message", "ts": "9.000001", "text": "from the page"}),
+        ];
+        assert_eq!(parent_of(&m, &page), Some(Some("from the page".to_owned())));
+        // A root with a blank text is no root.
+        let blank = broadcast_reply(json!({"root": {"ts": "9.000001", "text": "  "}}));
+        assert_eq!(
+            parent_of(&blank, &page),
+            Some(Some("from the page".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_broadcast_reply_with_no_parent_text_anywhere_is_still_a_broadcast() {
+        let m = broadcast_reply(json!({}));
+        assert_eq!(parent_of(&m, std::slice::from_ref(&m)), Some(None));
+        let blank_parent = [
+            m.clone(),
+            json!({"type": "message", "ts": "9.000001", "text": " ", "files": [{"id": "F1"}]}),
+        ];
+        assert_eq!(parent_of(&m, &blank_parent), Some(None));
+    }
+
+    #[test]
+    fn only_a_thread_broadcast_with_another_thread_is_a_broadcast() {
+        let plain =
+            json!({"type": "message", "ts": "13.000001", "thread_ts": "9.000001", "text": "x"});
+        assert_eq!(broadcast_of(&plain, std::slice::from_ref(&plain)), None);
+        let own = broadcast_reply(json!({"thread_ts": "13.000001"}));
+        assert_eq!(broadcast_of(&own, &[]), None);
+        let none = broadcast_reply(json!({"thread_ts": null}));
+        assert_eq!(broadcast_of(&none, &[]), None);
+        let bad = broadcast_reply(json!({"thread_ts": "x"}));
+        assert_eq!(broadcast_of(&bad, &[]), None);
+    }
+
+    #[test]
+    fn a_history_row_carries_the_parent_of_a_broadcast_and_a_list_row_carries_none() {
+        let m = broadcast_reply(json!({}));
+        let parent = json!({"type": "message", "ts": "9.000001", "user": "U2", "text": "start"});
+        let reply = json!({"ok": true, "messages": [m.clone(), parent]});
+        let rows = history_rows(&reply, "T1", &channel("C1"));
+        assert_eq!(rows[0].broadcast, None);
+        assert_eq!(
+            rows[1].broadcast,
+            Some(Broadcast {
+                parent_text: Some("start".to_owned())
+            })
+        );
+        assert_eq!(raw_of("T1", &channel("C1"), &m).unwrap().broadcast, None);
+    }
+
+    #[test]
+    fn a_broadcast_row_draws_the_start_of_its_parent_as_one_line_of_plain_text() {
+        let w = workspace("T1", "https://one.slack.com/");
+        let name_of = |id: &str| (id == "U7").then(|| "Grace".to_owned());
+        let row_of = |b: Option<Broadcast>| {
+            let mut raw = raw_from("T1", &channel("C1"), &broadcast_reply(json!({}))).unwrap();
+            raw.broadcast = b;
+            timeline_message(&raw, &w, None, &name_of, false).thread_reply
+        };
+        let parent = |text: &str| {
+            Some(Broadcast {
+                parent_text: Some(text.to_owned()),
+            })
+        };
+        assert_eq!(
+            row_of(parent("<@U7> &lt;go&gt; :tada:\n\n  ship it")),
+            Some(ThreadReply {
+                parent: Some("@Grace <go> 🎉 ship it".to_owned())
+            })
+        );
+        assert_eq!(
+            row_of(Some(Broadcast { parent_text: None })),
+            Some(ThreadReply { parent: None })
+        );
+        // Nothing of the text is left once it is turned into plain text.
+        assert_eq!(row_of(parent("<>")), Some(ThreadReply { parent: None }));
+        assert_eq!(row_of(None), None);
+    }
 
     #[test]
     fn a_row_of_the_list_draws_what_the_thread_draws_with_its_styles_blocks_and_attachments() {

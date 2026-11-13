@@ -517,6 +517,7 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
   watch: null,
   unreadReplies: null,
   reactions: [],
+  threadReply: null,
   ...extra,
 });
 

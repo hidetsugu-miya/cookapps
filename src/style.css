@@ -1233,6 +1233,8 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .feed-day { display: flex; align-items: center; gap: 10px; margin: 10px 16px 4px; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .feed-day::before, .feed-day::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .feed-day span { padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; }
+/* A reply also sent to the channel (S-20): which thread it answered, one line above the text. */
+.feed-thread-reply { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); font-weight: normal; color: var(--muted); }
 .feed-thread-open { display: block; margin-top: 3px; padding: 0; border: 0; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); font-weight: bold; color: var(--accent); cursor: pointer; }
 .feed-thread-open:hover { text-decoration: underline; }
 .feed-meta b { font-weight: 600; }
