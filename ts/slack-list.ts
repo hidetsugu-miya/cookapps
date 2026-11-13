@@ -187,10 +187,12 @@ function chooseSection(next: SlackSection) {
   revealSlackList();
 }
 
-// The side menu chose a channel (S-20): its history fills the body, also when a thread is shown.
+// The side menu chose a channel (S-20): its history fills the body, also when a thread is shown. The channel is read at the press, as "既読にする" of S-15 reads it, where that changes something.
 function openChannel(teamId: string, team: string, c: SideWorkspace["channels"][number]) {
   openSlackChannel(teamId, team, c);
   drawSide();
+  const held = timeline?.unreadChannels.find((x) => x.teamId === teamId && x.channel === c.id);
+  if (held && readChanges(held)) readChannel(held);
 }
 
 // What a row's unread replies add to the badge (Rust's `share`).
@@ -448,6 +450,9 @@ async function readChannel(c: UnreadChannel) {
   load(true);
 }
 
+// Whether reading the channel changes something: the token of its workspace may write the position and a message is unread, or a thread of it has unread replies (S-14, which need no scope).
+const readChanges = (c: UnreadChannel) => (c.to !== null && canWrite(c.teamId)) || c.threads.length > 0;
+
 // The unread replies of the channel's threads count as read here: the rows go at once (one that is still unread itself, when the token cannot write the position, stays without them) and the badge drops by them.
 function seeChannelReplies(teamId: string, channel: string, threads: UnreadChannel["threads"]) {
   if (!timeline) return [];
@@ -677,7 +682,7 @@ function channelHead(first: TimelineMessage, info: UnreadChannel | undefined, pr
   dot.style.background = workspaceColor(first.team);
   head.append(mark, tag("b", "feed-chan-name", first.channelName), dot, tag("span", "feed-chan-team", first.team));
   if (info && info.messages > 0) head.append(tag("span", "feed-chan-count", `${info.messages} 件のメッセージ`));
-  if (info && ((info.to !== null && canWrite(first.teamId)) || info.threads.length > 0)) {
+  if (info && readChanges(info)) {
     const read = tag("button", "icon-btn feed-chan-read");
     read.type = "button";
     read.setAttribute("aria-label", "既読にする");

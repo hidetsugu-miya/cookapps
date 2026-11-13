@@ -1,6 +1,6 @@
 // The Slack screen's side menu (S-19): a column at the left of the list and of the thread, like the Orca screen's list of projects.
 // The two sections of the list ("未読メッセージ" with the number of unread messages, "ウォッチ"), and under them each workspace's joined channels by name, bold when unread.
-// A channel shows the button that keeps it off the list (S-9) while it is hovered or has the focus. Pressing a channel opens its history (S-20) and the channel stays pressed.
+// A channel shows the button that keeps it off the list (S-9) while it is hovered or has the focus. Pressing a channel opens its history (S-20), reads it as S-15 does, and the channel stays pressed.
 // A workspace's heading is a button that folds the workspace: the channels with no unread message go, the unread ones and the one whose history is shown stay.
 // Drawing only: what is held and what each press does belong to slack-list.ts. It is drawn again only when what it shows changes, and the focus stays.
 import type { SideWorkspace } from "./bindings/SideWorkspace";

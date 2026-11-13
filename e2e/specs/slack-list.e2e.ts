@@ -1784,6 +1784,8 @@ describe("slack list: the history of a channel (S-20)", () => {
   it("shows the history of the channel pressed: slack_channel_history is called with the workspace and the channel, the header is the channel and the workspace only, and the channel is the one pressed", async () => {
     const history = await openHistory();
     const mark = await mock("slack_mark_read", true);
+    // What Rust holds once the position is set: dev has nothing unread any more.
+    await mock("slack_timeline", timeline([unreadSample()[1]], { side: [sideWorkspace([sideChannel("C0123ABCD", "dev"), sideChannel("G2", "ops", { private: true }), sideChannel("C3", "announce")]), sideWorkspace([sideChannel("C9", "random")], { teamId: "T2", team: "Lakeside" })] }));
     await pressChannel();
     expect(await waitForCalls(history)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD" }]);
     await expect($("#slack-channel")).toBeDisplayed();
@@ -1797,11 +1799,81 @@ describe("slack list: the history of a channel (S-20)", () => {
     expect(days).toHaveLength(2);
     expect(days[1]).toBe("今日");
     expect(await textsOf("#sc-feed .feed-thread-open")).toEqual(["2 件の返信"]);
-    expect((await sideLayout()).slice(0, 2)).toEqual(["button:未読メッセージ 3", "button:ウォッチ"]);
     expect(await pressedChannels()).toEqual(["true", "false", "false", "false"]);
-    // Opening the history reads nothing: no position is set, and the unread numbers stay.
-    expect(await callsOf(mark)).toEqual([]);
-    expect((await sideLayout())[4]).toBe("unread:hash:dev 3");
+    // The press reads the channel (S-15): the position goes to its newest unread message and the unread numbers fall.
+    expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: slackTs(3) }]);
+    await browser.waitUntil(async () => (await sideLayout())[4] === "read:hash:dev");
+    expect((await sideLayout()).slice(0, 2)).toEqual(["button:未読メッセージ 1", "button:ウォッチ"]);
+  });
+
+  describe("reading the channel at the press (S-19)", () => {
+    const lackingWrite = [{ teamId: workspace.teamId, team: workspace.team, scopes: ["channels:write"] }];
+
+    it("calls slack_mark_read with the newest unread message of the channel and slack_thread_seen for each thread with unread replies, and opens the history", async () => {
+      const message = withReplies();
+      await openList(timeline([...unreadSample(), message], { side: sideSample() }));
+      await waitForCount("#slack-feed .feed-row", 4);
+      const history = await mock("slack_channel_history", historySample());
+      const mark = await mock("slack_mark_read", true);
+      const seen = await mock("slack_thread_seen", true);
+      await pressChannel();
+      expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: slackTs(3) }]);
+      expect(await waitForCalls(seen)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: message.ts, latestTs: replyTwo }]);
+      expect(await waitForCalls(history)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD" }]);
+      await expect($("#slack-channel")).toBeDisplayed();
+      await waitForCount("#sc-feed .feed-row", 3);
+    });
+
+    it("does not call slack_mark_read when the token cannot write the position, and still calls slack_thread_seen for the unread replies", async () => {
+      const message = withReplies();
+      await openList(timeline([...unreadSample(), message], { side: sideSample(), missing: lackingWrite }));
+      await waitForCount("#slack-feed .feed-row", 4);
+      const history = await mock("slack_channel_history", historySample());
+      const mark = await mock("slack_mark_read", true);
+      const seen = await mock("slack_thread_seen", true);
+      await pressChannel();
+      expect(await waitForCalls(seen)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: message.ts, latestTs: replyTwo }]);
+      await waitForCalls(history);
+      expect(await callsOf(mark)).toEqual([]);
+      await expect($("#slack-channel")).toBeDisplayed();
+    });
+
+    it("calls nothing to read when the token cannot write the position and no thread has unread replies, and opens the history", async () => {
+      await openList(timeline(unreadSample(), { side: sideSample(), missing: lackingWrite }));
+      await waitForCount("#slack-feed .feed-row", 3);
+      const history = await mock("slack_channel_history", historySample());
+      const mark = await mock("slack_mark_read", true);
+      const seen = await mock("slack_thread_seen", true);
+      await pressChannel();
+      await waitForCalls(history);
+      expect(await callsOf(mark)).toEqual([]);
+      expect(await callsOf(seen)).toEqual([]);
+      await expect($("#slack-channel")).toBeDisplayed();
+    });
+
+    it("calls nothing to read for a channel with nothing unread, and opens the history", async () => {
+      await openList(timeline(unreadSample(), { side: sideSample() }));
+      await waitForCount("#slack-feed .feed-row", 3);
+      const history = await mock("slack_channel_history", historySample());
+      const mark = await mock("slack_mark_read", true);
+      const seen = await mock("slack_thread_seen", true);
+      await pressChannel("C3");
+      expect(await waitForCalls(history)).toEqual([{ teamId: workspace.teamId, channel: "C3" }]);
+      expect(await callsOf(mark)).toEqual([]);
+      expect(await callsOf(seen)).toEqual([]);
+      await expect($("#slack-channel")).toBeDisplayed();
+    });
+
+    it("shows the error of the read when slack_mark_read fails, and opens the history all the same", async () => {
+      await openList(timeline(unreadSample(), { side: sideSample() }));
+      await waitForCount("#slack-feed .feed-row", 3);
+      const history = await mock("slack_channel_history", historySample());
+      await mock("slack_mark_read", rejects("失敗しました"));
+      await pressChannel();
+      await waitForCalls(history);
+      await expect($("#error")).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
+      await expect($("#slack-channel")).toBeDisplayed();
+    });
   });
 
   it("draws a private channel's header with a lock", async () => {
@@ -1825,11 +1897,13 @@ describe("slack list: the history of a channel (S-20)", () => {
     expect(gap.left).toBeLessThan(2);
   });
 
-  it("opens the thread of a message with the press, and the back button returns to the history where it was, reading nothing", async () => {
+  it("opens the thread of a message with the press, and the back button returns to the history where it was, reading nothing more", async () => {
     await openHistory([...many(40).reverse(), ...historySample()]);
     const mark = await mock("slack_mark_read", true);
     const thread = await mock("slack_thread", slackThread([threadMessage(slackTs(20), "Alice Example", "first")]));
     await pressChannel();
+    // Only the press on the channel read it.
+    await waitForCalls(mark);
     await waitForCount("#sc-feed .feed-row", 43);
     await browser.execute(() => (document.getElementById("sc-feed")!.scrollTop = 200));
     await browser.waitUntil(async () => (await historyScroll()) === 200);
@@ -1844,7 +1918,7 @@ describe("slack list: the history of a channel (S-20)", () => {
     await expect($("#slack-channel")).toBeDisplayed();
     await expect($("#slack-list")).not.toBeDisplayed();
     expect(await historyScroll()).toBe(200);
-    expect(await callsOf(mark)).toEqual([]);
+    expect(await callsOf(mark)).toHaveLength(1);
   });
 
   it('opens the thread with "N 件の返信", too', async () => {
@@ -1962,7 +2036,8 @@ describe("slack list: the history of a channel (S-20)", () => {
     await showWatch();
     await expect($("#slack-list")).toBeDisplayed();
     await expect($("#slack-channel")).not.toBeDisplayed();
-    expect((await sideLayout()).slice(0, 2)).toEqual(["button:未読メッセージ 3", "button:*ウォッチ"]);
+    // The press read the channel; the list made again from Rust's cache (which this spec does not change) has the unread number back.
+    await browser.waitUntil(async () => (await sideLayout()).slice(0, 2).join() === ["button:未読メッセージ 3", "button:*ウォッチ"].join());
     expect(await pressedChannels()).toEqual(["false", "false", "false", "false"]);
   });
 
