@@ -327,6 +327,7 @@ pub fn run() {
             orca_files::orca_switch_branch,
             orca_files::orca_git_history,
             orca_files::orca_commit_files,
+            orca_files::orca_commit_file_diff,
             orca_files::editor_settings,
             orca_files::editor_settings_set,
             fonts::font_settings,

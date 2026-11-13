@@ -10,6 +10,7 @@
 //! The branches of a worktree (`orca_local_branches`, `git.localBranches`) and the remote branches found by a text (`orca_remote_branches`, `repo.searchRefs` with `namespace` `remote`) are read here too, for the branch button of the file pane.
 //! The branch of a worktree is switched here too (`orca_switch_branch`, `git.switchBranch`): a local or a remote branch, never a new one, and Orca's refusal is shown in its own words.
 //! The commits of a worktree (`orca_git_history`, `git.history`: HEAD first, the newest first, read `limit` at a time with `skip`) and the files a commit changed (`orca_commit_files`, `git.commitCompare`) are read here too, for the history of the file pane. Both only read; a subject, an author and a path are held in memory only and are in no log line. They were tried on this machine's Orca 1.4.258 over its unix socket (a saved environment was not tried).
+//! The difference of one file of a commit (`orca_commit_file_diff`, `git.commitDiff`: the text at the first parent and at the commit, in the shape of `git.diff`) is drawn as A-24's diff is (`parse_diff`). The text is held in memory only and is in no log line.
 //! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
 
 use std::{
@@ -1187,6 +1188,41 @@ async fn commit_files(
     parse_commit_files(&answer)
 }
 
+/// Asks Orca for one file of a commit: its text at the first parent (`parent_id`; none for the first commit, which is compared with nothing) and at the commit. `old_relative` is the path the file had at the parent, for a file that was renamed.
+async fn commit_diff(
+    rpc: &mut impl Rpc,
+    path: &str,
+    commit_id: &str,
+    parent_id: Option<&str>,
+    relative: &str,
+    old_relative: Option<&str>,
+) -> Result<Value, String> {
+    let mut params = json!({"commitOid": commit_id, "filePath": relative});
+    if let Some(parent_id) = parent_id {
+        params["parentOid"] = json!(parent_id);
+    }
+    if let Some(old_relative) = old_relative {
+        params["oldPath"] = json!(old_relative);
+    }
+    rpc.call("git.commitDiff", worktree_params(path, None, params))
+        .await
+        .map_err(branch_reason)
+}
+
+/// What `orca_commit_file_diff` is asked for: full ids (the parent only when there is one) and paths inside the worktree.
+fn check_commit_diff(
+    commit_id: &str,
+    parent_id: Option<&str>,
+    relative: &str,
+    old_relative: Option<&str>,
+) -> Result<(), String> {
+    if !is_object_id(commit_id) || parent_id.is_some_and(|id| !is_object_id(id)) {
+        return Err("コミットの ID が正しくありません".into());
+    }
+    check_relative(relative, false)?;
+    old_relative.map_or(Ok(()), |old| check_relative(old, false))
+}
+
 // ---- the commands ----
 
 /// An SSH host has no file calls (its `hostId` is `ssh:{id}`), as A-10 found.
@@ -1401,6 +1437,41 @@ pub async fn orca_commit_files(
         commit_files(&mut connection, &path, &commit_id).await
     };
     forgetting(asked.await, &path, environment.as_deref())
+}
+
+/// The difference of the file `relative` in the commit `commit_id` (a full id) from the commit `parent_id` (its first parent, a full id; none for the first commit, which is compared with nothing), of the worktree at `path`, as the diff tab draws it (A-24, the answer of `orca_file_diff`). `old_relative` is the path the file had at the parent, for a file that was renamed. A file that is not in the parent is compared with nothing, and so is one that the commit deleted. A worktree that is not one of the target's list is refused as for the list. The comparison runs off the async threads, as in `orca_file_diff`.
+#[tauri::command]
+pub async fn orca_commit_file_diff(
+    path: String,
+    commit_id: String,
+    parent_id: Option<String>,
+    relative: String,
+    old_relative: Option<String>,
+    environment: Option<String>,
+) -> Result<OrcaFileDiff, String> {
+    check_commit_diff(
+        &commit_id,
+        parent_id.as_deref(),
+        &relative,
+        old_relative.as_deref(),
+    )?;
+    cached_host_of(&path, environment.as_deref()).await?;
+    let asked = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        commit_diff(
+            &mut connection,
+            &path,
+            &commit_id,
+            parent_id.as_deref(),
+            &relative,
+            old_relative.as_deref(),
+        )
+        .await
+    };
+    let answer = forgetting(asked.await, &path, environment.as_deref())?;
+    tokio::task::spawn_blocking(move || parse_diff(&answer, &relative))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Saves the text of the editor over the file it was read from, if the disk still holds what was read (`signature`), and answers what happened (A-18). It is not tried again: a failure carries its message.
@@ -1845,6 +1916,124 @@ mod tests {
             commit_files(&mut orca, "/work/a", ID_A).await.unwrap_err(),
             "Orca がエラーを返しました（invalid_argument）"
         );
+    }
+
+    #[tokio::test]
+    async fn the_diff_of_a_commit_file_is_asked_with_the_parent_and_the_old_path() {
+        let answer = json!({"kind": "text", "originalContent": "a\n", "modifiedContent": "b\n"});
+        let mut orca = fake(vec![("git.commitDiff", Ok(answer.clone()))]);
+        let got = commit_diff(&mut orca, "/work/a", ID_A, Some(ID_B), "n.rs", Some("o.rs"))
+            .await
+            .unwrap();
+        assert_eq!(got, answer);
+        assert_eq!(
+            orca.calls,
+            [(
+                "git.commitDiff".to_owned(),
+                json!({"worktree": "path:/work/a", "commitOid": ID_A, "parentOid": ID_B, "filePath": "n.rs", "oldPath": "o.rs"})
+            )]
+        );
+        // The first commit has no parent, and a file that was not renamed has no old path: neither is sent.
+        let mut orca = fake(vec![("git.commitDiff", Ok(answer))]);
+        commit_diff(&mut orca, "/work/a", ID_A, None, "n.rs", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            orca.calls[0].1,
+            json!({"worktree": "path:/work/a", "commitOid": ID_A, "filePath": "n.rs"})
+        );
+        let mut orca = fake(vec![(
+            "git.commitDiff",
+            Err((
+                "Orca がエラーを返しました（selector_not_found）",
+                "selector_not_found",
+            )),
+        )]);
+        assert_eq!(
+            commit_diff(&mut orca, "/work/a", ID_A, None, "n.rs", None)
+                .await
+                .unwrap_err(),
+            "worktree が見つかりません"
+        );
+    }
+
+    #[test]
+    fn the_diff_of_a_commit_file_is_drawn_as_a_file_diff_is() {
+        let changed = parse_diff(
+            &json!({"kind": "text", "originalContent": "a\nb\n", "modifiedContent": "a\nc\n", "originalIsBinary": false, "modifiedIsBinary": false}),
+            "src/a.rs",
+        )
+        .unwrap();
+        assert_eq!(changed.old_lines, vec!["a", "b"]);
+        assert_eq!(changed.new_lines, vec!["a", "c"]);
+        assert_eq!(changed.changes.len(), 1);
+        assert_eq!(changed.language, "rust");
+        // A file the commit added is compared with nothing (no parent, or not in it), and one it deleted has no text at the commit.
+        let added = parse_diff(
+            &json!({"kind": "text", "originalContent": "", "modifiedContent": "x\n"}),
+            "a.rs",
+        )
+        .unwrap();
+        assert!(added.old_lines.is_empty() && added.new_lines == ["x"]);
+        let deleted = parse_diff(
+            &json!({"kind": "text", "originalContent": "x\n", "modifiedContent": ""}),
+            "a.rs",
+        )
+        .unwrap();
+        assert!(deleted.new_lines.is_empty() && deleted.old_lines == ["x"]);
+        // What Orca marks for a binary file, one it cannot draw, and a side over 384 KiB is refused as in A-24.
+        let binary = json!({"kind": "binary", "originalContent": "", "modifiedContent": "", "originalIsBinary": false, "modifiedIsBinary": true});
+        assert_eq!(
+            parse_diff(&binary, "a.bin").unwrap_err(),
+            "バイナリのファイルの差分は表示できません"
+        );
+        let limited = json!({"kind": "text", "originalContent": "", "modifiedContent": "", "originalIsBinary": false, "modifiedIsBinary": false, "largeDiffRenderLimit": {"limited": true}});
+        assert_eq!(parse_diff(&limited, "a").unwrap_err(), DIFF_TOO_LARGE);
+        let big = json!({"originalContent": "a".repeat(MAX_TEXT + 1), "modifiedContent": ""});
+        assert_eq!(
+            parse_diff(&big, "a").unwrap_err(),
+            "384 KiB を超えるファイルの差分は表示できません"
+        );
+        let not_utf8 = json!({"originalContent": "a\u{FFFD}", "modifiedContent": ""});
+        assert_eq!(
+            parse_diff(&not_utf8, "a").unwrap_err(),
+            "UTF-8 ではないファイルの差分は表示できません"
+        );
+    }
+
+    #[test]
+    fn a_commit_file_diff_is_asked_only_for_full_ids_and_paths_in_the_worktree() {
+        assert!(check_commit_diff(ID_A, Some(ID_B), "a/b.rs", Some("c.rs")).is_ok());
+        assert!(check_commit_diff(ID_A, None, "a.rs", None).is_ok());
+        let id = "コミットの ID が正しくありません";
+        for (commit, parent) in [
+            ("19ea5e7", None),
+            ("", None),
+            ("HEAD", None),
+            (ID_A, Some("cfabd25")),
+            (ID_A, Some("")),
+            (ID_A, Some("-x")),
+        ] {
+            assert_eq!(
+                check_commit_diff(commit, parent, "a.rs", None).unwrap_err(),
+                id,
+                "{commit} {parent:?}"
+            );
+        }
+        for (relative, old) in [
+            ("", None),
+            ("../a", None),
+            ("/a", None),
+            ("a\nb", None),
+            ("a.rs", Some("")),
+            ("a.rs", Some("../a")),
+            ("a.rs", Some("/etc/passwd")),
+        ] {
+            assert!(
+                check_commit_diff(ID_A, None, relative, old).is_err(),
+                "{relative:?} {old:?}"
+            );
+        }
     }
 
     #[test]
