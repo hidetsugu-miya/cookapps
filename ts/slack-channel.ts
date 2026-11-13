@@ -38,6 +38,17 @@ const drafts = new Map<string, string>();
 let posting: string | null = null;
 // The channel whose text the field holds now (null: none, the field is empty).
 let shownKey: string | null = null;
+// True while the field holds an edit that `drafts` has not taken yet: typing only marks it, and the Markdown is taken (`syncDraft`) when it is needed.
+let dirty = false;
+
+// Takes the field's Markdown into the draft of the channel whose text it holds (a blank text is not kept).
+function syncDraft() {
+  if (!dirty) return;
+  dirty = false;
+  if (!shownKey || !editor.ready()) return;
+  if (editor.blank()) drafts.delete(shownKey);
+  else drafts.set(shownKey, editor.markdown());
+}
 
 const feed = () => $("sc-feed");
 const editor = createSlackEditor({
@@ -46,10 +57,9 @@ const editor = createSlackEditor({
   onChange: () => {
     const key = selectedChannel();
     if (!key) return;
-    if (editor.blank()) drafts.delete(key);
-    else drafts.set(key, editor.markdown());
+    dirty = true;
     $("sc-error").hidden = true;
-    drawReply();
+    editor.setSendDisabled(posting !== null || editor.blank());
   },
   onSubmit: () => post(),
 });
@@ -68,6 +78,7 @@ export function slackChannelForClaude() {
 export function putSlackDraft(draft: string) {
   const key = selectedChannel();
   if (!key || $("slack-channel").hidden || posting === key) return;
+  syncDraft();
   const have = drafts.get(key) ?? "";
   const next = `${have ? `${have.trimEnd()}\n\n` : ""}${draft.trim()}\n`;
   if (editor.ready()) {
@@ -92,6 +103,7 @@ export function closeSlackChannel() {
 // Draws the field and the arrow for the chosen channel: its own text, off while its post is on its way, and the arrow off while any post is (a post is never sent twice) or the text is blank.
 // The field is put right only when another channel's text is in it, or after a post emptied the draft; typing never rewrites it.
 function drawReply() {
+  syncDraft();
   const key = selectedChannel();
   const text = (key && drafts.get(key)) || "";
   if (editor.ready() && (shownKey !== key || (!text && !editor.blank()))) {
@@ -115,6 +127,7 @@ async function post() {
   if (!chosen || posting !== null) return;
   const { teamId, channel, name } = chosen;
   const key = `${teamId}/${channel}`;
+  syncDraft();
   const text = drafts.get(key) ?? "";
   if (!text.trim()) return;
   $("sc-error").hidden = true;

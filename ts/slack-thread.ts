@@ -84,15 +84,32 @@ const FETCH_BATCH = 50;
 let shownKey: string | null = null;
 const draft = () => (current ? drafts.get(current.key) : undefined);
 const hasText = () => !!draft()?.text.trim();
+// True while the field holds an edit that the draft has not taken yet: typing only marks it, and the Markdown is taken (`syncDraft`) when it is needed (a read of the text for Claude, a switch of thread, a reply).
+let dirty = false;
+let staleTimer = 0;
+// How long after the last key the pane of Claude is told that the text changed (its old proposals can no longer be applied).
+const STALE_DELAY = 150;
+
+// Takes the field's Markdown into the draft of the thread whose text it holds.
+function syncDraft() {
+  if (!dirty) return;
+  dirty = false;
+  const d = shownKey ? drafts.get(shownKey) : undefined;
+  if (d && editor.ready()) d.text = editor.blank() ? "" : editor.markdown();
+}
 
 const chat = createChat({
   prefix: "reply",
   loginNote: "設定の Claude タブで接続すると、Claude に相談できます",
   // The reply field's text, which may be blank: Claude can write a reply from the thread. There is none to ask about while no thread is open.
-  text: () => draft()?.text ?? null,
+  text: () => {
+    syncDraft();
+    return draft()?.text ?? null;
+  },
   apply: (text) => {
     draft()!.text = text;
     editor.set(text);
+    dirty = false;
     refreshSlackThread();
   },
   // The thread goes as the screen shows it (the sender's name, the time and the text), and whether its read stopped short; while it is not read, none goes.
@@ -109,11 +126,12 @@ const editor = createSlackEditor({
   label: "スレッドに返信",
   sendLabel: "返信",
   onChange: () => {
-    const d = draft();
-    if (!d) return;
-    d.text = editor.blank() ? "" : editor.markdown();
+    if (!draft()) return;
+    dirty = true;
     $("st-error").hidden = true;
-    refreshSlackThread();
+    editor.setSendDisabled(posting || editor.blank());
+    clearTimeout(staleTimer);
+    staleTimer = window.setTimeout(refreshSlackThread, STALE_DELAY);
   },
   onSubmit: () => reply(),
 });
@@ -121,6 +139,7 @@ const editor = createSlackEditor({
 // Draws what follows from the state: the field and the arrow, whether Claude can be asked, and whether a Todo can be made.
 // The field is put right only when another thread's text is in it, or after a reply emptied the draft; typing never rewrites it.
 export function refreshSlackThread() {
+  syncDraft();
   const text = draft()?.text ?? "";
   const key = current?.key ?? null;
   if (editor.ready() && (shownKey !== key || (!text && !editor.blank()))) {
@@ -413,6 +432,7 @@ export function openSlackThread(m: TimelineMessage) {
 
 async function reply() {
   const open = current;
+  syncDraft();
   const d = draft();
   if (!open || !d || posting || !d.text.trim()) return;
   $("st-error").hidden = true;
@@ -429,6 +449,7 @@ async function reply() {
     return toast(`スレッドに返信できませんでした: ${e}`);
   }
   posting = false;
+  dirty = false;
   d.text = "";
   if (isOpen(open) && !$("slack-thread").hidden) {
     note("スレッドに返信しました");
