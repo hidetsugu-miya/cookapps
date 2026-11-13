@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.67.0
+
+S-21, S-6: the field under a channel's history and the reply field of a thread are rich fields, as the editor of A-26 is (#456, #457). A toolbar at the top of the frame makes the selection bold, italic or struck through, a link, a numbered or bulleted list, a quote, code or a code block. The text button 「投稿する」 or 「返信する」 is gone: a round arrow at the right end of the frame, or Cmd+Enter, posts, and Enter is a line break. The text is posted as Markdown and turned into Slack's notation when it is sent; only a link to an http, https or mailto address stays a link, so a link cannot notify `@channel` or a person.
+
+S-24, A-2: the Slack screen has a Claude pane on its right, in the unread list, the watch and a channel's history (#458, #459). Claude answers a request in short, and while a channel's history is shown, the recent messages of that channel are sent with the request. The pane has its own model and effort, 「Slack の相談」 (Sonnet and medium at first), so the settings now choose them for eight purposes. Claude cannot post and has no tool. While a thread is open, the thread's own Claude pane is shown instead.
+
+S-24: when the request asks for the text of a post, the answer has a draft card under the reply (#460). In a channel's history, 「投稿欄に入れる」 on the card puts the draft into the post field of that channel, after any text already there, and posts nothing; the arrow of the field posts it. In the unread list and the watch the card shows the text alone.
+
+A-27: the file pane of the Orca screen has two icons at the top, 「ファイル」 and 「履歴」 (#536, #537, #538). The history lists the commits of the worktree, the newest first, and reads more as the list is scrolled to its end. Pressing a commit shows the files it changed, with how each changed and the numbers of lines added and removed. A double press on a file opens its diff, the file at the parent on the left and at the commit on the right, in a tab like the diff of A-24.
+
 ## v0.66.0
 
 A-26: a Markdown file opened in the editor of the Orca screen opens in a rich view, with its headings, lists, tables, code and task lists drawn as a document (#384, #381, #382). Two buttons at the right of the editor's heading switch between the source (`<>`) and the rich view (the pencil). The rich view can be edited, and it is saved automatically as typing in the source is: only the lines that changed are written into the file, so every other line, the front matter included, stays as it was. A file whose notation the rich view cannot keep opens in the source, and its rich view is read only.
