@@ -136,13 +136,13 @@ const invoiceThread = (): ThreadDetail => ({
 type Spec = [repo: string, branch: string, line: string, extra: Partial<OrcaRow> & { minutes?: number }];
 const path = (repo: string, branch: string) => `/work/${repo}/${branch.replace(/\//g, "-")}`;
 const specs: Spec[] = [
-  ["billing-api", "fix/invoice-discount", "請求書の金額の差を直して", { group: "waiting", minutes: 3, activity: "プルリクエストを開いてよいですか" }],
-  ["shop-web", "fix/login-redirect", "ログイン後の戻り先を直して", { group: "waiting", minutes: 8, activity: "どちらの画面に戻すか確認させてください" }],
-  ["billing-api", "feat/csv-export", "請求データを CSV で出力したい", { minutes: 12, activity: "テストを実行しています" }],
-  ["shop-web", "feat/cart-coupon", "カートでクーポンを使いたい", { minutes: 25, activity: "カート画面を編集しています" }],
-  ["mobile-api", "fix/push-retry", "通知の再送が止まる件を調べて", { minutes: 6, activity: "ログを読んでいます" }],
-  ["admin-console", "feat/date-filter", "一覧を日付で絞り込みたい", { group: "done", minutes: 40, activity: "プルリクエストを開きました" }],
-  ["design-docs", "docs/release-steps", "リリース手順書を整えて", { group: "done", minutes: 95, activity: "手順書を更新しました" }],
+  ["billing-api", "fix/invoice-discount", "請求書の金額の差を直して", { group: "waiting", minutes: 3 }],
+  ["shop-web", "fix/login-redirect", "ログイン後の戻り先を直して", { group: "waiting", minutes: 8 }],
+  ["billing-api", "feat/csv-export", "請求データを CSV で出力したい", { minutes: 12 }],
+  ["shop-web", "feat/cart-coupon", "カートでクーポンを使いたい", { minutes: 25 }],
+  ["mobile-api", "fix/push-retry", "通知の再送が止まる件を調べて", { minutes: 6 }],
+  ["admin-console", "feat/date-filter", "一覧を日付で絞り込みたい", { group: "done", minutes: 40 }],
+  ["design-docs", "docs/release-steps", "リリース手順書を整えて", { group: "done", minutes: 95 }],
 ];
 const rows = () =>
   specs.map(([repo, branch, line, extra], i) => orcaRow(repo, branch, line, { handle: `term_${i}`, paneKey: `tab_${i}:leaf_1`, path: path(repo, branch), atMs: minutesAgo(extra.minutes ?? 2) - 5_000, ...extra }));
