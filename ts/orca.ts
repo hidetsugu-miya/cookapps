@@ -2,11 +2,12 @@
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
 // A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history.
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
-// A saved environment streams the list (`orca_stream_open`: Orca sends each change) and nothing reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
+// A saved environment streams the list (`orca_stream_open`: Orca sends each change, and Rust reads the worktrees again every 10 seconds and after a switch of the branch) and nothing here reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
 // and no more once the `orca` command was found missing (the reload button reads again). Only the first read, the screen being shown, the reload button, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
 // A search field above the projects (A-19) narrows them by name; ⌘J moves to it.
+// While the screen and the file pane are shown, the clock also reads again, every 10 seconds, what the file pane shows and the files and differences that the panes show (`rereadFiles`; A-18, A-24, A-27), without a word.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
@@ -25,8 +26,8 @@ import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
-import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
-import { closeFile, dirtyIds, discardFiles, filesOf, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
+import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
+import { closeFile, dirtyIds, discardFiles, filesOf, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
 import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
@@ -67,6 +68,8 @@ let switching = false;
 let loadSeq = 0;
 let loading = false;
 let lastTry = 0;
+// When the clock last read the files again (`rereadFiles`), or last found the screen, the window or the file pane hidden: the next read is one period after it.
+let filesAt = Date.now();
 // Whether the list of projects is open (A-23): held in memory only, so the screen is open again when the app starts.
 let listOpen = true;
 // The text of the search field (A-19): the list shows the projects and SSH hosts whose name holds it (blank: all of them), and the row the keys are on is `cursor` (a key; one the list does not show leaves the first).
@@ -553,7 +556,8 @@ function syncEditor(tabs: Tab[]) {
     const host = editorHostOf(pane.id);
     if (tab?.kind === "file" && host) placements.push({ id: tab.id, host });
   }
-  showEditors(placements);
+  // A file that comes back into a pane is read again while the file pane is shown (A-18).
+  showEditors(placements, filesShown());
 }
 
 // Shows the difference of the diff tab selected in each pane while the screen is shown (in the host of the editor, which a pane shows one of).
@@ -565,7 +569,7 @@ function syncDiff(tabs: Tab[]) {
     const host = editorHostOf(pane.id);
     if (tab?.kind === "diff" && host) placements.push({ id: tab.id, host });
   }
-  showDiffs(placements);
+  showDiffs(placements, filesShown());
 }
 
 // The id of the SSH host of the selected row, when this machine's Orca lists it: only such a host has a scratchpad (A-30), because Rust finds the host in that list. The row of a host that only the target (a saved environment) lists gives none.
@@ -759,9 +763,27 @@ async function load(scope: Scope, force = false) {
   draw();
 }
 
+// Reads again, without a word, the files and the differences that the panes show now (the clock, and a branch of the worktree that changed).
+function rereadTabs() {
+  refreshEditors();
+  refreshDiffs();
+}
+
+// The clock's read of the files (A-18, A-24, A-27): what the file pane shows (the tree, or the history) and the tabs of files and differences that the panes show. Each skips what is still being read.
+function rereadFiles() {
+  refreshFiles(true);
+  rereadTabs();
+}
+
 function refresh() {
   // The terminals are shown only while the screen is shown.
   if (!shown()) syncTerminal();
+  // The files are read again every period while the screen, the window and the file pane are shown, whatever the list does (streamed or being read).
+  if (!shown() || document.hidden || !filesShown()) filesAt = Date.now();
+  else if (Date.now() - filesAt >= shownMs()) {
+    filesAt = Date.now();
+    rereadFiles();
+  }
   // The wait for a new tab ends after its 30 seconds, also while a streamed list is not read by the clock.
   if (startWaits() && Date.now() > started!.until) {
     started = null;
@@ -1172,7 +1194,14 @@ export function initOrca() {
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError });
-  initOrcaFiles({ open: openFile, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw, switched: () => void refreshOrca(true), deleted: (here, relative, folder) => discardFiles(here.target, here.project, here.path, relative, folder) && draw(),
+  initOrcaFiles({ open: openFile, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
+    // A-25: after the app's own switch the tabs shown are read again with the tree, and the list (a streamed one is read again by Rust, which the switch told).
+    switched: () => {
+      rereadTabs();
+      void refreshOrca(true);
+    },
+    moved: rereadTabs,
+    deleted: (here, relative, folder) => discardFiles(here.target, here.project, here.path, relative, folder) && draw(),
     // A-18: the tabs of the files that a move takes along wait with their saves, and take the new path (and the new name of the tab) when it is done.
     moving: async (here, relative) => {
       const release = await holdFiles(here.target, here.project, here.path, relative);
@@ -1187,7 +1216,7 @@ export function initOrca() {
     drawBadge();
     refresh();
   });
-  // The files and the history of the file pane are read again when the app is activated (A-18, A-27), as nothing watches the disk.
+  // The files and the history of the file pane are read again when the app is activated (A-18, A-27), and by the clock (`refresh`), as nothing watches the disk.
   window.addEventListener("focus", () => shown() && refreshFiles());
   initSearch();
   const toggle = listToggle("プロジェクト一覧", toggleList);

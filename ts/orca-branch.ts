@@ -20,16 +20,18 @@ export interface BranchContext {
 // How long the typing must stop before the remote branches are asked for again.
 const SEARCH_MS = 250;
 
-// Switches the worktree. A refusal is shown as the error; a switch that worked with a warning says so; the list of the screen is read again after a switch.
-async function switchTo(here: BranchContext, kind: "local" | "remote", name: string, switched: () => void) {
+// Switches the worktree. A refusal is shown as the error; a switch that worked with a warning says so; the list of the screen is read again after a switch (`switched` is told the branch the worktree is on now).
+async function switchTo(here: BranchContext, kind: "local" | "remote", name: string, switched: (branch: string) => void) {
+  let branch: string;
   try {
     const done = await invoke("orca_switch_branch", { path: here.path, kind, name, environment: here.target });
     if (done.warning !== null) toast(`${done.branch} に切り替えました: ${done.warning}`);
+    branch = done.branch;
   } catch (e) {
     showError(e);
     return;
   }
-  switched();
+  switched(branch);
 }
 
 // The list that was opened last; it is open while it is in the page (another menu, a pick or a click elsewhere takes it out).
@@ -70,7 +72,7 @@ export function closeBranchDialog() {
 }
 
 // Opens the list under `anchor`. A pick closes it; the branch the worktree is on only closes it.
-export function openBranchDialog(anchor: Element, here: BranchContext, switched: () => void) {
+export function openBranchDialog(anchor: Element, here: BranchContext, switched: (branch: string) => void) {
   openBranchList(anchor, here, {
     current: (_kind, _name, checkedOut) => checkedOut,
     refuseInUse: true,

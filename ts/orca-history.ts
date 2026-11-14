@@ -1,8 +1,9 @@
 // The history of the file pane of the Orca screen (A-27): the commits of the worktree the pane shows, from HEAD, the newest first, with the files of the chosen commit under them. Rust reads the commits (`orca_git_history`) and the files of one (`orca_commit_files`); this module draws them, reads the next commits when the list is scrolled to its end, and gives the screen a file to open as a diff tab (A-24) on a double press.
-// The list belongs to one worktree of one target: another worktree gives a new list (nothing is kept of the old one, and an answer that comes late for the old one is dropped). It is read only while the history is the part of the pane that is shown, and a return of the window's focus (`refreshHistory`) and a switch of the branch read it again from the start. Nothing is kept outside memory.
+// The list belongs to one worktree of one target: another worktree gives a new list (nothing is kept of the old one, and an answer that comes late for the old one is dropped). It is read only while the history is the part of the pane that is shown, and a return of the window's focus (`refreshHistory`) and a switch of the branch read it again from the start. While it is shown the clock of the Orca screen asks for the first commits again (`checkHistory`), and the list is drawn again only when they are not the ones it holds. Nothing is kept outside memory.
 import type { OrcaCommit } from "./bindings/OrcaCommit";
 import type { OrcaCommitFile } from "./bindings/OrcaCommitFile";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
+import type { OrcaCommitList } from "./bindings/OrcaCommitList";
 import { $, tag } from "./dom.js";
 import { formatDate } from "./format.js";
 import { invoke } from "./ipc.js";
@@ -39,6 +40,8 @@ let historyToken: string | null = null;
 let hasMore = false;
 let error: string | null = null;
 let busy = false;
+// Whether the clock's read of the first commits is on its way (`checkHistory`).
+let checking = false;
 // Whether the first commits were asked for (a read again from the start asks again).
 let started = false;
 let selected: string | null = null;
@@ -259,6 +262,38 @@ export function reloadHistory() {
 // The same at the return of the window's focus, unless a read is on its way.
 export function refreshHistory() {
   if (!busy) reloadHistory();
+}
+
+// The clock's read (A-27): asks for the first commits again, from HEAD as it is now, and when they are not the ones the list begins with (a new commit, another branch, or a list that could not be read before) takes them as the new list. The same commits draw nothing, so the scroll and the chosen commit stay; a chosen commit that the new list still holds stays chosen with its files.
+// A read that fails says nothing and keeps what is shown. Nothing is asked while the history is not shown, before its first read, or while a read is on its way.
+export async function checkHistory() {
+  const here = context;
+  if (!active || here === null || busy || checking || !started) return;
+  const mine = generation;
+  checking = true;
+  let page: OrcaCommitList;
+  try {
+    page = await invoke("orca_git_history", { path: here.path, limit: PAGE, skip: 0, historyToken: null, environment: here.target });
+  } catch {
+    return;
+  } finally {
+    checking = false;
+  }
+  if (mine !== generation || page.historyChanged) return;
+  const ids = page.commits.map((c) => c.id);
+  const same = error === null && ids.length <= commits.length && ids.every((id, i) => commits[i].id === id) && (page.hasMore || ids.length === commits.length);
+  if (same) return;
+  // The files of a commit that are still being read would never come for the new list.
+  const kept = selected !== null && ids.includes(selected) && changed?.read !== "loading" ? { selected, changed, picked } : null;
+  reset();
+  started = true;
+  commits = page.commits.filter((c) => !seen.has(c.id) && seen.add(c.id));
+  historyToken = page.historyToken ?? null;
+  hasMore = page.hasMore && page.commits.length > 0;
+  if (kept !== null) ({ selected, changed, picked } = kept);
+  draw();
+  appendRows(commits);
+  renderStatus();
 }
 
 export function initHistory(on: { open: (relative: string, commit: DiffCommit) => void }) {

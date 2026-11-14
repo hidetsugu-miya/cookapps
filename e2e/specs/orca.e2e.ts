@@ -4068,15 +4068,19 @@ describe("orca: files and editor (A-18)", () => {
     expect(await browser.execute(() => document.activeElement?.classList.contains("orca-edit-area"))).toBe(true);
   });
 
-  it("opens a file that is open already by selecting its tab, without reading it again", async () => {
+  it("opens a file that is open already by selecting its tab, and reads it again as it comes back into the pane: the text of the disk takes the place of the one held", async () => {
     await openFiles();
     await openA();
     await tabOf(claude).$(".orca-tab-btn").click();
     await expect($(".orca-edit-area")).not.toBeExisting();
+    // The file changed on the disk while its tab was not shown.
+    const read = await mock("orca_file_read", text("fn main() {}\n// outside\n", "sig-2"));
     await doublePress("a.rs");
     await expect(selectedTab().$(".orca-tab-title")).toHaveText("a.rs");
     expect(await count(".orca-tabs [data-file]")).toBe(1);
-    expect(await callsOf("orca_file_read")).toHaveLength(1);
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\n", { trim: false });
+    expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
+    expect(await dirtyMarks()).toBe(0);
   });
 
   it("keeps the typing of a file when another tab is shown and the file again", async () => {
@@ -4265,9 +4269,11 @@ describe("orca: files and editor (A-18)", () => {
     await doublePress("b.rs");
     await expect($(".orca-edit-area")).toHaveValue("pub fn b() {}\n", { trim: false });
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs", "b.rs"]);
+    // a.rs comes back into the pane and is read again: the disk still holds the text that was read, so it stays.
+    const again = await mock("orca_file_read", text("fn main() {}\n", "sig-1"));
     await tabOf("file:1").$(".orca-tab-btn").click();
     await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
-    expect(await callsOf("orca_file_read")).toHaveLength(1);
+    expect((await waitForCalls(again))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
   });
 
   // The right button on a row of the tree, as the page gets it; whether the page kept the browser's own menu from showing.
@@ -5830,6 +5836,128 @@ describe("orca: files and editor (A-18)", () => {
     await browser.pause(200);
     expect(await commitRows()).toBe(3);
     expect(await callsOf("orca_git_history")).toHaveLength(1);
+  });
+
+  // #601: the clock of the Orca screen (10 seconds; 1 second here) reads again what the file pane and the panes show, with no return of the focus. #600: the heading follows the branch of the list a saved environment streams.
+  const marked = (selector: string) => browser.execute((q) => document.querySelector<HTMLElement>(q)?.dataset.kept ?? null, selector);
+  const markNode = (selector: string) =>
+    browser.execute((q) => {
+      document.querySelector<HTMLElement>(q)!.dataset.kept = "1";
+    }, selector);
+
+  it("reads the tree and the file shown again by the clock: a folder that did not change is not drawn again, a file with no unsaved typing takes the text of the disk and keeps its caret, one with unsaved typing is left alone, and a read that fails shows nothing (A-18)", async () => {
+    await openFiles({ ...timers({ orcaClock: 1000 }), editor_settings: { autosaveMs: 60000 } });
+    await openA();
+    // The same entries: the rows are the ones that were drawn.
+    await markNode('.orca-file[data-path="a.rs"]');
+    const same = await mock("orca_files_list", root());
+    expect((await waitForCalls(same))[0]).toEqual({ path: "/work/example-app", dir: "", ignored: false, environment: null });
+    await browser.pause(300);
+    expect(await marked('.orca-file[data-path="a.rs"]')).toBe("1");
+    // A file made outside the app shows with no return of the focus.
+    await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["a.rs", false], ["b.log", false], ["new.rs", false]]));
+    await browser.waitUntil(async () => (await names()).includes("new.rs"), { timeoutMsg: "the new file never showed" });
+    // The text changed outside the app: it takes the place of the one shown, and the caret stays.
+    await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.setSelectionRange(3, 3));
+    const read = await mock("orca_file_read", text("fn main() {}\n// outside\n", "sig-2"));
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\n", { trim: false });
+    expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
+    expect(await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.selectionStart)).toBe(3);
+    expect(await dirtyMarks()).toBe(0);
+    // Typing that is not saved yet: the file is not read, and the text stays.
+    await type("x");
+    expect(await dirtyMarks()).toBe(1);
+    const later = await mock("orca_file_read", text("other\n", "sig-3"));
+    // A read of the tree that fails keeps the rows and says nothing.
+    await mock("orca_files_list", rejects("Orca に接続できません"));
+    await browser.pause(1200);
+    expect(await callsOf(later)).toEqual([]);
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\nx", { trim: false });
+    expect(await count("#orca-files-tree .orca-file-note.fail")).toBe(0);
+    expect(await names()).toContain("new.rs");
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("reads the diff shown and the history shown again by the clock: a diff that changed is drawn in place, the same commits are not drawn again, and a new commit comes to the top with the chosen commit kept (A-24, A-27)", async () => {
+    await openFiles(historyFixtures(timers({ orcaClock: 1000 })));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_file_diff", diffOfA());
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("差分を表示");
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    // The file changed outside the app: the rows follow with no press of the reload button.
+    const diff = await mock("orca_file_diff", many());
+    await waitForCount(".orca-diff-rows .odf-row", 200);
+    expect((await callsOf(diff))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
+    await expect($("#error")).not.toBeDisplayed();
+    // The history: the same first commits keep the rows that were drawn.
+    await paneMode("履歴").click();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    await markNode(`#orca-history-list .orca-commit[data-id="${commitId(3)}"]`);
+    const same = await mock("orca_git_history", page(3, 1, false));
+    expect((await waitForCalls(same))[0]).toEqual({ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null });
+    await browser.pause(300);
+    expect(await marked(`#orca-history-list .orca-commit[data-id="${commitId(3)}"]`)).toBe("1");
+    // A commit made outside the app comes to the top, and the chosen commit stays chosen with its files.
+    await mock("orca_git_history", page(4, 1, false));
+    await waitForCount("#orca-history-list .orca-commit", 4);
+    expect(await textsOf("#orca-history-list .orca-commit-subject")).toEqual(["Commit 4", "Commit 3", "Commit 2", "Commit 1"]);
+    await expect(commitRow(3)).toHaveAttribute("aria-pressed", "true");
+    expect(await count("#orca-history-files .orca-hfile")).toBe(2);
+  });
+
+  it("reads the tree and the file shown again at once when the list of Orca shows another branch for the worktree, with no switch from the app (A-25)", async () => {
+    await openFiles(branchFixtures());
+    await openA();
+    const list = await mock("orca_files_list", dirOf("", [["a.rs", false], ["only-c.rs", false]]));
+    const read = await mock("orca_file_read", text("fn c() {}\n", "sig-c"));
+    // The branch was switched in a terminal: the next read of the list says so (the reload button reads it here).
+    await mock("orca_overview", onFeatC());
+    await $("#orca-refresh").click();
+    await expect(branchButton()).toHaveText("feat/c");
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await browser.waitUntil(async () => (await names()).join() === "a.rs,only-c.rs", { timeoutMsg: "the tree of the new branch never showed" });
+    await expect($(".orca-edit-area")).toHaveValue("fn c() {}\n", { trim: false });
+    expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
+    expect(await callsOf("orca_switch_branch")).toEqual([]);
+  });
+
+  it("shows the new branch in the heading of a saved environment, whose list is streamed: after a switch from the app without a second read of the tree, and after a switch made outside it with the tree read again (A-25, A-12)", async () => {
+    const studioOnly = { target: "Studio", environments: ["Studio"] };
+    // What the stream sends once Rust has read the worktrees again: example-app on `gitBranch`.
+    const listOn = (gitBranch: string) =>
+      streamList([orcaRow("example-app", "feat/c", "Write the docs", { minutes: 2 }), ...sample().slice(1)], [orcaWorktree("example-app", "feat/c", { gitBranch }), orcaWorktree("example-api", "main")]);
+    await openOrca(orcaOverview([], [], studioOnly), { orca_files_list: root(), orca_files_ignored: rootIgnored, ...branchFixtures() });
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList(sample(), worktrees()));
+    await project("example-app").click();
+    await expect(selectedTab()).toBeDisplayed();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await expect(branchButton()).toHaveText("feat/a");
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const files = await mock("orca_files_list", root());
+    const overview = await mock("orca_overview", orcaOverview([], [], studioOnly));
+    await branchPick("local", "feat/c").click();
+    // Rust switches, and tells the stream to read the worktrees again (unit tests); the screen reads the tree once and asks for no list.
+    expect(await waitForCalls("orca_switch_branch")).toEqual([{ path: "/work/example-app", kind: "local", name: "feat/c", environment: "Studio" }]);
+    await waitForCalls(files);
+    await sendStream(listOn("feat/c"));
+    await expect(branchButton()).toHaveText("feat/c");
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/c");
+    await browser.pause(300);
+    expect(await callsOf(files)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: "Studio" }]);
+    expect(await callsOf(overview)).toEqual([]);
+    // A switch made outside the app comes with the next list of the stream: the heading follows, and the tree is read again.
+    const again = await mock("orca_files_list", dirOf("", [["only-d.rs", false]]));
+    await sendStream(listOn("feat/d"));
+    await expect(branchButton()).toHaveText("feat/d");
+    expect(await waitForCalls(again)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: "Studio" }]);
+    await browser.waitUntil(async () => (await names()).join() === "only-d.rs", { timeoutMsg: "the tree of the new branch never showed" });
+    expect(await callsOf("orca_switch_branch")).toHaveLength(1);
   });
 });
 

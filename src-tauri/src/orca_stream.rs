@@ -1,12 +1,14 @@
 //! A-12: the Orca screen's stream from a saved environment (a paired server), over the end-to-end encrypted WebSocket of `orca_link`.
-//! The list of sessions comes from `session.tabs.subscribeAll`, named by `worktree.ps`, which is read once when the connection opens and again only when a worktree it did not list appears;
+//! The list of sessions comes from `session.tabs.subscribeAll`, named by `worktree.ps`, which is read once when the connection opens and again when a worktree it did not list appears,
+//! every 10 seconds (the branch of a worktree can change with no change of the tabs) and right after the app switched a branch (`orca_switch_branch`), one read at a time;
 //! each terminal shown (one for each pane of the work pane, A-17) comes from its own `terminal.subscribe` (its size from `terminal.updateViewport`), and the keys go with `terminal.send`.
-//! Nothing is read again by a clock. None of these methods is a public interface of Orca: they were checked on Orca 1.4.249. Nothing is stored here.
+//! Nothing else is read again by a clock. None of these methods is a public interface of Orca: they were checked on Orca 1.4.249. Nothing is stored here.
 //! What a terminal prints and the keys typed are in no log line, no error text and no event but the terminal's own channel; a token is in none at all.
 
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +34,8 @@ use crate::{
 
 /// `worktree.ps` is asked for this many worktrees, as the CLI's read of A-6.
 const WORKTREE_LIMIT: u64 = 200;
+/// How often `worktree.ps` is read again while the connection lasts: the period of the list of this machine's Orca while its screen is shown (A-6).
+const PS_EVERY: Duration = Duration::from_secs(10);
 /// The sizes Orca takes for a viewport (`terminal.subscribe` takes 1 to 1000 columns, `terminal.updateViewport` 20 to 1024; rows 8 to 500 for both).
 const MIN_COLS: u16 = 20;
 const MAX_COLS: u16 = 1000;
@@ -114,6 +118,8 @@ pub enum StreamCommand {
     Viewport(String, OrcaViewport),
     /// Keys typed into the terminal `handle` (the first field); they go while it is subscribed or at least in Orca's list, and the answer says whether Orca took them.
     Input(String, String, oneshot::Sender<Result<(), String>>),
+    /// Read `worktree.ps` again now: the app switched the branch of a worktree.
+    Worktrees,
     Close,
 }
 
@@ -176,6 +182,11 @@ fn unknown_worktrees(ps: &Value, tabs: &HashMap<String, Value>) -> HashSet<Strin
         .filter(|(id, tabs)| !known.contains(id.as_str()) && terminal_tabs(tabs).next().is_some())
         .map(|(id, _)| id.clone())
         .collect()
+}
+
+/// Whether `worktree.ps` is read again now: a worktree it does not list has terminals (`unlisted`), or the clock or a switch of the branch made it due (`due`), and never while a read of it is on its way (`pending`; what is due waits for its answer).
+fn reads_ps(pending: bool, unlisted: bool, due: bool) -> bool {
+    !pending && (unlisted || due)
 }
 
 fn ms_of(value: &Value) -> f64 {
@@ -382,6 +393,8 @@ struct Connection {
     /// The worktrees a read of `worktree.ps` was made for, so that one it never lists is not asked for again and again.
     asked: HashSet<String>,
     ps_request: Option<String>,
+    /// `worktree.ps` is to be read again (the clock, or a switch of the branch), once no read of it is on its way.
+    ps_due: bool,
     tabs_request: String,
     tabs: HashMap<String, Value>,
     loaded: bool,
@@ -495,14 +508,32 @@ impl Connection {
         Ok(())
     }
 
-    /// Sends the list when it changed, and asks `worktree.ps` again when a worktree it does not list has terminals.
+    /// Makes `worktree.ps` due and, once the list is held, asks for it (`publish`).
+    async fn reread(
+        &mut self,
+        link: &mut WsLink,
+        sink: &mut impl FnMut(OrcaStreamEvent),
+    ) -> Result<(), String> {
+        self.ps_due = true;
+        if self.loaded {
+            self.publish(link, sink).await?;
+        }
+        Ok(())
+    }
+
+    /// Sends the list when it changed, and asks `worktree.ps` again when a worktree it does not list has terminals or the read is due (`reads_ps`).
     async fn publish(
         &mut self,
         link: &mut WsLink,
         sink: &mut impl FnMut(OrcaStreamEvent),
     ) -> Result<(), String> {
         let unknown = unknown_worktrees(&self.ps, &self.tabs);
-        if self.ps_request.is_none() && !unknown.is_subset(&self.asked) {
+        if reads_ps(
+            self.ps_request.is_some(),
+            !unknown.is_subset(&self.asked),
+            self.ps_due,
+        ) {
+            self.ps_due = false;
             self.asked.extend(unknown);
             self.ps_request = Some(
                 link.send_request("worktree.ps", json!({"limit": WORKTREE_LIMIT}))
@@ -547,10 +578,15 @@ impl Connection {
             }
         } else if self.ps_request.as_deref() == Some(id) {
             self.ps_request = None;
-            // A failed read leaves the names held; the next unknown worktree asks again.
-            if let Ok(ps) = result_of(response) {
-                self.ps = ps;
-                self.publish(link, sink).await?;
+            // A failed read leaves the names held; the next unknown worktree, or the clock, asks again.
+            match result_of(response) {
+                Ok(ps) => {
+                    self.ps = ps;
+                    self.publish(link, sink).await?;
+                }
+                // A switch of the branch that came while this read was on its way is still read.
+                Err(_) if self.ps_due => self.publish(link, sink).await?,
+                Err(_) => {}
             }
         } else if let Some(handle) = self
             .terminals
@@ -595,9 +631,11 @@ impl Connection {
         command: Option<StreamCommand>,
         link: &mut WsLink,
         stream: &mut Stream,
+        sink: &mut impl FnMut(OrcaStreamEvent),
     ) -> Result<bool, String> {
         match command {
             None | Some(StreamCommand::Close) => return Ok(false),
+            Some(StreamCommand::Worktrees) => self.reread(link, sink).await?,
             Some(StreamCommand::Terminal(watch)) => {
                 let handle = watch.handle.clone();
                 self.unsubscribe(link, &stream.client, &handle).await?;
@@ -675,6 +713,7 @@ async fn serve(
         ps,
         asked: HashSet::new(),
         ps_request: None,
+        ps_due: false,
         tabs_request,
         tabs: HashMap::new(),
         loaded: false,
@@ -683,17 +722,25 @@ async fn serve(
         inputs: HashMap::new(),
         last_list: None,
     };
+    let mut ps_at = Instant::now() + PS_EVERY;
     loop {
         let silence = link.silence_deadline();
         tokio::select! {
             command = commands.recv() => {
-                if !connection.on_command(command, link, stream).await? {
+                if !connection.on_command(command, link, stream, sink).await? {
                     // Best effort: closing the socket ends the subscriptions anyway.
                     let _ = connection.unsubscribe_all(link, &stream.client).await;
                     return Ok(());
                 }
             }
             () = sleep_until(silence) => return Err("接続先からの応答が途絶えました".into()),
+            () = sleep_until(ps_at) => {
+                ps_at = Instant::now() + PS_EVERY;
+                // A read that is still on its way after the period is the read of this period.
+                if connection.ps_request.is_none() {
+                    connection.reread(link, sink).await?;
+                }
+            }
             response = link.next_response() => {
                 if let Some(response) = response? {
                     connection.on_response(&response, link, stream, sink).await?;
@@ -753,6 +800,8 @@ async fn run_loop<F, Fut>(
                     Some(StreamCommand::Input(_, _, reply)) => {
                         let _ = reply.send(Err(NOT_CONNECTED.into()));
                     }
+                    // The next connection reads `worktree.ps` when it opens.
+                    Some(StreamCommand::Worktrees) => {}
                 },
             }
         }
@@ -780,6 +829,11 @@ impl OrcaStream {
             .commands
             .send(command)
             .map_err(|_| NOT_CONNECTED.to_owned())
+    }
+
+    /// Has the stream that runs, if any, read `worktree.ps` again now (the app switched the branch of a worktree, and the list says the branch).
+    pub(crate) fn reread_worktrees(&self) {
+        let _ = self.send(StreamCommand::Worktrees);
     }
 }
 
@@ -1658,6 +1712,102 @@ mod tests {
             input_route(false, false, false, true),
             Refused(NOT_CONNECTED)
         );
+    }
+
+    #[test]
+    fn worktree_ps_is_read_again_for_an_unlisted_worktree_or_when_it_is_due_and_never_twice_at_once(
+    ) {
+        // Nothing asks for it.
+        assert!(!reads_ps(false, false, false));
+        // A worktree it does not list has terminals.
+        assert!(reads_ps(false, true, false));
+        // The clock or a switch of the branch made it due.
+        assert!(reads_ps(false, false, true));
+        assert!(reads_ps(false, true, true));
+        // A read on its way is waited for, whatever asks.
+        assert!(!reads_ps(true, false, false));
+        assert!(!reads_ps(true, true, false));
+        assert!(!reads_ps(true, false, true));
+        assert!(!reads_ps(true, true, true));
+    }
+
+    #[tokio::test]
+    async fn a_switch_of_the_branch_reads_the_worktrees_again_and_sends_the_list_only_when_it_changed(
+    ) {
+        let (listener, url) = bind().await;
+        let desktop = Desktop::new([44; 32]);
+        let key = desktop.public_key_b64();
+        let (commands, receiver) = unbounded_channel();
+        let list: Seen<OrcaStreamEvent> = Arc::default();
+        let into = list.clone();
+        let task = tokio::spawn(run_loop(
+            move || {
+                let (url, key) = (url.clone(), key.clone());
+                async move { WsLink::connect(&url, "device-token", &key).await }
+            },
+            receiver,
+            move |event| into.lock().unwrap().push(event),
+            "cookapps-test".into(),
+        ));
+        let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
+        let on = |branch: &str| {
+            let mut ps = ps();
+            ps["worktrees"][0]["branch"] = json!(format!("refs/heads/{branch}"));
+            ps
+        };
+        let request = server.request().await;
+        server
+            .send(json!({"id": request["id"], "ok": true, "result": on("rc/release")}))
+            .await;
+        let tabs = server.request().await;
+        streamed(
+            &mut server,
+            &tabs["id"],
+            snapshots(&[("r1::/w/a", vec![shell_tab("t2", "term_s", "zsh")])]),
+        )
+        .await;
+        let branch_of = |event: &OrcaStreamEvent| match event {
+            OrcaStreamEvent::List { worktrees, .. } => worktrees[0].git_branch.clone(),
+            OrcaStreamEvent::Status { .. } => panic!("not a list"),
+        };
+        assert_eq!(branch_of(&until(&list, 2).await[1]), "rc/release");
+
+        // The branch was switched in the app: `worktree.ps` is read again, and the list says the new branch.
+        commands.send(StreamCommand::Worktrees).ok().unwrap();
+        let again = server.request().await;
+        assert_eq!(again["method"], "worktree.ps");
+        assert_eq!(again["params"], json!({"limit": 200}));
+        server
+            .send(json!({"id": again["id"], "ok": true, "result": on("dev/release")}))
+            .await;
+        assert_eq!(branch_of(&until(&list, 3).await[2]), "dev/release");
+
+        // A read that finds the same worktrees sends no list (the next request is the close's, so the answer was handled).
+        commands.send(StreamCommand::Worktrees).ok().unwrap();
+        let same = server.request().await;
+        assert_eq!(same["method"], "worktree.ps");
+        server
+            .send(json!({"id": same["id"], "ok": true, "result": on("dev/release")}))
+            .await;
+        // A read that fails keeps the list held.
+        commands.send(StreamCommand::Worktrees).ok().unwrap();
+        let failed = server.request().await;
+        assert_eq!(failed["method"], "worktree.ps");
+        server
+            .send(
+                json!({"id": failed["id"], "ok": false, "error": {"code": "busy", "message": "x"}}),
+            )
+            .await;
+        let (shown, _) = watch("term_s", OrcaViewport { cols: 80, rows: 24 });
+        commands.send(StreamCommand::Terminal(shown)).ok().unwrap();
+        assert_eq!(server.request().await["method"], "terminal.subscribe");
+        assert_eq!(list.lock().unwrap().len(), 3);
+
+        commands.send(StreamCommand::Close).ok().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]

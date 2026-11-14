@@ -1,8 +1,8 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`); this module draws the folder at once, marks the ignored entries when the answer comes, and takes the presses.
-// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch. Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays), and the scratchpad folder of an SSH host is never read by the clock. Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 // On the row of an SSH host (and on the tab of one of its scratchpad files) the tree is the host's scratchpad folder (A-30): one flat list of files, read by ssh (`ssh_scratch_list`), with the new file, the new name and the delete of that folder (`ssh_scratch_create`, `ssh_scratch_rename`, `ssh_scratch_delete`). It has no folder, so nothing is dragged, and it has no path to copy, no download, no difference, no branch and no history.
-// The top row also has the two buttons that choose what the pane shows under the heading, the files or the history of the worktree (A-27, orca-history.ts); the choice is kept in memory only, and the heading serves both, and so does the read at the return of the focus (`refreshFiles`).
+// The top row also has the two buttons that choose what the pane shows under the heading, the files or the history of the worktree (A-27, orca-history.ts); the choice is kept in memory only, and the heading serves both, and so do the reads at the return of the focus and by the clock (`refreshFiles`).
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, composing, tag } from "./dom.js";
@@ -12,7 +12,7 @@ import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
 import type { DiffCommit } from "./orca-diff.js";
-import { initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
+import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
 import { toast } from "./toast.js";
 import { copyText, showError } from "./view.js";
 
@@ -75,6 +75,10 @@ let redrawing = false;
 let openFile: (relative: string) => void = () => {};
 let openDiff: (relative: string) => void = () => {};
 let branchSwitched: () => void = () => {};
+// Told that the list of Orca shows another branch for the worktree than the pane knew (a switch made outside the app): the tabs of its files are read again.
+let branchMoved: () => void = () => {};
+// The branch the app itself just switched the worktree to: the tree and the history were read for it then, so the list that shows it starts no second read.
+let switchedTo: string | null = null;
 // Told that the file `relative` (with `folder`, the folder and everything under it) is gone, so the tabs of the editor that hold it close.
 let gone: (here: FilesContext, relative: string, folder: boolean) => void = () => {};
 // Told that `relative` is about to be moved: the editor holds the saves of the files it takes along, and the function it answers is called when the move is over, with the new place or with null when it failed.
@@ -155,7 +159,8 @@ async function listDir(here: FilesContext, dir: string, ignored: boolean): Promi
   return { entries: names.map((name) => ({ name, path: name, isDirectory: false, ignored: false })), total: names.length };
 }
 
-async function readDir(dir: string) {
+// Reads the folder `dir`. With `quiet` (the clock, and a branch that changed outside the app) a read that fails says nothing and keeps what the folder shows, when it was read before.
+async function readDir(dir: string, quiet = false) {
   const here = context;
   if (here === null) return;
   const mine = generation;
@@ -170,6 +175,10 @@ async function readDir(dir: string) {
     const was = new Set(held?.dir?.entries.filter((e) => e.ignored).map((e) => e.path));
     next = { dir: inherited || was.size === 0 ? read : { ...read, entries: read.entries.map((e) => (was.has(e.path) ? { ...e, ignored: true } : e)) }, error: null, busy: false };
   } catch (e) {
+    if (quiet && held !== undefined) {
+      if (mine === generation && listings.get(dir)?.busy) listings.set(dir, { ...held, busy: false });
+      return;
+    }
     next = { dir: held?.dir ?? null, error: String(e), busy: false };
   }
   if (mine !== generation) return;
@@ -190,28 +199,31 @@ async function readDir(dir: string) {
 // How many folders a read of the open folders takes at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).
 const reads = (here: FilesContext) => (here.target === null ? 16 : 8);
 
-// Reads the root, and when it is read the folders that are open again, side by side. The root goes first alone, so that the check of the worktree that its read may start is done once, not once for each folder read at the same time. A folder that was read and is closed is dropped, so that it is read when it is opened next. Another worktree's tree ends it.
-async function reload() {
+// Reads the root, and when it is read the folders that are open again, side by side. The root goes first alone, so that the check of the worktree that its read may start is done once, not once for each folder read at the same time. A folder that was read and is closed is dropped, so that it is read when it is opened next. Another worktree's tree ends it. `quiet`: see `readDir`.
+async function reload(quiet = false) {
   const here = context;
   if (here === null) return;
   const mine = generation;
   const queue = [...expanded];
   for (const dir of [...listings.keys()]) if (dir !== "" && !queue.includes(dir)) listings.delete(dir);
-  await readDir("");
+  await readDir("", quiet);
   const worker = async () => {
     for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
       if (mine !== generation) return;
-      await readDir(dir);
+      await readDir(dir, quiet);
     }
   };
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
 }
 
 // Reads again what the pane shows, when the window gets the focus back: the files (the root, then the open folders) or the history (from the start). It does nothing while the pane is hidden or has no worktree, and while a read of the same kind is on its way, so a failed read is tried again at the next return.
-export function refreshFiles() {
-  if (!shown || context === null) return;
-  if (showsHistory()) refreshHistory();
-  else if (![...listings.values()].some((l) => l.busy)) void reload();
+// With `clock` it is the read of the clock of the Orca screen (A-18, A-27), which says nothing: the tree is drawn again only where a folder changed, the history only when its first commits are not the ones held (`checkHistory`), and a read that fails keeps what is shown. The scratchpad folder of an SSH host (A-30) is never read by the clock.
+export function refreshFiles(clock = false) {
+  if (!shown || context === null || (clock && context.host !== null)) return;
+  if (showsHistory()) {
+    if (clock) void checkHistory();
+    else refreshHistory();
+  } else if (![...listings.values()].some((l) => l.busy)) void reload(clock);
 }
 
 // A scratchpad file was made in `.orca/scratchpad` of the worktree at `path` (A-29): when the tree is that worktree's, the folders on the way to it that it has read are read again, the root first, so that a folder that was not there shows now. With `host` the file was made in the scratchpad folder of that SSH host (A-30), and its list is read again when the tree is that folder's.
@@ -635,7 +647,8 @@ function rows(dir: string, depth: number): HTMLElement[] {
 function openBranches(anchor: Element) {
   const here = context;
   if (here === null || here.branch === null) return;
-  openBranchDialog(anchor, { target: here.target, path: here.path, repo: here.project, branch: here.branch }, () => {
+  openBranchDialog(anchor, { target: here.target, path: here.path, repo: here.project, branch: here.branch }, (branch) => {
+    switchedTo = branch;
     void reload();
     reloadHistory();
     branchSwitched();
@@ -681,10 +694,13 @@ function draw() {
 }
 
 // Follows the selected tab: its worktree (null: none), and the files open in it. Another worktree starts a new tree, read at once while the pane is shown.
+// The same worktree on another git branch than the pane knew (the list of Orca says so: a switch made outside the app) has its tree and its history read again at once while the pane is shown, without a word, and the screen is told (`branchMoved`); the branch the app itself switched to was read already.
 export function syncFiles(next: FilesContext | null, open: Set<string>) {
   opened = open;
   const same = next?.path === context?.path && next?.target === context?.target && next?.host === context?.host;
+  const moved = same && next != null && context != null && next.host === null && next.branch !== null && context.branch !== null && next.branch !== context.branch;
   if (!same) {
+    switchedTo = null;
     generation++;
     listings.clear();
     expanded.clear();
@@ -697,12 +713,20 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   context = next;
   syncModes();
   draw();
+  if (!moved) return;
+  const own = next?.branch === switchedTo;
+  switchedTo = null;
+  if (own || !shown) return;
+  if (![...listings.values()].some((l) => l.busy)) void reload(true);
+  refreshHistory();
+  branchMoved();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; deleted: (here: FilesContext, relative: string, folder: boolean) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; moved: () => void; deleted: (here: FilesContext, relative: string, folder: boolean) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
   openFile = on.open;
   openDiff = on.diff;
   branchSwitched = on.switched;
+  branchMoved = on.moved;
   gone = on.deleted;
   hold = on.moving;
   initHistory({ open: on.commitDiff });
