@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.71.1
+
+A-17: the divider between two panes of a split Orca work pane can be dragged, to the left and right in a split side by side and up and down in a split one above the other (#597). Only the two panes beside the divider change, and a pane never gets smaller than a tenth of the split. The sizes are remembered with the split of each project.
+
+A-18, A-24, A-27: the file pane of the Orca screen follows what changes outside the app without waiting for the window's focus (#601). While the file pane is shown, about every 10 seconds the tree and the history are read again, and so are the files and the diffs that the panes show. A file with an edit that is not saved yet is left alone, and the cursor and the scroll of a file stay. Before, the tree was read only when the window got the focus back, and an open file only when it was closed and opened again.
+
+Fixed: on a saved environment, the branch in the heading of the file pane stayed the old one after the branch was switched, in the app or in a terminal (#600). The list is now read again right after a switch and every 10 seconds.
+
+Fixed: the menu of the right button that macOS draws (Cut, Copy, Paste and so on, in the editor and the other text fields) is in Japanese (#598).
+
 ## v0.71.0
 
 A-30: the scratchpad works on an SSH host's row too (#588, #589, #590). 「スクラッチパッド」 of the plus makes a file for notes in `~/.local/share/cookapps/scratchpad/` on the host and opens it in the editor, where it is saved as any file. Orca does not serve the files of an SSH host, so the app runs this Mac's `ssh` command itself: the Host must be in `~/.ssh/config` of this Mac, and a key with a passphrase in ssh-agent. A host that Orca added by hand is reached with the user name and the port saved in Orca. Each call is one of six fixed commands, and a name or a text is sent on the standard input only.
