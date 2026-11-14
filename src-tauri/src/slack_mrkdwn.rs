@@ -15,7 +15,19 @@ type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 /// The label of a link to a message that an attachment of the same message unfurls (S-11): Slack draws the address as a chip and the message below.
 const UNFURLED_LABEL: &str = "メッセージ";
 
-/// A run of text with one style. `code` is an inline code: its text is drawn as it is, with no link made of an address in it. `link` is the address the text is a link to (S-11): the screen draws that text as the link, and not the addresses in it.
+/// The address a mention of the user `id` opens: `{workspace}team/{id}`, the user's profile in the workspace. `workspace` is the workspace's checked address (`https://{ws}.slack.com/`, `workspace_base` of `slack.rs`).
+/// `None`, so that the mention stays text, with no workspace address and for an ID that is not a user's (`U` or `W`, then capital letters and digits): nothing of a message's text gets into an address unchecked.
+pub(crate) fn user_link(workspace: Option<&str>, id: &str) -> Option<String> {
+    let known = id.len() > 1
+        && id.starts_with(['U', 'W'])
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
+    let workspace = workspace?;
+    known.then(|| format!("{workspace}team/{id}"))
+}
+
+/// A run of text with one style. `code` is an inline code: its text is drawn as it is, with no link made of an address in it. `link` is the address the text is a link to (a message the message unfurls, S-11, or the profile of a mentioned user, S-12): the screen draws that text as the link, and not the addresses in it.
 #[derive(Serialize, Debug, PartialEq, Clone, Default)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -108,8 +120,11 @@ enum Atom {
     Ch(char),
     Code(String),
     Lit(String),
-    /// A link to a message that the message unfurls: the address, drawn as `UNFURLED_LABEL`.
-    Link(String),
+    /// A link: a message that the message unfurls, drawn as `UNFURLED_LABEL`, or a mention of a user, drawn as its name.
+    Link {
+        text: String,
+        url: String,
+    },
 }
 
 /// A piece of the result before neighbours with the same style are joined; `raw` text still needs its entities undone and its emoji converted.
@@ -145,8 +160,8 @@ fn without_mark_tail(url: &str) -> &str {
 }
 
 /// A line cut into characters, inline codes (closed on the line) and `<…>` tokens and web addresses (copied as they are). A mark at the end of an address is not part of it.
-/// A `<address>` with no label whose address is one of `unfurled` is a `Link`.
-fn atoms(line: &str, name_of: NameOf, unfurled: &[String]) -> Vec<Atom> {
+/// A `<address>` with no label whose address is one of `unfurled` is a `Link`, and so is a mention of a user (`<@U1>`, `<@U1|name>`) that `user_link` gives an address.
+fn atoms(line: &str, name_of: NameOf, unfurled: &[String], workspace: Option<&str>) -> Vec<Atom> {
     let (mut out, mut rest, mut prev) = (Vec::new(), line, None::<char>);
     while let Some(c) = rest.chars().next() {
         let after = &rest[c.len_utf8()..];
@@ -161,9 +176,19 @@ fn atoms(line: &str, name_of: NameOf, unfurled: &[String]) -> Vec<Atom> {
                     let address = (!unfurled.is_empty() && !token.contains('|'))
                         .then(|| unescape(token))
                         .filter(|address| unfurled.contains(address));
-                    let atom = match address {
-                        Some(address) => Atom::Link(address),
-                        None => Atom::Lit(token_text(token, name_of)),
+                    let mention = token
+                        .strip_prefix('@')
+                        .and_then(|rest| user_link(workspace, rest.split('|').next()?));
+                    let atom = match (address, mention) {
+                        (Some(url), _) => Atom::Link {
+                            text: UNFURLED_LABEL.to_owned(),
+                            url,
+                        },
+                        (None, Some(url)) => Atom::Link {
+                            text: token_text(token, name_of),
+                            url,
+                        },
+                        (None, None) => Atom::Lit(token_text(token, name_of)),
                     };
                     (atom, end + 2)
                 }
@@ -258,8 +283,8 @@ fn styled(atoms: &[Atom], lo: usize, hi: usize, style: Style, out: &mut Vec<Part
                 link: None,
                 style,
             },
-            Atom::Link(url) => Part {
-                text: UNFURLED_LABEL.to_owned(),
+            Atom::Link { text, url } => Part {
+                text: text.clone(),
                 raw: false,
                 code: false,
                 link: Some(url.clone()),
@@ -313,7 +338,12 @@ fn spans(parts: Vec<Part>) -> Vec<Span> {
 }
 
 /// Lines (their `&gt;` already taken off, for a quote) as spans, one `\n` between two.
-fn lines_spans(lines: &[&str], name_of: NameOf, unfurled: &[String]) -> Vec<Span> {
+fn lines_spans(
+    lines: &[&str],
+    name_of: NameOf,
+    unfurled: &[String],
+    workspace: Option<&str>,
+) -> Vec<Span> {
     let mut parts = Vec::new();
     for (n, line) in lines.iter().enumerate() {
         if n > 0 {
@@ -325,7 +355,7 @@ fn lines_spans(lines: &[&str], name_of: NameOf, unfurled: &[String]) -> Vec<Span
                 style: Style::default(),
             });
         }
-        let atoms = atoms(line, name_of, unfurled);
+        let atoms = atoms(line, name_of, unfurled, workspace);
         styled(&atoms, 0, atoms.len(), Style::default(), &mut parts);
     }
     spans(parts)
@@ -341,7 +371,13 @@ fn quoted(line: &str) -> Option<&str> {
 }
 
 /// Text with no code block: runs of quoted lines are quotes, the other lines paragraphs.
-fn text_blocks(text: &str, name_of: NameOf, unfurled: &[String], out: &mut Rich) {
+fn text_blocks(
+    text: &str,
+    name_of: NameOf,
+    unfurled: &[String],
+    workspace: Option<&str>,
+    out: &mut Rich,
+) {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut at = 0;
     while at < lines.len() {
@@ -355,11 +391,11 @@ fn text_blocks(text: &str, name_of: NameOf, unfurled: &[String], out: &mut Rich)
         if quote {
             let inner: Vec<&str> = run.iter().filter_map(|l| quoted(l)).collect();
             out.push(RichBlock::Quote {
-                spans: lines_spans(&inner, name_of, unfurled),
+                spans: lines_spans(&inner, name_of, unfurled, workspace),
             });
         } else {
             // A paragraph with nothing to see (blank lines, or a token that is no text) is not drawn.
-            let spans = lines_spans(run, name_of, unfurled);
+            let spans = lines_spans(run, name_of, unfurled, workspace);
             if spans.iter().any(|s| !s.text.trim().is_empty()) {
                 out.push(RichBlock::Paragraph { spans });
             }
@@ -369,7 +405,13 @@ fn text_blocks(text: &str, name_of: NameOf, unfurled: &[String], out: &mut Rich)
 
 /// Slack's mrkdwn `raw` as the blocks to draw. The code blocks (```` ```…``` ````) are cut out first; the rest goes by lines.
 /// `unfurled` is the addresses of the messages the same message unfurls in its attachments (`unfurled_urls`, S-11); a link without a label to one of them is drawn as a link labeled `UNFURLED_LABEL`.
-pub(crate) fn parse(raw: &str, name_of: NameOf, unfurled: &[String]) -> Rich {
+/// `workspace` is the checked address of the message's workspace: a mention of a user is drawn as a link to the user's profile there (`user_link`), except in a code; with `None` it stays text.
+pub(crate) fn parse(
+    raw: &str,
+    name_of: NameOf,
+    unfurled: &[String],
+    workspace: Option<&str>,
+) -> Rich {
     // Text and code alternate, and a mark with no partner is text.
     let (mut segments, mut rest) = (Vec::new(), raw);
     while let Some(start) = rest.find("```") {
@@ -394,7 +436,7 @@ pub(crate) fn parse(raw: &str, name_of: NameOf, unfurled: &[String]) -> Rich {
         } else {
             text
         };
-        text_blocks(text, name_of, unfurled, &mut out);
+        text_blocks(text, name_of, unfurled, workspace, &mut out);
         skip_newline = code.is_some();
         if let Some(code) = code {
             let code = code.strip_prefix('\n').unwrap_or(code);
@@ -414,12 +456,27 @@ mod tests {
     use super::*;
 
     fn read(raw: &str) -> Rich {
-        parse(raw, &|id| (id == "U1").then(|| "Alice".to_owned()), &[])
+        parse(
+            raw,
+            &|id| (id == "U1").then(|| "Alice".to_owned()),
+            &[],
+            None,
+        )
+    }
+
+    /// As `read`, in the workspace `https://a.slack.com/`.
+    fn read_in(raw: &str) -> Rich {
+        parse(
+            raw,
+            &|id| (id == "U1").then(|| "Alice".to_owned()),
+            &[],
+            Some("https://a.slack.com/"),
+        )
     }
 
     fn read_unfurled(raw: &str, unfurled: &[&str]) -> Rich {
         let unfurled: Vec<String> = unfurled.iter().map(|u| (*u).to_owned()).collect();
-        parse(raw, &|_| None, &unfurled)
+        parse(raw, &|_| None, &unfurled, None)
     }
 
     /// A span; `style` holds `b`, `i`, `s` and `c` for bold, italic, strike and code.
@@ -801,6 +858,91 @@ mod tests {
         assert_eq!(
             read_unfurled(&format!("```\n<{url}>\n```"), &[url]),
             vec![code(url)]
+        );
+    }
+
+    #[test]
+    fn a_mention_of_a_user_is_a_link_to_the_profile_in_the_workspace() {
+        let alice = "https://a.slack.com/team/U1";
+        assert_eq!(
+            read_in("hi <@U1> and <@W2ABC|bob>"),
+            vec![para(vec![
+                sp("hi ", ""),
+                link("@Alice", alice),
+                sp(" and ", ""),
+                link("@bob", "https://a.slack.com/team/W2ABC"),
+            ])]
+        );
+        // A name the cache knows goes before the label, and the address is made of the ID alone.
+        assert_eq!(
+            read_in("<@U1|old name>"),
+            vec![para(vec![link("@Alice", alice)])]
+        );
+        // A user nobody can name is still a link.
+        assert_eq!(
+            read_in("<@U9>"),
+            vec![para(vec![link("@不明", "https://a.slack.com/team/U9")])]
+        );
+        // The styles around a mention stay, and a quote reads it too.
+        assert_eq!(
+            read_in("*<@U1>* _hi <@U1>_\n&gt; <@U1>"),
+            vec![
+                para(vec![
+                    Span {
+                        bold: true,
+                        ..link("@Alice", alice)
+                    },
+                    sp(" ", ""),
+                    sp("hi ", "i"),
+                    Span {
+                        italic: true,
+                        ..link("@Alice", alice)
+                    },
+                ]),
+                quote(vec![link("@Alice", alice)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_mention_with_no_workspace_address_or_an_id_of_another_shape_stays_text() {
+        assert_eq!(read("hi <@U1>"), vec![para(vec![sp("hi @Alice", "")])]);
+        for raw in [
+            "<@u1>",
+            "<@U>",
+            "<@B1>",
+            "<@U1/../x>",
+            "<@U1?a=1>",
+            "<@U1 >",
+            "<@Ｕ１>",
+            "<@>",
+        ] {
+            let got = read_in(raw);
+            assert!(
+                matches!(&got[..], [RichBlock::Paragraph { spans }] if spans.iter().all(|s| s.link.is_none())),
+                "{raw}: {got:?}"
+            );
+        }
+        assert_eq!(user_link(Some("https://a.slack.com/"), "U1/x"), None);
+        assert_eq!(user_link(None, "U1"), None);
+    }
+
+    #[test]
+    fn a_user_group_a_broadcast_and_a_channel_stay_text() {
+        assert_eq!(
+            read_in("<!subteam^S1|@design> <!subteam^S2> <!here> <!channel> <!everyone> <#C1|dev>"),
+            vec![para(vec![sp(
+                "@design @不明 @here @channel @everyone #dev",
+                ""
+            )])]
+        );
+    }
+
+    #[test]
+    fn a_mention_in_a_code_stays_text() {
+        assert_eq!(
+            read_in("`<@U1>` x\n```\n<@U1>\n```"),
+            vec![para(vec![sp("@Alice", "c"), sp(" x", "")]), code("@Alice")]
         );
     }
 }

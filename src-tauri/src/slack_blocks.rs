@@ -12,7 +12,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::slack::{emojify, mention_ids, plain_text, unescape, UNKNOWN_NAME};
-use crate::slack_mrkdwn::{parse, plain, rich_plain, Rich, RichBlock, Span};
+use crate::slack_mrkdwn::{parse, plain, rich_plain, user_link, Rich, RichBlock, Span};
 
 /// Looks a user or a user group up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -122,10 +122,12 @@ pub struct ThreadAttachment {
 /// Slack's `text` is the alternative text of a message with blocks, so it is left out when a block other than `rich_text` can be drawn; but a person's ordinary post carries a `rich_text` block that repeats it,
 /// so `rich_text` is flattened only when there is such a block or `draw_rich_text` (the post is a bot's, or has no text). Nothing is flattened otherwise.
 /// The text is drawn too when there are no blocks to draw, and when the message has a block that could not be (the text may stand for it).
+/// `workspace` is the checked address of the message's workspace, where a mention of a user opens (`user_link`, S-12); with `None` a mention is text.
 pub(crate) fn message_blocks(
     blocks: &Value,
     draw_rich_text: bool,
     name_of: NameOf,
+    workspace: Option<&str>,
 ) -> (Vec<ThreadBlock>, bool) {
     let list = items(blocks);
     // The blocks other than `rich_text` first: they are cheap, and say whether `rich_text` is flattened at all.
@@ -133,7 +135,14 @@ pub(crate) fn message_blocks(
         .iter()
         .map(|b| {
             let rich = b["type"] == "rich_text";
-            (rich, if rich { None } else { block(b, name_of) })
+            (
+                rich,
+                if rich {
+                    None
+                } else {
+                    block(b, name_of, workspace)
+                },
+            )
         })
         .collect();
     let has_other = drawn.iter().any(|(rich, b)| !rich && b.is_some());
@@ -142,7 +151,7 @@ pub(crate) fn message_blocks(
     }
     for (b, (rich, slot)) in list.iter().zip(&mut drawn) {
         if *rich {
-            *slot = block(b, name_of);
+            *slot = block(b, name_of, workspace);
         }
     }
     let missing = drawn.iter().any(|(rich, b)| !rich && b.is_none());
@@ -176,14 +185,19 @@ fn text_of(v: &Value, name_of: NameOf) -> Option<String> {
 }
 
 /// A text as `Rich`: a mrkdwn object is read for its styles (S-12), a `plain_text` object is not. A plain string is read when `string_is_mrkdwn`.
-fn rich_of(v: &Value, name_of: NameOf, string_is_mrkdwn: bool) -> Option<Rich> {
+fn rich_of(
+    v: &Value,
+    name_of: NameOf,
+    workspace: Option<&str>,
+    string_is_mrkdwn: bool,
+) -> Option<Rich> {
     let (raw, formatted) = match v {
         Value::String(s) => (s.as_str(), string_is_mrkdwn),
         _ => (v["text"].as_str()?, v["type"] != "plain_text"),
     };
     if formatted {
         // Read once; nothing to draw is no text.
-        return Some(parse(raw, name_of, &[])).filter(|rich| !rich.is_empty());
+        return Some(parse(raw, name_of, &[], workspace)).filter(|rich| !rich.is_empty());
     }
     text_of(v, name_of).map(plain)
 }
@@ -228,36 +242,36 @@ fn accessory(a: &Value, name_of: NameOf) -> Option<ThreadAccessory> {
     }
 }
 
-fn context_element(e: &Value, name_of: NameOf) -> Option<ThreadContext> {
+fn context_element(e: &Value, name_of: NameOf, workspace: Option<&str>) -> Option<ThreadContext> {
     match e["type"].as_str()? {
         "image" => image(e).map(ThreadContext::Image),
         "mrkdwn" | "plain_text" => {
-            rich_of(e, name_of, false).map(|text| ThreadContext::Text { text })
+            rich_of(e, name_of, workspace, false).map(|text| ThreadContext::Text { text })
         }
         _ => None,
     }
 }
 
 /// A text as a section with nothing else in it.
-fn paragraph(text: String) -> ThreadBlock {
+fn paragraph(text: Rich) -> ThreadBlock {
     ThreadBlock::Section {
-        text: Some(plain(text)),
+        text: Some(text),
         fields: Vec::new(),
         accessory: None,
     }
 }
 
 /// A block as drawn; `None` for a type that is not drawn (a menu, an input, a video, an unknown one) and for a block with nothing in it.
-fn block(b: &Value, name_of: NameOf) -> Option<ThreadBlock> {
+fn block(b: &Value, name_of: NameOf, workspace: Option<&str>) -> Option<ThreadBlock> {
     match b["type"].as_str()? {
         "header" => Some(ThreadBlock::Header {
             text: text_of(&b["text"], name_of)?,
         }),
         "section" => {
-            let text = rich_of(&b["text"], name_of, false);
+            let text = rich_of(&b["text"], name_of, workspace, false);
             let fields: Vec<Rich> = items(&b["fields"])
                 .iter()
-                .filter_map(|f| rich_of(f, name_of, false))
+                .filter_map(|f| rich_of(f, name_of, workspace, false))
                 .collect();
             let accessory = accessory(&b["accessory"], name_of);
             (text.is_some() || !fields.is_empty() || accessory.is_some()).then_some(
@@ -271,7 +285,7 @@ fn block(b: &Value, name_of: NameOf) -> Option<ThreadBlock> {
         "context" => {
             let elements: Vec<ThreadContext> = items(&b["elements"])
                 .iter()
-                .filter_map(|e| context_element(e, name_of))
+                .filter_map(|e| context_element(e, name_of, workspace))
                 .collect();
             (!elements.is_empty()).then_some(ThreadBlock::Context { elements })
         }
@@ -287,27 +301,49 @@ fn block(b: &Value, name_of: NameOf) -> Option<ThreadBlock> {
                 .collect();
             (!buttons.is_empty()).then_some(ThreadBlock::Actions { buttons })
         }
-        "rich_text" => rich_text(b, name_of).map(paragraph),
+        "rich_text" => rich_text(b, name_of, workspace).map(paragraph),
         // Standard Markdown, which is not mrkdwn: drawn as it is.
         "markdown" => b["text"]
             .as_str()
             .map(str::to_owned)
             .and_then(not_blank)
-            .map(paragraph),
+            .map(|text| paragraph(plain(text))),
         _ => None,
     }
 }
 
-/// The inline elements of a `rich_text` section as one string.
-fn inline(elements: &Value, name_of: NameOf) -> String {
+/// Adds `text` to the spans, into the last span when that is no link, so that a text with no mention is one span.
+fn push_text(spans: &mut Vec<Span>, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    match spans.last_mut() {
+        Some(last) if last.link.is_none() => last.text.push_str(text),
+        _ => spans.push(Span {
+            text: text.to_owned(),
+            ..Span::default()
+        }),
+    }
+}
+
+/// Adds the spans of `more`, joining text to text.
+fn push_spans(spans: &mut Vec<Span>, more: Vec<Span>) {
+    for s in more {
+        match s.link {
+            None => push_text(spans, &s.text),
+            Some(_) => spans.push(s),
+        }
+    }
+}
+
+/// The inline elements of a `rich_text` section as spans with no style: one text, cut only by the mentions of users that `user_link` gives an address (S-12), each a link.
+fn inline(elements: &Value, name_of: NameOf, workspace: Option<&str>) -> Vec<Span> {
     let name = |id: &Value| {
         name_of(id.as_str().unwrap_or_default()).unwrap_or_else(|| UNKNOWN_NAME.to_owned())
     };
-    elements
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|e| match e["type"].as_str().unwrap_or_default() {
+    let mut out = Vec::new();
+    for e in elements.as_array().into_iter().flatten() {
+        let text = match e["type"].as_str().unwrap_or_default() {
             "text" => e["text"].as_str().unwrap_or_default().to_owned(),
             "link" => {
                 let url = e["url"].as_str().unwrap_or_default();
@@ -316,43 +352,74 @@ fn inline(elements: &Value, name_of: NameOf) -> String {
                     None => url.to_owned(),
                 }
             }
-            "user" => format!("@{}", name(&e["user_id"])),
+            "user" => {
+                let text = format!("@{}", name(&e["user_id"]));
+                let link = user_link(workspace, e["user_id"].as_str().unwrap_or_default());
+                if link.is_some() {
+                    out.push(Span {
+                        text,
+                        link,
+                        ..Span::default()
+                    });
+                    continue;
+                }
+                text
+            }
             "usergroup" => format!("@{}", name(&e["usergroup_id"])),
             "channel" => format!("#{UNKNOWN_NAME}"),
             "broadcast" => format!("@{}", e["range"].as_str().unwrap_or_default()),
             "emoji" => emojify(&format!(":{}:", e["name"].as_str().unwrap_or_default())),
             "date" => e["fallback"].as_str().unwrap_or_default().to_owned(),
             _ => String::new(),
-        })
-        .collect()
+        };
+        push_text(&mut out, &text);
+    }
+    out
 }
 
-/// One top-level element of a `rich_text` block as text.
-fn rich_element(e: &Value, name_of: NameOf) -> String {
+/// The spans with `> ` at the start of each line (a line break at the very end starts no line).
+fn quote_lines(spans: Vec<Span>) -> Vec<Span> {
+    let (mut out, mut at_start) = (Vec::new(), true);
+    for s in spans {
+        if s.link.is_some() {
+            if at_start {
+                push_text(&mut out, "> ");
+            }
+            at_start = false;
+            out.push(s);
+            continue;
+        }
+        let mut text = String::new();
+        for c in s.text.chars() {
+            if at_start {
+                text.push_str("> ");
+            }
+            text.push(c);
+            at_start = c == '\n';
+        }
+        push_text(&mut out, &text);
+    }
+    out
+}
+
+/// One top-level element of a `rich_text` block as spans.
+fn rich_element(e: &Value, name_of: NameOf, workspace: Option<&str>) -> Vec<Span> {
     let lines = |marker: &dyn Fn(usize) -> String, indent: usize| {
-        e["elements"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .map(|(i, item)| {
-                format!(
-                    "{}{}{}",
-                    "  ".repeat(indent),
-                    marker(i),
-                    inline(&item["elements"], name_of)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut out = Vec::new();
+        for (i, item) in e["elements"].as_array().into_iter().flatten().enumerate() {
+            if i > 0 {
+                push_text(&mut out, "\n");
+            }
+            push_text(&mut out, &format!("{}{}", "  ".repeat(indent), marker(i)));
+            push_spans(&mut out, inline(&item["elements"], name_of, workspace));
+        }
+        out
     };
     match e["type"].as_str().unwrap_or_default() {
-        "rich_text_section" | "rich_text_preformatted" => inline(&e["elements"], name_of),
-        "rich_text_quote" => inline(&e["elements"], name_of)
-            .lines()
-            .map(|l| format!("> {l}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        "rich_text_section" => inline(&e["elements"], name_of, workspace),
+        // A code block: a mention in it stays text, as in a code block of the text (S-12).
+        "rich_text_preformatted" => inline(&e["elements"], name_of, None),
+        "rich_text_quote" => quote_lines(inline(&e["elements"], name_of, workspace)),
         "rich_text_list" => {
             let indent = e["indent"].as_u64().unwrap_or(0).min(8) as usize;
             if e["style"] == "ordered" {
@@ -361,24 +428,35 @@ fn rich_element(e: &Value, name_of: NameOf) -> String {
                 lines(&|_| "• ".to_owned(), indent)
             }
         }
-        _ => String::new(),
+        _ => Vec::new(),
     }
 }
 
-/// A `rich_text` block as text: its elements one under another, a list item to a line.
-fn rich_text(b: &Value, name_of: NameOf) -> Option<String> {
-    let mut out = String::new();
+/// A `rich_text` block as one paragraph: its elements one under another, a list item to a line. Its text has no style; a mention of a user is a link (`inline`).
+fn rich_text(b: &Value, name_of: NameOf, workspace: Option<&str>) -> Option<Rich> {
+    let mut out: Vec<Span> = Vec::new();
     for e in b["elements"].as_array()? {
-        let part = rich_element(e, name_of);
+        let part = rich_element(e, name_of, workspace);
         if part.is_empty() {
             continue;
         }
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
+        if out.last().is_some_and(|s| !s.text.ends_with('\n')) {
+            push_text(&mut out, "\n");
         }
-        out.push_str(&part);
+        push_spans(&mut out, part);
     }
-    not_blank(out.trim_end().to_owned())
+    // The white space at the end is not drawn.
+    while let Some(last) = out.last_mut() {
+        let kept = last.text.trim_end().len();
+        last.text.truncate(kept);
+        if !last.text.is_empty() {
+            break;
+        }
+        out.pop();
+    }
+    out.iter()
+        .any(|s| !s.text.trim().is_empty())
+        .then(|| vec![RichBlock::Paragraph { spans: out }])
 }
 
 /// `#rrggbb` or `#rgb` for a hex colour (the `#` is optional) and for Slack's three words; anything else is no colour.
@@ -500,18 +578,18 @@ pub(crate) fn fold_rich(rich: &Rich) -> Option<Rich> {
     (!whole).then_some(out)
 }
 
-fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
+fn attachment(a: &Value, name_of: NameOf, workspace: Option<&str>) -> Option<ThreadAttachment> {
     if !a.is_object() {
         return None;
     }
     let text = |key: &str| text_of(&a[key], name_of);
     // Only the texts `mrkdwn_in` names are read for styles (`text`, `pretext` and `fields`, for the values of the fields); the others are plain text.
     let styled = |key: &str| items(&a["mrkdwn_in"]).iter().any(|k| k == key);
-    let rich = |key: &str| rich_of(&a[key], name_of, styled(key));
+    let rich = |key: &str| rich_of(&a[key], name_of, workspace, styled(key));
     let title = text("title");
     let body = rich("text");
     // The attachment's `text` is always drawn, so its blocks follow the message's rule: a `rich_text` that only repeats the `text` is not drawn, and with no `text` it is.
-    let blocks = message_blocks(&a["blocks"], body.is_none(), name_of).0;
+    let blocks = message_blocks(&a["blocks"], body.is_none(), name_of, workspace).0;
     let mut out = ThreadAttachment {
         color: color(a["color"].as_str()),
         pretext: rich("pretext"),
@@ -529,7 +607,7 @@ fn attachment(a: &Value, name_of: NameOf) -> Option<ThreadAttachment> {
             .filter_map(|f| {
                 let (title, value) = (
                     text_of(&f["title"], name_of),
-                    rich_of(&f["value"], name_of, styled("fields")),
+                    rich_of(&f["value"], name_of, workspace, styled("fields")),
                 );
                 (title.is_some() || value.is_some()).then(|| ThreadField {
                     title: title.unwrap_or_default(),
@@ -610,12 +688,17 @@ pub(crate) fn unfurled_urls(attachments: &Value) -> Vec<String> {
 }
 
 /// The attachments that can be drawn.
-pub(crate) fn message_attachments(attachments: &Value, name_of: NameOf) -> Vec<ThreadAttachment> {
+/// `workspace` is as for `message_blocks`.
+pub(crate) fn message_attachments(
+    attachments: &Value,
+    name_of: NameOf,
+    workspace: Option<&str>,
+) -> Vec<ThreadAttachment> {
     attachments
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|a| attachment(a, name_of))
+        .filter_map(|a| attachment(a, name_of, workspace))
         .collect()
 }
 
@@ -826,7 +909,7 @@ mod tests {
     use serde_json::json;
 
     fn blocks(v: Value) -> Vec<ThreadBlock> {
-        message_blocks(&v, false, &|_| None).0
+        message_blocks(&v, false, &|_| None, None).0
     }
 
     /// A text with no style.
@@ -873,7 +956,7 @@ mod tests {
     }
 
     fn drawn(v: Value, draw_rich_text: bool) -> (Vec<ThreadBlock>, bool) {
-        message_blocks(&v, draw_rich_text, &|_| None)
+        message_blocks(&v, draw_rich_text, &|_| None, None)
     }
 
     #[test]
@@ -1121,9 +1204,118 @@ mod tests {
             &json!([{"type": "section", "text": {"type": "mrkdwn", "text": "hi <@U1> and <@U2>"}}]),
             false,
             &names,
+            None,
         )
         .0;
         assert_eq!(list, vec![section("hi @Alice and @不明")]);
+    }
+
+    #[test]
+    fn a_mention_of_a_user_in_a_block_or_an_attachment_is_a_link_in_the_workspace() {
+        let names = |id: &str| (id == "U1").then(|| "Alice".to_owned());
+        let workspace = Some("https://a.slack.com/");
+        let link = |text: &str, id: &str| Span {
+            text: text.to_owned(),
+            link: Some(format!("https://a.slack.com/team/{id}")),
+            ..Span::default()
+        };
+        let text = |text: &str| Span {
+            text: text.to_owned(),
+            ..Span::default()
+        };
+        let para = |spans: Vec<Span>| vec![RichBlock::Paragraph { spans }];
+        // A section's mrkdwn text, and a context's.
+        let list = message_blocks(
+            &json!([
+                {"type": "section", "text": {"type": "mrkdwn", "text": "hi <@U1>"}},
+                {"type": "context", "elements": [{"type": "mrkdwn", "text": "<@U2>"}, {"type": "plain_text", "text": "<@U1>"}]}
+            ]),
+            false,
+            &names,
+            workspace,
+        )
+        .0;
+        assert_eq!(
+            list,
+            vec![
+                ThreadBlock::Section {
+                    text: Some(para(vec![text("hi "), link("@Alice", "U1")])),
+                    fields: Vec::new(),
+                    accessory: None,
+                },
+                ThreadBlock::Context {
+                    elements: vec![
+                        ThreadContext::Text {
+                            text: para(vec![link("@不明", "U2")])
+                        },
+                        // A `plain_text` object is not mrkdwn: no mention is read in it.
+                        ThreadContext::Text {
+                            text: para(vec![text("<@U1>")])
+                        },
+                    ]
+                },
+            ]
+        );
+        // A `rich_text` block: a user is a link, in a section, a quote and a list; a user group, a broadcast, an ID of another shape and a user in a code block stay text.
+        let rich = json!([{"type": "rich_text", "elements": [
+            {"type": "rich_text_section", "elements": [
+                {"type": "text", "text": "to "}, {"type": "user", "user_id": "U1"},
+                {"type": "text", "text": " "}, {"type": "usergroup", "usergroup_id": "S1"},
+                {"type": "text", "text": " "}, {"type": "broadcast", "range": "here"},
+                {"type": "text", "text": " "}, {"type": "user", "user_id": "u1/x"}
+            ]},
+            {"type": "rich_text_quote", "elements": [{"type": "user", "user_id": "U1"}, {"type": "text", "text": " said\nso"}]},
+            {"type": "rich_text_list", "style": "bullet", "elements": [
+                {"type": "rich_text_section", "elements": [{"type": "user", "user_id": "W2"}]},
+                {"type": "rich_text_section", "elements": [{"type": "text", "text": "b"}]}
+            ]},
+            {"type": "rich_text_preformatted", "elements": [{"type": "user", "user_id": "U1"}]}
+        ]}]);
+        let spans = vec![
+            text("to "),
+            link("@Alice", "U1"),
+            text(" @不明 @here @不明\n> "),
+            link("@Alice", "U1"),
+            text(" said\n> so\n• "),
+            link("@不明", "W2"),
+            text("\n• b\n@Alice"),
+        ];
+        let plain_text: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(
+            message_blocks(&rich, true, &names, workspace).0,
+            vec![ThreadBlock::Section {
+                text: Some(para(spans)),
+                fields: Vec::new(),
+                accessory: None,
+            }]
+        );
+        // With no workspace address the same block is one text, as before.
+        assert_eq!(
+            message_blocks(&rich, true, &names, None).0,
+            vec![section(&plain_text)]
+        );
+        // An attachment's text, the value of a field and its blocks.
+        let attachments = message_attachments(
+            &json!([{
+                "text": "<@U1>", "mrkdwn_in": ["text", "fields"],
+                "fields": [{"title": "<@U1>", "value": "<@U1>"}],
+                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "<@U1>"}}]
+            }]),
+            &names,
+            workspace,
+        );
+        let mention = para(vec![link("@Alice", "U1")]);
+        assert_eq!(attachments[0].text, Some(mention.clone()));
+        assert_eq!(attachments[0].fields[0].title, "@Alice");
+        assert_eq!(attachments[0].fields[0].value, mention);
+        assert_eq!(
+            attachments[0].blocks,
+            vec![ThreadBlock::Section {
+                text: Some(mention),
+                fields: Vec::new(),
+                accessory: None,
+            }]
+        );
     }
 
     #[test]
@@ -1134,6 +1326,7 @@ mod tests {
                 &json!([{"type": "section", "text": {"type": "mrkdwn", "text": t}}]),
                 false,
                 &names,
+                None,
             )
             .0
         };
@@ -1147,11 +1340,11 @@ mod tests {
             {"type": "usergroup", "usergroup_id": "S2"}
         ]}]}]);
         assert_eq!(
-            message_blocks(&rich, true, &names).0,
+            message_blocks(&rich, true, &names, None).0,
             vec![section("@design @不明")]
         );
         assert_eq!(
-            message_blocks(&rich, true, &|_| None).0,
+            message_blocks(&rich, true, &|_| None, None).0,
             vec![section("@不明 @不明")]
         );
     }
@@ -1331,7 +1524,7 @@ mod tests {
             {"type": "rich_text_quote", "elements": [{"type": "text", "text": "quoted <b>"}]},
             {"type": "rich_text_preformatted", "elements": [{"type": "text", "text": "let x = 1;\n"}]}
         ]));
-        let list = message_blocks(&json!([r, {"type": "divider"}]), false, &names).0;
+        let list = message_blocks(&json!([r, {"type": "divider"}]), false, &names, None).0;
         assert_eq!(
             list[0],
             section("hello @Alice and @不明 #不明@here🎉:my_custom:https://a.example Nov 4\n• one\n• two\n  1. first\n  2. second\n> quoted <b>\nlet x = 1;")
@@ -1347,7 +1540,7 @@ mod tests {
     }
 
     fn attachments(v: Value) -> Vec<ThreadAttachment> {
-        message_attachments(&v, &|_| None)
+        message_attachments(&v, &|_| None, None)
     }
 
     fn bare() -> ThreadAttachment {
@@ -1732,8 +1925,8 @@ mod tests {
     /// What `message_plain` reads from a whole message of Slack's JSON, with the text the screen would show.
     fn plain_of(m: Value, text: &str) -> String {
         let draw_rich_text = m["bot"] == true;
-        let (b, show_text) = message_blocks(&m["blocks"], draw_rich_text, &|_| None);
-        let a = message_attachments(&m["attachments"], &|_| None);
+        let (b, show_text) = message_blocks(&m["blocks"], draw_rich_text, &|_| None, None);
+        let a = message_attachments(&m["attachments"], &|_| None, None);
         message_plain(text, show_text, &b, &a)
     }
 
