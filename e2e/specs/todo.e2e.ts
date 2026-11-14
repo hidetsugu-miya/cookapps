@@ -1605,7 +1605,7 @@ describe("todo detail menu", () => {
     expect(sizes[0]).toBe(sizes[1]);
     expect(sizes[2]).toBeLessThanOrEqual(46);
     await $(more).click();
-    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    await waitForCount(items, 2);
     await expect($(more)).toHaveAttribute("aria-expanded", "true");
     await $("#todo-back").click();
     await expect($(more)).not.toBeDisplayed();
@@ -2757,6 +2757,7 @@ describe("todo detail comments", () => {
     await $("#todo-detail .c-head").click();
     await expect($("#todo-detail .c-head")).toHaveAttribute("aria-expanded", "true");
     await expect($("#todo-detail .c-list")).toBeDisplayed();
+    await waitForCount(rows, 3);
   });
 
   it("sends the typed text with todoist_add_comment, adds the answer to the list and empties the field", async () => {
