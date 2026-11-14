@@ -11,7 +11,7 @@ A-23: the band at the top of every screen is a little higher (44px, from 40px), 
 
 A-8: the close button of a tab on the Orca screen is larger (#618).
 
-The MCP server is built with rmcp 3.9.0 (#642), and the lint of the source runs with Biome 2.6.6 (#640).
+The MCP server is built with rmcp 3.9.0 (#642), and the lint of the source runs with Biome 2.6.6 (#640). The tests of the screens run with WebdriverIO 10.2.0 (#641, #647, #648).
 
 ## v0.72.0
 
