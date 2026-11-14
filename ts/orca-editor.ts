@@ -496,6 +496,19 @@ export async function closeFile(id: string) {
   return true;
 }
 
+// Takes out the tabs of the files of the worktree at `path` that are gone from the disk (A-18): the file `relative`, or with `folder` every file under that folder. Their typing is not saved (there is nothing to save it to), and a save on its way is not waited for. True when a tab was closed.
+export function discardFiles(target: string | null, project: string, path: string, relative: string, folder: boolean) {
+  const gone = filesOf(target, project).filter((f) => f.path === path && (f.relative === relative || (folder && f.relative.startsWith(`${relative}/`))));
+  for (const f of gone) {
+    clearTimer(f);
+    cancelPaint(f);
+    clearRich(f);
+    f.el.remove();
+    files.delete(f.id);
+  }
+  return gone.length > 0;
+}
+
 // Shows each file of `placements` in its host element and takes every other file out of the page (it keeps its text).
 export function showEditors(placements: { id: string; host: HTMLElement }[]) {
   const shown = new Set(placements.map((p) => p.id));

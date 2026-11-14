@@ -4161,15 +4161,33 @@ describe("orca: files and editor (A-18)", () => {
       onceId(),
     );
 
-  it("opens a menu of the two copies, the download and the diff on the right button of a file, and writes the path and the path from the worktree", async () => {
+  // Whether the last item of the open menu is 「削除」 and is drawn in the danger color (the variable --danger), unlike the item before it.
+  const deleteItemIsRed = () =>
+    browser.execute(() => {
+      const items = [...document.querySelectorAll<HTMLElement>('.menu[role="menu"] button')];
+      const last = items[items.length - 1];
+      const danger = getComputedStyle(document.documentElement).getPropertyValue("--danger").trim();
+      const probe = document.createElement("span");
+      probe.style.color = danger;
+      document.body.append(probe);
+      const expected = getComputedStyle(probe).color;
+      probe.remove();
+      return last.textContent === "削除" && danger !== "" && getComputedStyle(last).color === expected && getComputedStyle(items[items.length - 2]).color !== expected;
+    });
+
+  it("opens a menu of the two copies, the download, the diff and the delete on the right button of a file, and writes the path and the path from the worktree", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await stubClipboard();
     expect(await rightClickRow("a.rs")).toBe(true);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(4);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(5);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
+    // One line, before the delete, which is last and in red.
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "", "削除"]);
+    expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(1);
+    expect(await deleteItemIsRed()).toBe(true);
     await pickItem("パスのコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
     await expect($(".toast")).toHaveText(expect.stringContaining("パスをコピーしました"));
@@ -4188,12 +4206,13 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-files-tree .orca-file", 6);
     await stubClipboard();
     expect(await rightClickRow("src")).toBe(true);
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(4);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(5);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
-    // One line, between the two items that make something and the two copies.
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["新規ファイル", "新規フォルダー", "", "パスのコピー", "相対パスをコピー"]);
-    expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(1);
+    // One line between the two items that make something and the two copies, and one before the delete.
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["新規ファイル", "新規フォルダー", "", "パスのコピー", "相対パスをコピー", "", "削除"]);
+    expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(2);
+    expect(await deleteItemIsRed()).toBe(true);
     await pickItem("パスのコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
     expect(await rightClickRow("src/main.rs")).toBe(true);
@@ -4368,7 +4387,7 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     expect(await rightClickRow("a.rs")).toBe(true);
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示"]);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "削除"]);
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     await rightClickEmpty();
@@ -4381,6 +4400,114 @@ describe("orca: files and editor (A-18)", () => {
     await browser.keys("Enter");
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", dir: "", name: "docs", folder: true, environment: null }]);
     await waitForCount("#orca-files-tree .orca-file", 2);
+  });
+
+  // A-18: the delete. 「削除」 asks first in a popup of the app, and only its red button deletes, for good.
+  const confirmButtons = () => textsOf('.pop[role="alertdialog"] button');
+  async function askDelete(path: string) {
+    expect(await rightClickRow(path)).toBe(true);
+    await pickItem("削除");
+    await expect($('.pop[role="alertdialog"]')).toBeDisplayed();
+  }
+  const pressDelete = () => $('.pop[role="alertdialog"] .text-btn.danger').click();
+
+  it("asks before deleting a file, with its name, a red 「削除」 and 「キャンセル」 that has the keys, and calls nothing until 「削除」 is pressed", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const del = await mock("orca_file_delete", null);
+    await askDelete("a.rs");
+    await expect($(".menu")).not.toExist();
+    await expect($('.pop[role="alertdialog"] p')).toHaveText("a.rs を完全に削除します。元に戻せません。");
+    expect(await confirmButtons()).toEqual(["削除", "キャンセル"]);
+    expect(await browser.execute(() => document.activeElement?.textContent)).toBe("キャンセル");
+    await browser.pause(200);
+    expect(await callsOf(del)).toEqual([]);
+  });
+
+  it("calls nothing on 「キャンセル」, on Escape and on a press elsewhere", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const del = await mock("orca_file_delete", null);
+    await askDelete("a.rs");
+    await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await askDelete("a.rs");
+    await browser.keys("Escape");
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await askDelete("b.log");
+    // WebDriver's element click sends no pointerdown, which is what closes the popup: the page's own press elsewhere.
+    await browser.execute(
+      (once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.getElementById("orca-files-bar")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true }));
+      },
+      onceId(),
+    );
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await browser.pause(200);
+    expect(await callsOf(del)).toEqual([]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+  });
+
+  it("deletes a file for good on 「削除」 with the worktree, the path and no recursion, reads its folder again, closes its tab and says nothing", async () => {
+    await openFiles();
+    await openA();
+    await expect($(".orca-edit-area")).toBeDisplayed();
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+    const del = await mock("orca_file_delete", null);
+    const list = await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["b.log", false]]));
+    const write = await mock("orca_file_write", saved("sig-2"));
+    await askDelete("a.rs");
+    await pressDelete();
+    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", relative: "a.rs", folder: false, environment: null }]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 3);
+    expect(await names()).toEqual(["src", "target", "b.log"]);
+    await expect($(".orca-edit-area")).not.toExist();
+    expect(await tabTitles()).toEqual(["Write the docs"]);
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await expect($("#error")).not.toBeDisplayed();
+    expect(await callsOf(write)).toEqual([]);
+  });
+
+  it("deletes a folder with everything in it (recursive), closes the tabs of the files under it only, and drops what was read of it", async () => {
+    await openFiles();
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    await mock("orca_file_read", text("fn main() {}\n", "sig-m"));
+    await doublePress("src/main.rs");
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    await mock("orca_file_read", text("a", "sig-a"));
+    await doublePress("a.rs");
+    await browser.waitUntil(async () => (await tabTitles()).length === 3, { timeoutMsg: "the second file never opened" });
+    expect(await tabTitles()).toEqual(["Write the docs", "main.rs", "a.rs"]);
+    const del = await mock("orca_file_delete", null);
+    const list = await mock("orca_files_list", dirOf("", [["target", true], ["a.rs", false], ["b.log", false]]));
+    await askDelete("src");
+    await expect($('.pop[role="alertdialog"] p')).toHaveText("src を完全に削除します。元に戻せません。");
+    await pressDelete();
+    expect(await waitForCalls(del)).toEqual([{ path: "/work/example-app", relative: "src", folder: true, environment: null }]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 3);
+    expect(await names()).toEqual(["target", "a.rs", "b.log"]);
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the message of a failed delete and changes nothing: the tree and the tab stay", async () => {
+    await openFiles();
+    await openA();
+    const del = await mock("orca_file_delete", rejects("Orca がエラーを返しました（forbidden）"));
+    const list = await mock("orca_files_list", dirOf("", []));
+    await askDelete("a.rs");
+    await pressDelete();
+    await waitForCalls(del);
+    await expect($("#error")).toHaveText("Orca がエラーを返しました（forbidden）");
+    await browser.pause(300);
+    expect(await callsOf(list)).toEqual([]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
   });
 
   // A-22: the download of a file. Rust opens the save dialog and writes where it says; the page sends the worktree, the path from it and the target, and never a place to save.

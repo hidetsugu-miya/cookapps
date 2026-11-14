@@ -313,6 +313,8 @@ export interface Commands {
   orca_file_write: { args: { path: string; relative: string; content: string; crlf: boolean; signature: string; environment: string | null }; result: OrcaSaved };
   // A-18: makes a file, or with `folder` a folder, named `name` in the folder `dir` of the worktree (the empty `dir` is its root), and answers its path from the worktree. A name that is not one name, and one that is taken, are errors; nothing is overwritten.
   orca_file_create: { args: { path: string; dir: string; name: string; folder: boolean; environment: string | null }; result: string };
+  // A-18: deletes the file `relative` of the worktree, or with `folder` the folder and everything in it, for good (no Trash). The root of the worktree and a path outside it are refused.
+  orca_file_delete: { args: { path: string; relative: string; folder: boolean; environment: string | null }; result: null };
   // A-24: the diff of the file `relative` of the worktree, HEAD against the working tree: the rows of both views, the blocks of changes and the language to color by.
   orca_file_diff: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileDiff };
   // A-27: `limit` (1 to 200) commits of the worktree at `path` from HEAD, the newest first, after the first `skip`.

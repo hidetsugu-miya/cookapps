@@ -54,13 +54,12 @@ export function hintPopup(title: string, steps: (string | Node)[][], foot: strin
   return pop;
 }
 
-// The confirmation before unlinking, framed like a hint; Cancel, the same button, a click elsewhere or Escape closes it.
-// `name` is the service or workspace, `body` says what happens to the token and to the service's own data.
-export function confirmUnlink(button: Element, name: string, body: string, onConfirm: () => void) {
-  const pop = tag("div", "pop");
+// A confirmation framed like a hint, with a red button that does it and a Cancel; Cancel, the same button, a click elsewhere or Escape closes it. Cancel has the keys at first.
+function confirmPop(button: Element, label: string, title: string, body: string, yesText: string, onConfirm: () => void, extra = "") {
+  const pop = tag("div", `pop${extra}`);
   pop.setAttribute("role", "alertdialog");
-  pop.setAttribute("aria-label", `${name} の接続を解除`);
-  const yes = tag("button", "text-btn danger", "解除");
+  pop.setAttribute("aria-label", label);
+  const yes = tag("button", "text-btn danger", yesText);
   const no = tag("button", "text-btn", "キャンセル");
   yes.type = no.type = "button";
   yes.onclick = () => {
@@ -70,13 +69,20 @@ export function confirmUnlink(button: Element, name: string, body: string, onCon
   no.onclick = closeHint;
   const actions = tag("div", "popup-actions");
   actions.append(yes, no);
-  pop.append(
-    tag("h3", "", `${name} の接続を解除しますか？`),
-    tag("p", "", body),
-    actions,
-  );
+  pop.append(tag("h3", "", title), tag("p", "", body), actions);
   toggleHint(button, pop);
   no.focus();
+}
+
+// The confirmation before unlinking.
+// `name` is the service or workspace, `body` says what happens to the token and to the service's own data.
+export function confirmUnlink(button: Element, name: string, body: string, onConfirm: () => void) {
+  confirmPop(button, `${name} の接続を解除`, `${name} の接続を解除しますか？`, body, "解除", onConfirm);
+}
+
+// The confirmation before a permanent delete (A-18): `name` is what is deleted, shown in the body in one piece.
+export function confirmDelete(button: Element, name: string, onConfirm: () => void) {
+  confirmPop(button, `${name} を削除`, "削除しますか？", `${name} を完全に削除します。元に戻せません。`, "削除", onConfirm, " pop-confirm");
 }
 
 export function initHint() {

@@ -41,6 +41,8 @@ export interface MenuItem {
   current: boolean;
   // How deep the item is nested, shown as an indent.
   depth?: number;
+  // The row is drawn in the danger color (it deletes).
+  danger?: boolean;
   // A line drawn above the row, to set it apart from the rows before it.
   divider?: boolean;
   // A small label at the right end of the row.
@@ -71,6 +73,7 @@ export function openMenu(anchor: Element, items: MenuItem[], options: MenuOption
     const b = tag("button");
     b.setAttribute("role", "menuitem");
     b.setAttribute("aria-current", String(item.current));
+    if (item.danger) b.classList.add("danger");
     if (item.icon) b.innerHTML = item.icon;
     else {
       const dot = tag("span", "pdot");

@@ -26,7 +26,7 @@ import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
-import { closeFile, dirtyIds, filesOf, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
+import { closeFile, dirtyIds, discardFiles, filesOf, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
 import { filesShown, initOrcaFiles, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
@@ -1144,7 +1144,7 @@ export function initOrca() {
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.2, max: 0.5, initial: 0.25, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: showError });
-  initOrcaFiles({ open: openFile, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw, switched: () => void refreshOrca(true) });
+  initOrcaFiles({ open: openFile, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw, switched: () => void refreshOrca(true), deleted: (here, relative, folder) => discardFiles(here.target, here.project, here.path, relative, folder) && draw() });
   setInterval(refresh, (1000 * shownMs()) / SHOWN_MS);
   document.addEventListener("visibilitychange", () => {
     // A session shown again after the window was hidden is seen.

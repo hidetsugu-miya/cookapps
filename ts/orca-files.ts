@@ -1,11 +1,12 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`); this module draws the folder at once, marks the ignored entries when the answer comes, and takes the presses.
-// A folder is read the first time it is opened and drawn from what was read after that, and the reload button reads the root and then the open folders again, side by side (at most `reads()` at a time). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root, A-18). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read the first time it is opened and drawn from what was read after that, and the reload button reads the root and then the open folders again, side by side (at most `reads()` at a time). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, the delete, which asks first and deletes for good, A-18). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 // The top row also has the two buttons that choose what the pane shows under the heading, the files or the history of the worktree (A-27, orca-history.ts); the choice is kept in memory only, and the heading and its reload button serve both.
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, composing, tag } from "./dom.js";
-import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
+import { confirmDelete } from "./hint.js";
+import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
@@ -56,6 +57,8 @@ let redrawing = false;
 let openFile: (relative: string) => void = () => {};
 let openDiff: (relative: string) => void = () => {};
 let branchSwitched: () => void = () => {};
+// Told that the file `relative` (with `folder`, the folder and everything under it) is gone, so the tabs of the editor that hold it close.
+let gone: (here: FilesContext, relative: string, folder: boolean) => void = () => {};
 // The heading as it is drawn (the label and the branch), so that the branch button stays while the list under it is open.
 let drawnTitle = "";
 // The files open in the worktree, which the last drawing colored.
@@ -279,19 +282,40 @@ async function download(here: FilesContext, relative: string) {
   }
 }
 
+// Deletes the file or folder for good (Orca's `files.delete`, which skips the Trash) once the confirmation has been answered. It is gone from the editor and the tree after: a folder's reads are dropped, and the folder it was in is read again. A worktree that is not the tree's any more only closes the tabs.
+async function remove(here: FilesContext, relative: string, folder: boolean) {
+  const mine = generation;
+  try {
+    await invoke("orca_file_delete", { path: here.path, relative, folder, environment: here.target });
+  } catch (e) {
+    if (mine === generation) showError(e);
+    return;
+  }
+  gone(here, relative, folder);
+  if (mine !== generation) return;
+  const under = (path: string) => path === relative || path.startsWith(`${relative}/`);
+  if (folder) {
+    for (const path of [...listings.keys()]) if (under(path)) listings.delete(path);
+    for (const path of [...expanded]) if (under(path)) expanded.delete(path);
+    if (creating !== null && under(creating.dir)) creating = null;
+  }
+  await readDir(relative.slice(0, Math.max(0, relative.lastIndexOf("/"))));
+}
+
 const menuItem = (label: string, icon: string, pick: () => unknown) => ({ label, color: "var(--accent)", icon, current: false, pick });
 
 // The two items that make a new file or folder in the folder `dir` (the empty one is the worktree's root).
 const createItems = (dir: string) => [menuItem("新規ファイル", FILE_SVG, () => startCreate(dir, false)), menuItem("新規フォルダー", FOLDER_SVG, () => startCreate(dir, true))];
 
-// The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download and the difference from HEAD (A-24). The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
+// The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download and the difference from HEAD (A-24); and on both, last and after a line, the delete in red. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
 function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
   if (here === null) return;
   const copy = (label: string, text: string, done: string) => menuItem(label, COPY_PATH_SVG, () => void copyText(text, done));
+  const del = { ...menuItem("削除", DELETE_SVG, () => confirmDelete(anchor, relative.slice(relative.lastIndexOf("/") + 1), () => void remove(here, relative, isDirectory))), danger: true, divider: true };
   const [path, from] = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
-  if (isDirectory) openMenu(anchor, [...createItems(relative), { ...path, divider: true }, from]);
-  else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative))]);
+  if (isDirectory) openMenu(anchor, [...createItems(relative), { ...path, divider: true }, from, del]);
+  else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative)), del]);
 }
 
 // The menu of the empty part of the tree (the right button): the new file and folder in the root of the worktree, where the pointer is.
@@ -435,10 +459,11 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   draw();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: () => void; deleted: (here: FilesContext, relative: string, folder: boolean) => void }) {
   openFile = on.open;
   openDiff = on.diff;
   branchSwitched = on.switched;
+  gone = on.deleted;
   initHistory({ open: on.commitDiff });
   $("orca-files-tree").oncontextmenu = openRootMenu;
   $("orca-files-toggle").innerHTML = FOLDER_SVG;
