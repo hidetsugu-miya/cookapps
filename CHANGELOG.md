@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.71.2
+
+S-1: the left pane of the "Slack に貼る" screen is now the original message at the top and, under it, a numbered list of things to do: where to post and what (#606). A thing to do goes to a channel or a thread, or to the thread of an earlier one, and posts a text written on its card or the original message. "投稿" ("N 件を投稿" for several) posts them from the top, and one that follows another is a reply to that post. A failure stops the rest, and what was posted is never posted twice. The screen stays open after a post, so more can be added. `@here`, `@channel` and `@everyone` written on a card notify the channel.
+
+S-4, S-23: a request to Claude on that screen can write the things to do, for example a short message to a channel and then the mail in its thread, and can post them all when the request asks for it (#607). The app decides whether to post, for the whole list: every destination must be one the owner chose, one the request names, or the thread of an earlier post, and a text may hold only the links and mentions of the original message or of the request. A text that Claude wrote in the same answer is posted only when the request holds it; otherwise nothing is posted and the cards wait for "投稿".
+
+S-23: a Slack link in the request is a destination, so pasting the link of a thread and asking to post there works (#608).
+
+S-4: the heading of the right pane no longer says "Claude と校正" (#605).
+
+A-8: the list of the Orca screen has no reload button (#609). The list is read again by itself, and whenever the screen is shown.
+
 ## v0.71.1
 
 A-17: the divider between two panes of a split Orca work pane can be dragged, to the left and right in a split side by side and up and down in a split one above the other (#597). Only the two panes beside the divider change, and a pane never gets smaller than a tenth of the split. The sizes are remembered with the split of each project.
