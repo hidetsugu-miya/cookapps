@@ -128,12 +128,35 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #slack-header .icon-btn { color: #444746; border-radius: 50%; }
 #unread-heading .text-btn:disabled { opacity: .4; cursor: default; }
 #unread-heading .text-btn:disabled:hover { background: var(--surface); }
-/* The operations of the open mail: a row of icons at the right end of the body (its left padding keeps them right of the subject's column, 56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding (and sticks 8px above its content box, WebKit measuring from there) and has the color of the body, so that nothing shows through it. The line before "ゴミ箱へ移動" is drawn by the button itself, so it is not there when the buttons that take a row out are hidden. */
-#thread-actions { position: sticky; top: -8px; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: 0 -24px 0 -32px; padding: 4px 24px 4px 88px; background: var(--surface); }
+/* The operations of the open mail (M-2): a row of icons, 48px high, at the right end of the body (its left padding keeps them right of the subject's column, 56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding and has the color of the body, so that nothing shows through it, and a line under it. The icons are in three groups, set apart by a line drawn by the first button of a group: the summary, then "Slack に貼る", "Todo にする" and "Orca に渡す", then the two that take the row out; so no line is there when the group before it, or the group itself, is hidden. */
+#thread-actions { position: sticky; top: 0; z-index: 2; flex: none; box-sizing: border-box; height: 48px; display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: 0 -24px 0 -32px; padding: 0 24px 0 88px; background: var(--surface); border-bottom: 1px solid var(--line); }
 #thread-actions .icon-btn { width: 34px; height: 34px; color: var(--ink-soft); border-radius: 50%; }
 #thread-actions .icon-btn svg { width: 20px; height: 20px; }
-#thread-actions #trash { position: relative; margin-left: 10px; }
-#thread-actions #trash::before { content: ""; position: absolute; left: -7px; top: 7px; bottom: 7px; width: 1px; background: var(--chip-line); }
+#thread-actions #trash, #thread-summary:not([hidden]) + #thread-slack { position: relative; margin-left: 10px; }
+#thread-actions #trash::before, #thread-summary:not([hidden]) + #thread-slack::before { content: ""; position: absolute; left: -7px; top: 7px; bottom: 7px; width: 1px; background: var(--chip-line); }
+/* M-10: while a thread is open, #main is a column that holds the thread to the height of the area, and the reply field (#reply) sits at its bottom: it stays there, over the end of the messages, while they scroll. The field reaches the edges of #main's padding, as the row of operations does. */
+#main:has(> #thread:not([hidden])) { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
+#main > #thread:not([hidden]) { flex: 1 0 auto; display: flex; flex-direction: column; }
+#reply { position: sticky; bottom: 0; z-index: 2; flex: none; margin: auto -24px 0 -32px; padding: 10px 14px; background: var(--bar); border-top: 1px solid var(--line); }
+.reply-card { display: flex; flex-direction: column; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
+.reply-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.reply-mode { position: relative; flex: none; display: inline-flex; align-items: center; color: var(--ink-soft); }
+#reply-mode { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 14px 2px 0; cursor: pointer; }
+.reply-mode::after { content: ""; position: absolute; right: 2px; top: 50%; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+.reply-key { flex: none; min-width: 2.6em; padding: 2px 0; color: var(--ink-soft); }
+.reply-field { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.reply-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 0 2px 0 8px; border: 1px solid var(--chip-line); border-radius: 999px; font-size: calc(12px * var(--fs)); }
+.reply-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reply-chip-x { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink-soft); line-height: 1; cursor: pointer; }
+.reply-chip-x:hover { background: var(--soft); }
+.reply-input { flex: 1 1 80px; min-width: 80px; padding: 2px 0; border: 0; outline: 0; background: transparent; font: inherit; }
+.reply-more { flex: none; display: flex; gap: 8px; }
+.reply-link { padding: 2px 0; border: 0; background: none; color: var(--ink-soft); font: inherit; cursor: pointer; }
+.reply-link:hover { color: var(--accent); }
+#reply-body { display: block; box-sizing: border-box; width: 100%; min-height: 64px; max-height: 40vh; padding: 10px 12px; border: 0; outline: 0; background: transparent; font: inherit; line-height: 1.5; resize: vertical; }
+.reply-foot { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; }
+.reply-foot #reply-discard { margin-left: auto; }
+.reply-foot .text-btn:disabled { opacity: .4; cursor: default; }
 #thread-head { margin: 16px 0 20px 56px; font-size: calc(22px * var(--fs)); line-height: 1.35; }
 #thread-subject { display: inline; margin: 0; font-size: inherit; font-weight: normal; color: #1f1f1f; white-space: normal; overflow-wrap: anywhere; }
 #thread-head .label { display: inline-block; white-space: nowrap; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--code-line); color: #444746; font-size: calc(11px * var(--fs)); vertical-align: middle; }

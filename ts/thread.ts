@@ -1,4 +1,4 @@
-// The thread detail view: the messages of the open thread, their folding, and the buttons of its header.
+// The thread detail view: the messages of the open thread, their folding, the row of its operations and the reply field.
 import type { MessageDetail } from "./bindings/MessageDetail";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
 import { $, span } from "./dom.js";
@@ -14,6 +14,7 @@ import { clearSummary, renderSummary, summaryPressed } from "./mail-summary.js";
 import { linkify } from "./mail-text.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
+import { bindReply, initReply, resetReply, type ReplyTarget } from "./mail-reply.js";
 import { mailCard } from "./orca-handoff-cards.js";
 import { initSplit } from "./split.js";
 import { makeTodo } from "./todo-add.js";
@@ -239,6 +240,7 @@ function draw(t: ThreadDetail, { id, account, li }: ThreadTarget, seq: number) {
     $<HTMLButtonElement>(button).disabled = button === "thread-todo" && $(button).classList.contains("busy");
   }
   renderSummary(thread);
+  bindReply({ id, account, subject: t.subject }, t.reply);
   handoff.sync();
 }
 
@@ -267,6 +269,15 @@ async function refresh(target: ThreadTarget, stamp: number, seq: number) {
   }
 }
 
+// Reads the thread again once a reply went out, and draws it with the reply in it. Nothing is drawn when the thread was left meanwhile.
+async function reloadSent({ id, account }: ReplyTarget) {
+  const seq = openCount;
+  const t = await invoke("thread", { account, id });
+  if (seq !== openCount) return;
+  if (t === null) return needsLogin();
+  draw(t, { id, account, li: opened.current ? opened.current.li : null }, seq);
+}
+
 // `thread` is the row's item (or just the ids, for a thread opened from Todo with no row): its subject and sender are shown at once, and the body once Gmail answers.
 // A thread that Rust holds from an earlier open is drawn from that copy at once, and Gmail is asked in the background (`refresh`).
 export async function openThread(
@@ -282,6 +293,7 @@ export async function openThread(
   loading.current = { id, account };
   threadOrigin = origin;
   clearSummary();
+  resetReply();
   $("thread-subject").textContent = subject === undefined ? "" : subject || "(件名なし)";
   // Empty until Rust says whether it holds the thread (an answer from memory), so a held thread never shows the note.
   $("messages").replaceChildren();
@@ -342,6 +354,7 @@ function removeCurrent(command: "archive" | "trash") {
 }
 
 export function initThread() {
+  initReply(reloadSent);
   handoff = new HandoffPane({
     root: $("mail-handoff"),
     current: () => {

@@ -233,6 +233,9 @@ export const inbox = (threads = [thread("t1", "First unread", true), thread("t2"
 export const threadLoaded = () =>
   browser.waitUntil(() => browser.execute(() => !document.getElementById("thread")!.hasAttribute("aria-busy")), { timeoutMsg: "the thread did not arrive" });
 
+// Who a reply to the thread of `threadDetail` goes to (M-10): Alice for "返信"; Alice and Bob, with Carol in Cc, for "全員に返信".
+const alice = { label: "Alice", mailbox: "Alice <alice@example.com>" };
+
 // A thread of one plain-text message.
 export const threadDetail = (subject: string, body: string, unread: boolean): ThreadDetail => ({
   subject,
@@ -252,6 +255,10 @@ export const threadDetail = (subject: string, body: string, unread: boolean): Th
       authenticated: false,
     },
   ],
+  reply: {
+    one: { to: [alice], cc: [] },
+    all: { to: [alice, { label: "Bob", mailbox: "Bob <bob@example.com>" }], cc: [{ label: "Carol", mailbox: "carol@example.com" }] },
+  },
 });
 
 // ---- Calendar ----

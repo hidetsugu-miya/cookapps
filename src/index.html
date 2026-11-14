@@ -87,6 +87,28 @@
         <div id="thread-head"><h2 id="thread-subject"></h2><span id="thread-label" class="label">受信トレイ</span></div>
         <div id="mail-summary" role="status" hidden></div>
         <div id="messages"></div>
+        <div id="reply" hidden>
+          <div class="reply-card">
+            <div class="reply-row">
+              <label class="reply-mode"><select id="reply-mode" aria-label="返信の種類"><option value="one">返信</option><option value="all">全員に返信</option></select></label>
+              <div id="reply-to-field" class="reply-field"><input id="reply-to-input" class="reply-input" aria-label="宛先を追加" autocomplete="off" spellcheck="false"></div>
+              <span class="reply-more"><button id="reply-cc-open" class="reply-link" type="button">Cc</button><button id="reply-bcc-open" class="reply-link" type="button">Bcc</button></span>
+            </div>
+            <div id="reply-cc-row" class="reply-row" hidden>
+              <span class="reply-key">Cc</span>
+              <div id="reply-cc-field" class="reply-field"><input id="reply-cc-input" class="reply-input" aria-label="Cc を追加" autocomplete="off" spellcheck="false"></div>
+            </div>
+            <div id="reply-bcc-row" class="reply-row" hidden>
+              <span class="reply-key">Bcc</span>
+              <div id="reply-bcc-field" class="reply-field"><input id="reply-bcc-input" class="reply-input" aria-label="Bcc を追加" autocomplete="off" spellcheck="false"></div>
+            </div>
+            <textarea id="reply-body" aria-label="返信の本文" rows="3"></textarea>
+            <div class="reply-foot">
+              <button id="reply-send" class="text-btn primary" type="button" disabled>送信</button>
+              <button id="reply-discard" class="text-btn" type="button">破棄</button>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
     <div id="mail-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Orca の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="40" tabindex="0" hidden><span></span></div>
