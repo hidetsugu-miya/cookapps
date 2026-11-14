@@ -3,6 +3,14 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.71.0
+
+A-30: the scratchpad works on an SSH host's row too (#588, #589, #590). 「スクラッチパッド」 of the plus makes a file for notes in `~/.local/share/cookapps/scratchpad/` on the host and opens it in the editor, where it is saved as any file. Orca does not serve the files of an SSH host, so the app runs this Mac's `ssh` command itself: the Host must be in `~/.ssh/config` of this Mac, and a key with a passphrase in ssh-agent. A host that Orca added by hand is reached with the user name and the port saved in Orca. Each call is one of six fixed commands, and a name or a text is sent on the standard input only.
+
+A-30: while the row of an SSH host is selected with no tab, or with a scratchpad file's tab, the file pane lists the files of that folder (#590). A double press opens a file, and the menu of the right button has 「新規ファイル」, 「移動・名前の変更」 (a new name only: the folder holds no folder) and 「削除」, which asks first and deletes for good. The list is read again when the window gets the focus back and after the app's own changes. An SSH row that this Mac's Orca does not hold has no scratchpad.
+
+S-12: a mention of a user in a Slack message is a link to the user's profile, `https://{workspace}.slack.com/team/{user ID}`, in the list, a channel's history and the thread, and in blocks and attachments (#594). Pressing it opens the default browser. A mention of a user group, `@here`, `@channel` and `@everyone`, and a mention inside code stay text: Slack documents no address that opens a user group.
+
 ## v0.70.0
 
 A-29: the plus of the Orca work pane has a third item, 「スクラッチパッド」, that makes a file for notes in `.orca/scratchpad/` of the worktree and opens it in the editor (#582). A small field under the plus shows the folder and the name, `memo.md` at first; Enter or 「作って開く」 makes the file, and Escape or 「やめる」 closes the field. A name that is taken opens the file that is there, and nothing is overwritten. The item cannot be chosen while the selected row is an SSH host's.
