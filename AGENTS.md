@@ -83,6 +83,7 @@ tmp/           scratch files, gitignored except .keep
 ## Run
 
 Install the Rust version in `rust-toolchain.toml`.
+Install a Node.js that WebdriverIO 10 accepts, which E2E needs: 22.23.4 or later of 22, 24.22.1 or later of 24, or 26.12.1 or later.
 
 ```sh
 npm install

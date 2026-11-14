@@ -507,7 +507,9 @@ export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general", pri
 export const checked = (missingScopes: string[] | null, missingOptional: string[] | null = []): Checked => ({ ...workspace, missingScopes, missingOptional });
 
 // A Slack timestamp `minutes` minutes ago ("1700000000.000100"); `n` tells apart messages of the same minute.
-export const slackTs = (minutes: number, n = 0) => `${Math.floor(Date.now() / 1000) - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
+// "Ago" counts from the second this module was loaded, read once: the same arguments give the same timestamp at every call, so a message made twice in a spec is one message (the timestamp is part of its key).
+const slackNow = Math.floor(Date.now() / 1000);
+export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 
 // The permalink of the message with `ts` in the channel `C0123ABCD` of `workspace`.
 export const permalinkOf = (ts: string) => `${workspace.url}archives/C0123ABCD/p${ts.replace(".", "")}`;
@@ -678,8 +680,9 @@ export const orcaSsh = (id: string, label: string): OrcaSshTarget => ({ id, labe
 const STATUS_ORDER: OrcaStatus[] = ["question", "failed", "working", "monitoring", "interrupted", "done", "idle"];
 
 // The project list of what is on the screen: one project for each repository of the rows, the worktrees and the terminals, the highest status of its rows (a terminal is a green dot), and its sessions.
+// An SSH host (`ssh:{id}`) is no project: Rust lists it in `hosts`, which a spec gives in `extra`.
 function projectsOf(rows: OrcaRow[], worktrees: OrcaWorktree[], terminals: OrcaTerminal[]): OrcaProject[] {
-  const keys = [...new Set([...rows.map((r) => r.projectKey), ...worktrees.map((w) => w.projectKey), ...terminals.map((t) => t.projectKey)])];
+  const keys = [...new Set([...rows.map((r) => r.projectKey), ...worktrees.map((w) => w.projectKey), ...terminals.map((t) => t.projectKey)])].filter((key) => !key.startsWith("ssh:"));
   return keys.map((key) => {
     const mine = rows.filter((r) => r.projectKey === key);
     const mineTerminals = terminals.filter((t) => t.projectKey === key);

@@ -29,7 +29,7 @@ describe("inbox", () => {
   });
 
   it("lists the unread threads under the 未読 heading with their count, then the read ones under the 既読 heading", async () => {
-    await expect($("#unread-heading span")).toHaveText("未読");
+    await expect($("#unread-heading span:not(#unread-count)")).toHaveText("未読");
     await expect($("#unread-count")).toHaveText("2");
     await expect($("#read-heading")).toHaveText("既読");
     await expect($("#unread-threads")).toHaveText(expect.stringContaining("First unread"));

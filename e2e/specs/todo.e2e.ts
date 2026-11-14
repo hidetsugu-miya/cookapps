@@ -790,8 +790,8 @@ describe("todo", () => {
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
     await waitForCalls(summarize);
-    await expect($(".pending.fail")).toHaveText(expect.stringContaining("Claude が時間内に終わりませんでした"));
-    await $(".pending.fail .icon-btn").click();
+    await expect($("#todo-pending .pending.fail")).toHaveText(expect.stringContaining("Claude が時間内に終わりませんでした"));
+    await $("#todo-pending .pending.fail .icon-btn").click();
     await $("#todo-pending .pending").waitForExist({ reverse: true });
   });
 
@@ -1405,7 +1405,7 @@ describe("todo detail", () => {
     moved.tasks[0].projectId = "p2";
     await mock("todoist_load", moved);
     await $(ROWS).click();
-    await $("#todo-detail .field-value").click();
+    await $("#todo-detail .field:nth-child(1) .field-value").click();
     expect(await textsOf(".menu button")).toEqual(["インボックス", "Work", "Design", "Sketch", "Home"]);
     const [, work, design, sketch, home] = await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".menu button")].map((b) => parseInt(b.style.paddingLeft || "0", 10)));
     expect(design).toBeGreaterThan(work);
@@ -1413,7 +1413,7 @@ describe("todo detail", () => {
     expect(home).toBeLessThan(design);
     await $('.menu button[role="menuitem"]:nth-child(3)').click();
     expect(await waitForCalls(move)).toEqual([{ id: "k1", projectId: "p2" }]);
-    await expect($("#todo-detail .field-value")).toHaveText("Design");
+    await expect($("#todo-detail .field:nth-child(1) .field-value")).toHaveText("Design");
     await expect($("#todo-title")).toHaveText("Design");
   });
 
@@ -1459,7 +1459,7 @@ describe("todo detail", () => {
     await $(ROWS).click();
     await $("#todo-detail .field:nth-child(2) .field-value").click();
     await $(".due-pop .chip-input").setValue("2026-11-06 15:00");
-    await press($("#todo-detail .detail-side .field-label"));
+    await press($("#todo-detail .detail-side .field:nth-child(1) .field-label"));
     expect(await waitForCalls(update)).toEqual([{ id: "k1", dueString: "2026-11-06 15:00" }]);
   });
 
@@ -1482,7 +1482,7 @@ describe("todo detail", () => {
     const update = await mock("todoist_update", true);
     await $("#todo-detail .field:nth-child(2) .field-value").click();
     await $(".due-pop .chip-input").clearValue();
-    await press($("#todo-detail .detail-side .field-label"));
+    await press($("#todo-detail .detail-side .field:nth-child(1) .field-label"));
     await expect($(".due-pop")).not.toExist();
     expect(await callsOf(update)).toEqual([]);
   });
@@ -1561,8 +1561,8 @@ describe("todo summary failure: the way to the Slack settings", () => {
     await mock("todoist_summarize_slack", rejects("このメッセージを読む権限がありません"));
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
-    await $(".pending.fail").waitForExist();
-    await $(".pending.fail").$("button=設定を開く").click();
+    await $("#todo-pending .pending.fail").waitForExist();
+    await $("#todo-pending .pending.fail").$("button=設定を開く").click();
     await expect($("#settings")).toBeDisplayed();
     await expect($("#settings-tab-slack")).toHaveAttribute("aria-selected", "true");
     await expect($("#settings-panel-slack")).toBeDisplayed();
@@ -1605,7 +1605,7 @@ describe("todo detail menu", () => {
     expect(sizes[0]).toBe(sizes[1]);
     expect(sizes[2]).toBeLessThanOrEqual(46);
     await $(more).click();
-    await expect($(items)).toBeDisplayed();
+    await waitForCount(items, 2);
     await expect($(more)).toHaveAttribute("aria-expanded", "true");
     await $("#todo-back").click();
     await expect($(more)).not.toBeDisplayed();
@@ -1621,7 +1621,7 @@ describe("todo detail menu", () => {
   it("lists タスクのリンクをコピー and then 削除, which is the dangerous one", async () => {
     await openReport();
     await $(more).click();
-    await expect($(items)).toBeDisplayed();
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
     expect(await textsOf(items)).toEqual(["タスクのリンクをコピー", "削除"]);
     await expect($(deleteItem)).toHaveText("削除");
     expect(await count(`${items} svg`)).toBe(2);
@@ -2756,7 +2756,8 @@ describe("todo detail comments", () => {
     await expect($(field)).toBeDisplayed();
     await $("#todo-detail .c-head").click();
     await expect($("#todo-detail .c-head")).toHaveAttribute("aria-expanded", "true");
-    await expect($(rows)).toBeDisplayed();
+    await expect($("#todo-detail .c-list")).toBeDisplayed();
+    await waitForCount(rows, 3);
   });
 
   it("sends the typed text with todoist_add_comment, adds the answer to the list and empties the field", async () => {

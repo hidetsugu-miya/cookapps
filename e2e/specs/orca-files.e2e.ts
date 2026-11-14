@@ -36,7 +36,7 @@ import {
   waitForCalls,
   waitForCount,
 } from "../support";
-import { claudeTab, openOrca, pickItem, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { claudeTab, filesToggle, openOrca, pickItem, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
 describe("orca: files and editor (A-18)", () => {
@@ -62,8 +62,6 @@ describe("orca: files and editor (A-18)", () => {
   const text = (content: string, signature = "sig-1", language = "plaintext", highlight: string | null = null): OrcaFileText => ({ content, crlf: false, signature, language, highlight });
   const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
   const names = () => textsOf("#orca-files-tree .orca-file-name");
-  // The button of the file pane that is on the screen (one at a time: the corner pane's while the pane is hidden, the pane's own while it is shown).
-  const filesToggle = () => $(".orca-files-toggle:not([hidden])");
   const toggleBoxes = () =>
     browser.execute(() =>
       [...document.querySelectorAll<HTMLElement>(".orca-files-toggle")]
@@ -2402,7 +2400,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf(search)).toEqual([{ path: "/work/example-app", repo: "proj_example-app", query: "feat", environment: null }]);
     expect(await branchRows()).toEqual(["feat/a", "feat/c", "origin/feat/d"]);
     await $('.orca-dest-pop input[aria-label="ブランチを絞り込む"]').setValue("zzz");
-    await expect($(".orca-dest-pop .empty")).toBeDisplayed();
+    await waitForCount(".orca-dest-pop .empty:not([hidden])", 2);
     expect(await shownRows(".orca-dest-pop .empty")).toEqual(["該当するブランチがありません", "該当するブランチがありません"]);
     expect(await branchRows()).toEqual([]);
     await browser.waitUntil(async () => ((await callsOf(search)).at(-1) as { query: string } | undefined)?.query === "zzz", { timeoutMsg: "the new text was never asked for" });
