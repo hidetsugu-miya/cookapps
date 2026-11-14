@@ -2992,6 +2992,9 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files")).toBeDisplayed();
   }
 
+  // The window gets the focus back (the app is activated): the file pane reads again what it shows (A-18, A-27).
+  const focusBack = () => browser.execute(() => window.dispatchEvent(new Event("focus")));
+
   // The page's own double press on a file of the tree, and typing in the editor shown (value, then input).
   const doublePress = (path: string) =>
     browser.execute(
@@ -3525,7 +3528,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(shown[0].label).toBe("ファイル欄");
     const box = await browser.execute(() => {
       const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-      return { workRight: r("#orca-work").right, splitLeft: r("#orca-files-split").left, splitRight: r("#orca-files-split").right, filesLeft: r("#orca-files").left, filesRight: r("#orca-files").right, share: r("#orca-files").width / r("#orca").width, barTop: r("#orca-files-bar").top, barHeight: r("#orca-files-bar").height, headTop: r("#orca-files-head").top, headBottom: r("#orca-files-head").bottom, tabsTop: r(".orca-tabbar").top, tabs: r(".orca-tabbar").height, toggleRight: r("#orca-files-toggle").right, reloadRight: r("#orca-files-reload").right };
+      return { workRight: r("#orca-work").right, splitLeft: r("#orca-files-split").left, splitRight: r("#orca-files-split").right, filesLeft: r("#orca-files").left, filesRight: r("#orca-files").right, share: r("#orca-files").width / r("#orca").width, barTop: r("#orca-files-bar").top, barHeight: r("#orca-files-bar").height, headTop: r("#orca-files-head").top, headBottom: r("#orca-files-head").bottom, tabsTop: r(".orca-tabbar").top, tabs: r(".orca-tabbar").height, toggleRight: r("#orca-files-toggle").right };
     });
     expect(box.workRight).toBeLessThanOrEqual(box.splitLeft + 1);
     expect(box.splitRight).toBeLessThanOrEqual(box.filesLeft + 1);
@@ -3536,7 +3539,6 @@ describe("orca: files and editor (A-18)", () => {
     expect(box.headTop).toBeGreaterThanOrEqual(box.barTop + box.barHeight - 1);
     expect(box.toggleRight).toBeLessThanOrEqual(box.filesRight);
     expect(box.filesRight - box.toggleRight).toBeLessThanOrEqual(8);
-    expect(box.reloadRight).toBeLessThanOrEqual(box.filesRight);
     await filesToggle().click();
     await expect($("#orca-files")).not.toBeDisplayed();
     await expect($("#orca-files-split")).not.toBeDisplayed();
@@ -3650,20 +3652,54 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf(marks)).toEqual([]);
   });
 
-  it("reads the root and the open folders again with the reload button", async () => {
+  it("has no reload button in the heading of the pane, for the files or for the history", async () => {
+    await openFiles(historyFixtures());
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await expect($("#orca-files-title")).toBeDisplayed();
+    expect(await count("#orca-files-head button:not(.orca-branch-btn)")).toBe(0);
+    expect(await count("#orca-files-reload")).toBe(0);
+    await paneMode("履歴").click();
+    expect(await count("#orca-files-reload")).toBe(0);
+  });
+
+  it("reads the root and the open folders again when the window gets the focus back", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await mock("orca_files_list", dirOf("src", [["lib", true]]));
     await row("src").click();
     await waitForCount("#orca-files-tree .orca-file", 5);
     const list = await mock("orca_files_list", dirOf("", [["src", true], ["new.rs", false]]));
-    await expect($("#orca-files-reload")).toHaveAttribute("aria-label", "ファイルを読み直す");
-    await $("#orca-files-reload").click();
+    await focusBack();
     const calls = await waitForCalls(list, 2);
     expect(calls).toEqual([
       { path: "/work/example-app", dir: "", ignored: false, environment: null },
       { path: "/work/example-app", dir: "src", ignored: false, environment: null },
     ]);
+  });
+
+  it("reads nothing at the return of the focus while the file pane is hidden or the history is shown, and not a second time while a read is on its way", async () => {
+    await openFiles(historyFixtures());
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const list = await mock("orca_files_list", holds);
+    await focusBack();
+    await waitForCalls(list);
+    await focusBack();
+    await browser.pause(300);
+    expect(await callsOf(list)).toHaveLength(1);
+    await release(list, root());
+    await browser.pause(300);
+    const again = await mock("orca_files_list", root());
+    await paneMode("履歴").click();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await focusBack();
+    await browser.pause(300);
+    expect(await callsOf(again)).toEqual([]);
+    await paneMode("ファイル").click();
+    await filesToggle().click();
+    await expect($("#orca-files")).not.toBeDisplayed();
+    await focusBack();
+    await browser.pause(300);
+    expect(await callsOf(again)).toEqual([]);
   });
 
   it("reads the root alone first, then the open folders again side by side, not one after the other", async () => {
@@ -3676,7 +3712,7 @@ describe("orca: files and editor (A-18)", () => {
     await row("src/lib").click();
     await waitForCount("#orca-files-tree .orca-file", 6);
     const list = await mock("orca_files_list", holds);
-    await $("#orca-files-reload").click();
+    await focusBack();
     // Only the root is on its way while it has not been answered.
     expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
     await browser.pause(300);
@@ -3693,7 +3729,7 @@ describe("orca: files and editor (A-18)", () => {
     await browser.waitUntil(async () => (await names()).join() === "src,lib,y,target", { timeoutMsg: "the reads never drew" });
   });
 
-  it("reads at most 16 folders at once, after the root, when the reload button is pressed", async () => {
+  it("reads at most 16 folders at once, after the root, when the focus comes back", async () => {
     const folders = Array.from({ length: 17 }, (_, i) => `d${i}`);
     await openFiles({ orca_files_list: dirOf("", folders.map((f) => [f, true])) });
     await waitForCount("#orca-files-tree .orca-file", 17);
@@ -3704,7 +3740,7 @@ describe("orca: files and editor (A-18)", () => {
     }
     await waitForCount("#orca-files-tree .orca-file", 34);
     const list = await mock("orca_files_list", holds);
-    await $("#orca-files-reload").click();
+    await focusBack();
     await waitForCalls(list);
     await browser.pause(300);
     expect(await callsOf(list)).toHaveLength(1);
@@ -3717,12 +3753,12 @@ describe("orca: files and editor (A-18)", () => {
     expect(await waitForCalls(list, 18)).toHaveLength(18);
   });
 
-  it("keeps the ignored marks through a reload until git answers, and keeps them when git cannot", async () => {
+  it("keeps the ignored marks through a read again until git answers, and keeps them when git cannot", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await browser.waitUntil(async () => (await isIgnored("b.log")) === "true", { timeoutMsg: "the ignored mark never came" });
     const marks = await mock("orca_files_ignored", holds);
-    await $("#orca-files-reload").click();
+    await focusBack();
     await waitForCalls(marks);
     await browser.pause(300);
     expect(await isIgnored("b.log")).toBe("true");
@@ -3734,13 +3770,13 @@ describe("orca: files and editor (A-18)", () => {
     expect(await isIgnored("target")).toBe("true");
     // An answer that fails leaves the kept marks.
     const failing = await mock("orca_files_ignored", rejects("Orca に接続できません"));
-    await $("#orca-files-reload").click();
+    await focusBack();
     await waitForCalls(failing);
     await browser.pause(300);
     expect(await isIgnored("target")).toBe("true");
   });
 
-  it("reads a folder that was closed again after the reload button, because the reload dropped it", async () => {
+  it("reads a folder that was closed again after the focus came back, because the read dropped it", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await mock("orca_files_list", dirOf("src", [["lib", true]]));
@@ -3749,7 +3785,7 @@ describe("orca: files and editor (A-18)", () => {
     await row("src").click();
     await expect(row("src")).toHaveAttribute("aria-expanded", "false");
     const list = await mock("orca_files_list", dirOf("", [["src", true], ["target", true]]));
-    await $("#orca-files-reload").click();
+    await focusBack();
     expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
     await browser.waitUntil(async () => (await names()).join() === "src,target", { timeoutMsg: "the root never drew" });
     const inner = await mock("orca_files_list", dirOf("src", [["new.rs", false]]));
@@ -3891,7 +3927,8 @@ describe("orca: files and editor (A-18)", () => {
     await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
     await expect($("#orca-files-title")).toHaveText("");
     expect(await count("#orca-files-tree .orca-file")).toBe(0);
-    await expect($("#orca-files-reload")).toBeDisabled();
+    await focusBack();
+    await browser.pause(300);
     expect(await callsOf(list)).toEqual([]);
   });
 
@@ -3907,7 +3944,8 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles({ orca_files_list: rejects("Orca に接続できません") });
     await expect($("#orca-files-tree .orca-file-note.fail")).toHaveText("Orca に接続できません");
     await mock("orca_files_list", root());
-    await $("#orca-files-reload").click();
+    // The next return of the focus reads the root that failed again.
+    await focusBack();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await mock("orca_files_list", rejects("ファイルが見つかりません"));
     await row("src").click();
@@ -4078,7 +4116,7 @@ describe("orca: files and editor (A-18)", () => {
     await tabOf(claude).$(".orca-tab-btn").click();
     await mock("orca_file_read", text("x\n", "sig-x"));
     await mock("orca_files_list", dirOf("", [["a.rs", false], ["c.rs", false]]));
-    await $("#orca-files-reload").click();
+    await focusBack();
     await waitForCount("#orca-files-tree .orca-file", 2);
     await doublePress("c.rs");
     await mock("orca_file_write", { state: "not-utf8", signature: "sig-x" } satisfies OrcaSaved);
@@ -5041,7 +5079,6 @@ describe("orca: files and editor (A-18)", () => {
     expect(bar).toEqual([["ファイル", "true", true], ["履歴", "false", true], ["ファイル欄", "true", true]]);
     await expect($("#orca-files-tree")).toBeDisplayed();
     await expect($("#orca-history")).not.toBeDisplayed();
-    await expect($("#orca-files-reload")).toHaveAttribute("aria-label", "ファイルを読み直す");
     expect(await callsOf("orca_git_history")).toEqual([]);
   });
 
@@ -5050,7 +5087,6 @@ describe("orca: files and editor (A-18)", () => {
     await expect(paneMode("履歴")).toHaveAttribute("aria-pressed", "true");
     await expect(paneMode("ファイル")).toHaveAttribute("aria-pressed", "false");
     await expect($("#orca-files-tree")).not.toBeDisplayed();
-    await expect($("#orca-files-reload")).toHaveAttribute("aria-label", "履歴を読み直す");
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
     expect(await waitForCalls("orca_git_history")).toEqual([{ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null }]);
     const files = await mock("orca_files_list", root());
@@ -5058,7 +5094,6 @@ describe("orca: files and editor (A-18)", () => {
     await paneMode("ファイル").click();
     await expect($("#orca-files-tree")).toBeDisplayed();
     await expect($("#orca-history")).not.toBeDisplayed();
-    await expect($("#orca-files-reload")).toHaveAttribute("aria-label", "ファイルを読み直す");
     await paneMode("履歴").click();
     await waitForCount("#orca-history-list .orca-commit", 3);
     await browser.pause(200);
@@ -5282,14 +5317,14 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#error")).not.toBeDisplayed();
   });
 
-  it("shows the reason of a list that cannot be read, and the reload button reads it again from the start (A-27)", async () => {
+  it("shows the reason of a list that cannot be read, and the next return of the focus reads it again from the start (A-27)", async () => {
     await openHistory({ orca_git_history: rejects("Git の履歴を読めません") });
     await expect($("#orca-history-list .orca-file-note.fail")).toHaveText("Git の履歴を読めません");
     await expect($("#error")).not.toBeDisplayed();
     await browser.pause(300);
     expect(await callsOf("orca_git_history")).toHaveLength(1);
     await mock("orca_git_history", page(3, 1, false));
-    await $("#orca-files-reload").click();
+    await focusBack();
     await waitForCount("#orca-history-list .orca-commit", 3);
     await expect($("#orca-history-list .orca-file-note")).not.toExist();
     expect(await callsOf("orca_git_history")).toEqual([{ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null }]);
@@ -5310,13 +5345,13 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-history-list .orca-file-note")).toHaveText("コミットがありません");
   });
 
-  it("reads the list again from the start when the reload button is pressed, and drops the chosen commit (A-27)", async () => {
+  it("reads the list again from the start when the focus comes back, and drops the chosen commit (A-27)", async () => {
     await openHistory();
     await waitForCount("#orca-history-list .orca-commit", 3);
     await commitRow(3).click();
     await waitForCount("#orca-history-files .orca-hfile", 2);
     await mock("orca_git_history", page(4, 1, false));
-    await $("#orca-files-reload").click();
+    await focusBack();
     await waitForCount("#orca-history-list .orca-commit", 4);
     expect(await callsOf("orca_git_history")).toEqual([{ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null }]);
     await expect($("#orca-history-files .orca-hfile")).not.toExist();

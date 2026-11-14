@@ -27,7 +27,7 @@ import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
-import { filesShown, initOrcaFiles, syncFiles, toggleFiles } from "./orca-files.js";
+import { filesShown, initOrcaFiles, refreshFiles, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
@@ -1151,6 +1151,8 @@ export function initOrca() {
     drawBadge();
     refresh();
   });
+  // The files and the history of the file pane are read again when the app is activated (A-18, A-27), as nothing watches the disk.
+  window.addEventListener("focus", () => shown() && refreshFiles());
   initSearch();
   const toggle = listToggle("プロジェクト一覧", toggleList);
   toggle.id = "orca-list-toggle";

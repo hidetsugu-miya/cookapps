@@ -1,5 +1,5 @@
 // The history of the file pane of the Orca screen (A-27): the commits of the worktree the pane shows, from HEAD, the newest first, with the files of the chosen commit under them. Rust reads the commits (`orca_git_history`) and the files of one (`orca_commit_files`); this module draws them, reads the next commits when the list is scrolled to its end, and gives the screen a file to open as a diff tab (A-24) on a double press.
-// The list belongs to one worktree of one target: another worktree gives a new list (nothing is kept of the old one, and an answer that comes late for the old one is dropped). It is read only while the history is the part of the pane that is shown, and the reload button (and a switch of the branch) reads it again from the start. Nothing is kept outside memory.
+// The list belongs to one worktree of one target: another worktree gives a new list (nothing is kept of the old one, and an answer that comes late for the old one is dropped). It is read only while the history is the part of the pane that is shown, and a return of the window's focus (`refreshHistory`) and a switch of the branch read it again from the start. Nothing is kept outside memory.
 import type { OrcaCommit } from "./bindings/OrcaCommit";
 import type { OrcaCommitFile } from "./bindings/OrcaCommitFile";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
@@ -39,7 +39,7 @@ let historyToken: string | null = null;
 let hasMore = false;
 let error: string | null = null;
 let busy = false;
-// Whether the first commits were asked for (the reload button asks again).
+// Whether the first commits were asked for (a read again from the start asks again).
 let started = false;
 let selected: string | null = null;
 let changed: Changed | null = null;
@@ -178,7 +178,7 @@ function drawFiles() {
   requestAnimationFrame(readMore);
 }
 
-// Reads the next commits when the list is scrolled near its end, or is too short to scroll. A read that failed is not started again by scrolling (the reload button does).
+// Reads the next commits when the list is scrolled near its end, or is too short to scroll. A read that failed is not started again by scrolling (the next return of the focus does).
 function readMore() {
   const list = $("orca-history-list");
   if (!active || context === null || busy || !hasMore || error !== null || list.clientHeight === 0) return;
@@ -249,11 +249,16 @@ export function syncHistory(next: HistoryContext | null, show: boolean) {
   if (active && context !== null && !started) void readPage();
 }
 
-// Reads the list again from the start (the reload button, and a switch of the branch).
+// Reads the list again from the start (a switch of the branch, and an answer that says Orca no longer holds the history).
 export function reloadHistory() {
   reset();
   draw();
   if (active && context !== null) void readPage();
+}
+
+// The same at the return of the window's focus, unless a read is on its way.
+export function refreshHistory() {
+  if (!busy) reloadHistory();
 }
 
 export function initHistory(on: { open: (relative: string, commit: DiffCommit) => void }) {

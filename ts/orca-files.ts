@@ -1,7 +1,7 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`); this module draws the folder at once, marks the ignored entries when the answer comes, and takes the presses.
-// A folder is read the first time it is opened and drawn from what was read after that, and the reload button reads the root and then the open folders again, side by side (at most `reads()` at a time). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, the delete, which asks first and deletes for good, A-18). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back (`refreshFiles`, called by orca.ts), after the app's own create and delete, and after a switch of the branch. Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, the delete, which asks first and deletes for good, A-18). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
-// The top row also has the two buttons that choose what the pane shows under the heading, the files or the history of the worktree (A-27, orca-history.ts); the choice is kept in memory only, and the heading and its reload button serve both.
+// The top row also has the two buttons that choose what the pane shows under the heading, the files or the history of the worktree (A-27, orca-history.ts); the choice is kept in memory only, and the heading serves both, and so does the read at the return of the focus (`refreshFiles`).
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, composing, tag } from "./dom.js";
@@ -11,7 +11,7 @@ import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
 import type { DiffCommit } from "./orca-diff.js";
-import { initHistory, reloadHistory, syncHistory } from "./orca-history.js";
+import { initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
 import { toast } from "./toast.js";
 import { copyText, showError } from "./view.js";
 
@@ -73,14 +73,13 @@ export function toggleFiles() {
   syncModes();
 }
 
-// Shows the part of the pane that is chosen, with the reload button for it, and starts the read of it that is due: the history is read only while it is shown, the root of the tree only while the files are.
+// Shows the part of the pane that is chosen, and starts the read of it that is due: the history is read only while it is shown, the root of the tree only while the files are.
 function syncModes() {
   const history = mode === "history";
   $("orca-files-tree").hidden = history;
   $("orca-history").hidden = !history;
   $("orca-files-mode-files").setAttribute("aria-pressed", String(!history));
   $("orca-files-mode-history").setAttribute("aria-pressed", String(history));
-  $("orca-files-reload").setAttribute("aria-label", history ? "履歴を読み直す" : "ファイルを読み直す");
   syncHistory(context === null ? null : { target: context.target, path: context.path }, shown && history);
   if (shown && !history && context !== null && !listings.has("")) void readDir("");
 }
@@ -147,7 +146,7 @@ async function readDir(dir: string) {
   if (!inherited && next.dir !== null && next.error === null && next.dir.entries.length > 0) void markIgnored(here, mine, dir, next.dir);
 }
 
-// How many folders the reload button reads at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).
+// How many folders a read of the open folders takes at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).
 const reads = (here: FilesContext) => (here.target === null ? 16 : 8);
 
 // Reads the root, and when it is read the folders that are open again, side by side. The root goes first alone, so that the check of the worktree that its read may start is done once, not once for each folder read at the same time. A folder that was read and is closed is dropped, so that it is read when it is opened next. Another worktree's tree ends it.
@@ -167,7 +166,14 @@ async function reload() {
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
 }
 
-// Opens the folder: it is drawn from what was read (the reload button reads it again), waited for while it is being read, and read when it was not.
+// Reads again what the pane shows, when the window gets the focus back: the files (the root, then the open folders) or the history (from the start). It does nothing while the pane is hidden or has no worktree, and while a read of the same kind is on its way, so a failed read is tried again at the next return.
+export function refreshFiles() {
+  if (!shown || context === null) return;
+  if (mode === "history") refreshHistory();
+  else if (![...listings.values()].some((l) => l.busy)) void reload();
+}
+
+// Opens the folder: it is drawn from what was read (the next return of the focus reads it again; a folder whose read failed is read again when it is opened), waited for while it is being read, and read when it was not.
 function expandDir(path: string) {
   expanded.add(path);
   const held = listings.get(path);
@@ -428,7 +434,6 @@ function draw() {
   if (key === drawn) return;
   drawn = key;
   drawTitle();
-  $<HTMLButtonElement>("orca-files-reload").disabled = context === null;
   const tree = $("orca-files-tree");
   const top = tree.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.path;
@@ -472,5 +477,4 @@ export function initOrcaFiles(on: { open: (relative: string) => void; diff: (rel
   $("orca-files-mode-files").onclick = () => chooseMode("files");
   $("orca-files-mode-history").innerHTML = BRANCH_SVG;
   $("orca-files-mode-history").onclick = () => chooseMode("history");
-  $("orca-files-reload").onclick = () => (mode === "history" ? reloadHistory() : void reload());
 }
