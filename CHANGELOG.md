@@ -9,6 +9,12 @@ A-23: on the Orca screen, the button that closes and opens the list of projects 
 
 S-11: in a post that shares another message, an attachment whose long text is folded no longer shows the whole text again under 「もっと表示する」; the folded text alone shows until the button is pressed (#572).
 
+A-6, A-8: the bell of the Orca list and its working view (the Claude sessions grouped as waiting, working and done) are gone; the list pane shows only the projects (#577). The count and the blinking of the Orca icon in the side menu stay as before.
+
+A-8: closing a Claude session or a terminal from its tab on the Orca screen works again when Orca answers that the terminal is stale: the app closes it once more without `--tab` (#575). A close that fails shows its message and keeps the tab, and the list is read again, so a tab that Orca no longer holds leaves at once.
+
+T-1: the 「…」 button at the right of the header of a task's detail is a pencil with 「編集」, and opens the same menu (#578). On a subtask, the return arrow with 「親タスク」 in the parent's chip opens the parent, and the parent's name, when the parent has a description, opens that description in place under the chip, cut at its 3rd line with 「…」, with 「コピー」 to copy the whole text; pressed again, it folds.
+
 A-28: the app keeps a log in `app-log.jsonl` in its settings folder, one line for each entry with its time, weight (error, warning or information), place and a short text of at most 500 characters; lines older than 30 days are dropped and the file stays at 1 MiB or under (#432). No screen writes to it or shows it yet. It never holds a token, a mail, a Slack message, a Todo or what a terminal printed, and a word shaped like a secret is masked.
 
 No change in what the app shows yet, as groundwork for coming features: while a saved environment is the target, the Orca list also reads the lists of this Mac beside it, and each item knows where it is (#335); the skills, texts of instructions for the Claude calls of the screens, are saved and read in the settings folder (#339); the app connects to Notion through Notion's MCP server with OAuth and keeps the tokens in the keychain (#367); and a command sends a new mail or a reply with the Gmail API, with the scope the app already has (#487).
