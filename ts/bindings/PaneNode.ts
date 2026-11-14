@@ -4,4 +4,8 @@ import type { Direction } from "./Direction";
 /**
  * A pane with its tabs and the one shown, or a split of two or more nodes.
  */
-export type PaneNode = { "kind": "pane", id: string, tabs: Array<string>, selected: string, } | { "kind": "split", direction: Direction, children: Array<PaneNode>, };
+export type PaneNode = { "kind": "pane", id: string, tabs: Array<string>, selected: string, } | { "kind": "split", direction: Direction, children: Array<PaneNode>, 
+/**
+ * The share of the split's size that each child has, in the order of `children`; they add up to 1. A file saved before the shares were kept has none: equal shares.
+ */
+sizes: Array<number>, };

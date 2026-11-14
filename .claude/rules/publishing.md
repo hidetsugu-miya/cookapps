@@ -6,7 +6,7 @@
 
 The repository is public, and the license is MIT (`LICENSE`).
 Users read only these places, so do not scatter user-facing text elsewhere.
-`README.md` and `docs/` are for users. `AGENTS.md` is the developer guide: what the app is, the list of requirements, the stack, how to run and test it. `requirements/` holds the full text of the requirements. `CHANGELOG.md` is what went into each version, newest first. `.claude/rules/` is public too, but it is written for whoever develops the app.
+`README.md` and `docs/` are for users. `AGENTS.md` is the developer guide: what the app is, the list of requirements, the stack, how to run and test it. `requirements/` holds the full text of the requirements, and the technical constraints of each integration (`requirements/constraints.md`). `CHANGELOG.md` is what went into each version, newest first. `.claude/rules/` is public too, but it is written for whoever develops the app.
 
 ```text
 Good: add the description of a feature to docs/features.md

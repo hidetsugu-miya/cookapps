@@ -2,7 +2,7 @@
 // This module keeps what Rust answered, so the screen draws at once; it sends the tabs the screen shows with every call (Rust mends the saved layout against them), and an operation of the user.
 // With the tabs it sends the Orca handle of each tab that has a terminal, and the handles of the tabs of the call before that worked: a terminal that changed kind (a plain one where Claude starts, or the other way round) has a new tab id and the same handle, and Rust keeps its place.
 // The calls go one at a time, in the order they were made, and only the latest answer of a project is taken, so an older answer never replaces a newer one.
-// Selecting a tab or pressing a pane is also made here at once, before Rust's answer, so the screen follows the press.
+// Selecting a tab, pressing a pane or releasing a divider is also made here at once, before Rust's answer, so the screen follows the press and a divider does not go back while Rust answers.
 import type { PaneLayout } from "./bindings/PaneLayout";
 import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
@@ -61,10 +61,34 @@ export function forgetPanes() {
   latest.clear();
 }
 
-// Makes a press (a pane gets the focus, a tab is selected in its pane) on the layout held, as Rust will: nothing changes when the layout does not hold the tab or the pane.
+// The least share of its split that a divider leaves a node: `MIN_SHARE` of `orca_panes.rs`.
+export const MIN_SHARE = 0.1;
+
+// Sets the shares of the two nodes beside a divider, as `resize` of `orca_panes.rs` does: the node that holds the pane `before` and the next one, which holds `after`, in the deepest split that holds both. A divider that is not there changes nothing.
+function resizeLocal(node: PaneNode | null, before: string, after: string, share: number) {
+  if (node === null || node.kind !== "split") return;
+  const holds = (pane: string) => node.children.findIndex((c) => panesOf(c).some((p) => p.id === pane));
+  const i = holds(before);
+  const j = holds(after);
+  if (i < 0 || j < 0) return;
+  if (i === j) {
+    resizeLocal(node.children[i], before, after, share);
+  } else if (j === i + 1 && node.sizes.length === node.children.length && Number.isFinite(share)) {
+    const both = node.sizes[i] + node.sizes[j];
+    const least = Math.min(MIN_SHARE, both / 2);
+    node.sizes[i] = Math.min(both - least, Math.max(least, share * both));
+    node.sizes[j] = both - node.sizes[i];
+  }
+}
+
+// Makes a press (a pane gets the focus, a tab is selected in its pane) or the release of a divider (the two nodes beside it take their shares) on the layout held, as Rust will: nothing changes when the layout does not hold the tab, the pane or the divider.
 export function applyLocal(target: string | null, project: string, op: PaneOp) {
   const layout = layouts.get(keyOf(target, project));
   if (!layout || op.kind === "move") return;
+  if (op.kind === "resize") {
+    resizeLocal(layout.root, op.before, op.after, op.share);
+    return;
+  }
   const panes = panesOf(layout.root);
   const pane = op.kind === "focus" ? panes.find((p) => p.id === op.pane) : panes.find((p) => p.tabs.includes(op.tab));
   if (!pane) return;

@@ -1,18 +1,22 @@
 // The panes of the work pane of the Orca screen (A-17), drawn in `#orca-panes` from a tree: a pane (its tab strip, its plus, a line that says why it shows no terminal, and the host elements of its terminal and of its editor), or a split of panes side by side or one above the other.
 // The button of the file pane (A-18) is at the right end of the strip of the pane in the top right corner of the work pane.
 // While the list of projects is closed (A-23), the button that opens it is at the left end of the strip of the pane at the left edge.
-// This module only draws and takes the user's operations: a tab dragged by the pointer (an edge of a pane splits it, its tab strip or its middle joins its tabs), and the pane that was pressed. What an operation does to the layout is decided in Rust (`orca_panes`).
+// Between two nodes of a split is a divider (`.orca-divider`), and each node is as large as its share of the split.
+// This module only draws and takes the user's operations: a tab dragged by the pointer (an edge of a pane splits it, its tab strip or its middle joins its tabs), a divider dragged by the pointer (the two nodes beside it follow the pointer, and the release names the ratio), and the pane that was pressed. What an operation does to the layout is decided in Rust (`orca_panes`).
 // The pane elements are kept from one drawing to the next while their pane stays, so a terminal in a pane is not made again when the tree changes elsewhere; the structure is built again only when the tree's shape changes.
 import type { Direction } from "./bindings/Direction";
 import type { Edge } from "./bindings/Edge";
 import { tag } from "./dom.js";
 import { FOLDER_SVG } from "./icons.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
+import { MIN_SHARE } from "./orca-panes.js";
 
 const PLUS_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
 // How far from an edge of a pane's body a tab dropped there splits the pane (a share of the body's size), and how far the pointer goes before a press is a drag (px).
 const EDGE_SHARE = 0.25;
 const DRAG_PX = 5;
+// The shares of a split are drawn as `flex-grow`, times this (so that rounding never leaves them under 1, which would leave room unused).
+const GROW = 100;
 
 // A pane to draw: its strip's tabs (made only when `key` changed since the last drawing), whether it has the focus, the line under the strip (null: none), whether its terminal shows, whether its editor shows, whether its plus is off, whether the file pane is shown (the button of the pane in the corner is pressed), and whether the list of projects is open (the button of the pane at the left edge shows while it is not).
 export interface PaneModel {
@@ -27,7 +31,8 @@ export interface PaneModel {
   filesShown: boolean;
   listOpen: boolean;
 }
-export type TreeModel = { kind: "pane"; pane: PaneModel } | { kind: "split"; direction: Direction; children: TreeModel[] };
+// A split has the share of its size that each child takes (`sizes`, in the order of `children`).
+export type TreeModel = { kind: "pane"; pane: PaneModel } | { kind: "split"; direction: Direction; children: TreeModel[]; sizes: number[] };
 
 // What the user does in the panes.
 export interface TreeHandlers {
@@ -41,6 +46,8 @@ export interface TreeHandlers {
   focus: (pane: string) => void;
   // The tab was dropped on the pane at the edge.
   move: (tab: string, pane: string, edge: Edge) => void;
+  // The divider between the node that holds the pane `before` and the next one, which holds `after`, was dragged: the first takes `share` of the size the two have together.
+  resize: (before: string, after: string, share: number) => void;
   // The menu of the tab (the right button).
   menu: (anchor: Element, tab: string, pane: string) => void;
 }
@@ -66,6 +73,8 @@ let root: HTMLElement;
 let shape = "";
 // The hint of where the tab dragged would go.
 let hint: HTMLElement | null = null;
+// Ends the drag of a divider that is going on, leaving the sizes as they are (null: none is dragged).
+let stopResize: (() => void) | null = null;
 
 const shapeOf = (tree: TreeModel): unknown => (tree.kind === "pane" ? tree.pane.id : [tree.direction, tree.children.map(shapeOf)]);
 
@@ -138,8 +147,21 @@ function build(tree: TreeModel): HTMLElement {
   if (tree.kind === "pane") return paneEls.get(tree.pane.id)!.el;
   const node = tag("div", "orca-split-node");
   node.dataset.direction = tree.direction;
-  node.append(...tree.children.map(build));
+  tree.children.forEach((child, i) => {
+    if (i > 0) node.append(divider(tree.direction, leftEdge(tree.children[i - 1]).id, leftEdge(child).id));
+    node.append(build(child));
+  });
   return node;
+}
+
+// Gives each node of the splits its share of the size, on the elements `build` made (a split's children and its dividers in turn).
+function drawSizes(tree: TreeModel, el: HTMLElement) {
+  if (tree.kind === "pane") return;
+  tree.children.forEach((child, i) => {
+    const part = el.children[i * 2] as HTMLElement;
+    part.style.flexGrow = String((tree.sizes[i] ?? 1 / tree.children.length) * GROW);
+    drawSizes(child, part);
+  });
 }
 
 function paneModels(tree: TreeModel): PaneModel[] {
@@ -166,8 +188,15 @@ export function drawTree(tree: TreeModel): Map<string, HTMLElement> {
   const next = JSON.stringify(shapeOf(tree));
   if (next !== shape) {
     shape = next;
+    stopResize?.();
     root.replaceChildren(build(tree));
     root.dataset.multi = String(models.length > 1);
+  }
+  // A drawing in the middle of a drag leaves the sizes to the drag.
+  if (stopResize === null) {
+    const top = root.firstElementChild as HTMLElement;
+    top.style.flexGrow = "";
+    drawSizes(tree, top);
   }
   const top = corner(tree);
   const left = leftEdge(tree);
@@ -255,6 +284,84 @@ function startDrag(down: PointerEvent, from: string) {
   document.addEventListener("pointerup", up);
   document.addEventListener("pointercancel", cancel);
   document.addEventListener("keydown", key);
+}
+
+// ---- dragging a divider ----
+
+// The divider between two nodes of a split, drawn as the divider of the screen's parts is (`ts/split.ts`). `before` and `after` are a pane of the node on each side, which name it to Rust.
+function divider(direction: Direction, before: string, after: string): HTMLElement {
+  const bar = tag("div", "orca-divider");
+  bar.setAttribute("role", "separator");
+  bar.setAttribute("aria-orientation", direction === "row" ? "vertical" : "horizontal");
+  bar.append(tag("span"));
+  bar.onpointerdown = (down) => startResize(down, bar, direction, before, after);
+  return bar;
+}
+
+// A press on a divider drags it: the two nodes beside it follow the pointer (the others keep their size), each keeping the least share, and the release gives the ratio to Rust. A cancel puts the sizes back.
+// The drag goes on with pointer events on the document, so it does not end when the pointer leaves the divider; the boxes are read once, and the writes are gathered into one per animation frame.
+function startResize(down: PointerEvent, bar: HTMLElement, direction: Direction, before: string, after: string) {
+  const first = bar.previousElementSibling as HTMLElement | null;
+  const second = bar.nextElementSibling as HTMLElement | null;
+  if (down.button !== 0 || !first || !second) return;
+  down.preventDefault();
+  stopResize?.();
+  const pointer = down.pointerId;
+  const row = direction === "row";
+  const at = (e: PointerEvent) => (row ? e.clientX : e.clientY);
+  const a = first.getBoundingClientRect();
+  const b = second.getBoundingClientRect();
+  const start = row ? a.left : a.top;
+  const size = row ? a.width : a.height;
+  const room = size + (row ? b.width : b.height);
+  // Where in the divider it was pressed, so that the press alone moves nothing.
+  const grab = at(down) - (start + size);
+  const was = [first.style.flexGrow, second.style.flexGrow];
+  const both = Number(was[0]) + Number(was[1]);
+  const least = Math.min(MIN_SHARE * GROW, both / 2);
+  let moved = false;
+  let pending: number | null = null;
+  let frame = 0;
+  const flush = () => {
+    frame = 0;
+    if (pending === null) return;
+    const grow = Math.min(both - least, Math.max(least, pending * both));
+    first.style.flexGrow = String(grow);
+    second.style.flexGrow = String(both - grow);
+    pending = null;
+    moved = true;
+  };
+  const move = (e: PointerEvent) => {
+    if (e.pointerId !== pointer || room <= 0) return;
+    pending = (at(e) - grab - start) / room;
+    if (!frame) frame = requestAnimationFrame(flush);
+  };
+  const stop = () => {
+    cancelAnimationFrame(frame);
+    stopResize = null;
+    delete root.dataset.resizing;
+    delete bar.dataset.dragging;
+    document.removeEventListener("pointermove", move, true);
+    document.removeEventListener("pointerup", up, true);
+    document.removeEventListener("pointercancel", cancel, true);
+  };
+  const up = (e: PointerEvent) => {
+    if (e.pointerId !== pointer) return;
+    flush();
+    stop();
+    if (moved) handlers.resize(before, after, Number(first.style.flexGrow) / both);
+  };
+  const cancel = (e: PointerEvent) => {
+    if (e.pointerId !== pointer) return;
+    stop();
+    [first.style.flexGrow, second.style.flexGrow] = was;
+  };
+  stopResize = stop;
+  root.dataset.resizing = direction;
+  bar.dataset.dragging = "true";
+  document.addEventListener("pointermove", move, true);
+  document.addEventListener("pointerup", up, true);
+  document.addEventListener("pointercancel", cancel, true);
 }
 
 export function initPaneTree(host: HTMLElement, on: TreeHandlers) {

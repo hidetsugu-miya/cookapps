@@ -2585,8 +2585,10 @@ describe("orca: split panes (A-17)", () => {
   const bash = "orca:term_example-app_bash";
   const apiTab = claudeTab("example-api");
   const pane = (id: string, tabs: string[], selected = tabs[0]): PaneNode => ({ kind: "pane", id, tabs, selected });
-  const row = (...children: PaneNode[]): PaneNode => ({ kind: "split", direction: "row", children });
-  const column = (...children: PaneNode[]): PaneNode => ({ kind: "split", direction: "column", children });
+  // A split whose nodes share its size equally, unless `sizes` says otherwise.
+  const split = (direction: "row" | "column", children: PaneNode[], sizes = children.map(() => 1 / children.length)): PaneNode => ({ kind: "split", direction, children, sizes });
+  const row = (...children: PaneNode[]) => split("row", children);
+  const column = (...children: PaneNode[]) => split("column", children);
   const layout = (root: PaneNode, focus: string): PaneLayout => ({ root, focus });
   // The Orca handle of each tab that has a terminal.
   const handles = { [claude]: "term_example-app", [zsh]: "term_example-app_zsh", [bash]: "term_example-app_bash" };
@@ -2673,6 +2675,86 @@ describe("orca: split panes (A-17)", () => {
     expect(await browser.execute(() => [...document.querySelectorAll(".orca-split-node")].map((e) => e.getAttribute("data-direction")))).toEqual(["column", "row"]);
     const [top, bottom] = await browser.execute(() => ["p1", "p2"].map((id) => document.querySelector(`.orca-pane[data-pane="${id}"]`)!.getBoundingClientRect().top));
     expect(top).toBeLessThan(bottom);
+  });
+
+  // The pointer on the divider `index` (in the order of the document), as the page gets it: for each step its kind, with the pointer `by` from where it was pressed (a share of the size the two nodes beside the divider have together, along the split). The press goes to the divider, the rest to the document.
+  const onDivider = (index: number, by: number, steps: ("pointerdown" | "pointermove" | "pointerup" | "pointercancel")[]) =>
+    browser.execute(
+      (i, once, share, types) => {
+        if (!window.__e2e_once__(once)) return;
+        const bar = document.querySelectorAll<HTMLElement>(".orca-divider")[i];
+        const along = bar.parentElement!.dataset.direction === "row";
+        const a = bar.previousElementSibling!.getBoundingClientRect();
+        const b = bar.nextElementSibling!.getBoundingClientRect();
+        const box = bar.getBoundingClientRect();
+        const far = (along ? a.width + b.width : a.height + b.height) * share;
+        for (const type of types) {
+          const d = type === "pointerdown" ? 0 : far;
+          const init = { bubbles: true, cancelable: true, clientX: box.left + box.width / 2 + (along ? d : 0), clientY: box.top + box.height / 2 + (along ? 0 : d), button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 9, isPrimary: true };
+          (type === "pointerdown" ? bar : document).dispatchEvent(new PointerEvent(type, init));
+        }
+      },
+      index,
+      onceId(),
+      by,
+      steps,
+    );
+  // The width and the height of each pane, in the order of their ids.
+  const sizesOf = (...ids: string[]) =>
+    browser.execute((names) => names.map((id) => document.querySelector(`.orca-pane[data-pane="${id}"]`)!.getBoundingClientRect()).map((r) => [r.width, r.height] as [number, number]), ids);
+  const three = (sizes?: number[]) => layout(split("row", [pane("p1", [claude]), pane("p2", [zsh]), pane("p3", [bash])], sizes), "p1");
+
+  it("gives each pane of a split its share of the size, with a divider between two panes", async () => {
+    await openSplit(overview(), three([0.5, 0.2, 0.3]));
+    expect(await count(".orca-divider")).toBe(2);
+    await expect($(".orca-divider")).toHaveAttribute("role", "separator");
+    await expect($(".orca-divider")).toHaveAttribute("aria-orientation", "vertical");
+    const [[a], [b], [c]] = await sizesOf("p1", "p2", "p3");
+    expect(a / (a + b + c)).toBeCloseTo(0.5, 2);
+    expect(b / (a + b + c)).toBeCloseTo(0.2, 2);
+    expect(c / (a + b + c)).toBeCloseTo(0.3, 2);
+  });
+
+  it("changes the two panes beside a dragged divider and no other, asks for the ratio at the release, and draws the sizes of the answer", async () => {
+    await openSplit(overview(), three());
+    const [[a], [b], [c]] = await sizesOf("p1", "p2", "p3");
+    // The pointer goes right by a quarter of what the first two panes have: the first has three quarters of it while the divider is held.
+    await onDivider(0, 0.25, ["pointerdown", "pointermove"]);
+    await browser.waitUntil(async () => (await sizesOf("p1"))[0][0] > a + 1, { timeoutMsg: "the pane never followed the pointer" });
+    const [[held], [next], [other]] = await sizesOf("p1", "p2", "p3");
+    expect(held / (a + b)).toBeCloseTo(0.75, 2);
+    expect(held + next).toBeCloseTo(a + b, 0);
+    expect(other).toBeCloseTo(c, 0);
+    expect((await callsOf("orca_panes")).filter((call) => (call as { op: unknown }).op !== null)).toEqual([]);
+    const panes = await mock("orca_panes", three([0.5, 1 / 6, 1 / 3]));
+    await onDivider(0, 0.25, ["pointerup"]);
+    const [call] = (await waitForCalls(panes)) as { op: { share: number } }[];
+    expect(call).toMatchObject({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "resize", before: "p1", after: "p2" } });
+    expect(call.op.share).toBeCloseTo(0.75, 2);
+    await browser.waitUntil(
+      async () => {
+        const [[first], [second], [third]] = await sizesOf("p1", "p2", "p3");
+        return Math.abs(first / (first + second + third) - 0.5) < 0.01;
+      },
+      { timeoutMsg: "the answer's sizes never drew" },
+    );
+  });
+
+  it("leaves a pane its least share under a dragged divider, puts the sizes back at a cancel, and moves the divider of a column up and down", async () => {
+    await openSplit(overview(), layout(column(pane("p1", [claude, bash]), pane("p2", [zsh])), "p1"));
+    await expect($(".orca-divider")).toHaveAttribute("aria-orientation", "horizontal");
+    const [[, a], [, b]] = await sizesOf("p1", "p2");
+    // Far past the top: the first pane keeps a tenth of the split.
+    await onDivider(0, -0.9, ["pointerdown", "pointermove"]);
+    await browser.waitUntil(async () => (await sizesOf("p1"))[0][1] < a - 1, { timeoutMsg: "the pane never followed the pointer" });
+    expect((await sizesOf("p1"))[0][1] / (a + b)).toBeCloseTo(0.1, 2);
+    await onDivider(0, -0.9, ["pointercancel"]);
+    await browser.waitUntil(async () => Math.abs((await sizesOf("p1"))[0][1] - a) < 1, { timeoutMsg: "the sizes never came back" });
+    const panes = await mock("orca_panes", layout(split("column", [pane("p1", [claude, bash]), pane("p2", [zsh])], [0.1, 0.9]), "p1"));
+    await onDivider(0, -0.9, ["pointerdown", "pointermove", "pointerup"]);
+    const [call] = (await waitForCalls(panes)) as { op: { share: number } }[];
+    expect(call).toMatchObject({ op: { kind: "resize", before: "p1", after: "p2" } });
+    expect(call.op.share).toBeCloseTo(0.1, 5);
   });
 
   it("splits by the right-click menu of a tab: 「右に分割」 and 「下に分割」 ask for the tab at the right and at the bottom of its pane", async () => {
@@ -3582,14 +3664,14 @@ describe("orca: files and editor (A-18)", () => {
 
   it("puts the button in the pane in the top right corner only", async () => {
     const two = orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] });
-    const side = layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", [zsh])] }, "p1");
+    const side = layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", [zsh])], sizes: [0.5, 0.5] }, "p1");
     await openOrca(two, { orca_terminal_read: ["$"], orca_panes: side });
     await project("example-app").click();
     await waitForCount(".orca-pane", 2);
     await expect($('.orca-pane[data-pane="p1"] .orca-files-toggle')).not.toBeDisplayed();
     await expect($('.orca-pane[data-pane="p2"] .orca-files-toggle')).toBeDisplayed();
     expect(await toggleBoxes()).toHaveLength(1);
-    const stacked = layout({ kind: "split", direction: "column", children: [pane("p1", [claude]), pane("p2", [zsh])] }, "p1");
+    const stacked = layout({ kind: "split", direction: "column", children: [pane("p1", [claude]), pane("p2", [zsh])], sizes: [0.5, 0.5] }, "p1");
     await openOrca(two, { orca_terminal_read: ["$"], orca_panes: stacked });
     await project("example-app").click();
     await waitForCount(".orca-pane", 2);
@@ -3986,15 +4068,19 @@ describe("orca: files and editor (A-18)", () => {
     expect(await browser.execute(() => document.activeElement?.classList.contains("orca-edit-area"))).toBe(true);
   });
 
-  it("opens a file that is open already by selecting its tab, without reading it again", async () => {
+  it("opens a file that is open already by selecting its tab, and reads it again as it comes back into the pane: the text of the disk takes the place of the one held", async () => {
     await openFiles();
     await openA();
     await tabOf(claude).$(".orca-tab-btn").click();
     await expect($(".orca-edit-area")).not.toBeExisting();
+    // The file changed on the disk while its tab was not shown.
+    const read = await mock("orca_file_read", text("fn main() {}\n// outside\n", "sig-2"));
     await doublePress("a.rs");
     await expect(selectedTab().$(".orca-tab-title")).toHaveText("a.rs");
     expect(await count(".orca-tabs [data-file]")).toBe(1);
-    expect(await callsOf("orca_file_read")).toHaveLength(1);
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\n", { trim: false });
+    expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
+    expect(await dirtyMarks()).toBe(0);
   });
 
   it("keeps the typing of a file when another tab is shown and the file again", async () => {
@@ -4183,9 +4269,11 @@ describe("orca: files and editor (A-18)", () => {
     await doublePress("b.rs");
     await expect($(".orca-edit-area")).toHaveValue("pub fn b() {}\n", { trim: false });
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs", "b.rs"]);
+    // a.rs comes back into the pane and is read again: the disk still holds the text that was read, so it stays.
+    const again = await mock("orca_file_read", text("fn main() {}\n", "sig-1"));
     await tabOf("file:1").$(".orca-tab-btn").click();
     await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
-    expect(await callsOf("orca_file_read")).toHaveLength(1);
+    expect((await waitForCalls(again))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
   });
 
   // The right button on a row of the tree, as the page gets it; whether the page kept the browser's own menu from showing.
@@ -5748,6 +5836,128 @@ describe("orca: files and editor (A-18)", () => {
     await browser.pause(200);
     expect(await commitRows()).toBe(3);
     expect(await callsOf("orca_git_history")).toHaveLength(1);
+  });
+
+  // #601: the clock of the Orca screen (10 seconds; 1 second here) reads again what the file pane and the panes show, with no return of the focus. #600: the heading follows the branch of the list a saved environment streams.
+  const marked = (selector: string) => browser.execute((q) => document.querySelector<HTMLElement>(q)?.dataset.kept ?? null, selector);
+  const markNode = (selector: string) =>
+    browser.execute((q) => {
+      document.querySelector<HTMLElement>(q)!.dataset.kept = "1";
+    }, selector);
+
+  it("reads the tree and the file shown again by the clock: a folder that did not change is not drawn again, a file with no unsaved typing takes the text of the disk and keeps its caret, one with unsaved typing is left alone, and a read that fails shows nothing (A-18)", async () => {
+    await openFiles({ ...timers({ orcaClock: 1000 }), editor_settings: { autosaveMs: 60000 } });
+    await openA();
+    // The same entries: the rows are the ones that were drawn.
+    await markNode('.orca-file[data-path="a.rs"]');
+    const same = await mock("orca_files_list", root());
+    expect((await waitForCalls(same))[0]).toEqual({ path: "/work/example-app", dir: "", ignored: false, environment: null });
+    await browser.pause(300);
+    expect(await marked('.orca-file[data-path="a.rs"]')).toBe("1");
+    // A file made outside the app shows with no return of the focus.
+    await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["a.rs", false], ["b.log", false], ["new.rs", false]]));
+    await browser.waitUntil(async () => (await names()).includes("new.rs"), { timeoutMsg: "the new file never showed" });
+    // The text changed outside the app: it takes the place of the one shown, and the caret stays.
+    await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.setSelectionRange(3, 3));
+    const read = await mock("orca_file_read", text("fn main() {}\n// outside\n", "sig-2"));
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\n", { trim: false });
+    expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
+    expect(await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.selectionStart)).toBe(3);
+    expect(await dirtyMarks()).toBe(0);
+    // Typing that is not saved yet: the file is not read, and the text stays.
+    await type("x");
+    expect(await dirtyMarks()).toBe(1);
+    const later = await mock("orca_file_read", text("other\n", "sig-3"));
+    // A read of the tree that fails keeps the rows and says nothing.
+    await mock("orca_files_list", rejects("Orca に接続できません"));
+    await browser.pause(1200);
+    expect(await callsOf(later)).toEqual([]);
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\nx", { trim: false });
+    expect(await count("#orca-files-tree .orca-file-note.fail")).toBe(0);
+    expect(await names()).toContain("new.rs");
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("reads the diff shown and the history shown again by the clock: a diff that changed is drawn in place, the same commits are not drawn again, and a new commit comes to the top with the chosen commit kept (A-24, A-27)", async () => {
+    await openFiles(historyFixtures(timers({ orcaClock: 1000 })));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_file_diff", diffOfA());
+    expect(await rightClickRow("a.rs")).toBe(true);
+    await pickItem("差分を表示");
+    await waitForCount(".orca-diff-rows .odf-row", 7);
+    // The file changed outside the app: the rows follow with no press of the reload button.
+    const diff = await mock("orca_file_diff", many());
+    await waitForCount(".orca-diff-rows .odf-row", 200);
+    expect((await callsOf(diff))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
+    await expect($("#error")).not.toBeDisplayed();
+    // The history: the same first commits keep the rows that were drawn.
+    await paneMode("履歴").click();
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    await waitForCount("#orca-history-files .orca-hfile", 2);
+    await markNode(`#orca-history-list .orca-commit[data-id="${commitId(3)}"]`);
+    const same = await mock("orca_git_history", page(3, 1, false));
+    expect((await waitForCalls(same))[0]).toEqual({ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null });
+    await browser.pause(300);
+    expect(await marked(`#orca-history-list .orca-commit[data-id="${commitId(3)}"]`)).toBe("1");
+    // A commit made outside the app comes to the top, and the chosen commit stays chosen with its files.
+    await mock("orca_git_history", page(4, 1, false));
+    await waitForCount("#orca-history-list .orca-commit", 4);
+    expect(await textsOf("#orca-history-list .orca-commit-subject")).toEqual(["Commit 4", "Commit 3", "Commit 2", "Commit 1"]);
+    await expect(commitRow(3)).toHaveAttribute("aria-pressed", "true");
+    expect(await count("#orca-history-files .orca-hfile")).toBe(2);
+  });
+
+  it("reads the tree and the file shown again at once when the list of Orca shows another branch for the worktree, with no switch from the app (A-25)", async () => {
+    await openFiles(branchFixtures());
+    await openA();
+    const list = await mock("orca_files_list", dirOf("", [["a.rs", false], ["only-c.rs", false]]));
+    const read = await mock("orca_file_read", text("fn c() {}\n", "sig-c"));
+    // The branch was switched in a terminal: the next read of the list says so (the reload button reads it here).
+    await mock("orca_overview", onFeatC());
+    await $("#orca-refresh").click();
+    await expect(branchButton()).toHaveText("feat/c");
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await browser.waitUntil(async () => (await names()).join() === "a.rs,only-c.rs", { timeoutMsg: "the tree of the new branch never showed" });
+    await expect($(".orca-edit-area")).toHaveValue("fn c() {}\n", { trim: false });
+    expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
+    expect(await callsOf("orca_switch_branch")).toEqual([]);
+  });
+
+  it("shows the new branch in the heading of a saved environment, whose list is streamed: after a switch from the app without a second read of the tree, and after a switch made outside it with the tree read again (A-25, A-12)", async () => {
+    const studioOnly = { target: "Studio", environments: ["Studio"] };
+    // What the stream sends once Rust has read the worktrees again: example-app on `gitBranch`.
+    const listOn = (gitBranch: string) =>
+      streamList([orcaRow("example-app", "feat/c", "Write the docs", { minutes: 2 }), ...sample().slice(1)], [orcaWorktree("example-app", "feat/c", { gitBranch }), orcaWorktree("example-api", "main")]);
+    await openOrca(orcaOverview([], [], studioOnly), { orca_files_list: root(), orca_files_ignored: rootIgnored, ...branchFixtures() });
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList(sample(), worktrees()));
+    await project("example-app").click();
+    await expect(selectedTab()).toBeDisplayed();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await expect(branchButton()).toHaveText("feat/a");
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const files = await mock("orca_files_list", root());
+    const overview = await mock("orca_overview", orcaOverview([], [], studioOnly));
+    await branchPick("local", "feat/c").click();
+    // Rust switches, and tells the stream to read the worktrees again (unit tests); the screen reads the tree once and asks for no list.
+    expect(await waitForCalls("orca_switch_branch")).toEqual([{ path: "/work/example-app", kind: "local", name: "feat/c", environment: "Studio" }]);
+    await waitForCalls(files);
+    await sendStream(listOn("feat/c"));
+    await expect(branchButton()).toHaveText("feat/c");
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/c");
+    await browser.pause(300);
+    expect(await callsOf(files)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: "Studio" }]);
+    expect(await callsOf(overview)).toEqual([]);
+    // A switch made outside the app comes with the next list of the stream: the heading follows, and the tree is read again.
+    const again = await mock("orca_files_list", dirOf("", [["only-d.rs", false]]));
+    await sendStream(listOn("feat/d"));
+    await expect(branchButton()).toHaveText("feat/d");
+    expect(await waitForCalls(again)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: "Studio" }]);
+    await browser.waitUntil(async () => (await names()).join() === "only-d.rs", { timeoutMsg: "the tree of the new branch never showed" });
+    expect(await callsOf("orca_switch_branch")).toHaveLength(1);
   });
 });
 

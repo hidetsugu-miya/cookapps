@@ -3,6 +3,7 @@
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
 // A scratchpad file of an SSH host (A-30) is a file of this editor too: it has no worktree (`path` is empty) and names its host, and Rust reads and saves it by ssh (`ssh_scratch_read`, `ssh_scratch_write`) with the same answers, so everything else here is the same.
+// A file that a pane shows is read again by the clock of the Orca screen, and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing. A scratchpad file of an SSH host is not read again.
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
 // A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the textarea by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
 import { tag } from "./dom.js";
@@ -46,6 +47,10 @@ interface EditorFile {
   writing: Promise<void> | null;
   // The file is being moved (A-18): nothing is saved until the move is over, so that no save goes to the place it leaves.
   held: boolean;
+  // The quiet read (`reread`) is on its way; the file was put in a pane once, and was taken out of the page after that (it is read again when it is put back).
+  rereading: boolean;
+  placed: boolean;
+  out: boolean;
   // Focus the text when it is first shown.
   wantFocus: boolean;
   // The grammar of the highlighter for the file (null: none, drawn plain), and how to cancel the drawing of the layer that waits for the next frame or for the wait of a long text (null: none waits).
@@ -406,6 +411,47 @@ async function load(f: EditorFile) {
   changed();
 }
 
+// Whether the text may be replaced by the disk's: the file is read, is a worktree's, and has no typing that is not on the disk, on its way to it or refused by it.
+const canReread = (f: EditorFile) => f.read === "ready" && f.host === null && !f.dirty && !f.blocked && !f.held && !f.richPending && f.richSync === null && f.writing === null && f.timer === null && f.save !== "error";
+
+// Reads the file again without a word (the clock, and a tab shown again). The signature of the read says whether the disk still holds the text that was read: when it does, nothing is drawn. Another text takes the place of the one shown, with the caret, the selection and the scroll where they were (the rich view of a Markdown file is drawn again and keeps its scroll).
+// Typing that came while the read was on its way keeps the text as it is, saved by then or not, and a failure keeps what is shown.
+async function reread(f: EditorFile) {
+  if (f.rereading || !canReread(f)) return;
+  const relative = f.relative;
+  // A save that ends while the read is on its way gives the file another signature: the answer is then older than the disk.
+  const signature = f.signature;
+  f.rereading = true;
+  try {
+    const text = await invoke("orca_file_read", { path: f.path, relative, environment: f.target });
+    if (files.get(f.id) !== f || f.relative !== relative || !canReread(f) || f.signature !== signature || text.signature === f.signature) return;
+    f.signature = text.signature;
+    f.crlf = text.crlf;
+    if (text.content === f.area.value) return;
+    const area = f.area;
+    const [start, end, top, left, richTop] = [area.selectionStart, area.selectionEnd, area.scrollTop, area.scrollLeft, f.rich.scrollTop];
+    area.value = text.content;
+    area.setSelectionRange(Math.min(start, text.content.length), Math.min(end, text.content.length));
+    area.scrollTop = top;
+    area.scrollLeft = left;
+    f.highlight = text.highlight;
+    setSave(f, "idle");
+    if (f.markdown && f.mode === "rich") {
+      void drawRich(f).then(() => {
+        f.rich.scrollTop = richTop;
+      });
+    } else {
+      paint(f);
+      numberLines(f, area.value);
+      followScroll(f);
+    }
+  } catch {
+    // What is shown stays.
+  } finally {
+    f.rereading = false;
+  }
+}
+
 function create(id: string, target: string | null, project: string, path: string, relative: string, host: string | null): EditorFile {
   // The path the heading shows: from the worktree, or the place on the SSH host.
   const shown = host === null ? relative : SSH_SCRATCH_DIR + relative;
@@ -450,7 +496,7 @@ function create(id: string, target: string | null, project: string, path: string
   const rich = tag("div", "orca-edit-rich");
   rich.hidden = true;
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, host, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
+  const f: EditorFile = { id, target, project, path, relative, host, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
   area.oninput = () => typed(f);
   area.onscroll = () => followScroll(f);
   sourceButton.onclick = async () => {
@@ -472,7 +518,7 @@ function create(id: string, target: string | null, project: string, path: string
   return f;
 }
 
-// Opens the file as a tab of the project and gives its id; a file that is open already is not read again. With `host`, it is the scratchpad file named `relative` of that SSH host (A-30), and `path` is empty.
+// Opens the file as a tab of the project and gives its id; a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane). With `host`, it is the scratchpad file named `relative` of that SSH host (A-30), and `path` is empty.
 export function openFile(target: string | null, project: string, path: string, relative: string, host: string | null = null) {
   const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.host === host);
   if (open) {
@@ -550,13 +596,25 @@ export async function holdFiles(target: string | null, project: string, path: st
   };
 }
 
-// Shows each file of `placements` in its host element and takes every other file out of the page (it keeps its text).
-export function showEditors(placements: { id: string; host: HTMLElement }[]) {
+// Reads again, without a word, the files that the panes show now (the clock of the Orca screen, and a branch that changed).
+export function refreshEditors() {
+  for (const f of files.values()) if (f.el.isConnected) void reread(f);
+}
+
+// Shows each file of `placements` in its host element and takes every other file out of the page (it keeps its text). With `fresh`, a file that was out of the page and is put back is read again.
+export function showEditors(placements: { id: string; host: HTMLElement }[], fresh: boolean) {
   const shown = new Set(placements.map((p) => p.id));
-  for (const [id, f] of files) if (!shown.has(id)) f.el.remove();
+  for (const [id, f] of files) {
+    if (shown.has(id)) continue;
+    f.el.remove();
+    if (f.placed) f.out = true;
+  }
   for (const { id, host } of placements) {
     const f = files.get(id);
     if (!f) continue;
+    const back = f.out;
+    f.placed = true;
+    f.out = false;
     if (f.el.parentElement !== host) {
       host.replaceChildren(f.el);
       // A textarea that was out of the page starts at the top again.
@@ -566,6 +624,7 @@ export function showEditors(placements: { id: string; host: HTMLElement }[]) {
       f.wantFocus = false;
       f.area.focus({ preventScroll: true });
     }
+    if (back && fresh) void reread(f);
   }
 }
 

@@ -1,5 +1,6 @@
 // The diff tab of the Orca screen (A-24): the difference of a file of a worktree from HEAD, as a tab of the work pane, side by side (HEAD on the left, the working tree on the right, the numbers of the lines between them) or in one column. A file of a commit in the history (A-27) opens the same tab: the parent on the left, the commit on the right, and the short id of the commit in the heading.
 // Rust reads the two texts and compares them (`orca_file_diff`, and `orca_commit_file_diff` for a commit): the rows of both views, the blocks of changes and the language to color by; this module draws them, colors the text with the highlighter of the editor (A-21), and takes the presses of the buttons of the tab.
+// A tab of a difference from HEAD that a pane shows is read again by the clock of the Orca screen, and when it is shown again after it was out of the page (`refreshDiffs`, `showDiffs`): the rows are drawn again only when the answer is not the one held, and a read that fails keeps what is shown. A file of a commit does not change and is not read again.
 // The tabs are kept in memory only, by target and project, as the tabs of the work pane (their ids are `diff:{n}`), as the files of the editor are (`file:{n}`). The view chosen (side by side or in one column) is one choice for all the tabs.
 import type { OrcaDiffRow } from "./bindings/OrcaDiffRow";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
@@ -37,6 +38,10 @@ interface DiffTab {
   pending: boolean;
   // Counts the reads, so that an answer of an earlier read than the last is dropped; the wait before the colors of a long text are drawn.
   seq: number;
+  // The quiet read (`reread`) is on its way; the tab was put in a pane once, and was taken out of the page after that (it is read again when it is put back).
+  rereading: boolean;
+  placed: boolean;
+  out: boolean;
   cancelColor: (() => void) | null;
   el: HTMLElement;
   note: HTMLElement;
@@ -177,6 +182,40 @@ function paint(d: DiffTab, diff: OrcaFileDiff) {
   }
 }
 
+// Draws an answer of Rust as what the tab shows. The first one goes to the first change; one after that keeps the place in the rows.
+function adopt(d: DiffTab, diff: OrcaFileDiff, first: boolean) {
+  d.diff = diff;
+  paint(d, diff);
+  d.read = "ready";
+  d.note.hidden = true;
+  d.rows.hidden = false;
+  const top = d.rows.scrollTop;
+  render(d);
+  d.current = Math.min(d.current, diff.changes.length - 1);
+  syncHead(d);
+  if (first && diff.changes.length > 0) {
+    if (d.el.isConnected) goTo(d, 0);
+    else d.pending = true;
+  } else d.rows.scrollTop = top;
+}
+
+// Reads the difference from HEAD again without a word (the clock, and a tab shown again): an answer that is the one held draws nothing, another is drawn in place, and a failure keeps what is shown. Nothing is asked for a file of a commit, while a read of the tab is on its way, or twice at once; an answer that a later read of the tab overtook is dropped.
+async function reread(d: DiffTab) {
+  if (d.commit !== null || d.read === "loading" || d.rereading) return;
+  const mine = d.seq;
+  d.rereading = true;
+  try {
+    const diff = await invoke("orca_file_diff", { path: d.path, relative: d.relative, environment: d.target });
+    if (mine !== d.seq || diffs.get(d.id) !== d) return;
+    if (d.diff !== null && JSON.stringify(diff) === JSON.stringify(d.diff)) return;
+    adopt(d, diff, d.diff === null);
+  } catch {
+    // What is shown stays.
+  } finally {
+    d.rereading = false;
+  }
+}
+
 // Reads the difference again, and draws it. The first read goes to the first change; a read after that keeps the place in the rows.
 async function load(d: DiffTab) {
   const mine = ++d.seq;
@@ -187,19 +226,7 @@ async function load(d: DiffTab) {
     const c = d.commit;
     const diff = c === null ? await invoke("orca_file_diff", { path: d.path, relative: d.relative, environment: d.target }) : await invoke("orca_commit_file_diff", { path: d.path, commitId: c.id, parentId: c.parentId, relative: d.relative, oldRelative: c.oldRelative, environment: d.target });
     if (mine !== d.seq) return;
-    d.diff = diff;
-    paint(d, diff);
-    d.read = "ready";
-    d.note.hidden = true;
-    d.rows.hidden = false;
-    const top = d.rows.scrollTop;
-    render(d);
-    d.current = Math.min(d.current, diff.changes.length - 1);
-    syncHead(d);
-    if (first && diff.changes.length > 0) {
-      if (d.el.isConnected) goTo(d, 0);
-      else d.pending = true;
-    } else d.rows.scrollTop = top;
+    adopt(d, diff, first);
   } catch (e) {
     if (mine !== d.seq) return;
     cancelColor(d);
@@ -239,7 +266,7 @@ function create(id: string, target: string | null, project: string, path: string
   const rows = tag("div", "orca-diff-rows");
   rows.hidden = true;
   el.append(head, note, rows);
-  const d: DiffTab = { id, target, project, path, relative, commit, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, stale: false, pending: false, seq: 0, cancelColor: null, el, note, count, rows, previous, next, view, reload };
+  const d: DiffTab = { id, target, project, path, relative, commit, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, stale: false, pending: false, seq: 0, rereading: false, placed: false, out: false, cancelColor: null, el, note, count, rows, previous, next, view, reload };
   previous.onclick = () => goTo(d, d.current - 1);
   next.onclick = () => goTo(d, d.current + 1);
   reload.onclick = () => void load(d);
@@ -284,13 +311,25 @@ export function closeDiff(id: string) {
   diffs.delete(id);
 }
 
-// Shows each diff of `placements` in its host element and takes every other diff out of the page (it keeps its rows).
-export function showDiffs(placements: { id: string; host: HTMLElement }[]) {
+// Reads again, without a word, the differences that the panes show now (the clock of the Orca screen, and a branch that changed).
+export function refreshDiffs() {
+  for (const d of diffs.values()) if (d.el.isConnected) void reread(d);
+}
+
+// Shows each diff of `placements` in its host element and takes every other diff out of the page (it keeps its rows). With `fresh`, a diff that was out of the page and is put back is read again.
+export function showDiffs(placements: { id: string; host: HTMLElement }[], fresh: boolean) {
   const shown = new Set(placements.map((p) => p.id));
-  for (const [id, d] of diffs) if (!shown.has(id)) d.el.remove();
+  for (const [id, d] of diffs) {
+    if (shown.has(id)) continue;
+    d.el.remove();
+    if (d.placed) d.out = true;
+  }
   for (const { id, host } of placements) {
     const d = diffs.get(id);
     if (!d) continue;
+    const back = d.out;
+    d.placed = true;
+    d.out = false;
     if (d.el.parentElement !== host) {
       host.replaceChildren(d.el);
       // Rows that were out of the page start at the top again.
@@ -306,5 +345,6 @@ export function showDiffs(placements: { id: string; host: HTMLElement }[]) {
       else if (d.current >= 0) goTo(d, d.current);
       else d.rows.scrollTop = 0;
     }
+    if (back && fresh) void reread(d);
   }
 }
