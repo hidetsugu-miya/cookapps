@@ -1,4 +1,4 @@
-// The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine, an SSH host) or, with the bell pressed, the Claude agents that run in Orca in three groups (waiting for the user, working, done);
+// The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine, an SSH host);
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
 // A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history.
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
@@ -34,10 +34,8 @@ import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTe
 import { initSplit } from "./split.js";
 import { setNavCount, show, showError } from "./view.js";
 
-export const GROUP_LABELS = { waiting: "入力待ち", working: "作業中", done: "完了" } as const;
-// The name of each status icon (its `aria-label`), and the status each group of the working view draws.
+// The name of each status icon (its `aria-label`).
 export const STATUS_LABELS: Record<OrcaStatus, string> = { question: "入力待ち", failed: "失敗", working: "作業中", monitoring: "監視中", interrupted: "中断", done: "完了", idle: "動いていない" };
-export const GROUP_STATUS: Record<OrcaRow["group"], OrcaStatus> = { waiting: "question", working: "working", done: "done" };
 const ASK_SVG = svgOf('<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>');
 const ACTIVITY_SVG = svgOf('<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>');
 const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
@@ -68,8 +66,6 @@ let switching = false;
 let loadSeq = 0;
 let loading = false;
 let lastTry = 0;
-// The list pane shows the projects, or (the bell pressed) the working agents; the projects come first and the choice is kept in memory.
-let working = false;
 // Whether the list of projects is open (A-23): held in memory only, so the screen is open again when the app starts.
 let listOpen = true;
 // The text of the search field (A-19): the list shows the projects and SSH hosts whose name holds it (blank: all of them), and the row the keys are on is `cursor` (a key; one the list does not show leaves the first).
@@ -85,8 +81,6 @@ let workingOrder: string[] = [];
 let workingIds = new Map<string, Set<string>>();
 // The target `workingOrder`, `workingIds` and `opened` were made for: the keys of another target are not these.
 let workingTarget: string | null = null;
-// The groups of the working view that the user closed with their headings (A-6): held in memory only, every group is open at first.
-const closedGroups = new Set<OrcaRow["group"]>();
 // The host element of each pane drawn, by pane id: the terminals are placed in them.
 let paneHosts = new Map<string, HTMLElement>();
 // The order tabs were first seen in, so that a read that reorders the sessions does not move the tabs. A tab with a terminal is known by its handle, so a terminal that changes kind (a plain one where Claude starts, or the other way round) keeps its place.
@@ -102,9 +96,8 @@ const START_WAIT_MS = 30_000;
 // The saved environment whose list is streamed (null: none is, and the list is read by the clock), and the channel of the stream: an event of another channel is not taken.
 let streamTarget: string | null = null;
 let streamChannel: { onmessage: (event: OrcaStreamEvent) => void } | null = null;
-// What the feed, the bell, the tabs, the header and the notice show now; they are drawn again only when this changes.
+// What the feed, the tabs, the header and the notice show now; they are drawn again only when this changes.
 let feedKey = "";
-let bellKey = "";
 let headerKey = "";
 let noticeKey = "";
 
@@ -284,63 +277,9 @@ function drawNotice() {
   $("orca-notice").replaceChildren(row);
 }
 
-// The bell: pressed while the working view shows. At its right shoulder the question icon and the number of agents that wait, else the working mark and the number that work, else nothing.
-function drawBell() {
-  const rows = view?.rows ?? [];
-  const waiting = rows.filter((r) => r.group === "waiting").length;
-  const running = rows.filter((r) => r.group === "working").length;
-  const key = JSON.stringify([working, waiting, running]);
-  if (key === bellKey) return;
-  bellKey = key;
-  const bell = $("orca-bell");
-  bell.setAttribute("aria-pressed", String(working));
-  bell.setAttribute("aria-label", working ? "作業中の表示をやめる" : "作業中を表示する");
-  const note = $("orca-bell-badge");
-  note.hidden = waiting + running === 0;
-  note.dataset.kind = waiting ? "question" : "working";
-  note.replaceChildren(statusIcon(waiting ? "question" : "working"), String(waiting || running));
-}
-
-// The search field belongs to the list of projects: it is hidden in the working view, and its clear button shows while something is typed.
+// The clear button of the search field shows while something is typed.
 function drawSearch() {
-  $("orca-search").hidden = working;
   $("orca-search-clear").hidden = query === "";
-}
-
-// The heading of a group is one button: the arrow, the status icon, the name and the number. Pressing it closes the group's rows (the heading and the number stay) or opens them again.
-function heading(group: OrcaRow["group"], n: number) {
-  const h = tag("h2", `orca-group ${group}`);
-  const button = tag("button", "orca-group-btn");
-  button.type = "button";
-  button.dataset.key = `group:${group}`;
-  button.setAttribute("aria-expanded", String(!closedGroups.has(group)));
-  const arrow = tag("span", "orca-group-arrow");
-  arrow.innerHTML = CHEVRON_SVG;
-  button.append(arrow, statusIcon(GROUP_STATUS[group], GROUP_LABELS[group]), GROUP_LABELS[group], tag("span", "orca-count", String(n)));
-  button.onclick = () => toggleGroup(group);
-  h.append(button);
-  return h;
-}
-
-function toggleGroup(group: OrcaRow["group"]) {
-  if (!closedGroups.delete(group)) closedGroups.add(group);
-  draw();
-}
-
-// Three lines: the status icon, the title and the time; the latest action; and Claude's mark with the worktree.
-function rowNode(r: OrcaRow, key: string, now: number) {
-  const row = tag("button", `orca-row ${r.group}`);
-  row.type = "button";
-  row.dataset.key = key;
-  // A row with no pane has no session to read.
-  row.disabled = r.paneKey === null;
-  row.setAttribute("aria-pressed", String(r.paneKey !== null && claudeTabId(r.paneKey) === selectedTab() && r.projectKey === projectKey));
-  const where = tag("span", "orca-where");
-  where.innerHTML = CLAUDE_SVG;
-  where.append(worktreeLabel(r));
-  row.append(statusIcon(r.status), tag("span", "orca-prompt", r.line), tag("span", "orca-time", elapsed(r.atMs, now, r.group === "done")), tag("span", "orca-activity", r.activity), where);
-  row.onclick = () => selectRow(r);
-  return row;
 }
 
 // A session of the open project: its status icon and title, selected when it is the tab selected.
@@ -482,21 +421,8 @@ function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, o
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
 }
 
-function workingNodes(now: number): HTMLElement[] {
-  const rows = view?.rows ?? [];
-  const nodes: HTMLElement[] = [];
-  for (const group of ["waiting", "working", "done"] as const) {
-    const list = rows.filter((r) => r.group === group);
-    if (!list.length) continue;
-    nodes.push(heading(group, list.length));
-    if (!closedGroups.has(group)) nodes.push(...list.map((r) => rowNode(r, r.paneKey ?? `${group}/${r.repo}/${r.branch}/${r.line}`, now)));
-  }
-  return nodes.length ? nodes : [emptyNode("動いているエージェントはありません")];
-}
-
 // Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
-  const now = Date.now();
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, tabsOf(k).filter((t) => !isDocument(t))]));
@@ -504,16 +430,16 @@ function drawFeed() {
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
-  const re = working ? null : matcher();
+  const re = matcher();
   const rows = visibleRows(re);
-  const on = working ? null : cursorKey(rows);
-  const key = JSON.stringify([working, view?.state ?? null, working ? view?.rows : [view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), on], projectKey, sessions, selectedTab(), switching, [...closedGroups], Math.floor(now / 60_000)]);
+  const on = cursorKey(rows);
+  const key = JSON.stringify([view?.state ?? null, view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), on, projectKey, sessions, selectedTab(), switching]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...(working ? workingNodes(now) : projectNodes(re, rows, on, openTabs)));
+  box.replaceChildren(...projectNodes(re, rows, on, openTabs));
   box.scrollTop = top;
   if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
@@ -748,7 +674,6 @@ function draw() {
   if (!shown()) return;
   drawHeader();
   drawNotice();
-  drawBell();
   drawSearch();
   const tabs = projectKey === null ? [] : tabsOf(projectKey);
   drawFeed();
@@ -877,7 +802,7 @@ export function openInOrca(paneKey: string | null) {
 // The Orca screen is shown: what was read stays on screen while a new read is on its way.
 export function showOrca() {
   show("orca");
-  headerKey = noticeKey = feedKey = bellKey = "";
+  headerKey = noticeKey = feedKey = "";
   draw();
   // The environments are read when the screen is shown, whatever read is on its way.
   load("full", true);
@@ -1021,14 +946,6 @@ function focusPane(pane: string) {
   draw();
 }
 
-// A row of the working view selects its project and its tab.
-function selectRow(r: OrcaRow) {
-  if (r.paneKey === null) return;
-  started = null;
-  pickRow(r);
-  draw();
-}
-
 // Makes the row's project and tab the selection (the row has a pane key).
 function pickRow(r: OrcaRow) {
   setProject(r.projectKey);
@@ -1041,7 +958,7 @@ function pickTerminal(t: OrcaTerminal) {
   chooseTab(plainTabId(t.handle));
 }
 
-// Closes a tab. An Orca terminal is closed in Orca, and the list is read at once: it leaves the tabs then, and a failure keeps the tab and shows the message.
+// Closes a tab. An Orca terminal is closed in Orca, and the list is read at once: it leaves the tabs then, and a failure keeps the tab, shows the message and reads the list again.
 async function closeTab(tab: Tab) {
   if (closing.has(tab.id)) return;
   closing.add(tab.id);
@@ -1065,6 +982,8 @@ async function closeTab(tab: Tab) {
     showError(e);
     closing.delete(tab.id);
     draw();
+    // The terminal may be gone from Orca already: the list is read again, and the tab leaves only if the read no longer holds it.
+    if (!streaming()) load(clockScope(), true);
     return;
   }
   closing.delete(tab.id);
@@ -1165,9 +1084,8 @@ function clearSearch() {
   drawSearchList();
 }
 
-// ⌘J: the field takes the focus with its text selected. The working view has no field, so it gives way to the projects.
+// ⌘J: the field takes the focus with its text selected.
 function focusSearch() {
-  working = false;
   if (!listOpen) toggleList();
   draw();
   searchInput().focus();
@@ -1239,10 +1157,6 @@ export function initOrca() {
   drawListToggle(toggle, listOpen);
   $("orca-header").prepend(toggle);
   $("orca-refresh").onclick = () => load("full", true);
-  $("orca-bell").onclick = () => {
-    working = !working;
-    draw();
-  };
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
   initPaneTree($("orca-panes"), {
     plus: (anchor, pane) => {

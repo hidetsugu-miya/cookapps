@@ -279,7 +279,7 @@ export interface Commands {
   orca_handoff: { args: { destination: HandoffDestination; instruction: string; files: string[]; summary: string[]; context: HandoffContext | null; environment: string | null }; result: OrcaStarted };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
-  // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. A terminal that is already closed is a success.
+  // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. On `terminal_handle_stale` it closes once more without `--tab`, and a failure of that is an error.
   orca_close: { args: { handle: string; environment: string | null }; result: null };
   // The lines on the screen of the terminal `handle` (a Claude session's or a plain one) of this machine, or of the saved environment `environment` when given, for the mirror (no colors).
   orca_terminal_read: { args: { handle: string; environment?: string }; result: string[] };

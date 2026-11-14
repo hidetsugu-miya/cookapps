@@ -96,8 +96,6 @@ pub struct OrcaRow {
     pub pane_key: Option<String>,
     /// The worktree's path.
     pub path: String,
-    /// The latest action: `{tool}: {first line of its input}`, else the first line of the last answer, else empty (A-8).
-    pub activity: String,
     /// The icon of the row (A-8).
     pub status: OrcaStatus,
     /// The project the row belongs to (`OrcaProject::key`); empty when its worktree has none.
@@ -408,22 +406,6 @@ fn worktree_status(worktree: &Value) -> OrcaStatus {
     status_of(word, OrcaStatus::Idle)
 }
 
-/// The latest action of an agent: `{toolName}: {first line of toolInput}`, else the first line of its last answer, cut to `LINE_LIMIT` characters.
-fn activity_of(agent: &Value) -> String {
-    match text_of(agent, "toolName") {
-        Some(tool) => {
-            let line = match agent["toolInput"].as_str().and_then(first_line) {
-                Some(input) => format!("{tool}: {input}"),
-                None => tool.to_owned(),
-            };
-            line.chars().take(LINE_LIMIT).collect()
-        }
-        None => text_of(agent, "lastAssistantMessage")
-            .and_then(first_line)
-            .unwrap_or_default(),
-    }
-}
-
 const LOCAL_HOST: &str = "local";
 
 /// The id of the host a worktree is on; one with none is this machine's.
@@ -505,7 +487,6 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                     handle,
                     pane_key: pane_key.map(str::to_owned),
                     path: text_of(worktree, "path").unwrap_or_default().to_owned(),
-                    activity: activity_of(agent),
                     status: agent_status(agent),
                     project_key: project_key_of(worktree).unwrap_or_default(),
                     environment: None,
@@ -712,7 +693,7 @@ fn screen_of(result: &Value) -> Result<Vec<String>, String> {
     Ok(screen_lines_of(result))
 }
 
-/// Whether the CLI's output says the terminal was already closed (`terminal_handle_stale`): closing it again is a success.
+/// Whether the CLI's output is the `terminal_handle_stale` error. Orca answers it for a terminal that runs as well as for one that is gone, so it is no proof of a closed terminal.
 fn is_stale(out: &str) -> bool {
     serde_json::from_str::<Value>(out.trim())
         .is_ok_and(|doc| doc["ok"] == false && doc["error"]["code"] == "terminal_handle_stale")
@@ -1032,6 +1013,29 @@ fn close_args(handle: &str, environment: Option<&str>) -> Vec<String> {
         args_of(&["terminal", "close", "--terminal", handle, "--tab", "--json"]),
         environment,
     )
+}
+
+/// Closes the terminal itself, with no `--tab`: what stopped a terminal that the close of its tab answered `terminal_handle_stale` for.
+fn close_plain_args(handle: &str, environment: Option<&str>) -> Vec<String> {
+    with_environment(
+        args_of(&["terminal", "close", "--terminal", handle, "--json"]),
+        environment,
+    )
+}
+
+/// What the answer of the close of a tab decides: it is done, or the terminal is closed again with no `--tab`.
+#[derive(Debug, PartialEq)]
+enum AfterTabClose {
+    Done,
+    CloseAgain,
+}
+
+/// Reads the answer of `orca terminal close --tab`: `terminal_handle_stale` is closed again with no `--tab`, any other failure is its message.
+fn after_tab_close(out: &str) -> Result<AfterTabClose, String> {
+    if is_stale(out) {
+        return Ok(AfterTabClose::CloseAgain);
+    }
+    parse_output(out).map(|_| AfterTabClose::Done)
 }
 
 /// The screen of the terminal as lines with no colors.
@@ -1624,14 +1628,15 @@ fn handoff(
     launch(path, Some(&text), environment)
 }
 
-/// Closes the tab of an Orca terminal. A terminal that is already closed (`terminal_handle_stale`) is a success; `ptyKilled` is not looked at.
+/// Closes the tab of an Orca terminal; `ptyKilled` is not looked at. When the close of the tab answers `terminal_handle_stale` (which Orca also answers for a terminal that runs), the terminal is closed again with no `--tab`, once; any failure of that, `terminal_handle_stale` too, is an error, and the tab stays.
 fn close(handle: &str, environment: Option<&str>) -> Result<(), String> {
     check_handle(handle)?;
     check_listed(environment)?;
     let out = run(&close_args(handle, environment), READ_TIMEOUT).map_err(message_of)?;
-    if is_stale(&out) {
+    if after_tab_close(&out)? == AfterTabClose::Done {
         return Ok(());
     }
+    let out = run(&close_plain_args(handle, environment), READ_TIMEOUT).map_err(message_of)?;
     parse_output(&out).map(|_| ())
 }
 
@@ -2037,7 +2042,6 @@ mod tests {
                 handle: Some("term_1".into()),
                 pane_key: Some("tabA:leaf1".into()),
                 path: "/work/example".into(),
-                activity: String::new(),
                 status: OrcaStatus::Working,
                 project_key: "repo1".into(),
                 environment: None,
@@ -2305,7 +2309,6 @@ mod tests {
                 handle: None,
                 pane_key: None,
                 path: String::new(),
-                activity: String::new(),
                 status: OrcaStatus::Working,
                 project_key: String::new(),
                 environment: None,
@@ -3573,31 +3576,9 @@ mod tests {
     }
 
     #[test]
-    fn the_activity_is_the_tool_and_its_input_else_the_last_answer() {
-        let mut a = agent("tabA:leaf1", "working");
-        assert_eq!(activity_of(&a), "");
-        a["lastAssistantMessage"] = json!("\nAnswer\nmore");
-        assert_eq!(activity_of(&a), "Answer");
-        a["toolName"] = json!("Bash");
-        assert_eq!(activity_of(&a), "Bash");
-        a["toolInput"] = json!("\ncargo test --all-features\nsecond");
-        assert_eq!(activity_of(&a), "Bash: cargo test --all-features");
-        // A tool is named whatever the state; an input that is not text, or blank, leaves the name alone.
-        a["toolInput"] = json!({"command": "x"});
-        assert_eq!(activity_of(&a), "Bash");
-        a["toolInput"] = json!("  ");
-        assert_eq!(activity_of(&a), "Bash");
-        a["toolInput"] = json!("あ".repeat(LINE_LIMIT + 50));
-        assert_eq!(activity_of(&a).chars().count(), LINE_LIMIT);
-    }
-
-    #[test]
-    fn a_row_carries_its_activity_status_and_project() {
-        let mut a = agent("tabA:leaf1", "waiting");
-        a["toolName"] = json!("Edit");
-        a["toolInput"] = json!("ts/orca.ts");
+    fn a_row_carries_its_status_and_project() {
+        let a = agent("tabA:leaf1", "waiting");
         let row = &rows_of(&ps(&[a]), &terminals())[0];
-        assert_eq!(row.activity, "Edit: ts/orca.ts");
         assert_eq!(row.status, OrcaStatus::Question);
         assert_eq!(row.project_key, "repo1");
         // The group still follows A-6: waiting is 入力待ち whatever the icon.
@@ -3913,7 +3894,27 @@ mod tests {
     }
 
     #[test]
-    fn only_a_stale_handle_error_is_an_already_closed_terminal() {
+    fn a_stale_handle_error_of_the_tab_close_closes_the_terminal_again() {
+        let stale =
+            r#"{"ok": false, "error": {"code": "terminal_handle_stale", "message": "gone"}}"#;
+        assert_eq!(after_tab_close(stale), Ok(AfterTabClose::CloseAgain));
+        assert_eq!(
+            after_tab_close(r#"{"ok": true, "result": {"ptyKilled": false}}"#),
+            Ok(AfterTabClose::Done)
+        );
+        assert_eq!(
+            after_tab_close(r#"{"ok": false, "error": {"code": "not_found", "message": "no"}}"#),
+            Err("no".to_owned())
+        );
+        assert!(after_tab_close("").is_err());
+        assert!(after_tab_close("not json").is_err());
+        // The second close has no excuse: a stale answer again is an error, and so is any other failure.
+        assert_eq!(parse_output(stale), Err("gone".to_owned()));
+        assert!(parse_output(r#"{"ok": true, "result": {"ptyKilled": true}}"#).is_ok());
+    }
+
+    #[test]
+    fn only_a_stale_handle_error_is_a_stale_answer() {
         assert!(is_stale(
             r#"{"ok": false, "error": {"code": "terminal_handle_stale", "message": "gone"}}"#
         ));
@@ -3946,6 +3947,14 @@ mod tests {
         );
         assert_eq!(
             close_args("term_1", Some("Studio")).last().unwrap(),
+            "--environment=Studio"
+        );
+        assert_eq!(
+            close_plain_args("term_1", None),
+            ["terminal", "close", "--terminal", "term_1", "--json"]
+        );
+        assert_eq!(
+            close_plain_args("term_1", Some("Studio")).last().unwrap(),
             "--environment=Studio"
         );
         assert_eq!(

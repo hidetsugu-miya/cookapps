@@ -2,7 +2,7 @@
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, onEnter, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
-import { CLOSE_SVG, COPY_SVG, DATE_SVG, FOLDER_SVG, MAIL_SVG, OUTDENT_SVG, PLUS_SVG, RETURN_SVG } from "./icons.js";
+import { CLOSE_SVG, COPY_SVG, DATE_SVG, DOWN_SVG, FOLDER_SVG, MAIL_SVG, OUTDENT_SVG, PLUS_SVG, RETURN_SVG } from "./icons.js";
 import { rowButton } from "./inbox-rows.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { commentsSection, fitCommentInput } from "./todo-comments.js";
@@ -504,6 +504,24 @@ function descParts(t: TaskItem): HTMLElement[] {
   return [area, actions];
 }
 
+// The task (by its id) whose parent's description is open under the parent chip. Memory only.
+let parentDescOpen: string | null = null;
+
+// The parent's description under the chip: the Markdown of the description, cut at 3 lines by the CSS, and a button that copies all of it.
+function parentDescPanel(parentId: string) {
+  const text = tag("div", "parent-desc-text md");
+  text.innerHTML = markdownHtml(todoState.taskById.get(parentId)?.description ?? "");
+  const copy = tag("button", "text-btn", "コピー");
+  // Read when pressed: a refresh may have changed the description since this was drawn.
+  copy.onclick = () => {
+    const full = todoState.taskById.get(parentId)?.description;
+    if (full) void copyText(full, "説明をコピーしました");
+  };
+  const panel = tag("div", "parent-desc");
+  panel.append(text, copy);
+  return panel;
+}
+
 export function renderDetail() {
   const t = todoState.taskById.get(todoState.open!);
   if (!t) {
@@ -518,6 +536,8 @@ export function renderDetail() {
   const fresh = !!$("todo-detail").hidden || $("todo-detail").dataset.task !== t.id;
   // What was typed into the subtask field of this task is not lost to the redraw.
   const typed = $("todo-detail").dataset.task === t.id ? $("todo-detail").querySelector<HTMLInputElement>('[data-field="sub"]')?.value ?? "" : "";
+  // Another task, or no detail before: the parent's description starts folded.
+  if (fresh) parentDescOpen = null;
   todoMode("detail");
   $("todo-title").textContent = projectName(projectOf(t.projectId));
 
@@ -547,13 +567,32 @@ export function renderDetail() {
     parentBox.onchange = () => setTaskDone(parent.id, true, parentBox);
     const link = tag("button", "parent-link");
     link.insertAdjacentHTML("beforeend", RETURN_SVG);
-    link.append(tag("span", "pl-label", "親タスク"), tag("span", "pl-name", parent.content));
+    link.append(tag("span", "pl-label", "親タスク"));
     link.onclick = () => {
       todoState.open = parent.id;
       renderTodo();
     };
-    chip.append(parentBox, link);
-    parts.unshift(chip);
+    // The name opens the parent's description under the chip; a parent with none has its name as plain text. The panel is made only while it is open.
+    const hasDesc = !!parent.description;
+    const name = tag(hasDesc ? "button" : "span", "parent-name");
+    name.append(tag("span", "pl-name", parent.content));
+    chip.append(parentBox, link, name);
+    const below: HTMLElement[] = [chip];
+    if (hasDesc) {
+      let panel = parentDescOpen === t.id ? parentDescPanel(parent.id) : null;
+      name.insertAdjacentHTML("beforeend", DOWN_SVG);
+      name.setAttribute("aria-expanded", String(panel !== null));
+      if (panel) below.push(panel);
+      name.onclick = () => {
+        const open = name.getAttribute("aria-expanded") !== "true";
+        parentDescOpen = open ? t.id : null;
+        name.setAttribute("aria-expanded", String(open));
+        panel?.remove();
+        panel = open ? parentDescPanel(parent.id) : null;
+        if (panel) chip.after(panel);
+      };
+    }
+    parts.unshift(...below);
   }
   const mail = linkedMail(t, accountSet());
   if (mail) {
