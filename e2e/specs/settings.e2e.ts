@@ -1140,7 +1140,7 @@ describe("settings: update", () => {
     await $("#update-later").click();
     await expect($("#update-pop")).not.toBeDisplayed();
     const button = $("#update-items").$("button=更新して再起動");
-    await expect(button).toHaveClass(expect.stringContaining("primary"));
+    await expect(button).toHaveElementClass("primary");
     const install = await mock("install_update", holds);
     const restart = await mock("restart_app", null);
     await button.click();
