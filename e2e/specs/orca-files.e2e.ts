@@ -2431,7 +2431,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("orca_local_branches")).toEqual([{ path: "/work/example-app", environment: null }]);
     expect(await waitForCalls("orca_remote_branches")).toEqual([{ path: "/work/example-app", repo: "proj_example-app", query: "", environment: null }]);
     await waitForCount(".orca-dest-pop .orca-branch-row", 5);
-    expect(await textsOf(".orca-dest-pop .orca-dest-sec")).toEqual(["ローカル", "リモート"]);
+    expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["ローカル", "リモート"]);
     expect(await branchRows()).toEqual(["feat/a", "main", "feat/c", "origin/feat/a", "origin/feat/d"]);
     expect(await branchStates()).toEqual([
       ["local", "feat/a", "true", false],
@@ -2451,6 +2451,73 @@ describe("orca: files and editor (A-18)", () => {
     // The tree stays in view under the list.
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
     expect(await callsOf("orca_switch_branch")).toEqual([]);
+  });
+
+  // Remote branches as Orca lists them: origin/r1 to origin/r{n}.
+  const remotes = (n: number) => Array.from({ length: n }, (_, i) => remote(`origin/r${i + 1}`));
+  const remoteShown = () => shownRows('.orca-dest-pop .orca-branch-row[data-kind="remote"]');
+  const waitRemoteShown = (names: string[]) =>
+    browser.waitUntil(async () => JSON.stringify(await remoteShown()) === JSON.stringify(names), { timeoutMsg: `the remote rows never became ${names.join(", ")}` });
+  const moreButton = () => $(".orca-dest-more-btn");
+
+  it("draws the headings as a sticky band with an icon and the count, and shows the first five remote branches with a button for the rest that opens and folds them (A-25)", async () => {
+    await openBranches({ orca_remote_branches: remotes(7) });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 10);
+    expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["ローカル", "リモート"]);
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["3", "7"]);
+    expect(await count(".orca-dest-pop .orca-dest-sec .orca-dest-icon svg")).toBe(2);
+    const band = await browser.execute(() => {
+      const s = getComputedStyle(document.querySelector(".orca-dest-pop .orca-dest-sec")!);
+      return { position: s.position, size: s.fontSize, weight: s.fontWeight };
+    });
+    expect(band).toEqual({ position: "sticky", size: "13px", weight: "700" });
+    expect(await remoteShown()).toEqual(["origin/r1", "origin/r2", "origin/r3", "origin/r4", "origin/r5"]);
+    await expect(moreButton()).toBeDisplayed();
+    await expect(moreButton()).toHaveText("ほか 2 件を表示");
+    await expect(moreButton()).toHaveAttribute("aria-expanded", "false");
+    // The button is not a row of branches.
+    expect(await count(".orca-dest-pop .orca-branch-row .orca-dest-more-btn")).toBe(0);
+    await moreButton().click();
+    await expect($('.orca-dest-pop[role="dialog"]')).toBeDisplayed();
+    expect(await remoteShown()).toEqual(remotes(7).map((r) => r.name));
+    await expect(moreButton()).toHaveText("たたむ");
+    await expect(moreButton()).toHaveAttribute("aria-expanded", "true");
+    await moreButton().click();
+    expect(await remoteShown()).toEqual(["origin/r1", "origin/r2", "origin/r3", "origin/r4", "origin/r5"]);
+    await expect(moreButton()).toHaveText("ほか 2 件を表示");
+    await expect(moreButton()).toHaveAttribute("aria-expanded", "false");
+    expect(await callsOf("orca_switch_branch")).toEqual([]);
+  });
+
+  it("shows every match with no button while the filter has text, counts the matches, and folds the remote branches again when the text is cleared (A-25)", async () => {
+    await openBranches({ orca_remote_branches: remotes(7) });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 10);
+    await moreButton().click();
+    await waitRemoteShown(remotes(7).map((r) => r.name));
+    const input = $('.orca-dest-pop input[aria-label="ブランチを絞り込む"]');
+    await input.setValue("origin");
+    await waitRemoteShown(remotes(7).map((r) => r.name));
+    await expect(moreButton()).not.toBeDisplayed();
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["0", "7"]);
+    await input.setValue("r6");
+    await waitRemoteShown(["origin/r6"]);
+    await expect(moreButton()).not.toBeDisplayed();
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["0", "1"]);
+    await input.setValue("");
+    await waitRemoteShown(["origin/r1", "origin/r2", "origin/r3", "origin/r4", "origin/r5"]);
+    await expect(moreButton()).toBeDisplayed();
+    await expect(moreButton()).toHaveText("ほか 2 件を表示");
+    await expect(moreButton()).toHaveAttribute("aria-expanded", "false");
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["3", "7"]);
+  });
+
+  it("shows five remote branches or fewer with no line and no button (A-25)", async () => {
+    await openBranches({ orca_remote_branches: remotes(5) });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 8);
+    expect(await remoteShown()).toEqual(remotes(5).map((r) => r.name));
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["3", "5"]);
+    await expect($(".orca-dest-more")).not.toBeDisplayed();
+    await expect(moreButton()).not.toBeDisplayed();
   });
 
   it("narrows the local branches by the filter at once, and asks for the remote ones once after the typing stops (A-25)", async () => {
