@@ -4,7 +4,7 @@ html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
 :root { --ff-base: var(--ff-app, -apple-system, sans-serif); --fs: var(--fs-app, 1); }
 /* A-23: the header band at the top of every screen is one height at the default font (--header-h, a minimum: a larger font stretches it), and the icon buttons in it one size (--header-btn, with --header-ic for the icon); no screen sets its own. */
-:root { --header-h: 40px; --header-btn: 24px; --header-ic: 15px; }
+:root { --header-h: 44px; --header-btn: 28px; --header-ic: 17px; }
 body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0; display: flex; }
 #mail-header, #inbox-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
@@ -998,8 +998,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-tab-btn[aria-selected="true"] { font-weight: 600; }
 .orca-tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .orca-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.orca-tab-close { flex: none; width: 20px; height: 20px; margin-right: 4px; color: inherit; }
-.orca-tab-close svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.orca-tab-close { flex: none; width: 22px; height: 22px; margin-right: 4px; color: inherit; }
+.orca-tab-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #orca-panes .orca-empty { margin: 0; padding: 48px 24px; }
 #orca-started { margin: 16px 24px 0; }
 /* The terminal fills the pane. The box of each tab has a definite size (it is placed in the pane), so that the fit counts the rows that show and the bottom is not cut off. */

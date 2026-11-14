@@ -1603,7 +1603,7 @@ describe("todo detail menu", () => {
       return [h("#todo-more"), h("#todo-back"), h("#todo-body > header")];
     });
     expect(sizes[0]).toBe(sizes[1]);
-    expect(sizes[2]).toBeLessThanOrEqual(42);
+    expect(sizes[2]).toBeLessThanOrEqual(46);
     await $(more).click();
     await expect($(items)).toBeDisplayed();
     await expect($(more)).toHaveAttribute("aria-expanded", "true");
