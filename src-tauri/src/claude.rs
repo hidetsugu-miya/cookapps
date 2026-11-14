@@ -1191,6 +1191,33 @@ fn cut(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
 
+/// Refuses an empty request (「指示が空です」), unless a skill is given: its instructions are what the model follows then (S-4, S-7).
+fn check_request(instruction: &str, skill: Option<&str>) -> Result<(), String> {
+    if skill.is_none() && instruction.trim().is_empty() {
+        return Err("指示が空です".into());
+    }
+    Ok(())
+}
+
+/// The call of a skill (S-4, S-7): `args` with the plugin folder of the skill (`--plugin-dir`), and `input` led by the command `/cookapps:{name}`, so that Claude Code runs the skill with the input as its arguments.
+/// The input is the enclosed one the screen's call makes, unchanged. The tools, the MCP servers and the settings stay as `args` has them. With no skill (`None`), `args` and `input` come back as they were.
+/// `name` has passed `skills::plugin_for` (`validate_name`: a to z, 0 to 9 and `-`), so it holds nothing that could end the command.
+fn skill_call(
+    mut args: Vec<String>,
+    input: String,
+    skill: Option<(&Path, &str)>,
+) -> (Vec<String>, String) {
+    let Some((plugin_dir, name)) = skill else {
+        return (args, input);
+    };
+    args.push("--plugin-dir".to_owned());
+    args.push(plugin_dir.to_string_lossy().into_owned());
+    (
+        args,
+        format!("/{}:{name} {input}", crate::skills::PLUGIN_NAME),
+    )
+}
+
 /// What the model reads for an edit: the messages of a Slack thread (`thread_section`, only in the conversation about a reply), enclosed in the same way before the current text; the current text (`noun` says what it is: "指示" or "文章") enclosed between `BEGIN {boundary}` and `END {boundary}`, the last turns of the conversation, and the new request.
 /// The boundary is taken out of every part, so none of them can fake where the text ends.
 fn edit_input(
@@ -1203,9 +1230,6 @@ fn edit_input(
 ) -> Result<String, String> {
     check_length(body, noun)?;
     let instruction = instruction.trim();
-    if instruction.is_empty() {
-        return Err("指示が空です".into());
-    }
     let mut input = String::new();
     if let Some(thread) = thread {
         let _ = write!(
@@ -1223,6 +1247,7 @@ fn edit_input(
     Ok(input)
 }
 
+/// The empty request is not refused here (`check_request` does it).
 /// The input of the proofreading of a Slack post (S-4): `edit_input` for the text, headed by the destinations Claude may choose, numbered from 1 and enclosed as data
 /// (the names come from Slack, so a line break in one is turned into a space and the boundary is taken out), then the line that gives the number of the destination now in the chip of the first thing to do that is not posted,
 /// when it is in the list, and the line that gives the numbers of the destinations that the Slack links of the request lead to (`linked`), in the order of the links.
@@ -2601,6 +2626,7 @@ pub async fn claude_edit_todo_prompt(
         command,
         ("指示", edit_args, ModelPurpose::PromptChat),
         None,
+        None,
         body,
         history,
         instruction,
@@ -2609,12 +2635,13 @@ pub async fn claude_edit_todo_prompt(
 }
 
 /// Has Claude proofread the text of a Slack post, choose where to post it, write the things to do and post them when the request asks: `text` is the original message of the screen, `history` the conversation so far, `instruction` the new request,
-/// and `actions` the things to do of the screen (the cards of "行うこと", the posted ones first).
+/// and `actions` the things to do of the screen (the cards of "行うこと", the posted ones first). `skill` is the name of a saved skill that the request runs (`/cookapps:{name}`, S-4), or none; any other name is refused, and with one the request may be empty.
 /// They and the destinations to choose from (the ones in the chips, the ones that the Slack links of the request lead to, the recent ones and the joined channels, by name; no message) are sent to Anthropic through Claude Code, only when the user sent a request, and nothing is saved.
 /// The model has no tools, so it only answers; a destination it names that is not in the list it was given is dropped. When it answers `post: true` and the rules of `slack::post_decision` allow it (S-23),
 /// Rust posts the things to do that are not posted, from the top down, by the path of "投稿" (`slack::post_planned`): the original message (the new text, or `text` when the answer did not change it) as the mail's content, where nothing is made a mention,
 /// and a written text as one. The answer's `actions` then say which were posted; a first post that fails is the command's error, and a later one is `post_error`. What the model says never reaches the log.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn claude_proofread_slack(
     app: tauri::AppHandle,
     auth: tauri::State<'_, crate::auth::Auth>,
@@ -2623,6 +2650,7 @@ pub async fn claude_proofread_slack(
     history: Vec<ChatTurn>,
     instruction: String,
     actions: Vec<crate::slack::SlackAction>,
+    skill: Option<String>,
 ) -> Result<SlackEdit, String> {
     let command = "claude_proofread_slack";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
@@ -2639,8 +2667,10 @@ pub async fn claude_proofread_slack(
         &dir,
         command,
         ModelPurpose::Proofread,
+        skill.as_deref(),
         proofread_args,
         |boundary| {
+            check_request(&instruction, skill.as_deref())?;
             slack_edit_input(
                 &text,
                 &candidates,
@@ -2682,6 +2712,7 @@ pub async fn claude_proofread_slack(
 
 /// Has Claude help with the reply to a Slack thread (S-7): proofread it, summarise the thread, answer a question about it, or write a reply.
 /// `text` is what the reply field holds (it may be empty), `thread` the messages of the open thread (empty while it is not read) and `truncated` whether its read stopped before the end, `history` the conversation so far, `instruction` the new request.
+/// `skill` is the name of a saved skill that the request runs (`/cookapps:{name}`, S-7), or none; any other name is refused, and with one the request may be empty.
 /// They are sent to Anthropic through Claude Code, only when the user pressed send, and nothing is saved. What the model says never reaches the log.
 #[tauri::command]
 pub async fn claude_chat_thread(
@@ -2691,6 +2722,7 @@ pub async fn claude_chat_thread(
     truncated: bool,
     history: Vec<ChatTurn>,
     instruction: String,
+    skill: Option<String>,
 ) -> Result<PromptEdit, String> {
     let command = "claude_chat_thread";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
@@ -2699,6 +2731,7 @@ pub async fn claude_chat_thread(
         &dir,
         command,
         ("返信欄の文章", thread_chat_args, ModelPurpose::SlackReply),
+        skill.as_deref(),
         thread.as_deref(),
         text,
         history,
@@ -2725,6 +2758,7 @@ pub async fn claude_edit_todo_draft(
         &dir,
         command,
         ModelPurpose::SlackSummary,
+        None,
         draft_edit_args,
         |boundary| draft_edit_input(&content, &description, &history, &instruction, boundary),
     )
@@ -2743,19 +2777,25 @@ pub async fn claude_edit_todo_draft(
 type ArgsFor = fn(&str, ModelSettings) -> Vec<String>;
 
 /// The call behind the conversations, up to the model's answer: the settings of `purpose`, a random boundary, the input `input` makes from that boundary, and `args` with its system prompt.
-/// Returns what `claude` printed; the answer is read by the caller.
+/// With a `skill` (a saved one, `skills::plugin_for`; any other name is the call's error, before anything is sent), the call is the skill's (`skill_call`). Returns what `claude` printed; the answer is read by the caller.
 async fn chat_ask(
     dir: &Path,
     command: &str,
     purpose: ModelPurpose,
+    skill: Option<&str>,
     args: impl FnOnce(&str, ModelSettings) -> Vec<String>,
     input: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<String, String> {
     let dir = dir.to_path_buf();
-    let (settings, connection) = tokio::task::spawn_blocking(move || {
+    let skill = skill.map(str::to_owned);
+    let (settings, connection, skill) = tokio::task::spawn_blocking(move || {
+        let plugin = skill
+            .map(|name| crate::skills::plugin_for(&dir, &name).map(|plugin| (plugin, name)))
+            .transpose()?;
         Ok::<_, String>((
             load_settings(&dir).for_purpose(purpose),
             claude_auth::load_connection(&dir)?,
+            plugin,
         ))
     })
     .await
@@ -2763,28 +2803,33 @@ async fn chat_ask(
     .map_err(|e| log_failure(command, "-", e))?;
     let boundary = new_boundary().map_err(|e| log_failure(command, "-", e))?;
     let input = input(&boundary).map_err(|e| log_failure(command, "-", e))?;
-    ask(
+    let (args, input) = skill_call(
         args(&boundary, settings),
         input,
-        settings.timeout(EDIT_TIMEOUT),
-        connection,
-    )
-    .await
-    .map_err(|e| log_failure(command, "-", e))
+        skill
+            .as_ref()
+            .map(|(plugin, name)| (plugin.as_path(), name.as_str())),
+    );
+    ask(args, input, settings.timeout(EDIT_TIMEOUT), connection)
+        .await
+        .map_err(|e| log_failure(command, "-", e))
 }
 
-/// The call behind the conversations: `target` is what `body` is called, the arguments that carry its system prompt, and the purpose whose model and effort it uses.
+/// The call behind the conversations: `target` is what `body` is called, the arguments that carry its system prompt, and the purpose whose model and effort it uses; `skill` is the skill of the call, if any (`chat_ask`).
+#[allow(clippy::too_many_arguments)]
 async fn chat_edit(
     dir: &Path,
     command: &str,
     target: (&str, ArgsFor, ModelPurpose),
+    skill: Option<&str>,
     thread: Option<&str>,
     body: String,
     history: Vec<ChatTurn>,
     instruction: String,
 ) -> Result<PromptEdit, String> {
     let (noun, args, purpose) = target;
-    let out = chat_ask(dir, command, purpose, args, |boundary| {
+    let out = chat_ask(dir, command, purpose, skill, args, |boundary| {
+        check_request(&instruction, skill)?;
         edit_input(noun, thread, &body, &history, &instruction, boundary)
     })
     .await?;
@@ -2813,6 +2858,7 @@ pub async fn claude_summarize_handoff(
         &dir,
         command,
         ModelPurpose::OrcaHandoff,
+        None,
         |_, settings| handoff_args(settings),
         |_| Ok(handoff_input(&context)),
     )
@@ -2840,6 +2886,7 @@ pub async fn claude_chat_todo(
         &dir,
         command,
         ModelPurpose::TodoChat,
+        None,
         |boundary, settings| todo_chat_args(&today(), &projects, boundary, settings),
         |boundary| todo_chat_input(&history, &instruction, boundary),
     )
@@ -2876,6 +2923,7 @@ pub async fn claude_chat_slack(
         &dir,
         command,
         ModelPurpose::SlackChat,
+        None,
         slack_chat_args,
         |boundary| {
             slack_chat_input(
@@ -4043,7 +4091,9 @@ mod tests {
 
     #[test]
     fn the_edit_input_refuses_an_empty_request_and_a_body_past_the_limit() {
-        assert!(edit_input("指示", None, "b", &[], "  ", B).is_err());
+        assert!(check_request("  ", None).is_err());
+        assert_eq!(check_request("", None).unwrap_err(), "指示が空です");
+        assert!(check_request(" go ", None).is_ok());
         assert!(edit_input("指示", None, &"a".repeat(PROMPT_LIMIT + 1), &[], "go", B).is_err());
         // An empty body is fine to ask about: the user may want Claude to write one.
         assert!(edit_input("指示", None, "", &[], "write one", B).is_ok());
@@ -6946,6 +6996,46 @@ mod tests {
                     .unwrap();
             assert!(!input.contains("現在の貼り先の番号"), "{input}");
         }
+    }
+
+    #[test]
+    fn a_skill_makes_the_call_carry_the_plugin_and_the_command_and_keeps_the_permissions() {
+        let plugin = Path::new("/config/claude-plugin");
+        let args = proofread_args(B, ModelSettings::default());
+        let input = slack_edit_input("T", &[], &[], &[], &[], "校正して", B).unwrap();
+        let (with, led) = skill_call(args.clone(), input.clone(), Some((plugin, "proofread")));
+        let at = |flag: &str| with.iter().position(|a| a == flag).unwrap();
+        assert_eq!(with[at("--plugin-dir") + 1], "/config/claude-plugin");
+        // The permissions of the call stay: no tools, no MCP, no settings.
+        assert_eq!(with[at("--tools") + 1], "");
+        assert!(with.contains(&"--strict-mcp-config".to_owned()));
+        assert_eq!(with[at("--setting-sources") + 1], "");
+        // Nothing but the two flags is added, and the input follows the command unchanged (its enclosure included).
+        assert_eq!(with[..args.len()], args[..]);
+        assert_eq!(with.len(), args.len() + 2);
+        assert_eq!(led, format!("/cookapps:proofread {input}"));
+        assert!(led.contains(&format!("BEGIN {B}\nT\nEND {B}")), "{led}");
+    }
+
+    #[test]
+    fn with_no_skill_the_call_is_as_it_was() {
+        let args = thread_chat_args(B, ModelSettings::default());
+        let (same, input) = skill_call(args.clone(), "入力".to_owned(), None);
+        assert_eq!(same, args);
+        assert_eq!(input, "入力");
+        assert!(!same.contains(&"--plugin-dir".to_owned()));
+    }
+
+    #[test]
+    fn a_skill_lets_a_request_be_empty_and_without_one_it_is_refused() {
+        assert!(check_request("", Some("proofread")).is_ok());
+        assert!(check_request("  \n", Some("proofread")).is_ok());
+        assert!(check_request("", None).is_err());
+        // The inputs take an empty request (the check is `check_request`'s): the request is an empty block.
+        let input = edit_input("返信欄の文章", None, "T", &[], "", B).unwrap();
+        assert!(input.ends_with("新しい依頼:\n\n"), "{input:?}");
+        let input = slack_edit_input("T", &[], &[], &[], &[], "", B).unwrap();
+        assert!(input.contains("新しい依頼:\n\n"), "{input:?}");
     }
 
     #[test]

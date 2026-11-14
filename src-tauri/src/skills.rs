@@ -7,7 +7,7 @@
 //! The front matter holds `name`, `description` (the keys Claude Code reads) and `cookapps-display-name` and `cookapps-screens` (cookapps's own);
 //! the body is the instructions.
 //! The name is the folder's, and it is checked before any path is made of it (`validate_name`), so a name never points outside `skills/`.
-//! This file reads and writes only: nothing here calls Claude.
+//! This file reads and writes only: nothing here calls Claude. `plugin_for` is what a call of a skill asks (S-4, S-7): it gives the folder for `--plugin-dir` only for a saved skill.
 
 use std::{
     path::{Path, PathBuf},
@@ -27,7 +27,7 @@ const PLUGIN_DIR: &str = "claude-plugin";
 const DIR: &str = "skills";
 const FILE: &str = "SKILL.md";
 /// The plugin's name: the `cookapps` of `/cookapps:{name}`.
-const PLUGIN_NAME: &str = "cookapps";
+pub const PLUGIN_NAME: &str = "cookapps";
 const MANIFEST_DIR: &str = ".claude-plugin";
 const MANIFEST_FILE: &str = "plugin.json";
 const NAME_MAX: usize = 64;
@@ -346,6 +346,18 @@ fn delete_skill(dir: &Path, name: &str) -> Result<(), String> {
     std::fs::remove_dir_all(&folder).map_err(|e| format!("スキル「{name}」を消せません: {e}"))
 }
 
+/// The folder a call of the skill `name` gives `--plugin-dir`, for a name that passes `validate_name` and has a saved `SKILL.md`; any other name is refused, in Japanese.
+/// The manifest is put right first, so that a skill placed by hand is still run as `/cookapps:{name}`.
+pub fn plugin_for(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    validate_name(name)?;
+    let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+    if !skills_dir(dir).join(name).join(FILE).is_file() {
+        return Err(format!("スキル「{name}」がありません"));
+    }
+    ensure_manifest(dir)?;
+    Ok(plugin_dir(dir))
+}
+
 /// The skills saved, by name.
 #[tauri::command]
 pub async fn skill_list(app: AppHandle) -> Result<Vec<Skill>, String> {
@@ -629,6 +641,47 @@ mod tests {
             .collect();
         assert_eq!(made, vec!["config"]);
         assert_eq!(std::fs::read_dir(&inside).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_saved_skill_gives_the_plugin_folder_to_pass() {
+        let dir = temp_dir("plugin-for");
+        save_skill(&dir, &skill("proofread")).unwrap();
+        assert_eq!(
+            plugin_for(&dir, "proofread").unwrap(),
+            dir.join("claude-plugin")
+        );
+    }
+
+    #[test]
+    fn a_skill_placed_by_hand_gets_its_manifest_before_it_is_passed() {
+        let dir = temp_dir("plugin-for-by-hand");
+        std::fs::create_dir_all(dir.join("claude-plugin/skills/mine")).unwrap();
+        std::fs::write(dir.join("claude-plugin/skills/mine/SKILL.md"), "手順").unwrap();
+        plugin_for(&dir, "mine").unwrap();
+        let text =
+            std::fs::read_to_string(dir.join("claude-plugin/.claude-plugin/plugin.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["name"], PLUGIN_NAME);
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_saved_skill_is_refused_and_nothing_is_made() {
+        let dir = temp_dir("plugin-for-refused");
+        save_skill(&dir, &skill("proofread")).unwrap();
+        std::fs::create_dir_all(dir.join("claude-plugin/skills/empty")).unwrap();
+        // Unknown, a folder with no SKILL.md, and names that are not valid at all.
+        for name in ["unknown", "empty", "../x", "a/b", "Proofread", "", "a--b"] {
+            assert!(plugin_for(&dir, name).is_err(), "{name:?}");
+        }
+        assert_eq!(
+            plugin_for(&dir, "unknown").unwrap_err(),
+            "スキル「unknown」がありません"
+        );
+        // Without any skill saved, nothing is made by the refusal.
+        let bare = temp_dir("plugin-for-bare");
+        assert!(plugin_for(&bare, "proofread").is_err());
+        assert_eq!(std::fs::read_dir(&bare).unwrap().count(), 0);
     }
 
     #[test]

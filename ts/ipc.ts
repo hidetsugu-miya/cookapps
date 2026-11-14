@@ -263,13 +263,14 @@ export interface Commands {
   // Claude's proofreading of the original message of the Slack compose screen: the same answer, for `text` instead of the instructions, with `actions`, what the answer made of the things to do that are not posted
   // (a destination it chose from the list Rust gave it, or the cards it wrote; null when it left them alone, S-4). `actions` of the arguments are the cards of "行うこと", the posted ones first.
   // When the request asked to post (S-23) and Rust allowed it, Rust posted them from the top down by the path of `slack_post`, and the ones sent carry `posted`; `postError` is the failure that stopped it after one was sent. Nothing is saved.
+  // `skill` (optional, none or null for no skill) is the name of a saved skill (S-4); a name that is not one is refused, and with one the request may be empty.
   claude_proofread_slack: {
-    args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; actions: SlackAction[] };
+    args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; actions: SlackAction[]; skill?: string | null };
     result: SlackEdit;
   };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
-  // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread).
-  claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };
+  // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread). `skill` is as in `claude_proofread_slack`.
+  claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string; skill?: string | null }; result: PromptEdit };
   // The agents that run in the Orca in use and its worktrees. Never rejects for a read that failed: `state` says "missing" (no orca command) or "failed" (with `message`).
   // `scope` "full" reads the saved environments and resolves the target (the saved one; with no file saved yet the first environment, else this machine; a saved environment that is gone, or a file that cannot be used while an environment is saved, is a failed read that picks nothing, with the environments listed so the owner can choose again),
   // "screen" reads the agents and their terminals of `target` (the one the screen holds), and "badge" only the agents, for the count (no terminals, so no handles). With "screen" and "badge", and when `environment list` itself failed, `known` is false and `target` and `environments` are not the answer: the screen keeps the ones it had.
