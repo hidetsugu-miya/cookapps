@@ -123,7 +123,7 @@ function drawSoon() {
   });
 }
 
-// Marks the entries of `read`, the folder `dir` as it was listed, that git ignores, and takes the mark off the ones it does not name (`read` may hold the marks of the earlier listing, `readDir`). It is asked after the folder is drawn, and an answer that fails leaves `read` as it is. The answer is dropped when the tree is another worktree's by then, or the folder was read again.
+// Marks the entries of `read`, the folder `dir` as it was listed, that git ignores, and takes the mark off the ones it does not name (`read` may hold the marks of the earlier listing, `readDir`). It is asked after the folder is drawn, and an answer that fails leaves `read` as it is. The answer is dropped when the tree is another worktree's by then, or the folder was read again, and nothing is drawn when it names the entries that are marked already.
 async function markIgnored(here: FilesContext, mine: number, dir: string, read: OrcaDir) {
   let paths: string[];
   try {
@@ -132,8 +132,9 @@ async function markIgnored(here: FilesContext, mine: number, dir: string, read: 
     return;
   }
   const listing = listings.get(dir);
-  if (mine !== generation || listing?.dir !== read || (paths.length === 0 && !read.entries.some((e) => e.ignored))) return;
+  if (mine !== generation || listing?.dir !== read) return;
   const ignored = new Set(paths);
+  if (read.entries.every((e) => e.ignored === ignored.has(e.path))) return;
   listings.set(dir, { ...listing, dir: { ...read, entries: read.entries.map((e) => ({ ...e, ignored: ignored.has(e.path) })) } });
   version++;
   drawSoon();
@@ -157,9 +158,17 @@ async function readDir(dir: string) {
     next = { dir: held?.dir ?? null, error: String(e), busy: false };
   }
   if (mine !== generation) return;
-  listings.set(dir, next);
-  version++;
-  drawSoon();
+  // A read that finds what is held (the same entries in the same order, and as many in the folder) keeps it, marks and all, and draws nothing.
+  const was = held?.dir;
+  const now = next.dir;
+  if (held?.error === null && next.error === null && was != null && now !== null && was.total === now.total && was.entries.length === now.entries.length && was.entries.every((e, i) => e.path === now.entries[i].path && e.isDirectory === now.entries[i].isDirectory)) {
+    next = { ...next, dir: was };
+    listings.set(dir, next);
+  } else {
+    listings.set(dir, next);
+    version++;
+    drawSoon();
+  }
   if (!inherited && next.dir !== null && next.error === null && next.dir.entries.length > 0) void markIgnored(here, mine, dir, next.dir);
 }
 
@@ -251,8 +260,12 @@ async function submitCreate() {
   try {
     const relative = await invoke("orca_file_create", { path: here.path, dir: field.dir, name, folder: field.folder, environment: here.target });
     if (mine !== generation) return;
-    if (creating === field) creating = null;
+    if (creating === field) {
+      creating = null;
+      version++;
+    }
     await readDir(field.dir);
+    draw();
     if (!field.folder && mine === generation) openFile(relative);
   } catch (e) {
     if (mine !== generation) return;
@@ -263,7 +276,7 @@ async function submitCreate() {
   }
 }
 
-// A row with a field in place of the name: Enter and the loss of the keys (while the field is still `current`) run `submit`, Escape runs `cancel`.
+// A row with a field in place of the name: Enter and the loss of the keys inside the window (while the field is still `current`) run `submit`, Escape runs `cancel`. The loss of the keys that comes with the window going to the back runs nothing, and the field stays.
 function fieldRow(depth: number, field: { text: string; folder: boolean }, label: string, current: () => boolean, submit: () => unknown, cancel: () => void) {
   const line = tag("div", "orca-file-new");
   line.style.setProperty("--depth", String(depth));
@@ -288,7 +301,7 @@ function fieldRow(depth: number, field: { text: string; folder: boolean }, label
     }
   };
   input.onblur = () => {
-    if (!redrawing && current()) void submit();
+    if (!redrawing && document.hasFocus() && current()) void submit();
   };
   line.append(tag("span", "orca-file-mark"), icon(field.folder ? FOLDER_SVG : FILE_SVG), input);
   return line;
@@ -311,7 +324,7 @@ function focusField(scroll: boolean, select?: [number, number]) {
 
 const parentOf = (relative: string) => relative.slice(0, Math.max(0, relative.lastIndexOf("/")));
 
-// Moves the file or folder `from` to `to` (both from the worktree; Orca's `files.rename`, which overwrites nothing, so a taken place is Rust's error). The editor holds the saves of the open files it takes along until the answer comes, and they follow to the new place. After it what was read of a moved folder is dropped (its open folders stay open at the new place and are read there), and the folder it left and the one it went to are read again: of the target, the nearest folder that was read, so that a folder made on the way shows. A worktree that is not the tree's any more only moves the tabs.
+// Moves the file or folder `from` to `to` (both from the worktree; Orca's `files.rename`, which overwrites nothing, so a taken place is Rust's error). The editor holds the saves of the open files it takes along until the answer comes, and they follow to the new place. After it what was read of a moved folder is dropped (its open folders stay open at the new place and are read there), and the folder it left and the one it went to are read again: of the target, the nearest folder that was read, so that a folder made on the way shows. The folder it left is read first, alone, and the others side by side, as `reload` does. A worktree that is not the tree's any more only moves the tabs.
 async function move(here: FilesContext, from: string, to: string, folder: boolean) {
   if (moving) return;
   moving = true;
@@ -343,10 +356,15 @@ async function move(here: FilesContext, from: string, to: string, folder: boolea
   }
   let target = parentOf(to);
   while (target !== "" && !listings.has(target)) target = parentOf(target);
-  for (const dir of new Set([parentOf(from), target, ...reopened])) {
-    if (mine !== generation) return;
-    await readDir(dir);
-  }
+  const [first, ...queue] = new Set([parentOf(from), target, ...reopened]);
+  await readDir(first);
+  const worker = async () => {
+    for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
+      if (mine !== generation) return;
+      await readDir(dir);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
 }
 
 // Turns the row of `relative` into the field of its path from the worktree, with the name selected (a file's without its extension).
@@ -368,13 +386,14 @@ function cancelRename() {
   draw();
 }
 
-// Moves the entry to the path of the field. A blank path and the path it has are a cancel. Rust checks the path; the field goes when the answer comes, and a failure is shown.
+// Moves the entry to the path of the field. A blank path and the path it has are a cancel. Rust checks the path; the field goes when the answer comes, and a failure is shown. While another move (a drag's) is on its way nothing is asked and the field stays.
 async function submitRename() {
   const here = context;
   const field = renaming;
   if (here === null || field === null || field.busy) return;
   const to = field.text.trim();
   if (to === "" || to === field.from) return cancelRename();
+  if (moving) return;
   field.busy = true;
   await move(here, field.from, to, field.folder);
   if (renaming !== field) return;
@@ -383,9 +402,8 @@ async function submitRename() {
   draw();
 }
 
-// The folder a row dragged from `from` would go to at the point: the folder of the row under it, or the root of the worktree on the part of the tree with no row. Null where nothing is dropped: outside the tree, on a file's row, on the folder the entry is in already, on itself and inside itself.
-function dropAt(x: number, y: number, from: string) {
-  const at = document.elementFromPoint(x, y);
+// The folder a row dragged from `from` would go to at `at`, the element under the pointer: the folder of the row under it, or the root of the worktree on the part of the tree with no row. Null where nothing is dropped: outside the tree, on a file's row, on the folder the entry is in already, on itself and inside itself.
+function dropAt(at: Element | null, from: string) {
   if (at === null || !$("orca-files-tree").contains(at)) return null;
   const over = at.closest<HTMLElement>(".orca-file");
   if (over !== null && over.dataset.kind !== "dir") return null;
@@ -434,9 +452,10 @@ function startDrag(down: PointerEvent, entry: OrcaFileEntry) {
       document.body.classList.add("orca-dragging");
     }
     Object.assign(ghost.style, { left: `${e.clientX + 10}px`, top: `${e.clientY + 8}px` });
-    showDrop(dropAt(e.clientX, e.clientY, entry.path));
+    const at = document.elementFromPoint(e.clientX, e.clientY);
+    showDrop(dropAt(at, entry.path));
     // A closed folder under the pointer (not the dragged one or one inside it) opens when the pointer stays on it.
-    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('#orca-files-tree .orca-file[data-kind="dir"][aria-expanded="false"]');
+    const over = at?.closest<HTMLElement>('#orca-files-tree .orca-file[data-kind="dir"][aria-expanded="false"]');
     const dir = over?.dataset.path;
     if (dir === undefined || dir === entry.path || dir.startsWith(`${entry.path}/`)) return unrest();
     if (rest?.dir === dir) return;
@@ -457,7 +476,7 @@ function startDrag(down: PointerEvent, entry: OrcaFileEntry) {
     const swallow = (c: Event) => c.stopPropagation();
     window.addEventListener("click", swallow, { capture: true, once: true });
     setTimeout(() => window.removeEventListener("click", swallow, true), 0);
-    const dir = mine === generation ? dropAt(e.clientX, e.clientY, entry.path) : null;
+    const dir = mine === generation ? dropAt(document.elementFromPoint(e.clientX, e.clientY), entry.path) : null;
     if (dir !== null) void move(here, entry.path, dir === "" ? entry.name : `${dir}/${entry.name}`, entry.isDirectory);
   };
   const key = (e: KeyboardEvent) => e.key === "Escape" && end();

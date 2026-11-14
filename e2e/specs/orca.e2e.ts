@@ -4268,7 +4268,12 @@ describe("orca: files and editor (A-18)", () => {
   const treeOrder = () =>
     browser.execute(() => [...document.querySelectorAll("#orca-files-tree > *")].map((e) => (e.classList.contains("orca-file-new") ? "[field]" : ((e as HTMLElement).dataset.path ?? e.className))));
   const fieldFocused = () => browser.execute(() => document.activeElement?.classList.contains("orca-file-input") === true);
-  const blurField = () => browser.execute(() => (document.activeElement as HTMLElement).blur());
+  // The field loses the keys inside the window. The window of an E2E run is never the front one, so the document is made to say it has the focus (a loss of the keys without it is the window going to the back, which commits nothing).
+  const blurField = () =>
+    browser.execute(() => {
+      document.hasFocus = () => true;
+      (document.activeElement as HTMLElement).blur();
+    });
   // The right button on the empty part of the tree, at 20px from its left and half way down (below its four rows, and clear of the window's bottom, which would move the menu), as the page gets it.
   const rightClickEmpty = () =>
     browser.execute(
@@ -4681,6 +4686,48 @@ describe("orca: files and editor (A-18)", () => {
     await setField("c.rs");
     await blurField();
     expect(await waitForCalls(move)).toEqual([{ path: HERE, from: "a.rs", to: "c.rs", environment: null }]);
+    await waitForCount(".orca-file-new", 0);
+  });
+
+  it("keeps the field and moves nothing when it loses the keys because the window went to the back", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const move = await mock("orca_file_move", null);
+    await askMove("a.rs");
+    await setField("c.rs");
+    // The window is not the front one: the document says it has no focus.
+    await browser.execute(() => {
+      document.hasFocus = () => false;
+      (document.activeElement as HTMLElement).blur();
+    });
+    await browser.pause(300);
+    expect(await callsOf(move)).toEqual([]);
+    await waitForCount(".orca-file-new", 1);
+    expect((await moveField()).value).toBe("c.rs");
+    await browser.execute(() => {
+      delete (document as { hasFocus?: unknown }).hasFocus;
+    });
+  });
+
+  it("keeps the field and asks nothing on Enter while a move by a drag is on its way, and moves on Enter after it", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const move = await mock("orca_file_move", holds);
+    await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["a.rs", false]]));
+    await dragRow("b.log", "src");
+    await waitForCalls(move);
+    await askMove("a.rs");
+    await setField("c.rs");
+    await browser.keys("Enter");
+    await browser.pause(300);
+    expect(await callsOf(move)).toHaveLength(1);
+    await waitForCount(".orca-file-new", 1);
+    await release(move, null);
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    expect((await moveField()).value).toBe("c.rs");
+    await browser.keys("Enter");
+    expect((await waitForCalls(move, 2))[1]).toEqual({ path: HERE, from: "a.rs", to: "c.rs", environment: null });
+    await release(move, null);
     await waitForCount(".orca-file-new", 0);
   });
 
