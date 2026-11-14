@@ -3,6 +3,12 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.71.3
+
+M-2: a mail thread that was opened before is shown at once when it is opened again, without the note "読み込んでいます…" (#614). The app keeps the threads it has opened in memory (up to 64 MB, the oldest dropped first; nothing is written to a file, and they are gone when the app quits), asks Gmail again in the background, and draws the thread again only when the answer differs, for example when a reply has arrived. A thread that has not been opened yet is read as before.
+
+The app is built with Rust 1.100.0 (#612).
+
 ## v0.71.2
 
 S-1: the left pane of the "Slack に貼る" screen is now the original message at the top and, under it, a numbered list of things to do: where to post and what (#606). A thing to do goes to a channel or a thread, or to the thread of an earlier one, and posts a text written on its card or the original message. "投稿" ("N 件を投稿" for several) posts them from the top, and one that follows another is a reply to that post. A failure stops the rest, and what was posted is never posted twice. The screen stays open after a post, so more can be added. `@here`, `@channel` and `@everyone` written on a card notify the channel.
