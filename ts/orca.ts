@@ -188,10 +188,21 @@ interface Tab {
   path: string;
   // The worktree's name, "{repo} ・ {branch}", which the heading of the file pane shows.
   where: string;
+  // Where the tab is: null for this machine, else the name of the saved environment. A terminal's comes from its row, a file's and a diff's from the project they were opened in.
+  environment: string | null;
 }
 
 // A tab with no terminal, whose page is a document of the worktree: a file in the editor, or the difference of a file.
 const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff";
+
+// Where an item of a list is (A-6): the saved environment's name, null for this machine (an item with no `environment` is this machine's).
+const placeOf = (item: { environment?: string | null }) => item.environment ?? null;
+
+// Where the project `key` of the list is, which the layout of its panes, its files and its diffs are kept under. A key the list does not hold (an SSH host that only this machine lists, or a project that left) has no place of its own: the screen's target.
+function projectPlace(key: string): string | null {
+  const project = view?.projects.find((p) => p.key === key) ?? view?.hosts.find((p) => p.key === key);
+  return project === undefined ? (view?.target ?? null) : placeOf(project);
+}
 
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
 const plainTabId = (handle: string) => `orca:${handle}`;
@@ -207,21 +218,22 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of view?.rows ?? []) {
     if (r.projectKey !== key || r.paneKey === null) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", handle: r.handle, path: r.path, where: worktreeLabel(r) });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
   }
   for (const t of view?.terminals ?? []) {
     if (t.projectKey !== key) continue;
     const repo = view?.worktrees.find((w) => w.path === t.path)?.repo ?? view?.projects.find((p) => p.key === t.projectKey)?.name ?? "";
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }) });
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
   }
-  for (const f of filesOf(view?.target ?? null, key)) {
+  const place = projectPlace(key);
+  for (const f of filesOf(place, key)) {
     // A scratchpad file of an SSH host (A-30) is in no worktree.
     const where = f.host !== null ? "" : tabs.find((t) => t.path === f.path)?.where ?? view?.worktrees.find((w) => w.path === f.path);
-    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where) });
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target });
   }
-  for (const d of diffsOf(view?.target ?? null, key)) {
+  for (const d of diffsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? view?.worktrees.find((w) => w.path === d.path);
-    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where) });
+    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -229,7 +241,10 @@ function tabsOf(key: string): Tab[] {
 }
 
 // The layout of the selected project's work pane, as Rust answered it (null: no project, or no answer yet).
-const currentLayout = () => (projectKey === null ? null : layoutOf(view?.target ?? null, projectKey));
+const currentLayout = () => (projectKey === null ? null : layoutOf(projectPlace(projectKey), projectKey));
+
+// The tab of the selected project that a tab id of its layout means (`findTab`).
+const tabOfId = (tabs: Tab[], id: string) => findTab(projectPlace(projectKey ?? ""), projectKey ?? "", tabs, id);
 
 // The tab selected: the one shown in the pane that has the focus (null: no project, no answer yet, or no tab).
 const selectedTab = () => focusedTab(currentLayout());
@@ -530,7 +545,7 @@ function drawWork(tabs: Tab[]) {
   const layout = currentLayout();
   const plusDisabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
   const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, editor: false, plusDisabled, filesShown: filesShown(), listOpen } };
-  paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled, (id) => findTab(view?.target ?? null, projectKey!, tabs, id)) : empty);
+  paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled, (id) => tabOfId(tabs, id)) : empty);
   drawStarted();
 }
 
@@ -539,12 +554,12 @@ function syncTerminal(tabs: Tab[] = projectKey === null ? [] : tabsOf(projectKey
   const layout = shown() ? currentLayout() : null;
   const placements: Placement[] = [];
   for (const pane of panesOf(layout?.root ?? null)) {
-    const tab = findTab(view?.target ?? null, projectKey!, tabs, pane.selected);
+    const tab = tabOfId(tabs, pane.selected);
     const host = paneHosts.get(pane.id);
-    if (tab?.handle && host) placements.push({ id: tab.handle, source: { kind: streaming() ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: view?.target ?? null }, host });
+    if (tab?.handle && host) placements.push({ id: tab.handle, source: { kind: tab.environment !== null && streamsEnvironment(tab.environment) ? "stream" : "mirror", handle: tab.handle, path: tab.path, environment: tab.environment }, host });
   }
   if (placements.length === 0) return hideTerminals();
-  showTerminals(placements, findTab(view?.target ?? null, projectKey!, tabs, selectedTab() ?? "")?.handle ?? null);
+  showTerminals(placements, tabOfId(tabs, selectedTab() ?? "")?.handle ?? null);
 }
 
 // Shows the editor of the file tab selected in each pane while the screen is shown.
@@ -552,7 +567,7 @@ function syncEditor(tabs: Tab[]) {
   const layout = shown() ? currentLayout() : null;
   const placements: { id: string; host: HTMLElement }[] = [];
   for (const pane of panesOf(layout?.root ?? null)) {
-    const tab = findTab(view?.target ?? null, projectKey!, tabs, pane.selected);
+    const tab = tabOfId(tabs, pane.selected);
     const host = editorHostOf(pane.id);
     if (tab?.kind === "file" && host) placements.push({ id: tab.id, host });
   }
@@ -565,7 +580,7 @@ function syncDiff(tabs: Tab[]) {
   const layout = shown() ? currentLayout() : null;
   const placements: { id: string; host: HTMLElement }[] = [];
   for (const pane of panesOf(layout?.root ?? null)) {
-    const tab = findTab(view?.target ?? null, projectKey!, tabs, pane.selected);
+    const tab = tabOfId(tabs, pane.selected);
     const host = editorHostOf(pane.id);
     if (tab?.kind === "diff" && host) placements.push({ id: tab.id, host });
   }
@@ -578,23 +593,23 @@ function scratchHost(): string | null {
 }
 
 // The worktree the file pane shows: the selected tab's, else (no tab) the main worktree of the selected project. An SSH host's row has no worktree to read with no tab, and the tab of one of its scratchpad files is in none: both give the scratchpad folder of the host (A-30; `host` is its id, and `path` is empty), which the pane lists in place of a worktree. A host that this machine does not list has no scratchpad, so its row gives none with no tab.
-function filesWorktree(tabs: Tab[]): { path: string; label: string; host: string | null } | null {
-  const tab = findTab(view?.target ?? null, projectKey ?? "", tabs, selectedTab() ?? "");
-  if (tab !== undefined && tab.path !== "") return { path: tab.path, label: tab.where, host: null };
+function filesWorktree(tabs: Tab[]): { path: string; label: string; host: string | null; environment: string | null } | null {
+  const tab = tabOfId(tabs, selectedTab() ?? "");
+  if (tab !== undefined && tab.path !== "") return { path: tab.path, label: tab.where, host: null, environment: tab.environment };
   const host = scratchHost();
-  if (host !== null) return { path: "", label: SSH_SCRATCH_DIR, host };
+  if (host !== null) return { path: "", label: SSH_SCRATCH_DIR, host, environment: projectPlace(projectKey!) };
   if (tab !== undefined || projectKey === null || projectKey.startsWith("ssh:")) return null;
   const main = view?.worktrees.find((w) => w.projectKey === projectKey && w.isMain);
   // A project with tabs whose layout is not answered yet has no selected tab for a moment: nothing is read for it,
   // except when the only tabs are files of the main worktree (the first file opened in a project with no tab), whose tree stays.
   if (tabs.some((t) => !isDocument(t) || t.path !== main?.path)) return null;
-  return main === undefined ? null : { path: main.path, label: worktreeLabel(main), host: null };
+  return main === undefined ? null : { path: main.path, label: worktreeLabel(main), host: null, environment: placeOf(main) };
 }
 
 // The file pane follows its worktree and the files open in it.
 function drawFiles(tabs: Tab[]) {
   const worktree = filesWorktree(tabs);
-  const target = view?.target ?? null;
+  const target = worktree?.environment ?? null;
   // The branch of the heading is a button (A-25) for a worktree of the list that is on a git branch, except an SSH host's, whose branches Rust does not read. It is the git branch, not Orca's name of the worktree.
   const listed = worktree === null ? undefined : view?.worktrees.find((w) => w.path === worktree.path);
   const branch = listed !== undefined && listed.gitBranch !== "" && worktree?.label === worktreeLabel(listed) && !projectKey?.startsWith("ssh:") ? listed.gitBranch : null;
@@ -606,7 +621,7 @@ function openFile(relative: string) {
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
   if (worktree === null || projectKey === null || view === null) return;
   started = null;
-  const id = openEditorFile(view.target, projectKey, worktree.path, relative, worktree.host);
+  const id = openEditorFile(worktree.environment, projectKey, worktree.path, relative, worktree.host);
   // The select asks Rust for the layout with the new tab in it (`runPaneOp` reads the tabs when it asks).
   chooseTab(id);
   draw();
@@ -617,7 +632,7 @@ function openDiff(relative: string, commit: DiffCommit | null = null) {
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
   if (worktree === null || worktree.host !== null || projectKey === null || view === null) return;
   started = null;
-  const id = openDiffTab(view.target, projectKey, worktree.path, relative, commit);
+  const id = openDiffTab(worktree.environment, projectKey, worktree.path, relative, commit);
   chooseTab(id);
   draw();
 }
@@ -678,7 +693,7 @@ function claimStarted() {
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => t.handle), ...filesOf(view?.target ?? null, projectKey ?? "").map((f) => f.id), ...diffsOf(view?.target ?? null, projectKey ?? "").map((d) => d.id)]);
+  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
 }
 
@@ -869,7 +884,7 @@ function openTargetMenu(anchor: Element) {
 }
 
 // The dialog of the worktrees, narrowed by a filter on `{repo} ・ {branch}`, under the plus of the work pane and under the chip of the side pane of A-9. A pick closes it.
-export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], chosen: string | null, pick: (path: string) => void) {
+export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], chosen: string | null, pick: (worktree: OrcaWorktree) => void) {
   const pop = tag("div", "menu orca-dest-pop");
   pop.setAttribute("role", "dialog");
   pop.setAttribute("aria-label", "起動先の worktree");
@@ -891,7 +906,7 @@ export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], c
             b.append(tag("b", "", w.repo), tag("span", "", w.branch));
             b.onclick = () => {
               closeMenu();
-              pick(w.path);
+              pick(w);
             };
             return b;
           })
@@ -944,26 +959,26 @@ function selectTab(id: string) {
 function runPaneOp(op: PaneOp | null) {
   const key = projectKey;
   if (key === null || view === null) return;
-  const target = view.target;
+  const [target, place] = [view.target, projectPlace(key)];
   const tabs = (): PaneTabs | null => {
     if (view === null || view.target !== target || view.state === "missing" || switching) return null;
     const now = tabsOf(key);
     return { ids: now.map((t) => t.id), handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
   };
-  syncPanes(target, key, tabs, op, () => draw(), showError);
+  syncPanes(place, key, tabs, op, () => draw(), showError);
 }
 
 // Asks for the layout when the project's tabs are not the ones it was asked for with (the first time, and each time a tab came or went); only a read that worked says what the tabs are.
 function syncLayout(tabs: Tab[]) {
   if (projectKey === null || view === null || view.state !== "ready" || switching) return;
-  if (needsSync(view.target, projectKey, tabs.map((t) => t.id))) runPaneOp(null);
+  if (needsSync(projectPlace(projectKey), projectKey, tabs.map((t) => t.id))) runPaneOp(null);
 }
 
 // Selects the tab in its pane and gives the pane the focus, at once and then in Rust (nothing is asked when it is the selected tab already).
 function chooseTab(id: string) {
   if (projectKey === null || view === null || selectedTab() === id) return;
   const op: PaneOp = { kind: "select", tab: id };
-  applyLocal(view.target, projectKey, op);
+  applyLocal(projectPlace(projectKey), projectKey, op);
   runPaneOp(op);
 }
 
@@ -972,7 +987,7 @@ function focusPane(pane: string) {
   const layout = currentLayout();
   if (projectKey === null || view === null || layout === null || layout.focus === pane || !panesOf(layout.root).some((p) => p.id === pane)) return;
   const op: PaneOp = { kind: "focus", pane };
-  applyLocal(view.target, projectKey, op);
+  applyLocal(projectPlace(projectKey), projectKey, op);
   runPaneOp(op);
   draw();
 }
@@ -1008,7 +1023,7 @@ async function closeTab(tab: Tab) {
     return;
   }
   try {
-    await invoke("orca_close", { handle: tab.handle!, environment: view?.target ?? null });
+    await invoke("orca_close", { handle: tab.handle!, environment: tab.environment });
   } catch (e) {
     showError(e);
     closing.delete(tab.id);
@@ -1027,7 +1042,7 @@ async function closeTab(tab: Tab) {
 function openTabMenu(anchor: Element, tab: string, pane: string) {
   const item = (label: string, icon: string, pick: () => unknown): MenuItem => ({ label, color: "var(--accent)", icon, current: false, pick });
   const split = (panesOf(currentLayout()?.root ?? null).find((p) => p.id === pane)?.tabs.length ?? 0) >= 2;
-  const file = projectKey === null ? undefined : filesOf(view?.target ?? null, projectKey).find((f) => f.id === tab);
+  const file = projectKey === null ? undefined : filesOf(projectPlace(projectKey), projectKey).find((f) => f.id === tab);
   const items: MenuItem[] = split ? [item("右に分割", COLUMNS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "right" })), item("下に分割", ROWS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "bottom" }))] : [];
   if (file !== undefined && file.host === null) {
     const [path, from] = [`${file.path.replace(/\/+$/, "")}/${file.relative}`, file.relative];
@@ -1042,38 +1057,39 @@ function openStartMenu(anchor: Element) {
   const item = (label: string, icon: string, pick: () => void, disabled = false) => ({ label, color: "var(--accent)", icon, current: false, disabled, pick });
   const host = scratchHost();
   openMenu(anchor, [
-    item("Claude を起動", CLAUDE_SVG, () => chooseWorktree(anchor, (path) => start("claude", path))),
-    item("ターミナルを開く", TERMINAL_SVG, () => chooseWorktree(anchor, (path) => start("terminal", path))),
-    item("スクラッチパッド", SCRATCHPAD_SVG, () => (host === null ? chooseWorktree(anchor, (path) => askScratchpad(anchor, path, null)) : askScratchpad(anchor, "", host)), host === null && projectKey.startsWith("ssh:")),
+    item("Claude を起動", CLAUDE_SVG, () => chooseWorktree(anchor, (w) => start("claude", w))),
+    item("ターミナルを開く", TERMINAL_SVG, () => chooseWorktree(anchor, (w) => start("terminal", w))),
+    item("スクラッチパッド", SCRATCHPAD_SVG, () => (host === null ? chooseWorktree(anchor, (w) => askScratchpad(anchor, w.path, null, placeOf(w))) : askScratchpad(anchor, "", host, projectPlace(projectKey!))), host === null && projectKey.startsWith("ssh:")),
   ]);
 }
 
 // A project with one worktree acts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there).
-function chooseWorktree(anchor: Element, act: (path: string) => void) {
+function chooseWorktree(anchor: Element, act: (worktree: OrcaWorktree) => void) {
   if (view === null || projectKey === null) return;
   const mine = view.worktrees.filter((w) => w.projectKey === projectKey);
-  if (mine.length === 1) act(mine[0].path);
+  if (mine.length === 1) act(mine[0]);
   else openWorktreeDialog(anchor, mine, null, act);
 }
 
 // Asks for the name of the scratchpad file in the worktree at `path` (A-29), or with `host` on that SSH host (A-30; `path` is then empty). The file opens in the project that was selected when it was asked for; a selection made meanwhile leaves it made and not opened.
-function askScratchpad(anchor: Element, path: string, host: string | null) {
+function askScratchpad(anchor: Element, path: string, host: string | null, environment: string | null) {
   if (view === null || projectKey === null) return;
-  const [from, target] = [projectKey, view.target];
-  openScratchpad(anchor, host === null ? { path, environment: target } : { host }, (file) => {
-    if (projectKey !== from || view?.target !== target) return;
+  const from = projectKey;
+  openScratchpad(anchor, host === null ? { path, environment } : { host }, (file) => {
+    if (projectKey !== from || projectPlace(from) !== environment) return;
     started = null;
-    const id = openEditorFile(target, from, path, file, host);
+    const id = openEditorFile(environment, from, path, file, host);
     chooseTab(id);
     draw();
-    rereadScratchpad(target, path, host);
+    rereadScratchpad(environment, path, host);
   });
 }
 
 // Starts Claude (with no first prompt: the user types it in the terminal) or a plain terminal in the worktree, once; a failure shows its message. The project and its tab stay selected, and the new tab is followed: once the list holds it, it is selected.
-async function start(kind: StartKind, path: string) {
+async function start(kind: StartKind, worktree: OrcaWorktree) {
   if (busy || startWaits() || view === null) return;
-  const target = view.target;
+  const { path } = worktree;
+  const target = placeOf(worktree);
   const [from, tab] = [projectKey, selectedTab()];
   busy = true;
   started = null;
@@ -1241,7 +1257,7 @@ export function initOrca() {
     move: (tab, pane, edge) => runPaneOp({ kind: "move", tab, pane, edge }),
     resize: (before, after, share) => {
       const op: PaneOp = { kind: "resize", before, after, share };
-      if (projectKey !== null && view !== null) applyLocal(view.target, projectKey, op);
+      if (projectKey !== null && view !== null) applyLocal(projectPlace(projectKey), projectKey, op);
       runPaneOp(op);
     },
     menu: openTabMenu,

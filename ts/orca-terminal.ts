@@ -52,7 +52,7 @@ const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "whi
 const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-\uffef]*[^\s"':,.!?{}|\\^~[\]`()<>\u3000-\u303f\uff00-\uffef]/;
 
 // Where a terminal comes from: the stream of a saved environment, or a mirror (of this machine, or of a saved environment that is not streamed).
-// `path` is the worktree the terminal runs in and `environment` the target, where a file dropped on it is put (A-10).
+// `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10).
 export interface TermSource {
   kind: "stream" | "mirror";
   handle: string;

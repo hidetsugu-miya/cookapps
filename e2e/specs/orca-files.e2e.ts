@@ -21,7 +21,6 @@ import {
   holds,
   mock,
   onceId,
-  orcaOverview,
   orcaRow,
   orcaSsh,
   orcaTerminal,
@@ -29,14 +28,13 @@ import {
   rejects,
   release,
   sendStream,
-  streamList,
   stubClipboard,
   textsOf,
   timers,
   waitForCalls,
   waitForCount,
 } from "../support";
-import { claudeTab, filesToggle, openOrca, pickItem, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
 describe("orca: files and editor (A-18)", () => {
@@ -2740,6 +2738,17 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files-tree")).toBeDisplayed();
     await expect($("#orca-history")).not.toBeDisplayed();
     expect(await callsOf("orca_git_history")).toEqual([]);
+  });
+
+  it("reads the history and the files of a commit in the environment of the worktree's row, whatever target the screen holds (A-27)", async () => {
+    const studioMac = onThisMachine(orcaOverview(sample(), worktrees(), studio), "example-app");
+    await openFiles(historyFixtures(), studioMac);
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await paneMode("履歴").click();
+    expect(await waitForCalls("orca_git_history")).toEqual([{ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null }]);
+    await waitForCount("#orca-history-list .orca-commit", 3);
+    await commitRow(3).click();
+    expect(await waitForCalls("orca_commit_files")).toEqual([{ path: "/work/example-app", commitId: commitId(3), environment: null }]);
   });
 
   it("switches to the history, which is read with the worktree and the first 50 commits, and back to the files, which are not read again (A-27)", async () => {

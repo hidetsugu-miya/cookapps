@@ -1,6 +1,11 @@
 // What the two specs of the Orca screen share (`specs/orca.e2e.ts` and `specs/orca-files.e2e.ts`): the sample list, how the screen is opened, and how its tabs, projects and menus are found.
-// A helper that only one of them uses stays in that spec. The mocks and the typed fixture data stay in `support.ts`.
-import { boot, inbox, onceId, orcaOverview, orcaRow, orcaWorktree, textsOf } from "./support";
+// A helper that only one of them uses stays in that spec. The mocks stay in `support.ts`; `orcaOverview` and `streamList` here put each item where the list was read from, on top of those of `support.ts`.
+import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
+import type { OrcaRow } from "../ts/bindings/OrcaRow";
+import type { OrcaStreamEvent } from "../ts/bindings/OrcaStreamEvent";
+import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
+import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
+import { boot, inbox, onceId, orcaOverview as readOf, orcaRow, orcaWorktree, streamList as streamOf, textsOf } from "./support";
 
 // A running, a waiting and a done agent, and a second running one that has no pane (its session has no tab). Each has its own project (`proj_{repo}`).
 export const sample = () => [
@@ -10,6 +15,31 @@ export const sample = () => [
   orcaRow("example-lib", "feature/x", "Opened the pull request.", { group: "done", minutes: 18 }),
 ];
 export const worktrees = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-api", "main")];
+
+// Rust says where each item of a list is (`environment`: the name of the saved environment the list was read from, none for this machine). An item that names no place is put in `environment`; one that names it (null: this machine's) stays.
+const placed = <T extends { environment?: string | null }>(items: T[], environment: string | null): T[] => (environment === null ? items : items.map((item) => (item.environment === undefined ? { ...item, environment } : item)));
+
+// `orcaOverview` of `support.ts`, with every item put where the target is, as Rust does.
+export const orcaOverview = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], extra: Partial<OrcaOverview> = {}): OrcaOverview => {
+  const read = readOf(rows, worktrees, extra);
+  const at = read.target;
+  return { ...read, rows: placed(read.rows, at), worktrees: placed(read.worktrees, at), projects: placed(read.projects, at), hosts: placed(read.hosts, at), terminals: placed(read.terminals, at) };
+};
+
+// `streamList` of `support.ts`, with every item put in the saved environment that streams it (`Studio`, as the specs stream it), as Rust does.
+export const streamList = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], terminals: OrcaTerminal[] = [], environment = "Studio"): OrcaStreamEvent => {
+  const event = streamOf(rows, worktrees, terminals);
+  if (event.kind !== "list") return event;
+  return { ...event, rows: placed(event.rows, environment), worktrees: placed(event.worktrees, environment), projects: placed(event.projects, environment), hosts: placed(event.hosts, environment), terminals: placed(event.terminals, environment) };
+};
+
+// The list `read` with the projects of `repos` (and their rows, worktrees and terminals) on this machine, while the rest of it stays where it is: a list of a saved environment that holds this machine's items too.
+export const onThisMachine = (read: OrcaOverview, ...repos: string[]): OrcaOverview => {
+  const keys = repos.map((repo) => `proj_${repo}`);
+  const move = <T extends { environment?: string | null }>(items: T[], keyOf: (item: T) => string): T[] => items.map((item) => (keys.includes(keyOf(item)) ? { ...item, environment: null } : item));
+  return { ...read, rows: move(read.rows, (r) => r.projectKey), worktrees: move(read.worktrees, (w) => w.projectKey), projects: move(read.projects, (p) => p.key), terminals: move(read.terminals, (t) => t.projectKey) };
+};
+
 // A saved environment as the target: its list is streamed.
 export const studio = { target: "Studio", environments: ["Studio", "Lab"] };
 
