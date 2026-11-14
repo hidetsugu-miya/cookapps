@@ -32,6 +32,8 @@ struct Entry {
 struct Entries {
     /// The stamp of the last entry put.
     last: u32,
+    /// Advanced by every `forget`: an answer fetched before one is not held after it.
+    generation: u32,
     bytes: usize,
     threads: HashMap<Key, Entry>,
     /// The keys in the order they were put, the oldest first.
@@ -43,9 +45,25 @@ struct Entries {
 pub struct HeldThreads(Mutex<Entries>);
 
 impl HeldThreads {
+    /// What `put` takes as `since`, read before the fetch whose answer is put.
+    pub(super) fn generation(&self) -> u32 {
+        self.0.lock().unwrap().generation
+    }
+
     /// Holds `detail` as the thread's last answer. One larger than `limit` is not held, and what was held of the thread goes.
-    pub(super) fn put(&self, limit: usize, account: &str, id: &str, detail: Arc<ThreadDetail>) {
+    /// `since` is the `generation` read before the fetch: after a `forget` meanwhile (the account may be the removed one), nothing is held.
+    pub(super) fn put(
+        &self,
+        limit: usize,
+        since: u32,
+        account: &str,
+        id: &str,
+        detail: Arc<ThreadDetail>,
+    ) {
         let e = &mut *self.0.lock().unwrap();
+        if e.generation != since {
+            return;
+        }
         let key = (account.to_owned(), id.to_owned());
         if let Some(old) = e.threads.remove(&key) {
             e.bytes -= old.bytes;
@@ -87,6 +105,7 @@ impl HeldThreads {
     /// Drops every thread of `account`.
     pub fn forget(&self, account: &str) {
         let e = &mut *self.0.lock().unwrap();
+        e.generation = e.generation.wrapping_add(1);
         e.threads.retain(|k, _| k.0 != account);
         e.order.retain(|k| e.threads.contains_key(k));
         e.bytes = e.threads.values().map(|t| t.bytes).sum();
@@ -283,6 +302,11 @@ mod tests {
         Arc::new(detail(&[&"x".repeat(n)]))
     }
 
+    /// Puts an answer whose fetch no `forget` crossed.
+    fn put(held: &HeldThreads, limit: usize, account: &str, id: &str, detail: Arc<ThreadDetail>) {
+        held.put(limit, held.generation(), account, id, detail);
+    }
+
     /// The cost of a thread with an empty body.
     fn overhead() -> usize {
         size(&detail(&[""]))
@@ -292,11 +316,11 @@ mod tests {
     fn holds_the_last_answer_of_each_thread_with_a_new_stamp() {
         let held = HeldThreads::default();
         assert!(held.get("a", "t1").is_none());
-        held.put(1000, "a", "t1", Arc::new(detail(&["one"])));
-        held.put(1000, "b", "t1", Arc::new(detail(&["other"])));
+        put(&held, 1000, "a", "t1", Arc::new(detail(&["one"])));
+        put(&held, 1000, "b", "t1", Arc::new(detail(&["other"])));
         let (first, d) = held.get("a", "t1").unwrap();
         assert_eq!(d.messages[0].body, "one");
-        held.put(1000, "a", "t1", Arc::new(detail(&["two"])));
+        put(&held, 1000, "a", "t1", Arc::new(detail(&["two"])));
         let (second, d) = held.get("a", "t1").unwrap();
         assert_eq!(d.messages[0].body, "two");
         assert_ne!(first, second);
@@ -308,17 +332,17 @@ mod tests {
         let held = HeldThreads::default();
         let limit = 3 * (overhead() + 100);
         for id in ["t1", "t2", "t3"] {
-            held.put(limit, "a", id, sized(100));
+            put(&held, limit, "a", id, sized(100));
         }
         // Put again, t1 is the newest: t2 is the oldest now.
-        held.put(limit, "a", "t1", sized(100));
-        held.put(limit, "a", "t4", sized(100));
+        put(&held, limit, "a", "t1", sized(100));
+        put(&held, limit, "a", "t4", sized(100));
         assert!(held.get("a", "t2").is_none());
         for id in ["t1", "t3", "t4"] {
             assert!(held.get("a", id).is_some(), "{id}");
         }
         // One that takes the whole cap leaves only itself.
-        held.put(limit, "a", "t5", sized(limit - overhead()));
+        put(&held, limit, "a", "t5", sized(limit - overhead()));
         for id in ["t1", "t3", "t4"] {
             assert!(held.get("a", id).is_none(), "{id}");
         }
@@ -330,8 +354,8 @@ mod tests {
     fn does_not_hold_a_thread_over_the_cap_and_drops_what_it_held_of_it() {
         let held = HeldThreads::default();
         let limit = overhead() + 100;
-        held.put(limit, "a", "t1", sized(100));
-        held.put(limit, "a", "t1", sized(101));
+        put(&held, limit, "a", "t1", sized(100));
+        put(&held, limit, "a", "t1", sized(101));
         assert!(held.get("a", "t1").is_none());
         let e = held.0.lock().unwrap();
         assert_eq!((e.bytes, e.order.len()), (0, 0));
@@ -340,15 +364,31 @@ mod tests {
     #[test]
     fn forgets_the_threads_of_one_account_only() {
         let held = HeldThreads::default();
-        held.put(10_000, "a", "t1", sized(100));
-        held.put(10_000, "b", "t1", sized(50));
-        held.put(10_000, "a", "t2", sized(100));
+        put(&held, 10_000, "a", "t1", sized(100));
+        put(&held, 10_000, "b", "t1", sized(50));
+        put(&held, 10_000, "a", "t2", sized(100));
         held.forget("a");
         assert!(held.get("a", "t1").is_none());
         assert!(held.get("a", "t2").is_none());
         assert!(held.get("b", "t1").is_some());
         let e = held.0.lock().unwrap();
         assert_eq!((e.bytes, e.order.len()), (overhead() + 50, 1));
+    }
+
+    #[test]
+    fn does_not_hold_an_answer_fetched_before_a_forget() {
+        let held = HeldThreads::default();
+        let before = held.generation();
+        // Another account's removal crosses the fetch too: the answer is only not held.
+        held.forget("b");
+        held.put(10_000, before, "a", "t1", sized(100));
+        assert!(held.get("a", "t1").is_none());
+        let e = held.0.lock().unwrap();
+        assert_eq!((e.bytes, e.order.len()), (0, 0));
+        drop(e);
+        // A fetch that started after the forget is held.
+        held.put(10_000, held.generation(), "a", "t1", sized(100));
+        assert!(held.get("a", "t1").is_some());
     }
 
     #[test]
@@ -405,6 +445,33 @@ mod tests {
         fresh.pending_images = vec![pending("m0", "one", "new")];
         assert_eq!(
             refresh_answer(Some(&shown), Arc::new(fresh)),
+            ThreadRefresh {
+                unread: false,
+                thread: None
+            }
+        );
+    }
+
+    #[test]
+    fn answers_no_thread_when_an_image_was_cached_after_the_fetch_of_the_fresh_one() {
+        let cache = InlineCache::default();
+        let mut d = detail(&[r#"<img src="cid:one">"#]);
+        d.pending_images = vec![pending("m0", "one", "old")];
+        let shown = Arc::new(d);
+        // Gmail's answer was read while the image was still to fetch, and `thread_images` cached it since.
+        let mut d = detail(&[r#"<img src="cid:one">"#]);
+        d.pending_images = vec![pending("m0", "one", "new")];
+        let fresh = Arc::new(d);
+        cache.put(1000, inline_key("acc", "m0", "one"), Arc::from("data:1"));
+        let shown = with_cached_images(&cache, "acc", &shown);
+        // The fresh one as fetched draws differently from the copy on screen; with the same cache it does not.
+        assert!(refresh_answer(Some(&shown), Arc::clone(&fresh))
+            .thread
+            .is_some());
+        let fresh = with_cached_images(&cache, "acc", &fresh);
+        assert_eq!(fresh.messages[0].body, r#"<img src="data:1">"#);
+        assert_eq!(
+            refresh_answer(Some(&shown), fresh),
             ThreadRefresh {
                 unread: false,
                 thread: None

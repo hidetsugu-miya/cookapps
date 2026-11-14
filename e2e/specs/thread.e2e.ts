@@ -460,6 +460,22 @@ describe("thread held from an earlier open", () => {
     await release(open, threadDetail("Second unread", "Second body", false));
     await expect($("#messages .plain")).toHaveText("Second body");
   });
+
+  it("ignores the answer for a held thread that was archived while Gmail was asked", async () => {
+    await mock("thread_held", held("Hello from Alice"));
+    const refresh = await mock("thread_refresh", holds);
+    const archive = await mock("archive", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(refresh);
+    await expect($("#messages .plain")).toHaveText("Hello from Alice");
+    await $("#archive").click();
+    expect(await waitForCalls(archive)).toEqual([{ account, id: "t1" }]);
+    await expect($("#threads")).toBeDisplayed();
+    await release(refresh, rejects("Gmail に届きません"));
+    await browser.pause(300);
+    await expect($("#error")).not.toBeDisplayed();
+    await expect($("#threads")).toBeDisplayed();
+  });
 });
 
 describe("thread AI summary", () => {

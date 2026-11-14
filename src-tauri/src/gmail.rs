@@ -1383,12 +1383,14 @@ async fn fresh_thread(
     id: &str,
 ) -> Result<Option<Arc<ThreadDetail>>, String> {
     let dir = config_dir(app).map_err(|e| log_failure(command, account, e))?;
+    // Read before the fetch: an answer that arrives after the account was removed meanwhile is not held.
+    let since = held.generation();
     let detail = fetch_thread(&dir, auth, cache, account, id, false)
         .await
         .map_err(|e| log_failure(command, account, e))?
         .map(Arc::new);
     match &detail {
-        Some(d) => held.put(HELD_THREAD_BYTES, account, id, Arc::clone(d)),
+        Some(d) => held.put(HELD_THREAD_BYTES, since, account, id, Arc::clone(d)),
         None => held.forget(account),
     }
     Ok(detail)
@@ -1455,8 +1457,10 @@ pub async fn thread_refresh(
     else {
         return Ok(None);
     };
-    // As `thread_held` would answer it now: the images the screen fetched for the held copy are in the cache, as in `fresh`.
+    // Both as `thread_held` would answer them now: the images the screen fetched for the held copy are in the cache, and one
+    // cached after `fresh` was read is inlined in it too, so that an unchanged thread does not differ by that image.
     let shown = shown.map(|detail| held::with_cached_images(&cache, &account, &detail));
+    let fresh = held::with_cached_images(&cache, &account, &fresh);
     let answer = held::refresh_answer(shown.as_deref(), fresh);
     // A thread that is not drawn again keeps the images `thread_held` remembered for it.
     if let Some(d) = &answer.thread {

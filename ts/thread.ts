@@ -214,7 +214,11 @@ function draw(t: ThreadDetail, { id, account, li }: ThreadTarget, seq: number) {
   const drawn = ++drawCount;
   $("thread").removeAttribute("aria-busy");
   loading.current = null;
-  opened.current = { id, account, li, messages: t.messages, subject: t.subject };
+  // Gmail's answer for the thread already drawn keeps the object, so that what started from it ("Slack に貼る") still sees the same open thread.
+  const shown = opened.current;
+  const drawing = { li, messages: t.messages, subject: t.subject };
+  const thread: OpenThread = shown && shown.id === id && shown.account === account ? Object.assign(shown, drawing) : { id, account, ...drawing };
+  opened.current = thread;
   $("thread-subject").textContent = t.subject || "(件名なし)";
   // The images that had to be fetched come separately, so the body is not held up by them.
   const cids = t.pendingImages?.length
@@ -234,7 +238,7 @@ function draw(t: ThreadDetail, { id, account, li }: ThreadTarget, seq: number) {
   for (const button of ACTIONS) {
     $<HTMLButtonElement>(button).disabled = button === "thread-todo" && $(button).classList.contains("busy");
   }
-  renderSummary(opened.current);
+  renderSummary(thread);
   handoff.sync();
 }
 
@@ -328,6 +332,8 @@ export function goBack() {
 
 // Detail view "trash" / "archive": back to the list at once, the work runs in the background.
 function removeCurrent(command: "archive" | "trash") {
+  // An answer still awaited for the thread (`refresh`) is ignored, as after "戻る".
+  openCount++;
   if (threadOrigin === "todo") setScreen("todo");
   else show("list");
   handoff.sync();
