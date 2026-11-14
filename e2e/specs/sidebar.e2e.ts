@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, threadLoaded, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, orcaOverview, orcaRow, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackPreview, slackTs, task, threadDetail, threadLoaded, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -215,6 +215,30 @@ describe("sidebar", () => {
     await expect($("#nav-todo .nav-count")).toHaveText("5");
     // A held load is not an answer: the count came from the remembered tasks.
     expect((await callsOf(load)).length).toBeLessThanOrEqual(1);
+  });
+
+  // An unread message of the Slack list, each in a channel of its own.
+  const unreadSlack = (n: number) => Array.from({ length: n }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `unread ${i}`, { unread: true, channel: `C${i}` }));
+  // What Orca answers with one session that waits for the user.
+  const waitingOrca = () => orcaOverview([orcaRow("example-api", "main", "Task of example-api", { group: "waiting" })]);
+
+  it("sets the Dock badge when only Slack has unread messages, and takes it off when they are read", async () => {
+    await boot({ inbox: inbox([]), slack_load: slackLoad, slack_timeline: timeline(unreadSlack(2), { refreshSecs: 1 }), claude_status: claudeReady });
+    await waitForBadge({ count: 2, upcoming: [] });
+    await mock("slack_timeline", timeline([], { refreshSecs: 1 }));
+    await waitForBadge({ count: 0, upcoming: [] });
+  });
+
+  it("sets the Dock badge when only Orca has a session that waits for the user", async () => {
+    await boot({ inbox: inbox([]), orca_overview: waitingOrca(), claude_status: claudeReady });
+    await expect($("#nav-orca .nav-count")).toHaveText("1");
+    await waitForBadge({ count: 1, upcoming: [] });
+  });
+
+  it("sets the Dock badge to the sum of the unread threads, the tasks that are due, the unread Slack messages and the Orca sessions that wait", async () => {
+    // 2 unread threads, "Write report" (today, no time), 3 unread Slack messages and 1 waiting session.
+    await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, slack_timeline: timeline(unreadSlack(3)), orca_overview: waitingOrca(), claude_status: claudeReady });
+    await waitForBadge({ count: 7, upcoming: [] });
   });
 
   it("orders the sidebar as mail, calendar, the Google accounts, Todo, Slack, Orca, then the bottom group", async () => {

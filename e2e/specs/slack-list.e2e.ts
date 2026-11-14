@@ -809,10 +809,11 @@ describe("slack list", () => {
     expect(await badgeLabel()).toBe("Slack（未読 2 件）");
   });
 
-  it("does not add the Slack count to the Dock badge", async () => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(3)), claude_status: claudeReady });
-    await expect(badge()).toHaveText("3");
-    expect((await callsOf("set_badge")).every((c) => (c as { count: number }).count !== 3)).toBe(true);
+  it("adds the Slack count to the Dock badge as the number itself, not as what the button shows above 20", async () => {
+    // No unread thread, no Todo and no Orca: the 37 are Slack's.
+    await boot({ inbox: inbox([]), slack_load: slackLoad, slack_timeline: timeline(heap(3), { unreadTotal: 37 }), claude_status: claudeReady });
+    await expect(badge()).toHaveText("20+");
+    await browser.waitUntil(async () => JSON.stringify((await callsOf("set_badge")).at(-1)) === JSON.stringify({ count: 37, upcoming: [] }), { timeoutMsg: "set_badge was not called with the 37 of Slack" });
   });
 
   // Keeping a channel off the list (S-9), with the button of the side menu (S-19): a row has none.
