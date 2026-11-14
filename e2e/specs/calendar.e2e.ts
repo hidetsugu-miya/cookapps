@@ -19,7 +19,7 @@ describe("calendar", () => {
     await $("#nav-calendar").click();
     await expect($("#calendar")).toBeDisplayed();
     await waitForText("#cal-body .cal-name", "Team sync");
-    await expect($("#cal-body .cal-time")).toHaveText("10:00 - 11:00");
+    await expect(eventButton("Team sync").$(".cal-time")).toHaveText("10:00 - 11:00");
     await expect($("#cal-allday .cal-chip")).toHaveText("Holiday");
   });
 
@@ -137,7 +137,7 @@ describe("calendar: calendar panel", () => {
     expect(await waitForCalls(setShown)).toEqual([{ account, calendarId: "holidays", shown: false }]);
     await waitForCount("#cal-allday .cal-chip", 0);
     await expect(choiceBox("Holidays")).not.toBeSelected();
-    await expect($("#cal-body .cal-name")).toHaveText("Team sync");
+    await expect(eventButton("Team sync").$(".cal-name")).toHaveText("Team sync");
   });
 
   it("keeps the box disabled while its choice is being saved", async () => {

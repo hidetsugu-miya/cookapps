@@ -457,7 +457,7 @@ describe("orca handoff", () => {
       await $(`${MAIL.pane} .ho-base`).click();
       await waitForCount(".orca-dest-pop .orca-branch-row", 5);
       await expect(branchRow("feat/c")).toHaveAttribute("aria-current", "true");
-      await $(".orca-dest-pop .orca-branch-row").click();
+      await $$(".orca-dest-pop .orca-branch-row")[0].click();
       expect(await textsOf(`${MAIL.pane} .ho-base`)).toEqual(["既定"]);
     });
 

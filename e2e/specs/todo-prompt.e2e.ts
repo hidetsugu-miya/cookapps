@@ -263,7 +263,7 @@ describe("todo prompt screen: the conversation with Claude", () => {
     await ask("短くして");
     await ask("別の案も", { reply: "別の案です", body: "Third body", diff: [{ kind: "del", text: "Default body" }, { kind: "ins", text: "Third body" }] }, 2);
     expect(await count(".diff-foot .text-btn.primary")).toBe(2);
-    await apply().click();
+    await $$("#prompt-log .chat-diff")[0].$(".text-btn.primary").click();
     await expect(body()).toHaveValue("Better body");
     // The other proposal was made from the text before this one.
     await expect(apply()).toBeDisabled();

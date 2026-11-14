@@ -575,11 +575,11 @@ describe("slack compose screen: proofreading with Claude", () => {
 
   it("shows the model and effort of the proofreading in the frame of the request field, Sonnet and medium by default, and saves a change as proofread", async () => {
     await openCompose();
-    const model = $('#slack-model select[data-kind="model"]');
-    const effort = $('#slack-model select[data-kind="effort"]');
-    await expect(model).toHaveValue("sonnet");
-    await expect(effort).toHaveValue("medium");
-    await expect(effort).toHaveAttribute("data-effort", "medium");
+    const model = () => $('#slack-model select[data-kind="model"]');
+    const effort = () => $('#slack-model select[data-kind="effort"]');
+    await expect(model()).toHaveValue("sonnet");
+    await expect(effort()).toHaveValue("medium");
+    await expect(effort()).toHaveAttribute("data-effort", "medium");
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#slack-model select")!).borderTopWidth)).toBe("0px");
     const save = await mock("claude_model_settings_save", { ...claudeSettings, proofread: { model: "opus", effort: "medium" } });
     await browser.execute((id) => {
@@ -589,7 +589,7 @@ describe("slack compose screen: proofreading with Claude", () => {
       select.dispatchEvent(new Event("change", { bubbles: true }));
     }, onceId());
     expect(await waitForCalls(save)).toEqual([{ purpose: "proofread", model: "opus" }]);
-    await expect(model).toHaveValue("opus");
+    await expect(model()).toHaveValue("opus");
   });
 
   it("sends 校正してください with the text, and the answer changes the preview and the edit field at once without posting", async () => {

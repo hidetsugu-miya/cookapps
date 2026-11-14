@@ -678,8 +678,9 @@ export const orcaSsh = (id: string, label: string): OrcaSshTarget => ({ id, labe
 const STATUS_ORDER: OrcaStatus[] = ["question", "failed", "working", "monitoring", "interrupted", "done", "idle"];
 
 // The project list of what is on the screen: one project for each repository of the rows, the worktrees and the terminals, the highest status of its rows (a terminal is a green dot), and its sessions.
+// An SSH host (`ssh:{id}`) is no project: Rust lists it in `hosts`, which a spec gives in `extra`.
 function projectsOf(rows: OrcaRow[], worktrees: OrcaWorktree[], terminals: OrcaTerminal[]): OrcaProject[] {
-  const keys = [...new Set([...rows.map((r) => r.projectKey), ...worktrees.map((w) => w.projectKey), ...terminals.map((t) => t.projectKey)])];
+  const keys = [...new Set([...rows.map((r) => r.projectKey), ...worktrees.map((w) => w.projectKey), ...terminals.map((t) => t.projectKey)])].filter((key) => !key.startsWith("ssh:"));
   return keys.map((key) => {
     const mine = rows.filter((r) => r.projectKey === key);
     const mineTerminals = terminals.filter((t) => t.projectKey === key);

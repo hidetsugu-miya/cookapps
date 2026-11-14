@@ -42,7 +42,7 @@ async function openDetail(fixtures: Record<string, unknown> = {}, value = base()
   const read = await mock("slack_thread", value);
   await $("#nav-slack").click();
   await waitForCount("#slack-feed .feed-row", messages.length);
-  await $("#slack-feed .feed-open").click();
+  await $$("#slack-feed .feed-open")[0].click();
   await expect($("#slack-thread")).toBeDisplayed();
   await waitForCount("#st-msgs .st-msg", value.messages.length);
   return read;
@@ -747,9 +747,9 @@ describe("slack thread: styles of a text (S-12)", () => {
     const shared = "https://example.slack.com/archives/C1/p123";
     await openDetail({}, withRich({ rich: [para(span("see "), linkSpan("メッセージ", shared), span(` ${url}`))] }));
     expect(await textsOf("#st-msgs .st-text a")).toEqual(["メッセージ", url]);
-    await expect($("#st-msgs .st-text a")).toHaveAttribute("href", shared);
+    await expect($("#st-msgs .st-text").$("a=メッセージ")).toHaveAttribute("href", shared);
     // The address is the title, so the label hides nowhere.
-    await expect($("#st-msgs .st-text a")).toHaveAttribute("title", shared);
+    await expect($("#st-msgs .st-text").$("a=メッセージ")).toHaveAttribute("title", shared);
     expect(await textsOf("#st-msgs .st-text")).toEqual([`see メッセージ ${url}`]);
   });
 
@@ -884,7 +884,7 @@ describe("slack thread: add and take off a reaction (S-25)", () => {
   it("adds a reaction the user did not give: slack_react gets the workspace, the conversation, the message's ts, the name and add true, and the count and the frame change in place with no new read", async () => {
     const read = await openDetail({}, thread());
     const react = await mock("slack_react", true);
-    await $$("#st-msgs .st-msg")[0].$(".reaction").click();
+    await $$("#st-msgs .st-msg")[0].$('.reaction[data-name="tada"]').click();
     expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, name: "tada", add: true }]);
     await browser.waitUntil(async () => (await chips())[0][0][1] === "4");
     expect((await chips())[0][0]).toEqual(["tada", "4", true, "true", false]);
@@ -1254,7 +1254,7 @@ describe("slack thread: the emoji picker (S-25)", () => {
     await expect($(".emoji-pop")).not.toExist();
     await addButton(0);
     await waitForCount(".emoji-pop .emoji-cell", 7);
-    await press($("#st-msgs .st-text"));
+    await press($$("#st-msgs .st-msg")[0].$(".st-text"));
     await expect($(".emoji-pop")).not.toExist();
     await browser.pause(200);
     expect(await callsOf(react)).toEqual([]);
@@ -1791,11 +1791,11 @@ describe("slack thread: asking Claude", () => {
 
   it("shows the model and effort of the Slack thread in the frame of the request field, Sonnet and high by default, and saves a change as slackReply", async () => {
     await openDetail();
-    const model = $('#reply-model select[data-kind="model"]');
-    const effort = $('#reply-model select[data-kind="effort"]');
-    await expect(model).toHaveValue("sonnet");
-    await expect(effort).toHaveValue("high");
-    await expect(effort).toHaveAttribute("data-effort", "high");
+    const model = () => $('#reply-model select[data-kind="model"]');
+    const effort = () => $('#reply-model select[data-kind="effort"]');
+    await expect(model()).toHaveValue("sonnet");
+    await expect(effort()).toHaveValue("high");
+    await expect(effort()).toHaveAttribute("data-effort", "high");
     const save = await mock("claude_model_settings_save", { ...claudeSettings, slackReply: { model: "opus", effort: "medium" } });
     await browser.execute((id) => {
       if (!window.__e2e_once__(id)) return;
@@ -1804,8 +1804,8 @@ describe("slack thread: asking Claude", () => {
       select.dispatchEvent(new Event("change", { bubbles: true }));
     }, onceId());
     expect(await waitForCalls(save)).toEqual([{ purpose: "slackReply", model: "opus" }]);
-    await expect(model).toHaveValue("opus");
-    await expect(effort).toHaveValue("medium");
+    await expect(model()).toHaveValue("opus");
+    await expect(effort()).toHaveValue("medium");
   });
 });
 

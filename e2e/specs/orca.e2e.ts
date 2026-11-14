@@ -46,7 +46,7 @@ import {
   waitForCalls,
   waitForCount,
 } from "../support";
-import { claudeTab, openOrca, pickItem, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { claudeTab, filesToggle, openOrca, pickItem, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
 const twoWorktrees = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" }), orcaWorktree("example-api", "main")];
@@ -2659,8 +2659,10 @@ describe("orca: split panes (A-17)", () => {
   it("gives each pane of a split its share of the size, with a divider between two panes", async () => {
     await openSplit(overview(), three([0.5, 0.2, 0.3]));
     expect(await count(".orca-divider")).toBe(2);
-    await expect($(".orca-divider")).toHaveAttribute("role", "separator");
-    await expect($(".orca-divider")).toHaveAttribute("aria-orientation", "vertical");
+    for (const divider of await $$(".orca-divider")) {
+      await expect(divider).toHaveAttribute("role", "separator");
+      await expect(divider).toHaveAttribute("aria-orientation", "vertical");
+    }
     const [[a], [b], [c]] = await sizesOf("p1", "p2", "p3");
     expect(a / (a + b + c)).toBeCloseTo(0.5, 2);
     expect(b / (a + b + c)).toBeCloseTo(0.2, 2);
@@ -3377,7 +3379,7 @@ describe("orca: scratchpad (A-29)", () => {
     const entries = (...names: string[]): OrcaDir => ({ entries: names.map((name) => ({ name, path: name, isDirectory: true, ignored: false })), total: names.length });
     await openOrca(orcaOverview(sample(), worktrees()), { orca_files_list: entries("src"), orca_files_ignored: [] });
     await pickProject("example-app");
-    await $(".orca-files-toggle:not([hidden])").click();
+    await filesToggle().click();
     await waitForCount("#orca-files-tree .orca-file", 1);
     const list = await mock("orca_files_list", entries(".orca", "src"));
     await mock("orca_scratchpad_create", MADE);
@@ -3531,7 +3533,7 @@ describe("orca: scratchpad of an SSH host (A-30)", () => {
     await openOrca(orcaOverview(sample(), worktrees(), { ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow, other] }), { ssh_scratch_list: ["a.md"] });
     await $('#orca-feed .orca-project[data-key="ssh:s9"]').click();
     await expect($('#orca-feed .orca-project[data-key="ssh:s9"]')).toHaveAttribute("aria-pressed", "true");
-    await $(".orca-files-toggle:not([hidden])").click();
+    await filesToggle().click();
     await expect($("#orca-files")).toBeDisplayed();
     await expect($("#orca-files-title")).toHaveText("");
     expect(await count("#orca-files-tree .orca-file")).toBe(0);
@@ -3556,7 +3558,7 @@ describe("orca: scratchpad of an SSH host (A-30)", () => {
     await openOrca(orcaOverview(sample(), worktrees(), { ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow] }), { editor_settings: { autosaveMs: 100 }, ssh_scratch_list: files });
     await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
     await expect($('#orca-feed .orca-project[data-key="ssh:s1"]')).toHaveAttribute("aria-pressed", "true");
-    await $(".orca-files-toggle:not([hidden])").click();
+    await filesToggle().click();
     await expect($("#orca-files")).toBeDisplayed();
   }
   // The page's own double press and right button on a row, and right button on the empty part of the tree.
