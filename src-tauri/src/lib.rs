@@ -332,6 +332,7 @@ pub fn run() {
             orca_files::orca_files_ignored,
             orca_files::orca_file_read,
             orca_files::orca_file_write,
+            orca_files::orca_file_create,
             orca_files::orca_file_download,
             orca_files::orca_file_diff,
             orca_files::orca_local_branches,

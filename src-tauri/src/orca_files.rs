@@ -1,5 +1,5 @@
 //! A-18: the files of a worktree on the Orca screen: the list of its folders, and the text of a file read and saved by the editor.
-//! The calls are Orca's runtime (`files.readDir`, `files.read`, `files.writeIfUnchanged`, `git.checkIgnored`), on this machine over its unix socket and on a paired server over its WebSocket (the connection of A-10).
+//! The calls are Orca's runtime (`files.readDir`, `files.read`, `files.writeIfUnchanged`, `files.createFile`, `files.createDir`, `git.checkIgnored`), on this machine over its unix socket and on a paired server over its WebSocket (the connection of A-10).
 //! The folder is answered from `files.readDir` alone, and what git ignores is asked after it (`orca_files_ignored`, `git.checkIgnored`), as Orca's own window does.
 //! They are not a public interface of Orca: this was read in the `app.asar` of Orca 1.4.253 and tried on this machine's Orca. A token is in no log line, no error text and no return value, and the text of a file is in no log line.
 //!
@@ -11,6 +11,7 @@
 //! The branch of a worktree is switched here too (`orca_switch_branch`, `git.switchBranch`): a local or a remote branch, never a new one, and Orca's refusal is shown in its own words.
 //! The commits of a worktree (`orca_git_history`, `git.history`: HEAD first, the newest first, read `limit` at a time with `skip`, on the history that the token of the first answer pins) and the files a commit changed (`orca_commit_files`, `git.commitCompare`) are read here too, for the history of the file pane. Both only read; a subject, an author and a path are held in memory only and are in no log line. They were tried on this machine's Orca 1.4.258 over its unix socket (a saved environment was not tried).
 //! The difference of one file of a commit (`orca_commit_file_diff`, `git.commitDiff`: the text at the first parent and at the commit, in the shape of `git.diff`) is drawn as A-24's diff is (`parse_diff`). The text is held in memory only and is in no log line.
+//! A new file or folder is made in a folder of the tree (`orca_file_create`, `files.createFile` and `files.createDir`): Rust checks that the name is one name, and a name that is taken is refused (`files.createFile` never overwrites). They were read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
 
 use std::{
@@ -62,6 +63,9 @@ const TEMP_AFFIX: usize = 1 + 4 + 5;
 /// How many names of a temporary file are tried before the download gives up.
 const TEMP_TRIES: u32 = 1000;
 const DIFF_TOO_LARGE: &str = "差分が大きすぎて表示できません";
+const BAD_NAME: &str = "名前が正しくありません";
+const NAME_TAKEN: &str = "同じ名前があります";
+const NOT_CREATED: &str = "作成できませんでした";
 const NOT_LISTED: &str = "ファイルの一覧を読めません";
 const NOT_BRANCHES: &str = "ブランチの一覧を読めません";
 const NOT_SWITCHED: &str = "ブランチを切り替えた結果を読めません";
@@ -300,6 +304,30 @@ fn join(dir: &str, name: &str) -> String {
     } else {
         format!("{dir}/{name}")
     }
+}
+
+/// The name of a new file or folder: one name, trimmed, that is not empty, `.` or `..`, holds no `/`, `\` or control character, and is at most 255 bytes.
+fn check_new_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    let bad = name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.len() > MAX_NAME
+        || name.contains(['/', '\\'])
+        || name.chars().any(char::is_control);
+    if bad {
+        Err(BAD_NAME.into())
+    } else {
+        Ok(name)
+    }
+}
+
+/// The path from the worktree of the new entry `name` in the folder `dir` (the worktree's own folder is the empty one), when both are fit to ask Orca for.
+fn new_relative(dir: &str, name: &str) -> Result<String, String> {
+    check_relative(dir, true)?;
+    let relative = join(dir, check_new_name(name)?);
+    check_relative(&relative, false)?;
+    Ok(relative)
 }
 
 // ---- the list ----
@@ -652,6 +680,44 @@ async fn write(
             signature.to_owned()
         },
     })
+}
+
+// ---- the new file or folder ----
+
+/// The message of a failed create: a name that is taken (`EEXIST` of a file, "already exists" of a folder) is said so, anything else as a failed read is.
+fn create_reason(error: CallError) -> String {
+    let detail = error.detail.to_lowercase();
+    if detail.contains("eexist") || detail.contains("already exists") {
+        NAME_TAKEN.into()
+    } else {
+        reason(error)
+    }
+}
+
+/// Makes the file or folder `relative` (checked by `new_relative`) with `files.createFile` or `files.createDir`, and answers its path. Orca makes the missing folders of a file, never overwrites one, and answers `{ok: true}`.
+async fn create(
+    rpc: &mut impl Rpc,
+    path: &str,
+    host_id: &str,
+    relative: &str,
+    folder: bool,
+) -> Result<String, String> {
+    let method = if folder {
+        "files.createDir"
+    } else {
+        "files.createFile"
+    };
+    let answer = rpc
+        .call(
+            method,
+            worktree_params(path, Some(host_id), json!({"relativePath": relative})),
+        )
+        .await
+        .map_err(create_reason)?;
+    if answer["ok"] == false {
+        return Err(NOT_CREATED.into());
+    }
+    Ok(relative.to_owned())
 }
 
 // ---- the download ----
@@ -1546,6 +1612,21 @@ pub async fn orca_file_write(
         &signature,
     )
     .await
+}
+
+/// Makes a file or, with `folder`, a folder named `name` in the folder `dir` of the worktree at `path` (A-18), and answers its path from the worktree. The name is checked first, and a name that is taken is refused: nothing is overwritten. This writes to the worktree, so the target's list is read each time, as a save does.
+#[tauri::command]
+pub async fn orca_file_create(
+    path: String,
+    dir: String,
+    name: String,
+    folder: bool,
+    environment: Option<String>,
+) -> Result<String, String> {
+    let relative = new_relative(&dir, &name)?;
+    let host_id = host_of(&path, environment.as_deref()).await?;
+    let mut connection = Connection::open(environment).await?;
+    create(&mut connection, &path, &host_id, &relative, folder).await
 }
 
 /// The name the save dialog starts with: the last part of the file's path from the worktree.
@@ -3041,6 +3122,121 @@ mod tests {
             .await
             .is_err());
         assert!(orca.calls.is_empty());
+    }
+
+    #[test]
+    fn a_new_name_is_one_trimmed_name() {
+        assert_eq!(check_new_name("  a.rs "), Ok("a.rs"));
+        assert_eq!(check_new_name("日本語.md"), Ok("日本語.md"));
+        assert_eq!(check_new_name(".gitignore"), Ok(".gitignore"));
+        let long = "a".repeat(255);
+        assert_eq!(check_new_name(&long), Ok(long.as_str()));
+        for bad in [
+            "", "   ", ".", " .. ", "a/b", "/a", "a\\b", "a\nb", "a\tb", "a\u{7f}b",
+        ] {
+            assert_eq!(check_new_name(bad), Err(BAD_NAME.to_owned()), "{bad:?}");
+        }
+        // The limit counts bytes: 85 three-byte characters are 255.
+        assert!(check_new_name(&"あ".repeat(85)).is_ok());
+        assert!(check_new_name(&"あ".repeat(86)).is_err());
+        assert!(check_new_name(&"a".repeat(256)).is_err());
+    }
+
+    #[test]
+    fn the_path_of_a_new_entry_is_the_folder_and_the_name() {
+        assert_eq!(new_relative("", " a.rs "), Ok("a.rs".into()));
+        assert_eq!(new_relative("src/lib", "x"), Ok("src/lib/x".into()));
+        assert!(new_relative("../x", "a").is_err());
+        assert!(new_relative("/x", "a").is_err());
+        assert!(new_relative("src", "a/b").is_err());
+        assert!(new_relative("src", "..").is_err());
+        let deep = vec!["d".repeat(200); 21].join("/");
+        assert!(new_relative(&deep, "a").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_file_or_a_folder_is_made_with_its_own_call_on_the_host() {
+        let mut orca = fake(vec![
+            ("files.createFile", Ok(json!({"ok": true}))),
+            ("files.createDir", Ok(json!({"ok": true}))),
+        ]);
+        assert_eq!(
+            create(&mut orca, "/work/a", "local", "src/a.rs", false)
+                .await
+                .unwrap(),
+            "src/a.rs"
+        );
+        assert_eq!(
+            create(&mut orca, "/work/a", "local", "src/lib", true)
+                .await
+                .unwrap(),
+            "src/lib"
+        );
+        assert_eq!(
+            orca.calls,
+            vec![
+                (
+                    "files.createFile".to_owned(),
+                    json!({"worktree": "path:/work/a", "expectedExecutionHostId": "local", "relativePath": "src/a.rs"})
+                ),
+                (
+                    "files.createDir".to_owned(),
+                    json!({"worktree": "path:/work/a", "expectedExecutionHostId": "local", "relativePath": "src/lib"})
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_name_that_is_taken_is_said_so_and_other_failures_say_why() {
+        for detail in [
+            "EEXIST: file already exists, open '/work/a/a.rs'",
+            "Directory already exists",
+        ] {
+            let mut orca = fake(vec![(
+                "files.createFile",
+                Err(("Orca がエラーを返しました（runtime_error）", detail)),
+            )]);
+            assert_eq!(
+                create(&mut orca, "/work/a", "local", "a.rs", false)
+                    .await
+                    .unwrap_err(),
+                "同じ名前があります"
+            );
+        }
+        let mut orca = fake(vec![(
+            "files.createDir",
+            Err((
+                "Orca がエラーを返しました（forbidden）",
+                "EACCES: permission denied",
+            )),
+        )]);
+        assert_eq!(
+            create(&mut orca, "/work/a", "local", "x", true)
+                .await
+                .unwrap_err(),
+            "Orca がエラーを返しました（forbidden）"
+        );
+        let mut orca = fake(vec![(
+            "files.createFile",
+            Err((
+                "Orca がエラーを返しました（runtime_error）",
+                "ENOENT: no such file",
+            )),
+        )]);
+        assert_eq!(
+            create(&mut orca, "/work/a", "local", "x", false)
+                .await
+                .unwrap_err(),
+            "ファイルが見つかりません"
+        );
+        let mut orca = fake(vec![("files.createFile", Ok(json!({"ok": false})))]);
+        assert_eq!(
+            create(&mut orca, "/work/a", "local", "x", false)
+                .await
+                .unwrap_err(),
+            "作成できませんでした"
+        );
     }
 
     /// A file on Orca's side that answers `files.stat` with its size (or with `stat`), and `files.readChunk` as Orca does (`eof` when the read reaches the end; `exact_eof` only on a read that finds nothing left; `never_eof` is an Orca that sends full chunks for ever), can fail on one call, can lack the method, and answers `files.readPreview` with `preview`.

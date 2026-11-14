@@ -17,7 +17,8 @@ export function closeMenu() {
 }
 
 // Shows `node` as the open menu, under `anchor` and inside the window. `onOutside` runs after a click elsewhere closed it.
-export function showMenu(anchor: Element, node: HTMLElement, onOutside?: () => void) {
+// `point` puts the menu at that place (the pointer of a right press) instead of under `anchor`.
+export function showMenu(anchor: Element, node: HTMLElement, onOutside?: () => void, point?: { x: number; y: number }) {
   closeMenu();
   menuEl = node;
   menuOnOutside = onOutside ?? null;
@@ -25,8 +26,8 @@ export function showMenu(anchor: Element, node: HTMLElement, onOutside?: () => v
   anchor.setAttribute("aria-expanded", "true");
   document.body.append(node);
   const r = anchor.getBoundingClientRect();
-  node.style.left = `${Math.max(8, Math.min(r.left, innerWidth - node.offsetWidth - 8))}px`;
-  const top = Math.max(8, Math.min(r.bottom + 4, innerHeight - node.offsetHeight - 8));
+  node.style.left = `${Math.max(8, Math.min(point?.x ?? r.left, innerWidth - node.offsetWidth - 8))}px`;
+  const top = Math.max(8, Math.min(point?.y ?? r.bottom + 4, innerHeight - node.offsetHeight - 8));
   node.style.top = `${top}px`;
   // The top stays where it is when the menu grows later (the channel list), so the growth stops at the window's edge.
   node.style.maxHeight = `${innerHeight - top - 8}px`;
@@ -40,6 +41,8 @@ export interface MenuItem {
   current: boolean;
   // How deep the item is nested, shown as an indent.
   depth?: number;
+  // A line drawn above the row, to set it apart from the rows before it.
+  divider?: boolean;
   // A small label at the right end of the row.
   tag?: string;
   // A second line under the label (A-9: the branch under the name of a worktree); the search matches it too.
@@ -50,6 +53,8 @@ export interface MenuItem {
 export interface MenuOptions {
   // A field at the top of the menu that narrows the rows to those whose label holds the text (A-9): its `aria-label`, and the line shown when no row matches.
   search?: { label: string; empty: string };
+  // Where the menu opens when it is not under its anchor (the pointer of a right press).
+  at?: { x: number; y: number };
 }
 
 export function openMenu(anchor: Element, items: MenuItem[], options: MenuOptions = {}) {
@@ -58,6 +63,11 @@ export function openMenu(anchor: Element, items: MenuItem[], options: MenuOption
   // With a search field the rows scroll in `list` and the field stays above them.
   const list = options.search ? tag("div", "menu-list") : menu;
   const rows = items.map((item) => {
+    if (item.divider) {
+      const line = tag("div", "menu-sep");
+      line.setAttribute("role", "separator");
+      list.append(line);
+    }
     const b = tag("button");
     b.setAttribute("role", "menuitem");
     b.setAttribute("aria-current", String(item.current));
@@ -83,7 +93,7 @@ export function openMenu(anchor: Element, items: MenuItem[], options: MenuOption
     return { item, b };
   });
   if (!options.search) {
-    showMenu(anchor, menu);
+    showMenu(anchor, menu, undefined, options.at);
     menu.querySelector("button")!.focus();
     return;
   }

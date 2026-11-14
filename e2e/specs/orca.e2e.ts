@@ -4188,9 +4188,12 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-files-tree .orca-file", 6);
     await stubClipboard();
     expect(await rightClickRow("src")).toBe(true);
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(4);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
+    // One line, between the two items that make something and the two copies.
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["新規ファイル", "新規フォルダー", "", "パスのコピー", "相対パスをコピー"]);
+    expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(1);
     await pickItem("パスのコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
     expect(await rightClickRow("src/main.rs")).toBe(true);
@@ -4201,6 +4204,183 @@ describe("orca: files and editor (A-18)", () => {
     await pickItem("パスのコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 3, { timeoutMsg: "the path was never copied" });
     expect(await copiedTexts()).toEqual(["/work/example-app/src", "src/main.rs", "/work/example-app/src/main.rs"]);
+  });
+
+  // A-18: a new file or folder. The menu of a folder (and of the empty part of the tree, for the root) asks for a name in a field that is the first row of the folder; Rust checks the name and makes it.
+  const treeOrder = () =>
+    browser.execute(() => [...document.querySelectorAll("#orca-files-tree > *")].map((e) => (e.classList.contains("orca-file-new") ? "[field]" : ((e as HTMLElement).dataset.path ?? e.className))));
+  const fieldFocused = () => browser.execute(() => document.activeElement?.classList.contains("orca-file-input") === true);
+  const blurField = () => browser.execute(() => (document.activeElement as HTMLElement).blur());
+  // The right button on the empty part of the tree, at 20px from its left and half way down (below its four rows, and clear of the window's bottom, which would move the menu), as the page gets it.
+  const rightClickEmpty = () =>
+    browser.execute(
+      (once) => {
+        if (!window.__e2e_once__(once)) return null;
+        const tree = document.getElementById("orca-files-tree")!;
+        const r = tree.getBoundingClientRect();
+        const [x, y] = [r.left + 20, r.top + r.height / 2];
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: x, clientY: y });
+        tree.dispatchEvent(event);
+        return { prevented: event.defaultPrevented, x, y };
+      },
+      onceId(),
+    );
+  // The folder src opened for a new file: the menu, the read of src, and the field as the first row in it.
+  async function askNameInSrc(item = "新規ファイル") {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const list = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    expect(await rightClickRow("src")).toBe(true);
+    await pickItem(item);
+    await waitForCalls(list);
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    return list;
+  }
+
+  it("opens the folder with a field for the name as its first row, with the keys in it, when a new file is chosen from the menu of a folder", async () => {
+    const list = await askNameInSrc();
+    expect(await callsOf(list)).toEqual([{ path: "/work/example-app", dir: "src", ignored: false, environment: null }]);
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+    expect(await treeOrder()).toEqual(["src", "[field]", "src/lib", "src/main.rs", "target", "a.rs", "b.log"]);
+    expect(await fieldFocused()).toBe(true);
+    await expect($(".orca-file-input")).toHaveAttribute("aria-label", "新しいファイルの名前");
+    expect(await browser.execute(() => document.querySelector<HTMLElement>(".orca-file-new")!.style.getPropertyValue("--depth"))).toBe("1");
+    expect(await count(".orca-file-new .orca-file-ic svg")).toBe(1);
+    expect(await count(".orca-file-new input[placeholder]")).toBe(0);
+    await expect($(".menu")).not.toExist();
+  });
+
+  it("makes the file the name is typed for on Enter, with the folder and the trimmed name, reads the folder again and opens the file in the editor", async () => {
+    await askNameInSrc();
+    const create = await mock("orca_file_create", "src/new.rs");
+    const list = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false], ["new.rs", false]]));
+    const read = await mock("orca_file_read", text("fn new() {}\n", "sig-n"));
+    await browser.keys(" new.rs ");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", dir: "src", name: "new.rs", folder: false, environment: null }]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "src", ignored: false, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 7);
+    expect(await treeOrder()).toEqual(["src", "src/lib", "src/main.rs", "src/new.rs", "target", "a.rs", "b.log"]);
+    expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: "src/new.rs", environment: null }]);
+    await expect($(".orca-edit-area")).toHaveValue("fn new() {}\n", { trim: false });
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("makes a folder for the name typed after the new folder item, reads the folder again and opens nothing", async () => {
+    await askNameInSrc("新規フォルダー");
+    await expect($(".orca-file-input")).toHaveAttribute("aria-label", "新しいフォルダーの名前");
+    const create = await mock("orca_file_create", "src/gen");
+    const list = await mock("orca_files_list", dirOf("src", [["gen", true], ["lib", true], ["main.rs", false]]));
+    const read = await mock("orca_file_read", text("x"));
+    await browser.keys("gen");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", dir: "src", name: "gen", folder: true, environment: null }]);
+    await waitForCalls(list);
+    await waitForCount("#orca-files-tree .orca-file", 7);
+    expect(await treeOrder()).toEqual(["src", "src/gen", "src/lib", "src/main.rs", "target", "a.rs", "b.log"]);
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([]);
+    await expect($(".orca-edit-area")).not.toExist();
+  });
+
+  it("cancels on Escape and on a blank name, and calls nothing", async () => {
+    await askNameInSrc();
+    const create = await mock("orca_file_create", "src/x");
+    await browser.keys("abc");
+    await browser.keys("Escape");
+    await waitForCount(".orca-file-new", 0);
+    expect(await treeOrder()).toEqual(["src", "src/lib", "src/main.rs", "target", "a.rs", "b.log"]);
+    expect(await rightClickRow("src")).toBe(true);
+    await pickItem("新規ファイル");
+    await waitForCount(".orca-file-new", 1);
+    await browser.keys("   ");
+    await browser.keys("Enter");
+    await waitForCount(".orca-file-new", 0);
+    await browser.pause(300);
+    expect(await callsOf(create)).toEqual([]);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("makes the file when the field loses the keys after a name was typed, and cancels when it loses them with none typed", async () => {
+    await askNameInSrc();
+    const create = await mock("orca_file_create", "src/b.rs");
+    await mock("orca_file_read", text("b"));
+    await mock("orca_files_list", dirOf("src", [["b.rs", false]]));
+    await browser.keys("b.rs");
+    await blurField();
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", dir: "src", name: "b.rs", folder: false, environment: null }]);
+    await waitForCount(".orca-file-new", 0);
+    expect(await rightClickRow("src")).toBe(true);
+    await pickItem("新規フォルダー");
+    await waitForCount(".orca-file-new", 1);
+    expect(await fieldFocused()).toBe(true);
+    await blurField();
+    await waitForCount(".orca-file-new", 0);
+    await browser.pause(300);
+    expect(await callsOf(create)).toHaveLength(1);
+  });
+
+  it("says the name is taken when Orca refuses it, makes nothing and takes the field away", async () => {
+    await askNameInSrc();
+    const create = await mock("orca_file_create", rejects("同じ名前があります"));
+    const list = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await browser.keys("main.rs");
+    await browser.keys("Enter");
+    await waitForCalls(create);
+    await expect($("#error")).toHaveText("同じ名前があります");
+    await waitForCount(".orca-file-new", 0);
+    expect(await treeOrder()).toEqual(["src", "src/lib", "src/main.rs", "target", "a.rs", "b.log"]);
+    await browser.pause(300);
+    expect(await callsOf(list)).toEqual([]);
+    await expect($(".orca-edit-area")).not.toExist();
+  });
+
+  it("opens a menu of the new file and the new folder at the pointer on the right button on the empty part of the tree, and asks for the name at the root", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const click = await rightClickEmpty();
+    expect(click?.prevented).toBe(true);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["新規ファイル", "新規フォルダー"]);
+    expect(await count('.menu[role="menu"] [role="separator"]')).toBe(0);
+    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    const at = await browser.execute(() => {
+      const r = document.querySelector(".menu")!.getBoundingClientRect();
+      return { left: Math.round(r.left), top: Math.round(r.top) };
+    });
+    expect(at).toEqual({ left: Math.round(click!.x), top: Math.round(click!.y) });
+    await pickItem("新規ファイル");
+    await waitForCount(".orca-file-new", 1);
+    expect(await treeOrder()).toEqual(["[field]", "src", "target", "a.rs", "b.log"]);
+    expect(await browser.execute(() => document.querySelector<HTMLElement>(".orca-file-new")!.style.getPropertyValue("--depth"))).toBe("0");
+    expect(await fieldFocused()).toBe(true);
+    const create = await mock("orca_file_create", "top.txt");
+    const list = await mock("orca_files_list", dirOf("", [["src", true], ["top.txt", false]]));
+    await mock("orca_file_read", text("t"));
+    await browser.keys("top.txt");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", dir: "", name: "top.txt", folder: false, environment: null }]);
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 2);
+  });
+
+  it("makes a folder at the root from the menu of the empty part, and does not open that menu on a row", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    expect(await rightClickRow("a.rs")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示"]);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    await rightClickEmpty();
+    await pickItem("新規フォルダー");
+    await waitForCount(".orca-file-new", 1);
+    await expect($(".orca-file-input")).toHaveAttribute("aria-label", "新しいフォルダーの名前");
+    const create = await mock("orca_file_create", "docs");
+    await mock("orca_files_list", dirOf("", [["docs", true], ["src", true]]));
+    await browser.keys("docs");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", dir: "", name: "docs", folder: true, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 2);
   });
 
   // A-22: the download of a file. Rust opens the save dialog and writes where it says; the page sends the worktree, the path from it and the target, and never a place to save.

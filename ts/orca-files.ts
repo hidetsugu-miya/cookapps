@@ -1,10 +1,10 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`); this module draws the folder at once, marks the ignored entries when the answer comes, and takes the presses.
-// A folder is read the first time it is opened and drawn from what was read after that, and the reload button reads the root and then the open folders again, side by side (at most `reads()` at a time). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read the first time it is opened and drawn from what was read after that, and the reload button reads the root and then the open folders again, side by side (at most `reads()` at a time). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root, A-18). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 // The top row also has the two buttons that choose what the pane shows under the heading, the files or the history of the worktree (A-27, orca-history.ts); the choice is kept in memory only, and the heading and its reload button serve both.
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
-import { $, tag } from "./dom.js";
+import { $, composing, tag } from "./dom.js";
 import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
@@ -43,6 +43,16 @@ let drawn = "";
 let version = 0;
 // Whether a drawing is waiting for the next frame (the reads that end in it are drawn once).
 let waiting = false;
+// The name being typed for a new file or folder (A-18): the first row of the folder `dir`. `text` is what is typed (kept while the tree is drawn again), `busy` that the create is on its way.
+interface Creating {
+  dir: string;
+  folder: boolean;
+  text: string;
+  busy: boolean;
+}
+let creating: Creating | null = null;
+// Whether the tree is being replaced: the loss of the field that goes with it is not a blur of the owner.
+let redrawing = false;
 let openFile: (relative: string) => void = () => {};
 let openDiff: (relative: string) => void = () => {};
 let branchSwitched: () => void = () => {};
@@ -154,22 +164,109 @@ async function reload() {
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
 }
 
+// Opens the folder: it is drawn from what was read (the reload button reads it again), waited for while it is being read, and read when it was not.
+function expandDir(path: string) {
+  expanded.add(path);
+  const held = listings.get(path);
+  if (held !== undefined && (held.busy || (held.dir !== null && held.error === null))) {
+    version++;
+    draw();
+  } else {
+    void readDir(path);
+  }
+}
+
 function toggleDir(path: string) {
   if (expanded.has(path)) {
     expanded.delete(path);
     version++;
     draw();
   } else {
-    expanded.add(path);
-    const held = listings.get(path);
-    // A folder that was read is drawn from what was read (the reload button reads it again); one that is being read is waited for.
-    if (held !== undefined && (held.busy || (held.dir !== null && held.error === null))) {
-      version++;
-      draw();
-    } else {
-      void readDir(path);
-    }
+    expandDir(path);
   }
+}
+
+// Asks for the name of a new file or folder in `dir`: the folder is opened (and read when it was not), and the first row in it is the field.
+function startCreate(dir: string, folder: boolean) {
+  if (context === null) return;
+  creating = { dir, folder, text: "", busy: false };
+  if (dir !== "") expandDir(dir);
+  else if (!listings.has("")) void readDir("");
+  version++;
+  draw();
+  focusField(true);
+}
+
+function cancelCreate() {
+  if (creating === null || creating.busy) return;
+  creating = null;
+  version++;
+  draw();
+}
+
+// Makes the file or folder named by the field. A blank name is a cancel. Rust checks the name, and a name that is taken is its error: the field goes and the message is shown. After it is made the folder is read again, and a new file opens in the editor.
+async function submitCreate() {
+  const here = context;
+  const field = creating;
+  if (here === null || field === null || field.busy) return;
+  const name = field.text.trim();
+  if (name === "") return cancelCreate();
+  field.busy = true;
+  const mine = generation;
+  try {
+    const relative = await invoke("orca_file_create", { path: here.path, dir: field.dir, name, folder: field.folder, environment: here.target });
+    if (mine !== generation) return;
+    if (creating === field) creating = null;
+    await readDir(field.dir);
+    if (!field.folder && mine === generation) openFile(relative);
+  } catch (e) {
+    if (mine !== generation) return;
+    if (creating === field) creating = null;
+    version++;
+    draw();
+    showError(e);
+  }
+}
+
+// The row with the field of the name being typed.
+function createRow(depth: number, field: Creating) {
+  const line = tag("div", "orca-file-new");
+  line.style.setProperty("--depth", String(depth));
+  const input = tag("input", "orca-file-input");
+  input.type = "text";
+  input.value = field.text;
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.setAttribute("aria-label", field.folder ? "新しいフォルダーの名前" : "新しいファイルの名前");
+  input.oninput = () => {
+    field.text = input.value;
+  };
+  input.onkeydown = (e) => {
+    if (composing(e)) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void submitCreate();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelCreate();
+    }
+  };
+  // Leaving the field with a name typed makes it, and with none cancels it.
+  input.onblur = () => {
+    if (!redrawing && creating === field) void submitCreate();
+  };
+  line.append(tag("span", "orca-file-mark"), icon(field.folder ? FOLDER_SVG : FILE_SVG), input);
+  return line;
+}
+
+// Puts the keys in the field of the name. `scroll` brings it into view (it was just asked for).
+function focusField(scroll: boolean) {
+  const input = $("orca-files-tree").querySelector<HTMLInputElement>(".orca-file-input");
+  if (input === null) return;
+  input.focus({ preventScroll: !scroll });
+  input.setSelectionRange(input.value.length, input.value.length);
+  if (scroll) input.scrollIntoView({ block: "nearest" });
 }
 
 // Saves the file to this PC (A-22): Rust opens the save dialog and writes where it says, so the page names no place. Nothing is shown when the dialog is cancelled.
@@ -182,15 +279,26 @@ async function download(here: FilesContext, relative: string) {
   }
 }
 
-// The menu of a row (the right button): the path of the entry on the machine of the worktree, its path from the worktree, and, on a file, the download and the difference from HEAD (A-24). The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
+const menuItem = (label: string, icon: string, pick: () => unknown) => ({ label, color: "var(--accent)", icon, current: false, pick });
+
+// The two items that make a new file or folder in the folder `dir` (the empty one is the worktree's root).
+const createItems = (dir: string) => [menuItem("新規ファイル", FILE_SVG, () => startCreate(dir, false)), menuItem("新規フォルダー", FOLDER_SVG, () => startCreate(dir, true))];
+
+// The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download and the difference from HEAD (A-24). The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
 function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
   if (here === null) return;
-  const item = (label: string, icon: string, pick: () => unknown) => ({ label, color: "var(--accent)", icon, current: false, pick });
-  const copy = (label: string, text: string, done: string) => item(label, COPY_PATH_SVG, () => void copyText(text, done));
-  const items = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
-  if (!isDirectory) items.push(item("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), item("差分を表示", DIFF_SVG, () => openDiff(relative)));
-  openMenu(anchor, items);
+  const copy = (label: string, text: string, done: string) => menuItem(label, COPY_PATH_SVG, () => void copyText(text, done));
+  const [path, from] = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
+  if (isDirectory) openMenu(anchor, [...createItems(relative), { ...path, divider: true }, from]);
+  else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative))]);
+}
+
+// The menu of the empty part of the tree (the right button): the new file and folder in the root of the worktree, where the pointer is.
+function openRootMenu(e: MouseEvent) {
+  if (context === null || (e.target as Element).closest(".orca-file, .orca-file-new") !== null) return;
+  e.preventDefault();
+  openMenu($("orca-files-tree"), createItems(""), { at: { x: e.clientX, y: e.clientY } });
 }
 
 function row(entry: OrcaFileEntry, depth: number) {
@@ -243,6 +351,7 @@ function rows(dir: string, depth: number): HTMLElement[] {
   if (!listing) return [];
   const nodes: HTMLElement[] = [];
   if (listing.error !== null) nodes.push(note(listing.error, depth, true));
+  if (creating?.dir === dir) nodes.push(createRow(depth, creating));
   if (listing.dir === null) {
     if (listing.busy) {
       const loading = tag("div", "pending");
@@ -299,9 +408,13 @@ function draw() {
   const tree = $("orca-files-tree");
   const top = tree.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.path;
+  const typing = document.activeElement?.classList.contains("orca-file-input") === true;
+  redrawing = true;
   tree.replaceChildren(...(context === null ? [] : rows("", 0)));
+  redrawing = false;
   tree.scrollTop = top;
   if (focused) tree.querySelector<HTMLElement>(`[data-path="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  if (typing) focusField(false);
 }
 
 // Follows the selected tab: its worktree (null: none), and the files open in it. Another worktree starts a new tree, read at once while the pane is shown.
@@ -312,6 +425,7 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
     generation++;
     listings.clear();
     expanded.clear();
+    creating = null;
     version++;
     // A list of branches is of the worktree that was shown.
     closeBranchDialog();
@@ -326,6 +440,7 @@ export function initOrcaFiles(on: { open: (relative: string) => void; diff: (rel
   openDiff = on.diff;
   branchSwitched = on.switched;
   initHistory({ open: on.commitDiff });
+  $("orca-files-tree").oncontextmenu = openRootMenu;
   $("orca-files-toggle").innerHTML = FOLDER_SVG;
   $("orca-files-toggle").onclick = on.toggle;
   $("orca-files-mode-files").innerHTML = FILE_SVG;

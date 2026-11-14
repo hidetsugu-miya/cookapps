@@ -311,6 +311,8 @@ export interface Commands {
   orca_file_read: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileText };
   // A-18: saves `content` over the file only if the disk still holds the text with `signature` (`crlf`: write CRLF). `state` says whether it was written (`saved`, with the new signature) or the disk had changed (`changed`, `missing`, `not-utf8`: nothing written).
   orca_file_write: { args: { path: string; relative: string; content: string; crlf: boolean; signature: string; environment: string | null }; result: OrcaSaved };
+  // A-18: makes a file, or with `folder` a folder, named `name` in the folder `dir` of the worktree (the empty `dir` is its root), and answers its path from the worktree. A name that is not one name, and one that is taken, are errors; nothing is overwritten.
+  orca_file_create: { args: { path: string; dir: string; name: string; folder: boolean; environment: string | null }; result: string };
   // A-24: the diff of the file `relative` of the worktree, HEAD against the working tree: the rows of both views, the blocks of changes and the language to color by.
   orca_file_diff: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileDiff };
   // A-27: `limit` (1 to 200) commits of the worktree at `path` from HEAD, the newest first, after the first `skip`.
