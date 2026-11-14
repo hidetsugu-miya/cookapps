@@ -507,7 +507,9 @@ export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general", pri
 export const checked = (missingScopes: string[] | null, missingOptional: string[] | null = []): Checked => ({ ...workspace, missingScopes, missingOptional });
 
 // A Slack timestamp `minutes` minutes ago ("1700000000.000100"); `n` tells apart messages of the same minute.
-export const slackTs = (minutes: number, n = 0) => `${Math.floor(Date.now() / 1000) - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
+// "Ago" counts from the second this module was loaded, read once: the same arguments give the same timestamp at every call, so a message made twice in a spec is one message (the timestamp is part of its key).
+const slackNow = Math.floor(Date.now() / 1000);
+export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 
 // The permalink of the message with `ts` in the channel `C0123ABCD` of `workspace`.
 export const permalinkOf = (ts: string) => `${workspace.url}archives/C0123ABCD/p${ts.replace(".", "")}`;
