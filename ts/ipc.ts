@@ -353,8 +353,10 @@ export interface Commands {
   orca_commit_file_diff: { args: { path: string; commitId: string; parentId: string | null; relative: string; oldRelative: string | null; environment: string | null }; result: OrcaFileDiff };
   // A-25: the local branches of the worktree at `path`, the current one first, each with whether another worktree has it checked out.
   orca_local_branches: { args: { path: string; environment: string | null }; result: OrcaLocalBranch[] };
-  // A-25: the remote branches (at most 50) whose names hold `query`, of the project `repo` (`OrcaProject.key`) of the worktree at `path`.
+  // A-25: the remote branches (at most 50) whose names hold `query`, of the project `repo` (`OrcaProject.key`) of the worktree at `path`. With an empty `query` the ones picked before come first, the newest first.
   orca_remote_branches: { args: { path: string; repo: string; query: string; environment: string | null }; result: OrcaRemoteBranch[] };
+  // A-25: remembers that the remote branch `name` (as Orca names it) was picked in the list of branches of the project `repo` (`OrcaProject.key`) of `environment`, so that `orca_remote_branches` answers it first to an empty `query` (at most 5 for each project of each Orca).
+  orca_branch_used: { args: { repo: string; name: string; environment: string | null }; result: null };
   // A-25: switches the worktree at `path` to the local branch `name`, or to the remote one (`kind` "remote", `name` like `origin/feature/a`). Orca's refusal is the error's message; a `warning` comes with a switch that worked.
   orca_switch_branch: { args: { path: string; kind: "local" | "remote"; name: string; environment: string | null }; result: OrcaBranchSwitched };
   // A-22: copies the file `relative` of the worktree to this PC, to the place picked in the save dialog that Rust opens (the page gives none). The name of the file saved, or null when the dialog was cancelled.

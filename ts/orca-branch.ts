@@ -1,6 +1,6 @@
 // The list of branches under the branch button in the heading of the file pane (A-25): the local branches of the worktree and, below them, the remote ones found by the text of the filter. A pick switches the worktree to that branch.
 // The same list picks the ref a new worktree starts from and its existing branch (A-9, `openBranchList`).
-// Rust reads the branches (`orca_local_branches`, `orca_remote_branches`) and switches (`orca_switch_branch`); this module draws the list and takes the press. The local branches are read when the list opens and narrowed by the filter here; the remote ones are asked for by the text, after the typing stops.
+// Rust reads the branches (`orca_local_branches`, `orca_remote_branches`), remembers a remote one that was picked (`orca_branch_used`) and switches (`orca_switch_branch`); this module draws the list and takes the press. The local branches are read when the list opens and narrowed by the filter here; the remote ones are asked for by the text, after the typing stops.
 import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
 import { tag } from "./dom.js";
 import { BRANCH_SVG, CHECK_SVG, CLOUD_SVG, DOWN_SVG } from "./icons.js";
@@ -20,7 +20,7 @@ export interface BranchContext {
 // How long the typing must stop before the remote branches are asked for again.
 const SEARCH_MS = 250;
 
-// How many remote branches show while the filter is empty; the button under them opens the rest (A-25).
+// How many remote branches show while the filter is empty; the button under them opens the rest (A-25). Rust puts the ones picked last first in the answer to an empty text (`orca_branch_used`), so these are the first of the answer as it comes.
 const REMOTE_FIRST = 5;
 
 // Switches the worktree. A refusal is shown as the error; a switch that worked with a warning says so; the list of the screen is read again after a switch (`switched` is told the branch the worktree is on now).
@@ -151,7 +151,10 @@ export function openBranchList(anchor: Element, here: BranchSource, options: Bra
     }
     b.onclick = () => {
       closeMenu();
-      if (!current || options.pickCurrent) options.pick({ kind, name, localName });
+      if (current && !options.pickCurrent) return;
+      // Remembered for the order of the remote rows (the first five are the ones picked last). It changes nothing but that order, so a failure neither stops the pick nor is shown.
+      if (kind === "remote") invoke("orca_branch_used", { repo: here.repo, name, environment: here.target }).catch(() => {});
+      options.pick({ kind, name, localName });
     };
     return b;
   };

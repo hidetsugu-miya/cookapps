@@ -2613,6 +2613,39 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".orca-dest-pop")).not.toExist();
   });
 
+  it("remembers the remote branch picked, with the project and the Orca, and a local branch not (A-25)", async () => {
+    await openBranches();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    await mock("orca_overview", onFeatC());
+    await branchPick("remote", "origin/feat/d").click();
+    expect(await waitForCalls("orca_branch_used")).toEqual([{ repo: "proj_example-app", name: "origin/feat/d", environment: null }]);
+    await waitForCalls("orca_switch_branch");
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const used = await mock("orca_branch_used", null);
+    await branchPick("local", "feat/a").click();
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    await branchPick("local", "feat/c").click();
+    await waitForCalls("orca_switch_branch", 2);
+    await browser.pause(300);
+    expect(await callsOf(used)).toEqual([]);
+  });
+
+  it("switches and shows no error when remembering the remote branch picked fails (A-25)", async () => {
+    await openBranches({ orca_branch_used: rejects("orca-branch-recent.json を書けません") });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    await mock("orca_overview", onFeatC());
+    await branchPick("remote", "origin/feat/d").click();
+    expect(await waitForCalls("orca_branch_used")).toHaveLength(1);
+    expect(await waitForCalls("orca_switch_branch")).toEqual([{ path: "/work/example-app", kind: "remote", name: "origin/feat/d", environment: null }]);
+    await expect($(".orca-dest-pop")).not.toExist();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/c");
+    await browser.pause(300);
+    await expect($("#error")).not.toBeDisplayed();
+    await expect($(".toast")).not.toExist();
+  });
+
   it("only closes the list on the branch the worktree is on, and calls nothing on a branch in use (A-25)", async () => {
     await openBranches();
     await waitForCount(".orca-dest-pop .orca-branch-row", 5);
