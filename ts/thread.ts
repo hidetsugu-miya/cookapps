@@ -1,5 +1,6 @@
 // The thread detail view: the messages of the open thread, their folding, and the buttons of its header.
 import type { MessageDetail } from "./bindings/MessageDetail";
+import type { ThreadDetail } from "./bindings/ThreadDetail";
 import { $, span } from "./dom.js";
 import { avatarColor, formatDate, formatDetailDate, initials, unescapeHtml } from "./format.js";
 import { PERSON_SVG } from "./icons.js";
@@ -39,6 +40,9 @@ let threadOrigin: "mail" | "todo" = "mail";
 
 // Bumped by every openThread: a result that arrives for an earlier thread sees the number has moved on and leaves the page alone.
 let openCount = 0;
+
+// Bumped by every draw of a thread: the frames of a held copy that Gmail's answer replaced see the number has moved on and leave the page alone.
+let drawCount = 0;
 
 // The header of an open message: avatar, sender, recipients and date. A div, so the address can be selected;
 // when the message can be folded it acts as a button (`message` adds the click).
@@ -197,7 +201,70 @@ function loadingMessage(fromName = "", fromAddress = "") {
   return { article, body };
 }
 
+// The thread to draw and where it was opened from.
+interface ThreadTarget {
+  id: string;
+  account: string;
+  li: HTMLLIElement | null;
+}
+
+// Draws `t` as the open thread, in place of what the detail view holds: the note of a thread that had to be waited for, or the held copy that Gmail's answer differs from.
+// `seq` is the `openCount` of the open it belongs to.
+function draw(t: ThreadDetail, { id, account, li }: ThreadTarget, seq: number) {
+  const drawn = ++drawCount;
+  $("thread").removeAttribute("aria-busy");
+  loading.current = null;
+  opened.current = { id, account, li, messages: t.messages, subject: t.subject };
+  $("thread-subject").textContent = t.subject || "(件名なし)";
+  // The images that had to be fetched come separately, so the body is not held up by them.
+  const cids = t.pendingImages?.length
+    ? invoke("thread_images", { account, id, images: t.pendingImages }).catch(() => ({}))
+    : Promise.resolve({});
+  // Only a message Gmail vouches for can show its images by itself, so only its sender is asked about.
+  const froms = [...new Set(t.messages.filter((m) => m.html && m.authenticated).map((m) => m.from))];
+  const ctx: ThreadCtx = { cids, froms, senders: knownSenders(froms), stale: () => seq !== openCount || drawn !== drawCount };
+  frameObserver.disconnect();
+  resetImageBars();
+  // Newest first. Only the latest message (the first) is open when the thread has several.
+  const several = t.messages.length > 1;
+  $("messages").replaceChildren(
+    ...[...t.messages].reverse().map((m, i) => message(m, ctx, several && i > 0, several)),
+  );
+  // A Todo still being made from the thread opened before keeps its button until it ends.
+  for (const button of ACTIONS) {
+    $<HTMLButtonElement>(button).disabled = button === "thread-todo" && $(button).classList.contains("busy");
+  }
+  renderSummary(opened.current);
+  handoff.sync();
+}
+
+// The answer null of Gmail: that account must log in again, which the list shows.
+function needsLogin() {
+  if (currentScreen() === "mail") show("list");
+  handoff.sync();
+  return load();
+}
+
+// Asks Gmail again for a thread drawn from its held copy (`stamp` names that copy). The thread is drawn again only when Rust
+// answers one, which it does when the answer differs from the copy; a failure leaves the copy on screen and is shown where every error is.
+async function refresh(target: ThreadTarget, stamp: number, seq: number) {
+  const { account, id } = target;
+  try {
+    const r = await invoke("thread_refresh", { account, id, stamp });
+    if (seq !== openCount) return;
+    if (r === null) return needsLogin();
+    // The list may have rebuilt the row since the open (`inbox.ts` keeps `opened.current.li` the row on screen).
+    if (r.thread) draw(r.thread, { ...target, li: opened.current ? opened.current.li : target.li }, seq);
+    // The held copy's own `unread` is from the earlier read, so only Gmail's answer says whether to mark the thread read.
+    if (r.unread) markRead(account, id);
+  } catch (e) {
+    if (seq !== openCount) return;
+    showError(e);
+  }
+}
+
 // `thread` is the row's item (or just the ids, for a thread opened from Todo with no row): its subject and sender are shown at once, and the body once Gmail answers.
+// A thread that Rust holds from an earlier open is drawn from that copy at once, and Gmail is asked in the background (`refresh`).
 export async function openThread(
   { id, account, subject, fromName, fromAddress }: { id: string; account: string; subject?: string; fromName?: string; fromAddress?: string },
   li: HTMLLIElement | null,
@@ -211,49 +278,35 @@ export async function openThread(
   loading.current = { id, account };
   threadOrigin = origin;
   clearSummary();
-  const { article, body } = loadingMessage(fromName, fromAddress);
   $("thread-subject").textContent = subject === undefined ? "" : subject || "(件名なし)";
-  $("messages").replaceChildren(article);
+  // Empty until Rust says whether it holds the thread (an answer from memory), so a held thread never shows the note.
+  $("messages").replaceChildren();
   show("thread");
   $("thread").setAttribute("aria-busy", "true");
   for (const button of ACTIONS) $<HTMLButtonElement>(button).disabled = true;
   // A thread opened from Todo may be out of the list; with no row there is nothing to take out of it.
   $("trash").hidden = $("archive").hidden = $("thread-label").hidden = !li;
   handoff.sync();
+  const target = { id, account, li };
+  // A failure to read the held copy is no failure of the open: the thread is then waited for, as one that is not held.
+  const held = await invoke("thread_held", { account, id }).catch(() => null);
+  if (seq !== openCount) return;
+  if (held) {
+    draw(held.thread, target, seq);
+    return refresh(target, held.stamp, seq);
+  }
+  const { article, body } = loadingMessage(fromName, fromAddress);
+  $("messages").replaceChildren(article);
   try {
     const t = await invoke("thread", { account, id });
     if (seq !== openCount) return;
-    $("thread").removeAttribute("aria-busy");
-    loading.current = null;
-    // null: that account must log in again, which the list shows.
     if (t === null) {
-      if (currentScreen() === "mail") show("list");
-      handoff.sync();
-      return load();
+      $("thread").removeAttribute("aria-busy");
+      loading.current = null;
+      return needsLogin();
     }
-    opened.current = { id, account, li, messages: t.messages, subject: t.subject };
-    $("thread-subject").textContent = t.subject || "(件名なし)";
-    // The images that had to be fetched come separately, so the body is not held up by them.
-    const cids = t.pendingImages?.length
-      ? invoke("thread_images", { account, id, images: t.pendingImages }).catch(() => ({}))
-      : Promise.resolve({});
-    // Only a message Gmail vouches for can show its images by itself, so only its sender is asked about.
-    const froms = [...new Set(t.messages.filter((m) => m.html && m.authenticated).map((m) => m.from))];
-    const ctx: ThreadCtx = { cids, froms, senders: knownSenders(froms), stale: () => seq !== openCount };
-    frameObserver.disconnect();
-    resetImageBars();
-    // Newest first. Only the latest message (the first) is open when the thread has several.
-    const several = t.messages.length > 1;
-    $("messages").replaceChildren(
-      ...[...t.messages].reverse().map((m, i) => message(m, ctx, several && i > 0, several)),
-    );
-    // A Todo still being made from the thread opened before keeps its button until it ends.
-    for (const button of ACTIONS) {
-      $<HTMLButtonElement>(button).disabled = button === "thread-todo" && $(button).classList.contains("busy");
-    }
-    renderSummary(opened.current);
+    draw(t, target, seq);
     if (t.unread) markRead(account, id);
-    handoff.sync();
   } catch (e) {
     if (seq !== openCount) return;
     $("thread").removeAttribute("aria-busy");

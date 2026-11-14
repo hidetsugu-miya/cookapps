@@ -50,6 +50,7 @@ import type { PaneOp } from "./bindings/PaneOp";
 import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
+import type { HeldThread } from "./bindings/HeldThread";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackAction } from "./bindings/SlackAction";
 import type { SlackEdit } from "./bindings/SlackEdit";
@@ -65,6 +66,7 @@ import type { ThemeSelection } from "./bindings/ThemeSelection";
 import type { Timeline } from "./bindings/Timeline";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import type { ThreadDetail } from "./bindings/ThreadDetail";
+import type { ThreadRefresh } from "./bindings/ThreadRefresh";
 import type { Todo } from "./bindings/Todo";
 import type { TodoDraftEdit } from "./bindings/TodoDraftEdit";
 import type { TodoPrompt } from "./bindings/TodoPrompt";
@@ -105,6 +107,8 @@ export interface Commands {
   inbox_cached: { args: undefined; result: Inbox | null };
   sync: { args: Account & { startHistoryId: string }; result: Sync };
   thread: { args: Thread; result: ThreadDetail | null };
+  thread_held: { args: Thread; result: HeldThread | null };
+  thread_refresh: { args: Thread & { stamp: number }; result: ThreadRefresh | null };
   // By message ID, then by the reference as written in the body.
   thread_images: { args: Thread & { images: PendingImage[] }; result: Record<string, Record<string, string>> };
   // null: that account must log in again. true: done; false: nothing to do.

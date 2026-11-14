@@ -21,7 +21,7 @@ use crate::{
     accounts,
     calendar::{self, CalendarCache},
     disk_cache,
-    gmail::{self, InlineCache, SyncState},
+    gmail::{self, HeldThreads, InlineCache, SyncState},
 };
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -320,11 +320,13 @@ pub async fn remove_account(
     sync: State<'_, SyncState>,
     calendar: State<'_, CalendarCache>,
     images: State<'_, InlineCache>,
+    threads: State<'_, HeldThreads>,
     account: String,
 ) -> Result<(), String> {
     sync.forget(&account);
     calendar.forget(&account);
     images.forget(&account);
+    threads.forget(&account);
     let removed = match config_dir(&app) {
         Ok(dir) => auth.remove(&dir, &account).await,
         Err(e) => Err(e),

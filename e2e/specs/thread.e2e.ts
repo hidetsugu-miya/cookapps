@@ -1,6 +1,8 @@
 import {
   account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, waitForText,
 } from "../support";
+import type { HeldThread } from "../../ts/bindings/HeldThread";
+import type { ThreadRefresh } from "../../ts/bindings/ThreadRefresh";
 
 describe("thread", () => {
   beforeEach(async () => {
@@ -356,6 +358,107 @@ describe("thread loading", () => {
     await browser.pause(300);
     await expect($("#threads")).toBeDisplayed();
     expect(await count("#messages .plain")).toBe(0);
+  });
+});
+
+describe("thread held from an earlier open", () => {
+  const headerButtons = ["#thread-slack", "#thread-todo", "#thread-orca", "#trash", "#archive"];
+  const held = (body: string): HeldThread => ({ stamp: 7, thread: threadDetail("First unread", body, false) });
+  const answer = (unread: boolean, thread: ThreadRefresh["thread"]): ThreadRefresh => ({ unread, thread });
+  // Marks the message on screen, so that a draw that replaced it can be told from one that left it.
+  const markMessage = () => browser.execute(() => document.querySelector("#messages article")!.setAttribute("data-e2e", "drawn-first"));
+  const markedMessages = () => count('#messages article[data-e2e="drawn-first"]');
+
+  beforeEach(async () => {
+    await boot({ inbox: inbox() });
+    await waitForCount("#unread-threads li", 2);
+  });
+
+  it("draws the held copy at once, with no note and the buttons enabled, and asks Gmail again", async () => {
+    await mock("thread_held", held("Hello from Alice"));
+    const refresh = await mock("thread_refresh", holds);
+    const open = await mock("thread", rejects("held, so not asked"));
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(refresh);
+    await expect($("#messages .plain")).toHaveText("Hello from Alice");
+    await threadLoaded();
+    expect(await count("#messages .msg-loading")).toBe(0);
+    for (const id of headerButtons) await expect($(id)).toBeEnabled();
+    expect(await callsOf(refresh)).toEqual([{ account, id: "t1", stamp: 7 }]);
+    expect(await callsOf(open)).toEqual([]);
+  });
+
+  it("leaves the messages as they are when Gmail's answer is the same, and marks the thread read when the answer says it is unread", async () => {
+    await mock("thread_held", held("Hello from Alice"));
+    const refresh = await mock("thread_refresh", holds);
+    const setRead = await mock("set_read", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(refresh);
+    await expect($("#messages .plain")).toHaveText("Hello from Alice");
+    await markMessage();
+    expect(await callsOf(setRead)).toEqual([]);
+    await release(refresh, answer(true, null));
+    expect(await waitForCalls(setRead)).toEqual([{ account, id: "t1", read: true }]);
+    expect(await markedMessages()).toBe(1);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("draws the thread again when Gmail's answer differs", async () => {
+    await mock("thread_held", held("Hello from Alice"));
+    const refresh = await mock("thread_refresh", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(refresh);
+    await expect($("#messages .plain")).toHaveText("Hello from Alice");
+    await markMessage();
+    await release(refresh, answer(false, threadDetail("First unread, answered", "A new reply", false)));
+    await expect($("#messages .plain")).toHaveText("A new reply");
+    await expect($("#thread-subject")).toHaveText("First unread, answered");
+    expect(await markedMessages()).toBe(0);
+    for (const id of headerButtons) await expect($(id)).toBeEnabled();
+  });
+
+  it("keeps the held copy and shows the error when Gmail cannot be asked", async () => {
+    await mock("thread_held", held("Hello from Alice"));
+    const refresh = await mock("thread_refresh", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(refresh);
+    await expect($("#messages .plain")).toHaveText("Hello from Alice");
+    await markMessage();
+    await release(refresh, rejects("Gmail に届きません"));
+    await expect($("#error")).toHaveText("Gmail に届きません");
+    expect(await markedMessages()).toBe(1);
+    expect(await count("#messages .msg-fail")).toBe(0);
+    for (const id of headerButtons) await expect($(id)).toBeEnabled();
+  });
+
+  it("goes to the list when the answer says the account must log in again", async () => {
+    await mock("thread_held", held("Hello from Alice"));
+    const refresh = await mock("thread_refresh", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(refresh);
+    await expect($("#messages .plain")).toHaveText("Hello from Alice");
+    await release(refresh, null);
+    await expect($("#threads")).toBeDisplayed();
+    await expect($("#thread")).not.toBeDisplayed();
+  });
+
+  it("does not draw the answer for a held thread over the thread opened after it", async () => {
+    await mock("thread_held", held("Hello from Alice"));
+    const refresh = await mock("thread_refresh", holds);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await waitForCalls(refresh);
+    await $("#back").click();
+    await mock("thread_held", null);
+    const open = await mock("thread", holds);
+    await rowOf("unread-threads", "Second unread").$(".subject").click();
+    await waitForCalls(open);
+    await release(refresh, answer(true, threadDetail("First unread", "A new reply", true)));
+    await browser.pause(300);
+    await expect($("#thread-subject")).toHaveText("Second unread");
+    await expect($("#messages .msg-loading")).toBeDisplayed();
+    expect(await count("#messages .plain")).toBe(0);
+    await release(open, threadDetail("Second unread", "Second body", false));
+    await expect($("#messages .plain")).toHaveText("Second body");
   });
 });
 

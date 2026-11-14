@@ -192,6 +192,7 @@ pub fn run() {
         .manage(auth::Auth::new())
         .manage(gmail::SyncState::default())
         .manage(gmail::InlineCache::default())
+        .manage(gmail::HeldThreads::default())
         .manage(gmail::PendingImages::default())
         .manage(images::ImageCache::default())
         .manage(image_senders::ImageSenders::default())
@@ -225,6 +226,8 @@ pub fn run() {
             gmail::inbox,
             gmail::inbox_cached,
             gmail::thread,
+            gmail::thread_held,
+            gmail::thread_refresh,
             gmail::thread_images,
             gmail::trash,
             gmail::archive,
