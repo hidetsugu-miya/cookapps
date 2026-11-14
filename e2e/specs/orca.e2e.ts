@@ -2585,8 +2585,10 @@ describe("orca: split panes (A-17)", () => {
   const bash = "orca:term_example-app_bash";
   const apiTab = claudeTab("example-api");
   const pane = (id: string, tabs: string[], selected = tabs[0]): PaneNode => ({ kind: "pane", id, tabs, selected });
-  const row = (...children: PaneNode[]): PaneNode => ({ kind: "split", direction: "row", children });
-  const column = (...children: PaneNode[]): PaneNode => ({ kind: "split", direction: "column", children });
+  // A split whose nodes share its size equally, unless `sizes` says otherwise.
+  const split = (direction: "row" | "column", children: PaneNode[], sizes = children.map(() => 1 / children.length)): PaneNode => ({ kind: "split", direction, children, sizes });
+  const row = (...children: PaneNode[]) => split("row", children);
+  const column = (...children: PaneNode[]) => split("column", children);
   const layout = (root: PaneNode, focus: string): PaneLayout => ({ root, focus });
   // The Orca handle of each tab that has a terminal.
   const handles = { [claude]: "term_example-app", [zsh]: "term_example-app_zsh", [bash]: "term_example-app_bash" };
@@ -2673,6 +2675,86 @@ describe("orca: split panes (A-17)", () => {
     expect(await browser.execute(() => [...document.querySelectorAll(".orca-split-node")].map((e) => e.getAttribute("data-direction")))).toEqual(["column", "row"]);
     const [top, bottom] = await browser.execute(() => ["p1", "p2"].map((id) => document.querySelector(`.orca-pane[data-pane="${id}"]`)!.getBoundingClientRect().top));
     expect(top).toBeLessThan(bottom);
+  });
+
+  // The pointer on the divider `index` (in the order of the document), as the page gets it: for each step its kind, with the pointer `by` from where it was pressed (a share of the size the two nodes beside the divider have together, along the split). The press goes to the divider, the rest to the document.
+  const onDivider = (index: number, by: number, steps: ("pointerdown" | "pointermove" | "pointerup" | "pointercancel")[]) =>
+    browser.execute(
+      (i, once, share, types) => {
+        if (!window.__e2e_once__(once)) return;
+        const bar = document.querySelectorAll<HTMLElement>(".orca-divider")[i];
+        const along = bar.parentElement!.dataset.direction === "row";
+        const a = bar.previousElementSibling!.getBoundingClientRect();
+        const b = bar.nextElementSibling!.getBoundingClientRect();
+        const box = bar.getBoundingClientRect();
+        const far = (along ? a.width + b.width : a.height + b.height) * share;
+        for (const type of types) {
+          const d = type === "pointerdown" ? 0 : far;
+          const init = { bubbles: true, cancelable: true, clientX: box.left + box.width / 2 + (along ? d : 0), clientY: box.top + box.height / 2 + (along ? 0 : d), button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 9, isPrimary: true };
+          (type === "pointerdown" ? bar : document).dispatchEvent(new PointerEvent(type, init));
+        }
+      },
+      index,
+      onceId(),
+      by,
+      steps,
+    );
+  // The width and the height of each pane, in the order of their ids.
+  const sizesOf = (...ids: string[]) =>
+    browser.execute((names) => names.map((id) => document.querySelector(`.orca-pane[data-pane="${id}"]`)!.getBoundingClientRect()).map((r) => [r.width, r.height] as [number, number]), ids);
+  const three = (sizes?: number[]) => layout(split("row", [pane("p1", [claude]), pane("p2", [zsh]), pane("p3", [bash])], sizes), "p1");
+
+  it("gives each pane of a split its share of the size, with a divider between two panes", async () => {
+    await openSplit(overview(), three([0.5, 0.2, 0.3]));
+    expect(await count(".orca-divider")).toBe(2);
+    await expect($(".orca-divider")).toHaveAttribute("role", "separator");
+    await expect($(".orca-divider")).toHaveAttribute("aria-orientation", "vertical");
+    const [[a], [b], [c]] = await sizesOf("p1", "p2", "p3");
+    expect(a / (a + b + c)).toBeCloseTo(0.5, 2);
+    expect(b / (a + b + c)).toBeCloseTo(0.2, 2);
+    expect(c / (a + b + c)).toBeCloseTo(0.3, 2);
+  });
+
+  it("changes the two panes beside a dragged divider and no other, asks for the ratio at the release, and draws the sizes of the answer", async () => {
+    await openSplit(overview(), three());
+    const [[a], [b], [c]] = await sizesOf("p1", "p2", "p3");
+    // The pointer goes right by a quarter of what the first two panes have: the first has three quarters of it while the divider is held.
+    await onDivider(0, 0.25, ["pointerdown", "pointermove"]);
+    await browser.waitUntil(async () => (await sizesOf("p1"))[0][0] > a + 1, { timeoutMsg: "the pane never followed the pointer" });
+    const [[held], [next], [other]] = await sizesOf("p1", "p2", "p3");
+    expect(held / (a + b)).toBeCloseTo(0.75, 2);
+    expect(held + next).toBeCloseTo(a + b, 0);
+    expect(other).toBeCloseTo(c, 0);
+    expect((await callsOf("orca_panes")).filter((call) => (call as { op: unknown }).op !== null)).toEqual([]);
+    const panes = await mock("orca_panes", three([0.5, 1 / 6, 1 / 3]));
+    await onDivider(0, 0.25, ["pointerup"]);
+    const [call] = (await waitForCalls(panes)) as { op: { share: number } }[];
+    expect(call).toMatchObject({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "resize", before: "p1", after: "p2" } });
+    expect(call.op.share).toBeCloseTo(0.75, 2);
+    await browser.waitUntil(
+      async () => {
+        const [[first], [second], [third]] = await sizesOf("p1", "p2", "p3");
+        return Math.abs(first / (first + second + third) - 0.5) < 0.01;
+      },
+      { timeoutMsg: "the answer's sizes never drew" },
+    );
+  });
+
+  it("leaves a pane its least share under a dragged divider, puts the sizes back at a cancel, and moves the divider of a column up and down", async () => {
+    await openSplit(overview(), layout(column(pane("p1", [claude, bash]), pane("p2", [zsh])), "p1"));
+    await expect($(".orca-divider")).toHaveAttribute("aria-orientation", "horizontal");
+    const [[, a], [, b]] = await sizesOf("p1", "p2");
+    // Far past the top: the first pane keeps a tenth of the split.
+    await onDivider(0, -0.9, ["pointerdown", "pointermove"]);
+    await browser.waitUntil(async () => (await sizesOf("p1"))[0][1] < a - 1, { timeoutMsg: "the pane never followed the pointer" });
+    expect((await sizesOf("p1"))[0][1] / (a + b)).toBeCloseTo(0.1, 2);
+    await onDivider(0, -0.9, ["pointercancel"]);
+    await browser.waitUntil(async () => Math.abs((await sizesOf("p1"))[0][1] - a) < 1, { timeoutMsg: "the sizes never came back" });
+    const panes = await mock("orca_panes", layout(split("column", [pane("p1", [claude, bash]), pane("p2", [zsh])], [0.1, 0.9]), "p1"));
+    await onDivider(0, -0.9, ["pointerdown", "pointermove", "pointerup"]);
+    const [call] = (await waitForCalls(panes)) as { op: { share: number } }[];
+    expect(call).toMatchObject({ op: { kind: "resize", before: "p1", after: "p2" } });
+    expect(call.op.share).toBeCloseTo(0.1, 5);
   });
 
   it("splits by the right-click menu of a tab: 「右に分割」 and 「下に分割」 ask for the tab at the right and at the bottom of its pane", async () => {
@@ -3582,14 +3664,14 @@ describe("orca: files and editor (A-18)", () => {
 
   it("puts the button in the pane in the top right corner only", async () => {
     const two = orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] });
-    const side = layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", [zsh])] }, "p1");
+    const side = layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", [zsh])], sizes: [0.5, 0.5] }, "p1");
     await openOrca(two, { orca_terminal_read: ["$"], orca_panes: side });
     await project("example-app").click();
     await waitForCount(".orca-pane", 2);
     await expect($('.orca-pane[data-pane="p1"] .orca-files-toggle')).not.toBeDisplayed();
     await expect($('.orca-pane[data-pane="p2"] .orca-files-toggle')).toBeDisplayed();
     expect(await toggleBoxes()).toHaveLength(1);
-    const stacked = layout({ kind: "split", direction: "column", children: [pane("p1", [claude]), pane("p2", [zsh])] }, "p1");
+    const stacked = layout({ kind: "split", direction: "column", children: [pane("p1", [claude]), pane("p2", [zsh])], sizes: [0.5, 0.5] }, "p1");
     await openOrca(two, { orca_terminal_read: ["$"], orca_panes: stacked });
     await project("example-app").click();
     await waitForCount(".orca-pane", 2);

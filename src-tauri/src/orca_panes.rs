@@ -1,6 +1,7 @@
 //! A-17: how the work pane of the Orca screen is split into panes, each with its own tabs.
 //!
 //! The layout of a project is a tree: a pane (its tabs, in order, and the one selected) or a split of two or more nodes, side by side (`Row`) or one above the other (`Column`).
+//! The nodes of a split each have a share of its size (`sizes`, which add up to 1), which the user changes by dragging the divider between two of them; a file saved before the shares were kept has none, and is read as equal shares.
 //! It is saved for each project of each target (this machine, or a saved environment) in `orca-panes.json` in the app config directory.
 //! The file holds only tab ids that the screen made up (`claude:{pane key}`, `orca:{handle}`, `file:{n}` for a file open in the editor of A-18, `diff:{n}` for the diff of a file, A-24) and project keys of Orca, no token and no screen content or path of a file.
 //! A terminal whose kind changes (a plain terminal where Claude starts, or Claude's where the shell is back) has a new tab id but the same Orca handle, so it keeps its place in its pane and its selection.
@@ -26,6 +27,10 @@ const VERSION: u32 = 1;
 const MAX_DEPTH: usize = 32;
 const MAX_TABS: usize = 500;
 const MAX_TEXT: usize = 512;
+/// The least share of its split that a drag of a divider leaves a node.
+const MIN_SHARE: f64 = 0.1;
+/// Shares that add up to 1 within this are kept as they are, so that a read does not change, and save, a layout by rounding.
+const SUM_SLACK: f64 = 1e-9;
 /// The file is read and written in turn by the commands of the screen, which may overlap.
 static LOCK: Mutex<()> = Mutex::new(());
 
@@ -70,6 +75,9 @@ pub enum PaneNode {
     Split {
         direction: Direction,
         children: Vec<PaneNode>,
+        /// The share of the split's size that each child has, in the order of `children`; they add up to 1. A file saved before the shares were kept has none: equal shares.
+        #[serde(default)]
+        sizes: Vec<f64>,
     },
 }
 
@@ -103,9 +111,41 @@ pub enum PaneOp {
         pane: String,
         edge: Edge,
     },
+    /// The divider between two nodes of a split was dragged. `before` is a pane of the node before it and `after` a pane of the node after it (any pane of each), and `share` is the part the node before it takes of the size the two have together (0 to 1). No other node changes.
+    Resize {
+        before: String,
+        after: String,
+        share: f64,
+    },
 }
 
 // ---- the tree ----
+
+/// Equal shares for `n` nodes.
+fn equal(n: usize) -> Vec<f64> {
+    vec![1.0 / n as f64; n]
+}
+
+/// The shares of a split of `n` nodes as they were saved, or equal ones when they are not one positive number for each node.
+fn shares(sizes: Vec<f64>, n: usize) -> Vec<f64> {
+    if sizes.len() == n && sizes.iter().all(|s| s.is_finite() && *s > 0.0) {
+        sizes
+    } else {
+        equal(n)
+    }
+}
+
+/// The shares scaled so that they add up to 1 (each keeps its proportion), which gives the share of a node that left to the rest.
+fn scaled(sizes: Vec<f64>) -> Vec<f64> {
+    let sum: f64 = sizes.iter().sum();
+    if (sum - 1.0).abs() <= SUM_SLACK {
+        sizes
+    } else if sum.is_finite() && sum > 0.0 {
+        sizes.into_iter().map(|s| s / sum).collect()
+    } else {
+        equal(sizes.len())
+    }
+}
 
 fn each_pane_mut(
     node: &mut PaneNode,
@@ -166,6 +206,7 @@ fn take_tab(node: &mut PaneNode, tab: &str) {
 }
 
 /// Puts a new pane with `new` beside the pane `target`, before or after it. Beside a split of the same direction it joins that split.
+/// The new pane takes half of the size the target had, and the target keeps the other half.
 fn insert_beside(
     node: &mut PaneNode,
     target: &str,
@@ -179,6 +220,7 @@ fn insert_beside(
             PaneNode::Split {
                 direction,
                 children: vec![],
+                sizes: vec![],
             },
         );
         let children = if after {
@@ -189,12 +231,14 @@ fn insert_beside(
         *node = PaneNode::Split {
             direction,
             children,
+            sizes: equal(2),
         };
         return true;
     }
     let PaneNode::Split {
         direction: own,
         children,
+        sizes,
     } = node
     else {
         return false;
@@ -203,6 +247,11 @@ fn insert_beside(
         .iter()
         .position(|c| matches!(c, PaneNode::Pane { id, .. } if id == target));
     if let (Some(at), true) = (at, *own == direction) {
+        // Shares that are not one for each node are left for `normalize`, which makes them equal.
+        if sizes.len() == children.len() {
+            sizes[at] /= 2.0;
+            sizes.insert(at, sizes[at]);
+        }
         children.insert(if after { at + 1 } else { at }, new);
         return true;
     }
@@ -222,7 +271,34 @@ fn insert_beside(
     false
 }
 
+/// Sets the shares of the two nodes on the sides of a divider: the one that holds the pane `before` and the next one, which holds `after`, in the deepest split that holds both. The node before the divider takes `share` of what the two have together, each keeps at least `MIN_SHARE` of the split (half of what the two have, when that is less), and no other node changes. A divider that is not there changes nothing.
+fn resize(node: &mut PaneNode, before: &str, after: &str, share: f64) {
+    let PaneNode::Split {
+        children, sizes, ..
+    } = node
+    else {
+        return;
+    };
+    let holds = |pane: &str| {
+        children
+            .iter()
+            .position(|c| panes(c).iter().any(|(id, _)| *id == pane))
+    };
+    let (Some(i), Some(j)) = (holds(before), holds(after)) else {
+        return;
+    };
+    if i == j {
+        resize(&mut children[i], before, after, share);
+    } else if j == i + 1 && sizes.len() == children.len() && share.is_finite() {
+        let both = sizes[i] + sizes[j];
+        let least = MIN_SHARE.min(both / 2.0);
+        sizes[i] = (share * both).clamp(least, both - least);
+        sizes[j] = both - sizes[i];
+    }
+}
+
 /// Closes the panes with no tab, takes a split of one node for the node, and merges a split into its parent of the same direction.
+/// A split's shares are made equal when they are not one positive number for each node; a node that closes gives its share to the rest in proportion, and the nodes of a merged split divide the share it had.
 fn normalize(node: PaneNode) -> Option<PaneNode> {
     match node {
         PaneNode::Pane { id, tabs, selected } => {
@@ -237,15 +313,26 @@ fn normalize(node: PaneNode) -> Option<PaneNode> {
         PaneNode::Split {
             direction,
             children,
+            sizes,
         } => {
+            let sizes = shares(sizes, children.len());
             let mut flat = Vec::new();
-            for child in children.into_iter().filter_map(normalize) {
-                match child {
-                    PaneNode::Split {
+            let mut flat_sizes = Vec::new();
+            for (child, share) in children.into_iter().zip(sizes) {
+                match normalize(child) {
+                    None => {}
+                    Some(PaneNode::Split {
                         direction: inner,
                         children,
-                    } if inner == direction => flat.extend(children),
-                    other => flat.push(other),
+                        sizes,
+                    }) if inner == direction => {
+                        flat_sizes.extend(sizes.iter().map(|s| s * share));
+                        flat.extend(children);
+                    }
+                    Some(other) => {
+                        flat.push(other);
+                        flat_sizes.push(share);
+                    }
                 }
             }
             match flat.len() {
@@ -254,6 +341,7 @@ fn normalize(node: PaneNode) -> Option<PaneNode> {
                 _ => Some(PaneNode::Split {
                     direction,
                     children: flat,
+                    sizes: scaled(flat_sizes),
                 }),
             }
         }
@@ -462,6 +550,11 @@ pub fn apply(mut layout: PaneLayout, op: &PaneOp) -> PaneLayout {
                 layout.focus = Some(id);
             }
         }
+        PaneOp::Resize {
+            before,
+            after,
+            share,
+        } => resize(root, before, after, *share),
     }
     layout.root = layout.root.take().and_then(normalize);
     layout
@@ -580,6 +673,18 @@ fn check(
             check_text("タブ", tab)?;
             check_text("ペイン", pane)
         }
+        Some(PaneOp::Resize {
+            before,
+            after,
+            share,
+        }) => {
+            check_text("ペイン", before)?;
+            check_text("ペイン", after)?;
+            if !(0.0..=1.0).contains(share) {
+                return Err("比率が正しくありません".into());
+            }
+            Ok(())
+        }
         None => Ok(()),
     }
 }
@@ -636,11 +741,42 @@ mod tests {
         }
     }
 
+    /// A split whose children share its size equally.
     fn split(direction: Direction, children: Vec<PaneNode>) -> PaneNode {
+        let sizes = equal(children.len());
         PaneNode::Split {
             direction,
             children,
+            sizes,
         }
+    }
+
+    fn sized(direction: Direction, children: Vec<PaneNode>, sizes: &[f64]) -> PaneNode {
+        PaneNode::Split {
+            direction,
+            children,
+            sizes: sizes.to_vec(),
+        }
+    }
+
+    fn resize(before: &str, after: &str, share: f64) -> PaneOp {
+        PaneOp::Resize {
+            before: before.into(),
+            after: after.into(),
+            share,
+        }
+    }
+
+    /// The shares of the split at the root.
+    fn sizes_of(layout: &PaneLayout) -> Vec<f64> {
+        match layout.root.as_ref() {
+            Some(PaneNode::Split { sizes, .. }) => sizes.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn close(got: &[f64], want: &[f64]) -> bool {
+        got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-9)
     }
 
     fn layout(root: PaneNode, focus: &str) -> PaneLayout {
@@ -779,15 +915,17 @@ mod tests {
             ],
         );
         let got = normalize(tangled).unwrap();
+        // The inner row had a third of the outer one, the column a third, and the empty pane's third is shared out.
         assert_eq!(
             got,
-            split(
+            sized(
                 Direction::Row,
                 vec![
                     pane("p1", &["a"], "a"),
                     pane("p2", &["b"], "b"),
                     pane("p3", &["c"], "c")
-                ]
+                ],
+                &[0.25, 0.25, 0.5]
             )
         );
         assert_eq!(
@@ -900,15 +1038,17 @@ mod tests {
             "p1",
         );
         let got = apply(two.clone(), &mv("b", "p1", Edge::Right));
+        // The new pane takes half of the pane it was split from, and the other pane keeps its size.
         assert_eq!(
             got.root,
-            Some(split(
+            Some(sized(
                 Direction::Row,
                 vec![
                     pane("p1", &["a"], "a"),
                     pane("p3", &["b"], "b"),
                     pane("p2", &["c"], "c")
-                ]
+                ],
+                &[0.25, 0.25, 0.5]
             ))
         );
         let got = apply(two, &mv("b", "p1", Edge::Bottom));
@@ -1230,6 +1370,13 @@ mod tests {
         )
         .is_err());
         assert!(check(None, "proj", &ok, &no, Some(&mv("a", "", Edge::Left))).is_err());
+        assert!(check(None, "proj", &ok, &no, Some(&resize("p1", "p2", 0.0))).is_ok());
+        assert!(check(None, "proj", &ok, &no, Some(&resize("p1", "p2", 1.0))).is_ok());
+        assert!(check(None, "proj", &ok, &no, Some(&resize("", "p2", 0.5))).is_err());
+        assert!(check(None, "proj", &ok, &no, Some(&resize("p1", "", 0.5))).is_err());
+        assert!(check(None, "proj", &ok, &no, Some(&resize("p1", "p2", f64::NAN))).is_err());
+        assert!(check(None, "proj", &ok, &no, Some(&resize("p1", "p2", -0.1))).is_err());
+        assert!(check(None, "proj", &ok, &no, Some(&resize("p1", "p2", 1.1))).is_err());
         assert!(check(
             None,
             "proj",
@@ -1273,6 +1420,213 @@ mod tests {
         assert_eq!(json["root"]["kind"], "split");
         assert_eq!(json["root"]["direction"], "column");
         assert_eq!(json["root"]["children"][0]["kind"], "pane");
+        assert_eq!(json["root"]["sizes"], serde_json::json!([0.5, 0.5]));
         assert_eq!(json["focus"], "p1");
+        let op: PaneOp =
+            serde_json::from_str(r#"{"kind":"resize","before":"p1","after":"p2","share":0.25}"#)
+                .unwrap();
+        assert_eq!(op, resize("p1", "p2", 0.25));
+    }
+
+    /// Three panes side by side, a quarter, a quarter and a half.
+    fn three() -> PaneLayout {
+        layout(
+            sized(
+                Direction::Row,
+                vec![
+                    pane("p1", &["a"], "a"),
+                    pane("p2", &["b"], "b"),
+                    pane("p3", &["c"], "c"),
+                ],
+                &[0.25, 0.25, 0.5],
+            ),
+            "p1",
+        )
+    }
+
+    #[test]
+    fn a_divider_dragged_changes_the_two_nodes_beside_it_and_no_other() {
+        // The second pane takes 0.2 of the 0.75 it has with the third.
+        let got = apply(three(), &resize("p2", "p3", 0.2));
+        assert!(close(&sizes_of(&got), &[0.25, 0.15, 0.6]), "{got:?}");
+        assert_eq!(got.focus.as_deref(), Some("p1"));
+        let got = apply(three(), &resize("p1", "p2", 0.5));
+        assert_eq!(sizes_of(&got), vec![0.25, 0.25, 0.5]);
+    }
+
+    #[test]
+    fn a_node_keeps_the_least_share_and_two_that_are_smaller_share_what_they_have() {
+        let got = apply(three(), &resize("p2", "p3", 0.0));
+        assert!(
+            close(&sizes_of(&got), &[0.25, MIN_SHARE, 0.75 - MIN_SHARE]),
+            "{got:?}"
+        );
+        let got = apply(three(), &resize("p2", "p3", 1.0));
+        assert!(
+            close(&sizes_of(&got), &[0.25, 0.75 - MIN_SHARE, MIN_SHARE]),
+            "{got:?}"
+        );
+        // Two nodes with less than twice the least share between them are made equal.
+        let narrow = layout(
+            sized(
+                Direction::Column,
+                vec![
+                    pane("p1", &["a"], "a"),
+                    pane("p2", &["b"], "b"),
+                    pane("p3", &["c"], "c"),
+                ],
+                &[0.03, 0.09, 0.88],
+            ),
+            "p1",
+        );
+        let got = apply(narrow, &resize("p1", "p2", 0.9));
+        assert!(close(&sizes_of(&got), &[0.06, 0.06, 0.88]), "{got:?}");
+    }
+
+    #[test]
+    fn a_divider_is_named_by_any_pane_on_each_side_and_one_that_is_not_there_changes_nothing() {
+        // A column on the left of a pane: the divider of the row is between any pane of the column and p3.
+        let nested = || {
+            layout(
+                split(
+                    Direction::Row,
+                    vec![
+                        split(
+                            Direction::Column,
+                            vec![pane("p1", &["a"], "a"), pane("p2", &["b"], "b")],
+                        ),
+                        pane("p3", &["c"], "c"),
+                    ],
+                ),
+                "p1",
+            )
+        };
+        let got = apply(nested(), &resize("p2", "p3", 0.7));
+        assert!(close(&sizes_of(&got), &[0.7, 0.3]), "{got:?}");
+        // The divider inside the column.
+        let got = apply(nested(), &resize("p1", "p2", 0.25));
+        assert_eq!(sizes_of(&got), vec![0.5, 0.5]);
+        match got.root.unwrap() {
+            PaneNode::Split { children, .. } => match &children[0] {
+                PaneNode::Split { sizes, .. } => assert!(close(sizes, &[0.25, 0.75]), "{sizes:?}"),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+        // The wrong order, panes that are not beside each other, one pane twice, an unknown pane, a share that is no number, no split.
+        assert_eq!(apply(three(), &resize("p2", "p1", 0.7)), three());
+        assert_eq!(apply(three(), &resize("p1", "p3", 0.7)), three());
+        assert_eq!(apply(three(), &resize("p1", "p1", 0.7)), three());
+        assert_eq!(apply(three(), &resize("p1", "p9", 0.7)), three());
+        assert_eq!(apply(three(), &resize("p9", "p2", 0.7)), three());
+        assert_eq!(apply(three(), &resize("p1", "p2", f64::NAN)), three());
+        let one = layout(pane("p1", &["a"], "a"), "p1");
+        assert_eq!(apply(one.clone(), &resize("p1", "p1", 0.7)), one);
+    }
+
+    #[test]
+    fn a_pane_that_closes_gives_its_share_to_the_rest_in_proportion() {
+        let got = reconcile(three(), &ids(&["b", "c"]));
+        assert!(close(&sizes_of(&got), &[1.0 / 3.0, 2.0 / 3.0]), "{got:?}");
+        // A tab that moves out of its pane closes it too.
+        let got = apply(three(), &mv("a", "p2", Edge::Center));
+        assert!(close(&sizes_of(&got), &[1.0 / 3.0, 2.0 / 3.0]), "{got:?}");
+    }
+
+    #[test]
+    fn a_new_pane_takes_half_of_the_pane_it_is_split_from() {
+        let saved = layout(
+            sized(
+                Direction::Row,
+                vec![pane("p1", &["a", "b"], "a"), pane("p2", &["c"], "c")],
+                &[0.8, 0.2],
+            ),
+            "p1",
+        );
+        let got = apply(saved.clone(), &mv("b", "p1", Edge::Left));
+        assert!(close(&sizes_of(&got), &[0.4, 0.4, 0.2]), "{got:?}");
+        // The other direction nests: the outer shares stay, and the new split is halves.
+        let got = apply(saved, &mv("b", "p1", Edge::Bottom));
+        assert_eq!(sizes_of(&got), vec![0.8, 0.2]);
+        match got.root.unwrap() {
+            PaneNode::Split { children, .. } => match &children[0] {
+                PaneNode::Split { sizes, .. } => assert_eq!(sizes, &vec![0.5, 0.5]),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_split_merged_into_its_parent_gives_its_nodes_their_part_of_its_share() {
+        let tangled = sized(
+            Direction::Row,
+            vec![
+                sized(
+                    Direction::Row,
+                    vec![pane("p1", &["a"], "a"), pane("p2", &["b"], "b")],
+                    &[0.25, 0.75],
+                ),
+                pane("p3", &["c"], "c"),
+            ],
+            &[0.4, 0.6],
+        );
+        match normalize(tangled).unwrap() {
+            PaneNode::Split { sizes, .. } => assert!(close(&sizes, &[0.1, 0.3, 0.6]), "{sizes:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn shares_that_are_missing_or_wrong_are_made_equal_and_others_are_scaled_to_one() {
+        let two = |sizes: &[f64]| {
+            sized(
+                Direction::Row,
+                vec![pane("p1", &["a"], "a"), pane("p2", &["b"], "b")],
+                sizes,
+            )
+        };
+        let shares = |sizes: &[f64]| match normalize(two(sizes)).unwrap() {
+            PaneNode::Split { sizes, .. } => sizes,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(shares(&[]), vec![0.5, 0.5]);
+        assert_eq!(shares(&[1.0]), vec![0.5, 0.5]);
+        assert_eq!(shares(&[0.2, 0.3, 0.5]), vec![0.5, 0.5]);
+        assert_eq!(shares(&[0.0, 1.0]), vec![0.5, 0.5]);
+        assert_eq!(shares(&[-0.5, 1.5]), vec![0.5, 0.5]);
+        assert_eq!(shares(&[f64::NAN, 0.5]), vec![0.5, 0.5]);
+        assert_eq!(shares(&[f64::INFINITY, 0.5]), vec![0.5, 0.5]);
+        assert!(close(&shares(&[3.0, 1.0]), &[0.75, 0.25]));
+        // Shares that are one already are kept as they are, so a read saves nothing.
+        assert_eq!(shares(&[0.3, 0.7]), vec![0.3, 0.7]);
+    }
+
+    #[test]
+    fn a_saved_file_with_no_shares_is_read_as_equal_and_a_ratio_comes_back() {
+        let no = Handles::default();
+        let dir = temp_dir("sizes");
+        std::fs::write(
+            dir.join(FILE),
+            r#"{"version":1,"entries":[{"environment":null,"project":"proj","layout":{"root":{"kind":"split","direction":"row","children":[{"kind":"pane","id":"p1","tabs":["a"],"selected":"a"},{"kind":"pane","id":"p2","tabs":["b"],"selected":"b"}]},"focus":"p1"}}]}"#,
+        )
+        .unwrap();
+        let live = ids(&["a", "b"]);
+        let got = update(&dir, None, "proj", &live, &no, None).unwrap();
+        assert_eq!(sizes_of(&got), vec![0.5, 0.5]);
+        let got = update(
+            &dir,
+            None,
+            "proj",
+            &live,
+            &no,
+            Some(&resize("p1", "p2", 0.7)),
+        )
+        .unwrap();
+        assert!(close(&sizes_of(&got), &[0.7, 0.3]), "{got:?}");
+        // Read again with no operation: the ratio that was saved.
+        assert_eq!(update(&dir, None, "proj", &live, &no, None).unwrap(), got);
+        assert_eq!(load(&dir).entries[0].layout, got);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

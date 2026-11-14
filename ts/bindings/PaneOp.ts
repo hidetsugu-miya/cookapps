@@ -4,4 +4,4 @@ import type { Edge } from "./Edge";
 /**
  * What the user did to the layout.
  */
-export type PaneOp = { "kind": "focus", pane: string, } | { "kind": "select", tab: string, } | { "kind": "move", tab: string, pane: string, edge: Edge, };
+export type PaneOp = { "kind": "focus", pane: string, } | { "kind": "select", tab: string, } | { "kind": "move", tab: string, pane: string, edge: Edge, } | { "kind": "resize", before: string, after: string, share: number, };

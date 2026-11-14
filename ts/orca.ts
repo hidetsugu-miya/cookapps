@@ -501,7 +501,7 @@ function emptyText(tabs: Tab[], tab: Tab | undefined) {
 // The tree of the layout for drawing: each pane with the tabs it holds that the list still has (a tab that left shows no more before Rust's next answer), and the one it shows.
 // A tab id the layout holds from before a terminal changed kind is taken as the tab with the same handle (`find`) until Rust's answer.
 function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled: boolean, find: (id: string) => Tab | undefined): TreeModel {
-  if (node.kind === "split") return { kind: "split", direction: node.direction, children: node.children.map((c) => treeOf(c, tabs, focus, plusDisabled, find)) };
+  if (node.kind === "split") return { kind: "split", direction: node.direction, children: node.children.map((c) => treeOf(c, tabs, focus, plusDisabled, find)), sizes: node.sizes };
   const mine = [...new Set(node.tabs.flatMap((id) => find(id) ?? []))];
   const dirty = dirtyIds();
   const selected = find(node.selected);
@@ -1205,6 +1205,7 @@ export function initOrca() {
     list: toggleList,
     focus: focusPane,
     move: (tab, pane, edge) => runPaneOp({ kind: "move", tab, pane, edge }),
+    resize: (before, after, share) => runPaneOp({ kind: "resize", before, after, share }),
     menu: openTabMenu,
   });
   load("full");

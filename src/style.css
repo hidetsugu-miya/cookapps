@@ -950,9 +950,19 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-split-node { display: flex; min-width: 0; min-height: 0; }
 .orca-split-node[data-direction="row"] { flex-direction: row; }
 .orca-split-node[data-direction="column"] { flex-direction: column; }
-.orca-split-node > * { flex: 1 1 0; min-width: 0; min-height: 0; }
-.orca-split-node[data-direction="row"] > * + * { border-left: 1px solid var(--line); }
-.orca-split-node[data-direction="column"] > * + * { border-top: 1px solid var(--line); }
+/* Each node of a split is as large as its share of it, which `ts/orca-pane-tree.ts` sets as `flex-grow`. */
+.orca-split-node > :not(.orca-divider) { flex: 1 1 0; min-width: 0; min-height: 0; }
+/* The divider between two nodes of a split, which is dragged to change their sizes (A-17): drawn as `.split-bar` is, lying down in a column. */
+.orca-divider { flex: none; box-sizing: border-box; display: flex; align-items: center; justify-content: center; background: var(--bar); touch-action: none; }
+.orca-split-node[data-direction="row"] > .orca-divider { width: 7px; border-left: 1px solid var(--line); cursor: col-resize; }
+.orca-split-node[data-direction="column"] > .orca-divider { height: 7px; border-top: 1px solid var(--line); cursor: row-resize; }
+.orca-divider span { border-radius: 2px; background: var(--chip-line); }
+.orca-split-node[data-direction="row"] > .orca-divider span { width: 3px; height: 32px; }
+.orca-split-node[data-direction="column"] > .orca-divider span { width: 32px; height: 3px; }
+.orca-divider:hover span, .orca-divider[data-dragging] span { background: var(--accent-dim); }
+#orca-panes[data-resizing] { user-select: none; -webkit-user-select: none; }
+#orca-panes[data-resizing="row"], #orca-panes[data-resizing="row"] * { cursor: col-resize !important; }
+#orca-panes[data-resizing="column"], #orca-panes[data-resizing="column"] * { cursor: row-resize !important; }
 .orca-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #orca-panes[data-multi="true"] .orca-pane[data-focused="true"] .orca-tabbar { box-shadow: inset 0 2px 0 var(--accent); }
 .orca-tabbar { flex: none; display: flex; align-items: center; min-height: max(var(--header-h), calc(32px * var(--fs))); box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }

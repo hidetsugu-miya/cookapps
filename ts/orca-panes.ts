@@ -64,7 +64,7 @@ export function forgetPanes() {
 // Makes a press (a pane gets the focus, a tab is selected in its pane) on the layout held, as Rust will: nothing changes when the layout does not hold the tab or the pane.
 export function applyLocal(target: string | null, project: string, op: PaneOp) {
   const layout = layouts.get(keyOf(target, project));
-  if (!layout || op.kind === "move") return;
+  if (!layout || op.kind === "move" || op.kind === "resize") return;
   const panes = panesOf(layout.root);
   const pane = op.kind === "focus" ? panes.find((p) => p.id === op.pane) : panes.find((p) => p.tabs.includes(op.tab));
   if (!pane) return;
