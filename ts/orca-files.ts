@@ -159,8 +159,8 @@ async function listDir(here: FilesContext, dir: string, ignored: boolean): Promi
   return { entries: names.map((name) => ({ name, path: name, isDirectory: false, ignored: false })), total: names.length };
 }
 
-// Reads the folder `dir`. With `quiet` (the clock, and a branch that changed outside the app) a read that fails says nothing and keeps what the folder shows, when it was read before.
-async function readDir(dir: string, quiet = false) {
+// Reads the folder `dir`. With `quiet` (the clock, and a branch that changed outside the app) a read that fails says nothing and keeps what the folder shows, when it was read before. With `clock` (the clock alone) a read that finds the entries held asks no ignore marks.
+async function readDir(dir: string, quiet = false, clock = false) {
   const here = context;
   if (here === null) return;
   const mine = generation;
@@ -188,6 +188,8 @@ async function readDir(dir: string, quiet = false) {
   if (held?.error === null && next.error === null && was != null && now !== null && was.total === now.total && was.entries.length === now.entries.length && was.entries.every((e, i) => e.path === now.entries[i].path && e.isDirectory === now.entries[i].isDirectory)) {
     next = { ...next, dir: was };
     listings.set(dir, next);
+    // The clock does not ask git again for a folder that holds what it held: its marks are asked for at the next read that is not the clock's.
+    if (clock) return;
   } else {
     listings.set(dir, next);
     version++;
@@ -199,18 +201,18 @@ async function readDir(dir: string, quiet = false) {
 // How many folders a read of the open folders takes at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).
 const reads = (here: FilesContext) => (here.target === null ? 16 : 8);
 
-// Reads the root, and when it is read the folders that are open again, side by side. The root goes first alone, so that the check of the worktree that its read may start is done once, not once for each folder read at the same time. A folder that was read and is closed is dropped, so that it is read when it is opened next. Another worktree's tree ends it. `quiet`: see `readDir`.
-async function reload(quiet = false) {
+// Reads the root, and when it is read the folders that are open again, side by side. The root goes first alone, so that the check of the worktree that its read may start is done once, not once for each folder read at the same time. A folder that was read and is closed is dropped, so that it is read when it is opened next. Another worktree's tree ends it. `quiet` and `clock`: see `readDir`.
+async function reload(quiet = false, clock = false) {
   const here = context;
   if (here === null) return;
   const mine = generation;
   const queue = [...expanded];
   for (const dir of [...listings.keys()]) if (dir !== "" && !queue.includes(dir)) listings.delete(dir);
-  await readDir("", quiet);
+  await readDir("", quiet, clock);
   const worker = async () => {
     for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
       if (mine !== generation) return;
-      await readDir(dir, quiet);
+      await readDir(dir, quiet, clock);
     }
   };
   await Promise.all(Array.from({ length: Math.min(queue.length, reads(here)) }, worker));
@@ -223,7 +225,7 @@ export function refreshFiles(clock = false) {
   if (showsHistory()) {
     if (clock) void checkHistory();
     else refreshHistory();
-  } else if (![...listings.values()].some((l) => l.busy)) void reload(clock);
+  } else if (![...listings.values()].some((l) => l.busy)) void reload(clock, clock);
 }
 
 // A scratchpad file was made in `.orca/scratchpad` of the worktree at `path` (A-29): when the tree is that worktree's, the folders on the way to it that it has read are read again, the root first, so that a folder that was not there shows now. With `host` the file was made in the scratchpad folder of that SSH host (A-30), and its list is read again when the tree is that folder's.

@@ -1234,7 +1234,11 @@ export function initOrca() {
     list: toggleList,
     focus: focusPane,
     move: (tab, pane, edge) => runPaneOp({ kind: "move", tab, pane, edge }),
-    resize: (before, after, share) => runPaneOp({ kind: "resize", before, after, share }),
+    resize: (before, after, share) => {
+      const op: PaneOp = { kind: "resize", before, after, share };
+      if (projectKey !== null && view !== null) applyLocal(view.target, projectKey, op);
+      runPaneOp(op);
+    },
     menu: openTabMenu,
   });
   load("full");

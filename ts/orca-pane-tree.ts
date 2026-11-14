@@ -9,6 +9,7 @@ import type { Edge } from "./bindings/Edge";
 import { tag } from "./dom.js";
 import { FOLDER_SVG } from "./icons.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
+import { MIN_SHARE } from "./orca-panes.js";
 
 const PLUS_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
 // How far from an edge of a pane's body a tab dropped there splits the pane (a share of the body's size), and how far the pointer goes before a press is a drag (px).
@@ -16,8 +17,6 @@ const EDGE_SHARE = 0.25;
 const DRAG_PX = 5;
 // The shares of a split are drawn as `flex-grow`, times this (so that rounding never leaves them under 1, which would leave room unused).
 const GROW = 100;
-// The least share of its split that a divider dragged leaves a node while it is drawn: `MIN_SHARE` of `orca_panes.rs`, which decides the ratio that is kept, so the release does not move the divider.
-const MIN_SHARE = 0.1;
 
 // A pane to draw: its strip's tabs (made only when `key` changed since the last drawing), whether it has the focus, the line under the strip (null: none), whether its terminal shows, whether its editor shows, whether its plus is off, whether the file pane is shown (the button of the pane in the corner is pressed), and whether the list of projects is open (the button of the pane at the left edge shows while it is not).
 export interface PaneModel {

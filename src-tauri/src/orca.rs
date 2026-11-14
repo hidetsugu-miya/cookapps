@@ -1595,18 +1595,91 @@ fn worktree_hosts() -> std::sync::MutexGuard<'static, WorktreeHosts> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The runs that are on their way, by key: a call for a key that has one waits for its answer and runs nothing, so that calls made at the same time for the same key run once. The answer is kept for the calls that waited only, and the next call runs again.
+pub(crate) struct Flights<K, V> {
+    running: Mutex<HashMap<K, Arc<Mutex<Option<V>>>>>,
+}
+
+impl<K, V> Default for Flights<K, V> {
+    fn default() -> Self {
+        Self {
+            running: Mutex::default(),
+        }
+    }
+}
+
+impl<K: std::hash::Hash + Eq + Clone, V: Clone> Flights<K, V> {
+    fn running(&self) -> std::sync::MutexGuard<'_, HashMap<K, Arc<Mutex<Option<V>>>>> {
+        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The answer of `run`, or of the run for `key` that was on its way when this was called. A run that panicked answers nothing, and a call that waited for it runs its own.
+    fn run(&self, key: K, run: impl FnOnce() -> V) -> V {
+        let slot = Arc::new(Mutex::new(None));
+        // The slot is locked before the others can see it, so they wait until the run has answered.
+        let mut answer = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        let on_its_way = match self.running().entry(key.clone()) {
+            std::collections::hash_map::Entry::Occupied(held) => Some(Arc::clone(held.get())),
+            std::collections::hash_map::Entry::Vacant(free) => {
+                free.insert(Arc::clone(&slot));
+                None
+            }
+        };
+        let Some(other) = on_its_way else {
+            // Leaves the table when the run ends, a panic included, before the slot is unlocked.
+            struct Leave<'a, K: std::hash::Hash + Eq, V>(&'a Flights<K, V>, &'a K);
+            impl<K: std::hash::Hash + Eq, V> Drop for Leave<'_, K, V> {
+                fn drop(&mut self) {
+                    let mut running = self
+                        .0
+                        .running
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    running.remove(self.1);
+                }
+            }
+            let _leave = Leave(self, &key);
+            let value = run();
+            *answer = Some(value.clone());
+            return value;
+        };
+        drop(answer);
+        let theirs = other.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        theirs.unwrap_or_else(run)
+    }
+
+    /// How many calls wait for the answer of the run for `key`.
+    #[cfg(test)]
+    fn waiting(&self, key: &K) -> usize {
+        self.running()
+            .get(key)
+            .map_or(0, |slot| Arc::strong_count(slot) - 2)
+    }
+}
+
 /// `worktree_host` for the reads of A-18, with the project key of the worktree: the answer of an earlier one for the same path of the same target is used for `HOST_TTL`, so a folder is not read after a start of the CLI. Nothing is believed that the target's list did not hold when it was asked: the path is checked as it is by `worktree_confirmation`, and the cache holds only what that returned.
+/// The reads that find nothing believed at the same time (the clock reads the tree and each tab shown together) confirm once: the first one asks the list, and the others wait for its answer, a refusal included.
 pub(crate) fn worktree_host_cached(
     path: &str,
     environment: Option<&str>,
 ) -> Result<(String, String), String> {
+    type Confirming = Flights<(Option<String>, String), Result<(String, String), String>>;
+    static CONFIRMING: OnceLock<Confirming> = OnceLock::new();
     check_path(path)?;
     if let Some(confirmed) = worktree_hosts().get(environment, path, Instant::now()) {
         return Ok(confirmed);
     }
-    let (host_id, project) = worktree_confirmation(path, environment)?;
-    worktree_hosts().put(environment, path, (&host_id, &project), Instant::now());
-    Ok((host_id, project))
+    CONFIRMING
+        .get_or_init(Flights::default)
+        .run(WorktreeHosts::key(environment, path), || {
+            // A confirmation that ended between the look above and this run is the one to believe.
+            if let Some(confirmed) = worktree_hosts().get(environment, path, Instant::now()) {
+                return Ok(confirmed);
+            }
+            let (host_id, project) = worktree_confirmation(path, environment)?;
+            worktree_hosts().put(environment, path, (&host_id, &project), Instant::now());
+            Ok((host_id, project))
+        })
 }
 
 /// Throws away what was confirmed for `path` of the target: a call made with it failed, so the next one asks the list again.
@@ -2560,6 +2633,76 @@ mod tests {
         );
         assert_eq!(hosts.get(None, "/work/a", t0 + HOST_TTL), None);
         assert_eq!(hosts.get(None, "/work/a", t0 + HOST_TTL * 2), None);
+    }
+
+    /// Waits until `n` calls wait for the answer of the one that runs for `key`.
+    fn wait_for_waiting(flights: &Flights<&'static str, u32>, key: &'static str, n: usize) {
+        let end = Instant::now() + Duration::from_secs(10);
+        while flights.waiting(&key) != n {
+            assert!(Instant::now() < end, "{n} calls never waited");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn calls_for_the_same_key_at_the_same_time_run_once_and_share_the_answer() {
+        let flights = Flights::<&'static str, u32>::default();
+        let flights = &flights;
+        let runs = std::sync::atomic::AtomicU32::new(0);
+        let (started, has_started) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        let run = || runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let answers = std::thread::scope(|scope| {
+            let first = scope.spawn(move || {
+                flights.run("a", || {
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    run()
+                })
+            });
+            has_started.recv().unwrap();
+            let later: Vec<_> = (0..3)
+                .map(|_| scope.spawn(move || flights.run("a", run)))
+                .collect();
+            wait_for_waiting(flights, "a", 3);
+            // Another key does not wait for it, and runs its own.
+            assert_eq!(flights.run("b", || 100), 100);
+            release.send(()).unwrap();
+            let mut answers = vec![first.join().unwrap()];
+            answers.extend(later.into_iter().map(|t| t.join().unwrap()));
+            answers
+        });
+        assert_eq!(answers, [1, 1, 1, 1]);
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // The answer is kept for the calls that waited only: the next call runs again.
+        assert_eq!(flights.waiting(&"a"), 0);
+        assert_eq!(flights.run("a", run), 2);
+    }
+
+    #[test]
+    fn a_call_that_waited_for_one_that_panicked_runs_its_own() {
+        let flights = Flights::<&'static str, u32>::default();
+        let flights = &flights;
+        let (started, has_started) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let first = scope.spawn(move || {
+                flights.run("a", || {
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    panic!("the run failed")
+                })
+            });
+            has_started.recv().unwrap();
+            let later = scope.spawn(move || flights.run("a", || 7));
+            wait_for_waiting(flights, "a", 1);
+            release.send(()).unwrap();
+            assert!(first.join().is_err());
+            assert_eq!(later.join().unwrap(), 7);
+        });
+        // Nothing of the failed run is left to wait for.
+        assert_eq!(flights.waiting(&"a"), 0);
+        assert_eq!(flights.run("a", || 8), 8);
     }
 
     #[test]

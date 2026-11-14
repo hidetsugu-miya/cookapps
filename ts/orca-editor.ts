@@ -415,14 +415,16 @@ async function load(f: EditorFile) {
 const canReread = (f: EditorFile) => f.read === "ready" && f.host === null && !f.dirty && !f.blocked && !f.held && !f.richPending && f.richSync === null && f.writing === null && f.timer === null && f.save !== "error";
 
 // Reads the file again without a word (the clock, and a tab shown again). The signature of the read says whether the disk still holds the text that was read: when it does, nothing is drawn. Another text takes the place of the one shown, with the caret, the selection and the scroll where they were (the rich view of a Markdown file is drawn again and keeps its scroll).
-// Typing that came while the read was on its way keeps the text as it is, and a failure keeps what is shown.
+// Typing that came while the read was on its way keeps the text as it is, saved by then or not, and a failure keeps what is shown.
 async function reread(f: EditorFile) {
   if (f.rereading || !canReread(f)) return;
   const relative = f.relative;
+  // A save that ends while the read is on its way gives the file another signature: the answer is then older than the disk.
+  const signature = f.signature;
   f.rereading = true;
   try {
     const text = await invoke("orca_file_read", { path: f.path, relative, environment: f.target });
-    if (files.get(f.id) !== f || f.relative !== relative || !canReread(f) || text.signature === f.signature) return;
+    if (files.get(f.id) !== f || f.relative !== relative || !canReread(f) || f.signature !== signature || text.signature === f.signature) return;
     f.signature = text.signature;
     f.crlf = text.crlf;
     if (text.content === f.area.value) return;
