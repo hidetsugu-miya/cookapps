@@ -3,6 +3,18 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.70.0
+
+A-29: the plus of the Orca work pane has a third item, 「スクラッチパッド」, that makes a file for notes in `.orca/scratchpad/` of the worktree and opens it in the editor (#582). A small field under the plus shows the folder and the name, `memo.md` at first; Enter or 「作って開く」 makes the file, and Escape or 「やめる」 closes the field. A name that is taken opens the file that is there, and nothing is overwritten. The item cannot be chosen while the selected row is an SSH host's.
+
+A-18: in the file pane of the Orca screen, the menu of the right button on a folder starts with 「新規ファイル」 and 「新規フォルダー」 (#584). Choosing one opens the folder and shows a field for the name as its first row; Enter makes it, and Escape or a blank name cancels. A new file opens in the editor. The same two items are in the menu of the right button on the empty part of the tree, and make the entry at the top of the worktree. A name that is taken shows 「同じ名前があります」 and makes nothing.
+
+A-18: the menu of the right button on a file or a folder ends with 「削除」, in red (#585). It asks first, 「{name} を完全に削除します。元に戻せません。」, and only 「削除」 deletes: the file, or the folder with everything in it, is deleted for good and does not go to the Trash. The editor tabs of the deleted files close without saving.
+
+A-18: a file or a folder of the file pane can be moved and renamed (#586). Drag its row onto a folder, or onto the empty part of the tree for the top of the worktree; a closed folder opens when the pointer rests on it. Or choose 「移動・名前の変更」 in the menu of the right button: the row becomes a field with the path from the worktree, the name selected, and Enter moves the entry to the path typed, making the folders that are missing. Nothing is overwritten: a place that is taken shows 「同じ名前があります」. An open file keeps its tab and what was typed in it, under the new path.
+
+A-18, A-27: the reload button of the file pane's heading is gone (#583). The files, or the history when it is shown, are read again when the window gets the focus back, and the files after the app's own create, delete and move.
+
 ## v0.69.0
 
 A-23: on the Orca screen, the button that closes and opens the list of projects is at the left end of the list's header while the list is open, and at the left end of the tab strip of the pane at the left edge while it is closed, at the same x, so the button does not move sideways when it is pressed; the bell and the reload stay at the right of the header (#570). This takes back the place of v0.68.1 (#437).
