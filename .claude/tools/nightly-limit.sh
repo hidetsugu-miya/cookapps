@@ -29,25 +29,20 @@ case "${3:-}" in
   *) usage ;;
 esac
 
-# info_of {n}: "{points} {unit}" of the issue, or nothing without a point:* label. The unit is `-` for an issue outside a solo unit,
-# `i{n}` for a point:8 issue, and `m:{milestone title}` for a `solo` part (`i{n}` when it has no milestone). Keep it equal to `solo()` of plan-release.py.
+# info_of {n}: "{points} {session} {unit}" of the issue, or nothing without a point:* label (or when gh fails: the caller then stops with exit 2).
+# session is `s` when the issue has the label `session`, and `-` otherwise. Keep it equal to `session()` of plan-release.py.
+# The unit is `-` for an issue outside a solo unit, `i{n}` for a point:8 issue, and `m:{milestone title}` for a `solo` part (`i{n}` when it has no milestone).
+# Keep it equal to `solo()` of plan-release.py. The unit is the last field, because a milestone title may hold spaces.
 info_of() {
   if [ -n "${NIGHTLY_POINTS_LIST+x}" ]; then
-    printf '%s\n' "$NIGHTLY_POINTS_LIST" | awk -v n="$1" '$1 == n { u = $0; sub(/^[^ ]+ +[^ ]+ */, "", u); print $2, (u == "" ? "-" : u); exit }'
+    printf '%s\n' "$NIGHTLY_POINTS_LIST" | awk -v n="$1" -v s=" $(printf '%s' "${NIGHTLY_SESSION_LIST:-}" | tr ',' ' ') " \
+      '$1 == n { u = $0; sub(/^[^ ]+ +[^ ]+ */, "", u); print $2, (index(s, " " n " ") ? "s" : "-"), (u == "" ? "-" : u); exit }'
   else
     gh issue view "$1" --json labels,milestone --jq '(.labels | map(.name)) as $l
       | ([$l[] | select(startswith("point:")) | ltrimstr("point:")][0] // empty) as $p
       | (if ($l | index("point:8")) then "i'"$1"'" elif ($l | index("solo")) then (if .milestone then "m:" + .milestone.title else "i'"$1"'" end) else "-" end) as $u
-      | "\($p) \($u)"' 2>/dev/null
-  fi
-}
-
-# is_session {n}: does the issue have the label `session`? Keep it equal to `session()` of plan-release.py.
-is_session() {
-  if [ -n "${NIGHTLY_POINTS_LIST+x}" ]; then
-    case " $(printf '%s' "${NIGHTLY_SESSION_LIST:-}" | tr ',' ' ') " in *" $1 "*) return 0 ;; *) return 1 ;; esac
-  else
-    [ "$(gh issue view "$1" --json labels --jq '.labels | map(.name) | index("session") != null' 2>/dev/null)" = true ]
+      | (if ($l | index("session")) then "s" else "-" end) as $s
+      | "\($p) \($s) \($u)"' 2>/dev/null
   fi
 }
 
@@ -57,7 +52,9 @@ if [ -z "$mine_info" ]; then
   exit 2
 fi
 mine="${mine_info%% *}"
-mine_unit="${mine_info#* }"
+mine_rest="${mine_info#* }"
+mine_session="${mine_rest%% *}"
+mine_unit="${mine_rest#* }"
 sum=0
 unit_taken=""
 other_taken=""
@@ -69,6 +66,7 @@ for t in $(printf '%s' "$taken" | tr ',' ' '); do
   fi
   sum=$((sum + ${info%% *}))
   t_unit="${info#* }"
+  t_unit="${t_unit#* }"
   if [ "$t_unit" != "-" ]; then
     unit_taken="$t"
   fi
@@ -79,7 +77,7 @@ for t in $(printf '%s' "$taken" | tr ',' ' '); do
 done
 if [ -z "${NIGHTLY_DEADLINE_EPOCH:-}" ]; then
   : # a session: no unit rule, and `session` changes nothing
-elif is_session "$n"; then
+elif [ "$mine_session" = s ]; then
   echo "no: #${n} には session のラベルがあります。夜の実行は始めず、オーナーのセッションを待ちます"
   exit 3
 elif [ "$mine_unit" = "-" ] && [ -n "$unit_taken" ]; then
