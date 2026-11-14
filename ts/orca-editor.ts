@@ -540,8 +540,9 @@ export async function holdFiles(target: string | null, project: string, path: st
       f.held = false;
       if (to !== null) {
         f.relative = to + f.relative.slice(relative.length);
-        f.where.textContent = f.relative;
-        f.area.setAttribute("aria-label", f.relative);
+        const shown = f.host === null ? f.relative : SSH_SCRATCH_DIR + f.relative;
+        f.where.textContent = shown;
+        f.area.setAttribute("aria-label", shown);
       }
       if (f.dirty && !f.blocked && f.save !== "error") schedule(f);
     }

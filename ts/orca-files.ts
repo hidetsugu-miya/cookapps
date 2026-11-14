@@ -1,6 +1,7 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`); this module draws the folder at once, marks the ignored entries when the answer comes, and takes the presses.
 // A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch. Nothing watches the disk: Orca's `files.watch` is a stream, and this machine's Orca refuses streaming methods (A-12). A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
+// On the row of an SSH host (and on the tab of one of its scratchpad files) the tree is the host's scratchpad folder (A-30): one flat list of files, read by ssh (`ssh_scratch_list`), with the new file, the new name and the delete of that folder (`ssh_scratch_create`, `ssh_scratch_rename`, `ssh_scratch_delete`). It has no folder, so nothing is dragged, and it has no path to copy, no download, no difference, no branch and no history.
 // The top row also has the two buttons that choose what the pane shows under the heading, the files or the history of the worktree (A-27, orca-history.ts); the choice is kept in memory only, and the heading serves both, and so does the read at the return of the focus (`refreshFiles`).
 import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
@@ -16,12 +17,14 @@ import { toast } from "./toast.js";
 import { copyText, showError } from "./view.js";
 
 // The worktree shown (the selected tab's, else the selected project's main one), with the name its heading shows ("{repo} ・ {branch}"). `branch` is the git branch of the worktree, which the heading makes a button (A-25), null where it stays text (an SSH host's, a worktree the list does not hold, or one on no branch); `project` is the key of the project of the worktree.
+// With `host` (the `id` of an `OrcaSshTarget`) it is the scratchpad folder of that SSH host (A-30) and no worktree: `path` is empty, and the label is the folder.
 export interface FilesContext {
   target: string | null;
   path: string;
   label: string;
   project: string;
   branch: string | null;
+  host: string | null;
 }
 
 // What was read of a folder: its entries (kept while it is read again), the message of a read that failed, and whether one is on its way.
@@ -92,14 +95,19 @@ export function toggleFiles() {
 
 // Shows the part of the pane that is chosen, and starts the read of it that is due: the history is read only while it is shown, the root of the tree only while the files are.
 function syncModes() {
-  const history = mode === "history";
+  const history = showsHistory();
+  // The scratchpad folder of an SSH host has no history, so nothing is chosen there.
+  $("orca-files-mode-files").hidden = $("orca-files-mode-history").hidden = context !== null && context.host !== null;
   $("orca-files-tree").hidden = history;
   $("orca-history").hidden = !history;
   $("orca-files-mode-files").setAttribute("aria-pressed", String(!history));
   $("orca-files-mode-history").setAttribute("aria-pressed", String(history));
-  syncHistory(context === null ? null : { target: context.target, path: context.path }, shown && history);
+  syncHistory(context === null || context.host !== null ? null : { target: context.target, path: context.path }, shown && history);
   if (shown && !history && context !== null && !listings.has("")) void readDir("");
 }
+
+// Whether the pane shows the history: the choice, except for the scratchpad folder of an SSH host, which has files only.
+const showsHistory = () => mode === "history" && (context === null || context.host === null);
 
 function chooseMode(next: "files" | "history") {
   if (mode === next) return;
@@ -140,6 +148,13 @@ async function markIgnored(here: FilesContext, mine: number, dir: string, read: 
   drawSoon();
 }
 
+// The entries of the folder `dir`: of the worktree, or (an SSH host's scratchpad, which is one folder of files) the names ssh lists.
+async function listDir(here: FilesContext, dir: string, ignored: boolean): Promise<OrcaDir> {
+  if (here.host === null) return invoke("orca_files_list", { path: here.path, dir, ignored, environment: here.target });
+  const names = await invoke("ssh_scratch_list", { host: here.host });
+  return { entries: names.map((name) => ({ name, path: name, isDirectory: false, ignored: false })), total: names.length };
+}
+
 async function readDir(dir: string) {
   const here = context;
   if (here === null) return;
@@ -150,7 +165,7 @@ async function readDir(dir: string) {
   listings.set(dir, { dir: held?.dir ?? null, error: null, busy: true });
   let next: Listing;
   try {
-    const read = await invoke("orca_files_list", { path: here.path, dir, ignored: inherited, environment: here.target });
+    const read = await listDir(here, dir, inherited);
     // The entries that the earlier listing marked as ignored keep the mark until the answer of git replaces it, so that a reload does not blink it away.
     const was = new Set(held?.dir?.entries.filter((e) => e.ignored).map((e) => e.path));
     next = { dir: inherited || was.size === 0 ? read : { ...read, entries: read.entries.map((e) => (was.has(e.path) ? { ...e, ignored: true } : e)) }, error: null, busy: false };
@@ -169,7 +184,7 @@ async function readDir(dir: string) {
     version++;
     drawSoon();
   }
-  if (!inherited && next.dir !== null && next.error === null && next.dir.entries.length > 0) void markIgnored(here, mine, dir, next.dir);
+  if (here.host === null && !inherited && next.dir !== null && next.error === null && next.dir.entries.length > 0) void markIgnored(here, mine, dir, next.dir);
 }
 
 // How many folders a read of the open folders takes at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).
@@ -195,13 +210,13 @@ async function reload() {
 // Reads again what the pane shows, when the window gets the focus back: the files (the root, then the open folders) or the history (from the start). It does nothing while the pane is hidden or has no worktree, and while a read of the same kind is on its way, so a failed read is tried again at the next return.
 export function refreshFiles() {
   if (!shown || context === null) return;
-  if (mode === "history") refreshHistory();
+  if (showsHistory()) refreshHistory();
   else if (![...listings.values()].some((l) => l.busy)) void reload();
 }
 
-// A scratchpad file was made in `.orca/scratchpad` of the worktree at `path` (A-29): when the tree is that worktree's, the folders on the way to it that it has read are read again, the root first, so that a folder that was not there shows now.
-export function rereadScratchpad(target: string | null, path: string) {
-  if (context === null || context.path !== path || context.target !== target) return;
+// A scratchpad file was made in `.orca/scratchpad` of the worktree at `path` (A-29): when the tree is that worktree's, the folders on the way to it that it has read are read again, the root first, so that a folder that was not there shows now. With `host` the file was made in the scratchpad folder of that SSH host (A-30), and its list is read again when the tree is that folder's.
+export function rereadScratchpad(target: string | null, path: string, host: string | null) {
+  if (context === null || context.path !== path || context.target !== target || context.host !== host) return;
   void (async () => {
     for (const dir of ["", ".orca", ".orca/scratchpad"]) if (listings.has(dir)) await readDir(dir);
   })();
@@ -258,7 +273,8 @@ async function submitCreate() {
   field.busy = true;
   const mine = generation;
   try {
-    const relative = await invoke("orca_file_create", { path: here.path, dir: field.dir, name, folder: field.folder, environment: here.target });
+    // On an SSH host a name that is taken is no error: the file that is there opens (A-30).
+    const relative = here.host === null ? await invoke("orca_file_create", { path: here.path, dir: field.dir, name, folder: field.folder, environment: here.target }) : (await invoke("ssh_scratch_create", { host: here.host, name })).name;
     if (mine !== generation) return;
     if (creating === field) {
       creating = null;
@@ -332,7 +348,8 @@ async function move(here: FilesContext, from: string, to: string, folder: boolea
   try {
     const release = await hold(here, from);
     try {
-      await invoke("orca_file_move", { path: here.path, from, to, environment: here.target });
+      if (here.host === null) await invoke("orca_file_move", { path: here.path, from, to, environment: here.target });
+      else await invoke("ssh_scratch_rename", { host: here.host, from, to });
     } catch (e) {
       release(null);
       if (mine === generation) showError(e);
@@ -425,7 +442,8 @@ function showDrop(dir: string | null) {
 // A press on a row that moves past a few pixels drags the entry (A-18): its name follows the pointer, the folder it would go to is marked, and a closed folder the pointer rests on opens. The release moves it into the marked folder, and does nothing elsewhere; Escape or a cancel ends the drag.
 function startDrag(down: PointerEvent, entry: OrcaFileEntry) {
   const here = context;
-  if (down.button !== 0 || here === null || moving) return;
+  // The scratchpad of an SSH host has no folder to drop a row in.
+  if (down.button !== 0 || here === null || here.host !== null || moving) return;
   const mine = generation;
   let ghost: HTMLElement | null = null;
   let rest: { dir: string; timer: number } | null = null;
@@ -500,7 +518,8 @@ async function download(here: FilesContext, relative: string) {
 async function remove(here: FilesContext, relative: string, folder: boolean) {
   const mine = generation;
   try {
-    await invoke("orca_file_delete", { path: here.path, relative, folder, environment: here.target });
+    if (here.host === null) await invoke("orca_file_delete", { path: here.path, relative, folder, environment: here.target });
+    else await invoke("ssh_scratch_delete", { host: here.host, name: relative });
   } catch (e) {
     if (mine === generation) showError(e);
     return;
@@ -518,9 +537,10 @@ async function remove(here: FilesContext, relative: string, folder: boolean) {
 
 const menuItem = (label: string, icon: string, pick: () => unknown) => ({ label, color: "var(--accent)", icon, current: false, pick });
 
-// The two items that make a new file or folder in the folder `dir` (the empty one is the worktree's root).
-const createItems = (dir: string) => [menuItem("新規ファイル", FILE_SVG, () => startCreate(dir, false)), menuItem("新規フォルダー", FOLDER_SVG, () => startCreate(dir, true))];
+// The two items that make a new file or folder in the folder `dir` (the empty one is the worktree's root). The scratchpad of an SSH host holds files only, so it has the first alone.
+const createItems = (dir: string) => [menuItem("新規ファイル", FILE_SVG, () => startCreate(dir, false)), ...(context?.host == null ? [menuItem("新規フォルダー", FOLDER_SVG, () => startCreate(dir, true))] : [])];
 
+// A file of the scratchpad of an SSH host (A-30) has the new file and, after a line, 「移動・名前の変更」 and the delete: there is no path to copy, no download and no difference there.
 // The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download and the difference from HEAD (A-24); and on both, last and after a line, 「移動・名前の変更」 and the delete in red. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
 function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
@@ -528,6 +548,7 @@ function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const copy = (label: string, text: string, done: string) => menuItem(label, COPY_PATH_SVG, () => void copyText(text, done));
   const del = { ...menuItem("削除", DELETE_SVG, () => confirmDelete(anchor, relative.slice(relative.lastIndexOf("/") + 1), () => void remove(here, relative, isDirectory))), danger: true };
   const rename = { ...menuItem("移動・名前の変更", MOVE_SVG, () => startRename(relative, isDirectory)), divider: true };
+  if (here.host !== null) return openMenu(anchor, [...createItems(""), rename, del]);
   const [path, from] = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
   if (isDirectory) openMenu(anchor, [...createItems(relative), { ...path, divider: true }, from, rename, del]);
   else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative)), rename, del]);
@@ -662,7 +683,7 @@ function draw() {
 // Follows the selected tab: its worktree (null: none), and the files open in it. Another worktree starts a new tree, read at once while the pane is shown.
 export function syncFiles(next: FilesContext | null, open: Set<string>) {
   opened = open;
-  const same = next?.path === context?.path && next?.target === context?.target;
+  const same = next?.path === context?.path && next?.target === context?.target && next?.host === context?.host;
   if (!same) {
     generation++;
     listings.clear();

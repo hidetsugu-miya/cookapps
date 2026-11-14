@@ -3918,16 +3918,16 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf(list)).toEqual([]);
   });
 
-  it("leaves the pane empty for a project with no tab when the row cannot be read, as an SSH host's", async () => {
+  it("reads no worktree for an SSH host's row with no tab, even when the list holds a main worktree of the host: the pane is the host's scratchpad folder (A-30)", async () => {
     const hostRow = { key: "ssh:s1", name: "s1", status: "idle" as const, sessions: 0, atMs: 0 };
     const hostTree = orcaWorktree("remote-app", "main", { path: "/home/dev/remote-app", projectKey: "ssh:s1", isMain: true });
-    await openOrca(withIdle({ ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow] }, [hostTree]), { orca_terminal_read: ["$"], orca_files_list: root() });
+    await openOrca(withIdle({ ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow] }, [hostTree]), { orca_terminal_read: ["$"], orca_files_list: root(), ssh_scratch_list: [] });
     await project("example-idle").click();
     await filesToggle().click();
     await expect($("#orca-files-title")).toHaveText("example-idle ・ main");
     const list = await mock("orca_files_list", root());
     await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
-    await expect($("#orca-files-title")).toHaveText("");
+    await expect($("#orca-files-title")).toHaveText("~/.local/share/cookapps/scratchpad/");
     expect(await count("#orca-files-tree .orca-file")).toBe(0);
     await focusBack();
     await browser.pause(300);
@@ -6296,5 +6296,193 @@ describe("orca: scratchpad of an SSH host (A-30)", () => {
     await expect($(".orca-edit-area")).toBeDisplayed();
     const calls = (await callsOf("orca_panes")) as { project: string; tabs: string[]; environment: string | null }[];
     expect(calls.at(-1)).toMatchObject({ project: "ssh:s1", tabs: ["file:1"], environment: null });
+  });
+
+  // The file pane of the host's row (issue #590): the scratchpad folder of the host, listed by ssh, with the new file, the new name and the delete of that folder.
+  const names = () => textsOf("#orca-files-tree .orca-file-name");
+  const menuTexts = () => textsOf('.menu[role="menu"] button');
+  const focusBack = () => browser.execute(() => window.dispatchEvent(new Event("focus")));
+  // The app with the row of the host selected and the file pane open on its folder, which holds `files`.
+  async function openHostFiles(files: unknown = ["a.md", "b.md"]) {
+    await openOrca(orcaOverview(sample(), worktrees(), { ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow] }), { editor_settings: { autosaveMs: 100 }, ssh_scratch_list: files });
+    await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
+    await expect($('#orca-feed .orca-project[data-key="ssh:s1"]')).toHaveAttribute("aria-pressed", "true");
+    await $(".orca-files-toggle:not([hidden])").click();
+    await expect($("#orca-files")).toBeDisplayed();
+  }
+  // The page's own double press and right button on a row, and right button on the empty part of the tree.
+  const onRow = (kind: "dblclick" | "contextmenu", name: string) =>
+    browser.execute(
+      (k, n, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`.orca-file[data-path="${n}"]`)!.dispatchEvent(new MouseEvent(k, { bubbles: true, cancelable: true, button: k === "contextmenu" ? 2 : 0 }));
+      },
+      kind,
+      name,
+      onceId(),
+    );
+  const rightClickEmpty = () =>
+    browser.execute((once) => {
+      if (!window.__e2e_once__(once)) return;
+      const tree = document.getElementById("orca-files-tree")!;
+      const r = tree.getBoundingClientRect();
+      tree.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: r.left + 20, clientY: r.bottom - 12 }));
+    }, onceId());
+  async function rowMenu(name: string) {
+    await onRow("contextmenu", name);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+  }
+  // Types `value` as the whole text of the field of the tree (value, then input).
+  const setField = (value: string) =>
+    browser.execute(
+      (v, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const input = document.querySelector<HTMLInputElement>("#orca-files-tree .orca-file-input")!;
+        input.value = v;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+      value,
+      onceId(),
+    );
+  // Opens a.md from its row and waits for its text.
+  async function openA() {
+    const read = await mock("ssh_scratch_read", fileText("a note\n"));
+    await onRow("dblclick", "a.md");
+    await expect($(".orca-edit-area")).toHaveValue("a note\n", { trim: false });
+    return read;
+  }
+
+  it("lists the files of the host's folder in the file pane by ssh_scratch_list, under the folder as the heading, with no choice of the history and no call of a worktree's files", async () => {
+    await openHostFiles();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    expect(await names()).toEqual(["a.md", "b.md"]);
+    expect(await callsOf("ssh_scratch_list")).toEqual([{ host: "s1" }]);
+    await expect($("#orca-files-title")).toHaveText(DIR);
+    expect(await count("#orca-files-title button")).toBe(0);
+    expect(await count('#orca-files-tree .orca-file[data-kind="dir"]')).toBe(0);
+    await expect($("#orca-files-mode-files")).not.toBeDisplayed();
+    await expect($("#orca-files-mode-history")).not.toBeDisplayed();
+    for (const command of ["orca_files_list", "orca_files_ignored", "orca_git_history"]) expect(await callsOf(command)).toEqual([]);
+  });
+
+  it("shows the message of a read that failed in the pane, and reads again when the window gets the focus back", async () => {
+    await openHostFiles(rejects("接続できません: Connection refused"));
+    await expect($("#orca-files-tree .orca-file-note.fail")).toHaveText("接続できません: Connection refused");
+    expect(await count("#orca-files-tree .orca-file")).toBe(0);
+    const list = await mock("ssh_scratch_list", ["a.md"]);
+    await focusBack();
+    expect(await waitForCalls(list)).toEqual([{ host: "s1" }]);
+    await waitForCount("#orca-files-tree .orca-file", 1);
+    await expect($("#orca-files-tree .orca-file-note.fail")).not.toExist();
+  });
+
+  it("opens a file of the list in the editor by ssh_scratch_read, keeps the list for its tab, and selects the tab when it is open already", async () => {
+    await openHostFiles();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    const read = await openA();
+    expect(await callsOf(read)).toEqual([{ host: "s1", name: "a.md" }]);
+    await expect(selectedTab()).toHaveText(expect.stringContaining("a.md"));
+    await expect($(".orca-edit-path")).toHaveText(`${DIR}a.md`);
+    // The tab of the file is in no worktree: the pane still lists the folder, and colors the open file.
+    expect(await names()).toEqual(["a.md", "b.md"]);
+    await expect($('#orca-files-tree .orca-file[data-path="a.md"]')).toHaveAttribute("data-open", "true");
+    await onRow("dblclick", "a.md");
+    await browser.pause(300);
+    expect(await callsOf(read)).toHaveLength(1);
+    expect(await count('.orca-tabs [role="tab"]')).toBe(1);
+    expect(await callsOf("orca_file_read")).toEqual([]);
+  });
+
+  it("makes a new file from the menu of the empty part by ssh_scratch_create, reads the list again and opens the file", async () => {
+    await openHostFiles();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    await rowMenu("a.md");
+    // No folder, no copy of a path, no download and no difference in the folder of a host.
+    expect(await menuTexts()).toEqual(["新規ファイル", "移動・名前の変更", "削除"]);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    await rightClickEmpty();
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await menuTexts()).toEqual(["新規ファイル"]);
+    await pickItem("新規ファイル");
+    await waitForCount(".orca-file-new", 1);
+    expect(await count(".orca-file-new input[placeholder]")).toBe(0);
+    const create = await mock("ssh_scratch_create", { name: "c.md", existed: false });
+    const list = await mock("ssh_scratch_list", ["a.md", "b.md", "c.md"]);
+    const read = await mock("ssh_scratch_read", fileText(""));
+    await browser.keys(" c.md ");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ host: "s1", name: "c.md" }]);
+    expect(await waitForCalls(list)).toEqual([{ host: "s1" }]);
+    expect(await waitForCalls(read)).toEqual([{ host: "s1", name: "c.md" }]);
+    await waitForCount("#orca-files-tree .orca-file", 3);
+    await waitForCount(".orca-file-new", 0);
+    await expect(selectedTab()).toHaveText(expect.stringContaining("c.md"));
+    expect(await callsOf("orca_file_create")).toEqual([]);
+  });
+
+  it("renames a file by ssh_scratch_rename, reads the list again, and gives the open tab the new name", async () => {
+    await openHostFiles();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    await openA();
+    await rowMenu("a.md");
+    await pickItem("移動・名前の変更");
+    await waitForCount(".orca-file-new", 1);
+    await expect($("#orca-files-tree .orca-file-input")).toHaveValue("a.md");
+    const rename = await mock("ssh_scratch_rename", null);
+    const list = await mock("ssh_scratch_list", ["b.md", "z.md"]);
+    await setField("z.md");
+    await browser.keys("Enter");
+    expect(await waitForCalls(rename)).toEqual([{ host: "s1", from: "a.md", to: "z.md" }]);
+    expect(await waitForCalls(list)).toEqual([{ host: "s1" }]);
+    await browser.waitUntil(async () => (await names()).join() === "b.md,z.md");
+    await waitForCount(".orca-file-new", 0);
+    expect(await tabTitles()).toEqual(["z.md"]);
+    await expect($(".orca-edit-path")).toHaveText(`${DIR}z.md`);
+    await expect($(".orca-edit-area")).toHaveValue("a note\n", { trim: false });
+    expect(await callsOf("orca_file_move")).toEqual([]);
+  });
+
+  it("shows the message of a rename that was refused, and keeps the row and the tab", async () => {
+    await openHostFiles();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    await openA();
+    await rowMenu("a.md");
+    await pickItem("移動・名前の変更");
+    await waitForCount(".orca-file-new", 1);
+    const rename = await mock("ssh_scratch_rename", rejects("同じ名前があります"));
+    await setField("b.md");
+    await browser.keys("Enter");
+    expect(await waitForCalls(rename)).toEqual([{ host: "s1", from: "a.md", to: "b.md" }]);
+    await expect($("#error")).toHaveText("同じ名前があります");
+    await waitForCount(".orca-file-new", 0);
+    expect(await names()).toEqual(["a.md", "b.md"]);
+    expect(await tabTitles()).toEqual(["a.md"]);
+  });
+
+  it("asks before deleting a file, calls nothing on 「キャンセル」, and on 「削除」 deletes by ssh_scratch_delete, closes its tab and reads the list again", async () => {
+    await openHostFiles();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    await openA();
+    const del = await mock("ssh_scratch_delete", null);
+    const list = await mock("ssh_scratch_list", ["b.md"]);
+    await rowMenu("a.md");
+    await pickItem("削除");
+    await expect($('.pop[role="alertdialog"] p')).toHaveText("a.md を完全に削除します。元に戻せません。");
+    expect(await textsOf('.pop[role="alertdialog"] button')).toEqual(["削除", "キャンセル"]);
+    await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
+    await browser.pause(200);
+    expect(await callsOf(del)).toEqual([]);
+    await rowMenu("a.md");
+    await pickItem("削除");
+    await $('.pop[role="alertdialog"] .text-btn.danger').click();
+    expect(await waitForCalls(del)).toEqual([{ host: "s1", name: "a.md" }]);
+    expect(await waitForCalls(list)).toEqual([{ host: "s1" }]);
+    await waitForCount("#orca-files-tree .orca-file", 1);
+    expect(await names()).toEqual(["b.md"]);
+    expect(await count('.orca-tabs [role="tab"]')).toBe(0);
+    await expect($(".orca-edit-area")).not.toExist();
+    expect(await callsOf("orca_file_delete")).toEqual([]);
   });
 });
