@@ -26,15 +26,17 @@ const freePorts = async (count: number) => {
   return ports;
 };
 
-// The service starts one app for each capability, so the specs are split into four capabilities and run in four apps at once.
-// The first three capabilities name their specs: orca, which cannot be split (one spec for one screen), has an app of its own, and the other three apps take about the same time (the median of the last 30 passing runs, in seconds: orca 167, slack-list 89, todo 65, inbox 49, orca-handoff 39, settings 38, sidebar 38, slack-thread 26, todo-prompt 9, thread 9, slack-compose 8, calendar 6, todo-claude 5; 167 for orca and about 127 for each of the others).
-// Every spec not named here (a new one included) runs in the last one, which is slack-list and settings today and has the most room.
-// `--spec` replaces the specs of every capability and keeps only their excludes, so a spec given there runs in each app that does not exclude it (four apps for an unnamed spec, three for a named one).
+// The service starts one app for each capability, so the specs are split into five capabilities and run in five apps at once.
+// The first four capabilities name their specs. The tests of the Orca screen are two specs, orca and orca-files (the file pane and the editor), each in an app of its own with one short spec beside it, so that the two halves run at the same time.
+// The other specs are spread so that the apps take about the same time, by the seconds of one run of the four apps (2026-11-14, #613): slack-list 106, todo 70, slack-thread 42, orca-handoff 41, settings 39, inbox 38, sidebar 38, slack-compose 23, thread 10, calendar 10, todo-prompt 9, todo-claude 6; that is 129 for slack-list and slack-compose, 131 for todo and its three, and 125 for the last app.
+// Every spec not named here (a new one included) runs in the last one, which is settings, inbox, sidebar and calendar today.
+// `--spec` replaces the specs of every capability and keeps only their excludes, so a spec given there runs in each app that does not exclude it (five apps for an unnamed spec, four for a named one).
 // `wdio:maxInstances: 1` keeps two workers out of one app.
 const namedSpecs = [
-  ["./e2e/specs/orca.e2e.ts"],
-  ["./e2e/specs/inbox.e2e.ts", "./e2e/specs/sidebar.e2e.ts", "./e2e/specs/slack-thread.e2e.ts", "./e2e/specs/slack-compose.e2e.ts", "./e2e/specs/calendar.e2e.ts"],
-  ["./e2e/specs/todo.e2e.ts", "./e2e/specs/orca-handoff.e2e.ts", "./e2e/specs/todo-prompt.e2e.ts", "./e2e/specs/thread.e2e.ts", "./e2e/specs/todo-claude.e2e.ts"],
+  ["./e2e/specs/orca.e2e.ts", "./e2e/specs/todo-claude.e2e.ts"],
+  ["./e2e/specs/slack-list.e2e.ts", "./e2e/specs/slack-compose.e2e.ts"],
+  ["./e2e/specs/orca-files.e2e.ts", "./e2e/specs/orca-handoff.e2e.ts"],
+  ["./e2e/specs/todo.e2e.ts", "./e2e/specs/slack-thread.e2e.ts", "./e2e/specs/thread.e2e.ts", "./e2e/specs/todo-prompt.e2e.ts"],
 ];
 const appCapability = (specs: { "wdio:specs": string[] } | { "wdio:exclude": string[] }) => ({
   browserName: "tauri",
@@ -55,15 +57,13 @@ if (onlySpec !== undefined && !existsSync(onlySpec)) throw new Error(`${onlySpec
 export const config = {
   runner: "local",
   specs: ["./e2e/specs/**/*.e2e.ts"],
-  maxInstances: 4,
+  maxInstances: 5,
   services: [["@wdio/tauri-service", { appBinaryPath: binary, driverProvider: "embedded" }]],
   capabilities:
     onlySpec !== undefined
       ? [appCapability({ "wdio:specs": [onlySpec] })]
       : [
-          appCapability({ "wdio:specs": namedSpecs[0] }),
-          appCapability({ "wdio:specs": namedSpecs[1] }),
-          appCapability({ "wdio:specs": namedSpecs[2] }),
+          ...namedSpecs.map((specs) => appCapability({ "wdio:specs": specs })),
           appCapability({ "wdio:exclude": namedSpecs.flat() }),
         ],
   framework: "mocha",
