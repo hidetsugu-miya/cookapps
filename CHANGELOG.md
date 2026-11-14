@@ -3,6 +3,16 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.72.1
+
+The Dock badge counts Slack and Orca too (#619). It is now the sum of the unread mail, the Todo tasks whose due moment has come, the unread Slack messages and the Orca sessions that wait for the user, so it shows a number when only Slack or Orca has one. It was the sum of mail and Todo alone.
+
+A-23: the band at the top of every screen is a little higher (44px, from 40px), and the icon buttons in it are larger (28px, with icons of 17px) (#617).
+
+A-8: the close button of a tab on the Orca screen is larger (#618).
+
+The MCP server is built with rmcp 3.9.0 (#642), and the lint of the source runs with Biome 2.6.6 (#640).
+
 ## v0.72.0
 
 A-31: an HTML file in the file pane of the Orca screen opens in the default browser (#621, #622). The right button on a file whose name ends in `.html` has the item "ブラウザで開く". The app serves the files of the worktree from a small HTTP server that listens on this Mac alone (`127.0.0.1`), reading them through Orca, so the images and scripts beside the page show too, also for a worktree on a saved environment. The address holds a random token, and a path with a part that starts with `.` (`.env`, `.git/`) is not served.
