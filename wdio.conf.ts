@@ -96,7 +96,10 @@ export const config = {
       lastLookup = next.catch(() => {});
       return next;
     };
-    const commands = browser as unknown as { overwriteCommand: (name: string, command: (original: (...args: unknown[]) => Promise<unknown>, ...args: unknown[]) => Promise<unknown>, options?: { attachToElement: boolean }) => void };
+    const commands = browser as unknown as { overwriteCommand: (name: string, command: (original: (...args: unknown[]) => Promise<unknown>, ...args: unknown[]) => Promise<unknown>, options?: { attachToElement: boolean } | boolean) => void };
+    // @wdio/tauri-service 1.5.1 gives `overwriteCommand` the boolean wdio 9 took as "an element command", which wdio 10 refuses: read it as the option, so that the service's overrides of click, doubleClick, setValue and clearValue go in as they did.
+    const overwrite = commands.overwriteCommand.bind(browser);
+    commands.overwriteCommand = (name, command, options) => overwrite(name, command, typeof options === "boolean" ? { attachToElement: options } : options);
     for (const name of ["findElements", "findElementsFromElement", "findElementsFromShadowRoot"]) {
       commands.overwriteCommand(name, (original, ...args) => oneAtATime(() => original(...args)));
       commands.overwriteCommand(name, (original, ...args) => oneAtATime(() => original(...args)), { attachToElement: true });
