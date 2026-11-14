@@ -1394,6 +1394,26 @@ fn recent_names(pairs: &[RecentPair], environment: Option<&str>, repo: &str) -> 
         .unwrap_or_default()
 }
 
+/// The remembered branches (`recent`, the newest first) that an answer of the empty text lacks, because Orca gives only its first `BRANCH_LIMIT`: each is asked of Orca by its name, and it is added to `found` only when Orca answers a branch of exactly that name (a branch that is gone is not added). A name that cannot be asked, or a question that fails, adds nothing and does not fail the list. At most `RECENT_BRANCHES` questions are asked (A-25).
+async fn add_missing_recent(
+    rpc: &mut impl Rpc,
+    repo: &str,
+    found: &mut Vec<OrcaRemoteBranch>,
+    recent: &[String],
+) {
+    for name in recent.iter().take(RECENT_BRANCHES) {
+        if found.iter().any(|b| &b.name == name) || check_query(name).is_err() {
+            continue;
+        }
+        let Ok(by_name) = remote_branches(rpc, repo, name).await else {
+            continue;
+        };
+        if let Some(branch) = by_name.into_iter().find(|b| &b.name == name) {
+            found.push(branch);
+        }
+    }
+}
+
 /// The answer of a search with the remembered branches first (A-25). With a text in `query` the answer is left as Orca gave it. With none, the branches of `recent` (the newest first) that the answer holds come first in that order, and the others follow in Orca's order; a remembered branch that the answer lacks is not added.
 fn recent_first(
     branches: Vec<OrcaRemoteBranch>,
@@ -1855,7 +1875,7 @@ pub async fn orca_local_branches(
 }
 
 /// The remote branches whose names hold `query`, at most 50, of the repository `repo` (`OrcaProject::key`) of the worktree at `path`. The worktree must be one of the target's list, as for the list, and `repo` its project.
-/// With an empty `query` the branches picked before in the list (`orca_branch_used`) that the answer holds come first, the newest first (`recent_first`); a file that cannot be read changes nothing.
+/// With an empty `query` the branches picked before in the list (`orca_branch_used`) come first, the newest first (`recent_first`); one that the first 50 lack is asked of Orca by its name (`add_missing_recent`). A file that cannot be read changes nothing.
 #[tauri::command]
 pub async fn orca_remote_branches(
     app: AppHandle,
@@ -1868,24 +1888,33 @@ pub async fn orca_remote_branches(
     check_query(&query)?;
     let (_, project) = cached_host_and_project_of(&path, environment.as_deref()).await?;
     check_same_repo(&project, &repo)?;
+    let recent = if query.is_empty() {
+        remembered(&app, environment.as_deref(), &repo).await
+    } else {
+        Vec::new()
+    };
     let asked = async {
         let mut connection = Connection::open(environment.clone()).await?;
-        remote_branches(&mut connection, &repo, &query).await
+        let mut found = remote_branches(&mut connection, &repo, &query).await?;
+        add_missing_recent(&mut connection, &repo, &mut found, &recent).await;
+        Ok(found)
     };
     let found = forgetting(asked.await, &path, environment.as_deref())?;
-    if !query.is_empty() {
-        return Ok(found);
-    }
-    let Ok(dir) = config_dir(&app) else {
-        return Ok(found);
+    Ok(recent_first(found, &query, &recent))
+}
+
+/// The names remembered for the repository `repo` of `environment` (the newest first); none when the config folder or the file cannot be read.
+async fn remembered(app: &AppHandle, environment: Option<&str>, repo: &str) -> Vec<String> {
+    let Ok(dir) = config_dir(app) else {
+        return Vec::new();
     };
-    let kept = found.clone();
+    let environment = environment.map(str::to_owned);
+    let repo = repo.to_owned();
     tokio::task::spawn_blocking(move || {
-        let recent = recent_names(&load_recent(&dir), environment.as_deref(), &repo);
-        recent_first(found, &query, &recent)
+        recent_names(&load_recent(&dir), environment.as_deref(), &repo)
     })
     .await
-    .or(Ok(kept))
+    .unwrap_or_default()
 }
 
 /// Remembers that the remote branch `name` (as Orca names it) was picked in the list of branches of the repository `repo` (`OrcaProject::key`) of `environment` (`None` is this machine), so that `orca_remote_branches` shows it first (A-25). It only writes `orca-branch-recent.json`: nothing is asked of Orca.
@@ -4771,6 +4800,71 @@ mod tests {
             names_of(&recent_first(found, "", &recent)),
             ["origin/b", "origin/a"]
         );
+    }
+
+    /// Orca's side of a search by name: the answer of each text, and the texts asked.
+    struct ByName {
+        answers: HashMap<&'static str, Value>,
+        asked: Vec<String>,
+    }
+
+    impl Rpc for ByName {
+        async fn call(&mut self, _method: &str, params: Value) -> Result<Value, CallError> {
+            let query = params["query"].as_str().unwrap_or_default().to_owned();
+            self.asked.push(query.clone());
+            self.answers
+                .get(query.as_str())
+                .cloned()
+                .ok_or_else(|| CallError {
+                    shown: "no answer".into(),
+                    detail: String::new(),
+                })
+        }
+    }
+
+    fn by_name(answers: Vec<(&'static str, &[&str])>) -> ByName {
+        ByName {
+            answers: answers
+                .into_iter()
+                .map(|(query, names)| {
+                    let details: Vec<Value> = names
+                        .iter()
+                        .map(|n| json!({"refName": n, "localBranchName": n}))
+                        .collect();
+                    (query, json!({"refDetails": details}))
+                })
+                .collect(),
+            asked: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_remembered_branch_outside_the_first_answer_is_asked_by_its_name_and_comes_first() {
+        let mut orca = by_name(vec![
+            ("origin/old", &["origin/old", "origin/older"]),
+            ("origin/gone", &["origin/gone-not"]),
+            ("origin/err", &[]),
+        ]);
+        orca.answers.remove("origin/err");
+        let mut found = answer(&["origin/a", "origin/b"]);
+        let recent = strings(&["origin/gone", "origin/b", "origin/old", "origin/err"]);
+        add_missing_recent(&mut orca, "repo-1", &mut found, &recent).await;
+        // The one the answer holds is not asked; a name Orca does not answer exactly, and a failed question, add nothing.
+        assert_eq!(orca.asked, ["origin/gone", "origin/old", "origin/err"]);
+        assert_eq!(
+            names_of(&recent_first(found, "", &recent)),
+            ["origin/b", "origin/old", "origin/a"]
+        );
+    }
+
+    #[tokio::test]
+    async fn at_most_five_remembered_branches_are_asked() {
+        let mut orca = by_name(Vec::new());
+        let mut found = Vec::new();
+        let names: Vec<String> = (0..8).map(|i| format!("origin/b{i}")).collect();
+        add_missing_recent(&mut orca, "repo-1", &mut found, &names).await;
+        assert_eq!(orca.asked.len(), RECENT_BRANCHES);
+        assert!(found.is_empty());
     }
 
     #[test]

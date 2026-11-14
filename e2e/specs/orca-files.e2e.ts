@@ -2643,7 +2643,8 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/c");
     await browser.pause(300);
     await expect($("#error")).not.toBeDisplayed();
-    await expect($(".toast")).not.toExist();
+    // The notice element is always in the page and only hidden when nothing is said.
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   it("only closes the list on the branch the worktree is on, and calls nothing on a branch in use (A-25)", async () => {

@@ -498,7 +498,8 @@ describe("orca handoff", () => {
       await openFresh();
       await mock("orca_remote_branches", Array.from({ length: 6 }, (_, i) => ({ name: `origin/r${i + 1}`, localName: `r${i + 1}` })));
       await $(`${MAIL.pane} .ho-base`).click();
-      await waitForCount(".orca-dest-pop .orca-branch-row", 9);
+      // 既定, the three local branches and the six remote ones (the rows after the fifth are only hidden).
+      await waitForCount(".orca-dest-pop .orca-branch-row", 10);
       expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["ローカル", "リモート"]);
       expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["3", "6"]);
       expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>('.orca-dest-pop .orca-branch-row[data-kind="remote"]')].filter((b) => !b.hidden).length)).toBe(5);
