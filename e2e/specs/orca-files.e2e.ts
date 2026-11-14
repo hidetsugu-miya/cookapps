@@ -1076,6 +1076,60 @@ describe("orca: files and editor (A-18)", () => {
     expect(await browser.execute(() => document.activeElement?.classList.contains("orca-edit-area"))).toBe(true);
   });
 
+  // A-17: the right button on a tab, as the page gets it.
+  const rightClickTab = (tab: string) =>
+    browser.execute(
+      (id, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`[data-tab="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+      },
+      tab,
+      onceId(),
+    );
+
+  it("adds the two copies, after a line under the split, to the menu of the tab of a file, with a line icon on each row and no colored dot (A-17)", async () => {
+    await openFiles();
+    await openA();
+    await stubClipboard();
+    await rightClickTab("file:1");
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "", "パスのコピー", "相対パスをコピー"]);
+    expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(1);
+    expect(await count('.menu[role="menu"] button svg')).toBe(4);
+    expect(await count('.menu[role="menu"] .pdot')).toBe(0);
+    // The split to the right is a square cut by a vertical line, the one below by a horizontal line.
+    const [right, below] = await browser.execute(() => [...document.querySelectorAll('.menu[role="menu"] button')].slice(0, 2).map((b) => b.querySelector("path")!.getAttribute("d")));
+    expect([right, below]).toEqual(["M12 4v16", "M3 12h18"]);
+    await pickItem("パスのコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
+    await expect($(".toast")).toHaveText(expect.stringContaining("パスをコピーしました"));
+    await expect($(".menu")).not.toExist();
+    await rightClickTab("file:1");
+    await pickItem("相対パスをコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the relative path was never copied" });
+    await expect($(".toast")).toHaveText(expect.stringContaining("相対パスをコピーしました"));
+    expect(await copiedTexts()).toEqual(["/work/example-app/a.rs", "a.rs"]);
+  });
+
+  it("has the two copies alone, with no line, on the tab of a file that is alone in its pane, and no menu on the Claude tab that is alone in its pane (A-17)", async () => {
+    await openFiles();
+    await openA();
+    await stubClipboard();
+    await mock("orca_panes", layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", ["file:1"])], sizes: [0.5, 0.5] }, "p2"));
+    await tabOf(claude).$(".orca-tab-btn").click();
+    await waitForCount(".orca-pane", 2);
+    await rightClickTab("file:1");
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    await pickItem("相対パスをコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the relative path was never copied" });
+    expect(await copiedTexts()).toEqual(["a.rs"]);
+    await rightClickTab(claude);
+    await browser.pause(300);
+    expect(await count(".menu")).toBe(0);
+  });
+
   it("opens a file that is open already by selecting its tab, and reads it again as it comes back into the pane: the text of the disk takes the place of the one held", async () => {
     await openFiles();
     await openA();
@@ -2121,6 +2175,18 @@ describe("orca: files and editor (A-18)", () => {
     if ((value as { highlight?: string | null }).highlight) await waitForColors();
     return diff;
   }
+
+  it("has the split alone in the menu of the tab of a diff and of a Claude session, with no copy of a path (A-17)", async () => {
+    await openDiffOf();
+    await rightClickTab("diff:1");
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    await rightClickTab(claude);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+  });
 
   it("opens the diff of a file from the menu of its row with the worktree, its path and the target, as a tab that is selected (A-24)", async () => {
     const diff = await openDiffOf();
