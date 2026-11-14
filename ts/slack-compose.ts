@@ -43,6 +43,8 @@ let draft: Draft | null = null;
 // From the last `slack_load`: the picker lists them.
 let workspaces: Workspace[] = [];
 let recent: Recent[] = [];
+// The most things to do that are not posted: what one request to Claude posts at most (`ACTIONS_MAX` of `slack.rs`). The plus is off at that many.
+const ACTIONS_MAX = 10;
 // The post is on its way.
 let posting = false;
 // Where the thread was scrolled to when the screen opened (#main is hidden meanwhile, which forgets it).
@@ -235,7 +237,7 @@ function drawActions() {
       return card;
     }),
   );
-  $<HTMLButtonElement>("slack-add").disabled = !d || posting;
+  $<HTMLButtonElement>("slack-add").disabled = !d || posting || pendingOf(d).pending.length >= ACTIONS_MAX;
 }
 
 // The preview is shown, or the field it opens (pressing the preview opens it, leaving the field closes it).
@@ -489,7 +491,7 @@ export function initSlackCompose() {
   // A new thing to do goes on in the thread of the one before it, with a text of its own that starts empty.
   $("slack-add").onclick = () => {
     const d = draft;
-    if (!d || posting) return;
+    if (!d || posting || pendingOf(d).pending.length >= ACTIONS_MAX) return;
     d.actions.push({ target: null, after: d.actions.length - 1, paste: false, text: "", posted: null, byClaude: false });
     drawActions();
     refreshSlackCompose();

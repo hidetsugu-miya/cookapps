@@ -21,7 +21,7 @@ crypto_secretbox = "0.1"
 dirs = "7"
 emojis = "0.9"
 encoding_rs = "0.8"
-futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+futures-util = { version = "0.3", default-features = false, features = ["alloc", "sink"] }
 getrandom = "0.4"
 hkdf = "0.13"
 keyring = "4"

@@ -212,6 +212,19 @@ describe("slack compose screen", () => {
     await expect(post()).toHaveText("投稿");
   });
 
+  it("turns the plus off at 10 things to do that are not posted, and on again when one is taken out", async () => {
+    await openCompose();
+    for (let n = 2; n <= 10; n++) {
+      await expect(add()).toBeEnabled();
+      await add().click();
+      await waitForCount(cards, n);
+    }
+    await expect(add()).toBeDisabled();
+    await card(10).$(".slack-remove").click();
+    await waitForCount(cards, 9);
+    await expect(add()).toBeEnabled();
+  });
+
   it("keeps 投稿 off until every thing to do has somewhere to go and a text", async () => {
     await openCompose();
     await chooseGeneral();

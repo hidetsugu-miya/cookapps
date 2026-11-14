@@ -1572,8 +1572,9 @@ fn edit_of(output: &Value, current: &str) -> Result<PromptEdit, SummaryError> {
     })
 }
 
-/// The answer of the proofreading of a Slack post: `parse_edit`, and the things to do as the answer made them (`slack::answered_actions`: a destination outside `candidates`, or no list, changes nothing), for the list `actions` that the screen sent.
-/// `plan` is the posts to make (S-23) and `post_refused` whether a post was asked for and refused: see `slack::post_decision`, which gets the list as the answer made it, and `linked`, the destinations that the Slack links of the request lead to.
+/// The answer of the proofreading of a Slack post: `parse_edit`, and the things to do as the answer made them (`slack::answered_actions`: a destination outside `candidates`, or no list, changes nothing,
+/// and a text the answer wrote keeps only the broadcast words of `instruction`), for the list `actions` that the screen sent.
+/// `plan` is the posts to make (S-23) and `post_refused` whether a post was asked for and refused: see `slack::post_decision`, which gets the list as the answer made it, the list the screen sent (a written text that is in neither it nor the request is not posted), and `linked`, the destinations that the Slack links of the request lead to.
 /// Nothing is posted here; the command makes the posts of `plan`.
 fn parse_slack_edit(
     out: &str,
@@ -1587,7 +1588,7 @@ fn parse_slack_edit(
     let answer = read_answer(out)?;
     let output = &answer["structured_output"];
     let edit = edit_of(output, current)?;
-    let new = crate::slack::answered_actions(output, actions, candidates);
+    let new = crate::slack::answered_actions(output, actions, candidates, instruction);
     let list: Vec<_> = match &new {
         Some(new) => actions
             .iter()
@@ -1602,6 +1603,7 @@ fn parse_slack_edit(
         &output["post"],
         instruction,
         &list,
+        actions,
         candidates,
         linked,
         current,
@@ -6872,7 +6874,7 @@ mod tests {
         );
         assert_eq!(got.actions.as_ref().map(Vec::len), Some(2));
         // Refused, and said to be: no post word, another destination not named, a blank request,
-        // no candidates, a body that adds a link, and a written text with a broadcast word that the request does not hold. The rest of the answer stands.
+        // no candidates, a body that adds a link, a written text with a broadcast word that the request does not hold, and a new written text that the request does not hold. The rest of the answer stands.
         for (output, instruction, list) in [
             (to_chip.clone(), "敬語に直して", &candidates[..]),
             (to_other.clone(), "投稿して", &candidates[..]),
@@ -6884,17 +6886,23 @@ mod tests {
                 &candidates[..],
             ),
             (wrote.clone(), "投稿して", &candidates[..]),
+            (
+                json!({"reply": "r", "post": true, "actions": [
+                    {"destination": 1, "text": "お疲れ様です"},
+                    {"after": 1},
+                ]}),
+                "挨拶を書いて、そのスレッドにメールを貼って投稿して",
+                &candidates[..],
+            ),
         ] {
             let got = parse(output.clone(), instruction, list);
             assert!(got.plan.is_empty(), "{output} {instruction}");
             assert!(got.post_refused, "{output} {instruction}");
         }
-        assert_eq!(
-            parse(wrote, "投稿して", &candidates)
-                .actions
-                .map(|l| l.len()),
-            Some(2)
-        );
+        // The cards the refused answer wrote still go into the screen, a broadcast word that the request does not hold with a full-width ＠.
+        let cards = parse(wrote, "投稿して", &candidates).actions.unwrap();
+        assert_eq!(cards.len(), 2);
+        assert_eq!(cards[0].text, "＠here お疲れ様です");
         // A model that did not ask for a post posts nothing and refuses nothing.
         for output in [
             json!({"reply": "r", "destination": 1}),
