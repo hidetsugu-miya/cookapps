@@ -747,6 +747,27 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .item select.theme-select { width: 200px; }
 .item select.font-family { width: 240px; }
 .item select.font-size { width: 90px; }
+/* The Skill tab (A-32): the skills in a column at the left, the form of the one shown at the right. */
+.skill-card { max-width: 860px; }
+.skill-body { display: flex; align-items: flex-start; border-top: 1px solid var(--line); }
+.skill-side { box-sizing: border-box; flex: none; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 210px; padding: 12px; border-right: 1px solid var(--line); }
+#skill-list { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.skill-row { display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.skill-row:hover { background: var(--hover); }
+.skill-row[aria-current="true"] { background: var(--soft); }
+.skill-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.skill-empty { padding: 0 10px; }
+#skill-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 20px 16px; }
+.skill-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; color: #666; font-size: calc(12px * var(--fs)); font-weight: bold; }
+.skill-field legend { padding: 0; margin-bottom: 4px; }
+.skill-field :is(input:not([type="checkbox"]), textarea) { box-sizing: border-box; width: 100%; padding: 6px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: #333; font: inherit; font-size: calc(13px * var(--fs)); font-weight: normal; }
+.skill-field input:not([type="checkbox"]) { height: 32px; border-radius: 16px; }
+.skill-field textarea { resize: vertical; line-height: 1.6; }
+.skill-field :is(input:not([type="checkbox"]), textarea):focus { outline: 2px solid var(--accent); border-color: transparent; }
+.skill-field input[readonly] { background: var(--bar); }
+#skill-screens label { display: flex; align-items: center; gap: 6px; color: #333; font-size: calc(13px * var(--fs)); font-weight: normal; }
+#skill-screens input { margin: 0; accent-color: var(--accent); }
+.skill-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .card-add { display: flex; gap: 8px; padding: 12px 12px 14px 20px; border-top: 1px solid var(--line); background: var(--bar); border-radius: 0 0 12px 12px; }
 .card-add input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .card-add input:focus { outline: 2px solid var(--accent); border-color: transparent; }

@@ -26,6 +26,7 @@ import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
 import type { PromptEdit } from "../ts/bindings/PromptEdit";
 import type { Reaction } from "../ts/bindings/Reaction";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
+import type { Skill } from "../ts/bindings/Skill";
 import type { SlackLoad } from "../ts/bindings/SlackLoad";
 import type { RichBlock } from "../ts/bindings/RichBlock";
 import type { SlackThread } from "../ts/bindings/SlackThread";
@@ -468,6 +469,9 @@ export const claudeSettings: ClaudeSettings = {
   todoChat: { model: "sonnet", effort: "medium" },
   slackChat: { model: "sonnet", effort: "medium" },
 };
+
+// A saved skill (A-32) as `skill_list` answers it; `extra` changes the parts.
+export const skill = (name: string, extra: Partial<Skill> = {}): Skill => ({ name, displayName: `Skill ${name}`, screens: [], description: `About ${name}`, instructions: `Do ${name}.`, ...extra });
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
 export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };
