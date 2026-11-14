@@ -51,6 +51,7 @@ import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
+import type { SlackAction } from "./bindings/SlackAction";
 import type { SlackEdit } from "./bindings/SlackEdit";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
@@ -175,10 +176,11 @@ export interface Commands {
   slack_link: { args: { url: string }; result: Target };
   // What a post of the mail starts out as (plain text); the user edits it on the compose screen.
   slack_preview: { args: Mail; result: string };
-  // Posts `text` as it is (Rust escapes it for Slack and refuses a blank one or one past 10,000 characters).
+  // Posts `text` as it is (Rust escapes it for Slack and refuses a blank one or one past 10,000 characters). `written` true: the owner wrote the text in a card of "行うこと", and its `@here`, `@channel` and `@everyone` become mentions; false for the mail's content.
+  // The answer is the time (`ts`) of the posted message, which a later post gives as `threadTs` to continue its thread (empty when Slack's answer had none).
   slack_post: {
-    args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string };
-    result: boolean;
+    args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string; written: boolean };
+    result: string;
   };
   // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
@@ -254,9 +256,13 @@ export interface Commands {
   // `channel` is the channel the screen has open (null in the unread list and the watch, and then no Slack text is sent): `teamId` and `channel` must be a connected workspace and a channel of its list (a refusal is a Japanese message),
   // and `messages` are its recent messages as the screen draws them (`text` of `TimelineMessage`), oldest first. The model and effort are those of `slackChat`. Nothing is saved.
   claude_chat_slack: { args: { channel: { teamId: string; channel: string; messages: { name: string; ts: string; text: string }[] } | null; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: SlackChatReply };
-  // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions, with the `destination` it chose from the list Rust gave it (S-4).
-  // `posted` is true when the request asked to post (S-23) and Rust posted the new text (or `text`) to `destination` by the path of `slack_post`; the screen then goes on as after "投稿". Nothing is saved.
-  claude_proofread_slack: { args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; target: Target | null; targetByClaude: boolean }; result: SlackEdit };
+  // Claude's proofreading of the original message of the Slack compose screen: the same answer, for `text` instead of the instructions, with `actions`, what the answer made of the things to do that are not posted
+  // (a destination it chose from the list Rust gave it, or the cards it wrote; null when it left them alone, S-4). `actions` of the arguments are the cards of "行うこと", the posted ones first.
+  // When the request asked to post (S-23) and Rust allowed it, Rust posted them from the top down by the path of `slack_post`, and the ones sent carry `posted`; `postError` is the failure that stopped it after one was sent. Nothing is saved.
+  claude_proofread_slack: {
+    args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; actions: SlackAction[] };
+    result: SlackEdit;
+  };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
   // and `thread` the open thread's messages as the screen shows them (none while it is not read), which are sent too, with `truncated` (the read stopped before the end of the thread).
   claude_chat_thread: { args: { text: string; thread: { name: string; ts: string; text: string }[]; truncated: boolean; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: PromptEdit };

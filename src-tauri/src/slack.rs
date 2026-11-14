@@ -60,6 +60,10 @@ const LEGACY_FILE: &str = "slack-destinations.json";
 const RECENT_MAX: usize = 8;
 /// How many destinations Claude is offered to choose from (S-4): the recent ones first, then the joined channels.
 const DESTINATION_LIMIT: usize = 300;
+/// How many things to do one request to Claude may post (S-23).
+const ACTIONS_MAX: usize = 10;
+/// How many Slack links of one request to Claude are read as destinations (S-23).
+const REQUEST_LINKS_MAX: usize = 5;
 /// `users.conversations` answers in pages of 200 channels; the channels past this many pages are left out.
 const CHANNEL_PAGES: usize = 50;
 const CHANNELS_TTL: Duration = Duration::from_secs(10 * 60);
@@ -84,6 +88,8 @@ const WATCH_LIMITED: &str =
     "Slack の呼び出し制限のため、しばらくウォッチできません。少し待ってからやり直してください";
 const UNWATCHABLE: &str = "このスレッドは読めないため、ウォッチできません";
 const NO_WORKSPACE: &str = "このリンクのワークスペースは接続されていません。設定で追加してください";
+const BAD_ACTIONS: &str = "行うことの並びが不正です";
+const NO_THREAD: &str = "前の投稿の時刻が分からないため、スレッドに続けられません";
 
 /// A connected workspace. Its token is in the keychain under `team_id`.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -140,6 +146,38 @@ pub struct Candidate {
     pub target: Target,
     /// `ワークスペース / #チャンネル`, with `（スレッド）` after a thread.
     pub label: String,
+}
+
+/// Where a posted thing to do of the Slack compose screen went (S-1). `thread` is the thread a later one continues: the thread it replied in,
+/// or else the time (`ts`) of its own message (empty when Slack answered none).
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct PostedAt {
+    pub(crate) team_id: String,
+    pub(crate) channel: String,
+    pub(crate) name: String,
+    pub(crate) thread: String,
+}
+
+/// One thing to do of the Slack compose screen (a card of "行うこと", S-1): one post, where it goes and what it holds.
+/// The screen sends its list with a request to Claude, and the answer carries the list that the request made of it (S-4, S-23).
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct SlackAction {
+    /// Where: a channel or a thread (`after` none), or the thread of the post of an earlier one (`after` is its place in the list, from 0, and `target` is not used).
+    pub target: Option<Target>,
+    pub after: Option<usize>,
+    /// What: the original message as it is (`paste`), or `text`.
+    pub paste: bool,
+    pub text: String,
+    /// Set once it was posted: it is never sent again.
+    pub posted: Option<PostedAt>,
+    /// `target` is one that an answer of Claude put there, not one the owner chose: a post by a request then needs it named in the request (S-23).
+    pub by_claude: bool,
 }
 
 #[derive(Serialize)]
@@ -658,6 +696,88 @@ fn post_text(text: &str, markdown: bool) -> Result<String, String> {
         return Err(too_long());
     }
     Ok(text)
+}
+
+/// How the text of a post is read before it is sent (`sent_text`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum PostForm {
+    /// Plain text that the owner did not write (the mail's content of S-1): escaped, and nothing in it is made a mention.
+    Plain,
+    /// Plain text that the owner wrote (a card of "行うこと", S-1): escaped, and its `@here`, `@channel` and `@everyone` become Slack's broadcast mentions.
+    Written,
+    /// The Markdown of the rich field (S-6, S-21).
+    Markdown,
+}
+
+impl PostForm {
+    /// The form of a post of the rich field's commands, whose `markdown` argument may be missing.
+    fn rich(markdown: Option<bool>) -> Self {
+        if markdown.unwrap_or(false) {
+            Self::Markdown
+        } else {
+            Self::Plain
+        }
+    }
+}
+
+/// The words that Slack reads as a mention of everyone in a channel when they follow `@`.
+const BROADCASTS: [&str; 3] = ["here", "channel", "everyone"];
+
+/// `text` (already escaped by `escape_mrkdwn`) with each `@here`, `@channel` and `@everyone` as Slack's broadcast mention (`<!here>` and so on).
+/// The word is taken only as it is written (lower case), when the character before `@` is not an ASCII letter, digit, `_`, `-` or `.` (so a mail address is left alone)
+/// and the one after the word is not an ASCII letter, digit, `_` or `-` (so `@hereafter` is left alone; kana and kanji end the word).
+fn broadcast_mentions(text: &str) -> String {
+    map_broadcasts(text, |w| format!("<!{w}>"))
+}
+
+/// `text` with each `@here`, `@channel` and `@everyone` that `broadcast_mentions` takes replaced by what `put` makes of its word.
+fn map_broadcasts(text: &str, put: impl Fn(&str) -> String) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    // The character before `rest`, when `rest` does not start the text.
+    let mut before = None;
+    while let Some(at) = rest.find('@') {
+        let previous = rest[..at].chars().next_back().or(before);
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let hit = BROADCASTS
+            .iter()
+            .find(|w| after.starts_with(**w) && !after[w.len()..].starts_with(word));
+        match hit {
+            Some(w) if !previous.is_some_and(|c| word(c) || c == '.') => {
+                out.push_str(&put(w));
+                rest = &after[w.len()..];
+                before = Some('>');
+            }
+            _ => {
+                out.push('@');
+                rest = after;
+                before = Some('@');
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The text that is sent for `text` read as `form`: `post_text`, and for a text the owner wrote, its broadcast mentions (`broadcast_mentions`).
+fn sent_text(text: &str, form: PostForm) -> Result<String, String> {
+    let sent = post_text(text, form == PostForm::Markdown)?;
+    Ok(if form == PostForm::Written {
+        broadcast_mentions(&sent)
+    } else {
+        sent
+    })
+}
+
+/// The time (`ts`) of the message that an answer of `chat.postMessage` says was posted, or an empty string when the answer has none that is well formed.
+fn posted_ts(reply: &Value) -> String {
+    reply["ts"]
+        .as_str()
+        .filter(|ts| valid_ts(ts))
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// The message for the UI of a Slack error code. Slack answers 200 with `ok: false`.
@@ -1202,12 +1322,13 @@ async fn fetch_and_keep_channels(
     Ok(list)
 }
 
-/// The destinations Claude may choose from (S-4), numbered by their place in the list: the destination now in the chip (`current`, when its workspace is connected),
-/// the recent ones that are still in a connected workspace, then each workspace's joined channels (`channels`: the workspace's ID and its list).
+/// The destinations Claude may choose from (S-4), numbered by their place in the list: the destinations now in the chips of the things to do (`current`, those whose workspace is connected),
+/// the destinations of the Slack links in the owner's request (`linked`), the recent ones that are still in a connected workspace, then each workspace's joined channels (`channels`: the workspace's ID and its list).
 /// A destination already in the list is not repeated, and the list stops at `DESTINATION_LIMIT`.
 fn candidates_of(
     workspaces: &[Workspace],
-    current: Option<&Target>,
+    current: &[Target],
+    linked: &[Target],
     recent: &[Recent],
     channels: &[(String, Vec<Channel>)],
 ) -> Vec<Candidate> {
@@ -1227,8 +1348,8 @@ fn candidates_of(
         let label = format!("{} / #{}{thread}", workspace.team, target.name);
         out.push(Candidate { target, label });
     };
-    if let Some(current) = current {
-        add(current.clone());
+    for target in current.iter().chain(linked) {
+        add(target.clone());
     }
     for r in recent {
         add(Target {
@@ -1259,13 +1380,32 @@ pub fn pick_destination(chosen: &Value, candidates: &[Candidate]) -> Option<Targ
         .map(|c| c.target.clone())
 }
 
+/// Where a post that a request to Claude makes goes (S-23).
+#[derive(Debug, PartialEq, Clone)]
+pub enum PostTo {
+    /// This destination.
+    Target(Target),
+    /// The thread of the post of the thing to do at this place of the list (from 0), known once that one is posted.
+    ThreadOf(usize),
+}
+
+/// One post that a request to Claude makes (S-23): the thing to do at `index` of the list, where it goes, its text, and whether the text is one written for the card
+/// (its `@here`, `@channel` and `@everyone` become mentions) and not the original message.
+#[derive(Debug, PartialEq, Clone)]
+pub struct PlannedPost {
+    pub index: usize,
+    pub to: PostTo,
+    pub text: String,
+    pub written: bool,
+}
+
 /// What the answer to a request about the Slack post does (S-23).
 #[derive(Debug, PartialEq)]
 pub enum PostDecision {
     /// The model did not ask for a post.
     Skip,
-    /// Post to this destination.
-    Post(Target),
+    /// Make these posts, in this order.
+    Post(Vec<PlannedPost>),
     /// The model asked for a post and Rust refused it.
     Refused,
 }
@@ -1337,12 +1477,6 @@ fn name_key(t: &Target) -> String {
     t.name.trim().to_lowercase()
 }
 
-/// The destination chip that rule (b) of `post_decision` may trust: the one the owner set. A chip that a destination of Claude's own answer put there (`by_claude`) is not,
-/// because the text Claude read in an earlier turn could have steered it, and a later "投稿して" would then post there; such a destination must be named in the request.
-pub fn owner_chip(chip: Option<&Target>, by_claude: bool) -> Option<&Target> {
-    chip.filter(|_| !by_claude)
-}
-
 /// Characters that end a link or a mention in a text.
 const LINK_END: &[char] = &[
     '<', '>', '|', '"', '\'', '(', ')', '[', ']', '{', '}', '「', '」', '『', '』', '（', '）',
@@ -1412,9 +1546,85 @@ fn links_and_mentions(text: &str) -> HashSet<String> {
     found
 }
 
-/// Whether `text` holds a link or a Slack mention that `current` does not.
-fn adds_link_or_mention(current: &str, text: &str) -> bool {
-    !links_and_mentions(text).is_subset(&links_and_mentions(current))
+/// The `http://` and `https://` addresses in a text (byte spans): each runs to a space, a mark of `LINK_END` or a character that is not ASCII.
+fn url_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = vec![];
+    let mut from = 0;
+    while let Some(found) = ["https://", "http://"]
+        .iter()
+        .filter_map(|p| text[from..].find(p))
+        .min()
+    {
+        let start = from + found;
+        let rest = &text[start..];
+        let len = rest
+            .find(|c: char| !c.is_ascii_graphic() || LINK_END.contains(&c))
+            .unwrap_or(rest.len());
+        spans.push((start, start + len));
+        from = start + len;
+    }
+    spans
+}
+
+/// `text` with its addresses (`url_spans`) blanked, so that a word inside an address (`archives`, `post`) is not read as a word of the request.
+fn without_urls(text: &str) -> String {
+    let mut out = text.to_owned();
+    for (start, end) in url_spans(text) {
+        out.replace_range(start..end, &" ".repeat(end - start));
+    }
+    out
+}
+
+/// The Slack links (a channel's or a message's, as `parse_url` reads the link of the picker) in the owner's request, in the order they are written, each once, at most `REQUEST_LINKS_MAX`.
+fn request_links(instruction: &str) -> Vec<Link> {
+    let mut links: Vec<Link> = vec![];
+    for (start, end) in url_spans(instruction) {
+        let raw = instruction[start..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if let Ok(link) = parse_url(raw) {
+            if links.len() < REQUEST_LINKS_MAX && !links.contains(&link) {
+                links.push(link);
+            }
+        }
+    }
+    links
+}
+
+/// The broadcast words (`here`, `channel`, `everyone`) that a text holds after `@` as `broadcast_mentions` reads them, so the ones that become mentions when the text is posted as a written one.
+fn broadcast_words(text: &str) -> HashSet<&'static str> {
+    let sent = broadcast_mentions(&text.replace('<', " "));
+    BROADCASTS
+        .into_iter()
+        .filter(|w| sent.contains(&format!("<!{w}>")))
+        .collect()
+}
+
+/// Rule (c) of `post_decision` for one text to post: its links and Slack mentions are all in the original message the owner sent (`current`) or in the owner's request,
+/// and, for a written text, its broadcast words (`broadcast_words`) are all in the request.
+fn text_allowed(text: &str, written: bool, current: &str, instruction: &str) -> bool {
+    let mut held = links_and_mentions(current);
+    held.extend(links_and_mentions(instruction));
+    links_and_mentions(text).is_subset(&held)
+        && (!written || broadcast_words(text).is_subset(&broadcast_words(instruction)))
+}
+
+/// `text` with a full-width `＠` in the place of the `@` of each broadcast word (`broadcast_mentions`) that the owner's request does not hold (`broadcast_words`),
+/// so that a text Claude wrote makes no broadcast mention the owner did not ask for when it is posted as a written one.
+fn without_new_broadcasts(text: &str, instruction: &str) -> String {
+    let asked = broadcast_words(instruction);
+    map_broadcasts(text, |w| {
+        format!("{}{w}", if asked.contains(w) { '@' } else { '＠' })
+    })
+}
+
+/// Whether `text` is the written text of a card of `sent`, the list the screen sent (compared without the white space at the ends): the owner wrote it, or has seen it in the card.
+fn in_sent_card(text: &str, sent: &[SlackAction]) -> bool {
+    sent.iter()
+        .any(|a| !a.paste && a.text.trim() == text.trim())
+}
+
+/// `text` with each run of white space (line breaks too) as one space, and none at the ends.
+fn squeezed(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Whether the request names `to`, and no other candidate with the same channel name.
@@ -1423,34 +1633,195 @@ fn names_only(instruction: &str, candidates: &[Candidate], to: &Target) -> bool 
     named.contains(&to) && named.iter().filter(|t| name_key(t) == name_key(to)).count() == 1
 }
 
+/// Whether two destinations are the same channel or the same thread, whatever name each carries.
+fn same_place(a: &Target, b: &Target) -> bool {
+    a.team_id == b.team_id && a.channel == b.channel && a.thread_ts == b.thread_ts
+}
+
+/// How many things to do at the head of the list are posted. The posted ones are always at the head (`check_actions`).
+fn posted_count(actions: &[SlackAction]) -> usize {
+    actions.iter().take_while(|a| a.posted.is_some()).count()
+}
+
+/// Whether the list of things to do that the screen sent is well formed: the posted ones come first, and one that continues a thread names an earlier one.
+pub fn check_actions(actions: &[SlackAction]) -> Result<(), String> {
+    let done = posted_count(actions);
+    let ok = actions.iter().enumerate().all(|(index, a)| {
+        (index < done || a.posted.is_none()) && a.after.is_none_or(|k| k < index)
+    });
+    if ok {
+        Ok(())
+    } else {
+        Err(BAD_ACTIONS.into())
+    }
+}
+
+/// The destinations in the chips of the things to do that are not posted, in their order: they head the candidates.
+pub fn pending_targets(actions: &[SlackAction]) -> Vec<Target> {
+    actions[posted_count(actions)..]
+        .iter()
+        .filter(|a| a.after.is_none())
+        .filter_map(|a| a.target.clone())
+        .collect()
+}
+
+/// The things to do that are not posted, as the answer of Claude (`output`, the `structured_output`) makes them; `None` when the answer leaves them as they are (S-4, S-23).
+/// An `actions` array that is not empty replaces them all. One item is one post: `after` is the number (from 1, counted over the whole list, the posted ones included) of an earlier thing to do
+/// whose thread it continues, else `destination` is the number of a candidate (`pick_destination`), else it has nowhere to go yet; `text` is a written text, and without one it pastes the original message.
+/// Without such an array, a `destination` of the list goes into the chip of the first thing to do that is not posted.
+/// A destination the answer put there is Claude's (`by_claude`), unless the owner has chosen that place in a chip of a thing to do that is not posted.
+/// A written text that is not the text of a card of `actions` (`in_sent_card`) is one Claude wrote: its `@here`, `@channel` and `@everyone` that the owner's request (`instruction`) does not hold
+/// get a full-width `＠` (`without_new_broadcasts`), because "投稿" sends the text of a card as a written one, whose broadcast words become mentions.
+pub fn answered_actions(
+    output: &Value,
+    actions: &[SlackAction],
+    candidates: &[Candidate],
+    instruction: &str,
+) -> Option<Vec<SlackAction>> {
+    let done = posted_count(actions);
+    let pending = &actions[done..];
+    let by_claude = |t: &Target| {
+        !pending
+            .iter()
+            .filter(|a| a.after.is_none() && !a.by_claude)
+            .filter_map(|a| a.target.as_ref())
+            .any(|own| same_place(own, t))
+    };
+    let new: Vec<SlackAction> = match output["actions"].as_array().filter(|l| !l.is_empty()) {
+        Some(items) => items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let index = done + i;
+                let after = item["after"]
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok()?.checked_sub(1))
+                    .filter(|k| *k < index);
+                let target = match after {
+                    Some(_) => None,
+                    None => pick_destination(&item["destination"], candidates),
+                };
+                let text = item["text"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(|t| {
+                        if in_sent_card(t, actions) {
+                            t.to_owned()
+                        } else {
+                            without_new_broadcasts(t, instruction)
+                        }
+                    });
+                SlackAction {
+                    by_claude: target.as_ref().is_some_and(by_claude),
+                    target,
+                    after,
+                    paste: text.is_none(),
+                    text: text.unwrap_or_default(),
+                    posted: None,
+                }
+            })
+            .collect(),
+        None => {
+            let to = pick_destination(&output["destination"], candidates)?;
+            let mut list = pending.to_vec();
+            let first = list.first_mut()?;
+            first.by_claude = by_claude(&to);
+            first.target = Some(to);
+            first.after = None;
+            list
+        }
+    };
+    (new != pending).then_some(new)
+}
+
+/// The thread that a thing to do continues after the posted one `posted`: none when Slack answered no time for that post.
+fn thread_after(posted: &PostedAt) -> Option<Target> {
+    valid_ts(&posted.thread).then(|| Target {
+        team_id: posted.team_id.clone(),
+        channel: posted.channel.clone(),
+        name: posted.name.clone(),
+        thread_ts: Some(posted.thread.clone()),
+    })
+}
+
 /// What the answer to a request about the Slack post does (S-23). Only a model that said `post: true` (a JSON `true` and nothing else) asks for a post,
-/// and Rust posts it only when all of these hold, whatever the model answers, because the text the model reads is untrusted:
-/// (a) the owner's own request holds a word for a post (`asks_to_post`);
-/// (b) the destination is one `pick_destination` found in the list (`candidates`), and it is the one in the destination chip (`chip`; see `owner_chip`) or a candidate that the owner's request names (`named_candidates`) and that no other named candidate shares the name with;
-/// (c) the text to post (`text`) holds no link and no Slack mention that the text the owner sent (`current`) does not.
+/// and what is posted is every thing to do of `actions` that is not posted (the list as the answer made it, `answered_actions`), from the top down. `text` is the original message as the answer made it.
+/// Rust posts them only when all of these hold for the whole list, whatever the model answers, because the text the model reads is untrusted:
+/// (a) the owner's own request holds a word for a post (`asks_to_post`; a word inside an address does not count);
+/// (b) each one goes to the thread of an earlier thing to do of the same list, or to a destination of the list (`candidates`) that the owner chose in a chip (not `by_claude`),
+/// that the owner's request names (`named_candidates`, and no other named candidate shares the name), or that a Slack link in the owner's request leads to (`linked`);
+/// (c) each text (the original message, or the written text) is not blank or past `POST_LIMIT`, and holds no link and no Slack mention that the original message the owner sent (`current`) and the request do not,
+/// and a written text holds no `@here`, `@channel` or `@everyone` that the request does not (`text_allowed`);
+/// (d) there is something to post, at most `ACTIONS_MAX`;
+/// (e) each written text is one the owner has seen or asked for: the text of a card of `sent`, the list the screen sent (`in_sent_card`), or a text that the owner's request holds
+/// (compared with each run of white space as one space, `squeezed`), so that a text the same answer wrote, which the owner has not read, is not posted. When one thing to do fails a rule, nothing is posted.
 /// A model that asked for a post and was refused gives `Refused`, so that the screen can say that nothing was posted.
+#[allow(clippy::too_many_arguments)]
 pub fn post_decision(
     post: &Value,
     instruction: &str,
-    destination: Option<&Target>,
-    chip: Option<&Target>,
+    actions: &[SlackAction],
+    sent: &[SlackAction],
     candidates: &[Candidate],
+    linked: &[Target],
     current: &str,
     text: &str,
 ) -> PostDecision {
     if *post != Value::Bool(true) {
         return PostDecision::Skip;
     }
-    match destination {
-        Some(to)
-            if asks_to_post(instruction)
-                && (chip == Some(to) || names_only(instruction, candidates, to))
-                && !adds_link_or_mention(current, text) =>
-        {
-            PostDecision::Post(to.clone())
-        }
-        _ => PostDecision::Refused,
+    let words = without_urls(instruction);
+    let done = posted_count(actions);
+    let pending = actions.len() - done;
+    if !asks_to_post(&words) || pending == 0 || pending > ACTIONS_MAX {
+        return PostDecision::Refused;
     }
+    let request = squeezed(instruction);
+    let unseen = |a: &SlackAction| {
+        !a.paste && !in_sent_card(&a.text, sent) && !request.contains(&squeezed(&a.text))
+    };
+    if actions[done..].iter().any(unseen) {
+        return PostDecision::Refused;
+    }
+    let plan = |index: usize, a: &SlackAction| -> Option<PlannedPost> {
+        let to = match (a.after, &a.target) {
+            (Some(k), _) => {
+                let earlier = actions[..index].get(k)?;
+                if let Some(posted) = &earlier.posted {
+                    thread_after(posted)?;
+                }
+                PostTo::ThreadOf(k)
+            }
+            (None, Some(to)) => {
+                let listed = candidates.iter().any(|c| c.target == *to);
+                let owned = !a.by_claude
+                    || names_only(&words, candidates, to)
+                    || linked.iter().any(|l| same_place(l, to));
+                if !(listed && owned) {
+                    return None;
+                }
+                PostTo::Target(to.clone())
+            }
+            (None, None) => return None,
+        };
+        let written = !a.paste;
+        let body = if written { a.text.as_str() } else { text };
+        let fits = !body.trim().is_empty() && body.chars().count() <= POST_LIMIT;
+        (fits && text_allowed(body, written, current, instruction)).then(|| PlannedPost {
+            index,
+            to,
+            text: body.to_owned(),
+            written,
+        })
+    };
+    actions
+        .iter()
+        .enumerate()
+        .skip(done)
+        .map(|(index, a)| plan(index, a))
+        .collect::<Option<Vec<_>>>()
+        .map_or(PostDecision::Refused, PostDecision::Post)
 }
 
 /// The workspace's joined channels: the list kept in memory if it is fresh, else read from Slack (and kept).
@@ -1466,20 +1837,31 @@ async fn joined_channels(
     fetch_and_keep_channels(auth.http(), &state.channels, team_id, &token).await
 }
 
-/// The destinations Claude may choose from on the Slack compose screen (S-4): the destination now in the chip (`current`), the recent destinations and the joined channels of every connected workspace.
-/// It is a help for a proofreading, so whatever cannot be read (the list of workspaces, the recent file, a workspace's channels) is logged and left out, and the call goes on.
+/// The destinations of a request to Claude on the Slack compose screen: the ones it may choose from, and among them the ones that the Slack links of the request lead to.
+pub struct Destinations {
+    pub candidates: Vec<Candidate>,
+    pub linked: Vec<Target>,
+}
+
+/// The destinations Claude may choose from on the Slack compose screen (S-4): the destinations now in the chips (`current`), the ones that the Slack links in the owner's request (`instruction`) lead to
+/// (read as the link of the picker is, `slack_link`, but at once and with no retry of a rate-limited read; only those of a connected workspace), the recent destinations and the joined channels of every connected workspace.
+/// It is a help for a proofreading, so whatever cannot be read (the list of workspaces, the recent file, a workspace's channels, a link's workspace) is logged and left out, and the call goes on.
 pub async fn destination_candidates(
     dir: &Path,
     auth: &Auth,
     state: &SlackState,
-    current: Option<&Target>,
-) -> Vec<Candidate> {
+    current: &[Target],
+    instruction: &str,
+) -> Destinations {
     let command = "claude_proofread_slack";
     let workspaces = match load_workspaces(dir).await {
         Ok(workspaces) => workspaces,
         Err(e) => {
             log_failure(command, "-", e);
-            return vec![];
+            return Destinations {
+                candidates: vec![],
+                linked: vec![],
+            };
         }
     };
     let recent_dir = dir.to_path_buf();
@@ -1489,6 +1871,31 @@ pub async fn destination_candidates(
             log_failure(command, "-", e);
             vec![]
         });
+    // A link of a workspace that is not connected is not a destination, and neither is one of a workspace whose token cannot be read (logged). The token of a workspace is read once.
+    let links: Vec<(String, Link)> = request_links(instruction)
+        .into_iter()
+        .filter_map(|link| {
+            let team_id = workspace_for_host(&workspaces, &link.host)?.team_id.clone();
+            Some((team_id, link))
+        })
+        .collect();
+    let mut tokens: HashMap<String, Option<String>> = HashMap::new();
+    for (team_id, _) in &links {
+        if !tokens.contains_key(team_id) {
+            let token = token_of(team_id)
+                .await
+                .map_err(|e| log_failure(command, team_id, e))
+                .ok();
+            tokens.insert(team_id.clone(), token);
+        }
+    }
+    // The names are read at once, in the order of the request, and a rate-limited read is not sent again: the channel ID stands in for the name.
+    let http = auth.http();
+    let linked = futures_util::future::join_all(links.into_iter().filter_map(|(team_id, link)| {
+        let token = tokens.get(&team_id)?.as_deref()?;
+        Some(link_named(http, command, team_id, token, link, 0))
+    }))
+    .await;
     let mut channels = vec![];
     for w in &workspaces {
         match joined_channels(auth, state, &w.team_id).await {
@@ -1498,7 +1905,59 @@ pub async fn destination_candidates(
             }
         }
     }
-    candidates_of(&workspaces, current, &recent, &channels)
+    let candidates = candidates_of(&workspaces, current, &linked, &recent, &channels);
+    Destinations { candidates, linked }
+}
+
+/// Where a Slack link leads: the connected workspace of its host, the channel, and the thread of the message. A failure to read the workspace's token is logged under `command`.
+async fn link_target(
+    http: &reqwest::Client,
+    command: &str,
+    workspaces: &[Workspace],
+    link: Link,
+) -> Result<Target, String> {
+    let team_id = workspace_for_host(workspaces, &link.host)
+        .ok_or(NO_WORKSPACE)?
+        .team_id
+        .clone();
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    Ok(link_named(http, command, team_id, &token, link, MAX_RETRIES).await)
+}
+
+/// The destination of `link` in the workspace `team_id`, with the channel's name read with `token` (a rate-limited read is sent again up to `retries` times). A failure of that read is logged under `command`.
+async fn link_named(
+    http: &reqwest::Client,
+    command: &str,
+    team_id: String,
+    token: &str,
+    link: Link,
+    retries: usize,
+) -> Target {
+    // The name is for the recent list only: the channel ID stands in when Slack cannot say.
+    let form = [("channel", link.channel.clone())];
+    let read = call_scoped_retrying(
+        http,
+        token,
+        "conversations.info",
+        Payload::Form(&form),
+        retries,
+    )
+    .await;
+    let name = match read {
+        Ok((reply, _)) => reply["channel"]["name"].as_str().map(str::to_owned),
+        Err(e) => {
+            log_failure(command, &team_id, e);
+            None
+        }
+    };
+    Target {
+        team_id,
+        name: name.unwrap_or_else(|| link.channel.clone()),
+        channel: link.channel,
+        thread_ts: link.thread_ts,
+    }
 }
 
 /// Where a pasted Slack link leads: the connected workspace of its host, the channel, and the thread of the message.
@@ -1513,35 +1972,7 @@ pub async fn slack_link(
     let workspaces = load_workspaces(&config_dir(&app)?)
         .await
         .map_err(|e| log_failure(command, "-", e))?;
-    let team_id = workspace_for_host(&workspaces, &link.host)
-        .ok_or(NO_WORKSPACE)?
-        .team_id
-        .clone();
-    let token = token_of(&team_id)
-        .await
-        .map_err(|e| log_failure(command, &team_id, e))?;
-    // The name is for the recent list only: the channel ID stands in when Slack cannot say.
-    let form = [("channel", link.channel.clone())];
-    let name = match call(
-        auth.http(),
-        &token,
-        "conversations.info",
-        Payload::Form(&form),
-    )
-    .await
-    {
-        Ok(reply) => reply["channel"]["name"].as_str().map(str::to_owned),
-        Err(e) => {
-            log_failure(command, &team_id, e);
-            None
-        }
-    };
-    Ok(Target {
-        team_id,
-        name: name.unwrap_or_else(|| link.channel.clone()),
-        channel: link.channel,
-        thread_ts: link.thread_ts,
-    })
+    link_target(auth.http(), command, &workspaces, link).await
 }
 
 /// Whether `url` is a link to one Slack message (not a channel's), as the frontend must have checked it.
@@ -1670,7 +2101,8 @@ pub fn slack_preview(subject: &str, from: &str, date: &str, body: &str) -> Strin
     mail_text(subject, from, date, body)
 }
 
-/// Checks the destination and the text, and posts `text` (`markdown`: the Markdown of the rich field, see `post_text`) to the channel or as a reply in `thread_ts`'s thread. A failure is logged under `command` and returned.
+/// Checks the destination and the text, and posts `text` (read as `form`, see `sent_text`) to the channel or as a reply in `thread_ts`'s thread. A failure is logged under `command` and returned.
+/// The answer is the time (`ts`) of the posted message (`posted_ts`), which a later post replies to (S-1).
 /// The text goes to Slack only here, on the user's click.
 async fn send_post(
     http: &reqwest::Client,
@@ -1679,15 +2111,15 @@ async fn send_post(
     channel: &str,
     thread_ts: Option<&str>,
     text: &str,
-    markdown: bool,
-) -> Result<(), String> {
+    form: PostForm,
+) -> Result<String, String> {
     if token_key(team_id).is_err()
         || !valid_channel(channel)
         || thread_ts.is_some_and(|t| !valid_ts(t))
     {
         return Err(log_failure(command, team_id, BAD_TARGET));
     }
-    let text = post_text(text, markdown).map_err(|e| log_failure(command, team_id, e))?;
+    let text = sent_text(text, form).map_err(|e| log_failure(command, team_id, e))?;
     let token = token_of(team_id)
         .await
         .map_err(|e| log_failure(command, team_id, e))?;
@@ -1700,14 +2132,16 @@ async fn send_post(
     if let Some(ts) = thread_ts {
         message["thread_ts"] = ts.into();
     }
-    call(http, &token, "chat.postMessage", Payload::Json(&message))
+    let reply = call(http, &token, "chat.postMessage", Payload::Json(&message))
         .await
         .map_err(|e| log_failure(command, team_id, e))?;
-    Ok(())
+    Ok(posted_ts(&reply))
 }
 
 /// Posts `text` to `target` (the channel, or a reply in its thread) by `send_post`, and remembers the destination. A failure of the post is logged under `command` and returned.
 /// It is the one path of S-1: the "投稿" button (`slack_post`) and a request to Claude that asks for a post (S-23, `claude_proofread_slack`) both end here.
+/// `written` says that `text` is one written for a card of "行うこと" (by the owner, or by Claude at a request whose own words hold every broadcast word of it, `post_decision`): only then do its `@here`, `@channel` and `@everyone` become mentions (`PostForm::Written`); the mail's content is untrusted and is posted as text.
+/// The answer is the time (`ts`) of the posted message, empty when Slack's answer had none.
 /// `dir` is the config folder when it could be found; without it the post still goes and only the remembering is skipped (and logged).
 pub(crate) async fn post_and_remember(
     dir: Result<&Path, String>,
@@ -1715,15 +2149,21 @@ pub(crate) async fn post_and_remember(
     command: &str,
     target: Target,
     text: &str,
-) -> Result<(), String> {
-    send_post(
+    written: bool,
+) -> Result<String, String> {
+    let form = if written {
+        PostForm::Written
+    } else {
+        PostForm::Plain
+    };
+    let ts = send_post(
         http,
         command,
         &target.team_id,
         &target.channel,
         target.thread_ts.as_deref(),
         text,
-        false,
+        form,
     )
     .await?;
     // The post is done: failing to remember where is only logged.
@@ -1751,12 +2191,60 @@ pub(crate) async fn post_and_remember(
     if let Err(e) = remembered {
         log_failure(command, &team_id, e);
     }
-    Ok(())
+    Ok(ts)
+}
+
+/// Makes the posts that `post_decision` allowed (S-23), from the top down, each by `post_and_remember`, and marks each thing to do of `list` that was sent as posted.
+/// A post that continues a thread goes to the thread of the thing to do it follows, known once that one is posted with a time.
+/// A failure stops there: the first post failing is the error (nothing was posted), and a later one is the answer, with what was sent already marked, so that it is not sent twice.
+pub(crate) async fn post_planned(
+    dir: &Path,
+    http: &reqwest::Client,
+    command: &str,
+    list: &mut [SlackAction],
+    plan: Vec<PlannedPost>,
+) -> Result<Option<String>, String> {
+    let mut sent = 0;
+    for post in plan {
+        let to = match post.to {
+            PostTo::Target(to) => Ok(to),
+            PostTo::ThreadOf(k) => list[k]
+                .posted
+                .as_ref()
+                .and_then(thread_after)
+                .ok_or_else(|| NO_THREAD.to_owned()),
+        };
+        let done = match to {
+            Ok(to) => {
+                post_and_remember(Ok(dir), http, command, to.clone(), &post.text, post.written)
+                    .await
+                    .map(|ts| PostedAt {
+                        thread: to.thread_ts.unwrap_or(ts),
+                        team_id: to.team_id,
+                        channel: to.channel,
+                        name: to.name,
+                    })
+            }
+            Err(e) => Err(e),
+        };
+        match done {
+            Ok(posted) => {
+                list[post.index].posted = Some(posted);
+                sent += 1;
+            }
+            Err(e) if sent == 0 => return Err(e),
+            Err(e) => return Ok(Some(e)),
+        }
+    }
+    Ok(None)
 }
 
 /// Posts `text` (what the user edited) to the channel, or as a reply in `thread_ts`'s thread, and remembers the destination.
+/// `written` is true for a text the owner wrote in a card of "行うこと" (its `@here`, `@channel` and `@everyone` become mentions), and false for the mail's content.
+/// The answer is the time (`ts`) of the posted message, which the screen gives as `thread_ts` to a later post that continues its thread; it is empty when Slack's answer had none.
 /// The text goes to Slack only here, on the user's click (and in the request to Claude that asks for it, S-23).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn slack_post(
     app: AppHandle,
     auth: State<'_, Auth>,
@@ -1765,7 +2253,8 @@ pub async fn slack_post(
     thread_ts: Option<String>,
     name: String,
     text: String,
-) -> Result<bool, String> {
+    written: bool,
+) -> Result<String, String> {
     let command = "slack_post";
     let target = Target {
         team_id,
@@ -1780,9 +2269,9 @@ pub async fn slack_post(
         command,
         target,
         &text,
+        written,
     )
-    .await?;
-    Ok(true)
+    .await
 }
 
 // The Slack timeline (S-5), the thread (S-6) and its reply (S-6, S-7). Nothing about messages is saved to disk.
@@ -6466,7 +6955,7 @@ pub async fn slack_channel_post(
         &channel,
         None,
         &text,
-        markdown.unwrap_or(false),
+        PostForm::rich(markdown),
     )
     .await?;
     Ok(true)
@@ -6490,7 +6979,7 @@ pub async fn slack_reply(
         &channel,
         Some(&thread_ts),
         &text,
-        markdown.unwrap_or(false),
+        PostForm::rich(markdown),
     )
     .await?;
     Ok(true)
@@ -7069,6 +7558,82 @@ mod tests {
             post_text("  *見積 <1>*\nA <a@x.jp> & 本文\n", false).as_deref(),
             Ok("*見積 &lt;1&gt;*\nA &lt;a@x.jp&gt; &amp; 本文")
         );
+    }
+
+    #[test]
+    fn a_written_text_turns_its_broadcast_words_into_mentions() {
+        assert_eq!(
+            broadcast_mentions("@here 確認お願いします"),
+            "<!here> 確認お願いします"
+        );
+        assert_eq!(
+            broadcast_mentions("@channel と @everyone、@here。"),
+            "<!channel> と <!everyone>、<!here>。"
+        );
+        // Kana and kanji next to the word end it, as a space does.
+        assert_eq!(broadcast_mentions("皆さん@here確認"), "皆さん<!here>確認");
+        assert_eq!(
+            broadcast_mentions("(@here)\n@channel"),
+            "(<!here>)\n<!channel>"
+        );
+        // A longer word, a mail address and another case are not the broadcast words.
+        for text in [
+            "@hereafter",
+            "@here_1",
+            "@channels",
+            "@everyone-else",
+            "a@here",
+            "a.b@channel.example",
+            "x_@everyone",
+            "@Here",
+            "@ here",
+            "here",
+            "@alice",
+        ] {
+            assert_eq!(broadcast_mentions(text), text, "{text}");
+        }
+        // It works on the escaped text: what was typed as markup stays text.
+        assert_eq!(
+            broadcast_mentions(&escape_mrkdwn("<!here> @here")),
+            "&lt;!here&gt; <!here>"
+        );
+    }
+
+    #[test]
+    fn only_a_written_text_gets_its_broadcast_mentions() {
+        assert_eq!(
+            sent_text("@here *見積* <1>", PostForm::Written).as_deref(),
+            Ok("<!here> *見積* &lt;1&gt;")
+        );
+        // The mail's text is untrusted: its words stay words.
+        assert_eq!(
+            sent_text("@here *見積* <1>", PostForm::Plain).as_deref(),
+            Ok("@here *見積* &lt;1&gt;")
+        );
+        assert_eq!(
+            sent_text("@here **見積**", PostForm::Markdown).as_deref(),
+            Ok("@here *見積*")
+        );
+        assert_eq!(
+            sent_text(" ", PostForm::Written).unwrap_err(),
+            "貼る内容が空です"
+        );
+    }
+
+    #[test]
+    fn the_time_of_a_post_is_read_from_the_answer() {
+        assert_eq!(
+            posted_ts(&json!({"ok": true, "ts": "1761785520.123456"})),
+            "1761785520.123456"
+        );
+        // An answer without a well-formed time gives none: the post is done all the same.
+        for reply in [
+            json!({"ok": true}),
+            json!({"ok": true, "ts": 1}),
+            json!({"ok": true, "ts": "abc"}),
+        ] {
+            assert_eq!(posted_ts(&reply), "", "{reply}");
+        }
     }
 
     #[test]
@@ -11569,7 +12134,7 @@ mod tests {
             ("T1".to_owned(), vec![channel("C1"), channel("C2")]),
             ("T2".to_owned(), vec![channel("C1")]),
         ];
-        let got = candidates_of(&workspaces, None, &recents, &channels);
+        let got = candidates_of(&workspaces, &[], &[], &recents, &channels);
         let targets: Vec<_> = got.iter().map(|c| c.target.clone()).collect();
         assert_eq!(
             targets,
@@ -11591,7 +12156,7 @@ mod tests {
         let many: Vec<Channel> = (0..DESTINATION_LIMIT + 5)
             .map(|i| channel(&format!("C{i}")))
             .collect();
-        let got = candidates_of(&workspaces, None, &[], &[("T1".to_owned(), many)]);
+        let got = candidates_of(&workspaces, &[], &[], &[], &[("T1".to_owned(), many)]);
         assert_eq!(got.len(), DESTINATION_LIMIT);
     }
 
@@ -11599,7 +12164,7 @@ mod tests {
     fn a_chosen_number_gives_that_candidate_and_anything_else_is_dropped() {
         let workspaces = [workspace("T1", "https://one.slack.com/")];
         let channels = vec![("T1".to_owned(), vec![channel("C1"), channel("C2")])];
-        let got = candidates_of(&workspaces, None, &[], &channels);
+        let got = candidates_of(&workspaces, &[], &[], &[], &channels);
         assert_eq!(
             pick_destination(&json!(1), &got),
             Some(target("T1", "C1", None))
@@ -11629,11 +12194,23 @@ mod tests {
         let workspaces = [workspace("T1", "https://one.slack.com/")];
         let channels = vec![("T1".to_owned(), vec![channel("C1"), channel("C2")])];
         let chip = target("T1", "C2", None);
-        let got = candidates_of(&workspaces, Some(&chip), &[], &channels);
+        let got = candidates_of(
+            &workspaces,
+            std::slice::from_ref(&chip),
+            &[],
+            &[],
+            &channels,
+        );
         let targets: Vec<_> = got.iter().map(|c| c.target.clone()).collect();
         assert_eq!(targets, vec![chip, target("T1", "C1", None)]);
         // A chip in a workspace that is not connected is left out.
-        let got = candidates_of(&workspaces, Some(&target("T9", "C1", None)), &[], &channels);
+        let got = candidates_of(
+            &workspaces,
+            &[target("T9", "C1", None)],
+            &[],
+            &[],
+            &channels,
+        );
         assert_eq!(got.len(), 2);
     }
 
@@ -11654,12 +12231,70 @@ mod tests {
             .collect()
     }
 
+    /// A thing to do that pastes the original message to `to`, chosen by the owner.
+    fn pasting(to: Option<&Target>) -> SlackAction {
+        SlackAction {
+            target: to.cloned(),
+            after: None,
+            paste: true,
+            text: String::new(),
+            posted: None,
+            by_claude: false,
+        }
+    }
+
+    /// What `post_decision` does with one thing to do that pastes the original message.
+    #[derive(Debug, PartialEq)]
+    enum Single {
+        Skip,
+        Post(Target),
+        Refused,
+    }
+
+    /// `post_decision` for one thing to do that pastes the original message to `to`: the owner chose that destination when it is `chip`, and Claude did otherwise.
+    fn single(
+        post: &Value,
+        instruction: &str,
+        to: Option<&Target>,
+        chip: Option<&Target>,
+        candidates: &[Candidate],
+        current: &str,
+        text: &str,
+    ) -> Single {
+        let actions = [SlackAction {
+            by_claude: chip != to,
+            ..pasting(to)
+        }];
+        match post_decision(
+            post,
+            instruction,
+            &actions,
+            &actions,
+            candidates,
+            &[],
+            current,
+            text,
+        ) {
+            PostDecision::Skip => Single::Skip,
+            PostDecision::Refused => Single::Refused,
+            PostDecision::Post(plan) => {
+                assert_eq!(plan.len(), 1);
+                assert_eq!((plan[0].index, plan[0].written), (0, false));
+                assert_eq!(plan[0].text, text);
+                match &plan[0].to {
+                    PostTo::Target(to) => Single::Post(to.clone()),
+                    PostTo::ThreadOf(_) => panic!("a thread of nothing"),
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_post_needs_a_post_word_in_the_request_of_the_owner() {
         let to = named("sales");
         let list = listed(&[&to]);
         let post = |instruction: &str| {
-            post_decision(
+            single(
                 &json!(true),
                 instruction,
                 Some(&to),
@@ -11676,11 +12311,11 @@ mod tests {
             "please POST",
             "敬語に直して投稿",
         ] {
-            assert_eq!(post(ok), PostDecision::Post(to.clone()), "{ok}");
+            assert_eq!(post(ok), Single::Post(to.clone()), "{ok}");
         }
         // A request that is about something else, or blank, is refused whatever the model answers.
         for no in ["敬語に直して", "", "  ", "\n\u{3000}\t"] {
-            assert_eq!(post(no), PostDecision::Refused, "{no:?}");
+            assert_eq!(post(no), Single::Refused, "{no:?}");
         }
     }
 
@@ -11689,12 +12324,12 @@ mod tests {
         let (sales, other) = (named("sales"), named("random"));
         let list = listed(&[&sales, &other]);
         let post = |instruction: &str, to: Option<&Target>, chip: Option<&Target>| {
-            post_decision(&json!(true), instruction, to, chip, &list, "T", "T")
+            single(&json!(true), instruction, to, chip, &list, "T", "T")
         };
         // The chip needs no name in the request.
         assert_eq!(
             post("この内容で投稿して", Some(&sales), Some(&sales)),
-            PostDecision::Post(sales.clone())
+            Single::Post(sales.clone())
         );
         // Another destination needs its name in the request, with or without #, in any case.
         for ok in [
@@ -11705,24 +12340,21 @@ mod tests {
         ] {
             assert_eq!(
                 post(ok, Some(&other), Some(&sales)),
-                PostDecision::Post(other.clone()),
+                Single::Post(other.clone()),
                 "{ok}"
             );
         }
         assert_eq!(
             post("この内容で投稿して", Some(&other), Some(&sales)),
-            PostDecision::Refused
+            Single::Refused
         );
         assert_eq!(
             post("この内容で投稿して", Some(&other), None),
-            PostDecision::Refused
+            Single::Refused
         );
         // No destination of the list, or a channel with no name: refused.
-        assert_eq!(post("投稿して", None, Some(&sales)), PostDecision::Refused);
-        assert_eq!(
-            post("投稿して", Some(&named(" ")), None),
-            PostDecision::Refused
-        );
+        assert_eq!(post("投稿して", None, Some(&sales)), Single::Refused);
+        assert_eq!(post("投稿して", Some(&named(" ")), None), Single::Refused);
     }
 
     #[test]
@@ -11736,7 +12368,7 @@ mod tests {
         let list = listed(&[&dev, &dev_team]);
         let chip = named("elsewhere");
         let post = |instruction: &str, to: &Target| {
-            post_decision(
+            single(
                 &json!(true),
                 instruction,
                 Some(to),
@@ -11749,24 +12381,18 @@ mod tests {
         // `dev-team` is named, not `dev`.
         assert_eq!(
             post("#dev-team に投稿", &dev_team),
-            PostDecision::Post(dev_team.clone())
+            Single::Post(dev_team.clone())
         );
-        assert_eq!(post("#dev-team に投稿", &dev), PostDecision::Refused);
-        assert_eq!(post("#dev に投稿", &dev), PostDecision::Post(dev.clone()));
-        assert_eq!(post("#dev に投稿", &dev_team), PostDecision::Refused);
+        assert_eq!(post("#dev-team に投稿", &dev), Single::Refused);
+        assert_eq!(post("#dev に投稿", &dev), Single::Post(dev.clone()));
+        assert_eq!(post("#dev に投稿", &dev_team), Single::Refused);
         // Kana and kanji next to an ASCII name end the word.
-        assert_eq!(
-            post("#devに投稿して", &dev),
-            PostDecision::Post(dev.clone())
-        );
-        assert_eq!(
-            post("これを#devへ投稿", &dev),
-            PostDecision::Post(dev.clone())
-        );
-        assert_eq!(post("#dev-teamに投稿", &dev), PostDecision::Refused);
+        assert_eq!(post("#devに投稿して", &dev), Single::Post(dev.clone()));
+        assert_eq!(post("これを#devへ投稿", &dev), Single::Post(dev.clone()));
+        assert_eq!(post("#dev-teamに投稿", &dev), Single::Refused);
         assert_eq!(
             post("#dev-teamに投稿", &dev_team),
-            PostDecision::Post(dev_team.clone())
+            Single::Post(dev_team.clone())
         );
         // A name with a non-ASCII character keeps letters as word characters.
         let jp = Target {
@@ -11776,7 +12402,7 @@ mod tests {
         };
         let list = listed(&[&jp]);
         let decide = |instruction: &str| {
-            post_decision(
+            single(
                 &json!(true),
                 instruction,
                 Some(&jp),
@@ -11786,8 +12412,8 @@ mod tests {
                 "T",
             )
         };
-        assert_eq!(decide("#営業 に投稿"), PostDecision::Post(jp.clone()));
-        assert_eq!(decide("#営業部に投稿"), PostDecision::Refused);
+        assert_eq!(decide("#営業 に投稿"), Single::Post(jp.clone()));
+        assert_eq!(decide("#営業部に投稿"), Single::Refused);
         // A name inside a longer word is not named.
         for no in [
             "#developers に投稿",
@@ -11795,7 +12421,7 @@ mod tests {
             "#my_dev に投稿",
             "#dev2 に投稿",
         ] {
-            assert_eq!(post(no, &dev), PostDecision::Refused, "{no}");
+            assert_eq!(post(no, &dev), Single::Refused, "{no}");
         }
     }
 
@@ -11813,7 +12439,7 @@ mod tests {
         let chip = named("elsewhere");
         for to in [&one, &two] {
             assert_eq!(
-                post_decision(
+                single(
                     &json!(true),
                     "#general に投稿",
                     Some(to),
@@ -11822,12 +12448,12 @@ mod tests {
                     "T",
                     "T"
                 ),
-                PostDecision::Refused
+                Single::Refused
             );
         }
         // The chip still posts without a name.
         assert_eq!(
-            post_decision(
+            single(
                 &json!(true),
                 "投稿して",
                 Some(&one),
@@ -11836,7 +12462,7 @@ mod tests {
                 "T",
                 "T"
             ),
-            PostDecision::Post(one.clone())
+            Single::Post(one.clone())
         );
     }
 
@@ -11846,7 +12472,7 @@ mod tests {
         let list = listed(&[&post_channel]);
         let chip = named("elsewhere");
         let decide = |instruction: &str| {
-            post_decision(
+            single(
                 &json!(true),
                 instruction,
                 Some(&post_channel),
@@ -11856,12 +12482,9 @@ mod tests {
                 "T",
             )
         };
-        assert_eq!(decide("post it"), PostDecision::Refused);
-        assert_eq!(decide("post に投稿"), PostDecision::Refused);
-        assert_eq!(
-            decide("#post に投稿"),
-            PostDecision::Post(post_channel.clone())
-        );
+        assert_eq!(decide("post it"), Single::Refused);
+        assert_eq!(decide("post に投稿"), Single::Refused);
+        assert_eq!(decide("#post に投稿"), Single::Post(post_channel.clone()));
     }
 
     #[test]
@@ -11869,7 +12492,7 @@ mod tests {
         let to = named("sales");
         let list = listed(&[&to]);
         assert_eq!(
-            post_decision(
+            single(
                 &json!(true),
                 "投稿して",
                 Some(&to),
@@ -11878,7 +12501,7 @@ mod tests {
                 "T",
                 "T"
             ),
-            PostDecision::Post(to.clone())
+            Single::Post(to.clone())
         );
         for not in [
             json!(false),
@@ -11888,8 +12511,8 @@ mod tests {
             json!([true]),
         ] {
             assert_eq!(
-                post_decision(&not, "投稿して", Some(&to), Some(&to), &list, "T", "T"),
-                PostDecision::Skip,
+                single(&not, "投稿して", Some(&to), Some(&to), &list, "T", "T"),
+                Single::Skip,
                 "{not}"
             );
         }
@@ -11900,7 +12523,7 @@ mod tests {
         let to = named("sales");
         let list = listed(&[&to]);
         let post = |current: &str, text: &str| {
-            post_decision(
+            single(
                 &json!(true),
                 "投稿して",
                 Some(&to),
@@ -11910,8 +12533,8 @@ mod tests {
                 text,
             )
         };
-        let refused = PostDecision::Refused;
-        let ok = PostDecision::Post(to.clone());
+        let refused = Single::Refused;
+        let ok = Single::Post(to.clone());
         // Nothing new.
         assert_eq!(post("見てください", "見てください。"), ok);
         // A link or a mention that the owner's text has stays.
@@ -11989,9 +12612,11 @@ mod tests {
             assert!(got.iter().all(|k| k.contains("://")), "{plain}: {got:?}");
         }
         // One the owner's text holds stays.
-        assert!(!adds_link_or_mention(
+        assert!(text_allowed(
+            "evil.example.com/a です",
+            false,
             "evil.example.com/a",
-            "evil.example.com/a です"
+            "投稿して"
         ));
     }
 
@@ -12006,7 +12631,7 @@ mod tests {
         let list = listed(&[&marketing, &dev, &dev_team]);
         let chip = named("elsewhere");
         let post = |instruction: &str, to: &Target| {
-            post_decision(
+            single(
                 &json!(true),
                 instruction,
                 Some(to),
@@ -12017,18 +12642,12 @@ mod tests {
             )
         };
         let request = "#marketing の件を #dev に投稿して";
-        assert_eq!(post(request, &dev), PostDecision::Post(dev.clone()));
-        assert_eq!(
-            post(request, &marketing),
-            PostDecision::Post(marketing.clone())
-        );
+        assert_eq!(post(request, &dev), Single::Post(dev.clone()));
+        assert_eq!(post(request, &marketing), Single::Post(marketing.clone()));
         // `dev-team` is not `dev`, even with another channel named.
         let request = "#marketing の件を #dev-team に投稿して";
-        assert_eq!(post(request, &dev), PostDecision::Refused);
-        assert_eq!(
-            post(request, &dev_team),
-            PostDecision::Post(dev_team.clone())
-        );
+        assert_eq!(post(request, &dev), Single::Refused);
+        assert_eq!(post(request, &dev_team), Single::Post(dev_team.clone()));
         // A name that lies only inside a longer name that is named is not named.
         let (sales, sales_eu) = (named("sales"), named("sales eu"));
         let list = listed(&[&sales, &sales_eu]);
@@ -12047,7 +12666,7 @@ mod tests {
         };
         let list = listed(&[&marketing, &one, &two]);
         assert_eq!(
-            post_decision(
+            single(
                 &json!(true),
                 "#marketing の件を #general に投稿",
                 Some(&one),
@@ -12056,7 +12675,7 @@ mod tests {
                 "T",
                 "T"
             ),
-            PostDecision::Refused
+            Single::Refused
         );
     }
 
@@ -12064,27 +12683,640 @@ mod tests {
     fn a_chip_that_claude_set_is_not_the_owners() {
         let (sales, other) = (named("sales"), named("random"));
         let list = listed(&[&sales, &other]);
-        assert_eq!(owner_chip(Some(&sales), false), Some(&sales));
-        assert_eq!(owner_chip(Some(&sales), true), None);
-        assert_eq!(owner_chip(None, false), None);
         // With such a chip a "投稿して" alone posts nowhere, and a named channel still posts.
         let post = |instruction: &str, by_claude: bool| {
+            let actions = [SlackAction {
+                by_claude,
+                ..pasting(Some(&sales))
+            }];
             post_decision(
                 &json!(true),
                 instruction,
-                Some(&sales),
-                owner_chip(Some(&sales), by_claude),
+                &actions,
+                &actions,
                 &list,
+                &[],
                 "T",
                 "T",
             )
         };
-        assert_eq!(post("投稿して", false), PostDecision::Post(sales.clone()));
+        let posts = PostDecision::Post(vec![PlannedPost {
+            index: 0,
+            to: PostTo::Target(sales.clone()),
+            text: "T".into(),
+            written: false,
+        }]);
+        assert_eq!(post("投稿して", false), posts);
         assert_eq!(post("投稿して", true), PostDecision::Refused);
+        assert_eq!(post("#sales に投稿して", true), posts);
+    }
+
+    /// A thing to do that writes `text` in the thread of the one at `after`.
+    fn writing(after: usize, text: &str) -> SlackAction {
+        SlackAction {
+            target: None,
+            after: Some(after),
+            paste: false,
+            text: text.into(),
+            posted: None,
+            by_claude: false,
+        }
+    }
+
+    /// `a`, posted to its own destination with `thread` as the thread a later one continues.
+    fn posted(a: SlackAction, thread: &str) -> SlackAction {
+        let to = a.target.clone().unwrap();
+        SlackAction {
+            posted: Some(PostedAt {
+                team_id: to.team_id,
+                channel: to.channel,
+                name: to.name,
+                thread: thread.into(),
+            }),
+            ..a
+        }
+    }
+
+    #[test]
+    fn a_request_posts_a_written_text_and_then_the_original_message_in_its_thread() {
+        let sales = named("sales");
+        let list = listed(&[&sales]);
+        // The answer writes the two things to do; the first goes to the chip the owner chose.
+        let request =
+            "@here お疲れ様です。こちらお願いできますでしょうか？ と投稿したあと、メールの内容をそのスレッドに貼って";
+        let current = [pasting(Some(&sales))];
+        let output = json!({"actions": [
+            {"destination": 1, "text": "@here お疲れ様です。こちらお願いできますでしょうか？"},
+            {"after": 1},
+        ]});
+        let new = answered_actions(&output, &current, &list, request).unwrap();
         assert_eq!(
-            post("#sales に投稿して", true),
-            PostDecision::Post(sales.clone())
+            new,
+            vec![
+                SlackAction {
+                    paste: false,
+                    text: "@here お疲れ様です。こちらお願いできますでしょうか？".into(),
+                    ..pasting(Some(&sales))
+                },
+                SlackAction {
+                    after: Some(0),
+                    ..pasting(None)
+                },
+            ]
         );
+        assert_eq!(
+            post_decision(
+                &json!(true),
+                request,
+                &new,
+                &current,
+                &list,
+                &[],
+                "MAIL",
+                "MAIL"
+            ),
+            PostDecision::Post(vec![
+                PlannedPost {
+                    index: 0,
+                    to: PostTo::Target(sales.clone()),
+                    text: "@here お疲れ様です。こちらお願いできますでしょうか？".into(),
+                    written: true,
+                },
+                PlannedPost {
+                    index: 1,
+                    to: PostTo::ThreadOf(0),
+                    text: "MAIL".into(),
+                    written: false,
+                },
+            ])
+        );
+        // The same list without a post word in the request, or without `post: true`.
+        assert_eq!(
+            post_decision(
+                &json!(true),
+                "@here と書いて",
+                &new,
+                &current,
+                &list,
+                &[],
+                "MAIL",
+                "MAIL"
+            ),
+            PostDecision::Refused
+        );
+        assert_eq!(
+            post_decision(
+                &json!(false),
+                request,
+                &new,
+                &current,
+                &list,
+                &[],
+                "MAIL",
+                "MAIL"
+            ),
+            PostDecision::Skip
+        );
+    }
+
+    #[test]
+    fn one_thing_to_do_that_fails_a_rule_stops_every_post() {
+        let (sales, other) = (named("sales"), named("random"));
+        let list = listed(&[&sales, &other]);
+        let decide = |instruction: &str, actions: &[SlackAction]| {
+            post_decision(
+                &json!(true),
+                instruction,
+                actions,
+                actions,
+                &list,
+                &[],
+                "MAIL",
+                "MAIL",
+            )
+        };
+        let first = pasting(Some(&sales));
+        let posts = |d: PostDecision| matches!(d, PostDecision::Post(p) if p.len() == 2);
+        assert!(posts(decide(
+            "投稿して",
+            &[first.clone(), writing(0, "補足です")]
+        )));
+        // (b) The second goes to a destination that Claude chose and the request does not name; named, it posts.
+        let claude = SlackAction {
+            by_claude: true,
+            ..pasting(Some(&other))
+        };
+        assert_eq!(
+            decide("投稿して", &[first.clone(), claude.clone()]),
+            PostDecision::Refused
+        );
+        assert!(posts(decide(
+            "#random にも投稿して",
+            &[first.clone(), claude]
+        )));
+        // (b) Nowhere to go, a destination that is not in the list, and a thread of a thing to do that is not before it.
+        let unlisted = pasting(Some(&named("elsewhere")));
+        for second in [pasting(None), unlisted, writing(1, "x"), writing(5, "x")] {
+            assert_eq!(
+                decide("投稿して", &[first.clone(), second.clone()]),
+                PostDecision::Refused,
+                "{second:?}"
+            );
+        }
+        // (c) A written text with a link, a mention or a broadcast word that neither the original message nor the request holds, a blank one and one past the limit.
+        let long = "あ".repeat(POST_LIMIT + 1);
+        for text in [
+            "見て https://evil.example",
+            "<@U1> 見て",
+            "@channel 見て",
+            "  ",
+            long.as_str(),
+        ] {
+            assert_eq!(
+                decide("投稿して", &[first.clone(), writing(0, text)]),
+                PostDecision::Refused,
+                "{text}"
+            );
+        }
+        // (d) Nothing to post, and more than the most one request posts.
+        let done = posted(first.clone(), "1761785520.000100");
+        assert_eq!(
+            decide("投稿して", std::slice::from_ref(&done)),
+            PostDecision::Refused
+        );
+        let many: Vec<SlackAction> = std::iter::once(first.clone())
+            .chain((0..ACTIONS_MAX).map(|i| writing(i, "続き")))
+            .collect();
+        assert_eq!(decide("投稿して", &many), PostDecision::Refused);
+        assert!(matches!(
+            decide("投稿して", &many[..ACTIONS_MAX]),
+            PostDecision::Post(_)
+        ));
+    }
+
+    #[test]
+    fn a_written_text_may_hold_what_the_request_or_the_original_message_holds() {
+        let sales = named("sales");
+        let list = listed(&[&sales]);
+        let decide = |instruction: &str, text: &str| {
+            let actions = [SlackAction {
+                paste: false,
+                text: text.into(),
+                ..pasting(Some(&sales))
+            }];
+            post_decision(
+                &json!(true),
+                instruction,
+                &actions,
+                &actions,
+                &list,
+                &[],
+                "資料 https://a.example/x",
+                "資料 https://a.example/x",
+            )
+        };
+        let ok = |d: PostDecision| matches!(d, PostDecision::Post(p) if p[0].written);
+        // A broadcast word of the request, a link of the request, a link of the original message.
+        assert!(ok(decide(
+            "@here お疲れ様です と投稿して",
+            "@here お疲れ様です"
+        )));
+        assert!(ok(decide(
+            "https://b.example/y を見てくださいと投稿して",
+            "https://b.example/y を見てください"
+        )));
+        assert!(ok(decide(
+            "資料のリンクを付けて投稿して",
+            "https://a.example/x です"
+        )));
+        // Another broadcast word than the one the request holds, and one the request holds only inside a word or an address.
+        for (instruction, text) in [
+            ("@here と投稿して", "@channel お疲れ様です"),
+            ("@hereafter と投稿して", "@here お疲れ様です"),
+            ("me@here.example に投稿して", "@here お疲れ様です"),
+            ("投稿して", "@everyone"),
+        ] {
+            assert_eq!(
+                decide(instruction, text),
+                PostDecision::Refused,
+                "{instruction} {text}"
+            );
+        }
+        assert_eq!(
+            broadcast_words("@here と @channel、a@everyone.example <!everyone>"),
+            HashSet::from(["here", "channel"])
+        );
+    }
+
+    #[test]
+    fn a_text_that_claude_wrote_keeps_only_the_broadcast_words_of_the_request() {
+        let sales = named("sales");
+        let list = listed(&[&sales]);
+        let current = [pasting(Some(&sales)), writing(0, " @everyone 見て ")];
+        let output = json!({"actions": [
+            {"destination": 1, "text": "@channel お知らせ @here、@everyone。a@here.example @hereafter"},
+            {"after": 1, "text": "@everyone 見て"},
+            {"after": 2, "text": "@everyone 追記"},
+        ]});
+        let texts = |instruction: &str| -> Vec<String> {
+            answered_actions(&output, &current, &list, instruction)
+                .unwrap()
+                .into_iter()
+                .map(|a| a.text)
+                .collect()
+        };
+        // The word of the request stays, the others get a full-width ＠; the text the owner typed in a card stays as it is.
+        assert_eq!(
+            texts("@here と書いて"),
+            [
+                "＠channel お知らせ @here、＠everyone。a@here.example @hereafter",
+                "@everyone 見て",
+                "＠everyone 追記",
+            ]
+        );
+        assert_eq!(
+            texts("書いて")[0],
+            "＠channel お知らせ ＠here、＠everyone。a@here.example @hereafter"
+        );
+        // What went into the screen holds no broadcast word that the request does not.
+        assert!(broadcast_words(&texts("書いて")[0]).is_empty());
+        assert_eq!(
+            without_new_broadcasts("@here@channel", "@channel"),
+            "＠here@channel"
+        );
+    }
+
+    #[test]
+    fn a_new_written_text_is_posted_only_when_the_request_holds_it() {
+        let sales = named("sales");
+        let list = listed(&[&sales]);
+        let sent = [pasting(Some(&sales)), writing(0, "自分で書いた補足 ")];
+        let decide = |instruction: &str, texts: &[&str]| {
+            let actions: Vec<SlackAction> = std::iter::once(pasting(Some(&sales)))
+                .chain(texts.iter().enumerate().map(|(i, t)| writing(i, t)))
+                .collect();
+            post_decision(
+                &json!(true),
+                instruction,
+                &actions,
+                &sent,
+                &list,
+                &[],
+                "MAIL",
+                "MAIL",
+            )
+        };
+        let posts = |d: PostDecision, n: usize| matches!(d, PostDecision::Post(p) if p.len() == n);
+        let greeting = "@here お疲れ様です。こちらお願いできますでしょうか？";
+        // A text of the request, also with other white space between its words and at its ends.
+        assert!(posts(
+            decide(&format!("{greeting} と投稿して"), &[greeting]),
+            2
+        ));
+        assert!(posts(
+            decide(
+                "「確認を  お願いします\n明日まで」と投稿して",
+                &[" 確認を お願いします 明日まで\n"]
+            ),
+            2
+        ));
+        // A text of a card the screen sent, which the owner has seen.
+        assert!(posts(decide("投稿して", &["自分で書いた補足"]), 2));
+        // A new text that the request does not hold stops every post, the texts it holds included.
+        assert_eq!(decide("投稿して", &["お疲れ様です"]), PostDecision::Refused);
+        assert_eq!(
+            decide("お疲れ様 と投稿して", &["お疲れ様です"]),
+            PostDecision::Refused
+        );
+        assert_eq!(
+            decide(
+                &format!("{greeting} と投稿して"),
+                &[greeting, "自分で書いた補足", "追って連絡します"]
+            ),
+            PostDecision::Refused
+        );
+    }
+
+    #[test]
+    fn a_post_continues_the_thread_of_a_posted_thing_to_do_only_when_its_time_is_known() {
+        let sales = named("sales");
+        let list = listed(&[&sales]);
+        let decide = |thread: &str| {
+            let actions = [
+                posted(pasting(Some(&sales)), thread),
+                writing(0, "補足です"),
+            ];
+            post_decision(
+                &json!(true),
+                "投稿して",
+                &actions,
+                &actions,
+                &list,
+                &[],
+                "T",
+                "T",
+            )
+        };
+        assert_eq!(
+            decide("1761785520.000100"),
+            PostDecision::Post(vec![PlannedPost {
+                index: 1,
+                to: PostTo::ThreadOf(0),
+                text: "補足です".into(),
+                written: true,
+            }])
+        );
+        assert_eq!(decide(""), PostDecision::Refused);
+        let at = PostedAt {
+            team_id: "T1".into(),
+            channel: "C1".into(),
+            name: "sales".into(),
+            thread: "1761785520.000100".into(),
+        };
+        assert_eq!(
+            thread_after(&at),
+            Some(target("T1", "C1", Some("1761785520.000100"))).map(|t| Target {
+                name: "sales".into(),
+                ..t
+            })
+        );
+    }
+
+    #[test]
+    fn a_slack_link_in_the_request_is_a_destination_the_owner_named() {
+        let thread = Target {
+            name: "sales".into(),
+            ..target("T1", "C1", Some("1761785520.123456"))
+        };
+        let other = named("random");
+        let list = listed(&[&thread, &other]);
+        let request = "https://one.slack.com/archives/C1/p1761785520123456 こちらに投稿して";
+        // The link is read as the link of the picker is.
+        let links = request_links(request);
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            (
+                links[0].host.as_str(),
+                links[0].channel.as_str(),
+                links[0].thread_ts.as_deref()
+            ),
+            ("one.slack.com", "C1", Some("1761785520.123456"))
+        );
+        let actions = [SlackAction {
+            by_claude: true,
+            ..pasting(Some(&thread))
+        }];
+        let decide = |instruction: &str, linked: &[Target]| {
+            post_decision(
+                &json!(true),
+                instruction,
+                &actions,
+                &actions,
+                &list,
+                linked,
+                "T",
+                "T",
+            )
+        };
+        // The destination of the link posts, whatever name Slack gave it; without the link in the request it does not.
+        let renamed = Target {
+            name: "C1".into(),
+            ..thread.clone()
+        };
+        assert!(matches!(decide(request, &[renamed]), PostDecision::Post(_)));
+        assert_eq!(decide("こちらに投稿して", &[]), PostDecision::Refused);
+        // A link to another place is not this destination.
+        assert_eq!(
+            decide(request, std::slice::from_ref(&other)),
+            PostDecision::Refused
+        );
+        // The links of a request: each once, in order, a link glued to Japanese text, and nothing that is not a Slack link.
+        let many = "https://one.slack.com/archives/C1。と https://one.slack.com/archives/C2/p1761785520123456?thread_ts=1761700000.000001&cid=C2 と https://one.slack.com/archives/C1 と https://evil.example/archives/C3 と http://one.slack.com/archives/C4";
+        let got: Vec<_> = request_links(many)
+            .into_iter()
+            .map(|l| (l.channel, l.thread_ts))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("C1".to_owned(), None),
+                ("C2".to_owned(), Some("1761700000.000001".to_owned())),
+            ]
+        );
+        let six: String = (1..=6)
+            .map(|i| format!("https://one.slack.com/archives/C{i} "))
+            .collect();
+        assert_eq!(request_links(&six).len(), REQUEST_LINKS_MAX);
+        // A word inside an address is not a word of the request: no post word, and no channel name.
+        let archives = named("archives");
+        let list = listed(&[&archives]);
+        let actions = [SlackAction {
+            by_claude: true,
+            ..pasting(Some(&archives))
+        }];
+        assert_eq!(
+            post_decision(
+                &json!(true),
+                "https://one.slack.com/archives/C1 に投稿して",
+                &actions,
+                &actions,
+                &list,
+                &[],
+                "T",
+                "T"
+            ),
+            PostDecision::Refused
+        );
+        let own = [pasting(Some(&archives))];
+        assert_eq!(
+            post_decision(
+                &json!(true),
+                "https://a.example/post を見て",
+                &own,
+                &own,
+                &list,
+                &[],
+                "T",
+                "T"
+            ),
+            PostDecision::Refused
+        );
+    }
+
+    #[test]
+    fn the_destination_of_a_link_in_the_request_follows_the_chips_in_the_candidates() {
+        let workspaces = [workspace("T1", "https://one.slack.com/")];
+        let channels = vec![("T1".to_owned(), vec![channel("C1")])];
+        let chip = target("T1", "C2", None);
+        let linked = target("T1", "C3", Some("1761785520.123456"));
+        let got = candidates_of(
+            &workspaces,
+            std::slice::from_ref(&chip),
+            std::slice::from_ref(&linked),
+            &[],
+            &channels,
+        );
+        let targets: Vec<_> = got.iter().map(|c| c.target.clone()).collect();
+        assert_eq!(targets, vec![chip, linked, target("T1", "C1", None)]);
+    }
+
+    #[test]
+    fn an_answer_writes_the_things_to_do_that_are_not_posted() {
+        let (sales, other) = (named("sales"), named("random"));
+        let list = listed(&[&sales, &other]);
+        let done = posted(pasting(Some(&sales)), "1761785520.000100");
+        let current = [done, writing(0, "古い")];
+        // The numbers of `after` count the posted ones: 1 is the posted one, 2 the first of the answer.
+        let output = json!({"actions": [
+            {"after": 1, "text": " 一つ目 "},
+            {"after": 2},
+            {"destination": 2, "text": "別の先"},
+            {"after": 5, "destination": 9},
+            {"after": 0, "destination": 1, "text": ""},
+        ]});
+        let new = answered_actions(&output, &current, &list, "").unwrap();
+        assert_eq!(
+            new,
+            vec![
+                writing(0, "一つ目"),
+                SlackAction {
+                    after: Some(1),
+                    ..pasting(None)
+                },
+                SlackAction {
+                    paste: false,
+                    text: "別の先".into(),
+                    by_claude: true,
+                    ..pasting(Some(&other))
+                },
+                // A number that is not before it, and a destination outside the list: nowhere to go yet.
+                pasting(None),
+                SlackAction {
+                    by_claude: true,
+                    ..pasting(Some(&sales))
+                },
+            ]
+        );
+        // The same list again, no `actions`, an empty one and no destination change nothing.
+        let same = json!({"actions": [{"after": 1, "text": "古い"}]});
+        for output in [
+            same,
+            json!({}),
+            json!({"actions": []}),
+            json!({"actions": "x"}),
+        ] {
+            assert_eq!(
+                answered_actions(&output, &current, &list, ""),
+                None,
+                "{output}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_destination_alone_goes_into_the_first_thing_to_do_that_is_not_posted() {
+        let sales = named("sales");
+        let other = Target {
+            channel: "C2".into(),
+            ..named("random")
+        };
+        let list = listed(&[&sales, &other]);
+        let current = [pasting(Some(&sales)), writing(0, "補足")];
+        let new = answered_actions(&json!({"destination": 2}), &current, &list, "").unwrap();
+        assert_eq!(
+            new,
+            vec![
+                SlackAction {
+                    by_claude: true,
+                    ..pasting(Some(&other))
+                },
+                writing(0, "補足"),
+            ]
+        );
+        // The destination the owner chose stays the owner's when the answer repeats it, and one Claude chose stays Claude's.
+        assert_eq!(
+            answered_actions(&json!({"destination": 1}), &current, &list, ""),
+            None
+        );
+        assert!(
+            answered_actions(&json!({"destination": 1}), &new, &list, "").unwrap()[0].by_claude
+        );
+        assert_eq!(
+            answered_actions(&json!({"destination": 2}), &new, &list, ""),
+            None
+        );
+        // A number outside the list, and nothing left that is not posted.
+        assert_eq!(
+            answered_actions(&json!({"destination": 3}), &current, &list, ""),
+            None
+        );
+        let done = [posted(pasting(Some(&sales)), "")];
+        assert_eq!(
+            answered_actions(&json!({"destination": 2}), &done, &list, ""),
+            None
+        );
+        // The chips of the things to do that are not posted head the candidates.
+        assert_eq!(pending_targets(&current), vec![sales.clone()]);
+        assert!(pending_targets(&done).is_empty());
+    }
+
+    #[test]
+    fn the_list_of_things_to_do_has_the_posted_ones_first_and_threads_of_earlier_ones() {
+        let sales = named("sales");
+        let first = pasting(Some(&sales));
+        let done = posted(first.clone(), "1761785520.000100");
+        assert_eq!(check_actions(&[]), Ok(()));
+        assert_eq!(
+            check_actions(&[done.clone(), writing(0, "a"), writing(1, "b")]),
+            Ok(())
+        );
+        for bad in [
+            vec![first.clone(), done.clone()],
+            vec![writing(0, "a")],
+            vec![first.clone(), writing(1, "a")],
+        ] {
+            assert_eq!(check_actions(&bad), Err(BAD_ACTIONS.into()), "{bad:?}");
+        }
     }
 
     #[test]

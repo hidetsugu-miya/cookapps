@@ -847,7 +847,7 @@ button.status:hover { filter: brightness(.95); }
 .chat-task .review-chip:disabled, .chat-task .review-name:disabled, .chat-task .text-btn:disabled { opacity: .5; cursor: default; }
 .chat-clear { margin-left: auto; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; font-size: calc(12px * var(--fs)); font-weight: normal; }
 
-/* The Slack compose screen: the text to post on the left, a divider the user drags, and the conversation with Claude on the right.
+/* The Slack compose screen: the original message over the things to do ("行うこと") on the left, a divider the user drags, and the conversation with Claude on the right.
    The Slack thread has the same three parts. The Claude pane is a third to a half as wide as `.split-main`. `--chat-w` (ts/split.ts) is where the divider put it, and the clamp holds it to that range whatever is set. */
 #slack-main { flex: 1; min-height: 0; display: flex; }
 .split-main.dragging { user-select: none; -webkit-user-select: none; cursor: col-resize; }
@@ -865,6 +865,28 @@ button.status:hover { filter: brightness(.95); }
 #slack-preview:hover { border-color: var(--chip-line); }
 #slack-preview:focus-visible { outline: 2px solid var(--accent); }
 #slack-body { flex: 1; font: inherit; line-height: 1.7; overflow-wrap: anywhere; }
+/* "行うこと": numbered cards (where and what each one posts) and the plus under them. The pane takes what its cards need, up to half of the left pane, and scrolls inside. */
+#slack-actions-pane { flex: none; max-height: 50%; box-sizing: border-box; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 12px 24px; border-top: 1px solid var(--line); }
+#slack-actions-pane .prompt-label { flex: none; margin-bottom: 0; }
+#slack-actions { flex: none; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+#slack-actions:empty { display: none; }
+.slack-action { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.slack-action.posted { background: var(--bar); }
+.slack-no { flex: none; min-width: 16px; line-height: 26px; color: var(--ink-soft); font-size: calc(12px * var(--fs)); text-align: center; }
+.slack-action-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.slack-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.slack-action .review-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slack-action .review-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.slack-action .review-chip:disabled { opacity: .5; cursor: default; }
+.slack-action .review-chip:disabled:hover { background: var(--surface); }
+.slack-remove { margin-left: auto; width: 26px; height: 26px; }
+.slack-remove svg { width: 14px; height: 14px; }
+.slack-done { margin-left: auto; }
+.slack-text { box-sizing: border-box; width: 100%; height: calc(64px * var(--fs)); resize: none; padding: 8px 10px; border: 1px solid var(--chip-line); border-radius: 8px; color: #222; font: inherit; line-height: 1.6; overflow-wrap: anywhere; }
+.slack-text:focus { outline: 2px solid var(--soft); border-color: var(--accent); }
+.slack-text:disabled { background: var(--bar); }
+#slack-add { flex: none; align-self: flex-start; width: 28px; height: 28px; }
+#slack-add svg { width: 16px; height: 16px; }
 #slack-edit-foot { flex: none; box-sizing: border-box; height: var(--slack-foot); display: flex; align-items: center; justify-content: flex-end; padding: 0 16px; border-top: 1px solid var(--line); background: var(--bar); }
 #slack-edit-foot .text-btn { height: 36px; padding: 0 20px; border-radius: 18px; font: inherit; font-weight: bold; }
 #slack-edit-foot .text-btn:disabled { opacity: .4; cursor: default; }

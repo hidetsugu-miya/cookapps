@@ -3,7 +3,7 @@
 // A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history.
 // The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change, and Rust reads the worktrees again every 10 seconds and after a switch of the branch) and nothing here reads it by the clock. This machine's Orca cannot stream: its list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time,
-// and no more once the `orca` command was found missing (the reload button reads again). Only the first read, the screen being shown, the reload button, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
+// and no more once the `orca` command was found missing (showing the screen reads again). Only the first read, the screen being shown, a change of the target and a read after a failure ask for the environments (and the SSH hosts).
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
 // A search field above the projects (A-19) narrows them by name; ⌘J moves to it.
@@ -1223,7 +1223,6 @@ export function initOrca() {
   toggle.id = "orca-list-toggle";
   drawListToggle(toggle, listOpen);
   $("orca-header").prepend(toggle);
-  $("orca-refresh").onclick = () => load("full", true);
   $("orca-target").onclick = (e) => openTargetMenu(e.currentTarget as Element);
   initPaneTree($("orca-panes"), {
     plus: (anchor, pane) => {
