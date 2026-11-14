@@ -1,6 +1,6 @@
 //! The scratchpad of an SSH host (A-30): the files of `~/.local/share/cookapps/scratchpad/` on the host, read and written by the `ssh` command of this Mac.
 //!
-//! The host is the `configHost` of a target of `ssh.listEditableTargets` (a Host of `~/.ssh/config`), read at each call, and it is one element of ssh's argument list. The command the host runs is one of the constant scripts below: a name and a text never go into it, they go to its standard input. Nothing of a file is kept or logged.
+//! The host is the `configHost` of a target of `ssh.listEditableTargets` (a Host of `~/.ssh/config`), read at each call, and it is one element of ssh's argument list; a target added by hand in Orca also gives its user and its port, as `-l` and `-p` before it. The command the host runs is one of the constant scripts below: a name and a text never go into it, they go to its standard input. Nothing of a file is kept or logged.
 
 use std::{
     io::{Read, Write},
@@ -38,6 +38,7 @@ const CONTROL_ADDS: usize = 1 + 40 + 17;
 
 const NO_HOST: &str = "SSH ホストが見つかりません";
 const BAD_HOST: &str = "SSH ホストの名前が正しくありません";
+const BAD_LOGIN: &str = "SSH ホストのユーザー名またはポートが正しくありません";
 const NO_HOSTS: &str = "SSH ホストの一覧を読めません";
 const NOT_CONNECTED: &str = "接続できません";
 const NOT_RUN: &str = "ssh を実行できません";
@@ -121,15 +122,42 @@ fn check_host(host: &str) -> Result<&str, String> {
     }
 }
 
-/// The `configHost` of the target `id` in an answer of `ssh.listEditableTargets` (its `result`), checked.
-fn config_host_of(result: &Value, id: &str) -> Result<String, String> {
+/// The `configHost` of the target `id` in an answer of `ssh.listEditableTargets` (its `result`), checked, with the options of ssh that say its user and its port (`login_of`).
+fn config_host_of(result: &Value, id: &str) -> Result<(String, Vec<String>), String> {
     let target = result["targets"]
         .as_array()
         .into_iter()
         .flatten()
         .find(|t| t["id"].as_str() == Some(id))
         .ok_or(NO_HOST)?;
-    check_host(target["configHost"].as_str().unwrap_or_default()).map(str::to_owned)
+    let host = check_host(target["configHost"].as_str().unwrap_or_default())?;
+    Ok((host.to_owned(), login_of(target)?))
+}
+
+/// The options of ssh for the user and the port of a target: `-l {username}` and `-p {port}` for a target added by hand in Orca (its `source` is `manual`; one with no `source` is such when its `configHost` is its `host`), whose user and port `~/.ssh/config` may not hold. A target of `~/.ssh/config` gives none, so that the User and the Port of the config stand, and so do a user that is empty and the port 22 (or none), which Orca too leaves to the config. A user that is not empty is checked as the host is, and a port must be a whole number from 1 to 65535.
+fn login_of(target: &Value) -> Result<Vec<String>, String> {
+    let manual = match target["source"].as_str() {
+        Some(source) => source == "manual",
+        None => target["configHost"] == target["host"],
+    };
+    if !manual {
+        return Ok(Vec::new());
+    }
+    let mut login = Vec::new();
+    let user = target["username"].as_str().unwrap_or_default();
+    if !user.is_empty() {
+        let user = check_host(user).map_err(|_| BAD_LOGIN)?;
+        login.extend(["-l", user].map(str::to_owned));
+    }
+    match &target["port"] {
+        Value::Null => {}
+        port => match port.as_u64() {
+            Some(22) => {}
+            Some(port @ 1..=65535) => login.extend(["-p".to_owned(), port.to_string()]),
+            _ => return Err(BAD_LOGIN.into()),
+        },
+    }
+    Ok(login)
 }
 
 /// A temporary file of a save (`.cookapps-{pid}.tmp`), which is no file of the scratchpad.
@@ -191,8 +219,13 @@ pub(crate) trait Ssh {
     fn run(&mut self, script: &'static str, stdin: Vec<u8>, limit: usize) -> Result<Ran, String>;
 }
 
-/// The arguments of ssh for `script` on `host`: no question is asked (`BatchMode`), the connection is shared through a socket in `control` when there is one, no terminal, and the host after `--` as one element.
-fn ssh_args(host: &str, control: Option<&str>, script: &'static str) -> Vec<String> {
+/// The arguments of ssh for `script` on `host`: no question is asked (`BatchMode`), the connection is shared through a socket in `control` when there is one, no terminal, the options `login` (`login_of`), and the host after `--` as one element.
+fn ssh_args(
+    host: &str,
+    login: &[String],
+    control: Option<&str>,
+    script: &'static str,
+) -> Vec<String> {
     let mut args: Vec<String> = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
         .map(str::to_owned)
         .into();
@@ -211,7 +244,9 @@ fn ssh_args(host: &str, control: Option<&str>, script: &'static str) -> Vec<Stri
             .map(str::to_owned),
         );
     }
-    args.extend(["-T", "--", host, script].map(str::to_owned));
+    args.push("-T".to_owned());
+    args.extend_from_slice(login);
+    args.extend(["--", host, script].map(str::to_owned));
     args
 }
 
@@ -303,12 +338,10 @@ fn run_process(
     });
     let (err_tx, err_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut kept = Vec::new();
         let mut errors = errors.take(STDERR_MAX);
         let mut buffer = [0_u8; 1024];
         while let Ok(n @ 1..) = errors.read(&mut buffer) {
-            kept.extend_from_slice(&buffer[..n]);
-            let _ = err_tx.send(kept.clone());
+            let _ = err_tx.send(buffer[..n].to_vec());
         }
     });
     let deadline = Instant::now() + timeout;
@@ -326,10 +359,10 @@ fn run_process(
         }
     };
     let stdout = out_rx.recv_timeout(OUTPUT_WAIT).map_err(|_| NOT_RUN)?;
-    // What stderr held when the process ended: the last of what its reader sent within a moment.
+    // What stderr held when the process ended: the pieces its reader sent within a moment.
     let mut stderr = Vec::new();
     while let Ok(more) = err_rx.recv_timeout(Duration::from_millis(50)) {
-        stderr = more;
+        stderr.extend(more);
     }
     Ok(Ran {
         code: status.code(),
@@ -341,12 +374,13 @@ fn run_process(
 /// A host of `~/.ssh/config`, reached by this Mac's ssh.
 struct Host {
     host: String,
+    login: Vec<String>,
     control: Option<String>,
 }
 
 impl Ssh for Host {
     fn run(&mut self, script: &'static str, stdin: Vec<u8>, limit: usize) -> Result<Ran, String> {
-        let args = ssh_args(&self.host, self.control.as_deref(), script);
+        let args = ssh_args(&self.host, &self.login, self.control.as_deref(), script);
         run_process(SSH, &args, stdin, limit, TIMEOUT)
     }
 }
@@ -484,7 +518,7 @@ fn delete(ssh: &mut impl Ssh, name: &str) -> Result<(), String> {
 
 // ---- the commands ----
 
-/// Runs `call` off the async threads, on the SSH target `id` of this machine's Orca: its `configHost` is read from `ssh.listEditableTargets` just now.
+/// Runs `call` off the async threads, on the SSH target `id` of this machine's Orca: its `configHost`, and its user and port when it was added by hand, are read from `ssh.listEditableTargets` just now.
 async fn on_host<T: Send + 'static>(
     id: String,
     call: impl FnOnce(&mut Host) -> Result<T, String> + Send + 'static,
@@ -492,12 +526,16 @@ async fn on_host<T: Send + 'static>(
     let targets = crate::orca_link::local_call("ssh.listEditableTargets", json!({}))
         .await
         .map_err(|_| NO_HOSTS)?;
-    let host = config_host_of(&targets, &id)?;
+    let (host, login) = config_host_of(&targets, &id)?;
     crate::orca::blocking(move || {
         let control = dirs::home_dir()
             .and_then(|home| control_path(&home))
             .and_then(|dir| prepare_control(&dir));
-        call(&mut Host { host, control })
+        call(&mut Host {
+            host,
+            login,
+            control,
+        })
     })
     .await?
 }
@@ -606,7 +644,10 @@ mod tests {
             {"id": "s6", "configHost": "a\nb"},
             {"id": "s7", "configHost": "a\u{3000}b"},
         ]});
-        assert_eq!(config_host_of(&doc, "s1").unwrap(), "example-host");
+        assert_eq!(
+            config_host_of(&doc, "s1").unwrap(),
+            ("example-host".to_owned(), Vec::new())
+        );
         for id in ["s2", "s3", "s4", "s5", "s6", "s7"] {
             assert_eq!(config_host_of(&doc, id).unwrap_err(), BAD_HOST, "{id}");
         }
@@ -614,6 +655,95 @@ mod tests {
         // The label is not the id.
         assert_eq!(config_host_of(&doc, "Example").unwrap_err(), NO_HOST);
         assert_eq!(config_host_of(&Value::Null, "s1").unwrap_err(), NO_HOST);
+    }
+
+    #[test]
+    fn user_and_port_are_given_only_for_a_target_added_by_hand() {
+        let login = |target: Value| login_of(&target);
+        let args = |list: &[&str]| Ok(list.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>());
+        // Added by hand in Orca: `source` says so, and the user and the port go to ssh.
+        assert_eq!(
+            login(
+                json!({"source": "manual", "configHost": "203.0.113.5", "host": "203.0.113.5", "username": "dev", "port": 2222})
+            ),
+            args(&["-l", "dev", "-p", "2222"])
+        );
+        // An older target with no `source` is one added by hand when its `configHost` is its `host`.
+        assert_eq!(
+            login(json!({"configHost": "h", "host": "h", "username": "dev", "port": 2222})),
+            args(&["-l", "dev", "-p", "2222"])
+        );
+        // A Host of `~/.ssh/config` keeps the User and the Port of the config.
+        assert_eq!(
+            login(
+                json!({"source": "ssh-config", "configHost": "h", "host": "h", "username": "dev", "port": 2222})
+            ),
+            args(&[])
+        );
+        assert_eq!(
+            login(
+                json!({"configHost": "alias", "host": "203.0.113.5", "username": "dev", "port": 2222})
+            ),
+            args(&[])
+        );
+        // No user, an empty one, no port and the port 22 add nothing.
+        assert_eq!(login(json!({"source": "manual"})), args(&[]));
+        assert_eq!(
+            login(json!({"source": "manual", "username": "", "port": 22})),
+            args(&[])
+        );
+        assert_eq!(
+            login(json!({"source": "manual", "username": "dev", "port": null})),
+            args(&["-l", "dev"])
+        );
+        assert_eq!(
+            login(json!({"source": "manual", "port": 65535})),
+            args(&["-p", "65535"])
+        );
+        // A user that could be an option, or holds a space or a control character, and a port that is no port, are refused.
+        for user in ["-oProxyCommand=x", "a b", "a\nb", " "] {
+            assert_eq!(
+                login(json!({"source": "manual", "username": user})).unwrap_err(),
+                BAD_LOGIN,
+                "{user:?}"
+            );
+        }
+        for port in [
+            json!(0),
+            json!(65536),
+            json!(-1),
+            json!(22.5),
+            json!("2222"),
+        ] {
+            assert_eq!(
+                login(json!({"source": "manual", "port": port})).unwrap_err(),
+                BAD_LOGIN,
+                "{port}"
+            );
+        }
+        // A target of the config is not checked: nothing of it is given to ssh.
+        assert_eq!(
+            login(json!({"source": "ssh-config", "username": "-x", "port": 0})),
+            args(&[])
+        );
+        // The target of the list gives both, and a bad user stops it.
+        let doc = json!({"targets": [
+            {"id": "m1", "source": "manual", "configHost": "203.0.113.5", "host": "203.0.113.5", "username": "dev", "port": 2222},
+            {"id": "m2", "source": "manual", "configHost": "h", "host": "h", "username": "-x", "port": 22},
+        ]});
+        assert_eq!(
+            config_host_of(&doc, "m1").unwrap(),
+            (
+                "203.0.113.5".to_owned(),
+                vec![
+                    "-l".to_owned(),
+                    "dev".to_owned(),
+                    "-p".to_owned(),
+                    "2222".to_owned()
+                ]
+            )
+        );
+        assert_eq!(config_host_of(&doc, "m2").unwrap_err(), BAD_LOGIN);
     }
 
     #[test]
@@ -640,7 +770,12 @@ mod tests {
 
     #[test]
     fn ssh_arguments_keep_the_host_after_the_options() {
-        let args = ssh_args("example-host", Some("/home/u/.cache/cookapps/ssh"), LIST);
+        let args = ssh_args(
+            "example-host",
+            &[],
+            Some("/home/u/.cache/cookapps/ssh"),
+            LIST,
+        );
         assert_eq!(
             args,
             [
@@ -662,7 +797,7 @@ mod tests {
         );
         // With no folder for the sockets the connection is not shared.
         assert_eq!(
-            ssh_args("h", None, READ),
+            ssh_args("h", &[], None, READ),
             [
                 "-o",
                 "BatchMode=yes",
@@ -675,7 +810,26 @@ mod tests {
             ]
         );
         // A `%` of the folder is no token of ssh.
-        assert!(ssh_args("h", Some("/a%b"), READ).contains(&"ControlPath=/a%%b/%C".to_owned()));
+        assert!(ssh_args("h", &[], Some("/a%b"), READ).contains(&"ControlPath=/a%%b/%C".to_owned()));
+        // The user and the port of a target added by hand are options, before `--`.
+        let login = ["-l", "dev", "-p", "2222"].map(str::to_owned);
+        assert_eq!(
+            ssh_args("h", &login, None, READ),
+            [
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "-T",
+                "-l",
+                "dev",
+                "-p",
+                "2222",
+                "--",
+                "h",
+                READ
+            ]
+        );
     }
 
     #[test]
@@ -1093,6 +1247,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(got, ran(66, b"abcd", "no\n"));
+        // A stderr that comes in several pieces is put together in order.
+        let got = run_process(
+            "/bin/sh",
+            &sh("i=0; while [ $i -lt 300 ]; do printf %010d $i >&2; i=$((i+1)); done"),
+            Vec::new(),
+            0,
+            second,
+        )
+        .unwrap();
+        let whole: String = (0..300).map(|i| format!("{i:010}")).collect();
+        assert_eq!(got.stderr, whole);
         // A program that does not read its input is no failure.
         let big = vec![b'a'; 1024 * 1024];
         let got = run_process("/bin/sh", &sh("exit 75"), big, 0, second).unwrap();

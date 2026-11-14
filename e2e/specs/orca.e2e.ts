@@ -6298,6 +6298,28 @@ describe("orca: scratchpad of an SSH host (A-30)", () => {
     expect(calls.at(-1)).toMatchObject({ project: "ssh:s1", tabs: ["file:1"], environment: null });
   });
 
+  it("has no scratchpad for the row of an SSH host that this machine's Orca does not list: the item is disabled, the file pane is empty and ssh_scratch_list is not called", async () => {
+    // The target lists the host s9 (`hosts`), and this machine's list of SSH hosts (`ssh`) holds s1 alone.
+    const other = { key: "ssh:s9", name: "s9", status: "idle" as const, sessions: 0, atMs: 0 };
+    await openOrca(orcaOverview(sample(), worktrees(), { ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow, other] }), { ssh_scratch_list: ["a.md"] });
+    await $('#orca-feed .orca-project[data-key="ssh:s9"]').click();
+    await expect($('#orca-feed .orca-project[data-key="ssh:s9"]')).toHaveAttribute("aria-pressed", "true");
+    await $(".orca-files-toggle:not([hidden])").click();
+    await expect($("#orca-files")).toBeDisplayed();
+    await expect($("#orca-files-title")).toHaveText("");
+    expect(await count("#orca-files-tree .orca-file")).toBe(0);
+    await pressPlus();
+    expect(await textsOf('.menu[role="menu"] button:disabled')).toEqual([SCRATCHPAD]);
+    // Pressing the disabled item does nothing: the menu stays and no popover opens.
+    await $('.menu[role="menu"] button:nth-child(3)').click();
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    await expect(pop()).not.toExist();
+    await browser.execute(() => window.dispatchEvent(new Event("focus")));
+    await browser.pause(300);
+    expect(await callsOf("ssh_scratch_list")).toEqual([]);
+    expect(await callsOf("ssh_scratch_create")).toEqual([]);
+  });
+
   // The file pane of the host's row (issue #590): the scratchpad folder of the host, listed by ssh, with the new file, the new name and the delete of that folder.
   const names = () => textsOf("#orca-files-tree .orca-file-name");
   const menuTexts = () => textsOf('.menu[role="menu"] button');
