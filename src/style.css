@@ -4,7 +4,7 @@ html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
 :root { --ff-base: var(--ff-app, -apple-system, sans-serif); --fs: var(--fs-app, 1); }
 /* A-23: the header band at the top of every screen is one height at the default font (--header-h, a minimum: a larger font stretches it), and the icon buttons in it one size (--header-btn, with --header-ic for the icon); no screen sets its own. */
-:root { --header-h: 40px; --header-btn: 24px; --header-ic: 15px; }
+:root { --header-h: 44px; --header-btn: 28px; --header-ic: 17px; }
 body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0; display: flex; }
 #mail-header, #inbox-header, #mail-area { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }

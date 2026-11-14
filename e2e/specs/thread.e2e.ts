@@ -60,7 +60,7 @@ describe("thread", () => {
     });
     expect(layout).toEqual({
       header: ["back"],
-      headerHeight: 40,
+      headerHeight: 44,
       actions: ["thread-slack", "thread-todo", "thread-orca", "trash", "archive"],
       actionsInHeader: false,
       size: [34, 34],

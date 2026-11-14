@@ -447,10 +447,10 @@ describe("orca", () => {
     expect(box.listRight).toBeLessThanOrEqual(box.splitLeft + 1);
     expect(box.splitRight).toBeLessThanOrEqual(box.workLeft + 1);
     expect(box.share).toBeCloseTo(0.25, 2);
-    expect(box.header).toBe(40);
-    expect(box.tabs).toBe(40);
+    expect(box.header).toBe(44);
+    expect(box.tabs).toBe(44);
     expect(box.tabsTop).toBe(box.headerTop);
-    expect(box.buttons).toEqual([24]);
+    expect(box.buttons).toEqual([28]);
     // No label, no 「新規」 and no reload button: the button of the list (A-23) is the only one.
     expect(await count("#orca-heading")).toBe(0);
     expect(await count("#orca-new")).toBe(0);
@@ -461,7 +461,7 @@ describe("orca", () => {
     await expect($(".orca-plus")).toHaveAttribute("aria-label", "セッションを始める");
     await expect($(".orca-plus")).toHaveAttribute("aria-haspopup", "menu");
     await expect($(".orca-plus")).toBeDisabled();
-    expect(box.plusHeight).toBe(24);
+    expect(box.plusHeight).toBe(28);
     expect(box.plusLeft).toBeGreaterThanOrEqual(box.tabsRight - 1);
     expect(box.plusRight).toBeLessThanOrEqual(box.barRight);
     const barOrder = await browser.execute(() => [...document.querySelector(".orca-tabbar")!.children].map((e) => e.className));

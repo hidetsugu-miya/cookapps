@@ -68,7 +68,7 @@ describe("todo Claude pane", () => {
         heights: [head.height, tools.height, claude.height, orca.height],
       };
     });
-    expect(rows).toEqual({ level: true, right: true, same: true, line: "2px", heights: [40, 40, 24, 24] });
+    expect(rows).toEqual({ level: true, right: true, same: true, line: "2px", heights: [44, 44, 28, 28] });
     // A click on Claude's icon keeps Claude's pane.
     await $("#todo-tool-claude").click();
     await expect($(pane)).toBeDisplayed();
