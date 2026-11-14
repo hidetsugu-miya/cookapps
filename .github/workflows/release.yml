@@ -104,8 +104,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.tag.outputs.sha }}
-      # The version is in the ref (1.99.1), so the action takes no toolchain input.
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      # The version is in the ref (1.100.0), so the action takes no toolchain input.
+      - uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
       # The same clean-up as rust-cache.yml: rust-cache hashes `rustc -vV` of every installed toolchain, so one that the runner image brings would split the key.
       - name: Uninstall the toolchains other than the pinned one
         run: |

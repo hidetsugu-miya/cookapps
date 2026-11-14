@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The same toolchain, toolchain clean-up and cache settings as the release job, so that the cache key is the same.
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      - uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
       # rust-cache hashes `rustc -vV` of every installed toolchain, so a toolchain that the runner image brings (and updates) would split the key.
       - name: Uninstall the toolchains other than the pinned one
         run: |
