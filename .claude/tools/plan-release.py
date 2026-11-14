@@ -12,10 +12,10 @@ Usage:
 
 `snapshot` prints the open issues the planner orders. `apply` leaves out of the plan the closed issues and the fixed ones (stderr says which), writes the
 `blocked_by` relations, and, unless --dry-run, saves the plan it accepted as `.claude/plan.json` of the main checkout. `next` reads that plan:
-`start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run). `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
+`start` lists the issues a run may begin, in the order of the plan (the point:8 unit rule applies only when NIGHTLY_DEADLINE_EPOCH is set, that is, in the night run; the night run does not start an issue with `session` either, and `waits_for_session` lists the numbers left out). `unsplit` prints the issues of `point:5` or `point:8` that no one has split yet
 (open, no `needs:owner`, not in hand, and no milestone): `issue-plan` applies its step 3 to each before it orders.
 `split` splits a big issue into parts (`issue-plan` step 3): the file is JSON, {"issue": n, "milestone": "feature", "parts": [{"title", "body", "labels", "points_reason"}]}.
-It checks everything before it writes (the issue is open and the owner's, each part has exactly one `point:*` of 3 or less, the labels exist, a part of a point:8 issue has `solo`), makes the milestone and `solo` when they are missing,
+It checks everything before it writes (the issue is open and the owner's, each part has exactly one `point:*` of 3 or less, the labels exist, a part of a point:8 issue has `solo`, a part of an issue with `session` has `session`), makes the milestone, `solo` and `session` when they are missing,
 creates the parts in order, each with the reason of its points as a comment, and closes the issue as not planned only when every part exists; a failure stops it with the numbers made, and a second run keeps the parts
 that are already open in the milestone under the same title. With no parts it only puts the issue in the milestone.
 `release` prints the changes that wait for the owner's merge of the Release PR, the Release PR,
@@ -104,6 +104,12 @@ def solo(issue):
     The unit is that one point:8 issue, or all the `solo` parts of one milestone. Only the night run keeps a unit apart from everything else (issues.md):
     `nightly-limit.sh` and `build_next` do so when NIGHTLY_DEADLINE_EPOCH is set, and a session of the owner does not."""
     return has(issue, "point:8") or has(issue, "solo")
+
+
+def session(issue):
+    """An issue the night run does not start: the owner implements it in a session, in one go (the label `session`, put on the owner's word; issues.md).
+    It is in the order like any issue. `build_next` and `nightly-limit.sh` leave it out when NIGHTLY_DEADLINE_EPOCH is set, and a session of the owner starts it."""
+    return has(issue, "session")
 
 
 def urgent(issue):
@@ -414,7 +420,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
     `mine`: the issues the previous hand-over lists as this run's own; they are `in_progress` (continue them first).
     `held`: an open pull request of the owner closes the issue and it is not `mine`: someone else's work, left alone.
     `start`: the other issues that can begin, by the order of the saved plan (the issues the plan lacks come last, by `base_key`).
-    An issue with needs:owner, and one with an open blocker, are left out. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
+    An issue with needs:owner, and one with an open blocker, are left out. The night run leaves out an issue with `session` too (`waits_for_session`, its numbers): it waits for a session of the owner, which starts it like any issue. In the night run (`night`; cmd_next takes it from NIGHTLY_DEADLINE_EPOCH, as nightly-limit.sh does), a member of a solo unit
     (point:8, or a `solo` part) is left out too while a change waits for the release. A session of the owner has no unit rule (issues.md): it may bundle issues of any units.
     `stop` says why `start` is empty on purpose: a change of a solo unit waits for the owner's merge, and nothing new begins before it (the rest of its unit included); the night run only.
     `waiting` are the changes that wait for the release."""
@@ -436,6 +442,7 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
         "needs_owner": [],
         "blocked": [],
         "waits_for_release": [],
+        "waits_for_session": [],
         "waiting": [dict(brief(i), closed_at=i.closed_at) for i in waiting],
         "stop": None,
     }
@@ -449,6 +456,8 @@ def build_next(issues, pr_closing, mine=frozenset(), plan=None, night=True):
             out["needs_owner"].append(brief(i))
         elif i.blocked_by:
             out["blocked"].append({"number": i.number, "title": i.title, "blocked_by": sorted(i.blocked_by)})
+        elif night and session(i):
+            out["waits_for_session"].append(i.number)
         elif night and solo(i) and waiting:
             out["waits_for_release"].append(i.number)
         else:
@@ -543,6 +552,7 @@ def done_milestones(milestones, issues):
 # ---- pure: split ----
 
 SOLO_DESCRIPTION = "a part of a point:8 issue: the parts are a release of their own"
+SESSION_DESCRIPTION = "夜の実行は取らない。オーナーのセッションでまとめて実装する"
 
 
 def parse_split(raw):
@@ -612,10 +622,12 @@ def split_problems(spec, parent, owner, repo_labels):
         elif marks[0] not in QUICK_POINTS:
             problems.append(f"{where}: {marks[0]} is more than point:3")
         for label in part["labels"]:
-            if label != "solo" and label not in known:
+            if label not in ("solo", "session") and label not in known:
                 problems.append(f"{where}: the label '{label}' does not exist")
         if big and "solo" not in part["labels"]:
             problems.append(f"{where}: #{n} is point:8, so every part needs the label solo")
+        if "session" in parent_labels and "session" not in part["labels"]:
+            problems.append(f"{where}: #{n} has session, so every part needs the label session")
     return problems
 
 
@@ -1001,6 +1013,9 @@ def cmd_split(args):
         if any("solo" in p["labels"] for p in spec["parts"]) and "solo" not in repo_labels:
             gh("label", "create", "solo", "--description", SOLO_DESCRIPTION)
             print("made label solo")
+        if any("session" in p["labels"] for p in spec["parts"]) and "session" not in repo_labels:
+            gh("label", "create", "session", "--description", SESSION_DESCRIPTION)
+            print("made label session")
         for part in spec["parts"]:
             if part["title"] in kept:
                 made.append(kept[part["title"]])

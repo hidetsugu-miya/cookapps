@@ -40,6 +40,7 @@ GitHub にもファイルにも書かない。
 - `bug` と、`point:1`・`point:2`・`point:3` のどれかが付いた issue の前に置いてよいのは、上の段の issue と、同じ段の同種の issue と、その issue（または、それより前の issue）の依存先だけにする。`point:5` と `point:8` のバグは前に出さない。守らない並びは `plan-release.py` が拒否する。
 - `fixed` の issue は、依存先にだけ書ける。
 - `needs:owner` の issue も並べる。未決定の中身は推測せず、本文から分かる関連だけで置く。
+- `session` の issue も、ほかの issue と同じ規則で並べる。`session` は夜の実行がその issue を始めないことを示すだけで、順番を変える理由にしない。
 - 関連を付けた issue と、基本の並びから動かした issue には、`reasons` に一行の理由を書く。
 
 ## 返す形式

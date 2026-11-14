@@ -2,14 +2,17 @@
 # Tells a run whether it may start something new (issues.md). The run stops itself with this; nothing kills the process.
 # Usage: nightly-limit.sh issue {n} [--taken {a,b,...}]
 # issue {n}: may issue #n be started, when the issues {a,b,...} are already in hand in this run?
+#   In a night run (NIGHTLY_DEADLINE_EPOCH is set) no when #n has the label `session`: the owner implements it in a session (issues.md). Exit 3.
+#   A session of the owner starts it like any issue.
 #   In a night run (NIGHTLY_DEADLINE_EPOCH is set) no when the unit rule says so. Exit 3. A unit is a Release PR of its own: one point:8 issue, or all the `solo` parts (the label `issue-plan` gives the parts of a point:8 issue it split) of one milestone.
 #   The parts of one unit start together in a night; an issue that is not in the unit, and a part of another unit, do not start with it, before it or after it.
 #   A session of the owner has no unit rule (issues.md): it may bundle issues of any units.
 #   In a night run also no once the deadline has passed (exit 1), and no when the points of the issues in hand and of #n add up to more than 10 (exit 3; a smaller issue may still fit).
-# Exit 0: yes. Exit 1: no, the deadline has passed (stdout says why). Exit 3: no, #n does not fit the points (stdout says why). Exit 2: wrong usage, or an issue without a point label.
-# nightly.sh sets NIGHTLY_DEADLINE_EPOCH for the run it starts. A session of the owner has none, so it is never limited in time, in points or by the unit rule.
+# Exit 0: yes. Exit 1: no, the deadline has passed (stdout says why). Exit 3: no, #n does not fit the points, or it waits for a session or for its unit (stdout says why). Exit 2: wrong usage, or an issue without a point label.
+# nightly.sh sets NIGHTLY_DEADLINE_EPOCH for the run it starts. A session of the owner has none, so it is never limited in time, in points, by the unit rule or by `session`.
 # The points of an issue are its `point:*` label, read with gh. Checking by hand: NIGHTLY_NOW_EPOCH replaces the current time, NIGHTLY_DEADLINE_EPOCH may be set by hand,
-# and NIGHTLY_POINTS_LIST (lines of "{issue number} {points} [{unit}]"; unit is `i{n}` for a point:8 issue, `m:{milestone}` for a `solo` part, and absent for any other issue) replaces the labels read with gh.
+# and NIGHTLY_POINTS_LIST (lines of "{issue number} {points} [{unit}]"; unit is `i{n}` for a point:8 issue, `m:{milestone}` for a `solo` part, and absent for any other issue) replaces the labels read with gh,
+# and with it NIGHTLY_SESSION_LIST (the numbers of the issues with `session`, separated by commas or spaces).
 set -u
 MAX_POINTS=10
 usage() {
@@ -26,16 +29,20 @@ case "${3:-}" in
   *) usage ;;
 esac
 
-# info_of {n}: "{points} {unit}" of the issue, or nothing without a point:* label. The unit is `-` for an issue outside a solo unit,
-# `i{n}` for a point:8 issue, and `m:{milestone title}` for a `solo` part (`i{n}` when it has no milestone). Keep it equal to `solo()` of plan-release.py.
+# info_of {n}: "{points} {session} {unit}" of the issue, or nothing without a point:* label (or when gh fails: the caller then stops with exit 2).
+# session is `s` when the issue has the label `session`, and `-` otherwise. Keep it equal to `session()` of plan-release.py.
+# The unit is `-` for an issue outside a solo unit, `i{n}` for a point:8 issue, and `m:{milestone title}` for a `solo` part (`i{n}` when it has no milestone).
+# Keep it equal to `solo()` of plan-release.py. The unit is the last field, because a milestone title may hold spaces.
 info_of() {
   if [ -n "${NIGHTLY_POINTS_LIST+x}" ]; then
-    printf '%s\n' "$NIGHTLY_POINTS_LIST" | awk -v n="$1" '$1 == n { u = $0; sub(/^[^ ]+ +[^ ]+ */, "", u); print $2, (u == "" ? "-" : u); exit }'
+    printf '%s\n' "$NIGHTLY_POINTS_LIST" | awk -v n="$1" -v s=" $(printf '%s' "${NIGHTLY_SESSION_LIST:-}" | tr ',' ' ') " \
+      '$1 == n { u = $0; sub(/^[^ ]+ +[^ ]+ */, "", u); print $2, (index(s, " " n " ") ? "s" : "-"), (u == "" ? "-" : u); exit }'
   else
     gh issue view "$1" --json labels,milestone --jq '(.labels | map(.name)) as $l
       | ([$l[] | select(startswith("point:")) | ltrimstr("point:")][0] // empty) as $p
       | (if ($l | index("point:8")) then "i'"$1"'" elif ($l | index("solo")) then (if .milestone then "m:" + .milestone.title else "i'"$1"'" end) else "-" end) as $u
-      | "\($p) \($u)"' 2>/dev/null
+      | (if ($l | index("session")) then "s" else "-" end) as $s
+      | "\($p) \($s) \($u)"' 2>/dev/null
   fi
 }
 
@@ -45,7 +52,9 @@ if [ -z "$mine_info" ]; then
   exit 2
 fi
 mine="${mine_info%% *}"
-mine_unit="${mine_info#* }"
+mine_rest="${mine_info#* }"
+mine_session="${mine_rest%% *}"
+mine_unit="${mine_rest#* }"
 sum=0
 unit_taken=""
 other_taken=""
@@ -57,6 +66,7 @@ for t in $(printf '%s' "$taken" | tr ',' ' '); do
   fi
   sum=$((sum + ${info%% *}))
   t_unit="${info#* }"
+  t_unit="${t_unit#* }"
   if [ "$t_unit" != "-" ]; then
     unit_taken="$t"
   fi
@@ -66,7 +76,10 @@ for t in $(printf '%s' "$taken" | tr ',' ' '); do
   fi
 done
 if [ -z "${NIGHTLY_DEADLINE_EPOCH:-}" ]; then
-  : # a session: no unit rule
+  : # a session: no unit rule, and `session` changes nothing
+elif [ "$mine_session" = s ]; then
+  echo "no: #${n} には session のラベルがあります。夜の実行は始めず、オーナーのセッションを待ちます"
+  exit 3
 elif [ "$mine_unit" = "-" ] && [ -n "$unit_taken" ]; then
   echo "no: #${unit_taken}（単独の単位: point:8 か solo の部品）がこの回にあります。単位でない #${n} は一緒に始めません"
   exit 3
