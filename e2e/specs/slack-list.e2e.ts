@@ -439,7 +439,6 @@ describe("slack list", () => {
   const fourMessages = () => Array.from({ length: 4 }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `message ${i}`, { unread: true }));
 
   it("makes again only the row that changed on a read, and keeps the elements of the others", async () => {
-    // Built once: `slackTs` reads the clock, and a new `ts` after a change of the second would make every row another one.
     const messages = fourMessages();
     await openList(timeline(messages, { refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 4);
@@ -452,7 +451,6 @@ describe("slack list", () => {
   });
 
   it("keeps the rows and their focus in place when a read brings a group before them", async () => {
-    // Built once, as above.
     const messages = fourMessages();
     await openList(timeline(messages, { refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 4);
@@ -1236,7 +1234,6 @@ describe("slack list", () => {
 
   it("only folds the replies with the toggle: no thread, nothing read, the scroll position kept, and its own focus after a redraw", async () => {
     // The thread is the oldest row of the channel, so that it is the first of the group and in view.
-    // Built once: `slackTs` reads the clock, and a new `ts` would give the toggle another key in the second answer.
     const parent = withReplies({ ts: slackTs(300, 9) });
     const first = () => parent;
     await openList(timeline([first(), ...many(19)], { refreshSecs: 1 }));
