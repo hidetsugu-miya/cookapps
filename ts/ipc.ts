@@ -359,6 +359,8 @@ export interface Commands {
   orca_switch_branch: { args: { path: string; kind: "local" | "remote"; name: string; environment: string | null }; result: OrcaBranchSwitched };
   // A-22: copies the file `relative` of the worktree to this PC, to the place picked in the save dialog that Rust opens (the page gives none). The name of the file saved, or null when the dialog was cancelled.
   orca_file_download: { args: { path: string; relative: string; environment: string | null }; result: string | null };
+  // A-31: opens the HTML file `relative` of the worktree in the default browser of this PC, from the server of the app. It answers nothing: the address is never given to the page.
+  orca_file_open_in_browser: { args: { path: string; relative: string; environment: string | null }; result: null };
   // A-18: the settings of the editor: how long after the typing stops the file is saved.
   editor_settings: { args: undefined; result: EditorSettings };
   // A-18: saves the time of the automatic save, brought into 100 to 3000 ms in steps of 100, and answers the settings saved.

@@ -15,7 +15,7 @@
 //! A file, or a folder with what is in it, is deleted for good (`orca_file_delete`, `files.delete`, which skips the Trash and makes a path that is not there no error): Rust refuses the root of the worktree and a path that is not inside it. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! A file or a folder is moved or renamed inside the worktree (`orca_file_move`, `files.rename`, which does not overwrite: a target that is there is refused): Rust refuses the root, a path that is not inside the worktree, a target that is the source and a target inside the source. `files.rename` makes no folder, so when it answers `ENOENT` and the source is there (`files.stat`) the missing folders of the target are made one by one (`files.createDir`, which makes one level) and the rename is tried once more. A change of the case of the name alone goes through a temporary name in the same folder (two `files.rename`), because a disk that ignores case would have Orca refuse the target as taken. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! The scratchpad of A-29 is a file in `.orca/scratchpad` of a worktree (`orca_scratchpad_create`): the same `files.createFile`, and a name that is taken is answered as the existing file, not as a failure.
-//! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
+//! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB). The same read (`fetch_into`) gives the bytes to the preview server of A-31 (`orca_preview.rs`), through a `Sink`.
 
 use std::{
     cmp::Ordering,
@@ -297,7 +297,7 @@ struct StoredSettings {
 // ---- paths ----
 
 /// A path relative to the worktree that Orca may be asked for: no blank (`allow_empty` lets the worktree's own folder through), no control character, nothing absolute, no `.` or `..` element and no empty one.
-fn check_relative(relative: &str, allow_empty: bool) -> Result<(), String> {
+pub(crate) fn check_relative(relative: &str, allow_empty: bool) -> Result<(), String> {
     if relative.is_empty() {
         return if allow_empty {
             Ok(())
@@ -1014,15 +1014,22 @@ async fn on_disk<T: Send + 'static>(
 /// The temporary file being written, shared with the threads that write it.
 type Out = Arc<Mutex<std::fs::File>>;
 
-async fn put(out: &Out, bytes: Vec<u8>) -> Result<(), String> {
-    let out = Arc::clone(out);
-    on_disk(move || {
-        out.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .write_all(&bytes)
-            .map_err(|e| write_error(&e))
-    })
-    .await
+/// Where the bytes of a file that is read go, in the order they are read: the temporary file of a download, or the answer of the preview server (A-31). `total` is how many bytes the whole file has, as far as the read knows (the size `files.stat` gave, or the length of a preview).
+pub(crate) trait Sink {
+    async fn put(&mut self, bytes: Vec<u8>, total: u64) -> Result<(), String>;
+}
+
+impl Sink for Out {
+    async fn put(&mut self, bytes: Vec<u8>, _total: u64) -> Result<(), String> {
+        let out = Arc::clone(self);
+        on_disk(move || {
+            out.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .write_all(&bytes)
+                .map_err(|e| write_error(&e))
+        })
+        .await
+    }
 }
 
 /// The whole file by one `files.readPreview`, written to `out`. Answers the size.
@@ -1031,7 +1038,7 @@ async fn fetch_preview(
     path: &str,
     relative: &str,
     size: Option<u64>,
-    out: &Out,
+    out: &mut impl Sink,
 ) -> Result<u64, String> {
     let answer = rpc
         .call(
@@ -1042,29 +1049,38 @@ async fn fetch_preview(
         .map_err(reason)?;
     let bytes = parse_preview(&answer, size)?;
     let length = bytes.len() as u64;
-    put(out, bytes).await?;
+    out.put(bytes, length).await?;
     Ok(length)
 }
 
-/// Reads the file `relative` of the worktree at `path` and writes it to `out`. `files.stat` gives the size first, and the reading stops with an error when Orca sends more than that, so an Orca that never says `eof` cannot fill the disk. Then `files.readChunk` is called, `CHUNK` bytes at a time until `eof`. A host that lacks `files.stat`, or answers `method_not_found` to the first `files.readChunk`, has the file read whole with `files.readPreview` (a host that lacks `files.stat` has no size to hold the preview to). Answers the size.
-async fn fetch_into(
+/// The size of the file `relative` of the worktree at `path`, by `files.stat`; `None` on a host that lacks `files.stat`.
+pub(crate) async fn stat_size(
     rpc: &mut impl Rpc,
     path: &str,
     relative: &str,
-    out: &Out,
-) -> Result<u64, String> {
-    let size = match rpc
+) -> Result<Option<u64>, String> {
+    match rpc
         .call(
             "files.stat",
             worktree_params(path, None, json!({"relativePath": relative})),
         )
         .await
     {
-        Ok(answer) => answer["size"].as_u64().ok_or("ファイルを読めません")?,
-        Err(e) if e.shown.contains("method_not_found") => {
-            return fetch_preview(rpc, path, relative, None, out).await;
-        }
-        Err(e) => return Err(reason(e)),
+        Ok(answer) => Ok(Some(answer["size"].as_u64().ok_or("ファイルを読めません")?)),
+        Err(e) if e.shown.contains("method_not_found") => Ok(None),
+        Err(e) => Err(reason(e)),
+    }
+}
+
+/// Reads the file `relative` of the worktree at `path` and writes it to `out`. `files.stat` gives the size first, and the reading stops with an error when Orca sends more than that, so an Orca that never says `eof` cannot fill the disk. Then `files.readChunk` is called, `CHUNK` bytes at a time until `eof`. A host that lacks `files.stat`, or answers `method_not_found` to the first `files.readChunk`, has the file read whole with `files.readPreview` (a host that lacks `files.stat` has no size to hold the preview to). Answers the size.
+pub(crate) async fn fetch_into(
+    rpc: &mut impl Rpc,
+    path: &str,
+    relative: &str,
+    out: &mut impl Sink,
+) -> Result<u64, String> {
+    let Some(size) = stat_size(rpc, path, relative).await? else {
+        return fetch_preview(rpc, path, relative, None, out).await;
     };
     let mut offset = 0_u64;
     loop {
@@ -1092,7 +1108,7 @@ async fn fetch_into(
         }
         offset += bytes.len() as u64;
         let empty = bytes.is_empty();
-        put(out, bytes).await?;
+        out.put(bytes, size).await?;
         if eof {
             return Ok(offset);
         }
@@ -1155,7 +1171,7 @@ pub(crate) async fn download(
     let wanted = dest.to_path_buf();
     let (file, temp) = on_disk(move || create_temp(&wanted)).await?;
     let out: Out = Arc::new(Mutex::new(file));
-    let done = match fetch_into(rpc, path, relative, &out).await {
+    let done = match fetch_into(rpc, path, relative, &mut Arc::clone(&out)).await {
         Ok(size) => {
             let (out, temp, dest) = (Arc::clone(&out), temp.clone(), dest.to_path_buf());
             on_disk(move || {
@@ -1581,7 +1597,7 @@ fn check_host(host_id: &str) -> Result<(), String> {
 }
 
 /// The `hostId` of the worktree at `path` (one of the target's list read just now), which a file call is made on. A save and a download ask the target's list each time.
-async fn host_of(path: &str, environment: Option<&str>) -> Result<String, String> {
+pub(crate) async fn host_of(path: &str, environment: Option<&str>) -> Result<String, String> {
     let (path, environment) = (path.to_owned(), environment.map(str::to_owned));
     let host_id = tokio::task::spawn_blocking(move || worktree_host(&path, environment.as_deref()))
         .await
@@ -1591,7 +1607,10 @@ async fn host_of(path: &str, environment: Option<&str>) -> Result<String, String
 }
 
 /// `host_of` for the reads (the list, the ignore marks and the text of a file): the worktree is confirmed against the target's list once, and believed for a while after (`worktree_host_cached`). The path is held to the same checks, and an SSH host is refused the same.
-async fn cached_host_of(path: &str, environment: Option<&str>) -> Result<String, String> {
+pub(crate) async fn cached_host_of(
+    path: &str,
+    environment: Option<&str>,
+) -> Result<String, String> {
     cached_host_and_project_of(path, environment)
         .await
         .map(|(host_id, _)| host_id)

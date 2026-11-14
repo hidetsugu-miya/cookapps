@@ -2036,6 +2036,61 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".toast")).not.toBeDisplayed();
   });
 
+  // A-31: an HTML file opened in the browser. Rust serves the worktree and opens the address; the page sends the worktree, the path from it and the target, and shows nothing when it works.
+  const withPage = () =>
+    dirOf("", [
+      ["site.html", true],
+      ["a.rs", false],
+      ["INDEX.HTML", false],
+      ["page.html", false],
+    ]);
+
+  it("has 「ブラウザで開く」 as the fifth item of the menu of a file whose name ends with .html, whatever the case, before the line, and not on another file or on a folder (A-31)", async () => {
+    await openFiles({ orca_files_list: withPage() });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    expect(await rightClickRow("page.html")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "ブラウザで開く", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(7);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "ブラウザで開く", "", "移動・名前の変更", "削除"]);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    expect(await rightClickRow("INDEX.HTML")).toBe(true);
+    expect((await textsOf('.menu[role="menu"] button'))[4]).toBe("ブラウザで開く");
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    expect(await rightClickRow("a.rs")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    // A folder whose name ends with .html is a folder.
+    expect(await rightClickRow("site.html")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "移動・名前の変更", "削除"]);
+  });
+
+  it("opens an HTML file in the browser from the menu with the worktree, its path and the target, closes the menu and shows nothing (A-31)", async () => {
+    await openFiles({ orca_files_list: withPage() });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const open = await mock("orca_file_open_in_browser", null);
+    expect(await rightClickRow("page.html")).toBe(true);
+    await pickItem("ブラウザで開く");
+    expect(await waitForCalls(open)).toEqual([{ path: "/work/example-app", relative: "page.html", environment: null }]);
+    await expect($(".menu")).not.toExist();
+    await browser.pause(300);
+    await expect($(".toast")).not.toBeDisplayed();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the message of an open in the browser that failed, and no toast (A-31)", async () => {
+    await openFiles({ orca_files_list: withPage() });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const open = await mock("orca_file_open_in_browser", rejects("ブラウザで開けません"));
+    expect(await rightClickRow("page.html")).toBe(true);
+    await pickItem("ブラウザで開く");
+    await waitForCalls(open);
+    await expect($("#error")).toHaveText("ブラウザで開けません");
+    await expect($(".toast")).not.toBeDisplayed();
+  });
+
   // A-24: the diff tab. Rust compares the two texts (`orca_file_diff`): the rows of both views and the blocks of changes; the page draws them and colors the text.
   const row_ = (kind: OrcaDiffRow["kind"], old: number | null, nw: number | null): OrcaDiffRow => ({ kind, old, new: nw });
   const diffOfA = (): OrcaFileDiff => ({
