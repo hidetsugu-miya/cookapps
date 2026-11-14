@@ -23,6 +23,7 @@ pub mod orca_handoff;
 pub mod orca_language;
 pub mod orca_link;
 pub mod orca_panes;
+pub mod orca_preview;
 pub mod orca_stream;
 pub mod orca_theme;
 pub mod skills;
@@ -341,6 +342,7 @@ pub fn run() {
             orca_files::orca_file_delete,
             orca_files::orca_file_move,
             orca_files::orca_file_download,
+            orca_preview::orca_file_open_in_browser,
             orca_files::orca_file_diff,
             orca_files::orca_local_branches,
             orca_files::orca_remote_branches,
