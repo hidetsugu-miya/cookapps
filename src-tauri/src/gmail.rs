@@ -28,6 +28,11 @@ use crate::images::{
 };
 use crate::mail_address::{recipients_label, split_address};
 
+mod held;
+
+pub use held::HeldThreads;
+use held::{HeldThread, ThreadRefresh, HELD_THREAD_BYTES};
+
 const THREADS_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 const PROFILE_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/profile";
 const HISTORY_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/history";
@@ -201,7 +206,7 @@ pub struct ThreadDetail {
     pending_images: Vec<PendingImage>,
 }
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
@@ -1366,24 +1371,102 @@ pub async fn fetch_thread(
     Ok(Some(detail))
 }
 
+/// Asks Gmail for the thread as the screen draws it. An answer is held (`HeldThreads`) for the next open of the thread;
+/// `Ok(None)` means `account` must log in again, and what is held of the account goes.
+async fn fresh_thread(
+    app: &AppHandle,
+    auth: &Auth,
+    cache: &InlineCache,
+    held: &HeldThreads,
+    command: &str,
+    account: &str,
+    id: &str,
+) -> Result<Option<Arc<ThreadDetail>>, String> {
+    let dir = config_dir(app).map_err(|e| log_failure(command, account, e))?;
+    // Read before the fetch: an answer that arrives after the account was removed meanwhile is not held.
+    let since = held.generation();
+    let detail = fetch_thread(&dir, auth, cache, account, id, false)
+        .await
+        .map_err(|e| log_failure(command, account, e))?
+        .map(Arc::new);
+    match &detail {
+        Some(d) => held.put(HELD_THREAD_BYTES, since, account, id, Arc::clone(d)),
+        None => held.forget(account),
+    }
+    Ok(detail)
+}
+
 /// `Ok(None)` means `account` must log in again.
 #[tauri::command]
 pub async fn thread(
     app: AppHandle,
     auth: State<'_, Auth>,
     cache: State<'_, InlineCache>,
+    held: State<'_, HeldThreads>,
     pending: State<'_, PendingImages>,
     account: String,
     id: String,
-) -> Result<Option<ThreadDetail>, String> {
-    let dir = config_dir(&app).map_err(|e| log_failure("thread", &account, e))?;
-    let detail = fetch_thread(&dir, &auth, &cache, &account, &id, false)
-        .await
-        .map_err(|e| log_failure("thread", &account, e))?;
+) -> Result<Option<Arc<ThreadDetail>>, String> {
+    let detail = fresh_thread(&app, &auth, &cache, &held, "thread", &account, &id).await?;
     if let Some(d) = &detail {
         pending.remember(Instant::now(), &account, &id, d.pending_images.clone());
     }
     Ok(detail)
+}
+
+/// The thread as `thread` (or `thread_refresh`) last answered it, to draw before Gmail answers again; `Ok(None)` when it is not held.
+/// The images it left to fetch that `thread_images` has fetched since are inlined, and the others can be asked of `thread_images` again.
+#[tauri::command]
+pub async fn thread_held(
+    cache: State<'_, InlineCache>,
+    held: State<'_, HeldThreads>,
+    pending: State<'_, PendingImages>,
+    account: String,
+    id: String,
+) -> Result<Option<HeldThread>, String> {
+    let Some((stamp, detail)) = held.get(&account, &id) else {
+        return Ok(None);
+    };
+    let thread = held::with_cached_images(&cache, &account, &detail);
+    pending.remember(Instant::now(), &account, &id, thread.pending_images.clone());
+    Ok(Some(HeldThread { stamp, thread }))
+}
+
+/// Asks Gmail for a thread the screen drew from `thread_held` (`stamp` is that answer's). The thread comes back only
+/// when it draws differently from that copy, so an unchanged thread is neither sent nor drawn twice.
+/// `Ok(None)` means `account` must log in again.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn thread_refresh(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    cache: State<'_, InlineCache>,
+    held: State<'_, HeldThreads>,
+    pending: State<'_, PendingImages>,
+    account: String,
+    id: String,
+    stamp: u32,
+) -> Result<Option<ThreadRefresh>, String> {
+    // Read before the fetch puts its answer in its place. A copy with another stamp is not the one the screen drew.
+    let shown = held
+        .get(&account, &id)
+        .filter(|(held_stamp, _)| *held_stamp == stamp)
+        .map(|(_, detail)| detail);
+    let Some(fresh) =
+        fresh_thread(&app, &auth, &cache, &held, "thread_refresh", &account, &id).await?
+    else {
+        return Ok(None);
+    };
+    // Both as `thread_held` would answer them now: the images the screen fetched for the held copy are in the cache, and one
+    // cached after `fresh` was read is inlined in it too, so that an unchanged thread does not differ by that image.
+    let shown = shown.map(|detail| held::with_cached_images(&cache, &account, &detail));
+    let fresh = held::with_cached_images(&cache, &account, &fresh);
+    let answer = held::refresh_answer(shown.as_deref(), fresh);
+    // A thread that is not drawn again keeps the images `thread_held` remembered for it.
+    if let Some(d) = &answer.thread {
+        pending.remember(Instant::now(), &account, &id, d.pending_images.clone());
+    }
+    Ok(Some(answer))
 }
 
 /// Fetches the `images` that `thread` left to fetch for the thread (anything else asked for is ignored) and returns,

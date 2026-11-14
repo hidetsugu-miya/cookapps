@@ -40,6 +40,7 @@ const fixtures = JSON.parse(sessionStorage.getItem("e2e-fixtures") ?? "{}");
 window.__e2e_timers__ = fixtures.e2e_timers;
 const answers = {
   inbox_cached: null,
+  thread_held: null,
   calendar_cached: [],
   calendar_first_day: 0,
   set_calendar_first_day: null,
