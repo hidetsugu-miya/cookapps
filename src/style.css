@@ -1,4 +1,4 @@
-:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; }
+:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --danger: #b00020; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
@@ -47,7 +47,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .popup-email { font-weight: bold; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .popup-status { padding: 8px 12px; border-radius: 8px; background: var(--warn-bg); }
 .popup-actions { display: flex; gap: 8px; }
-.danger, .text-btn.danger { color: #b00020; }
+.danger, .text-btn.danger { color: var(--danger); }
+.pop-confirm { max-width: 320px; overflow-wrap: anywhere; }
 .popup-unread, .popup-plan { color: #666; }
 .nav-item[aria-current="page"] { background: var(--accent); color: var(--on-accent); }
 
@@ -646,6 +647,9 @@ a.c-file:hover { background: var(--hover); }
 .menu { position: fixed; z-index: 10; overflow-y: auto; min-width: 160px; padding: 4px; border: 1px solid var(--chip-line); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; }
 .menu button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+.menu button:disabled { opacity: .45; cursor: default; }
+.menu button:disabled:hover { background: transparent; }
+.menu-sep { flex: none; height: 1px; margin: 4px 6px; background: var(--chip-line); }
 .menu-searchable { box-sizing: border-box; overflow: hidden; }
 .menu-search { flex: none; box-sizing: border-box; width: 100%; height: 28px; margin: 0 0 4px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; outline: 0; background: var(--surface); font: inherit; color: inherit; }
 .menu-search:focus { border-color: var(--accent); }
@@ -971,9 +975,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 /* The file pane (A-18) on the right of the work pane: the tree of the selected tab's worktree (`--files-w` is where the divider put it, 15% to 40% of the screen), and the editor of a file in the place of a terminal. */
 #orca-files { flex: none; width: clamp(15%, var(--files-w, 22%), 40%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
 #orca-files-bar { flex: none; display: flex; align-items: center; min-height: var(--header-h); box-sizing: border-box; border-bottom: 1px solid var(--line); }
-#orca-files-head { flex: none; display: flex; align-items: center; gap: 4px; height: calc(32px * var(--fs)); box-sizing: border-box; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); }
+#orca-files-head { flex: none; display: flex; align-items: center; gap: 4px; height: calc(32px * var(--fs)); box-sizing: border-box; padding: 0 12px; border-bottom: 1px solid var(--line); }
 #orca-files-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); font-weight: 600; }
-#orca-files-head .icon-btn { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
 /* A-25: the branch of the heading is a button that opens the list of branches under it. */
 .orca-branch-btn { max-width: 100%; margin: 0 -4px; padding: 1px 4px; border: 0; border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-weight: inherit; cursor: pointer; }
 .orca-branch-btn:hover, .orca-branch-btn[aria-expanded="true"], .orca-branch-btn:focus-visible { background: var(--soft); outline: none; }
@@ -985,7 +988,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-branch-mark svg { width: 14px; height: 14px; }
 .orca-dest-sec { margin: 6px 10px 2px; font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--muted); }
 .orca-dest-list .empty.fail { color: var(--warn); }
-#orca-files-head .icon-btn svg { width: 15px; height: 15px; }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }
 .orca-file { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
@@ -1002,6 +1004,11 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-file[data-ignored="true"] .orca-file-name { font-style: italic; }
 .orca-file[data-open="true"] { background: var(--soft); color: var(--accent); }
 .orca-file[data-open="true"] .orca-file-ic { color: var(--accent); }
+.orca-file-new { display: flex; align-items: center; gap: 4px; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); }
+.orca-file-input { flex: 1; min-width: 0; height: 20px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--accent); border-radius: 10px; outline: 0; background: var(--surface); font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; }
+/* A-18: the folder a dragged row would be dropped in (its row, or the tree for the root of the worktree), and the name that follows the pointer. */
+.orca-file[data-drop="true"], #orca-files-tree[data-drop="true"] { background: var(--soft); outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-file-drag { position: fixed; z-index: 30; padding: 2px 8px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 14px rgba(0, 0, 0, .16); font-size: calc(12.5px * var(--fs)); white-space: nowrap; opacity: .92; pointer-events: none; }
 .orca-file-note { margin: 0; padding: 2px 8px 2px calc(24px + var(--depth, 0) * 14px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
 .orca-file-note.fail { color: var(--warn); }
 /* A-27: the buttons that choose the files or the history in the top row of the file pane, and the history (the commits above, the files of the chosen commit below). */
@@ -1143,6 +1150,15 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-dest-list { display: flex; flex-direction: column; overflow-y: auto; }
 .orca-dest-pop button { flex: none; height: auto; flex-direction: column; align-items: flex-start; gap: 0; padding: 6px 10px; }
 .orca-dest-pop button span { font-size: calc(12px * var(--fs)); color: var(--muted); }
+.orca-scratch-pop { width: 320px; padding: 8px; gap: 8px; }
+.orca-scratch-field { display: flex; align-items: center; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); }
+.orca-scratch-field:focus-within { border-color: var(--accent); }
+.orca-scratch-prefix { flex: none; font-size: calc(12.5px * var(--fs)); color: var(--muted); }
+.orca-scratch-pop input { flex: 1; min-width: 0; height: 28px; padding: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; }
+.orca-scratch-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.orca-scratch-actions .text-btn { justify-content: center; height: 28px; padding: 0 16px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); }
+.orca-scratch-actions .text-btn:hover { background: var(--soft); }
+.orca-scratch-actions .text-btn.primary, .orca-scratch-actions .text-btn.primary:hover { border-color: var(--accent); background: var(--accent); }
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
 
 /* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail and the Todo have it on the right of the screen (the mail 40% at first, a third to a half; the Todo 30% at first, 30% to 45%; the divider of ts/split.ts); the Slack thread has it as the Orca tab of its right pane. */

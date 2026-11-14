@@ -41,6 +41,8 @@ interface EditorFile {
   blocked: boolean;
   timer: number | null;
   writing: Promise<void> | null;
+  // The file is being moved (A-18): nothing is saved until the move is over, so that no save goes to the place it leaves.
+  held: boolean;
   // Focus the text when it is first shown.
   wantFocus: boolean;
   // The grammar of the highlighter for the file (null: none, drawn plain), and how to cancel the drawing of the layer that waits for the next frame or for the wait of a long text (null: none waits).
@@ -74,6 +76,8 @@ interface EditorFile {
   gutter: HTMLElement;
   lines: number;
   state: HTMLElement;
+  // The path of the heading.
+  where: HTMLElement;
   note: HTMLElement;
 }
 
@@ -96,7 +100,7 @@ export function setAutosaveMs(ms: number) {
   autosaveMs = ms;
 }
 
-const canSave = (f: EditorFile) => f.read === "ready" && f.dirty && !f.blocked && f.save !== "error";
+const canSave = (f: EditorFile) => f.read === "ready" && f.dirty && !f.blocked && !f.held && f.save !== "error";
 
 function setSave(f: EditorFile, save: Save) {
   f.save = save;
@@ -251,6 +255,8 @@ function schedule(f: EditorFile) {
   clearTimer(f);
   if (f.blocked) return;
   setSave(f, "pending");
+  // A file that is being moved waits for the end of the move (`holdFiles`).
+  if (f.held) return;
   f.timer = window.setTimeout(() => void flush(f), autosaveMs);
 }
 
@@ -411,7 +417,8 @@ function create(id: string, target: string | null, project: string, path: string
   const modes = tag("span", "orca-edit-modes");
   modes.hidden = true;
   modes.append(sourceButton, richButton);
-  head.append(tag("span", "orca-edit-path", relative), state, modes);
+  const where = tag("span", "orca-edit-path", relative);
+  head.append(where, state, modes);
   const note = tag("p", "orca-empty feed-empty");
   note.hidden = true;
   const area = tag("textarea", "orca-edit-area");
@@ -435,7 +442,7 @@ function create(id: string, target: string | null, project: string, path: string
   const rich = tag("div", "orca-edit-rich");
   rich.hidden = true;
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, note };
+  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
   area.oninput = () => typed(f);
   area.onscroll = () => followScroll(f);
   sourceButton.onclick = async () => {
@@ -494,6 +501,44 @@ export async function closeFile(id: string) {
   f.el.remove();
   files.delete(id);
   return true;
+}
+
+// Takes out the tabs of the files of the worktree at `path` that are gone from the disk (A-18): the file `relative`, or with `folder` every file under that folder. Their typing is not saved (there is nothing to save it to), and a save on its way is not waited for. True when a tab was closed.
+export function discardFiles(target: string | null, project: string, path: string, relative: string, folder: boolean) {
+  const gone = filesOf(target, project).filter((f) => f.path === path && (f.relative === relative || (folder && f.relative.startsWith(`${relative}/`))));
+  for (const f of gone) {
+    clearTimer(f);
+    cancelPaint(f);
+    clearRich(f);
+    f.el.remove();
+    files.delete(f.id);
+  }
+  return gone.length > 0;
+}
+
+// Holds the saves of the open files of the worktree at `path` that a move of `relative` takes along (the file itself, or the files under the folder), and waits for the save of each that is on its way, so that nothing is written to the old place once the move is asked for (A-18). The typing goes on and stays in the tab.
+// The function it answers ends the hold: with `to`, the place `relative` was moved to, each file takes its new path (the heading and the name of the tab follow; the text, its signature and the language it was opened with stay), and with null (the move failed) the paths stay. Typing that waited is saved then, to the path the file has now. It answers whether a path changed.
+export async function holdFiles(target: string | null, project: string, path: string, relative: string) {
+  const moved = filesOf(target, project).filter((f) => f.path === path && !f.held && (f.relative === relative || f.relative.startsWith(`${relative}/`)));
+  for (const f of moved) {
+    f.held = true;
+    clearTimer(f);
+  }
+  await Promise.all(moved.map((f) => f.writing));
+  return (to: string | null) => {
+    // A tab that was closed meanwhile is left out.
+    const open = moved.filter((f) => files.get(f.id) === f);
+    for (const f of open) {
+      f.held = false;
+      if (to !== null) {
+        f.relative = to + f.relative.slice(relative.length);
+        f.where.textContent = f.relative;
+        f.area.setAttribute("aria-label", f.relative);
+      }
+      if (f.dirty && !f.blocked && f.save !== "error") schedule(f);
+    }
+    return to !== null && open.length > 0;
+  };
 }
 
 // Shows each file of `placements` in its host element and takes every other file out of the page (it keeps its text).
