@@ -196,7 +196,7 @@ const PURPOSES: { key: Purpose; name: string; meta: string }[] = [
   { key: "slackSummary", name: "Slack の要約", meta: "Slack のメッセージから Todo を作るとき" },
   { key: "mailSummary", name: "メールの要約", meta: "メール詳細の AI 要約" },
   { key: "promptChat", name: "プロンプトの会話", meta: "Todo の要約プロンプトを Claude と編集するとき" },
-  { key: "proofread", name: "Slack に貼る文章の校正", meta: "Slack に貼る画面の「Claude と校正」" },
+  { key: "proofread", name: "Slack に貼る文章の校正", meta: "Slack に貼る画面の Claude のペイン" },
   { key: "slackReply", name: "Slack のスレッドの相談", meta: "スレッド詳細の Claude 欄" },
   { key: "orcaHandoff", name: "Orca に渡す要約", meta: "Orca に渡すペインで、渡す内容を要約するとき" },
   { key: "todoChat", name: "Todo の相談", meta: "Todo の Claude ペインで、タスクを頼むとき" },

@@ -434,7 +434,8 @@ pub struct PromptEdit {
 }
 
 /// Claude's answer to a request about the text of a Slack post (S-4): the `PromptEdit` fields, the destination it chose from the list it was given (`None` when it chose none, or one that is not in the list),
-/// and whether the post was made (S-23: `posted` is true only after Rust posted the text to `destination`; `post_to` is where it is to post, decided by `parse_slack_edit`, and never reaches the screen;
+/// and whether the post was made (S-23: `posted` is true only after Rust posted the text to `destination`, and `posted_ts` is then the time of the posted message, empty when Slack's answer had none;
+/// `post_to` is where it is to post, decided by `parse_slack_edit`, and never reaches the screen;
 /// `post_refused` is true when the model asked for a post and Rust refused it, so that the screen can say that nothing was posted).
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -445,10 +446,21 @@ pub struct SlackEdit {
     pub edit: PromptEdit,
     pub destination: Option<crate::slack::Target>,
     pub posted: bool,
+    pub posted_ts: Option<String>,
     pub post_refused: bool,
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     pub post_to: Option<crate::slack::Target>,
+}
+
+impl SlackEdit {
+    /// The answer for a request that must not post (`may_post` false of `claude_proofread_slack`): a post that would go out is refused, and the rest stands.
+    fn without_post(mut self) -> Self {
+        if self.post_to.take().is_some() {
+            self.post_refused = true;
+        }
+        self
+    }
 }
 
 /// Claude's answer to a request to fix a Todo proposal (the name and the description made from a Slack message): what it says and, for each part it changed,
@@ -1547,6 +1559,7 @@ fn parse_slack_edit(
         post_refused,
         destination,
         posted: false,
+        posted_ts: None,
     })
 }
 
@@ -2541,7 +2554,8 @@ pub async fn claude_edit_todo_prompt(
 /// `target` is the destination now in the destination chip, if any: it is put at the head of the list and marked for the model.
 /// `target_by_claude` says that a destination of Claude's own answer put it there: the post then needs the destination named in the request (`slack::owner_chip`, S-23).
 /// The model has no tools, so it only answers; a destination it names that is not in the list it was given is dropped. When it answers `post: true` and the rules of `slack::post_decision` allow it (S-23),
-/// Rust posts the new text (or `text` when it did not change it) by the path of "投稿" (`slack::post_and_remember`) and answers `posted`; a failed post is the command's error. What the model says never reaches the log.
+/// Rust posts the new text (or `text` when it did not change it) by the path of "投稿" (`slack::post_and_remember`, as the mail's content: nothing in it is made a mention) and answers `posted` with `posted_ts`; a failed post is the command's error. What the model says never reaches the log.
+/// `may_post` is false when the screen's "行うこと" are not the one post this command can make (more than one, a written text, or one already posted): a post is then refused (`SlackEdit::without_post`).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn claude_proofread_slack(
@@ -2553,6 +2567,7 @@ pub async fn claude_proofread_slack(
     instruction: String,
     target: Option<crate::slack::Target>,
     target_by_claude: bool,
+    may_post: bool,
 ) -> Result<SlackEdit, String> {
     let command = "claude_proofread_slack";
     let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
@@ -2588,10 +2603,16 @@ pub async fn claude_proofread_slack(
         log_failure(command, "-", e.log);
         e.screen
     })?;
+    if !may_post {
+        answer = answer.without_post();
+    }
     if let Some(target) = answer.post_to.take() {
         let posted = answer.edit.body.as_deref().unwrap_or(&text);
-        crate::slack::post_and_remember(Ok(&dir), auth.http(), command, target, posted).await?;
+        let ts =
+            crate::slack::post_and_remember(Ok(&dir), auth.http(), command, target, posted, false)
+                .await?;
         answer.posted = true;
+        answer.posted_ts = Some(ts);
     }
     Ok(answer)
 }
@@ -6690,6 +6711,17 @@ mod tests {
             assert_eq!(got.post_to, None, "{output} {instruction}");
             assert!(got.post_refused, "{output} {instruction}");
         }
+        // Where the screen says that this request must not post (`may_post` false), a post that would go out is refused, and said to be.
+        let got = parse(to_chip.clone(), "要点だけ投稿して", &candidates).without_post();
+        assert_eq!(got.post_to, None);
+        assert!(got.post_refused);
+        assert_eq!(got.destination, Some(chip.clone()));
+        let quiet = parse(
+            json!({"reply": "r", "destination": 1}),
+            "投稿して",
+            &candidates,
+        );
+        assert!(!quiet.without_post().post_refused);
         // A model that did not ask for a post posts nothing and refuses nothing.
         for output in [
             json!({"reply": "r", "destination": 1}),

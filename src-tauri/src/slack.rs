@@ -660,6 +660,83 @@ fn post_text(text: &str, markdown: bool) -> Result<String, String> {
     Ok(text)
 }
 
+/// How the text of a post is read before it is sent (`sent_text`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum PostForm {
+    /// Plain text that the owner did not write (the mail's content of S-1): escaped, and nothing in it is made a mention.
+    Plain,
+    /// Plain text that the owner wrote (a card of "行うこと", S-1): escaped, and its `@here`, `@channel` and `@everyone` become Slack's broadcast mentions.
+    Written,
+    /// The Markdown of the rich field (S-6, S-21).
+    Markdown,
+}
+
+impl PostForm {
+    /// The form of a post of the rich field's commands, whose `markdown` argument may be missing.
+    fn rich(markdown: Option<bool>) -> Self {
+        if markdown.unwrap_or(false) {
+            Self::Markdown
+        } else {
+            Self::Plain
+        }
+    }
+}
+
+/// The words that Slack reads as a mention of everyone in a channel when they follow `@`.
+const BROADCASTS: [&str; 3] = ["here", "channel", "everyone"];
+
+/// `text` (already escaped by `escape_mrkdwn`) with each `@here`, `@channel` and `@everyone` as Slack's broadcast mention (`<!here>` and so on).
+/// The word is taken only as it is written (lower case), when the character before `@` is not an ASCII letter, digit, `_`, `-` or `.` (so a mail address is left alone)
+/// and the one after the word is not an ASCII letter, digit, `_` or `-` (so `@hereafter` is left alone; kana and kanji end the word).
+fn broadcast_mentions(text: &str) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    // The character before `rest`, when `rest` does not start the text.
+    let mut before = None;
+    while let Some(at) = rest.find('@') {
+        let previous = rest[..at].chars().next_back().or(before);
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let hit = BROADCASTS
+            .iter()
+            .find(|w| after.starts_with(**w) && !after[w.len()..].starts_with(word));
+        match hit {
+            Some(w) if !previous.is_some_and(|c| word(c) || c == '.') => {
+                out.push_str(&format!("<!{w}>"));
+                rest = &after[w.len()..];
+                before = Some('>');
+            }
+            _ => {
+                out.push('@');
+                rest = after;
+                before = Some('@');
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The text that is sent for `text` read as `form`: `post_text`, and for a text the owner wrote, its broadcast mentions (`broadcast_mentions`).
+fn sent_text(text: &str, form: PostForm) -> Result<String, String> {
+    let sent = post_text(text, form == PostForm::Markdown)?;
+    Ok(if form == PostForm::Written {
+        broadcast_mentions(&sent)
+    } else {
+        sent
+    })
+}
+
+/// The time (`ts`) of the message that an answer of `chat.postMessage` says was posted, or an empty string when the answer has none that is well formed.
+fn posted_ts(reply: &Value) -> String {
+    reply["ts"]
+        .as_str()
+        .filter(|ts| valid_ts(ts))
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// The message for the UI of a Slack error code. Slack answers 200 with `ok: false`.
 /// `needed` is what a `missing_scope` reply says the token lacks.
 fn error_message(code: &str, needed: &str) -> String {
@@ -1670,7 +1747,8 @@ pub fn slack_preview(subject: &str, from: &str, date: &str, body: &str) -> Strin
     mail_text(subject, from, date, body)
 }
 
-/// Checks the destination and the text, and posts `text` (`markdown`: the Markdown of the rich field, see `post_text`) to the channel or as a reply in `thread_ts`'s thread. A failure is logged under `command` and returned.
+/// Checks the destination and the text, and posts `text` (read as `form`, see `sent_text`) to the channel or as a reply in `thread_ts`'s thread. A failure is logged under `command` and returned.
+/// The answer is the time (`ts`) of the posted message (`posted_ts`), which a later post replies to (S-1).
 /// The text goes to Slack only here, on the user's click.
 async fn send_post(
     http: &reqwest::Client,
@@ -1679,15 +1757,15 @@ async fn send_post(
     channel: &str,
     thread_ts: Option<&str>,
     text: &str,
-    markdown: bool,
-) -> Result<(), String> {
+    form: PostForm,
+) -> Result<String, String> {
     if token_key(team_id).is_err()
         || !valid_channel(channel)
         || thread_ts.is_some_and(|t| !valid_ts(t))
     {
         return Err(log_failure(command, team_id, BAD_TARGET));
     }
-    let text = post_text(text, markdown).map_err(|e| log_failure(command, team_id, e))?;
+    let text = sent_text(text, form).map_err(|e| log_failure(command, team_id, e))?;
     let token = token_of(team_id)
         .await
         .map_err(|e| log_failure(command, team_id, e))?;
@@ -1700,14 +1778,16 @@ async fn send_post(
     if let Some(ts) = thread_ts {
         message["thread_ts"] = ts.into();
     }
-    call(http, &token, "chat.postMessage", Payload::Json(&message))
+    let reply = call(http, &token, "chat.postMessage", Payload::Json(&message))
         .await
         .map_err(|e| log_failure(command, team_id, e))?;
-    Ok(())
+    Ok(posted_ts(&reply))
 }
 
 /// Posts `text` to `target` (the channel, or a reply in its thread) by `send_post`, and remembers the destination. A failure of the post is logged under `command` and returned.
 /// It is the one path of S-1: the "投稿" button (`slack_post`) and a request to Claude that asks for a post (S-23, `claude_proofread_slack`) both end here.
+/// `written` says that the owner wrote `text` (a card of "行うこと"): only then do its `@here`, `@channel` and `@everyone` become mentions (`PostForm::Written`); the mail's content is untrusted and is posted as text.
+/// The answer is the time (`ts`) of the posted message, empty when Slack's answer had none.
 /// `dir` is the config folder when it could be found; without it the post still goes and only the remembering is skipped (and logged).
 pub(crate) async fn post_and_remember(
     dir: Result<&Path, String>,
@@ -1715,15 +1795,21 @@ pub(crate) async fn post_and_remember(
     command: &str,
     target: Target,
     text: &str,
-) -> Result<(), String> {
-    send_post(
+    written: bool,
+) -> Result<String, String> {
+    let form = if written {
+        PostForm::Written
+    } else {
+        PostForm::Plain
+    };
+    let ts = send_post(
         http,
         command,
         &target.team_id,
         &target.channel,
         target.thread_ts.as_deref(),
         text,
-        false,
+        form,
     )
     .await?;
     // The post is done: failing to remember where is only logged.
@@ -1751,12 +1837,15 @@ pub(crate) async fn post_and_remember(
     if let Err(e) = remembered {
         log_failure(command, &team_id, e);
     }
-    Ok(())
+    Ok(ts)
 }
 
 /// Posts `text` (what the user edited) to the channel, or as a reply in `thread_ts`'s thread, and remembers the destination.
+/// `written` is true for a text the owner wrote in a card of "行うこと" (its `@here`, `@channel` and `@everyone` become mentions), and false for the mail's content.
+/// The answer is the time (`ts`) of the posted message, which the screen gives as `thread_ts` to a later post that continues its thread; it is empty when Slack's answer had none.
 /// The text goes to Slack only here, on the user's click (and in the request to Claude that asks for it, S-23).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn slack_post(
     app: AppHandle,
     auth: State<'_, Auth>,
@@ -1765,7 +1854,8 @@ pub async fn slack_post(
     thread_ts: Option<String>,
     name: String,
     text: String,
-) -> Result<bool, String> {
+    written: bool,
+) -> Result<String, String> {
     let command = "slack_post";
     let target = Target {
         team_id,
@@ -1780,9 +1870,9 @@ pub async fn slack_post(
         command,
         target,
         &text,
+        written,
     )
-    .await?;
-    Ok(true)
+    .await
 }
 
 // The Slack timeline (S-5), the thread (S-6) and its reply (S-6, S-7). Nothing about messages is saved to disk.
@@ -6466,7 +6556,7 @@ pub async fn slack_channel_post(
         &channel,
         None,
         &text,
-        markdown.unwrap_or(false),
+        PostForm::rich(markdown),
     )
     .await?;
     Ok(true)
@@ -6490,7 +6580,7 @@ pub async fn slack_reply(
         &channel,
         Some(&thread_ts),
         &text,
-        markdown.unwrap_or(false),
+        PostForm::rich(markdown),
     )
     .await?;
     Ok(true)
@@ -7069,6 +7159,82 @@ mod tests {
             post_text("  *見積 <1>*\nA <a@x.jp> & 本文\n", false).as_deref(),
             Ok("*見積 &lt;1&gt;*\nA &lt;a@x.jp&gt; &amp; 本文")
         );
+    }
+
+    #[test]
+    fn a_written_text_turns_its_broadcast_words_into_mentions() {
+        assert_eq!(
+            broadcast_mentions("@here 確認お願いします"),
+            "<!here> 確認お願いします"
+        );
+        assert_eq!(
+            broadcast_mentions("@channel と @everyone、@here。"),
+            "<!channel> と <!everyone>、<!here>。"
+        );
+        // Kana and kanji next to the word end it, as a space does.
+        assert_eq!(broadcast_mentions("皆さん@here確認"), "皆さん<!here>確認");
+        assert_eq!(
+            broadcast_mentions("(@here)\n@channel"),
+            "(<!here>)\n<!channel>"
+        );
+        // A longer word, a mail address and another case are not the broadcast words.
+        for text in [
+            "@hereafter",
+            "@here_1",
+            "@channels",
+            "@everyone-else",
+            "a@here",
+            "a.b@channel.example",
+            "x_@everyone",
+            "@Here",
+            "@ here",
+            "here",
+            "@alice",
+        ] {
+            assert_eq!(broadcast_mentions(text), text, "{text}");
+        }
+        // It works on the escaped text: what was typed as markup stays text.
+        assert_eq!(
+            broadcast_mentions(&escape_mrkdwn("<!here> @here")),
+            "&lt;!here&gt; <!here>"
+        );
+    }
+
+    #[test]
+    fn only_a_written_text_gets_its_broadcast_mentions() {
+        assert_eq!(
+            sent_text("@here *見積* <1>", PostForm::Written).as_deref(),
+            Ok("<!here> *見積* &lt;1&gt;")
+        );
+        // The mail's text is untrusted: its words stay words.
+        assert_eq!(
+            sent_text("@here *見積* <1>", PostForm::Plain).as_deref(),
+            Ok("@here *見積* &lt;1&gt;")
+        );
+        assert_eq!(
+            sent_text("@here **見積**", PostForm::Markdown).as_deref(),
+            Ok("@here *見積*")
+        );
+        assert_eq!(
+            sent_text(" ", PostForm::Written).unwrap_err(),
+            "貼る内容が空です"
+        );
+    }
+
+    #[test]
+    fn the_time_of_a_post_is_read_from_the_answer() {
+        assert_eq!(
+            posted_ts(&json!({"ok": true, "ts": "1761785520.123456"})),
+            "1761785520.123456"
+        );
+        // An answer without a well-formed time gives none: the post is done all the same.
+        for reply in [
+            json!({"ok": true}),
+            json!({"ok": true, "ts": 1}),
+            json!({"ok": true, "ts": "abc"}),
+        ] {
+            assert_eq!(posted_ts(&reply), "", "{reply}");
+        }
     }
 
     #[test]

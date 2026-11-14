@@ -522,23 +522,26 @@
       <div id="slack-main" class="split-main">
         <section id="slack-edit" aria-label="投稿する内容">
           <div id="slack-edit-head">
-            <span class="prompt-label">貼り付け先</span>
-            <button id="slack-target" class="review-chip" aria-haspopup="menu">選んでください</button>
+            <span class="prompt-label">元のメッセージ</span>
             <button id="slack-reset" class="text-btn" disabled>元の内容に戻す</button>
           </div>
           <div id="slack-edit-body">
-            <div id="slack-preview" role="button" tabindex="0" aria-label="投稿する内容"></div>
-            <textarea id="slack-body" spellcheck="false" aria-label="投稿する内容" hidden></textarea>
+            <div id="slack-preview" role="button" tabindex="0" aria-label="元のメッセージ"></div>
+            <textarea id="slack-body" spellcheck="false" aria-label="元のメッセージ" hidden></textarea>
+          </div>
+          <div id="slack-actions-pane">
+            <span class="prompt-label">行うこと</span>
+            <ol id="slack-actions" aria-label="行うこと"></ol>
+            <button id="slack-add" class="icon-btn" type="button" aria-label="行うことを足す"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
           </div>
           <div id="slack-edit-foot">
             <button id="slack-post" class="text-btn primary" disabled>投稿</button>
           </div>
         </section>
         <div id="slack-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
-        <aside id="slack-chat" class="chat-pane split-chat" aria-label="Claude と校正">
+        <aside id="slack-chat" class="chat-pane split-chat" aria-label="Claude">
           <div class="chat-head">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
-            Claude と校正
             <button id="slack-clear" type="button" class="text-btn chat-clear" disabled>クリア</button>
           </div>
           <div id="slack-log" class="chat-log"></div>
