@@ -54,7 +54,7 @@ pub(crate) const LIST_LIMIT: usize = 5000;
 /// The most paths one `git.checkIgnored` takes. `orca_files_ignored` takes as many as one list holds (`LIST_LIMIT`) and sends them in chunks of this size.
 const IGNORE_CHUNK: usize = 2000;
 /// The most bytes of a file the editor opens or saves. Orca reads 512 KiB at most, and a larger frame closes the WebSocket of a paired server (it takes 1 MiB), so a text is kept well under both.
-const MAX_TEXT: usize = 384 * 1024;
+pub(crate) const MAX_TEXT: usize = 384 * 1024;
 /// The longest relative path, in bytes (the limit of a path on the file systems Orca runs on).
 const MAX_PATH: usize = 4096;
 /// The bytes one `files.readChunk` asks for (the size Orca's own client reads at a time; Orca refuses more than 512 KiB).
@@ -68,14 +68,15 @@ const TEMP_TRIES: u32 = 1000;
 const DIFF_TOO_LARGE: &str = "差分が大きすぎて表示できません";
 /// The folder of the scratchpad files (A-29), from the worktree.
 const SCRATCHPAD_DIR: &str = ".orca/scratchpad";
-const BAD_NAME: &str = "名前が正しくありません";
-const NAME_TAKEN: &str = "同じ名前があります";
-const NOT_CREATED: &str = "作成できませんでした";
-const NOT_DELETED: &str = "削除できませんでした";
-const NOT_MOVED: &str = "移動できませんでした";
-const SAME_PLACE: &str = "移動先が元の場所と同じです";
+pub(crate) const BAD_NAME: &str = "名前が正しくありません";
+pub(crate) const NAME_TAKEN: &str = "同じ名前があります";
+pub(crate) const NOT_CREATED: &str = "作成できませんでした";
+pub(crate) const NOT_DELETED: &str = "削除できませんでした";
+pub(crate) const NOT_MOVED: &str = "移動できませんでした";
+pub(crate) const SAME_PLACE: &str = "移動先が元の場所と同じです";
 const INTO_ITSELF: &str = "フォルダーを自分の中には移動できません";
-const NOT_FOUND: &str = "ファイルが見つかりません";
+pub(crate) const NOT_FOUND: &str = "ファイルが見つかりません";
+pub(crate) const NOT_UTF8: &str = "UTF-8 ではないファイルは開けません";
 const NOT_LISTED: &str = "ファイルの一覧を読めません";
 const NOT_BRANCHES: &str = "ブランチの一覧を読めません";
 const NOT_SWITCHED: &str = "ブランチを切り替えた結果を読めません";
@@ -335,7 +336,7 @@ fn join(dir: &str, name: &str) -> String {
 }
 
 /// The name of a new file or folder: one name, trimmed, that is not empty, `.` or `..`, holds no `/`, `\` or control character, and is at most 255 bytes.
-fn check_new_name(name: &str) -> Result<&str, String> {
+pub(crate) fn check_new_name(name: &str) -> Result<&str, String> {
     let name = name.trim();
     let bad = name.is_empty()
         || name == "."
@@ -383,7 +384,7 @@ fn check_move(from: &str, to: &str) -> Result<(), String> {
 // ---- the list ----
 
 /// The order of Orca's file list: a number inside a name counts by its value (`2` before `10`), other characters by their lower case, and a tie by the plain order of the names.
-fn natural_cmp(a: &str, b: &str) -> Ordering {
+pub(crate) fn natural_cmp(a: &str, b: &str) -> Ordering {
     let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
     loop {
         match (x.peek().copied(), y.peek().copied()) {
@@ -556,9 +557,13 @@ fn line_ending(text: &str) -> Result<bool, String> {
     }
 }
 
+/// The refusal of a file that is larger than the editor takes.
+pub(crate) fn too_large() -> String {
+    format!("{} KiB を超えるファイルは開けません", MAX_TEXT / 1024)
+}
+
 /// The text the editor gets from an answer of `files.read`: Orca's reply must be the whole file, as text, in the size the editor takes.
 fn parse_text(result: &Value, relative: &str) -> Result<OrcaFileText, String> {
-    let too_large = || format!("{} KiB を超えるファイルは開けません", MAX_TEXT / 1024);
     let too_big = result["byteLength"]
         .as_u64()
         .is_some_and(|n| n > MAX_TEXT as u64);
@@ -571,8 +576,17 @@ fn parse_text(result: &Value, relative: &str) -> Result<OrcaFileText, String> {
     }
     // Orca decodes bytes that are not UTF-8 into U+FFFD, and a save would write that over them.
     if content.contains('\u{FFFD}') {
-        return Err("UTF-8 ではないファイルは開けません".into());
+        return Err(NOT_UTF8.into());
     }
+    editor_text(content, relative, disk_signature(content))
+}
+
+/// The text of the file `relative` for the editor, from the text the disk holds (`content`, with one kind of line end) and the signature of it.
+pub(crate) fn editor_text(
+    content: &str,
+    relative: &str,
+    signature: String,
+) -> Result<OrcaFileText, String> {
     let crlf = line_ending(content)?;
     let language = detect_language(relative, content);
     Ok(OrcaFileText {
@@ -582,7 +596,7 @@ fn parse_text(result: &Value, relative: &str) -> Result<OrcaFileText, String> {
             content.to_owned()
         },
         crlf,
-        signature: disk_signature(content),
+        signature,
         language: language.to_owned(),
         highlight: highlight_name(language).map(str::to_owned),
     })
@@ -675,7 +689,7 @@ fn save_state(result: &Value) -> OrcaSaveState {
 }
 
 /// The text as it goes to the disk: with the file's own line ends.
-fn disk_text(content: &str, crlf: bool) -> String {
+pub(crate) fn disk_text(content: &str, crlf: bool) -> String {
     if crlf {
         content.replace('\n', "\r\n")
     } else {

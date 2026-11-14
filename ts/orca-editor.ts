@@ -2,6 +2,7 @@
 // A file is saved by itself: once the typing has stopped for the time of the settings, the text goes to Rust with the signature of the text that was read, and Orca writes only if the disk still holds it.
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
+// A scratchpad file of an SSH host (A-30) is a file of this editor too: it has no worktree (`path` is empty) and names its host, and Rust reads and saves it by ssh (`ssh_scratch_read`, `ssh_scratch_write`) with the same answers, so everything else here is the same.
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
 // A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the textarea by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
 import { tag } from "./dom.js";
@@ -30,6 +31,8 @@ interface EditorFile {
   // The worktree, and the file in it (relative).
   path: string;
   relative: string;
+  // The SSH host (the `id` of an `OrcaSshTarget`) whose scratchpad holds the file (A-30): `path` is then empty and `relative` is the name of the file. null: a file of a worktree.
+  host: string | null;
   // The text of the read (null until it is read), whether the file has CRLF, and the signature of what the disk held then; a save that went through brings the signature up to date.
   signature: string;
   crlf: boolean;
@@ -92,6 +95,9 @@ let lastId = 0;
 let autosaveMs = 1000;
 let changed: () => void = () => {};
 let fail: (e: unknown) => void = () => {};
+
+// The folder of the scratchpad files on an SSH host (A-30), as the screen shows it; Rust alone makes the real path.
+export const SSH_SCRATCH_DIR = "~/.local/share/cookapps/scratchpad/";
 
 export const nameOf = (relative: string) => relative.slice(relative.lastIndexOf("/") + 1);
 
@@ -216,7 +222,7 @@ async function write(f: EditorFile) {
   const sent = f.area.value;
   setSave(f, "saving");
   try {
-    const saved = await invoke("orca_file_write", { path: f.path, relative: f.relative, content: sent, crlf: f.crlf, signature: f.signature, environment: f.target });
+    const saved = f.host === null ? await invoke("orca_file_write", { path: f.path, relative: f.relative, content: sent, crlf: f.crlf, signature: f.signature, environment: f.target }) : await invoke("ssh_scratch_write", { host: f.host, name: f.relative, content: sent, crlf: f.crlf, signature: f.signature });
     if (saved.state !== "saved") {
       f.blocked = true;
       setSave(f, saved.state);
@@ -379,7 +385,7 @@ function setMode(f: EditorFile, mode: "rich" | "source") {
 
 async function load(f: EditorFile) {
   try {
-    const text = await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
+    const text = f.host === null ? await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target }) : await invoke("ssh_scratch_read", { host: f.host, name: f.relative });
     f.area.value = text.content;
     f.highlight = text.highlight;
     f.markdown = text.language === "markdown";
@@ -400,7 +406,9 @@ async function load(f: EditorFile) {
   changed();
 }
 
-function create(id: string, target: string | null, project: string, path: string, relative: string): EditorFile {
+function create(id: string, target: string | null, project: string, path: string, relative: string, host: string | null): EditorFile {
+  // The path the heading shows: from the worktree, or the place on the SSH host.
+  const shown = host === null ? relative : SSH_SCRATCH_DIR + relative;
   const el = tag("div", "orca-edit");
   el.dataset.file = id;
   const head = tag("div", "orca-edit-head");
@@ -417,14 +425,14 @@ function create(id: string, target: string | null, project: string, path: string
   const modes = tag("span", "orca-edit-modes");
   modes.hidden = true;
   modes.append(sourceButton, richButton);
-  const where = tag("span", "orca-edit-path", relative);
+  const where = tag("span", "orca-edit-path", shown);
   head.append(where, state, modes);
   const note = tag("p", "orca-empty feed-empty");
   note.hidden = true;
   const area = tag("textarea", "orca-edit-area");
   area.spellcheck = false;
   area.disabled = true;
-  area.setAttribute("aria-label", relative);
+  area.setAttribute("aria-label", shown);
   const code = tag("code");
   const layer = tag("pre", "orca-edit-hl");
   layer.setAttribute("aria-hidden", "true");
@@ -442,7 +450,7 @@ function create(id: string, target: string | null, project: string, path: string
   const rich = tag("div", "orca-edit-rich");
   rich.hidden = true;
   el.append(head, note, body, rich);
-  const f: EditorFile = { id, target, project, path, relative, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
+  const f: EditorFile = { id, target, project, path, relative, host, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, wantFocus: true, highlight: null, cancelPaint: null, markdown: false, mode: "rich", modes, sourceButton, richButton, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note };
   area.oninput = () => typed(f);
   area.onscroll = () => followScroll(f);
   sourceButton.onclick = async () => {
@@ -464,14 +472,14 @@ function create(id: string, target: string | null, project: string, path: string
   return f;
 }
 
-// Opens the file as a tab of the project and gives its id; a file that is open already is not read again.
-export function openFile(target: string | null, project: string, path: string, relative: string) {
-  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative);
+// Opens the file as a tab of the project and gives its id; a file that is open already is not read again. With `host`, it is the scratchpad file named `relative` of that SSH host (A-30), and `path` is empty.
+export function openFile(target: string | null, project: string, path: string, relative: string, host: string | null = null) {
+  const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.host === host);
   if (open) {
     open.wantFocus = true;
     return open.id;
   }
-  const f = create(`file:${++lastId}`, target, project, path, relative);
+  const f = create(`file:${++lastId}`, target, project, path, relative, host);
   files.set(f.id, f);
   void load(f);
   return f.id;
@@ -532,8 +540,9 @@ export async function holdFiles(target: string | null, project: string, path: st
       f.held = false;
       if (to !== null) {
         f.relative = to + f.relative.slice(relative.length);
-        f.where.textContent = f.relative;
-        f.area.setAttribute("aria-label", f.relative);
+        const shown = f.host === null ? f.relative : SSH_SCRATCH_DIR + f.relative;
+        f.where.textContent = shown;
+        f.area.setAttribute("aria-label", shown);
       }
       if (f.dirty && !f.blocked && f.save !== "error") schedule(f);
     }

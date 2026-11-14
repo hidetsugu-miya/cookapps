@@ -26,7 +26,7 @@ import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
-import { closeFile, dirtyIds, discardFiles, filesOf, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
+import { closeFile, dirtyIds, discardFiles, filesOf, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
 import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
@@ -212,7 +212,8 @@ function tabsOf(key: string): Tab[] {
     tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }) });
   }
   for (const f of filesOf(view?.target ?? null, key)) {
-    const where = tabs.find((t) => t.path === f.path)?.where ?? view?.worktrees.find((w) => w.path === f.path);
+    // A scratchpad file of an SSH host (A-30) is in no worktree.
+    const where = f.host !== null ? "" : tabs.find((t) => t.path === f.path)?.where ?? view?.worktrees.find((w) => w.path === f.path);
     tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where) });
   }
   for (const d of diffsOf(view?.target ?? null, key)) {
@@ -567,16 +568,23 @@ function syncDiff(tabs: Tab[]) {
   showDiffs(placements);
 }
 
-// The worktree the file pane shows: the selected tab's, else (no tab) the main worktree of the selected project. An SSH host's row has no files to read, so a project with no tab gives none there.
-function filesWorktree(tabs: Tab[]): { path: string; label: string } | null {
+// The id of the SSH host of the selected row, when this machine's Orca lists it: only such a host has a scratchpad (A-30), because Rust finds the host in that list. The row of a host that only the target (a saved environment) lists gives none.
+function scratchHost(): string | null {
+  return projectKey !== null && ssh.some((t) => `ssh:${t.id}` === projectKey) ? projectKey.slice("ssh:".length) : null;
+}
+
+// The worktree the file pane shows: the selected tab's, else (no tab) the main worktree of the selected project. An SSH host's row has no worktree to read with no tab, and the tab of one of its scratchpad files is in none: both give the scratchpad folder of the host (A-30; `host` is its id, and `path` is empty), which the pane lists in place of a worktree. A host that this machine does not list has no scratchpad, so its row gives none with no tab.
+function filesWorktree(tabs: Tab[]): { path: string; label: string; host: string | null } | null {
   const tab = findTab(view?.target ?? null, projectKey ?? "", tabs, selectedTab() ?? "");
-  if (tab !== undefined) return { path: tab.path, label: tab.where };
-  if (projectKey === null || projectKey.startsWith("ssh:")) return null;
+  if (tab !== undefined && tab.path !== "") return { path: tab.path, label: tab.where, host: null };
+  const host = scratchHost();
+  if (host !== null) return { path: "", label: SSH_SCRATCH_DIR, host };
+  if (tab !== undefined || projectKey === null || projectKey.startsWith("ssh:")) return null;
   const main = view?.worktrees.find((w) => w.projectKey === projectKey && w.isMain);
   // A project with tabs whose layout is not answered yet has no selected tab for a moment: nothing is read for it,
   // except when the only tabs are files of the main worktree (the first file opened in a project with no tab), whose tree stays.
   if (tabs.some((t) => !isDocument(t) || t.path !== main?.path)) return null;
-  return main === undefined ? null : { path: main.path, label: worktreeLabel(main) };
+  return main === undefined ? null : { path: main.path, label: worktreeLabel(main), host: null };
 }
 
 // The file pane follows its worktree and the files open in it.
@@ -586,7 +594,7 @@ function drawFiles(tabs: Tab[]) {
   // The branch of the heading is a button (A-25) for a worktree of the list that is on a git branch, except an SSH host's, whose branches Rust does not read. It is the git branch, not Orca's name of the worktree.
   const listed = worktree === null ? undefined : view?.worktrees.find((w) => w.path === worktree.path);
   const branch = listed !== undefined && listed.gitBranch !== "" && worktree?.label === worktreeLabel(listed) && !projectKey?.startsWith("ssh:") ? listed.gitBranch : null;
-  syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label, project: projectKey ?? "", branch }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
+  syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label, project: projectKey ?? "", branch, host: worktree.host }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
 }
 
 // A file of the file pane was pressed twice: it opens as a tab in the focused pane and is selected, and the editor takes the typing.
@@ -594,7 +602,7 @@ function openFile(relative: string) {
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
   if (worktree === null || projectKey === null || view === null) return;
   started = null;
-  const id = openEditorFile(view.target, projectKey, worktree.path, relative);
+  const id = openEditorFile(view.target, projectKey, worktree.path, relative, worktree.host);
   // The select asks Rust for the layout with the new tab in it (`runPaneOp` reads the tabs when it asks).
   chooseTab(id);
   draw();
@@ -603,7 +611,7 @@ function openFile(relative: string) {
 // The difference of a file of the file pane from HEAD (its menu), or, with `commit`, of a file of a commit of the history (A-27): it opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
 function openDiff(relative: string, commit: DiffCommit | null = null) {
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
-  if (worktree === null || projectKey === null || view === null) return;
+  if (worktree === null || worktree.host !== null || projectKey === null || view === null) return;
   started = null;
   const id = openDiffTab(view.target, projectKey, worktree.path, relative, commit);
   chooseTab(id);
@@ -1000,14 +1008,15 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
   openMenu(anchor, [item("右に分割", "right"), item("下に分割", "bottom")]);
 }
 
-// The plus (A-16, A-29): a menu of "Claude を起動", "ターミナルを開く" and "スクラッチパッド". The first two start in a worktree of the project (or SSH host) selected in the list pane, and the scratchpad is a file of that worktree; an SSH host's files cannot be read, so the scratchpad is not offered for its row.
+// The plus (A-16, A-29): a menu of "Claude を起動", "ターミナルを開く" and "スクラッチパッド". The first two start in a worktree of the project (or SSH host) selected in the list pane, and the scratchpad is a file of that worktree; for an SSH host's row it is a file of the host's own scratchpad folder (A-30), which asks for no worktree, and it is not offered for a host that this machine does not list.
 function openStartMenu(anchor: Element) {
   if (view === null || projectKey === null) return;
   const item = (label: string, icon: string, pick: () => void, disabled = false) => ({ label, color: "var(--accent)", icon, current: false, disabled, pick });
+  const host = scratchHost();
   openMenu(anchor, [
     item("Claude を起動", CLAUDE_SVG, () => chooseWorktree(anchor, (path) => start("claude", path))),
     item("ターミナルを開く", TERMINAL_SVG, () => chooseWorktree(anchor, (path) => start("terminal", path))),
-    item("スクラッチパッド", SCRATCHPAD_SVG, () => chooseWorktree(anchor, (path) => askScratchpad(anchor, path)), projectKey.startsWith("ssh:")),
+    item("スクラッチパッド", SCRATCHPAD_SVG, () => (host === null ? chooseWorktree(anchor, (path) => askScratchpad(anchor, path, null)) : askScratchpad(anchor, "", host)), host === null && projectKey.startsWith("ssh:")),
   ]);
 }
 
@@ -1019,17 +1028,17 @@ function chooseWorktree(anchor: Element, act: (path: string) => void) {
   else openWorktreeDialog(anchor, mine, null, act);
 }
 
-// Asks for the name of the scratchpad file in the worktree (A-29). The file opens in the project that was selected when it was asked for; a selection made meanwhile leaves it made and not opened.
-function askScratchpad(anchor: Element, path: string) {
+// Asks for the name of the scratchpad file in the worktree at `path` (A-29), or with `host` on that SSH host (A-30; `path` is then empty). The file opens in the project that was selected when it was asked for; a selection made meanwhile leaves it made and not opened.
+function askScratchpad(anchor: Element, path: string, host: string | null) {
   if (view === null || projectKey === null) return;
   const [from, target] = [projectKey, view.target];
-  openScratchpad(anchor, path, target, (relative) => {
+  openScratchpad(anchor, host === null ? { path, environment: target } : { host }, (file) => {
     if (projectKey !== from || view?.target !== target) return;
     started = null;
-    const id = openEditorFile(target, from, path, relative);
+    const id = openEditorFile(target, from, path, file, host);
     chooseTab(id);
     draw();
-    rereadScratchpad(target, path);
+    rereadScratchpad(target, path, host);
   });
 }
 
