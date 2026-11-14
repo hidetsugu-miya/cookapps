@@ -55,6 +55,7 @@ import type { SlackEdit } from "./bindings/SlackEdit";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
 import type { SocketStatus } from "./bindings/SocketStatus";
+import type { SshScratchFile } from "./bindings/SshScratchFile";
 import type { Summary } from "./bindings/Summary";
 import type { Sync } from "./bindings/Sync";
 import type { Target } from "./bindings/Target";
@@ -318,6 +319,18 @@ export interface Commands {
   orca_file_delete: { args: { path: string; relative: string; folder: boolean; environment: string | null }; result: null };
   // A-29: makes the scratchpad file `name` in `.orca/scratchpad` of the worktree and answers its path from the worktree; a file of that name that is there already is answered as it is (`existed`) and left as it is.
   orca_scratchpad_create: { args: { path: string; name: string; environment: string | null }; result: OrcaScratchpad };
+  // A-30: the names of the scratchpad files of the SSH host `host` (the `id` of an `OrcaSshTarget`), in `~/.local/share/cookapps/scratchpad/` on that host, in the order of A-18. A host with no such folder has none. A host that cannot be reached is an error.
+  ssh_scratch_list: { args: { host: string }; result: string[] };
+  // A-30: the text of the scratchpad file `name` of the SSH host, as `orca_file_read` answers it (the signature is of the bytes on the host). A missing file, one over 384 KiB, one that is not UTF-8 and one with mixed line ends are errors.
+  ssh_scratch_read: { args: { host: string; name: string }; result: OrcaFileText };
+  // A-30: saves `content` over the scratchpad file only if the host still holds the text with `signature` (`crlf`: write CRLF). `state` is `saved` (with the new signature), `changed` or `missing` (nothing written).
+  ssh_scratch_write: { args: { host: string; name: string; content: string; crlf: boolean; signature: string }; result: OrcaSaved };
+  // A-30: makes the empty scratchpad file `name` on the SSH host, with its folder; a file of that name that is there already is answered as it is (`existed`) and left as it is.
+  ssh_scratch_create: { args: { host: string; name: string }; result: SshScratchFile };
+  // A-30: renames the scratchpad file `from` of the SSH host to `to`. A name that is taken, a missing file and the same name are errors; nothing is overwritten.
+  ssh_scratch_rename: { args: { host: string; from: string; to: string }; result: null };
+  // A-30: deletes the scratchpad file `name` of the SSH host, for good.
+  ssh_scratch_delete: { args: { host: string; name: string }; result: null };
   // A-18: moves or renames the file or folder `from` of the worktree to `to` (both paths from the worktree), making the folders of `to` that are missing. A place that is taken, the root, a path outside the worktree, the same place and a place inside `from` are errors; nothing is overwritten.
   orca_file_move: { args: { path: string; from: string; to: string; environment: string | null }; result: null };
   // A-24: the diff of the file `relative` of the worktree, HEAD against the working tree: the rows of both views, the blocks of changes and the language to color by.
