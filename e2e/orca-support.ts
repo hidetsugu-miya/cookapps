@@ -44,4 +44,8 @@ export async function pickItem(label: string) {
   );
 }
 
+// The button of the file pane that is on the screen (one at a time: the corner pane's while the pane is hidden, the pane's own while it is shown).
+// The pane's own has no `hidden` of its own (the pane around it has), so it is found by the pane.
+export const filesToggle = () => $(".orca-tabbar .orca-files-toggle:not([hidden]), #orca-files:not([hidden]) .orca-files-toggle");
+
 export const project = (name: string) => $(`//div[@id="orca-feed"]//button[contains(@class,"orca-project")][.//span[@class="orca-project-name"][. = "${name}"]]`);

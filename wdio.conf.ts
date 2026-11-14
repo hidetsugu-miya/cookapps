@@ -86,6 +86,21 @@ export const config = {
   // The result of `browser.execute` is sometimes lost (locally too; see `boot` in e2e/support.ts), and the plugin then waits for the default 30 s before webdriver retries the command and it recovers. Waiting longer does not bring the result back.
   // The scripts of the specs finish at once, so a short limit turns that wait into 3 s.
   before: async () => {
+    // wdio 10 has no `browser.executeAsync`, and @wdio/tauri-service 1.5.1 still binds it in its own `before` (which runs after this one) and calls it in `browser.tauri.switchWindow`: without it the service stops halfway through its setup.
+    const classic = browser as unknown as { executeAsync?: (script: string | ((...args: never[]) => unknown), ...args: unknown[]) => Promise<unknown> };
+    classic.executeAsync ??= (script, ...args) => browser.executeAsyncScript(typeof script === "function" ? `return (${script}).apply(null, arguments)` : script, args as Parameters<typeof browser.executeAsyncScript>[1]);
+    // The embedded WebDriver (tauri-plugin-wdio-webdriver 1.5.1) keeps the result of a lookup of several elements in one fixed place of the page (`window.__wd_temp_{i}`), so two such lookups in flight at once hand out each other's elements. wdio 10 looks up every `$()` that way (to count the matches), so these lookups go one at a time.
+    let lastLookup: Promise<unknown> = Promise.resolve();
+    const oneAtATime = (lookup: () => Promise<unknown>) => {
+      const next = lastLookup.then(lookup, lookup);
+      lastLookup = next.catch(() => {});
+      return next;
+    };
+    const commands = browser as unknown as { overwriteCommand: (name: string, command: (original: (...args: unknown[]) => Promise<unknown>, ...args: unknown[]) => Promise<unknown>, options?: { attachToElement: boolean }) => void };
+    for (const name of ["findElements", "findElementsFromElement", "findElementsFromShadowRoot"]) {
+      commands.overwriteCommand(name, (original, ...args) => oneAtATime(() => original(...args)));
+      commands.overwriteCommand(name, (original, ...args) => oneAtATime(() => original(...args)), { attachToElement: true });
+    }
     await browser.setTimeout({ script: 3000 });
   },
   // Choosing the one window ("main", Tauri's default label) by hand stops the service's per-command focus check, whose eval can wait for the whole script timeout (set in `before`) on macOS.

@@ -404,7 +404,7 @@ describe("settings: Claude", () => {
 
   it("keeps the model selects and the prompt row as they were when only the connection is redrawn", async () => {
     await openSettings([], claudeReady, "claude");
-    await expect($("#claude-models select")).toExist();
+    await waitForCount("#claude-models select", 16);
     await browser.waitUntil(async () => (await textsOf("#claude-prompt .status"))[0] !== "確認中");
     const marks = () => browser.execute(() => {
       const w = window as unknown as { __marks__?: Element[] };
@@ -1059,7 +1059,7 @@ describe("settings: Todo prompt", () => {
 
   it("opens the prompt screen with 確認・編集 and shows the saved instructions there", async () => {
     await openSettings([], claudeReady, "claude");
-    await expect($("#claude-items .item-meta")).toHaveText(expect.stringContaining("claude@example.com"));
+    await expect($("#claude-items .item:nth-child(1) .item-meta")).toHaveText(expect.stringContaining("claude@example.com"));
     await expect(row().$(".status")).toHaveText("デフォルト");
     await row().$(".text-btn").click();
     await expect($("#prompt")).toBeDisplayed();
@@ -1140,7 +1140,7 @@ describe("settings: update", () => {
     await $("#update-later").click();
     await expect($("#update-pop")).not.toBeDisplayed();
     const button = $("#update-items").$("button=更新して再起動");
-    await expect(button).toHaveClass(expect.stringContaining("primary"));
+    await expect(button).toHaveElementClass("primary");
     const install = await mock("install_update", holds);
     const restart = await mock("restart_app", null);
     await button.click();
@@ -1882,7 +1882,7 @@ describe("settings: tabs", () => {
     await boot({ inbox: inbox(), slack_load: { workspaces, recent: [] }, slack_check: checked([]), claude_status: claudeMissing });
     await $("#nav-settings").click();
     await openTab("slack");
-    await expect($("#slack-workspaces .item")).toExist();
+    await waitForCount("#slack-workspaces .item", workspaces.length);
     const scrolled = await browser.execute(() => {
       const settings = document.getElementById("settings")!;
       settings.scrollTop = 400;

@@ -329,7 +329,7 @@ describe("todo Claude pane", () => {
       expect(await count(`${log} .chat-task`)).toBe(2);
     };
     await kept();
-    await $("#todo-list li.task").click();
+    await $('#todo-list li.task[data-id="k9"]').click();
     await expect($("#todo-back")).toBeDisplayed();
     await $("#todo-back").click();
     await kept();

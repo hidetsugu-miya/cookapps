@@ -81,11 +81,12 @@ async function openUnread(messages: ReturnType<typeof unreadSample>, extra: Para
   await mock("slack_thread", slackThread([threadMessage(messages[0].ts, "Alice Example", "first")]));
   return mark;
 }
-const openRow = async (text: string) => {
-  const rows = await $$("#slack-feed .feed-row");
-  for (const row of rows) if ((await row.$(".feed-text").getText()) === text) return row.$(".feed-open").click();
+// The item of the list (a row with its bookmark) whose message is `text`.
+const itemOf = async (text: string) => {
+  for (const item of await $$("#slack-feed .feed-item")) if ((await item.$(".feed-main > .feed-text").getText()) === text) return item;
   throw new Error(`no row with ${text}`);
 };
+const openRow = async (text: string) => (await itemOf(text)).$(".feed-open").click();
 const scrollTop = () => browser.execute(() => document.getElementById("slack-feed")!.scrollTop);
 // Marks the elements of the rows drawn now; a row that is made again has no mark.
 const markRows = () =>
@@ -356,7 +357,7 @@ describe("slack list", () => {
       "Other Team を読み込めませんでした: 接続できません設定を開く",
       "Example Team: users:read、files:read の権限がありません設定を開く",
     ]);
-    await $("#slack-notice > div .text-btn").click();
+    await $("#slack-notice").$("div*=Other Team").$(".text-btn").click();
     await expect($("#settings-tab-slack")).toHaveAttribute("aria-selected", "true");
   });
 
@@ -943,7 +944,7 @@ describe("slack list", () => {
     await openList(timeline(unreadSample()));
     await waitForCount("#slack-feed .feed-row", 3);
     await mock("slack_watch", rejects("読めません"));
-    await $('button[aria-label="ウォッチする"]').click();
+    await (await itemOf("second")).$(".feed-watch").click();
     await expect($("#error")).toHaveText(expect.stringContaining("読めません"));
     await waitForCount("#slack-feed .feed-row", 3);
     expect(await layout()).toEqual(["未読", "unread:second", "unread:first", "unread:other"]);
@@ -975,7 +976,7 @@ describe("slack list", () => {
     const watch = await mock("slack_watch", true);
     const ts = watched[0].ts;
     await mock("slack_timeline", timeline([], { watched: [watched[1]] }));
-    await $('button[aria-label="ウォッチを外す"]').click();
+    await (await itemOf("Watched read")).$(".feed-watch").click();
     expect(await waitForCalls(unwatch)).toEqual([{ teamId: workspace.teamId, channel: "C3", ts }]);
     await expect($(".toast")).toHaveText(expect.stringContaining("ウォッチを外しました"));
     expect(await layout()).toEqual(["ウォッチ", "unread:Watched unread"]);
@@ -2035,7 +2036,7 @@ describe("slack list: the history of a channel (S-20)", () => {
     // What Rust answers once the thread is saved as watched.
     await mock("slack_timeline", timeline(unreadSample(), { side: sideSample(), watched: [watchedMessage(firstTs, "Alice Example", "dev", "first", 0), watchedMessage(oldTs, "Bob Example", "dev", "old", 0)] }));
     await browser.execute(() => document.querySelector("#sc-feed .feed-item")!.classList.add("feed-keep"));
-    await $("#sc-feed .feed-item .feed-watch").click();
+    await $("#sc-feed .feed-watch:not(.on)").click();
     expect(await waitForCalls(watch)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: oldTs }]);
     await browser.waitUntil(async () => await browser.execute(() => document.querySelector("#sc-feed .feed-watch")!.classList.contains("on")));
     await expect($("#slack-thread")).not.toBeDisplayed();
