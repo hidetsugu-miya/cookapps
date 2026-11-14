@@ -25,6 +25,7 @@ export const EDIT_SVG = svgOf('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7
 export const OUTDENT_SVG = svgOf('<path d="M3 5h18M13 12h8M3 19h18"/><path d="M8 9l-4 3 4 3"/>');
 export const FOLDER_SVG = svgOf('<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>');
 export const CLAUDE_SVG = svgOf('<path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>');
+export const SCRATCHPAD_SVG = svgOf('<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M8 12h8M8 16h5"/>');
 export const TERMINAL_SVG = svgOf('<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 10l3 2-3 2M12 15h5"/>');
 export const SUMMARY_SVG = $("thread-summary").innerHTML.trim();
 export const SLACK_SVG = $("thread-slack").innerHTML.trim();

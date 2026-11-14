@@ -173,6 +173,14 @@ export function refreshFiles() {
   else if (![...listings.values()].some((l) => l.busy)) void reload();
 }
 
+// A scratchpad file was made in `.orca/scratchpad` of the worktree at `path` (A-29): when the tree is that worktree's, the folders on the way to it that it has read are read again, the root first, so that a folder that was not there shows now.
+export function rereadScratchpad(target: string | null, path: string) {
+  if (context === null || context.path !== path || context.target !== target) return;
+  void (async () => {
+    for (const dir of ["", ".orca", ".orca/scratchpad"]) if (listings.has(dir)) await readDir(dir);
+  })();
+}
+
 // Opens the folder: it is drawn from what was read (the next return of the focus reads it again; a folder whose read failed is read again when it is opened), waited for while it is being read, and read when it was not.
 function expandDir(path: string) {
   expanded.add(path);

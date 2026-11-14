@@ -42,6 +42,7 @@ import type { OrcaLocalBranch } from "./bindings/OrcaLocalBranch";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "./bindings/OrcaSaved";
+import type { OrcaScratchpad } from "./bindings/OrcaScratchpad";
 import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaViewport } from "./bindings/OrcaViewport";
 import type { PaneLayout } from "./bindings/PaneLayout";
@@ -315,6 +316,8 @@ export interface Commands {
   orca_file_create: { args: { path: string; dir: string; name: string; folder: boolean; environment: string | null }; result: string };
   // A-18: deletes the file `relative` of the worktree, or with `folder` the folder and everything in it, for good (no Trash). The root of the worktree and a path outside it are refused.
   orca_file_delete: { args: { path: string; relative: string; folder: boolean; environment: string | null }; result: null };
+  // A-29: makes the scratchpad file `name` in `.orca/scratchpad` of the worktree and answers its path from the worktree; a file of that name that is there already is answered as it is (`existed`) and left as it is.
+  orca_scratchpad_create: { args: { path: string; name: string; environment: string | null }; result: OrcaScratchpad };
   // A-24: the diff of the file `relative` of the worktree, HEAD against the working tree: the rows of both views, the blocks of changes and the language to color by.
   orca_file_diff: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileDiff };
   // A-27: `limit` (1 to 200) commits of the worktree at `path` from HEAD, the newest first, after the first `skip`.

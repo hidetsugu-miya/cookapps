@@ -13,6 +13,7 @@
 //! The difference of one file of a commit (`orca_commit_file_diff`, `git.commitDiff`: the text at the first parent and at the commit, in the shape of `git.diff`) is drawn as A-24's diff is (`parse_diff`). The text is held in memory only and is in no log line.
 //! A new file or folder is made in a folder of the tree (`orca_file_create`, `files.createFile` and `files.createDir`): Rust checks that the name is one name, and a name that is taken is refused (`files.createFile` never overwrites). They were read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! A file, or a folder with what is in it, is deleted for good (`orca_file_delete`, `files.delete`, which skips the Trash and makes a path that is not there no error): Rust refuses the root of the worktree and a path that is not inside it. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
+//! The scratchpad of A-29 is a file in `.orca/scratchpad` of a worktree (`orca_scratchpad_create`): the same `files.createFile`, and a name that is taken is answered as the existing file, not as a failure.
 //! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
 
 use std::{
@@ -64,6 +65,8 @@ const TEMP_AFFIX: usize = 1 + 4 + 5;
 /// How many names of a temporary file are tried before the download gives up.
 const TEMP_TRIES: u32 = 1000;
 const DIFF_TOO_LARGE: &str = "差分が大きすぎて表示できません";
+/// The folder of the scratchpad files (A-29), from the worktree.
+const SCRATCHPAD_DIR: &str = ".orca/scratchpad";
 const BAD_NAME: &str = "名前が正しくありません";
 const NAME_TAKEN: &str = "同じ名前があります";
 const NOT_CREATED: &str = "作成できませんでした";
@@ -242,6 +245,15 @@ pub enum OrcaSaveState {
     Changed,
     Missing,
     NotUtf8,
+}
+
+/// The answer to the making of a scratchpad file (A-29): its path from the worktree, and whether the file was there already (nothing was written then).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct OrcaScratchpad {
+    pub relative: String,
+    pub existed: bool,
 }
 
 /// The answer to a save, with the signature of the text the disk holds now when it was written (else the one that was sent).
@@ -745,6 +757,27 @@ async fn delete(
         return Err(NOT_DELETED.into());
     }
     Ok(())
+}
+
+/// Makes the scratchpad file `name` in `.orca/scratchpad` (Orca makes the folder when it is missing). A name that is taken is no failure: the file is the existing one, and `existed` says so.
+async fn create_scratchpad(
+    rpc: &mut impl Rpc,
+    path: &str,
+    host_id: &str,
+    name: &str,
+) -> Result<OrcaScratchpad, String> {
+    let relative = new_relative(SCRATCHPAD_DIR, name)?;
+    match create(rpc, path, host_id, &relative, false).await {
+        Ok(relative) => Ok(OrcaScratchpad {
+            relative,
+            existed: false,
+        }),
+        Err(reason) if reason == NAME_TAKEN => Ok(OrcaScratchpad {
+            relative,
+            existed: true,
+        }),
+        Err(reason) => Err(reason),
+    }
 }
 
 // ---- the download ----
@@ -1654,6 +1687,19 @@ pub async fn orca_file_create(
     let host_id = host_of(&path, environment.as_deref()).await?;
     let mut connection = Connection::open(environment).await?;
     create(&mut connection, &path, &host_id, &relative, folder).await
+}
+
+/// Makes the scratchpad file `name` in `.orca/scratchpad` of the worktree at `path` (A-29), and answers its path from the worktree; a file of that name that is there already is answered as it is, with `existed` true, and left as it is. The name is checked first. This writes to the worktree, so the target's list is read each time, as a save does.
+#[tauri::command]
+pub async fn orca_scratchpad_create(
+    path: String,
+    name: String,
+    environment: Option<String>,
+) -> Result<OrcaScratchpad, String> {
+    new_relative(SCRATCHPAD_DIR, &name)?;
+    let host_id = host_of(&path, environment.as_deref()).await?;
+    let mut connection = Connection::open(environment).await?;
+    create_scratchpad(&mut connection, &path, &host_id, &name).await
 }
 
 /// Deletes the file or, with `folder`, the folder with its contents, `relative` in the worktree at `path` (A-18), for good: Orca's `files.delete` skips the Trash. The root of the worktree (an empty `relative`) and a path that is not inside it are refused. This writes to the worktree, so the target's list is read each time, as a save does, and what was believed of the worktree is thrown away after the call.
@@ -3342,6 +3388,68 @@ mod tests {
                 .unwrap_err(),
             "削除できませんでした"
         );
+    }
+
+    #[tokio::test]
+    async fn a_scratchpad_file_is_made_in_its_folder_and_a_taken_name_is_the_existing_file() {
+        let mut orca = fake(vec![("files.createFile", Ok(json!({"ok": true})))]);
+        assert_eq!(
+            create_scratchpad(&mut orca, "/work/a", "local", " memo.md ")
+                .await
+                .unwrap(),
+            OrcaScratchpad {
+                relative: ".orca/scratchpad/memo.md".into(),
+                existed: false
+            }
+        );
+        assert_eq!(
+            orca.calls,
+            vec![(
+                "files.createFile".to_owned(),
+                json!({"worktree": "path:/work/a", "expectedExecutionHostId": "local", "relativePath": ".orca/scratchpad/memo.md"})
+            )]
+        );
+        let mut orca = fake(vec![(
+            "files.createFile",
+            Err((
+                "Orca がエラーを返しました（runtime_error）",
+                "EEXIST: file already exists, open '/work/a/.orca/scratchpad/memo.md'",
+            )),
+        )]);
+        assert_eq!(
+            create_scratchpad(&mut orca, "/work/a", "local", "memo.md")
+                .await
+                .unwrap(),
+            OrcaScratchpad {
+                relative: ".orca/scratchpad/memo.md".into(),
+                existed: true
+            }
+        );
+        // Another failure is a failure, and a bad name asks Orca nothing.
+        let mut orca = fake(vec![(
+            "files.createFile",
+            Err((
+                "Orca がエラーを返しました（forbidden）",
+                "EACCES: permission denied",
+            )),
+        )]);
+        assert_eq!(
+            create_scratchpad(&mut orca, "/work/a", "local", "memo.md")
+                .await
+                .unwrap_err(),
+            "Orca がエラーを返しました（forbidden）"
+        );
+        for bad in ["", "  ", "..", "a/b", "../x", "a\\b", "a\nb"] {
+            let mut orca = fake(vec![]);
+            assert_eq!(
+                create_scratchpad(&mut orca, "/work/a", "local", bad)
+                    .await
+                    .unwrap_err(),
+                "名前が正しくありません",
+                "{bad:?}"
+            );
+            assert!(orca.calls.is_empty());
+        }
     }
 
     /// A file on Orca's side that answers `files.stat` with its size (or with `stat`), and `files.readChunk` as Orca does (`eof` when the read reaches the end; `exact_eof` only on a read that finds nothing left; `never_eof` is an Orca that sends full chunks for ever), can fail on one call, can lack the method, and answers `files.readPreview` with `preview`.

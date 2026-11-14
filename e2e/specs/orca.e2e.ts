@@ -77,6 +77,7 @@ const createdTerminal = () => orcaTerminal("example-api", "zsh", { handle: "term
 // The two items of the plus.
 const CLAUDE = "Claude を起動";
 const TERMINAL = "ターミナルを開く";
+const SCRATCHPAD = "スクラッチパッド";
 // A saved environment as the target: its list is streamed.
 const studio = { target: "Studio", environments: ["Studio", "Lab"] };
 
@@ -544,15 +545,15 @@ describe("orca", () => {
     expect(await callsOf("orca_terminal_read")).toEqual([]);
   });
 
-  it("is enabled by a selected project, and opens a menu of 「Claude を起動」 and 「ターミナルを開く」", async () => {
+  it("is enabled by a selected project, and opens a menu of 「Claude を起動」, 「ターミナルを開く」 and 「スクラッチパッド」", async () => {
     await openOrca();
     await expect($(".orca-plus")).toBeDisabled();
     await pickProject("example-api");
     await expect($(".orca-plus")).toBeEnabled();
     await pressPlus();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual([CLAUDE, TERMINAL]);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual([CLAUDE, TERMINAL, SCRATCHPAD]);
     // Each item draws its own icon in place of the dot.
-    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    expect(await count('.menu[role="menu"] button svg')).toBe(3);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     await expect($(".orca-plus")).toHaveAttribute("aria-expanded", "true");
     // Escape closes it, and nothing was started.
@@ -5641,5 +5642,186 @@ describe("orca: search the list (A-19)", () => {
     await browser.waitUntil(async () => (await names()).length === 2, { timeoutMsg: "the new project never matched" });
     expect(await names()).toEqual(["example-app", "example-apple"]);
     await expect(input()).toHaveValue("app");
+  });
+});
+
+// A-29: the scratchpad of the work pane's plus. Rust makes the file (and answers the existing one when the name is taken, unit tests); here the screen is checked: the item, the popover, what it asks of Rust, and what opens.
+describe("orca: scratchpad (A-29)", () => {
+  const MADE = { relative: ".orca/scratchpad/memo.md", existed: false };
+  const fileText = (content: string): OrcaFileText => ({ content, crlf: false, signature: "sig-s", language: "plaintext", highlight: null });
+  const pop = () => $('.orca-scratch-pop[role="dialog"]');
+  const field = () => $('.orca-scratch-pop input[aria-label="ファイル名"]');
+  const primary = () => $(".orca-scratch-actions .text-btn.primary");
+  // Chooses the scratchpad in the plus of `repo`; with one worktree the popover opens at once.
+  async function ask(repo = "example-app") {
+    await plus(repo, SCRATCHPAD);
+    await expect(pop()).toBeDisplayed();
+  }
+  const selection = () =>
+    browser.execute(() => {
+      const input = document.querySelector<HTMLInputElement>(".orca-scratch-pop input")!;
+      return [input.selectionStart, input.selectionEnd, input.value];
+    });
+
+  it("is the third item of the plus, with an icon, and is disabled for an SSH host's row", async () => {
+    const hostRow = { key: "ssh:s1", name: "s1", status: "idle" as const, sessions: 0, atMs: 0 };
+    const hostTree = orcaWorktree("remote-app", "main", { path: "/home/dev/remote-app", projectKey: "ssh:s1" });
+    await openOrca(orcaOverview(sample(), [...worktrees(), hostTree], { ssh: [orcaSsh("s1", "example-host")], hosts: [hostRow] }));
+    await pickProject("example-app");
+    await pressPlus();
+    expect(await textsOf('.menu[role="menu"] button')).toEqual([CLAUDE, TERMINAL, SCRATCHPAD]);
+    expect(await count('.menu[role="menu"] button:nth-child(3) svg')).toBe(1);
+    expect(await count('.menu[role="menu"] button:disabled')).toBe(0);
+    await browser.keys("Escape");
+    await $('#orca-feed .orca-project[data-key="ssh:s1"]').click();
+    await pressPlus();
+    expect(await textsOf('.menu[role="menu"] button:disabled')).toEqual([SCRATCHPAD]);
+    // Pressing the disabled item does nothing: the menu stays and no popover opens.
+    await $('.menu[role="menu"] button:nth-child(3)').click();
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    await expect(pop()).not.toExist();
+    expect(await callsOf("orca_scratchpad_create")).toHaveLength(0);
+  });
+
+  it("opens a popover under the plus with the fixed folder, the name memo.md with memo selected, and the keys in it", async () => {
+    await openOrca();
+    await ask();
+    await expect($('.menu[role="menu"]')).not.toExist();
+    await expect($(".orca-scratch-prefix")).toHaveText(".orca/scratchpad/");
+    expect(await selection()).toEqual([0, 4, "memo.md"]);
+    await expect(field()).toBeFocused();
+    expect(await textsOf(".orca-scratch-actions button")).toEqual(["やめる", "作って開く"]);
+    expect(await count(".orca-scratch-pop input[placeholder]")).toBe(0);
+    // It is under the plus, inside the window.
+    const where = await browser.execute(() => {
+      const p = document.querySelector(".orca-scratch-pop")!.getBoundingClientRect();
+      const b = document.querySelector(".orca-plus")!.getBoundingClientRect();
+      return { belowPlus: p.top >= b.bottom, inside: p.right <= innerWidth && p.left >= 0 };
+    });
+    expect(where).toEqual({ belowPlus: true, inside: true });
+    // Nothing is made until the user asks.
+    expect(await callsOf("orca_scratchpad_create")).toHaveLength(0);
+  });
+
+  it("makes the file on Enter with the name typed in place of memo, and opens it in the editor", async () => {
+    await openOrca();
+    const create = await mock("orca_scratchpad_create", { relative: ".orca/scratchpad/notes.md", existed: false });
+    const read = await mock("orca_file_read", fileText("a note\n"));
+    await ask();
+    await browser.keys("notes");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", name: "notes.md", environment: null }]);
+    expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: ".orca/scratchpad/notes.md", environment: null }]);
+    await expect($(".orca-edit-area")).toHaveValue("a note\n", { trim: false });
+    await expect(pop()).not.toExist();
+    await expect(selectedTab()).toHaveText(expect.stringContaining("notes.md"));
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("makes the file with the target the screen shows when the button 「作って開く」 is pressed", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio));
+    const create = await mock("orca_scratchpad_create", MADE);
+    await mock("orca_file_read", fileText(""));
+    await ask();
+    await primary().click();
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", name: "memo.md", environment: "Studio" }]);
+    await expect(pop()).not.toExist();
+    await expect($(".orca-edit-area")).toBeDisplayed();
+  });
+
+  it("opens the file that is there already when the name is taken, with no error", async () => {
+    await openOrca();
+    const create = await mock("orca_scratchpad_create", { ...MADE, existed: true });
+    const read = await mock("orca_file_read", fileText("old memo\n"));
+    await ask();
+    await browser.keys("Enter");
+    await waitForCalls(create);
+    expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: ".orca/scratchpad/memo.md", environment: null }]);
+    await expect($(".orca-edit-area")).toHaveValue("old memo\n", { trim: false });
+    await expect(pop()).not.toExist();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("closes on Escape, on 「やめる」 and on a press outside, and makes nothing", async () => {
+    await openOrca();
+    const create = await mock("orca_scratchpad_create", MADE);
+    await ask();
+    await browser.keys("Escape");
+    await expect(pop()).not.toExist();
+    await ask();
+    await $(".orca-scratch-actions .text-btn:not(.primary)").click();
+    await expect(pop()).not.toExist();
+    await ask();
+    // WebDriver's element click sends no pointerdown, which is what closes a popup: the page's own press elsewhere.
+    await browser.execute(
+      (once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.getElementById("orca-header")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true }));
+      },
+      onceId(),
+    );
+    await expect(pop()).not.toExist();
+    await browser.pause(200);
+    expect(await callsOf(create)).toEqual([]);
+    await expect($(".orca-edit-area")).not.toExist();
+  });
+
+  it("does nothing for a blank name and keeps the popover open", async () => {
+    await openOrca();
+    const create = await mock("orca_scratchpad_create", MADE);
+    await ask();
+    await field().setValue("   ");
+    await browser.keys("Enter");
+    await primary().click();
+    await browser.pause(300);
+    expect(await callsOf(create)).toEqual([]);
+    await expect(pop()).toBeDisplayed();
+  });
+
+  it("shows the message when the file cannot be made, and keeps the popover open with the text so that it can be pressed again", async () => {
+    await openOrca();
+    const create = await mock("orca_scratchpad_create", rejects("名前が正しくありません"));
+    await mock("orca_file_read", fileText("x"));
+    await ask();
+    await field().setValue("a/b.md");
+    await browser.keys("Enter");
+    await waitForCalls(create);
+    await expect($("#error")).toHaveText("名前が正しくありません");
+    await expect(pop()).toBeDisplayed();
+    await expect(field()).toHaveValue("a/b.md");
+    await expect(primary()).toBeEnabled();
+    await expect($(".orca-edit-area")).not.toExist();
+    await mock("orca_scratchpad_create", { relative: ".orca/scratchpad/b.md", existed: false });
+    await field().setValue("b.md");
+    await browser.keys("Enter");
+    await expect($(".orca-edit-area")).toBeDisplayed();
+    await expect(pop()).not.toExist();
+  });
+
+  it("asks which worktree when the project has several, then opens the popover for the one picked", async () => {
+    await openOrca(orcaOverview(sample(), twoWorktrees()));
+    const create = await mock("orca_scratchpad_create", MADE);
+    await mock("orca_file_read", fileText(""));
+    await plusIn("example-app", SCRATCHPAD, "/work/example-app-b");
+    await expect(pop()).toBeDisplayed();
+    await expect($(".orca-dest-pop")).not.toExist();
+    expect(await callsOf(create)).toEqual([]);
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app-b", name: "memo.md", environment: null }]);
+  });
+
+  it("reads again the folders of the file pane that hold the new file when the pane shows that worktree", async () => {
+    const entries = (...names: string[]): OrcaDir => ({ entries: names.map((name) => ({ name, path: name, isDirectory: true, ignored: false })), total: names.length });
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_files_list: entries("src"), orca_files_ignored: [] });
+    await pickProject("example-app");
+    await $(".orca-files-toggle:not([hidden])").click();
+    await waitForCount("#orca-files-tree .orca-file", 1);
+    const list = await mock("orca_files_list", entries(".orca", "src"));
+    await mock("orca_scratchpad_create", MADE);
+    await mock("orca_file_read", fileText(""));
+    await ask();
+    await browser.keys("Enter");
+    expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 2);
   });
 });

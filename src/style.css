@@ -647,6 +647,8 @@ a.c-file:hover { background: var(--hover); }
 .menu { position: fixed; z-index: 10; overflow-y: auto; min-width: 160px; padding: 4px; border: 1px solid var(--chip-line); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: flex; flex-direction: column; }
 .menu button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+.menu button:disabled { opacity: .45; cursor: default; }
+.menu button:disabled:hover { background: transparent; }
 .menu-sep { flex: none; height: 1px; margin: 4px 6px; background: var(--chip-line); }
 .menu-searchable { box-sizing: border-box; overflow: hidden; }
 .menu-search { flex: none; box-sizing: border-box; width: 100%; height: 28px; margin: 0 0 4px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; outline: 0; background: var(--surface); font: inherit; color: inherit; }
@@ -1145,6 +1147,15 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-dest-list { display: flex; flex-direction: column; overflow-y: auto; }
 .orca-dest-pop button { flex: none; height: auto; flex-direction: column; align-items: flex-start; gap: 0; padding: 6px 10px; }
 .orca-dest-pop button span { font-size: calc(12px * var(--fs)); color: var(--muted); }
+.orca-scratch-pop { width: 320px; padding: 8px; gap: 8px; }
+.orca-scratch-field { display: flex; align-items: center; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); }
+.orca-scratch-field:focus-within { border-color: var(--accent); }
+.orca-scratch-prefix { flex: none; font-size: calc(12.5px * var(--fs)); color: var(--muted); }
+.orca-scratch-pop input { flex: 1; min-width: 0; height: 28px; padding: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; }
+.orca-scratch-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.orca-scratch-actions .text-btn { justify-content: center; height: 28px; padding: 0 16px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); }
+.orca-scratch-actions .text-btn:hover { background: var(--soft); }
+.orca-scratch-actions .text-btn.primary, .orca-scratch-actions .text-btn.primary:hover { border-color: var(--accent); background: var(--accent); }
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
 
 /* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail and the Todo have it on the right of the screen (the mail 40% at first, a third to a half; the Todo 30% at first, 30% to 45%; the divider of ts/split.ts); the Slack thread has it as the Orca tab of its right pane. */

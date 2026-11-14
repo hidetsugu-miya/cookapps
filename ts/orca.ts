@@ -20,16 +20,17 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { CHEVRON_SVG, CLAUDE_SVG, DIFF_SVG, FILE_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
+import { CHEVRON_SVG, CLAUDE_SVG, DIFF_SVG, FILE_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, showEditors } from "./orca-editor.js";
-import { filesShown, initOrcaFiles, refreshFiles, syncFiles, toggleFiles } from "./orca-files.js";
+import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, syncFiles, toggleFiles } from "./orca-files.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
+import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
 import { setNavCount, show, showError } from "./view.js";
@@ -999,19 +1000,37 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
   openMenu(anchor, [item("右に分割", "right"), item("下に分割", "bottom")]);
 }
 
-// The plus (A-16): a menu of "Claude を起動" and "ターミナルを開く", which start in a worktree of the project (or SSH host) selected in the list pane.
+// The plus (A-16, A-29): a menu of "Claude を起動", "ターミナルを開く" and "スクラッチパッド". The first two start in a worktree of the project (or SSH host) selected in the list pane, and the scratchpad is a file of that worktree; an SSH host's files cannot be read, so the scratchpad is not offered for its row.
 function openStartMenu(anchor: Element) {
   if (view === null || projectKey === null) return;
-  const item = (label: string, icon: string, kind: StartKind) => ({ label, color: "var(--accent)", icon, current: false, pick: () => chooseWorktree(anchor, kind) });
-  openMenu(anchor, [item("Claude を起動", CLAUDE_SVG, "claude"), item("ターミナルを開く", TERMINAL_SVG, "terminal")]);
+  const item = (label: string, icon: string, pick: () => void, disabled = false) => ({ label, color: "var(--accent)", icon, current: false, disabled, pick });
+  openMenu(anchor, [
+    item("Claude を起動", CLAUDE_SVG, () => chooseWorktree(anchor, (path) => start("claude", path))),
+    item("ターミナルを開く", TERMINAL_SVG, () => chooseWorktree(anchor, (path) => start("terminal", path))),
+    item("スクラッチパッド", SCRATCHPAD_SVG, () => chooseWorktree(anchor, (path) => askScratchpad(anchor, path)), projectKey.startsWith("ssh:")),
+  ]);
 }
 
-// A project with one worktree starts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there).
-function chooseWorktree(anchor: Element, kind: StartKind) {
+// A project with one worktree acts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there).
+function chooseWorktree(anchor: Element, act: (path: string) => void) {
   if (view === null || projectKey === null) return;
   const mine = view.worktrees.filter((w) => w.projectKey === projectKey);
-  if (mine.length === 1) void start(kind, mine[0].path);
-  else openWorktreeDialog(anchor, mine, null, (path) => start(kind, path));
+  if (mine.length === 1) act(mine[0].path);
+  else openWorktreeDialog(anchor, mine, null, act);
+}
+
+// Asks for the name of the scratchpad file in the worktree (A-29). The file opens in the project that was selected when it was asked for; a selection made meanwhile leaves it made and not opened.
+function askScratchpad(anchor: Element, path: string) {
+  if (view === null || projectKey === null) return;
+  const [from, target] = [projectKey, view.target];
+  openScratchpad(anchor, path, target, (relative) => {
+    if (projectKey !== from || view?.target !== target) return;
+    started = null;
+    const id = openEditorFile(target, from, path, relative);
+    chooseTab(id);
+    draw();
+    rereadScratchpad(target, path);
+  });
 }
 
 // Starts Claude (with no first prompt: the user types it in the terminal) or a plain terminal in the worktree, once; a failure shows its message. The project and its tab stay selected, and the new tab is followed: once the list holds it, it is selected.
