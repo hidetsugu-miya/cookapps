@@ -27,10 +27,6 @@ paneKey: string | null,
  */
 path: string, 
 /**
- * The latest action: `{tool}: {first line of its input}`, else the first line of the last answer, else empty (A-8).
- */
-activity: string, 
-/**
  * The icon of the row (A-8).
  */
 status: OrcaStatus, 

@@ -1586,13 +1586,27 @@ describe("todo detail menu", () => {
   // Runs the timed refresh now: the page's visibilitychange makes it load again.
   const refreshNow = () => browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
 
-  it("shows the three-dot button only in a task's detail, and the screen has no reload, disconnect or trash button", async () => {
+  it("shows the 編集 button (a pencil and the word) only in a task's detail, and the screen has no reload, disconnect or trash button", async () => {
     await openTodo();
     await expect($(more)).not.toBeDisplayed();
-    await expect($(more)).toHaveAttribute("aria-label", "その他");
+    await expect($(more)).toHaveAttribute("aria-label", "編集");
+    await expect($(more)).toHaveAttribute("aria-haspopup", "menu");
     expect(await count("#todo-reload, #todo-disconnect, #todo-delete")).toBe(0);
     await $(ROWS).click();
     await expect($(more)).toBeDisplayed();
+    await expect($(more)).toHaveText("編集");
+    expect(await count(`${more} svg`)).toBe(1);
+    expect(await count(`${more} svg path`)).toBe(2);
+    // As high as the other buttons of the header, which keep their size: the band does not grow.
+    const sizes = await browser.execute(() => {
+      const h = (q: string) => document.querySelector(q)!.getBoundingClientRect().height;
+      return [h("#todo-more"), h("#todo-back"), h("#todo-body > header")];
+    });
+    expect(sizes[0]).toBe(sizes[1]);
+    expect(sizes[2]).toBeLessThanOrEqual(42);
+    await $(more).click();
+    await expect($(items)).toBeDisplayed();
+    await expect($(more)).toHaveAttribute("aria-expanded", "true");
     await $("#todo-back").click();
     await expect($(more)).not.toBeDisplayed();
   });
@@ -2027,9 +2041,10 @@ describe("todo detail of a subtask", () => {
     await openTask("Book flights");
     await expect($("#todo-detail .name")).toHaveValue("Book flights");
     await expect($("#todo-detail .parent-link")).toHaveText(expect.stringContaining("親タスク"));
-    await expect($("#todo-detail .parent-link")).toHaveText(expect.stringContaining("Plan trip"));
-    // A real button, in a chip above the name row.
+    await expect($("#todo-detail .parent-name")).toHaveText("Plan trip");
+    // A real button holding the return arrow, in a chip above the name row.
     expect(await $("#todo-detail .parent-link").getTagName()).toBe("button");
+    expect(await count("#todo-detail .parent-link svg")).toBe(1);
     expect(await browser.execute(() => document.querySelector("#todo-detail .parent-link")!.parentElement!.className)).toBe("parent-chip");
     expect(await browser.execute(() => document.querySelector("#todo-detail .parent-chip")!.nextElementSibling!.className)).toBe("head");
     await $("#todo-detail .parent-link").click();
@@ -2047,7 +2062,7 @@ describe("todo detail of a subtask", () => {
         const radius = getComputedStyle(chip.querySelector(".check")!).borderRadius;
         return [chip.firstElementChild!.matches("input.check"), chip.children.length, document.querySelector("#todo-detail .parent-link input") === null, radius];
       }),
-    ).toEqual([true, 2, true, "50%"]);
+    ).toEqual([true, 3, true, "50%"]);
     // The subtask count and the chevron of the reference are not drawn.
     await expect($("#todo-detail .parent-chip")).not.toHaveText(expect.stringContaining("/"));
   });
@@ -2073,8 +2088,8 @@ describe("todo detail of a subtask", () => {
     await openTask("Book flights", "Pick seat");
     await expect($("#todo-detail .name")).toHaveValue("Pick seat");
     expect(await count("#todo-detail .parent-link")).toBe(1);
-    await expect($("#todo-detail .parent-link")).toHaveText(expect.stringContaining("Book flights"));
-    await expect($("#todo-detail .parent-link")).not.toHaveText(expect.stringContaining("Plan trip"));
+    await expect($("#todo-detail .parent-name")).toHaveText("Book flights");
+    await expect($("#todo-detail .parent-chip")).not.toHaveText(expect.stringContaining("Plan trip"));
     await $("#todo-detail .parent-link").click();
     await expect($("#todo-detail .name")).toHaveValue("Book flights");
   });
@@ -2083,6 +2098,133 @@ describe("todo detail of a subtask", () => {
     await openTask();
     await expect($("#todo-detail .name")).toHaveValue("Plan trip");
     expect(await count("#todo-detail .parent-link")).toBe(0);
+  });
+});
+
+// "Plan trip" (k2) with `description`, and "Book flights" (k3), its subtask, open.
+async function openFlightsUnder(description: string) {
+  const data = todoData();
+  data.tasks[1].description = description;
+  await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+  await $("#nav-todo").click();
+  await waitForCount(ROWS, 1);
+  await $('#projects .proj[data-view="p1"]').click();
+  await waitForCount(ROWS, 2);
+  await rowOf("Plan trip").click();
+  await subRowOf("Book flights").click();
+  await expect($("#todo-detail .name")).toHaveValue("Book flights");
+}
+
+describe("todo detail of a subtask: the parent's description", () => {
+  const name = "#todo-detail .parent-name";
+  const panel = "#todo-detail .parent-desc";
+  const text = "#todo-detail .parent-desc-text";
+  const long = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+
+  it("opens the description under the chip when the name is pressed, and folds it when pressed again", async () => {
+    await openFlightsUnder("Book by **Friday**");
+    expect(await $(name).getTagName()).toBe("button");
+    await expect($(name)).toHaveAttribute("aria-expanded", "false");
+    expect(await count(panel)).toBe(0);
+    await $(name).click();
+    await expect($(name)).toHaveAttribute("aria-expanded", "true");
+    await expect($(panel)).toBeDisplayed();
+    // Drawn as the description is: Markdown.
+    await expect($(`${text} strong`)).toHaveText("Friday");
+    // Right under the chip, above the name row.
+    expect(await browser.execute(() => document.querySelector("#todo-detail .parent-chip")!.nextElementSibling!.className)).toBe("parent-desc");
+    expect(await browser.execute(() => document.querySelector("#todo-detail .parent-desc")!.nextElementSibling!.className)).toBe("head");
+    await $(name).click();
+    await expect($(name)).toHaveAttribute("aria-expanded", "false");
+    expect(await count(panel)).toBe(0);
+  });
+
+  it("cuts a long name of the parent at one line inside the chip", async () => {
+    const data = todoData();
+    data.tasks[1].content = "A very long name of the parent task ".repeat(12).trim();
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 1);
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 2);
+    await rowOf(data.tasks[1].content).click();
+    await subRowOf("Book flights").click();
+    await expect($("#todo-detail .name")).toHaveValue("Book flights");
+    const shape = await browser.execute(() => {
+      const chip = document.querySelector<HTMLElement>("#todo-detail .parent-chip")!;
+      const name = chip.querySelector<HTMLElement>(".pl-name")!;
+      const at = name.getBoundingClientRect();
+      return { overflow: getComputedStyle(name).textOverflow, one: at.height < parseFloat(getComputedStyle(name).fontSize) * 2, cut: name.scrollWidth > name.clientWidth, inside: at.right <= chip.getBoundingClientRect().right + 0.5 };
+    });
+    expect(shape).toEqual({ overflow: "ellipsis", one: true, cut: true, inside: true });
+  });
+
+  it("keeps the arrow button going to the parent, whether the description is open or not", async () => {
+    await openFlightsUnder("Book by Friday");
+    await $(name).click();
+    await expect($(panel)).toBeDisplayed();
+    await $("#todo-detail .parent-link").click();
+    await expect($("#todo-detail .name")).toHaveValue("Plan trip");
+    expect(await count("#todo-detail .parent-chip")).toBe(0);
+  });
+
+  it("has the name as plain text, which opens nothing, when the parent has no description", async () => {
+    await openFlightsUnder("");
+    await expect($(name)).toHaveText("Plan trip");
+    expect(await $(name).getTagName()).toBe("span");
+    await $(name).click();
+    expect(await count(panel)).toBe(0);
+  });
+
+  it("cuts a long description at 3 lines on the screen, and copies all of it with コピー", async () => {
+    await openFlightsUnder(long);
+    await $(name).click();
+    const shape = await browser.execute((q) => {
+      const el = document.querySelector<HTMLElement>(q)!;
+      const line = parseFloat(getComputedStyle(el).lineHeight);
+      return { clamp: getComputedStyle(el).webkitLineClamp, cut: el.scrollHeight > el.clientHeight, lines: el.clientHeight / line };
+    }, text);
+    expect(shape.clamp).toBe("3");
+    expect(shape.cut).toBe(true);
+    expect(shape.lines).toBeLessThanOrEqual(3.05);
+    await stubClipboard();
+    await expect($(`${panel} button`)).toHaveText("コピー");
+    await $(`${panel} button`).click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
+    expect(await copiedTexts()).toEqual([long]);
+    await expect($(".toast")).toHaveText("説明をコピーしました");
+  });
+
+  it("shows a short description in full, and lets its text be selected", async () => {
+    await openFlightsUnder("short");
+    await $(name).click();
+    const shape = await browser.execute((q) => {
+      const el = document.querySelector<HTMLElement>(q)!;
+      return { cut: el.scrollHeight > el.clientHeight, select: getComputedStyle(el).webkitUserSelect };
+    }, text);
+    expect(shape).toEqual({ cut: false, select: "text" });
+  });
+
+  it("shows the error and keeps the description open when the clipboard refuses", async () => {
+    await openFlightsUnder("Book by Friday");
+    await browser.execute(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => Promise.reject(new Error("denied")) } });
+    });
+    await $(name).click();
+    await $(`${panel} button`).click();
+    await expect($("#error")).toHaveText(expect.stringContaining("denied"));
+    await expect($(panel)).toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
+  });
+
+  it("starts folded when another task is opened", async () => {
+    await openFlightsUnder("Book by Friday");
+    await $(name).click();
+    await expect($(panel)).toBeDisplayed();
+    await $("#todo-detail .parent-link").click();
+    await subRowOf("Book flights").click();
+    await expect($(name)).toHaveAttribute("aria-expanded", "false");
+    expect(await count(panel)).toBe(0);
   });
 });
 
