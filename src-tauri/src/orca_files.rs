@@ -1053,6 +1053,25 @@ async fn fetch_preview(
     Ok(length)
 }
 
+/// The size of the file `relative` of the worktree at `path`, by `files.stat`; `None` on a host that lacks `files.stat`.
+pub(crate) async fn stat_size(
+    rpc: &mut impl Rpc,
+    path: &str,
+    relative: &str,
+) -> Result<Option<u64>, String> {
+    match rpc
+        .call(
+            "files.stat",
+            worktree_params(path, None, json!({"relativePath": relative})),
+        )
+        .await
+    {
+        Ok(answer) => Ok(Some(answer["size"].as_u64().ok_or("ファイルを読めません")?)),
+        Err(e) if e.shown.contains("method_not_found") => Ok(None),
+        Err(e) => Err(reason(e)),
+    }
+}
+
 /// Reads the file `relative` of the worktree at `path` and writes it to `out`. `files.stat` gives the size first, and the reading stops with an error when Orca sends more than that, so an Orca that never says `eof` cannot fill the disk. Then `files.readChunk` is called, `CHUNK` bytes at a time until `eof`. A host that lacks `files.stat`, or answers `method_not_found` to the first `files.readChunk`, has the file read whole with `files.readPreview` (a host that lacks `files.stat` has no size to hold the preview to). Answers the size.
 pub(crate) async fn fetch_into(
     rpc: &mut impl Rpc,
@@ -1060,18 +1079,8 @@ pub(crate) async fn fetch_into(
     relative: &str,
     out: &mut impl Sink,
 ) -> Result<u64, String> {
-    let size = match rpc
-        .call(
-            "files.stat",
-            worktree_params(path, None, json!({"relativePath": relative})),
-        )
-        .await
-    {
-        Ok(answer) => answer["size"].as_u64().ok_or("ファイルを読めません")?,
-        Err(e) if e.shown.contains("method_not_found") => {
-            return fetch_preview(rpc, path, relative, None, out).await;
-        }
-        Err(e) => return Err(reason(e)),
+    let Some(size) = stat_size(rpc, path, relative).await? else {
+        return fetch_preview(rpc, path, relative, None, out).await;
     };
     let mut offset = 0_u64;
     loop {

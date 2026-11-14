@@ -1,12 +1,13 @@
 //! A-31: an HTML file of a worktree on the Orca screen, opened in the default browser. The app serves the files of the worktree from an HTTP server of its own and opens the address of the file (`orca_file_open_in_browser`).
 //! The server listens on `127.0.0.1` alone, on a port the OS gives, from the first open until the app ends. An address is `http://127.0.0.1:{port}/{token}/{path from the worktree}`: the token is random, one for each worktree of each target, and held in memory only, so a page of another site that guesses the port still cannot name a file.
-//! Only GET and HEAD are answered, only with a `Host` of `127.0.0.1:{port}` (a name that was rebound to this address is refused), and only for a path that A-18 would read (`check_relative`, after the percent escapes are taken out). A folder has no list.
-//! A file is read as the download of A-22 reads it (`fetch_into`: `files.stat`, `files.readChunk`, never past the size, or `files.readPreview`) and goes to the browser as it is read; nothing of it is kept.
+//! Only GET and HEAD are answered, only with a `Host` of `127.0.0.1:{port}` (a name that was rebound to this address is refused), and only for a path that A-18 would read (`check_relative`, after the percent escapes are taken out) and that has no part starting with `.` (`.git/config`, `.env`: the script of an opened page could fetch them otherwise). A folder has no list.
+//! A file is read as the download of A-22 reads it (`fetch_into`: `files.stat`, `files.readChunk`, never past the size, or `files.readPreview`) and goes to the browser as it is read; nothing of it is kept. A HEAD asks `files.stat` alone.
 //! The bytes of a file, a path and a token are in no log line and no file of the app.
 
 use std::{
     collections::HashMap,
     future::Future,
+    net::SocketAddr,
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
@@ -20,7 +21,7 @@ use tokio::{
 
 use crate::{
     orca_attach::Rpc,
-    orca_files::{cached_host_of, check_relative, fetch_into, host_of, Sink, NOT_FOUND},
+    orca_files::{cached_host_of, check_relative, fetch_into, host_of, stat_size, Sink, NOT_FOUND},
     orca_link::Connection,
 };
 
@@ -113,12 +114,20 @@ fn percent_encode(relative: &str) -> String {
     encoded
 }
 
-/// The token and the path from the worktree that a target names: `/{token}/{path}`, without what follows a `?` or a `#`. The path has its percent escapes taken out and is then held to the checks of A-18 (`check_relative`), so an escaped `..` or `/` is seen as what it is.
+/// Whether a part of `relative` starts with `.` (`.env`, `.git/config`, `a/.b/c`). Such a file is not served, so that the script of an opened page cannot fetch the settings and the secrets a worktree keeps under those names.
+fn has_hidden_part(relative: &str) -> bool {
+    relative.split('/').any(|part| part.starts_with('.'))
+}
+
+/// The token and the path from the worktree that a target names: `/{token}/{path}`, without what follows a `?` or a `#`. The path has its percent escapes taken out and is then held to the checks of A-18 (`check_relative`), so an escaped `..` or `/` is seen as what it is, and to `has_hidden_part`, so an escaped `.` at the start of a part is too.
 fn split_target(target: &str) -> Option<(&str, String)> {
     let path = target.split(['?', '#']).next()?;
     let (token, relative) = path.strip_prefix('/')?.split_once('/')?;
     let relative = percent_decode(relative)?;
     check_relative(&relative, false).ok()?;
+    if has_hidden_part(&relative) {
+        return None;
+    }
     Some((token, relative))
 }
 
@@ -166,7 +175,7 @@ pub(crate) struct Wanted {
     pub(crate) head_only: bool,
 }
 
-/// What a request gets: a file, or the status that refuses it. A `Host` that is not this server's is 403 before anything else is looked at, a method other than GET and HEAD is 405, and a token no worktree has, or a path that is not one inside a worktree, is 404.
+/// What a request gets: a file, or the status that refuses it. A `Host` that is not this server's is 403 before anything else is looked at, a method other than GET and HEAD is 405, and a token no worktree has, or a path that is not one inside a worktree or has a part starting with `.`, is 404.
 fn decide(request: &Request, port: u16, tokens: &Tokens) -> Result<Wanted, u16> {
     if !host_matches(request.host.as_deref(), port) {
         return Err(403);
@@ -208,7 +217,7 @@ fn file_headers(content_type: &str, total: u64) -> String {
     )
 }
 
-/// The answer being written: the headers go out with the first bytes of the file, when its size is known, and the bytes follow as they are read. For a HEAD the read stops after the headers.
+/// The answer being written: the headers go out with the first bytes of the file, when its size is known, and the bytes follow as they are read. For a HEAD (one on a host that lacks `files.stat`, which is read for its size) the read stops after the headers.
 struct Answer<'a, S> {
     stream: &'a mut S,
     content_type: &'static str,
@@ -236,31 +245,53 @@ impl<S: AsyncWrite + Unpin> Sink for Answer<'_, S> {
     }
 }
 
-/// Answers a request for the file `relative` of the worktree at `path` on `stream`: the file, read as A-22 reads it, or 404 for a file that is not there and 502 for any other failure of the read. A read that fails after the headers went out ends the connection short of the length it promised. Answers whether the headers of the file went out.
+/// Answers a request for the file `relative` of the worktree at `path` on `stream`: the file, read as A-22 reads it, or 404 for a file that is not there and 502 for any other failure of the read. A HEAD is answered from the size `files.stat` gives, and nothing of the file is read; only on a host that lacks `files.stat` is the file read for its size. A read that fails after the headers went out ends the connection short of the length it promised. Answers `Ok` when the headers of the file went out, and the status of the refusal otherwise.
 async fn respond<S: AsyncWrite + Unpin>(
     rpc: &mut impl Rpc,
     path: &str,
     relative: &str,
     head_only: bool,
     stream: &mut S,
-) -> bool {
-    let mut answer = Answer {
-        stream,
-        content_type: content_type(relative),
-        head_only,
-        started: false,
+) -> Result<(), u16> {
+    let content_type = content_type(relative);
+    let size = if head_only {
+        stat_size(rpc, path, relative).await
+    } else {
+        Ok(None)
     };
-    let read = fetch_into(rpc, path, relative, &mut answer).await;
-    if answer.started {
-        return true;
-    }
+    let read = match size {
+        Ok(Some(total)) => {
+            let headers = file_headers(content_type, total);
+            let _ = stream.write_all(headers.as_bytes()).await;
+            return Ok(());
+        }
+        Ok(None) => {
+            let mut answer = Answer {
+                stream,
+                content_type,
+                head_only,
+                started: false,
+            };
+            let read = fetch_into(rpc, path, relative, &mut answer).await;
+            if answer.started {
+                return Ok(());
+            }
+            read.map(|_| ())
+        }
+        Err(reason) => Err(reason),
+    };
     let status = if read.is_err_and(|reason| reason == NOT_FOUND) {
         404
     } else {
         502
     };
     let _ = stream.write_all(refusal(status).as_bytes()).await;
-    false
+    Err(status)
+}
+
+/// Whether the confirmation of the worktree is dropped after `sent` (what `respond` answered), so that the next request asks the target's list again: after a failed read (502), which a worktree that is gone gives too. A file that is not there (404) says nothing of the worktree, so a page that asks for many such files keeps the confirmation.
+fn drops_confirmation(sent: Result<(), u16>) -> bool {
+    sent == Err(502)
 }
 
 // ---- the tokens ----
@@ -299,13 +330,17 @@ fn new_token() -> Result<String, String> {
 
 // ---- the server ----
 
-/// The server that runs: its port and the tokens it answers to.
+/// The server that runs: the address its listener is bound to and the tokens it answers to.
 struct Preview {
-    port: u16,
+    address: SocketAddr,
     tokens: Mutex<Tokens>,
 }
 
 impl Preview {
+    fn port(&self) -> u16 {
+        self.address.port()
+    }
+
     fn tokens(&self) -> std::sync::MutexGuard<'_, Tokens> {
         self.tokens.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -314,7 +349,7 @@ impl Preview {
     fn url(&self, token: &str, relative: &str) -> String {
         format!(
             "http://{LOOPBACK}:{}/{token}/{}",
-            self.port,
+            self.port(),
             percent_encode(relative)
         )
     }
@@ -349,10 +384,10 @@ impl Orca for Live {
             }
             Err(_) => {
                 let _ = stream.write_all(refusal(502).as_bytes()).await;
-                false
+                Err(502)
             }
         };
-        if !sent {
+        if drops_confirmation(sent) {
             crate::orca::forget_worktree_host(&wanted.path, environment);
         }
     }
@@ -384,7 +419,7 @@ async fn connection(mut stream: TcpStream, preview: Arc<Preview>, orca: Arc<impl
     let head = tokio::time::timeout(HEAD_TIMEOUT, read_head(&mut stream)).await;
     let request = head.ok().flatten().as_deref().and_then(parse_request);
     let decided = match &request {
-        Some(request) => decide(request, preview.port, &preview.tokens()),
+        Some(request) => decide(request, preview.port(), &preview.tokens()),
         None => Err(400),
     };
     match decided {
@@ -412,9 +447,9 @@ async fn serve(listener: TcpListener, preview: Arc<Preview>, orca: Arc<impl Orca
 async fn start(orca: impl Orca) -> Result<Arc<Preview>, String> {
     let failed = |_| "プレビューのサーバーを始められません".to_owned();
     let listener = TcpListener::bind((LOOPBACK, 0)).await.map_err(failed)?;
-    let port = listener.local_addr().map_err(failed)?.port();
+    let address = listener.local_addr().map_err(failed)?;
     let preview = Arc::new(Preview {
-        port,
+        address,
         tokens: Mutex::default(),
     });
     tokio::spawn(serve(listener, Arc::clone(&preview), Arc::new(orca)));
@@ -429,11 +464,11 @@ async fn server() -> Result<Arc<Preview>, String> {
 
 // ---- the command ----
 
-/// The path of a file the browser is opened on: a path inside the worktree (the checks of A-18) whose name ends with `.html`, whatever the case.
+/// The path of a file the browser is opened on: a path inside the worktree (the checks of A-18) whose name ends with `.html`, whatever the case, and that has no part starting with `.` (the server would answer it 404).
 fn check_html(relative: &str) -> Result<(), String> {
     check_relative(relative, false)?;
     let name = relative.rsplit('/').next().unwrap_or(relative);
-    if name.to_ascii_lowercase().ends_with(".html") {
+    if name.to_ascii_lowercase().ends_with(".html") && !has_hidden_part(relative) {
         Ok(())
     } else {
         Err(NOT_HTML.into())
@@ -461,6 +496,8 @@ pub async fn orca_file_open_in_browser(
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
     use base64::{engine::general_purpose::STANDARD, Engine};
     use serde_json::{json, Value};
 
@@ -570,6 +607,22 @@ mod tests {
         ] {
             assert_eq!(split_target(bad), None, "{bad:?}");
         }
+        // A part that starts with `.` is not served, escaped or not.
+        for hidden in [
+            "/tok/.env",
+            "/tok/.git/config",
+            "/tok/.npmrc",
+            "/tok/a/.b/c",
+            "/tok/docs/.a.html",
+            "/tok/%2Egit/config",
+            "/tok/a/%2eb/c.html",
+        ] {
+            assert_eq!(split_target(hidden), None, "{hidden:?}");
+        }
+        assert_eq!(
+            split_target("/tok/a.b/c.d.html"),
+            Some(("tok", "a.b/c.d.html".to_owned()))
+        );
     }
 
     #[test]
@@ -650,7 +703,14 @@ mod tests {
                 "{method}"
             );
         }
-        for target in ["/other/a.html", "/tok/../a.html", "/tok/", "/"] {
+        for target in [
+            "/other/a.html",
+            "/tok/../a.html",
+            "/tok/",
+            "/",
+            "/tok/.env",
+            "/tok/.git/config",
+        ] {
             assert_eq!(
                 decide(&request("GET", target, host), 4100, &tokens),
                 Err(404),
@@ -689,11 +749,15 @@ mod tests {
 
     #[test]
     fn only_an_html_file_inside_the_worktree_is_opened() {
-        for good in ["a.html", "docs/Report.HTML", "a b/あ.Html", ".html"] {
+        for good in ["a.html", "docs/Report.HTML", "a b/あ.Html", "a.b/c.d.html"] {
             assert_eq!(check_html(good), Ok(()), "{good}");
         }
         for bad in ["a.htm", "a.html.txt", "html", "a.md", "docs/a.html/x.js"] {
             assert_eq!(check_html(bad), Err(NOT_HTML.into()), "{bad}");
+        }
+        // A part that starts with `.` would be answered 404, so it is not opened.
+        for hidden in [".html", ".a.html", ".git/a.html", "a/.b/c.html"] {
+            assert_eq!(check_html(hidden), Err(NOT_HTML.into()), "{hidden}");
         }
         for bad in ["", "../a.html", "/a.html", "a//b.html", "a/./b.html"] {
             assert!(check_html(bad).is_err_and(|e| e != NOT_HTML), "{bad:?}");
@@ -703,7 +767,7 @@ mod tests {
     #[test]
     fn the_address_holds_the_port_the_token_and_the_escaped_path() {
         let preview = Preview {
-            port: 4100,
+            address: SocketAddr::from((Ipv4Addr::LOCALHOST, 4100)),
             tokens: Mutex::default(),
         };
         assert_eq!(
@@ -738,6 +802,7 @@ mod tests {
         files: HashMap<&'static str, Vec<u8>>,
         /// The chunk (counted from 0) whose read fails, if any.
         fail_on_chunk: Option<usize>,
+        has_stat: bool,
         has_chunks: bool,
         chunks: usize,
         calls: Arc<Mutex<Vec<(String, Value)>>>,
@@ -758,6 +823,10 @@ mod tests {
                 return Err(failed("Orca がエラーを返しました", "ENOENT: no such file"));
             };
             match method {
+                "files.stat" if !self.has_stat => Err(failed(
+                    "Orca がエラーを返しました（method_not_found）",
+                    "Unknown method: files.stat",
+                )),
                 "files.stat" => Ok(json!({"size": file.len()})),
                 "files.readChunk" if !self.has_chunks => Err(failed(
                     "Orca がエラーを返しました（method_not_found）",
@@ -795,9 +864,24 @@ mod tests {
     struct FakeOrca {
         files: HashMap<&'static str, Vec<u8>>,
         fail_on_chunk: Option<usize>,
+        no_stat: bool,
         no_chunks: bool,
         calls: Arc<Mutex<Vec<(String, Value)>>>,
         asked: Arc<Mutex<Vec<Worktree>>>,
+    }
+
+    impl FakeOrca {
+        /// Orca's side of one request.
+        fn rpc(&self) -> Fake {
+            Fake {
+                files: self.files.clone(),
+                fail_on_chunk: self.fail_on_chunk,
+                has_stat: !self.no_stat,
+                has_chunks: !self.no_chunks,
+                chunks: 0,
+                calls: Arc::clone(&self.calls),
+            }
+        }
     }
 
     impl Orca for FakeOrca {
@@ -806,14 +890,8 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((wanted.environment.clone(), wanted.path.clone()));
-            let mut rpc = Fake {
-                files: self.files.clone(),
-                fail_on_chunk: self.fail_on_chunk,
-                has_chunks: !self.no_chunks,
-                chunks: 0,
-                calls: Arc::clone(&self.calls),
-            };
-            respond(
+            let mut rpc = self.rpc();
+            let _ = respond(
                 &mut rpc,
                 &wanted.path,
                 &wanted.relative,
@@ -846,8 +924,8 @@ mod tests {
 
     /// Sends `request` (the port of the server stands for `{port}`) and answers the status line, the headers and the body.
     async fn exchange(preview: &Preview, request: &str) -> (String, String, Vec<u8>) {
-        let mut stream = TcpStream::connect((LOOPBACK, preview.port)).await.unwrap();
-        let request = request.replace("{port}", &preview.port.to_string());
+        let mut stream = TcpStream::connect(preview.address).await.unwrap();
+        let request = request.replace("{port}", &preview.port().to_string());
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut answer = Vec::new();
         let _ = stream.read_to_end(&mut answer).await;
@@ -916,8 +994,83 @@ mod tests {
         assert!(headers.contains(&format!("Content-Length: {}\r\n", PAGE.len())));
         assert!(headers.contains("Content-Type: text/html; charset=utf-8\r\n"));
         assert!(body.is_empty());
-        // The read stops once the size is known.
-        assert_eq!(calls.lock().unwrap().len(), 2);
+        // The size is all that is asked of Orca: nothing of the file is read.
+        let calls = calls.lock().unwrap();
+        let methods: Vec<&str> = calls.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["files.stat"]);
+    }
+
+    #[tokio::test]
+    async fn a_head_on_an_orca_without_stat_reads_the_file_for_its_size() {
+        let orca = FakeOrca {
+            no_stat: true,
+            ..orca()
+        };
+        let calls = Arc::clone(&orca.calls);
+        let preview = serving(orca).await;
+        let request = "HEAD /tok/index.html HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n";
+        let (status, headers, body) = exchange(&preview, request).await;
+        assert_eq!(status, "HTTP/1.1 200 OK");
+        assert!(headers.contains(&format!("Content-Length: {}\r\n", PAGE.len())));
+        assert!(body.is_empty());
+        let calls = calls.lock().unwrap();
+        let methods: Vec<&str> = calls.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["files.stat", "files.stat", "files.readPreview"]);
+    }
+
+    #[tokio::test]
+    async fn a_head_for_a_file_that_is_not_there_is_not_found() {
+        let preview = serving(orca()).await;
+        let request = "HEAD /tok/gone.html HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n";
+        let (status, _, body) = exchange(&preview, request).await;
+        assert_eq!(status, "HTTP/1.1 404 Not Found");
+        assert!(body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_worktree_stays_confirmed_after_a_file_that_is_not_there() {
+        let plain = orca();
+        for head_only in [false, true] {
+            let mut out = Vec::new();
+            let sent = respond(&mut plain.rpc(), "/w/app", "gone.html", head_only, &mut out).await;
+            assert_eq!(sent, Err(404));
+            assert!(!drops_confirmation(sent));
+            assert!(out.starts_with(b"HTTP/1.1 404 Not Found\r\n"));
+        }
+        // A read that fails another way may mean the worktree is gone: it is confirmed again.
+        let failing = FakeOrca {
+            fail_on_chunk: Some(0),
+            ..plain
+        };
+        let mut out = Vec::new();
+        let sent = respond(&mut failing.rpc(), "/w/app", "index.html", false, &mut out).await;
+        assert_eq!(sent, Err(502));
+        assert!(drops_confirmation(sent));
+        // A file that went out keeps it.
+        let mut out = Vec::new();
+        let sent = respond(&mut orca().rpc(), "/w/app", "index.html", false, &mut out).await;
+        assert_eq!(sent, Ok(()));
+        assert!(!drops_confirmation(sent));
+    }
+
+    #[tokio::test]
+    async fn a_path_with_a_hidden_part_is_not_found_and_orca_is_not_asked() {
+        let mut orca = orca();
+        orca.files.insert(".env", b"SECRET=1".to_vec());
+        orca.files.insert(".git/config", b"[core]".to_vec());
+        let asked = Arc::clone(&orca.asked);
+        let preview = serving(orca).await;
+        for target in [
+            "/tok/.env",
+            "/tok/%2Eenv",
+            "/tok/.git/config",
+            "/tok/img/.a.png",
+        ] {
+            let (status, _, body) = exchange(&preview, &get(target)).await;
+            assert_eq!(status, "HTTP/1.1 404 Not Found", "{target}");
+            assert!(body.is_empty());
+        }
+        assert!(asked.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1066,9 +1219,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_server_listens_on_this_machine_alone() {
-        let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
-        assert!(listener.local_addr().unwrap().ip().is_loopback());
         let preview = serving(orca()).await;
-        assert_ne!(preview.port, 0);
+        assert_eq!(preview.address.ip(), Ipv4Addr::LOCALHOST);
+        assert_ne!(preview.port(), 0);
     }
 }
