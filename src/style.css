@@ -1151,6 +1151,7 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-dest-pop button { flex: none; height: auto; flex-direction: column; align-items: flex-start; gap: 0; padding: 6px 10px; }
 .orca-dest-pop button span { font-size: calc(12px * var(--fs)); color: var(--muted); }
 .orca-scratch-pop { width: 320px; padding: 8px; gap: 8px; }
+.orca-scratch-pop[data-place="host"] { width: 440px; }
 .orca-scratch-field { display: flex; align-items: center; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); }
 .orca-scratch-field:focus-within { border-color: var(--accent); }
 .orca-scratch-prefix { flex: none; font-size: calc(12.5px * var(--fs)); color: var(--muted); }
