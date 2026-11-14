@@ -2139,6 +2139,26 @@ describe("todo detail of a subtask: the parent's description", () => {
     expect(await count(panel)).toBe(0);
   });
 
+  it("cuts a long name of the parent at one line inside the chip", async () => {
+    const data = todoData();
+    data.tasks[1].content = "A very long name of the parent task ".repeat(12).trim();
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount(ROWS, 1);
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 2);
+    await rowOf(data.tasks[1].content).click();
+    await subRowOf("Book flights").click();
+    await expect($("#todo-detail .name")).toHaveValue("Book flights");
+    const shape = await browser.execute(() => {
+      const chip = document.querySelector<HTMLElement>("#todo-detail .parent-chip")!;
+      const name = chip.querySelector<HTMLElement>(".pl-name")!;
+      const at = name.getBoundingClientRect();
+      return { overflow: getComputedStyle(name).textOverflow, one: at.height < parseFloat(getComputedStyle(name).fontSize) * 2, cut: name.scrollWidth > name.clientWidth, inside: at.right <= chip.getBoundingClientRect().right + 0.5 };
+    });
+    expect(shape).toEqual({ overflow: "ellipsis", one: true, cut: true, inside: true });
+  });
+
   it("keeps the arrow button going to the parent, whether the description is open or not", async () => {
     await openFlightsUnder("Book by Friday");
     await $(name).click();

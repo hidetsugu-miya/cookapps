@@ -533,20 +533,19 @@ body.dragging-task, body.dragging-task * { cursor: grabbing !important; user-sel
 #todo-detail .parent-chip:hover { background: var(--soft); }
 #todo-detail .parent-chip .check { width: 14px; height: 14px; flex: none; }
 #todo-detail .parent-chip .check:hover::after, #todo-detail .parent-chip .check:checked::after { width: 4px; height: 6px; margin-top: -1px; }
-#todo-detail .parent-link { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; font-size: calc(12px * var(--fs)); text-align: left; cursor: pointer; }
+#todo-detail .parent-link { display: flex; flex: none; align-items: center; gap: 6px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; font-size: calc(12px * var(--fs)); text-align: left; cursor: pointer; }
 #todo-detail .parent-link:focus-visible { outline: 2px solid var(--accent); }
 #todo-detail .parent-link svg { width: 14px; height: 14px; flex: none; }
 .parent-link .pl-label { flex: none; color: var(--muted); }
-.parent-link .pl-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* T-1: the name of the parent opens its description under the chip, cut at 3 lines with "…" (the copy button has all of it); a parent with no description has the name as plain text. */
-#todo-detail .parent-name { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; color: #333; font: inherit; font-size: calc(12px * var(--fs)); text-align: left; }
+#todo-detail .parent-name { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ink-soft); font: inherit; font-size: calc(12px * var(--fs)); text-align: left; }
 #todo-detail button.parent-name { cursor: pointer; }
 #todo-detail button.parent-name:focus-visible { outline: 2px solid var(--accent); }
-.parent-name .pl-name { color: var(--accent); }
+.parent-name .pl-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); }
 #todo-detail .parent-name svg { width: 12px; height: 12px; flex: none; }
 #todo-detail .parent-name[aria-expanded="true"] svg { transform: rotate(180deg); }
 #todo-detail .parent-desc { display: flex; align-items: flex-start; gap: 8px; margin: 0 16px 4px; padding: 6px 8px; border-radius: 8px; background: var(--hover); }
-#todo-detail .parent-desc-text { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: #333; font-size: calc(12px * var(--fs)); line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+#todo-detail .parent-desc-text { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: var(--ink-soft); font-size: calc(12px * var(--fs)); line-height: 1.6; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 #todo-detail .parent-desc .text-btn { flex: none; height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
 #todo-detail .head { display: flex; gap: 14px; align-items: flex-start; padding: 4px 16px 0; }
 #todo-detail .head .check { margin-top: 4px; }

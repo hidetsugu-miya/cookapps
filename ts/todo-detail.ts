@@ -572,22 +572,24 @@ export function renderDetail() {
       todoState.open = parent.id;
       renderTodo();
     };
-    // The name opens the parent's description under the chip; a parent with none has its name as plain text.
-    const shown = parent.description ? parentDescPanel(parent.id) : null;
-    const name = tag(shown ? "button" : "span", "parent-name");
+    // The name opens the parent's description under the chip; a parent with none has its name as plain text. The panel is made only while it is open.
+    const hasDesc = !!parent.description;
+    const name = tag(hasDesc ? "button" : "span", "parent-name");
     name.append(tag("span", "pl-name", parent.content));
     chip.append(parentBox, link, name);
     const below: HTMLElement[] = [chip];
-    if (shown) {
+    if (hasDesc) {
+      let panel = parentDescOpen === t.id ? parentDescPanel(parent.id) : null;
       name.insertAdjacentHTML("beforeend", DOWN_SVG);
-      name.setAttribute("aria-expanded", String(parentDescOpen === t.id));
-      if (parentDescOpen === t.id) below.push(shown);
+      name.setAttribute("aria-expanded", String(panel !== null));
+      if (panel) below.push(panel);
       name.onclick = () => {
         const open = name.getAttribute("aria-expanded") !== "true";
         parentDescOpen = open ? t.id : null;
         name.setAttribute("aria-expanded", String(open));
-        if (open) chip.after(shown);
-        else shown.remove();
+        panel?.remove();
+        panel = open ? parentDescPanel(parent.id) : null;
+        if (panel) chip.after(panel);
       };
     }
     parts.unshift(...below);
