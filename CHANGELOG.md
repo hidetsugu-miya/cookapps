@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.72.0
+
+A-31: an HTML file in the file pane of the Orca screen opens in the default browser (#621, #622). The right button on a file whose name ends in `.html` has the item "ブラウザで開く". The app serves the files of the worktree from a small HTTP server that listens on this Mac alone (`127.0.0.1`), reading them through Orca, so the images and scripts beside the page show too, also for a worktree on a saved environment. The address holds a random token, and a path with a part that starts with `.` (`.env`, `.git/`) is not served.
+
 ## v0.71.3
 
 M-2: a mail thread that was opened before is shown at once when it is opened again, without the note "読み込んでいます…" (#614). The app keeps the threads it has opened in memory (up to 64 MB, the oldest dropped first; nothing is written to a file, and they are gone when the app quits), asks Gmail again in the background, and draws the thread again only when the answer differs, for example when a reply has arrived. A thread that has not been opened yet is read as before.
