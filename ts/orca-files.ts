@@ -7,7 +7,7 @@ import type { OrcaDir } from "./bindings/OrcaDir";
 import type { OrcaFileEntry } from "./bindings/OrcaFileEntry";
 import { $, composing, tag } from "./dom.js";
 import { confirmDelete } from "./hint.js";
-import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MOVE_SVG } from "./icons.js";
+import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MOVE_SVG, OPEN_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
@@ -528,6 +528,9 @@ async function download(here: FilesContext, relative: string) {
   }
 }
 
+// Opens the HTML file in the default browser of this PC (A-31): Rust serves the worktree and hands the address to the system, so nothing is said when it works (the browser comes to the front).
+const openInBrowser = (here: FilesContext, relative: string) => invoke("orca_file_open_in_browser", { path: here.path, relative, environment: here.target }).catch(showError);
+
 // Deletes the file or folder for good (Orca's `files.delete`, which skips the Trash) once the confirmation has been answered. It is gone from the editor and the tree after: a folder's reads are dropped, and the folder it was in is read again. A worktree that is not the tree's any more only closes the tabs.
 async function remove(here: FilesContext, relative: string, folder: boolean) {
   const mine = generation;
@@ -555,7 +558,7 @@ const menuItem = (label: string, icon: string, pick: () => unknown) => ({ label,
 const createItems = (dir: string) => [menuItem("新規ファイル", FILE_SVG, () => startCreate(dir, false)), ...(context?.host == null ? [menuItem("新規フォルダー", FOLDER_SVG, () => startCreate(dir, true))] : [])];
 
 // A file of the scratchpad of an SSH host (A-30) has the new file and, after a line, 「移動・名前の変更」 and the delete: there is no path to copy, no download and no difference there.
-// The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download and the difference from HEAD (A-24); and on both, last and after a line, 「移動・名前の変更」 and the delete in red. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
+// The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download, the difference from HEAD (A-24) and, when its name ends with `.html` (whatever the case; Rust refuses any other name), 「ブラウザで開く」 (A-31); and on both, last and after a line, 「移動・名前の変更」 and the delete in red. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
 function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
   if (here === null) return;
@@ -565,7 +568,7 @@ function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   if (here.host !== null) return openMenu(anchor, [...createItems(""), rename, del]);
   const [path, from] = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
   if (isDirectory) openMenu(anchor, [...createItems(relative), { ...path, divider: true }, from, rename, del]);
-  else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative)), rename, del]);
+  else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative)), ...(/\.html$/i.test(relative) ? [menuItem("ブラウザで開く", OPEN_SVG, () => void openInBrowser(here, relative))] : []), rename, del]);
 }
 
 // The menu of the empty part of the tree (the right button): the new file and folder in the root of the worktree, where the pointer is.
