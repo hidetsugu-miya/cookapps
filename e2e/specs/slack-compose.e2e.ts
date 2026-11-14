@@ -1,6 +1,8 @@
 import {
   boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, claudeSettings, composerLayout, count, holds, inbox, mock, onceId, proofreadEdit, rejects, release, rowOf, slackChannels, slackLoad, slackPreview, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, workspace,
 } from "../support";
+import type { SlackAction } from "../../ts/bindings/SlackAction";
+import type { Target } from "../../ts/bindings/Target";
 
 const body = () => $("#slack-body");
 const previewBox = () => $("#slack-preview");
@@ -17,7 +19,12 @@ const target = () => where(1);
 // What `slack_post` answers: the time of the posted message.
 const postedTs = "1761785520.000100";
 // The destination of `slackChannels` as Rust answers it when Claude chose it (S-4).
-const general = { teamId: "T1", channel: "C0123ABCD", name: "general", threadTs: null };
+const general: Target = { teamId: "T1", channel: "C0123ABCD", name: "general", threadTs: null };
+// A thing to do as the screen sends it and Rust answers it: one that pastes the original message to `target` (`byClaude`: a destination that Claude's answer put there),
+// one that writes `text` in the thread of the one at `after` (from 0), and `action` once it was posted with `thread` as the thread a later one continues.
+const pasteTo = (target: Target | null, byClaude = false): SlackAction => ({ target, after: null, paste: true, text: "", posted: null, byClaude });
+const writeAfter = (after: number, text: string): SlackAction => ({ target: null, after, paste: false, text, posted: null, byClaude: false });
+const postedAt = (action: SlackAction, thread: string): SlackAction => ({ ...action, posted: { teamId: "T1", channel: "C0123ABCD", name: "general", thread } });
 
 // The app with a mail opened and "Slack に貼る" pressed; `claude` is what `claude_status` answers. `first` is the mail's text.
 async function openCompose(claude: unknown = claudeReady, first = "Hello from Alice") {
@@ -316,7 +323,7 @@ describe("slack compose screen", () => {
 
   it("replies in the chosen thread itself when a later thing to do follows a post that went into a thread", async () => {
     await openCompose();
-    await mock("claude_proofread_slack", { reply: "スレッドにしました", body: null, diff: [], destination: { ...general, threadTs: "1761700000.000001" } });
+    await mock("claude_proofread_slack", { reply: "スレッドにしました", body: null, diff: [], actions: [pasteTo({ ...general, threadTs: "1761700000.000001" }, true)] });
     await askProofread();
     await expect(where(1)).toHaveText("Example Team ・ #general（スレッド）");
     await add().click();
@@ -578,7 +585,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     const slackPost = await mock("slack_post", postedTs);
     const edit = await mock("claude_proofread_slack", proofreadEdit);
     await askProofread();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", target: general, targetByClaude: false, mayPost: true }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", actions: [pasteTo(general)] }]);
     await waitForCount("#slack-log .chat-ai", 1);
     await expect($("#slack-log .chat-user")).toHaveText("校正してください");
     await expect(body()).toHaveValue(proofreadEdit.body as string);
@@ -608,9 +615,9 @@ describe("slack compose screen: proofreading with Claude", () => {
     await openCompose();
     await expect(target()).toHaveText("選んでください");
     const slackPost = await mock("slack_post", postedTs);
-    const edit = await mock("claude_proofread_slack", { ...proofreadEdit, destination: general });
+    const edit = await mock("claude_proofread_slack", { ...proofreadEdit, actions: [pasteTo(general, true)] });
     await askProofread();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", target: null, targetByClaude: false, mayPost: true }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", actions: [pasteTo(null)] }]);
     await waitForCount("#slack-log .chat-ai", 1);
     await expect(target()).toHaveText("Example Team ・ #general");
     await expect(post()).toBeEnabled();
@@ -618,34 +625,25 @@ describe("slack compose screen: proofreading with Claude", () => {
     expect(await callsOf(slackPost)).toEqual([]);
   });
 
-  it("tells Rust that the destination in the chip is Claude's until the owner chooses one, and when the answer only repeats it", async () => {
+  it("tells Rust that the destination in the chip is Claude's until the owner chooses one", async () => {
     await openCompose();
-    const edit = await mock("claude_proofread_slack", { ...proofreadEdit, destination: general });
+    await mock("claude_proofread_slack", { ...proofreadEdit, actions: [pasteTo(general, true)] });
     await $("#slack-input").setValue("貼り先を決めて");
     await $("#slack-send").click();
     await waitForCount("#slack-log .chat-ai", 1);
     await expect(target()).toHaveText("Example Team ・ #general");
+    const sent = async () => ((await waitForCalls("claude_proofread_slack")) as { actions: SlackAction[] }[]).map((c) => c.actions);
+    await mock("claude_proofread_slack", { ...proofreadEdit, body: null, diff: [], actions: null });
     await $("#slack-input").setValue("もう一度");
     await $("#slack-send").click();
+    expect(await sent()).toEqual([[pasteTo(general, true)]]);
     await waitForCount("#slack-log .chat-ai", 2);
-    const calls = await callsOf(edit);
-    expect((calls as { target: unknown; targetByClaude: boolean }[]).map((c) => [c.target, c.targetByClaude])).toEqual([
-      [null, false],
-      [general, true],
-    ]);
-    // The owner chooses the same destination: it is theirs, and Claude repeating it does not take it back.
+    // The owner chooses the same destination: it is theirs.
     await chooseGeneral();
+    await mock("claude_proofread_slack", { ...proofreadEdit, body: null, diff: [], actions: null });
     await $("#slack-input").setValue("さらにもう一度");
     await $("#slack-send").click();
-    await waitForCount("#slack-log .chat-ai", 3);
-    await $("#slack-input").setValue("最後");
-    await $("#slack-send").click();
-    await waitForCount("#slack-log .chat-ai", 4);
-    const later = ((await callsOf(edit)) as { target: unknown; targetByClaude: boolean }[]).slice(2);
-    expect(later.map((c) => [c.target, c.targetByClaude])).toEqual([
-      [general, false],
-      [general, false],
-    ]);
+    expect(await sent()).toEqual([[pasteTo(general)]]);
   });
 
   it("marks the one thing to do as posted when the answer says Rust posted, without posting from the screen, and stays open", async () => {
@@ -655,13 +653,12 @@ describe("slack compose screen: proofreading with Claude", () => {
       reply: "投稿しました",
       body: proofreadEdit.body,
       diff: proofreadEdit.diff,
-      destination: general,
-      posted: true,
-      postedTs,
+      actions: [postedAt(pasteTo(general, true), postedTs)],
+      postError: null,
     });
     await $("#slack-input").setValue("#general に要点だけ投稿して");
     await $("#slack-send").click();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "#general に要点だけ投稿して", target: null, targetByClaude: false, mayPost: true }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "#general に要点だけ投稿して", actions: [pasteTo(null)] }]);
     await expect($(".toast")).toHaveText("Example Team の #general に貼りました");
     // The screen stays, the card is the posted one with the destination Rust posted to, and the answer is in the conversation.
     await waitForCount("#slack-log .chat-ai", 1);
@@ -677,43 +674,154 @@ describe("slack compose screen: proofreading with Claude", () => {
     await written(2).setValue("補足です");
     await post().click();
     expect(await waitForCalls(slackPost)).toEqual([{ teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: "補足です", written: true }]);
-    // A later request has nothing left that Claude may post or choose for.
-    await mock("claude_proofread_slack", { ...proofreadEdit, body: null, diff: [], destination: { ...general, name: "random" } });
+    // A later request tells Rust which things to do are posted, and where.
+    await waitForCount(`${cards} .slack-done`, 2);
+    await mock("claude_proofread_slack", { ...proofreadEdit, body: null, diff: [], actions: null });
     await $("#slack-input").setValue("もう一度投稿して");
     await $("#slack-send").click();
-    expect(((await waitForCalls("claude_proofread_slack")) as { target: unknown; mayPost: boolean }[]).map((c) => [c.target, c.mayPost])).toEqual([[null, false]]);
+    expect(((await waitForCalls("claude_proofread_slack")) as { actions: SlackAction[] }[]).map((c) => c.actions)).toEqual([
+      [postedAt(pasteTo(general, true), postedTs), postedAt(writeAfter(0, "補足です"), postedTs)],
+    ]);
     await waitForCount("#slack-log .chat-ai", 2);
     await expect(where(1)).toHaveText("Example Team ・ #general");
   });
 
-  it("tells Rust not to post for a request when there is more than one thing to do, or when the first is a written text", async () => {
+  it("sends the things to do with a request, a written text with its words", async () => {
     await openCompose();
     await chooseGeneral();
-    const edit = await mock("claude_proofread_slack", { ...proofreadEdit, body: null, diff: [] });
-    const mayPost = async () => ((await callsOf(edit)) as { mayPost: boolean }[]).map((c) => c.mayPost);
-    const ask = async (n: number) => {
-      await $("#slack-input").setValue("この内容で投稿して");
-      await $("#slack-send").click();
-      await waitForCount("#slack-log .chat-ai", n);
-    };
+    const edit = await mock("claude_proofread_slack", { ...proofreadEdit, body: null, diff: [], actions: null });
     await add().click();
-    await ask(1);
-    await card(2).$(".slack-remove").click();
-    await what(1).click();
-    await ask(2);
-    await what(1).click();
-    await ask(3);
-    expect(await mayPost()).toEqual([false, false, true]);
+    await written(2).setValue("補足です");
+    await $("#slack-input").setValue("この内容で投稿して");
+    await $("#slack-send").click();
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "この内容で投稿して", actions: [pasteTo(general), writeAfter(0, "補足です")] }]);
+    await waitForCount("#slack-log .chat-ai", 1);
+    // An answer that leaves the things to do alone changes no card.
+    expect(await count(cards)).toBe(2);
+    await expect(written(2)).toHaveValue("補足です");
+  });
+
+  it("puts the things to do that Claude wrote into the cards, posts nothing, and 投稿 sends them in order", async () => {
+    await openCompose();
+    await chooseGeneral();
+    const greeting = "@here お疲れ様です。こちらお願いできますでしょうか？";
+    const request = `${greeting} とメッセージを打ったあと、メールの内容をそのスレッド内に貼り付けたいです`;
+    const slackPost = await mock("slack_post", postedTs);
+    const edit = await mock("claude_proofread_slack", {
+      reply: "行うことを 2 件にしました",
+      body: null,
+      diff: [],
+      actions: [{ ...pasteTo(general), paste: false, text: greeting }, { ...pasteTo(null), after: 0 }],
+      postRefused: false,
+      postError: null,
+    });
+    await $("#slack-input").setValue(request);
+    await $("#slack-send").click();
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: request, actions: [pasteTo(general)] }]);
+    await waitForCount(cards, 2);
+    await expect(where(1)).toHaveText("Example Team ・ #general");
+    await expect(what(1)).toHaveAttribute("aria-pressed", "false");
+    await expect(written(1)).toHaveValue(greeting);
+    await expect(where(2)).toHaveText("1 のスレッド");
+    await expect(what(2)).toHaveAttribute("aria-pressed", "true");
+    expect(await count(`${cards}:nth-child(2) textarea`)).toBe(0);
+    expect(await count(`${cards} .slack-done`)).toBe(0);
+    expect(await callsOf(slackPost)).toEqual([]);
+    // The owner reads them and presses 投稿: the written text first, then the original message in its thread.
+    await expect(post()).toHaveText("2 件を投稿");
+    await post().click();
+    expect(await waitForCalls(slackPost, 2)).toEqual([
+      { teamId: "T1", channel: "C0123ABCD", threadTs: null, name: "general", text: greeting, written: true },
+      { teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: slackPreview, written: false },
+    ]);
+  });
+
+  it("marks every thing to do that Rust posted for a request, without posting from the screen", async () => {
+    await openCompose();
+    await chooseGeneral();
+    const slackPost = await mock("slack_post", postedTs);
+    await mock("claude_proofread_slack", {
+      reply: "投稿しました",
+      body: null,
+      diff: [],
+      actions: [postedAt({ ...pasteTo(general), paste: false, text: "@here お疲れ様です" }, postedTs), postedAt({ ...pasteTo(null), after: 0 }, postedTs)],
+      postRefused: false,
+      postError: null,
+    });
+    await $("#slack-input").setValue("@here お疲れ様です と投稿して、そのスレッドにメールを貼って");
+    await $("#slack-send").click();
+    await expect($(".toast")).toHaveText("2 件を投稿しました");
+    await waitForCount(`${cards} .slack-done`, 2);
+    await expect(written(1)).toHaveValue("@here お疲れ様です");
+    await expect(written(1)).toBeDisabled();
+    await expect(where(2)).toHaveText("1 のスレッド");
+    await expect(post()).toBeDisabled();
+    expect(await callsOf(slackPost)).toEqual([]);
+    await expect($("#slack-compose")).toBeDisplayed();
+  });
+
+  it("shows the failure of a later post of a request, and leaves only what was not sent to 投稿", async () => {
+    await openCompose();
+    await chooseGeneral();
+    await mock("claude_proofread_slack", {
+      reply: "投稿します",
+      body: null,
+      diff: [],
+      actions: [postedAt({ ...pasteTo(general), paste: false, text: "お疲れ様です" }, postedTs), { ...pasteTo(null), after: 0 }],
+      postRefused: false,
+      postError: "チャンネルに投稿する権限がありません",
+    });
+    await $("#slack-input").setValue("お疲れ様です と投稿して、そのスレッドにメールを貼って");
+    await $("#slack-send").click();
+    await waitForCount("#slack-log .chat-ai", 1);
+    await expect($("#slack-error")).toHaveText("チャンネルに投稿する権限がありません");
+    await expect(card(1).$(".slack-done")).toHaveText("投稿済み");
+    expect(await count(`${cards} .slack-done`)).toBe(1);
+    // The next press sends the second one only, to the thread of the first.
+    await expect(post()).toHaveText("投稿");
+    const slackPost = await mock("slack_post", "1761785999.000200");
+    await post().click();
+    expect(await waitForCalls(slackPost)).toEqual([{ teamId: "T1", channel: "C0123ABCD", threadTs: postedTs, name: "general", text: slackPreview, written: false }]);
+  });
+
+  it("marks the post to the thread of a Slack link in the request, with the request sent as it was typed", async () => {
+    await openCompose();
+    const thread = { ...general, threadTs: "1761785520.123456" };
+    const request = "https://example.slack.com/archives/C0123ABCD/p1761785520123456 こちらに投稿して";
+    const slackPost = await mock("slack_post", postedTs);
+    const edit = await mock("claude_proofread_slack", { reply: "投稿しました", body: null, diff: [], actions: [postedAt(pasteTo(thread, true), thread.threadTs)], postRefused: false, postError: null });
+    await $("#slack-input").setValue(request);
+    await $("#slack-send").click();
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: request, actions: [pasteTo(null)] }]);
+    await expect($(".toast")).toHaveText("Example Team の #general（スレッド） に貼りました");
+    await expect(card(1).$(".slack-done")).toHaveText("投稿済み");
+    await expect(where(1)).toHaveText("Example Team ・ #general（スレッド）");
+    expect(await callsOf(slackPost)).toEqual([]);
+  });
+
+  it("does not put in the things to do of an answer that arrives after a card was added", async () => {
+    await openCompose();
+    await chooseGeneral();
+    const edit = await mock("claude_proofread_slack", holds);
+    await askProofread();
+    await waitForCalls(edit);
+    await add().click();
+    await written(2).setValue("補足です");
+    await release(edit, { ...proofreadEdit, actions: [{ ...pasteTo(general), paste: false, text: "別の文面" }] });
+    await waitForCount("#slack-log .chat-ai", 1);
+    expect(await count(cards)).toBe(2);
+    await expect(what(1)).toHaveAttribute("aria-pressed", "true");
+    await expect(written(2)).toHaveValue("補足です");
   });
 
   it("says that nothing was posted when Claude asked for a post and Rust refused it, and keeps the compose screen", async () => {
     await openCompose();
     await chooseGeneral();
     const slackPost = await mock("slack_post", postedTs);
-    const edit = await mock("claude_proofread_slack", { reply: "投稿します", body: null, diff: [], destination: general, posted: false, postRefused: true });
+    const edit = await mock("claude_proofread_slack", { reply: "投稿します", body: null, diff: [], actions: null, postRefused: true });
     await $("#slack-input").setValue("この内容で投稿して");
     await $("#slack-send").click();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "この内容で投稿して", target: general, targetByClaude: false, mayPost: true }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "この内容で投稿して", actions: [pasteTo(general)] }]);
     await waitForCount("#slack-log .chat-ai", 1);
     await expect($("#slack-error")).toHaveText("投稿されませんでした");
     await expect($("#slack-compose")).toBeDisplayed();
@@ -749,7 +857,7 @@ describe("slack compose screen: proofreading with Claude", () => {
 
   it("keeps the compose screen when the answer did not post", async () => {
     await openCompose();
-    await mock("claude_proofread_slack", { ...proofreadEdit, destination: general, posted: false });
+    await mock("claude_proofread_slack", { ...proofreadEdit, actions: [pasteTo(general, true)] });
     await $("#slack-input").setValue("#general に貼り先を変えて");
     await $("#slack-send").click();
     await waitForCount("#slack-log .chat-ai", 1);
@@ -761,7 +869,7 @@ describe("slack compose screen: proofreading with Claude", () => {
   it("shows a thread as the destination Claude chose, and changes a destination that was chosen before", async () => {
     await openCompose();
     await chooseGeneral();
-    await mock("claude_proofread_slack", { reply: "スレッドにしました", body: null, diff: [], destination: { ...general, name: "random", threadTs: "1761785520.123456" } });
+    await mock("claude_proofread_slack", { reply: "スレッドにしました", body: null, diff: [], actions: [pasteTo({ ...general, name: "random", threadTs: "1761785520.123456" }, true)] });
     await askProofread();
     await waitForCount("#slack-log .chat-ai", 1);
     await expect(target()).toHaveText("Example Team ・ #random（スレッド）");
@@ -770,11 +878,11 @@ describe("slack compose screen: proofreading with Claude", () => {
   it("keeps the destination when the answer names none", async () => {
     await openCompose();
     await chooseGeneral();
-    await mock("claude_proofread_slack", { ...proofreadEdit, destination: null });
+    await mock("claude_proofread_slack", { ...proofreadEdit, actions: null });
     await askProofread();
     await waitForCount("#slack-log .chat-ai", 1);
     await expect(target()).toHaveText("Example Team ・ #general");
-    // An answer from before the destination existed has no such key at all.
+    // An answer with no such key at all.
     await mock("claude_proofread_slack", { ...proofreadEdit, body: null, diff: [] });
     await askProofread();
     await waitForCount("#slack-log .chat-ai", 2);
@@ -787,7 +895,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     await askProofread();
     await waitForCalls(edit);
     await chooseGeneral();
-    await release(edit, { ...proofreadEdit, destination: { ...general, name: "random" } });
+    await release(edit, { ...proofreadEdit, actions: [pasteTo({ ...general, name: "random" }, true)] });
     await waitForCount("#slack-log .chat-ai", 1);
     await expect(target()).toHaveText("Example Team ・ #general");
     // The text of the answer still goes in.
@@ -801,7 +909,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     await waitForCalls(edit);
     await openOtherMail("Second unread", "Another text");
     await pressSlack();
-    await release(edit, { ...proofreadEdit, destination: general });
+    await release(edit, { ...proofreadEdit, actions: [pasteTo(general, true)] });
     // Give a wrongly kept answer the time to be drawn.
     await browser.pause(300);
     await expect(target()).toHaveText("選んでください");
@@ -817,7 +925,7 @@ describe("slack compose screen: proofreading with Claude", () => {
       const mac = /Mac/.test(navigator.platform);
       document.getElementById("slack-input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: mac, ctrlKey: !mac, bubbles: true, cancelable: true }));
     }, onceId());
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "敬語にして", target: null, targetByClaude: false, mayPost: true }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "敬語にして", actions: [pasteTo(null)] }]);
   });
 
   it("sends a typed request with the text and the conversation so far", async () => {
@@ -825,7 +933,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     const edit = await mock("claude_proofread_slack", proofreadEdit);
     await $("#slack-input").setValue("敬語にして");
     await $("#slack-send").click();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "敬語にして", target: null, targetByClaude: false, mayPost: true }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "敬語にして", actions: [pasteTo(null)] }]);
     await waitForCount("#slack-log .chat-ai", 1);
     await askProofread();
     const calls = await waitForCalls(edit, 2);
@@ -837,9 +945,7 @@ describe("slack compose screen: proofreading with Claude", () => {
         { role: "assistant", text: proofreadEdit.reply },
       ],
       instruction: "校正してください",
-      target: null,
-      targetByClaude: false,
-      mayPost: true,
+      actions: [pasteTo(null)],
     });
   });
 
@@ -897,7 +1003,7 @@ describe("slack compose screen: proofreading with Claude", () => {
     await expect($("#slack-send")).toBeEnabled();
     const edit = await mock("claude_proofread_slack", proofreadEdit);
     await askProofread();
-    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", target: null, targetByClaude: false, mayPost: true }]);
+    expect(await waitForCalls(edit)).toEqual([{ text: slackPreview, history: [], instruction: "校正してください", actions: [pasteTo(null)] }]);
     await waitForCount("#slack-log .chat-ai", 1);
   });
 

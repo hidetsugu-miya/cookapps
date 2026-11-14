@@ -4,13 +4,13 @@
 // The elements are in the owner's HTML, with the ids `{prefix}-log`, `-input`, `-send`, `-clear`, `-form` and `-chat-note`, and `-keys` unless `keyHint` is false.
 import type { DiffLine } from "./bindings/DiffLine";
 import type { PromptEdit } from "./bindings/PromptEdit";
-import type { Target } from "./bindings/Target";
+import type { SlackAction } from "./bindings/SlackAction";
 import type { TodoTaskProposal } from "./bindings/TodoTaskProposal";
 import { getClaude } from "./claude.js";
 import { $, composing, isMac, tag } from "./dom.js";
 
-// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, the destination it chose and whether a post it asked for was refused (the Slack compose screen, S-4, S-23), or the draft of a post (the Slack screen's pane, S-24).
-export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; destination?: Target | null; postRefused?: boolean; draft?: string | null };
+// What Claude answered: the reply, and a proposed change of the text (`body` and `diff`), proposed tasks, the things to do as it made them and whether a post it asked for was refused (the Slack compose screen, S-4, S-23), or the draft of a post (the Slack screen's pane, S-24).
+export type ChatAnswer = PromptEdit & { tasks?: TodoTaskProposal[]; actions?: SlackAction[] | null; postRefused?: boolean; draft?: string | null };
 
 export interface ChatTurnPayload {
   role: "user" | "assistant";

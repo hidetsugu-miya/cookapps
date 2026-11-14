@@ -1,8 +1,9 @@
 // The Slack compose screen, opened by "Slack に貼る" in the thread's header. Two panes: on the left, at the top the original message (it starts as the mail's latest message; pressing it opens the field to edit it)
 // with "元の内容に戻す" above it, under it the things to do ("行うこと": numbered cards, each one post, with where it goes and what it posts, and a plus that adds one), and "投稿" at the bottom, which sends them from the top down;
-// on the right a conversation with Claude that proofreads the original message. Nothing leaves the app until "投稿" (or a request to Claude that asks for a post, S-23).
+// on the right a conversation with Claude that proofreads the original message and can write the things to do. Nothing leaves the app until "投稿" (or a request to Claude that asks for a post, S-23).
 import type { Channel } from "./bindings/Channel";
 import type { Recent } from "./bindings/Recent";
+import type { SlackAction } from "./bindings/SlackAction";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { Target } from "./bindings/Target";
 import type { Workspace } from "./bindings/Workspace";
@@ -30,20 +31,13 @@ interface Draft {
   text: string;
   // The things to do, in the order they are sent. There is always a first one.
   actions: Action[];
-  // The destination in the first action's chip is one that Claude's answer put there, not one the owner chose: a post then needs the destination named in the request (S-23).
-  byClaude: boolean;
 }
-// One thing to do: one post, where it goes and what it holds.
-interface Action {
-  // Where: a channel or a thread chosen in the picker (`after` null), or the thread of the post of an earlier action (`after` is its index, and `target` is not used).
-  target: Target | null;
-  after: number | null;
-  // What: the original message as it is (`paste`), or the text written in the card.
-  paste: boolean;
-  text: string;
-  // Set once it was posted: it is never sent again. `thread` is the thread a later action continues: the thread it replied in, or else the time of its own message (empty when Slack answered none).
-  posted: { teamId: string; channel: string; name: string; thread: string } | null;
-}
+// One thing to do: one post, where it goes and what it holds, as Rust reads and answers it (`SlackAction`).
+// Where: `target`, a channel or a thread chosen in the picker (`after` null), or the thread of the post of an earlier action (`after` is its index, and `target` is not used).
+// `byClaude`: the destination is one that Claude's answer put there, not one the owner chose; a post by a request then needs it named in the request (S-23).
+// What: the original message as it is (`paste`), or the text written in the card.
+// `posted` is set once it was posted, and it is never sent again: its `thread` is the thread a later action continues, the thread it replied in or else the time of its own message (empty when Slack answered none).
+type Action = SlackAction;
 let draft: Draft | null = null;
 
 // From the last `slack_load`: the picker lists them.
@@ -70,11 +64,18 @@ const slackDate = (ms: number) => {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
-// The first action's destination when the request that is on its way was sent: Claude's choice is put in only if the chip is still that.
-let askedTarget: Target | null = null;
-let askedByClaude = false;
-// A request to Claude of this screen is on its way, and may post the text: "投稿" waits for it, so the text is not posted twice.
+// The things to do as they were when the request that is on its way was sent: what Claude's answer makes of them is put in only if they are still that.
+let askedActions = "";
+// A request to Claude of this screen is on its way, and may post: "投稿" waits for it, so nothing is posted twice.
 let asking = false;
+
+// Puts `next` in the place of the actions of `d` that were not posted when the request was sent (the first `kept` are the posted ones, which never change).
+function putActions(d: Draft, kept: number, next: Action[]) {
+  d.actions.splice(kept, d.actions.length - kept, ...next);
+  if (draft !== d) return;
+  $("slack-error").hidden = true;
+  drawActions();
+}
 
 const chat = createChat({
   prefix: "slack",
@@ -86,50 +87,41 @@ const chat = createChat({
     $<HTMLTextAreaElement>("slack-body").value = text;
     $("slack-preview").textContent = text;
   },
-  // A request that asks to post is posted by Rust (S-23), which pastes the original message to the first action's destination: it may only when that is all there is to do (`mayPost`).
-  // The first action is then the posted one, marked here before the chat sees the answer; the screen stays, and the answer is drawn as any other.
+  // The things to do go with the request. A request that asks to post is posted by Rust (S-23), which sends the ones that are not posted from the top down, as the answer made them.
+  // What it posted is marked here, before the chat sees the answer and whatever changed meanwhile, so that nothing is sent twice; the screen stays, and the answer is drawn as any other.
   ask: async (text, history, instruction) => {
     const d = draft;
-    const first = d && !d.actions[0].posted ? d.actions[0] : null;
-    askedTarget = first?.target ?? null;
-    askedByClaude = first ? d!.byClaude : false;
-    const mayPost = !!first && d!.actions.length === 1 && first.paste;
+    const actions = d?.actions.map((a) => ({ ...a })) ?? [];
+    askedActions = JSON.stringify(actions);
     asking = true;
     refreshSlackCompose();
     try {
-      const answer = await invoke("claude_proofread_slack", { text, history, instruction, target: askedTarget, targetByClaude: askedByClaude, mayPost });
-      if (answer.posted && answer.destination) {
-        const to = answer.destination;
-        // When the first action is still to do, it is what Rust posted: the original message, to that destination.
-        if (first && !first.posted) {
-          first.target = to;
-          first.paste = true;
-          first.posted = { teamId: to.teamId, channel: to.channel, name: to.name, thread: to.threadTs ?? answer.postedTs ?? "" };
-          if (draft === d) drawActions();
-        }
-        toast(`${wsName(to.teamId)} の ${label(to)} に貼りました`);
+      const answer = await invoke("claude_proofread_slack", { text, history, instruction, actions });
+      const sent = answer.actions?.filter((a) => a.posted) ?? [];
+      if (d && sent.length) {
+        putActions(d, actions.filter((a) => a.posted).length, answer.actions!);
+        const [first, at] = [sent[0], sent[0].posted!];
+        // One post is named by where it went: its own destination, or the thread it continued.
+        const to = { name: at.name, threadTs: first.after === null && first.target ? first.target.threadTs : at.thread };
+        toast(sent.length > 1 ? `${sent.length} 件を投稿しました` : `${wsName(at.teamId)} の ${label(to)} に貼りました`);
+      }
+      // A post that failed after another was sent: the ones sent are marked above, and the rest stays to do.
+      if (answer.postError) {
+        if (currentScreen() === "compose" && draft === d) showComposeError(answer.postError);
+        else toast(answer.postError);
       }
       return answer;
     } finally {
       asking = false;
     }
   },
-  // The destination Claude chose (Rust kept it to the list it was given) goes into the first action's chip, unless that one is posted, the user chose another meanwhile or the post is on its way.
-  // A post that Claude asked for and Rust refused (S-23) is said not to have been made.
+  // What Claude's answer made of the things to do (a destination it chose, kept by Rust to the list it was given, or the cards it wrote) is put in, unless the user changed them meanwhile or the post is on its way.
+  // What Rust posted is in already (`ask`). A post that Claude asked for and Rust refused (S-23) is said not to have been made.
   answered: (answer) => {
     const d = draft;
     if (!d) return;
-    const first = d.actions[0];
-    if (answer.destination && !posting && !first.posted && first.target === askedTarget) {
-      // Claude naming the destination that the chip already holds does not make it Claude's.
-      const t = first.target;
-      const same = t && t.teamId === answer.destination.teamId && t.channel === answer.destination.channel && t.threadTs === answer.destination.threadTs;
-      if (!same) d.byClaude = true;
-      first.target = answer.destination;
-      first.after = null;
-      $("slack-error").hidden = true;
-      drawActions();
-    }
+    if (answer.actions && !answer.actions.some((a) => a.posted) && !posting && JSON.stringify(d.actions) === askedActions)
+      putActions(d, d.actions.filter((a) => a.posted).length, answer.actions);
     if (answer.postRefused) {
       if (currentScreen() === "compose") showComposeError("投稿されませんでした");
       else toast("投稿されませんでした");
@@ -179,7 +171,7 @@ function removeAction(d: Draft, index: number) {
   const [gone] = d.actions.splice(index, 1);
   for (const a of d.actions) {
     if (a.after === null) continue;
-    if (a.after === index) [a.target, a.after] = [gone.target, gone.after];
+    if (a.after === index) [a.target, a.after, a.byClaude] = [gone.target, gone.after, gone.byClaude];
     else if (a.after > index) a.after--;
   }
 }
@@ -283,8 +275,7 @@ function openPicker(anchor: HTMLElement, a: Action, index: number) {
     refreshSlackCompose();
   };
   const choose = (t: Target) => {
-    [a.target, a.after] = [t, null];
-    if (index === 0) d.byClaude = false;
+    [a.target, a.after, a.byClaude] = [t, null, false];
     chosen();
   };
   const pop = tag("div", "menu slack-pop");
@@ -394,7 +385,7 @@ async function newDraft(key: string, current: OpenThread, stale: () => boolean) 
   });
   if (stale()) return;
   // One thing to do at first: paste the original message, to a destination that is not chosen yet.
-  draft = { key, original, text: original, actions: [{ target: null, after: null, paste: true, text: "", posted: null }], byClaude: false };
+  draft = { key, original, text: original, actions: [{ target: null, after: null, paste: true, text: "", posted: null, byClaude: false }] };
   chat.reset();
   chat.clearInput();
   $<HTMLTextAreaElement>("slack-body").value = original;
@@ -499,7 +490,7 @@ export function initSlackCompose() {
   $("slack-add").onclick = () => {
     const d = draft;
     if (!d || posting) return;
-    d.actions.push({ target: null, after: d.actions.length - 1, paste: false, text: "", posted: null });
+    d.actions.push({ target: null, after: d.actions.length - 1, paste: false, text: "", posted: null, byClaude: false });
     drawActions();
     refreshSlackCompose();
     const card = $("slack-actions").lastElementChild!;

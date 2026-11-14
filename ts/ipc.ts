@@ -51,6 +51,7 @@ import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { PromptEdit } from "./bindings/PromptEdit";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
+import type { SlackAction } from "./bindings/SlackAction";
 import type { SlackEdit } from "./bindings/SlackEdit";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
@@ -255,11 +256,11 @@ export interface Commands {
   // `channel` is the channel the screen has open (null in the unread list and the watch, and then no Slack text is sent): `teamId` and `channel` must be a connected workspace and a channel of its list (a refusal is a Japanese message),
   // and `messages` are its recent messages as the screen draws them (`text` of `TimelineMessage`), oldest first. The model and effort are those of `slackChat`. Nothing is saved.
   claude_chat_slack: { args: { channel: { teamId: string; channel: string; messages: { name: string; ts: string; text: string }[] } | null; history: { role: "user" | "assistant"; text: string }[]; instruction: string }; result: SlackChatReply };
-  // Claude's proofreading of the text in the Slack compose screen's edit field: the same answer, for `text` instead of the instructions, with the `destination` it chose from the list Rust gave it (S-4).
-  // `posted` is true when the request asked to post (S-23) and Rust posted the new text (or `text`) to `destination` by the path of `slack_post` (`postedTs` is the time of that message); the first card of "行うこと" is then the posted one. Nothing is saved.
-  // `mayPost` false: the things to do are not the one post this command can make (more than one, a written text, or the first one already posted), and a post is refused.
+  // Claude's proofreading of the original message of the Slack compose screen: the same answer, for `text` instead of the instructions, with `actions`, what the answer made of the things to do that are not posted
+  // (a destination it chose from the list Rust gave it, or the cards it wrote; null when it left them alone, S-4). `actions` of the arguments are the cards of "行うこと", the posted ones first.
+  // When the request asked to post (S-23) and Rust allowed it, Rust posted them from the top down by the path of `slack_post`, and the ones sent carry `posted`; `postError` is the failure that stopped it after one was sent. Nothing is saved.
   claude_proofread_slack: {
-    args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; target: Target | null; targetByClaude: boolean; mayPost: boolean };
+    args: { text: string; history: { role: "user" | "assistant"; text: string }[]; instruction: string; actions: SlackAction[] };
     result: SlackEdit;
   };
   // The conversation in the Slack thread detail (its own model and effort, `slackReply`): proofread the reply, summarise the thread, write a reply. `text` is the reply field's text (it may be empty),
