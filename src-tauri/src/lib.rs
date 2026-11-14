@@ -335,6 +335,7 @@ pub fn run() {
             orca_files::orca_file_create,
             orca_files::orca_scratchpad_create,
             orca_files::orca_file_delete,
+            orca_files::orca_file_move,
             orca_files::orca_file_download,
             orca_files::orca_file_diff,
             orca_files::orca_local_branches,

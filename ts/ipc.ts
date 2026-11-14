@@ -318,6 +318,8 @@ export interface Commands {
   orca_file_delete: { args: { path: string; relative: string; folder: boolean; environment: string | null }; result: null };
   // A-29: makes the scratchpad file `name` in `.orca/scratchpad` of the worktree and answers its path from the worktree; a file of that name that is there already is answered as it is (`existed`) and left as it is.
   orca_scratchpad_create: { args: { path: string; name: string; environment: string | null }; result: OrcaScratchpad };
+  // A-18: moves or renames the file or folder `from` of the worktree to `to` (both paths from the worktree), making the folders of `to` that are missing. A place that is taken, the root, a path outside the worktree, the same place and a place inside `from` are errors; nothing is overwritten.
+  orca_file_move: { args: { path: string; from: string; to: string; environment: string | null }; result: null };
   // A-24: the diff of the file `relative` of the worktree, HEAD against the working tree: the rows of both views, the blocks of changes and the language to color by.
   orca_file_diff: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileDiff };
   // A-27: `limit` (1 to 200) commits of the worktree at `path` from HEAD, the newest first, after the first `skip`.

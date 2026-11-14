@@ -1,5 +1,5 @@
 //! A-18: the files of a worktree on the Orca screen: the list of its folders, and the text of a file read and saved by the editor.
-//! The calls are Orca's runtime (`files.readDir`, `files.read`, `files.writeIfUnchanged`, `files.createFile`, `files.createDir`, `files.delete`, `git.checkIgnored`), on this machine over its unix socket and on a paired server over its WebSocket (the connection of A-10).
+//! The calls are Orca's runtime (`files.readDir`, `files.read`, `files.writeIfUnchanged`, `files.createFile`, `files.createDir`, `files.delete`, `files.rename`, `git.checkIgnored`), on this machine over its unix socket and on a paired server over its WebSocket (the connection of A-10).
 //! The folder is answered from `files.readDir` alone, and what git ignores is asked after it (`orca_files_ignored`, `git.checkIgnored`), as Orca's own window does.
 //! They are not a public interface of Orca: this was read in the `app.asar` of Orca 1.4.253 and tried on this machine's Orca. A token is in no log line, no error text and no return value, and the text of a file is in no log line.
 //!
@@ -13,6 +13,7 @@
 //! The difference of one file of a commit (`orca_commit_file_diff`, `git.commitDiff`: the text at the first parent and at the commit, in the shape of `git.diff`) is drawn as A-24's diff is (`parse_diff`). The text is held in memory only and is in no log line.
 //! A new file or folder is made in a folder of the tree (`orca_file_create`, `files.createFile` and `files.createDir`): Rust checks that the name is one name, and a name that is taken is refused (`files.createFile` never overwrites). They were read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! A file, or a folder with what is in it, is deleted for good (`orca_file_delete`, `files.delete`, which skips the Trash and makes a path that is not there no error): Rust refuses the root of the worktree and a path that is not inside it. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
+//! A file or a folder is moved or renamed inside the worktree (`orca_file_move`, `files.rename`, which does not overwrite: a target that is there is refused): Rust refuses the root, a path that is not inside the worktree, a target that is the source and a target inside the source. `files.rename` makes no folder, so when it answers `ENOENT` the missing folders of the target are made one by one (`files.createDir`, which makes one level) and the rename is tried once more. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! The scratchpad of A-29 is a file in `.orca/scratchpad` of a worktree (`orca_scratchpad_create`): the same `files.createFile`, and a name that is taken is answered as the existing file, not as a failure.
 //! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB).
 
@@ -71,6 +72,10 @@ const BAD_NAME: &str = "名前が正しくありません";
 const NAME_TAKEN: &str = "同じ名前があります";
 const NOT_CREATED: &str = "作成できませんでした";
 const NOT_DELETED: &str = "削除できませんでした";
+const NOT_MOVED: &str = "移動できませんでした";
+const SAME_PLACE: &str = "移動先が元の場所と同じです";
+const INTO_ITSELF: &str = "フォルダーを自分の中には移動できません";
+const NOT_FOUND: &str = "ファイルが見つかりません";
 const NOT_LISTED: &str = "ファイルの一覧を読めません";
 const NOT_BRANCHES: &str = "ブランチの一覧を読めません";
 const NOT_SWITCHED: &str = "ブランチを切り替えた結果を読めません";
@@ -344,6 +349,28 @@ fn new_relative(dir: &str, name: &str) -> Result<String, String> {
     Ok(relative)
 }
 
+/// The source and the target of a move (both relative to the worktree): each is a path inside the worktree and not its root, no part of the target holds a `\` or is over 255 bytes, the target is not the source, and it is not inside the source (a folder cannot go into itself).
+fn check_move(from: &str, to: &str) -> Result<(), String> {
+    check_relative(from, false)?;
+    check_relative(to, false)?;
+    if to
+        .split('/')
+        .any(|part| part.len() > MAX_NAME || part.contains('\\'))
+    {
+        return Err(BAD_NAME.into());
+    }
+    if to == from {
+        return Err(SAME_PLACE.into());
+    }
+    if to
+        .strip_prefix(from)
+        .is_some_and(|rest| rest.starts_with('/'))
+    {
+        return Err(INTO_ITSELF.into());
+    }
+    Ok(())
+}
+
 // ---- the list ----
 
 /// The order of Orca's file list: a number inside a name counts by its value (`2` before `10`), other characters by their lower case, and a tie by the plain order of the names.
@@ -458,7 +485,7 @@ fn check_ignore_paths(paths: &[String]) -> Result<(), String> {
 /// The message of a failed read of the files.
 fn reason(error: CallError) -> String {
     if error.detail.starts_with("ENOENT") {
-        "ファイルが見つかりません".into()
+        NOT_FOUND.into()
     } else if error.detail == "binary_file" {
         "バイナリのファイルは開けません".into()
     } else if error.detail == "diff_too_large" {
@@ -700,8 +727,7 @@ async fn write(
 
 /// The message of a failed create: a name that is taken (`EEXIST` of a file, "already exists" of a folder) is said so, anything else as a failed read is.
 fn create_reason(error: CallError) -> String {
-    let detail = error.detail.to_lowercase();
-    if detail.contains("eexist") || detail.contains("already exists") {
+    if taken(&error) {
         NAME_TAKEN.into()
     } else {
         reason(error)
@@ -757,6 +783,92 @@ async fn delete(
         return Err(NOT_DELETED.into());
     }
     Ok(())
+}
+
+// ---- the move ----
+
+/// Whether a failed call says that a name is taken (`EEXIST`, or Orca's own "already exists").
+fn taken(error: &CallError) -> bool {
+    let detail = error.detail.to_lowercase();
+    detail.contains("eexist") || detail.contains("already exists")
+}
+
+/// One `files.rename` of `from` to `to`.
+async fn rename(
+    rpc: &mut impl Rpc,
+    path: &str,
+    host_id: &str,
+    from: &str,
+    to: &str,
+) -> Result<(), CallError> {
+    let answer = rpc
+        .call(
+            "files.rename",
+            worktree_params(
+                path,
+                Some(host_id),
+                json!({"oldRelativePath": from, "newRelativePath": to}),
+            ),
+        )
+        .await?;
+    if answer["ok"] == false {
+        return Err(CallError {
+            shown: NOT_MOVED.into(),
+            detail: String::new(),
+        });
+    }
+    Ok(())
+}
+
+/// Makes the folders on the way to `to` that are missing, from the worktree down, one `files.createDir` for each (it makes one level and refuses a name that is there, which is no failure here). Answers whether one was made.
+async fn make_parents(
+    rpc: &mut impl Rpc,
+    path: &str,
+    host_id: &str,
+    to: &str,
+) -> Result<bool, String> {
+    let mut made = false;
+    for (at, _) in to.match_indices('/') {
+        let made_now = rpc
+            .call(
+                "files.createDir",
+                worktree_params(path, Some(host_id), json!({"relativePath": &to[..at]})),
+            )
+            .await;
+        match made_now {
+            Ok(_) => made = true,
+            Err(error) if taken(&error) => {}
+            Err(error) => return Err(reason(error)),
+        }
+    }
+    Ok(made)
+}
+
+/// Moves `from` to `to` (both checked by `check_move`) with `files.rename`, which never overwrites: a target that is there is said so. Orca's rename makes no folder, so on `ENOENT` the missing folders of the target are made and the rename is tried once more; when none was missing it is the source that is gone, and nothing is tried again.
+async fn move_entry(
+    rpc: &mut impl Rpc,
+    path: &str,
+    host_id: &str,
+    from: &str,
+    to: &str,
+) -> Result<(), String> {
+    let error = match rename(rpc, path, host_id, from, to).await {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    if !error.detail.contains("ENOENT") {
+        return Err(create_reason(error));
+    }
+    if !make_parents(rpc, path, host_id, to).await? {
+        return Err(NOT_FOUND.into());
+    }
+    rename(rpc, path, host_id, from, to).await.map_err(|error| {
+        if error.detail.contains("ENOENT") {
+            NOT_FOUND.into()
+        } else {
+            create_reason(error)
+        }
+    })
 }
 
 /// Makes the scratchpad file `name` in `.orca/scratchpad` (Orca makes the folder when it is missing). A name that is taken is no failure: the file is the existing one, and `existed` says so.
@@ -1719,6 +1831,25 @@ pub async fn orca_file_delete(
     let deleted = asked.await;
     forget_worktree_host(&path, environment.as_deref());
     deleted
+}
+
+/// Moves or renames the file or folder `from` of the worktree at `path` to `to` (A-18; both are paths from the worktree). The root of the worktree, a path that is not inside it, a target that is the source and a target inside the source are refused before anything is asked, and a target that is there is refused by Orca: nothing is overwritten. The folders of the target that are missing are made. This writes to the worktree, so the target's list is read each time, as a save does, and what was believed of the worktree is thrown away after the call.
+#[tauri::command]
+pub async fn orca_file_move(
+    path: String,
+    from: String,
+    to: String,
+    environment: Option<String>,
+) -> Result<(), String> {
+    check_move(&from, &to)?;
+    let host_id = host_of(&path, environment.as_deref()).await?;
+    let asked = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        move_entry(&mut connection, &path, &host_id, &from, &to).await
+    };
+    let moved = asked.await;
+    forget_worktree_host(&path, environment.as_deref());
+    moved
 }
 
 /// The name the save dialog starts with: the last part of the file's path from the worktree.
@@ -3328,6 +3459,202 @@ mod tests {
                 .await
                 .unwrap_err(),
             "作成できませんでした"
+        );
+    }
+
+    #[test]
+    fn a_move_stays_in_the_worktree_and_out_of_its_own_source() {
+        assert_eq!(check_move("a.md", "docs/a.md"), Ok(()));
+        assert_eq!(check_move("src/lib", "lib"), Ok(()));
+        assert_eq!(check_move("src", "src2/x"), Ok(()));
+        assert_eq!(check_move("src/a.rs", "src/b.rs"), Ok(()));
+        for (from, to) in [
+            ("", "a"),
+            ("a", ""),
+            ("../a", "a"),
+            ("a", "../a"),
+            ("a", "/a"),
+            ("a", "b/"),
+            ("a", "b//c"),
+            ("a", "./b"),
+            ("a", "b\nc"),
+        ] {
+            assert_eq!(
+                check_move(from, to),
+                Err("ファイルの場所が正しくありません".to_owned()),
+                "{from:?} {to:?}"
+            );
+        }
+        assert_eq!(check_move("a", "b\\c"), Err(BAD_NAME.to_owned()));
+        assert_eq!(
+            check_move("a", &format!("b/{}", "c".repeat(256))),
+            Err(BAD_NAME.to_owned())
+        );
+        assert_eq!(
+            check_move("src/a.rs", "src/a.rs"),
+            Err(SAME_PLACE.to_owned())
+        );
+        assert_eq!(check_move("src", "src/lib"), Err(INTO_ITSELF.to_owned()));
+        assert_eq!(
+            check_move("src", "src/a/b/src"),
+            Err(INTO_ITSELF.to_owned())
+        );
+    }
+
+    /// An Orca that answers each call with the next of `answers`, in order, and keeps the calls.
+    struct Script {
+        answers: std::collections::VecDeque<Answer>,
+        calls: Vec<(String, Value)>,
+    }
+
+    impl Rpc for Script {
+        async fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
+            self.calls.push((method.to_owned(), params));
+            match self.answers.pop_front().expect("an answer for the call") {
+                Ok(value) => Ok(value),
+                Err((shown, detail)) => Err(CallError {
+                    shown: shown.into(),
+                    detail: detail.into(),
+                }),
+            }
+        }
+    }
+
+    fn script(answers: Vec<Answer>) -> Script {
+        Script {
+            answers: answers.into(),
+            calls: Vec::new(),
+        }
+    }
+
+    fn enoent() -> Answer {
+        Err((
+            "Orca がエラーを返しました（runtime_error）",
+            "ENOENT: no such file or directory, rename '/work/a/a.md' -> '/work/a/x/y/a.md'",
+        ))
+    }
+
+    fn exists() -> Answer {
+        Err((
+            "Orca がエラーを返しました（runtime_error）",
+            "A file or folder named 'x' already exists in this location",
+        ))
+    }
+
+    fn denied() -> Answer {
+        Err((
+            "Orca がエラーを返しました（forbidden）",
+            "EACCES: permission denied",
+        ))
+    }
+
+    fn methods(calls: &[(String, Value)]) -> Vec<&str> {
+        calls.iter().map(|(method, _)| method.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_move_is_one_rename_with_both_paths_on_the_host() {
+        let mut orca = script(vec![Ok(json!({"ok": true}))]);
+        move_entry(&mut orca, "/work/a", "local", "src/a.rs", "docs/b.rs")
+            .await
+            .unwrap();
+        assert_eq!(
+            orca.calls,
+            vec![(
+                "files.rename".to_owned(),
+                json!({"worktree": "path:/work/a", "expectedExecutionHostId": "local", "oldRelativePath": "src/a.rs", "newRelativePath": "docs/b.rs"})
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_missing_folders_of_the_target_are_made_and_the_rename_is_tried_once_more() {
+        let mut orca = script(vec![
+            enoent(),
+            exists(),
+            Ok(json!({"ok": true})),
+            Ok(json!({"ok": true})),
+        ]);
+        move_entry(&mut orca, "/work/a", "local", "a.md", "x/y/a.md")
+            .await
+            .unwrap();
+        assert_eq!(
+            methods(&orca.calls),
+            [
+                "files.rename",
+                "files.createDir",
+                "files.createDir",
+                "files.rename"
+            ]
+        );
+        assert_eq!(orca.calls[1].1["relativePath"], "x");
+        assert_eq!(orca.calls[2].1["relativePath"], "x/y");
+        assert_eq!(orca.calls[3].1, orca.calls[0].1);
+    }
+
+    #[tokio::test]
+    async fn a_source_that_is_gone_is_said_so_and_the_rename_is_not_tried_a_third_time() {
+        // Every folder of the target is there: it is the source that is missing.
+        let mut orca = script(vec![enoent(), exists()]);
+        assert_eq!(
+            move_entry(&mut orca, "/work/a", "local", "a.md", "x/a.md")
+                .await
+                .unwrap_err(),
+            "ファイルが見つかりません"
+        );
+        assert_eq!(methods(&orca.calls), ["files.rename", "files.createDir"]);
+        // A target at the root has no folder to make.
+        let mut orca = script(vec![enoent()]);
+        assert_eq!(
+            move_entry(&mut orca, "/work/a", "local", "x/a.md", "a.md")
+                .await
+                .unwrap_err(),
+            "ファイルが見つかりません"
+        );
+        assert_eq!(methods(&orca.calls), ["files.rename"]);
+        // The second rename fails the same way.
+        let mut orca = script(vec![enoent(), Ok(json!({"ok": true})), enoent()]);
+        assert_eq!(
+            move_entry(&mut orca, "/work/a", "local", "a.md", "x/a.md")
+                .await
+                .unwrap_err(),
+            "ファイルが見つかりません"
+        );
+        assert_eq!(orca.calls.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_target_that_is_taken_is_said_so_and_other_failures_say_why() {
+        let mut orca = script(vec![exists()]);
+        assert_eq!(
+            move_entry(&mut orca, "/work/a", "local", "a.md", "x")
+                .await
+                .unwrap_err(),
+            "同じ名前があります"
+        );
+        assert_eq!(orca.calls.len(), 1);
+        let mut orca = script(vec![denied()]);
+        assert_eq!(
+            move_entry(&mut orca, "/work/a", "local", "a.md", "b.md")
+                .await
+                .unwrap_err(),
+            "Orca がエラーを返しました（forbidden）"
+        );
+        // A folder that cannot be made ends the move with its reason.
+        let mut orca = script(vec![enoent(), denied()]);
+        assert_eq!(
+            move_entry(&mut orca, "/work/a", "local", "a.md", "x/a.md")
+                .await
+                .unwrap_err(),
+            "Orca がエラーを返しました（forbidden）"
+        );
+        assert_eq!(orca.calls.len(), 2);
+        let mut orca = script(vec![Ok(json!({"ok": false}))]);
+        assert_eq!(
+            move_entry(&mut orca, "/work/a", "local", "a.md", "b.md")
+                .await
+                .unwrap_err(),
+            "移動できませんでした"
         );
     }
 

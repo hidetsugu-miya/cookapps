@@ -45,6 +45,8 @@ export const ARROW_UP_SVG = svgOf('<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>
 export const INBOX_SVG = $("nav-mail").querySelector("svg")!.outerHTML;
 export const SMILE_PLUS_SVG = svgOf('<circle cx="11" cy="13" r="8"/><path d="M7.5 14.5a4 4 0 0 0 7 0"/><path d="M8.5 11h.01M13.5 11h.01"/><path d="M19 2v6M16 5h6"/>');
 export const PLUS_SVG = svgOf('<path d="M12 5v14M5 12h14"/>');
+// A-18: the move or the new name of a file (an arrow to a place).
+export const MOVE_SVG = svgOf('<path d="M4 12h12"/><path d="M11 7l5 5-5 5"/><path d="M20 5v14"/>');
 export const DELETE_SVG = svgOf('<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/>');
 export const FILE_SVG = svgOf('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>');
 export const CLIP_SVG = svgOf('<path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>');

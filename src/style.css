@@ -1006,6 +1006,9 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-file[data-open="true"] .orca-file-ic { color: var(--accent); }
 .orca-file-new { display: flex; align-items: center; gap: 4px; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); }
 .orca-file-input { flex: 1; min-width: 0; height: 20px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--accent); border-radius: 10px; outline: 0; background: var(--surface); font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; }
+/* A-18: the folder a dragged row would be dropped in (its row, or the tree for the root of the worktree), and the name that follows the pointer. */
+.orca-file[data-drop="true"], #orca-files-tree[data-drop="true"] { background: var(--soft); outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-file-drag { position: fixed; z-index: 30; padding: 2px 8px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 14px rgba(0, 0, 0, .16); font-size: calc(12.5px * var(--fs)); white-space: nowrap; opacity: .92; pointer-events: none; }
 .orca-file-note { margin: 0; padding: 2px 8px 2px calc(24px + var(--depth, 0) * 14px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
 .orca-file-note.fail { color: var(--warn); }
 /* A-27: the buttons that choose the files or the history in the top row of the file pane, and the history (the commits above, the files of the chosen commit below). */

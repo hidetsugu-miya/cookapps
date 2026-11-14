@@ -4214,17 +4214,17 @@ describe("orca: files and editor (A-18)", () => {
       return last.textContent === "削除" && danger !== "" && getComputedStyle(last).color === expected && getComputedStyle(items[items.length - 2]).color !== expected;
     });
 
-  it("opens a menu of the two copies, the download, the diff and the delete on the right button of a file, and writes the path and the path from the worktree", async () => {
+  it("opens a menu of the two copies, the download, the diff, the move and the delete on the right button of a file, and writes the path and the path from the worktree", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await stubClipboard();
     expect(await rightClickRow("a.rs")).toBe(true);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "削除"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(5);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(6);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
-    // One line, before the delete, which is last and in red.
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "", "削除"]);
+    // One line, before the move and the delete, which is last and in red.
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "", "移動・名前の変更", "削除"]);
     expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(1);
     expect(await deleteItemIsRed()).toBe(true);
     await pickItem("パスのコピー");
@@ -4245,11 +4245,11 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-files-tree .orca-file", 6);
     await stubClipboard();
     expect(await rightClickRow("src")).toBe(true);
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "削除"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(5);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(6);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
-    // One line between the two items that make something and the two copies, and one before the delete.
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["新規ファイル", "新規フォルダー", "", "パスのコピー", "相対パスをコピー", "", "削除"]);
+    // One line between the two items that make something and the two copies, and one before the move and the delete.
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["新規ファイル", "新規フォルダー", "", "パスのコピー", "相対パスをコピー", "", "移動・名前の変更", "削除"]);
     expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(2);
     expect(await deleteItemIsRed()).toBe(true);
     await pickItem("パスのコピー");
@@ -4426,7 +4426,7 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     expect(await rightClickRow("a.rs")).toBe(true);
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "削除"]);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     await rightClickEmpty();
@@ -4547,6 +4547,299 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf(list)).toEqual([]);
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+  });
+
+  // A-18: the move. 「移動・名前の変更」 turns the row into a field with its path from the worktree, and a row is dragged onto a folder or onto the empty part of the tree; Rust moves it.
+  const HERE = "/work/example-app";
+  async function askMove(path: string) {
+    expect(await rightClickRow(path)).toBe(true);
+    await pickItem("移動・名前の変更");
+    await waitForCount(".orca-file-new", 1);
+  }
+  // The field of the path: its text, what is selected in it, its label and its placeholder.
+  const moveField = () =>
+    browser.execute(() => {
+      const input = document.querySelector<HTMLInputElement>("#orca-files-tree .orca-file-input")!;
+      return { value: input.value, selected: [input.selectionStart, input.selectionEnd], label: input.getAttribute("aria-label"), placeholder: input.placeholder, focused: document.activeElement === input };
+    });
+  // Types `value` as the whole text of the field (value, then input).
+  const setField = (value: string) =>
+    browser.execute(
+      (v, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const input = document.querySelector<HTMLInputElement>("#orca-files-tree .orca-file-input")!;
+        input.value = v;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+      value,
+      onceId(),
+    );
+  // The pointer on the tree, as the page gets it (the tree listens for pointer events): for each step its kind and where it is, the row of a path (the press at its middle, a move or a release at four fifths of its width) or "empty", the part of the tree under its rows. The press goes to the row, the rest to the document.
+  const pointer = (steps: ["pointerdown" | "pointermove" | "pointerup", string][]) =>
+    browser.execute(
+      (list, once) => {
+        if (!window.__e2e_once__(once)) return;
+        for (const [type, where] of list) {
+          const tree = document.getElementById("orca-files-tree")!.getBoundingClientRect();
+          const target = where === "empty" ? null : document.querySelector(`.orca-file[data-path="${where}"]`)!;
+          const r = target?.getBoundingClientRect();
+          const [x, y] = r ? [r.left + r.width * (type === "pointerdown" ? 0.5 : 0.8), r.top + r.height / 2] : [tree.left + 20, tree.bottom - 12];
+          (type === "pointerdown" ? target! : document).dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 4, isPrimary: true }));
+        }
+      },
+      steps,
+      onceId(),
+    );
+  const dragRow = (from: string, to: string) =>
+    pointer([
+      ["pointerdown", from],
+      ["pointermove", to],
+      ["pointerup", to],
+    ]);
+  const dropMark = (path: string) => browser.execute((p) => (p === "" ? document.getElementById("orca-files-tree")! : document.querySelector<HTMLElement>(`.orca-file[data-path="${p}"]`)!).dataset.drop ?? null, path);
+  async function openSrc() {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await row("src").click();
+    await waitForCount("#orca-files-tree .orca-file", 6);
+  }
+
+  it("turns the row into a field with its path from the worktree, the keys in it and the name selected, when the move is chosen from the menu", async () => {
+    await openSrc();
+    await askMove("src/main.rs");
+    expect(await treeOrder()).toEqual(["src", "src/lib", "[field]", "target", "a.rs", "b.log"]);
+    // The name without its extension is selected: `main` of `src/main.rs`.
+    expect(await moveField()).toEqual({ value: "src/main.rs", selected: [4, 8], label: "移動先のパス", placeholder: "", focused: true });
+    await browser.keys("Escape");
+    await waitForCount(".orca-file-new", 0);
+    // A folder's name is selected whole, and the folder stays open under the field.
+    await askMove("src");
+    expect(await treeOrder()).toEqual(["[field]", "src/lib", "src/main.rs", "target", "a.rs", "b.log"]);
+    expect(await moveField()).toEqual({ value: "src", selected: [0, 3], label: "移動先のパス", placeholder: "", focused: true });
+  });
+
+  it("moves the entry to the path typed on Enter, with the worktree and both paths, and reads its folder again", async () => {
+    await openSrc();
+    const move = await mock("orca_file_move", null);
+    const list = await mock("orca_files_list", dirOf("src", [["lib", true], ["renamed.rs", false]]));
+    await askMove("src/main.rs");
+    // The keys replace the selected name.
+    await browser.keys("renamed");
+    await browser.keys("Enter");
+    expect(await waitForCalls(move)).toEqual([{ path: HERE, from: "src/main.rs", to: "src/renamed.rs", environment: null }]);
+    expect(await waitForCalls(list)).toEqual([{ path: HERE, dir: "src", ignored: false, environment: null }]);
+    await waitForCount(".orca-file-new", 0);
+    await browser.waitUntil(async () => (await names()).includes("renamed.rs"), { timeoutMsg: "the folder was never drawn again" });
+    expect(await treeOrder()).toEqual(["src", "src/lib", "src/renamed.rs", "target", "a.rs", "b.log"]);
+    await expect($("#error")).not.toBeDisplayed();
+    await browser.pause(200);
+    expect(await callsOf(list)).toHaveLength(1);
+  });
+
+  it("sends the trimmed path of another folder, and reads the folder it left and the nearest folder read of the one it went to", async () => {
+    await openSrc();
+    const move = await mock("orca_file_move", null);
+    const list = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await askMove("a.rs");
+    await setField("  src/new/deep/a.rs ");
+    await browser.keys("Enter");
+    expect(await waitForCalls(move)).toEqual([{ path: HERE, from: "a.rs", to: "src/new/deep/a.rs", environment: null }]);
+    // src/new and src/new/deep were never read: src is the nearest folder that was.
+    expect((await waitForCalls(list, 2)).map((c) => (c as { dir: string }).dir)).toEqual(["", "src"]);
+    await waitForCount(".orca-file-new", 0);
+  });
+
+  it("cancels the move on Escape, on a blank path, on the same path and when the field loses the keys unchanged, and calls nothing", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const move = await mock("orca_file_move", null);
+    await askMove("a.rs");
+    await setField("c.rs");
+    await browser.keys("Escape");
+    await waitForCount(".orca-file-new", 0);
+    await askMove("a.rs");
+    await setField("   ");
+    await browser.keys("Enter");
+    await waitForCount(".orca-file-new", 0);
+    await askMove("a.rs");
+    await browser.keys("Enter");
+    await waitForCount(".orca-file-new", 0);
+    await askMove("a.rs");
+    await blurField();
+    await waitForCount(".orca-file-new", 0);
+    await browser.pause(300);
+    expect(await callsOf(move)).toEqual([]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+  });
+
+  it("moves when the field loses the keys after another path was typed", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const move = await mock("orca_file_move", null);
+    await askMove("a.rs");
+    await setField("c.rs");
+    await blurField();
+    expect(await waitForCalls(move)).toEqual([{ path: HERE, from: "a.rs", to: "c.rs", environment: null }]);
+    await waitForCount(".orca-file-new", 0);
+  });
+
+  it("says the name is taken when Orca refuses the place, moves nothing and takes the field away", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const move = await mock("orca_file_move", rejects("同じ名前があります"));
+    const list = await mock("orca_files_list", dirOf("", []));
+    await askMove("a.rs");
+    await setField("b.log");
+    await browser.keys("Enter");
+    await waitForCalls(move);
+    await expect($("#error")).toHaveText("同じ名前があります");
+    await waitForCount(".orca-file-new", 0);
+    await browser.pause(300);
+    expect(await callsOf(list)).toEqual([]);
+    expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
+  });
+
+  it("moves a row dragged onto a folder into it, and reads the folder it left again", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const move = await mock("orca_file_move", null);
+    const list = await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["b.log", false]]));
+    await dragRow("a.rs", "src");
+    expect(await waitForCalls(move)).toEqual([{ path: HERE, from: "a.rs", to: "src/a.rs", environment: null }]);
+    // src is closed and was never read, so the root is what is read.
+    expect(await waitForCalls(list)).toEqual([{ path: HERE, dir: "", ignored: false, environment: null }]);
+    await waitForCount("#orca-files-tree .orca-file", 3);
+    expect(await names()).toEqual(["src", "target", "b.log"]);
+    // The press that ended the drag opened no folder, and nothing of the drag is left.
+    await expect(row("src")).toHaveAttribute("aria-expanded", "false");
+    await expect($(".orca-file-drag")).not.toExist();
+    expect(await dropMark("src")).toBeNull();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("marks the folder under a dragged row, shows the name at the pointer, and opens a closed folder the pointer rests on", async () => {
+    await openFiles();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const move = await mock("orca_file_move", null);
+    const list = await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
+    await pointer([
+      ["pointerdown", "a.rs"],
+      ["pointermove", "src"],
+    ]);
+    await expect($(".orca-file-drag")).toHaveText("a.rs");
+    expect(await dropMark("src")).toBe("true");
+    expect(await dropMark("target")).toBeNull();
+    expect(await dropMark("")).toBeNull();
+    // The pointer rests on src, which is closed: it opens, and is still the place of the drop.
+    expect(await waitForCalls(list)).toEqual([{ path: HERE, dir: "src", ignored: false, environment: null }]);
+    await expect(row("src")).toHaveAttribute("aria-expanded", "true");
+    await waitForCount("#orca-files-tree .orca-file", 6);
+    expect(await dropMark("src")).toBe("true");
+    expect(await callsOf(move)).toEqual([]);
+    // A folder inside it is a place too.
+    await pointer([["pointermove", "src/lib"]]);
+    expect(await dropMark("src/lib")).toBe("true");
+    expect(await dropMark("src")).toBeNull();
+    await pointer([["pointerup", "src/lib"]]);
+    expect(await waitForCalls(move)).toEqual([{ path: HERE, from: "a.rs", to: "src/lib/a.rs", environment: null }]);
+    await expect($(".orca-file-drag")).not.toExist();
+    expect(await dropMark("src/lib")).toBeNull();
+  });
+
+  it("moves a row dragged onto the empty part of the tree to the root of the worktree, and reads both folders again", async () => {
+    await openSrc();
+    const move = await mock("orca_file_move", null);
+    const list = await mock("orca_files_list", dirOf("src", [["lib", true]]));
+    await pointer([
+      ["pointerdown", "src/main.rs"],
+      ["pointermove", "empty"],
+    ]);
+    expect(await dropMark("")).toBe("true");
+    await pointer([["pointerup", "empty"]]);
+    expect(await waitForCalls(move)).toEqual([{ path: HERE, from: "src/main.rs", to: "main.rs", environment: null }]);
+    expect((await waitForCalls(list, 2)).map((c) => (c as { dir: string }).dir)).toEqual(["src", ""]);
+    expect(await dropMark("")).toBeNull();
+  });
+
+  it("does nothing for a row dropped on the folder it is in, on itself, inside itself, on a file and outside the tree", async () => {
+    await openSrc();
+    const move = await mock("orca_file_move", null);
+    // a.rs is in the root already, and src/main.rs in src.
+    await pointer([
+      ["pointerdown", "a.rs"],
+      ["pointermove", "empty"],
+    ]);
+    await expect($(".orca-file-drag")).toHaveText("a.rs");
+    expect(await dropMark("")).toBeNull();
+    await pointer([["pointerup", "empty"]]);
+    await dragRow("src/main.rs", "src");
+    // A folder on itself and on a folder inside it.
+    await dragRow("src", "src");
+    await pointer([
+      ["pointerdown", "src"],
+      ["pointermove", "src/lib"],
+    ]);
+    expect(await dropMark("src/lib")).toBeNull();
+    await pointer([["pointerup", "src/lib"]]);
+    // A file's row is no place.
+    await dragRow("a.rs", "b.log");
+    // Escape ends a drag: the release after it moves nothing.
+    await pointer([
+      ["pointerdown", "a.rs"],
+      ["pointermove", "src"],
+    ]);
+    expect(await dropMark("src")).toBe("true");
+    await browser.keys("Escape");
+    await expect($(".orca-file-drag")).not.toExist();
+    expect(await dropMark("src")).toBeNull();
+    await pointer([["pointerup", "src"]]);
+    await browser.pause(300);
+    expect(await callsOf(move)).toEqual([]);
+    await expect($(".orca-file-drag")).not.toExist();
+    expect(await names()).toEqual(["src", "lib", "main.rs", "target", "a.rs", "b.log"]);
+  });
+
+  it("gives the tab of a moved file its new path and title, keeps its typing, and saves it to the new path only after the move", async () => {
+    await openFiles();
+    await openA();
+    const move = await mock("orca_file_move", holds);
+    const write = await mock("orca_file_write", saved("sig-2"));
+    await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["b.log", false], ["c.rs", false]]));
+    await askMove("a.rs");
+    await setField("c.rs");
+    await browser.keys("Enter");
+    await waitForCalls(move);
+    // Typing while the move is on its way waits: nothing is saved to the path the file leaves.
+    await type("// x\n");
+    await browser.pause(400);
+    expect(await callsOf(write)).toEqual([]);
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+    await release(move, null);
+    await browser.waitUntil(async () => (await tabTitles())[1] === "c.rs", { timeoutMsg: "the tab never took the new name" });
+    await expect($(".orca-edit-path")).toHaveText("c.rs");
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// x\n", { trim: false });
+    expect(await waitForCalls(write)).toEqual([{ path: HERE, relative: "c.rs", content: "fn main() {}\n// x\n", crlf: false, signature: "sig-1", environment: null }]);
+    await expect(stateText()).toHaveText("保存しました");
+    // The moved file is the one drawn as open.
+    await expect(row("c.rs")).toHaveAttribute("data-open", "true");
+  });
+
+  it("gives the tabs of the files under a moved folder their new paths, and keeps the path of a tab when the move fails", async () => {
+    await openSrc();
+    await mock("orca_file_read", text("fn main() {}\n", "sig-m"));
+    await doublePress("src/main.rs");
+    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    const move = await mock("orca_file_move", rejects("Orca がエラーを返しました（forbidden）"));
+    await dragRow("src", "target");
+    await waitForCalls(move);
+    await expect($("#error")).toHaveText("Orca がエラーを返しました（forbidden）");
+    await expect($(".orca-edit-path")).toHaveText("src/main.rs");
+    await mock("orca_file_move", null);
+    await dragRow("src", "target");
+    expect(await waitForCalls(move)).toEqual([{ path: HERE, from: "src", to: "target/src", environment: null }]);
+    await expect($(".orca-edit-path")).toHaveText("target/src/main.rs");
+    expect(await tabTitles()).toEqual(["Write the docs", "main.rs"]);
   });
 
   // A-22: the download of a file. Rust opens the save dialog and writes where it says; the page sends the worktree, the path from it and the target, and never a place to save.
