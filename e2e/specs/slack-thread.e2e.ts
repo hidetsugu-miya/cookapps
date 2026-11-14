@@ -753,6 +753,16 @@ describe("slack thread: styles of a text (S-12)", () => {
     expect(await textsOf("#st-msgs .st-text")).toEqual([`see メッセージ ${url}`]);
   });
 
+  it("draws a mention of a user as a link to the profile, in a style too, and a user group as text (S-12)", async () => {
+    const profile = "https://example-team.slack.com/team/U2";
+    await openDetail({}, withRich({ rich: [para(span("hi "), linkSpan("@Bob", profile), span(" "), { ...linkSpan("@Bob", profile), bold: true }, span(" @design"))] }));
+    expect(await textsOf("#st-msgs .st-text a")).toEqual(["@Bob", "@Bob"]);
+    await expect($("#st-msgs .st-text > a")).toHaveAttribute("href", profile);
+    await expect($("#st-msgs .st-text > a")).toHaveAttribute("title", profile);
+    await expect($("#st-msgs .st-text strong a")).toHaveAttribute("href", profile);
+    expect(await textsOf("#st-msgs .st-text")).toEqual(["hi @Bob @Bob @design"]);
+  });
+
   it("draws an HTML tag in a styled text as text", async () => {
     const markup = "<b>x</b><img src=x onerror=alert(1)>";
     await openDetail({}, withRich({ rich: [para(span(markup, "b"), span(markup, "c")), quote(span(markup)), { type: "code", text: markup }] }));
