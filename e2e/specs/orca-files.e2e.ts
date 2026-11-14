@@ -1076,6 +1076,60 @@ describe("orca: files and editor (A-18)", () => {
     expect(await browser.execute(() => document.activeElement?.classList.contains("orca-edit-area"))).toBe(true);
   });
 
+  // A-17: the right button on a tab, as the page gets it.
+  const rightClickTab = (tab: string) =>
+    browser.execute(
+      (id, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`[data-tab="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+      },
+      tab,
+      onceId(),
+    );
+
+  it("adds the two copies, after a line under the split, to the menu of the tab of a file, with a line icon on each row and no colored dot (A-17)", async () => {
+    await openFiles();
+    await openA();
+    await stubClipboard();
+    await rightClickTab("file:1");
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "", "パスのコピー", "相対パスをコピー"]);
+    expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(1);
+    expect(await count('.menu[role="menu"] button svg')).toBe(4);
+    expect(await count('.menu[role="menu"] .pdot')).toBe(0);
+    // The split to the right is a square cut by a vertical line, the one below by a horizontal line.
+    const [right, below] = await browser.execute(() => [...document.querySelectorAll('.menu[role="menu"] button')].slice(0, 2).map((b) => b.querySelector("path")!.getAttribute("d")));
+    expect([right, below]).toEqual(["M12 4v16", "M3 12h18"]);
+    await pickItem("パスのコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the path was never copied" });
+    await expect($(".toast")).toHaveText(expect.stringContaining("パスをコピーしました"));
+    await expect($(".menu")).not.toExist();
+    await rightClickTab("file:1");
+    await pickItem("相対パスをコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the relative path was never copied" });
+    await expect($(".toast")).toHaveText(expect.stringContaining("相対パスをコピーしました"));
+    expect(await copiedTexts()).toEqual(["/work/example-app/a.rs", "a.rs"]);
+  });
+
+  it("has the two copies alone, with no line, on the tab of a file that is alone in its pane, and no menu on the Claude tab that is alone in its pane (A-17)", async () => {
+    await openFiles();
+    await openA();
+    await stubClipboard();
+    await mock("orca_panes", layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", ["file:1"])], sizes: [0.5, 0.5] }, "p2"));
+    await tabOf(claude).$(".orca-tab-btn").click();
+    await waitForCount(".orca-pane", 2);
+    await rightClickTab("file:1");
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    await pickItem("相対パスをコピー");
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the relative path was never copied" });
+    expect(await copiedTexts()).toEqual(["a.rs"]);
+    await rightClickTab(claude);
+    await browser.pause(300);
+    expect(await count(".menu")).toBe(0);
+  });
+
   it("opens a file that is open already by selecting its tab, and reads it again as it comes back into the pane: the text of the disk takes the place of the one held", async () => {
     await openFiles();
     await openA();
@@ -2122,6 +2176,18 @@ describe("orca: files and editor (A-18)", () => {
     return diff;
   }
 
+  it("has the split alone in the menu of the tab of a diff and of a Claude session, with no copy of a path (A-17)", async () => {
+    await openDiffOf();
+    await rightClickTab("diff:1");
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    await rightClickTab(claude);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+  });
+
   it("opens the diff of a file from the menu of its row with the worktree, its path and the target, as a tab that is selected (A-24)", async () => {
     const diff = await openDiffOf();
     expect(await waitForCalls(diff)).toEqual([{ path: "/work/example-app", relative: "a.rs", environment: null }]);
@@ -2365,7 +2431,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("orca_local_branches")).toEqual([{ path: "/work/example-app", environment: null }]);
     expect(await waitForCalls("orca_remote_branches")).toEqual([{ path: "/work/example-app", repo: "proj_example-app", query: "", environment: null }]);
     await waitForCount(".orca-dest-pop .orca-branch-row", 5);
-    expect(await textsOf(".orca-dest-pop .orca-dest-sec")).toEqual(["ローカル", "リモート"]);
+    expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["ローカル", "リモート"]);
     expect(await branchRows()).toEqual(["feat/a", "main", "feat/c", "origin/feat/a", "origin/feat/d"]);
     expect(await branchStates()).toEqual([
       ["local", "feat/a", "true", false],
@@ -2385,6 +2451,73 @@ describe("orca: files and editor (A-18)", () => {
     // The tree stays in view under the list.
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
     expect(await callsOf("orca_switch_branch")).toEqual([]);
+  });
+
+  // Remote branches as Orca lists them: origin/r1 to origin/r{n}.
+  const remotes = (n: number) => Array.from({ length: n }, (_, i) => remote(`origin/r${i + 1}`));
+  const remoteShown = () => shownRows('.orca-dest-pop .orca-branch-row[data-kind="remote"]');
+  const waitRemoteShown = (names: string[]) =>
+    browser.waitUntil(async () => JSON.stringify(await remoteShown()) === JSON.stringify(names), { timeoutMsg: `the remote rows never became ${names.join(", ")}` });
+  const moreButton = () => $(".orca-dest-more-btn");
+
+  it("draws the headings as a sticky band with an icon and the count, and shows the first five remote branches with a button for the rest that opens and folds them (A-25)", async () => {
+    await openBranches({ orca_remote_branches: remotes(7) });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 10);
+    expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["ローカル", "リモート"]);
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["3", "7"]);
+    expect(await count(".orca-dest-pop .orca-dest-sec .orca-dest-icon svg")).toBe(2);
+    const band = await browser.execute(() => {
+      const s = getComputedStyle(document.querySelector(".orca-dest-pop .orca-dest-sec")!);
+      return { position: s.position, size: s.fontSize, weight: s.fontWeight };
+    });
+    expect(band).toEqual({ position: "sticky", size: "13px", weight: "700" });
+    expect(await remoteShown()).toEqual(["origin/r1", "origin/r2", "origin/r3", "origin/r4", "origin/r5"]);
+    await expect(moreButton()).toBeDisplayed();
+    await expect(moreButton()).toHaveText("ほか 2 件を表示");
+    await expect(moreButton()).toHaveAttribute("aria-expanded", "false");
+    // The button is not a row of branches.
+    expect(await count(".orca-dest-pop .orca-branch-row .orca-dest-more-btn")).toBe(0);
+    await moreButton().click();
+    await expect($('.orca-dest-pop[role="dialog"]')).toBeDisplayed();
+    expect(await remoteShown()).toEqual(remotes(7).map((r) => r.name));
+    await expect(moreButton()).toHaveText("たたむ");
+    await expect(moreButton()).toHaveAttribute("aria-expanded", "true");
+    await moreButton().click();
+    expect(await remoteShown()).toEqual(["origin/r1", "origin/r2", "origin/r3", "origin/r4", "origin/r5"]);
+    await expect(moreButton()).toHaveText("ほか 2 件を表示");
+    await expect(moreButton()).toHaveAttribute("aria-expanded", "false");
+    expect(await callsOf("orca_switch_branch")).toEqual([]);
+  });
+
+  it("shows every match with no button while the filter has text, counts the matches, and folds the remote branches again when the text is cleared (A-25)", async () => {
+    await openBranches({ orca_remote_branches: remotes(7) });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 10);
+    await moreButton().click();
+    await waitRemoteShown(remotes(7).map((r) => r.name));
+    const input = $('.orca-dest-pop input[aria-label="ブランチを絞り込む"]');
+    await input.setValue("origin");
+    await waitRemoteShown(remotes(7).map((r) => r.name));
+    await expect(moreButton()).not.toBeDisplayed();
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["0", "7"]);
+    await input.setValue("r6");
+    await waitRemoteShown(["origin/r6"]);
+    await expect(moreButton()).not.toBeDisplayed();
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["0", "1"]);
+    await input.setValue("");
+    await waitRemoteShown(["origin/r1", "origin/r2", "origin/r3", "origin/r4", "origin/r5"]);
+    await expect(moreButton()).toBeDisplayed();
+    await expect(moreButton()).toHaveText("ほか 2 件を表示");
+    await expect(moreButton()).toHaveAttribute("aria-expanded", "false");
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["3", "7"]);
+  });
+
+  it("shows five remote branches or fewer with no line and no button (A-25)", async () => {
+    await openBranches({ orca_remote_branches: remotes(5) });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 8);
+    expect(await remoteShown()).toEqual(remotes(5).map((r) => r.name));
+    expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["3", "5"]);
+    await expect($(".orca-dest-more")).not.toBeDisplayed();
+    await expect(moreButton()).not.toBeDisplayed();
   });
 
   it("narrows the local branches by the filter at once, and asks for the remote ones once after the typing stops (A-25)", async () => {
@@ -2478,6 +2611,40 @@ describe("orca: files and editor (A-18)", () => {
     await branchPick("remote", "origin/feat/d").click();
     expect(await waitForCalls("orca_switch_branch")).toEqual([{ path: "/work/example-app", kind: "remote", name: "origin/feat/d", environment: null }]);
     await expect($(".orca-dest-pop")).not.toExist();
+  });
+
+  it("remembers the remote branch picked, with the project and the Orca, and a local branch not (A-25)", async () => {
+    await openBranches();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    await mock("orca_overview", onFeatC());
+    await branchPick("remote", "origin/feat/d").click();
+    expect(await waitForCalls("orca_branch_used")).toEqual([{ repo: "proj_example-app", name: "origin/feat/d", environment: null }]);
+    await waitForCalls("orca_switch_branch");
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    const used = await mock("orca_branch_used", null);
+    await branchPick("local", "feat/a").click();
+    await branchButton().click();
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    await branchPick("local", "feat/c").click();
+    await waitForCalls("orca_switch_branch", 2);
+    await browser.pause(300);
+    expect(await callsOf(used)).toEqual([]);
+  });
+
+  it("switches and shows no error when remembering the remote branch picked fails (A-25)", async () => {
+    await openBranches({ orca_branch_used: rejects("orca-branch-recent.json を書けません") });
+    await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+    await mock("orca_overview", onFeatC());
+    await branchPick("remote", "origin/feat/d").click();
+    expect(await waitForCalls("orca_branch_used")).toHaveLength(1);
+    expect(await waitForCalls("orca_switch_branch")).toEqual([{ path: "/work/example-app", kind: "remote", name: "origin/feat/d", environment: null }]);
+    await expect($(".orca-dest-pop")).not.toExist();
+    await expect($("#orca-files-title")).toHaveText("example-app ・ feat/c");
+    await browser.pause(300);
+    await expect($("#error")).not.toBeDisplayed();
+    // The notice element is always in the page and only hidden when nothing is said.
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   it("only closes the list on the branch the worktree is on, and calls nothing on a branch in use (A-25)", async () => {

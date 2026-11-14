@@ -78,6 +78,8 @@ const answers = {
   orca_open_url: null,
   orca_attach_file: { text: "/work/example/.orca/drops/image.png ", bracketed: true },
   orca_files_ignored: [],
+  // A-25: the pick of a remote branch is remembered by Rust; a spec that checks it, or its failure, mocks `orca_branch_used`.
+  orca_branch_used: null,
   // A-20: the fonts of the screens are read at the start (the first values), and this Mac has three families; a spec that presses a select mocks `font_settings_set`.
   font_settings: {
     app: { family: null, size: 14, ghostty: false },
