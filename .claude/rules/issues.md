@@ -72,6 +72,25 @@ Good: the owner writes "this is urgent" in the session -> the agent adds urgency
 Bad:  a bug looks serious to the agent -> the agent adds urgency:high (rate its importance instead)
 ```
 
+### Use `session` only on the owner's word
+
+`session` marks an issue that the night run does not take: the owner implements it in a session, in one go (at the owner's instruction, 2026-11-14). It is for a large feature, such as the database screen or the Notion integration, that should not advance a little each night.
+`session` is put on an issue by the owner, or by an agent that follows the owner's word ("do it in a session", "implement it in one go", "keep it out of the night run"). An agent never adds it on its own judgment, and removes it only on the owner's word.
+An issue with `session` is in the order like any other: the label changes no rule of the order (the tiers, the blockers, the points).
+The night run (`nightly.sh ship`, which sets `NIGHTLY_DEADLINE_EPOCH`) does not start it: `plan-release.py next` leaves it out of `start` and lists its number in `waits_for_session`, `nightly-limit.sh issue {n}` answers no for it with exit 3, and the hand-over names it as waiting for a session. An issue that it blocks does not start in the night either, as with any open blocker.
+A session of the owner is not changed by the label: `ship` takes the issue in the order of the plan, and the issues the owner names may be in one pull request ("Run `ship` once a day at 00:30" below).
+When `issue-plan` splits a large issue with `session`, every part has `session`; `plan-release.py split` refuses a split where a part lacks it, and writes nothing.
+`solo` and the unit rule stay as they are. A part with both `session` and `solo` does not start in the night, because of `session`.
+
+```text
+Good: the owner says "implement the Notion integration in one go, in a session" -> the agent adds session and says whose word it was
+Good: #60 has session and is first in the plan -> the 00:30 run starts the next issue, and its hand-over says that #60 waits for a session
+Good: the owner says "do the parts of the database screen" in a session -> the session takes the parts with session in the order of the plan, in one pull request
+Bad:  an issue looks large to the agent -> the agent adds session
+Bad:  the 00:30 run starts one part with session because it fits the 10 points
+Bad:  a part of a split issue with session is made without session, and the night run starts it
+```
+
 ### Rate the importance of an issue when you first read it
 
 `importance:high` and `importance:low` are put by whoever reads the issue first, with the reason as a one-line comment; no label means normal. Do not change a label the owner set (at the owner's instruction, 2026-11-06; Discussion #136).
@@ -96,10 +115,10 @@ Bad:  add status:doing and status:merged, and keep them in step with the pull re
 ### Order every issue, and give a feature its own milestone, with `issue-plan`
 
 A milestone is a feature, not a version: it is named for the feature ("Orca files"), and a closed one is a feature that has been released (at the owner's instruction, 2026-11-09; Discussion #293). Only a `point:5` or `point:8` issue starts one.
-`issue-plan` splits such an issue into issues of `point:3` or less, puts them in the milestone, and closes the large issue as not planned with a comment that lists the parts, through `plan-release.py split`, which checks everything before it writes and closes the large issue only when every part exists. When the large issue is `point:8`, it gives every part the label `solo`, so that the parts keep the rule of a `point:8` change in the night run ("Run `ship`" and "Keep one Release PR open" below). An issue that cannot be split into parts that merge one by one stays one issue and is alone in its milestone.
+`issue-plan` splits such an issue into issues of `point:3` or less, puts them in the milestone, and closes the large issue as not planned with a comment that lists the parts, through `plan-release.py split`, which checks everything before it writes and closes the large issue only when every part exists. When the large issue is `point:8`, it gives every part the label `solo`, so that the parts keep the rule of a `point:8` change in the night run ("Run `ship`" and "Keep one Release PR open" below). When the large issue has `session`, it gives every part `session` too ("Use `session` only on the owner's word" above). An issue that cannot be split into parts that merge one by one stays one issue and is alone in its milestone.
 An issue of `point:3` or less that belongs to no feature has no milestone. A milestone does not decide the order, a version or the release.
 `plan-release.py close` closes a milestone once all its issues are closed and released.
-Every open issue is ordered, `needs:owner` included: it waits unstarted. `release-planner` decides the order from how the issues relate, and `plan-release.py` checks it against the hard rules below and saves it; `ship` takes the issues from the front.
+Every open issue is ordered, `needs:owner` included: it waits unstarted. An issue with `session` is ordered by the same rules, and only the night run leaves it unstarted. `release-planner` decides the order from how the issues relate, and `plan-release.py` checks it against the hard rules below and saves it; `ship` takes the issues from the front.
 The hard rules of the order are checked by `plan-release.py`, which refuses a plan that breaks one (at the owner's instruction, 2026-11-06; Discussion #136):
 - Issues in progress and waiting for a release (fixed) stay at the front and do not move.
 - An issue comes after the issues it depends on.
@@ -157,6 +176,7 @@ Bad:  a run files a UI change as an issue with no needs:owner
 The job runs only at 00:30 (at the owner's instruction, 2026-11-07: the three runs a day of Discussion #136 were too complicated; at the owner's instruction, 2026-11-08: improvement-proposal at 22:00 and issue-dev (now `ship`) at 00:30; the run between them that decided Discussions was retired at the owner's instruction, 2026-11-09; the job at 22:00 was retired at the owner's instruction, 2026-11-12; #485).
 A run lasts 3 hours at most. `nightly.sh` hands the run the end of its 3 hours as `NIGHTLY_DEADLINE_EPOCH`, and the skill asks `nightly-limit.sh issue {n} --taken {numbers}` before it starts each issue; nothing kills the process.
 A run takes the issues in the order of the plan (`plan-release.py next`, `start`) until their points reach 10 (at the owner's instruction, 2026-11-09; Discussion #293). `nightly-limit.sh` decides it from the `point:*` labels: exit 3 means that issue does not fit, and a smaller issue further down may still be tried; exit 1 means the 3 hours are over, and nothing more starts.
+The night run does not start an issue with `session`, nor an issue that one blocks: `plan-release.py next` leaves it out of `start` and lists it in `waits_for_session`, `nightly-limit.sh` answers exit 3 for it, and the hand-over names it as waiting for a session of the owner (at the owner's instruction, 2026-11-14; "Use `session` only on the owner's word" above). A session of the owner takes it like any issue.
 The run does all its issues in the one worktree (`worktree.md`), on one branch, as commits, and opens one pull request for them (`Closes #a` and `Closes #b` in its body); `review.md` runs once, on the range of that pull request.
 Issues whose files do not overlap are implemented at the same time, by `code-implementer` launches in one message, one commit for each issue; issues that overlap are implemented one after another (at the owner's instruction, 2026-11-12; #485). `run-ci.sh` runs on the HEAD of each such bundle, and `run-e2e.sh` once, after the last implementation; E2E is not run between issues. A failed spec is run again alone with `run-e2e.sh --only` (`e2e.md`) until it passes, before the whole run.
 Before the reorder, the night run files one improvement of its own and takes it first (at the owner's instruction, 2026-11-12; #485). It launches `refactor-scout` and `harness-scout` in one message, verifies the candidates as `improvement-proposal` does, and keeps at most one, of the kind the AI may decide ("Let the proposal agent file issues in a session" above) and of `point:3` or less, as an issue through `issue-plan` with `proposal`, no `needs:owner`, and a section `AI が決めたこと`. It is implemented on the run's branch before the issues of the plan, in the same pull request, and its points count in the 10. When the unit rule leaves nothing to start (`stop`), or the run implements a unit, it files the issue and implements nothing of it. When no candidate holds, it files nothing and the hand-over says why. A session does not take this step.
@@ -170,11 +190,13 @@ A run leaves alone what a session of the owner may hold: the worktree when it is
 ```text
 Good: the 00:30 run takes #41 (3), #42 (2) and #44 (3), the next issue is 3 points -> nightly-limit.sh says exit 3 -> it tries a 2-point issue, and one pull request closes them all
 Good: #41 and #42 touch different files -> two `code-implementer` launches in one message, one commit each, `run-ci.sh` on the bundle's HEAD, and `run-e2e.sh` once at the end
+Good: #60 has `session` and is first in the plan -> the 00:30 run leaves it, takes #41 next, and writes in the hand-over that #60 waits for a session
 Good: the improvement it filed is 2 points, #41 is 3 and #42 is 3 -> 2 + 3 + 3 = 8, and #44 (3) does not fit
 Good: the worktree is in use by a session's branch with uncommitted changes or unpushed commits -> the run touches nothing and says so in the hand-over
 Good: the owner says "do #41, a `solo` part, and #42 together" in a session -> one pull request closes both, and one Release PR carries them
 Bad:  the 00:30 run starts a fourth issue because 3 hours are not over, with 11 points in hand
 Bad:  the 00:30 run starts #42 in the same night as the `solo` parts of #41, because a session once bundled them
+Bad:  the 00:30 run starts #60, which has `session`, because the night has points left
 Bad:  the 00:30 run merges the Release PR because the change is urgent (it notifies the owner instead)
 Bad:  the 00:30 run runs `run-e2e.sh` after every issue
 Bad:  the 00:30 run files a night improvement that needs `needs:owner`, or one of 5 points, and implements it

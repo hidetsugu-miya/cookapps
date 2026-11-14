@@ -382,6 +382,35 @@ class Next(unittest.TestCase):
         out = pr.build_next([mk(1, ["point:2"]), waiting(2, ["point:8"])], set(), frozenset(), None)
         self.assertEqual(out["start"], [])
 
+    def test_the_night_run_does_not_start_a_session_issue_and_lists_its_number(self):
+        issues = [mk(1, ["point:2"]), mk(2, ["point:3", "session"]), mk(3, ["point:2"], blocked=[2]), mk(4, ["point:3", "session", "solo"], milestone="Notion")]
+        out = pr.build_next(issues, set(), frozenset(), {"order": [2, 1, 3, 4]})
+        self.assertEqual([i["number"] for i in out["start"]], [1])
+        self.assertEqual(out["waits_for_session"], [2, 4])
+        self.assertEqual(out["waits_for_release"], [])
+        self.assertEqual([b["number"] for b in out["blocked"]], [3])
+        self.assertIsNone(out["stop"])
+
+    def test_a_session_issue_that_waits_is_listed_when_the_night_run_stops_too(self):
+        out = pr.build_next([mk(1, ["point:3", "session"]), waiting(2, ["point:8"])], set(), frozenset(), None)
+        self.assertEqual(out["start"], [])
+        self.assertEqual(out["waits_for_session"], [1])
+        self.assertIsNotNone(out["stop"])
+
+    def test_a_session_of_the_owner_starts_a_session_issue_in_the_order_of_the_plan(self):
+        issues = [mk(1, ["point:2"]), mk(2, ["point:3", "session"]), mk(3, ["point:3", "session", "solo"], milestone="Notion")]
+        out = pr.build_next(issues, set(), frozenset(), {"order": [2, 1, 3]}, night=False)
+        self.assertEqual([i["number"] for i in out["start"]], [2, 1, 3])
+        self.assertEqual(out["waits_for_session"], [])
+
+    def test_a_session_issue_in_hand_needs_owner_or_held_keeps_its_own_list(self):
+        issues = [mk(1, ["point:3", "session"]), mk(2, ["point:3", "session", "needs:owner"]), mk(3, ["point:3", "session"])]
+        out = pr.build_next(issues, {3}, frozenset({1}), None)
+        self.assertEqual([i["number"] for i in out["in_progress"]], [1])
+        self.assertEqual([i["number"] for i in out["needs_owner"]], [2])
+        self.assertEqual([i["number"] for i in out["held"]], [3])
+        self.assertEqual(out["waits_for_session"], [])
+
     def test_the_issues_the_plan_lacks_come_last_by_tier_then_quick_bug_then_points(self):
         issues = [
             mk(1, ["point:1"]),
@@ -934,6 +963,7 @@ class Split(unittest.TestCase):
             "unknown label": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "nope"))]}, "'nope' does not exist"),
             "same title": (self.big(), {"issue": 438, "milestone": "f", "parts": [part("a"), part("a")]}, "appears twice"),
             "point 8 without solo": (self.big(("point:8",)), {"issue": 438, "milestone": "f", "parts": [part("a"), part("b", ("point:3", "solo"))]}, "needs the label solo"),
+            "session without session": (self.big(("point:5", "session")), {"issue": 438, "milestone": "f", "parts": [part("a"), part("b", ("point:3", "session"))]}, "needs the label session"),
             "unknown issue": (self.big(), {"issue": 999, "milestone": "f", "parts": one}, "#999"),
             "not a split file": (self.big(), {"issue": "x", "milestone": "", "parts": [{"title": "a"}]}, "split.issue"),
         }
@@ -975,6 +1005,28 @@ class Split(unittest.TestCase):
         code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "solo"))]})
         self.assertEqual(code, 0)
         self.assertEqual(fake.written("label"), [])
+
+    def test_a_session_issue_gives_every_part_session_and_makes_the_label_when_it_is_missing(self):
+        fake = self.big(("point:8", "session"))
+        spec = {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "solo", "session")), part("b", ("point:3", "solo", "session"))]}
+        code, _, err = self.run_split(fake, spec)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual([w[2] for w in fake.written("label", "create")], ["solo", "session"])
+        self.assertLess(fake.writes.index(fake.written("label", "create")[1]), fake.writes.index(fake.written("issue", "create")[0]))
+        self.assertTrue(all("session" in [x["name"] for x in fake.issues[n]["labels"]] for n in (501, 502)))
+
+    def test_session_that_exists_is_not_made_again(self):
+        fake = self.big(("point:5", "session"))
+        fake.labels.append("session")
+        code, _, _ = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "session"))]})
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.written("label"), [])
+
+    def test_a_part_may_have_session_when_the_big_issue_has_none(self):
+        fake = self.big()
+        code, _, err = self.run_split(fake, {"issue": 438, "milestone": "f", "parts": [part("a", ("point:3", "session")), part("b")]})
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual([w[2] for w in fake.written("label", "create")], ["session"])
 
     def test_a_failed_part_stops_the_run_and_the_big_issue_stays_open(self):
         fake = self.big()
@@ -1387,11 +1439,14 @@ class NightlyLimit(unittest.TestCase):
     """nightly-limit.sh with the points and the clock given by the environment."""
 
     # "{issue number} {points} [{unit}]": the unit is `i{n}` for a point:8 issue, `m:{milestone}` for a `solo` part, and nothing for any other issue
-    POINTS = "1 1\n2 2\n3 3\n5 5\n8 8 i8\n9 3\n10 3\n11 3 m:Slack thread\n12 3 m:Slack thread\n13 2 m:Slack thread\n14 3 m:Orca files\n15 8 i15\n16 3 m:Slack thread\n17 3 m:Slack thread\n"
+    POINTS = "1 1\n2 2\n3 3\n5 5\n8 8 i8\n9 3\n10 3\n11 3 m:Slack thread\n12 3 m:Slack thread\n13 2 m:Slack thread\n14 3 m:Orca files\n15 8 i15\n16 3 m:Slack thread\n17 3 m:Slack thread\n20 3\n21 3 m:Notion\n22 3 m:Notion\n"
+    # the issues with the label `session`
+    SESSION = "20,21,22"
 
     def run_limit(self, *args, deadline=2000, now=1000):
         env = {k: v for k, v in os.environ.items() if not k.startswith("NIGHTLY_")}
         env["NIGHTLY_POINTS_LIST"] = self.POINTS
+        env["NIGHTLY_SESSION_LIST"] = self.SESSION
         if deadline is not None:
             env["NIGHTLY_DEADLINE_EPOCH"] = str(deadline)
             env["NIGHTLY_NOW_EPOCH"] = str(now)
@@ -1442,6 +1497,19 @@ class NightlyLimit(unittest.TestCase):
         self.assertEqual(self.run_limit("issue", "8", "--taken", "11")[0], 3)
         self.assertEqual(self.run_limit("issue", "11", "--taken", "8")[0], 3)
         self.assertEqual(self.run_limit("issue", "15", "--taken", "8")[0], 3)
+
+    def test_the_night_run_does_not_start_a_session_issue(self):
+        code, text = self.run_limit("issue", "20")
+        self.assertEqual(code, 3, text)
+        self.assertIn("session", text)
+        self.assertEqual(self.run_limit("issue", "20", "--taken", "1")[0], 3)
+        self.assertEqual(self.run_limit("issue", "21")[0], 3)  # `session` and `solo`
+        self.assertEqual(self.run_limit("issue", "22", "--taken", "21")[0], 3)
+        self.assertEqual(self.run_limit("issue", "1")[0], 0)
+
+    def test_a_session_of_the_owner_starts_a_session_issue(self):
+        self.assertEqual(self.run_limit("issue", "20", deadline=None)[0], 0)
+        self.assertEqual(self.run_limit("issue", "21", "--taken", "20,1,5,8", deadline=None)[0], 0)
 
     def test_the_parts_of_a_unit_still_keep_to_ten_points(self):
         code, text = self.run_limit("issue", "17", "--taken", "11,12,16")  # 3 + 3 + 3 + 3 = 12
