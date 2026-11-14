@@ -7,7 +7,7 @@
 //! The text goes through a textarea, which turns CRLF into LF and cannot hold a lone CR, so only a file with no CR or with a CRLF at every line end is opened (`line_ending`), and a CRLF file is written back with CRLF.
 //! The time of the automatic save is saved in `editor-settings.json` in the app config directory.
 //! The difference of a file from HEAD (A-24, `orca_file_diff`) is Orca's `git.diff` (`staged` false, `compareAgainstHead` true): the text at HEAD and the text in the working tree, which `orca_diff.rs` turns into rows.
-//! The branches of a worktree (`orca_local_branches`, `git.localBranches`) and the remote branches found by a text (`orca_remote_branches`, `repo.searchRefs` with `namespace` `remote`) are read here too, for the branch button of the file pane.
+//! The branches of a worktree (`orca_local_branches`, `git.localBranches`) and the remote branches found by a text (`orca_remote_branches`, `repo.searchRefs` with `namespace` `remote`) are read here too, for the branch button of the file pane. The remote branches picked in the list are remembered for each repository of each Orca (`orca_branch_used`, `orca-branch-recent.json`), and `orca_remote_branches` puts them first when the text is empty.
 //! The branch of a worktree is switched here too (`orca_switch_branch`, `git.switchBranch`): a local or a remote branch, never a new one, and Orca's refusal is shown in its own words.
 //! The commits of a worktree (`orca_git_history`, `git.history`: HEAD first, the newest first, read `limit` at a time with `skip`, on the history that the token of the first answer pins) and the files a commit changed (`orca_commit_files`, `git.commitCompare`) are read here too, for the history of the file pane. Both only read; a subject, an author and a path are held in memory only and are in no log line. They were tried on this machine's Orca 1.4.258 over its unix socket (a saved environment was not tried).
 //! The difference of one file of a commit (`orca_commit_file_diff`, `git.commitDiff`: the text at the first parent and at the commit, in the shape of `git.diff`) is drawn as A-24's diff is (`parse_diff`). The text is held in memory only and is in no log line.
@@ -94,6 +94,14 @@ const BRANCH_LIMIT: u32 = 50;
 const MAX_QUERY: usize = 2048;
 /// The longest repository id, in bytes.
 const MAX_REPO: usize = 256;
+/// The longest remote branch name that is remembered, in bytes.
+const MAX_BRANCH_NAME: usize = 512;
+/// The file of the remote branches picked in the list of branches (A-25), in the app config directory.
+const RECENT_FILE: &str = "orca-branch-recent.json";
+/// How many remote branches are remembered for one repository of one Orca, which is how many the list shows first.
+const RECENT_BRANCHES: usize = 5;
+/// How many repositories (of one Orca each) are remembered; the ones picked from longest ago are dropped, so the file does not grow without end.
+const RECENT_PAIRS: usize = 50;
 
 // ---- what the screen gets ----
 
@@ -1307,6 +1315,141 @@ fn check_query(query: &str) -> Result<(), String> {
     }
 }
 
+/// A remote branch name to remember: not blank, no control character, and not longer than `MAX_BRANCH_NAME`.
+fn check_branch_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() || name.len() > MAX_BRANCH_NAME || name.chars().any(char::is_control)
+    {
+        Err("ブランチの名前が正しくありません".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// The name of a saved environment, as the commands of this module take it (`None` is this machine): not blank, no control character, and not longer than `MAX_REPO`. Only its shape is checked, because the name is kept as a key and no connection is opened.
+fn check_environment(environment: Option<&str>) -> Result<(), String> {
+    match environment {
+        Some(e) if e.trim().is_empty() || e.len() > MAX_REPO || e.chars().any(char::is_control) => {
+            Err("接続先が正しくありません".into())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The remote branches picked in the list of branches of one repository of one Orca, the newest pick first (`orca-branch-recent.json`, A-25).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct RecentPair {
+    environment: Option<String>,
+    repo: String,
+    names: Vec<String>,
+}
+
+/// The file as it is saved: the pairs, the one picked from last first.
+#[derive(Serialize, Deserialize, Default)]
+struct RecentFile {
+    pairs: Vec<RecentPair>,
+}
+
+/// The pairs of the file's text. A text that is not the shape of the file gives none, and a file with more than the limits is cut to them.
+fn parse_recent(text: &str) -> Vec<RecentPair> {
+    let Ok(mut file) = serde_json::from_str::<RecentFile>(text) else {
+        return Vec::new();
+    };
+    file.pairs.truncate(RECENT_PAIRS);
+    for pair in &mut file.pairs {
+        pair.names.truncate(RECENT_BRANCHES);
+    }
+    file.pairs
+}
+
+/// `pairs` with `name` put first among the branches of the pair (`environment`, `repo`), which is itself put first: a name picked again moves up, at most `RECENT_BRANCHES` names are kept for a pair, and the pairs that fall past `RECENT_PAIRS` are the ones picked from longest ago.
+fn remember_branch(
+    mut pairs: Vec<RecentPair>,
+    environment: Option<&str>,
+    repo: &str,
+    name: &str,
+) -> Vec<RecentPair> {
+    let mut pair = pairs
+        .iter()
+        .position(|p| p.environment.as_deref() == environment && p.repo == repo)
+        .map(|i| pairs.remove(i))
+        .unwrap_or_else(|| RecentPair {
+            environment: environment.map(str::to_owned),
+            repo: repo.to_owned(),
+            names: Vec::new(),
+        });
+    pair.names.retain(|n| n != name);
+    pair.names.insert(0, name.to_owned());
+    pair.names.truncate(RECENT_BRANCHES);
+    pairs.insert(0, pair);
+    pairs.truncate(RECENT_PAIRS);
+    pairs
+}
+
+/// The names remembered for the pair (`environment`, `repo`), the newest first.
+fn recent_names(pairs: &[RecentPair], environment: Option<&str>, repo: &str) -> Vec<String> {
+    pairs
+        .iter()
+        .find(|p| p.environment.as_deref() == environment && p.repo == repo)
+        .map(|p| p.names.clone())
+        .unwrap_or_default()
+}
+
+/// The remembered branches (`recent`, the newest first) that an answer of the empty text lacks, because Orca gives only its first `BRANCH_LIMIT`: each is asked of Orca by its name, and it is added to `found` only when Orca answers a branch of exactly that name (a branch that is gone is not added). A name that cannot be asked, or a question that fails, adds nothing and does not fail the list. At most `RECENT_BRANCHES` questions are asked (A-25).
+async fn add_missing_recent(
+    rpc: &mut impl Rpc,
+    repo: &str,
+    found: &mut Vec<OrcaRemoteBranch>,
+    recent: &[String],
+) {
+    for name in recent.iter().take(RECENT_BRANCHES) {
+        if found.iter().any(|b| &b.name == name) || check_query(name).is_err() {
+            continue;
+        }
+        let Ok(by_name) = remote_branches(rpc, repo, name).await else {
+            continue;
+        };
+        if let Some(branch) = by_name.into_iter().find(|b| &b.name == name) {
+            found.push(branch);
+        }
+    }
+}
+
+/// The answer of a search with the remembered branches first (A-25). With a text in `query` the answer is left as Orca gave it. With none, the branches of `recent` (the newest first) that the answer holds come first in that order, and the others follow in Orca's order; a remembered branch that the answer lacks is not added.
+fn recent_first(
+    branches: Vec<OrcaRemoteBranch>,
+    query: &str,
+    recent: &[String],
+) -> Vec<OrcaRemoteBranch> {
+    if !query.is_empty() {
+        return branches;
+    }
+    let mut rest = branches;
+    let mut first = Vec::with_capacity(rest.len());
+    for name in recent {
+        if let Some(i) = rest.iter().position(|b| &b.name == name) {
+            first.push(rest.remove(i));
+        }
+    }
+    first.extend(rest);
+    first
+}
+
+/// The pairs saved in `dir`: a file that is missing, cannot be read or is not the shape of the file gives none.
+fn load_recent(dir: &Path) -> Vec<RecentPair> {
+    std::fs::read_to_string(dir.join(RECENT_FILE))
+        .map(|text| parse_recent(&text))
+        .unwrap_or_default()
+}
+
+/// Remembers that `name` was picked in the list of branches of `repo` of `environment`. One write at a time reads the file again, changes it and writes it all.
+fn use_branch(dir: &Path, environment: Option<&str>, repo: &str, name: &str) -> Result<(), String> {
+    static WRITING: Mutex<()> = Mutex::new(());
+    let _one_at_a_time = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+    let pairs = remember_branch(load_recent(dir), environment, repo, name);
+    let text = serde_json::to_string_pretty(&RecentFile { pairs }).map_err(|e| e.to_string())?;
+    write_atomic(dir, RECENT_FILE, &text)
+}
+
 /// The message of a failed read of the branches: a worktree or a repository Orca does not know says so, any other failure is `reason`'s.
 fn branch_reason(error: CallError) -> String {
     match error.detail.as_str() {
@@ -1732,8 +1875,10 @@ pub async fn orca_local_branches(
 }
 
 /// The remote branches whose names hold `query`, at most 50, of the repository `repo` (`OrcaProject::key`) of the worktree at `path`. The worktree must be one of the target's list, as for the list, and `repo` its project.
+/// With an empty `query` the branches picked before in the list (`orca_branch_used`) come first, the newest first (`recent_first`); one that the first 50 lack is asked of Orca by its name (`add_missing_recent`). A file that cannot be read changes nothing.
 #[tauri::command]
 pub async fn orca_remote_branches(
+    app: AppHandle,
     path: String,
     repo: String,
     query: String,
@@ -1743,11 +1888,50 @@ pub async fn orca_remote_branches(
     check_query(&query)?;
     let (_, project) = cached_host_and_project_of(&path, environment.as_deref()).await?;
     check_same_repo(&project, &repo)?;
+    let recent = if query.is_empty() {
+        remembered(&app, environment.as_deref(), &repo).await
+    } else {
+        Vec::new()
+    };
     let asked = async {
         let mut connection = Connection::open(environment.clone()).await?;
-        remote_branches(&mut connection, &repo, &query).await
+        let mut found = remote_branches(&mut connection, &repo, &query).await?;
+        add_missing_recent(&mut connection, &repo, &mut found, &recent).await;
+        Ok(found)
     };
-    forgetting(asked.await, &path, environment.as_deref())
+    let found = forgetting(asked.await, &path, environment.as_deref())?;
+    Ok(recent_first(found, &query, &recent))
+}
+
+/// The names remembered for the repository `repo` of `environment` (the newest first); none when the config folder or the file cannot be read.
+async fn remembered(app: &AppHandle, environment: Option<&str>, repo: &str) -> Vec<String> {
+    let Ok(dir) = config_dir(app) else {
+        return Vec::new();
+    };
+    let environment = environment.map(str::to_owned);
+    let repo = repo.to_owned();
+    tokio::task::spawn_blocking(move || {
+        recent_names(&load_recent(&dir), environment.as_deref(), &repo)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Remembers that the remote branch `name` (as Orca names it) was picked in the list of branches of the repository `repo` (`OrcaProject::key`) of `environment` (`None` is this machine), so that `orca_remote_branches` shows it first (A-25). It only writes `orca-branch-recent.json`: nothing is asked of Orca.
+#[tauri::command]
+pub async fn orca_branch_used(
+    app: AppHandle,
+    repo: String,
+    name: String,
+    environment: Option<String>,
+) -> Result<(), String> {
+    check_repo(&repo)?;
+    check_branch_name(&name)?;
+    check_environment(environment.as_deref())?;
+    let dir = config_dir(&app)?;
+    tokio::task::spawn_blocking(move || use_branch(&dir, environment.as_deref(), &repo, &name))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Switches the worktree at `path` to a local branch, or to a remote one (`kind` `remote`, `name` like `origin/feature/a`; Orca makes the local branch). `kind` `new` is refused. This writes to the worktree, so the target's list is read each time, as a save does, and what was believed of the worktree is thrown away after the call, whatever it answered. Orca's refusal comes back in its own words.
@@ -4581,5 +4765,282 @@ mod tests {
         std::fs::write(dir.join(SETTINGS_FILE), "{\"autosaveMs\": 9000}").unwrap();
         assert_eq!(load_settings(&dir).autosave_ms, 3000);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn names_of(branches: &[OrcaRemoteBranch]) -> Vec<&str> {
+        branches.iter().map(|b| b.name.as_str()).collect()
+    }
+
+    fn answer(names: &[&str]) -> Vec<OrcaRemoteBranch> {
+        names.iter().map(|n| remote(n, n)).collect()
+    }
+
+    fn strings(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| (*n).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_remembered_branches_come_first_in_their_order_and_the_rest_keeps_the_order_of_orca() {
+        let found = answer(&["origin/a", "origin/b", "origin/c", "origin/d", "origin/e"]);
+        let recent = strings(&["origin/d", "origin/b"]);
+        let ordered = recent_first(found, "", &recent);
+        assert_eq!(
+            names_of(&ordered),
+            ["origin/d", "origin/b", "origin/a", "origin/c", "origin/e"]
+        );
+        // The rest of a branch is its own: the local name goes with it.
+        assert_eq!(ordered[0], remote("origin/d", "origin/d"));
+    }
+
+    #[test]
+    fn a_remembered_branch_that_the_answer_lacks_is_not_added() {
+        let found = answer(&["origin/a", "origin/b"]);
+        let recent = strings(&["origin/gone", "origin/b", "origin/also-gone"]);
+        assert_eq!(
+            names_of(&recent_first(found, "", &recent)),
+            ["origin/b", "origin/a"]
+        );
+    }
+
+    /// Orca's side of a search by name: the answer of each text, and the texts asked.
+    struct ByName {
+        answers: HashMap<&'static str, Value>,
+        asked: Vec<String>,
+    }
+
+    impl Rpc for ByName {
+        async fn call(&mut self, _method: &str, params: Value) -> Result<Value, CallError> {
+            let query = params["query"].as_str().unwrap_or_default().to_owned();
+            self.asked.push(query.clone());
+            self.answers
+                .get(query.as_str())
+                .cloned()
+                .ok_or_else(|| CallError {
+                    shown: "no answer".into(),
+                    detail: String::new(),
+                })
+        }
+    }
+
+    fn by_name(answers: Vec<(&'static str, &[&str])>) -> ByName {
+        ByName {
+            answers: answers
+                .into_iter()
+                .map(|(query, names)| {
+                    let details: Vec<Value> = names
+                        .iter()
+                        .map(|n| json!({"refName": n, "localBranchName": n}))
+                        .collect();
+                    (query, json!({"refDetails": details}))
+                })
+                .collect(),
+            asked: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_remembered_branch_outside_the_first_answer_is_asked_by_its_name_and_comes_first() {
+        let mut orca = by_name(vec![
+            ("origin/old", &["origin/old", "origin/older"]),
+            ("origin/gone", &["origin/gone-not"]),
+            ("origin/err", &[]),
+        ]);
+        orca.answers.remove("origin/err");
+        let mut found = answer(&["origin/a", "origin/b"]);
+        let recent = strings(&["origin/gone", "origin/b", "origin/old", "origin/err"]);
+        add_missing_recent(&mut orca, "repo-1", &mut found, &recent).await;
+        // The one the answer holds is not asked; a name Orca does not answer exactly, and a failed question, add nothing.
+        assert_eq!(orca.asked, ["origin/gone", "origin/old", "origin/err"]);
+        assert_eq!(
+            names_of(&recent_first(found, "", &recent)),
+            ["origin/b", "origin/old", "origin/a"]
+        );
+    }
+
+    #[tokio::test]
+    async fn at_most_five_remembered_branches_are_asked() {
+        let mut orca = by_name(Vec::new());
+        let mut found = Vec::new();
+        let names: Vec<String> = (0..8).map(|i| format!("origin/b{i}")).collect();
+        add_missing_recent(&mut orca, "repo-1", &mut found, &names).await;
+        assert_eq!(orca.asked.len(), RECENT_BRANCHES);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn nothing_remembered_leaves_the_answer_as_it_is() {
+        let found = answer(&["origin/a", "origin/b"]);
+        assert_eq!(recent_first(found.clone(), "", &[]), found);
+        assert!(recent_first(Vec::new(), "", &strings(&["origin/a"])).is_empty());
+    }
+
+    #[test]
+    fn a_text_leaves_the_answer_in_the_order_of_orca() {
+        let found = answer(&["origin/a", "origin/b", "origin/c"]);
+        let recent = strings(&["origin/c"]);
+        assert_eq!(recent_first(found.clone(), "o", &recent), found);
+    }
+
+    #[test]
+    fn a_name_picked_is_put_first_and_a_name_picked_again_moves_up() {
+        let mut pairs = Vec::new();
+        for name in ["origin/a", "origin/b", "origin/c"] {
+            pairs = remember_branch(pairs, None, "repo-1", name);
+        }
+        assert_eq!(
+            recent_names(&pairs, None, "repo-1"),
+            ["origin/c", "origin/b", "origin/a"]
+        );
+        pairs = remember_branch(pairs, None, "repo-1", "origin/a");
+        assert_eq!(
+            recent_names(&pairs, None, "repo-1"),
+            ["origin/a", "origin/c", "origin/b"]
+        );
+        assert_eq!(pairs.len(), 1);
+    }
+
+    #[test]
+    fn at_most_five_names_are_kept_for_a_repository() {
+        let mut pairs = Vec::new();
+        for i in 1..=7 {
+            pairs = remember_branch(pairs, None, "repo-1", &format!("origin/b{i}"));
+        }
+        assert_eq!(
+            recent_names(&pairs, None, "repo-1"),
+            [
+                "origin/b7",
+                "origin/b6",
+                "origin/b5",
+                "origin/b4",
+                "origin/b3"
+            ]
+        );
+    }
+
+    #[test]
+    fn each_repository_of_each_orca_has_its_own_names() {
+        let mut pairs = remember_branch(Vec::new(), None, "repo-1", "origin/a");
+        pairs = remember_branch(pairs, Some("Studio"), "repo-1", "origin/b");
+        pairs = remember_branch(pairs, None, "repo-2", "origin/c");
+        assert_eq!(recent_names(&pairs, None, "repo-1"), ["origin/a"]);
+        assert_eq!(recent_names(&pairs, Some("Studio"), "repo-1"), ["origin/b"]);
+        assert_eq!(recent_names(&pairs, None, "repo-2"), ["origin/c"]);
+        assert!(recent_names(&pairs, Some("Other"), "repo-1").is_empty());
+        assert!(recent_names(&pairs, None, "repo-3").is_empty());
+    }
+
+    #[test]
+    fn the_pairs_picked_from_longest_ago_are_dropped_past_the_limit() {
+        let mut pairs = Vec::new();
+        for i in 0..RECENT_PAIRS + 3 {
+            pairs = remember_branch(pairs, None, &format!("repo-{i}"), "origin/a");
+        }
+        assert_eq!(pairs.len(), RECENT_PAIRS);
+        assert_eq!(pairs[0].repo, format!("repo-{}", RECENT_PAIRS + 2));
+        assert!(recent_names(&pairs, None, "repo-0").is_empty());
+        assert!(recent_names(&pairs, None, "repo-2").is_empty());
+        assert_eq!(recent_names(&pairs, None, "repo-3"), ["origin/a"]);
+        // A pick in an old pair makes it the newest, so it stays when the next one is added.
+        pairs = remember_branch(pairs, None, "repo-3", "origin/b");
+        pairs = remember_branch(pairs, None, "repo-new", "origin/a");
+        assert_eq!(
+            recent_names(&pairs, None, "repo-3"),
+            ["origin/b", "origin/a"]
+        );
+        assert!(recent_names(&pairs, None, "repo-4").is_empty());
+    }
+
+    #[test]
+    fn a_file_that_is_missing_or_cannot_be_used_remembers_nothing() {
+        let dir = temp_dir("recent-broken");
+        assert!(load_recent(&dir).is_empty());
+        for text in [
+            "",
+            "not json",
+            "[]",
+            "{}",
+            "{\"pairs\": null}",
+            "{\"pairs\": [1]}",
+            "{\"pairs\": [{\"repo\": \"r\"}]}",
+            "{\"pairs\": [{\"repo\": \"r\", \"names\": [1]}]}",
+        ] {
+            std::fs::write(dir.join(RECENT_FILE), text).unwrap();
+            assert!(load_recent(&dir).is_empty(), "{text}");
+        }
+        // A folder where the file should be cannot be read either.
+        std::fs::remove_file(dir.join(RECENT_FILE)).unwrap();
+        std::fs::create_dir(dir.join(RECENT_FILE)).unwrap();
+        assert!(load_recent(&dir).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_with_more_than_the_limits_is_cut_to_them() {
+        let pairs: Vec<Value> = (0..RECENT_PAIRS + 5)
+            .map(|i| json!({"environment": null, "repo": format!("r{i}"), "names": (0..9).map(|n| format!("origin/b{n}")).collect::<Vec<_>>()}))
+            .collect();
+        let read = parse_recent(&json!({"pairs": pairs}).to_string());
+        assert_eq!(read.len(), RECENT_PAIRS);
+        assert!(read.iter().all(|p| p.names.len() == RECENT_BRANCHES));
+    }
+
+    #[test]
+    fn a_pick_is_written_to_the_file_and_read_back_with_no_temporary_file_left() {
+        let dir = temp_dir("recent-write");
+        use_branch(&dir, None, "repo-1", "origin/a").unwrap();
+        use_branch(&dir, None, "repo-1", "origin/b").unwrap();
+        use_branch(&dir, Some("Studio"), "repo-1", "origin/c").unwrap();
+        let text = std::fs::read_to_string(dir.join(RECENT_FILE)).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap(),
+            json!({"pairs": [
+                {"environment": "Studio", "repo": "repo-1", "names": ["origin/c"]},
+                {"environment": null, "repo": "repo-1", "names": ["origin/b", "origin/a"]},
+            ]})
+        );
+        let pairs = load_recent(&dir);
+        assert_eq!(
+            recent_names(&pairs, None, "repo-1"),
+            ["origin/b", "origin/a"]
+        );
+        let files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(files, [RECENT_FILE]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_pick_replaces_a_file_that_cannot_be_used() {
+        let dir = temp_dir("recent-replace");
+        std::fs::write(dir.join(RECENT_FILE), "not json").unwrap();
+        use_branch(&dir, None, "repo-1", "origin/a").unwrap();
+        assert_eq!(
+            recent_names(&load_recent(&dir), None, "repo-1"),
+            ["origin/a"]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_branch_name_to_remember_is_one_line_that_is_not_blank_and_not_long() {
+        assert!(check_branch_name("origin/feature/a").is_ok());
+        assert!(check_branch_name(&"a".repeat(MAX_BRANCH_NAME)).is_ok());
+        for bad in ["", "  ", "origin/a\nb", "origin/a\u{0}"] {
+            assert!(check_branch_name(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_branch_name(&"a".repeat(MAX_BRANCH_NAME + 1)).is_err());
+    }
+
+    #[test]
+    fn an_environment_to_remember_is_this_machine_or_a_name_of_one_line() {
+        assert!(check_environment(None).is_ok());
+        assert!(check_environment(Some("Studio")).is_ok());
+        assert!(check_environment(Some(&"a".repeat(MAX_REPO))).is_ok());
+        for bad in ["", " ", "a\nb"] {
+            assert!(check_environment(Some(bad)).is_err(), "{bad:?}");
+        }
+        assert!(check_environment(Some(&"a".repeat(MAX_REPO + 1))).is_err());
     }
 }

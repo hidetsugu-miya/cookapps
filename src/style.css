@@ -1018,7 +1018,21 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-dest-pop .orca-branch-row:disabled:hover { background: transparent; }
 .orca-dest-pop .orca-branch-mark { flex: none; display: flex; color: var(--accent); }
 .orca-branch-mark svg { width: 14px; height: 14px; }
-.orca-dest-sec { margin: 6px 10px 2px; font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--muted); }
+/* The headings of the list of branches (A-25) stay at the top of the list while its rows scroll; each is inside its own section, so the next one takes its place. */
+.orca-dest-section + .orca-dest-section { margin-top: 6px; }
+.orca-dest-sec { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; margin: 0; padding: 4px 10px; border-radius: 6px; background: var(--soft); color: var(--accent-text); font-size: calc(13px * var(--fs)); font-weight: 700; }
+.orca-dest-sec + div { margin-top: 2px; }
+.orca-dest-icon { flex: none; display: flex; }
+.orca-dest-icon svg { width: 14px; height: 14px; }
+.orca-dest-name { flex: 1; min-width: 0; }
+.orca-dest-count { flex: none; }
+/* The line and the round button under the first remote branches: the rest opens below and the button says so. It is not a row, so its shape and colors differ from the rows. */
+.orca-dest-more { display: flex; justify-content: center; margin: 6px 10px 2px; padding-top: 8px; border-top: 1px solid var(--chip-line); }
+.orca-dest-pop .orca-dest-more-btn { flex-direction: row; align-items: center; gap: 4px; height: 24px; padding: 0 10px 0 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--bar); color: var(--muted); font-size: calc(12px * var(--fs)); }
+.orca-dest-pop .orca-dest-more-btn:hover, .orca-dest-pop .orca-dest-more-btn:focus-visible { background: var(--hover); }
+.orca-dest-chev { display: flex; }
+.orca-dest-chev svg { width: 12px; height: 12px; }
+.orca-dest-more-btn[aria-expanded="true"] .orca-dest-chev svg { transform: rotate(180deg); }
 .orca-dest-list .empty.fail { color: var(--warn); }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }

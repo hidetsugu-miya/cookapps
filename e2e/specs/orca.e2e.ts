@@ -2719,6 +2719,10 @@ describe("orca: split panes (A-17)", () => {
     await rightClick(zsh);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
     expect(await textsOf('.menu[role="menu"] button')).toEqual(["右に分割", "下に分割"]);
+    // A line icon on each row and no colored dot; the terminal has no copy of a path.
+    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    expect(await count('.menu[role="menu"] .pdot')).toBe(0);
+    expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(0);
     await pickItem("右に分割");
     expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "move", tab: zsh, pane: "p1", edge: "right" } }]);
     await waitForCount(".orca-pane", 2);
@@ -3625,6 +3629,18 @@ describe("orca: scratchpad of an SSH host (A-30)", () => {
     expect(await waitForCalls(list)).toEqual([{ host: "s1" }]);
     await waitForCount("#orca-files-tree .orca-file", 1);
     await expect($("#orca-files-tree .orca-file-note.fail")).not.toExist();
+  });
+
+  it("has no menu on the tab of a scratchpad file of the host that is alone in its pane: no copy of a path, as in the file pane (A-17)", async () => {
+    await openHostFiles();
+    await waitForCount("#orca-files-tree .orca-file", 2);
+    await openA();
+    await browser.execute((once) => {
+      if (!window.__e2e_once__(once)) return;
+      document.querySelector('.orca-tabs [role="tab"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+    }, onceId());
+    await browser.pause(300);
+    expect(await count(".menu")).toBe(0);
   });
 
   it("opens a file of the list in the editor by ssh_scratch_read, keeps the list for its tab, and selects the tab when it is open already", async () => {

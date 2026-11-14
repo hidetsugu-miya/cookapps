@@ -1,9 +1,9 @@
 // The list of branches under the branch button in the heading of the file pane (A-25): the local branches of the worktree and, below them, the remote ones found by the text of the filter. A pick switches the worktree to that branch.
 // The same list picks the ref a new worktree starts from and its existing branch (A-9, `openBranchList`).
-// Rust reads the branches (`orca_local_branches`, `orca_remote_branches`) and switches (`orca_switch_branch`); this module draws the list and takes the press. The local branches are read when the list opens and narrowed by the filter here; the remote ones are asked for by the text, after the typing stops.
+// Rust reads the branches (`orca_local_branches`, `orca_remote_branches`), remembers a remote one that was picked (`orca_branch_used`) and switches (`orca_switch_branch`); this module draws the list and takes the press. The local branches are read when the list opens and narrowed by the filter here; the remote ones are asked for by the text, after the typing stops.
 import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
 import { tag } from "./dom.js";
-import { CHECK_SVG } from "./icons.js";
+import { BRANCH_SVG, CHECK_SVG, CLOUD_SVG, DOWN_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { toast } from "./toast.js";
@@ -19,6 +19,9 @@ export interface BranchContext {
 
 // How long the typing must stop before the remote branches are asked for again.
 const SEARCH_MS = 250;
+
+// How many remote branches show while the filter is empty; the button under them opens the rest (A-25). Rust puts the ones picked last first in the answer to an empty text (`orca_branch_used`), so these are the first of the answer as it comes.
+const REMOTE_FIRST = 5;
 
 // Switches the worktree. A refusal is shown as the error; a switch that worked with a warning says so; the list of the screen is read again after a switch (`switched` is told the branch the worktree is on now).
 async function switchTo(here: BranchContext, kind: "local" | "remote", name: string, switched: (branch: string) => void) {
@@ -92,10 +95,33 @@ export function openBranchList(anchor: Element, here: BranchSource, options: Bra
   filter.autocomplete = "off";
   const list = tag("div", "orca-dest-list");
   // A section keeps its rows between the typing: the filter only hides them, and a row is made again only when its answer comes.
-  const makeSection = (title: string) => {
+  // `limit` is how many rows show while the filter is empty and the section is folded (null: all); the button of `more` folds and opens the rest.
+  const makeSection = (title: string, icon: string, limit: number | null) => {
+    const mark = tag("span", "orca-dest-icon");
+    mark.innerHTML = icon;
+    const count = tag("span", "orca-dest-count");
+    count.hidden = true;
+    const head = tag("p", "orca-dest-sec");
+    head.append(mark, tag("span", "orca-dest-name", title), count);
     const box = tag("div");
-    list.append(tag("p", "orca-dest-sec", title), box);
-    return { box, rows: [] as HTMLElement[], none: tag("p", "empty", "該当するブランチがありません"), answered: false, failed: false };
+    const section = tag("div", "orca-dest-section");
+    section.append(head, box);
+    list.append(section);
+    const label = tag("span");
+    const chevron = tag("span", "orca-dest-chev");
+    chevron.innerHTML = DOWN_SVG;
+    const toggle = tag("button", "orca-dest-more-btn");
+    toggle.type = "button";
+    toggle.append(label, chevron);
+    const more = tag("div", "orca-dest-more");
+    more.hidden = true;
+    more.append(toggle);
+    const s = { box, count, more, toggle, label, limit, expanded: false, rows: [] as HTMLElement[], none: tag("p", "empty", "該当するブランチがありません"), answered: false, failed: false };
+    toggle.onclick = () => {
+      s.expanded = !s.expanded;
+      narrow();
+    };
+    return s;
   };
   if (options.top) {
     const top = tag("button", "orca-branch-row", options.top.label);
@@ -107,8 +133,8 @@ export function openBranchList(anchor: Element, here: BranchSource, options: Bra
     };
     list.prepend(top);
   }
-  const localSection = makeSection("ローカル");
-  const remoteSection = makeSection("リモート");
+  const localSection = makeSection("ローカル", BRANCH_SVG, null);
+  const remoteSection = makeSection("リモート", CLOUD_SVG, REMOTE_FIRST);
 
   const row = (kind: "local" | "remote", name: string, localName: string, current: boolean, inUse: boolean) => {
     const b = tag("button", "orca-branch-row");
@@ -125,20 +151,36 @@ export function openBranchList(anchor: Element, here: BranchSource, options: Bra
     }
     b.onclick = () => {
       closeMenu();
-      if (!current || options.pickCurrent) options.pick({ kind, name, localName });
+      if (current && !options.pickCurrent) return;
+      // Remembered for the order of the remote rows (the first five are the ones picked last). It changes nothing but that order, so a failure neither stops the pick nor is shown.
+      if (kind === "remote") invoke("orca_branch_used", { repo: here.repo, name, environment: here.target }).catch(() => {});
+      options.pick({ kind, name, localName });
     };
     return b;
   };
   // Hides the rows that do not hold the text of the filter, and says so when none is left in an answered section.
+  // With no text, a folded section shows its first `limit` rows and the button for the rest; a text shows every match, with no button, and folds the section again for when the text is cleared.
   const narrow = () => {
     const q = filter.value.trim().toLowerCase();
     for (const s of [localSection, remoteSection]) {
+      if (q !== "") s.expanded = false;
+      const limit = s.limit ?? Infinity;
+      const cap = q === "" && !s.expanded ? limit : Infinity;
+      let matched = 0;
       let shown = 0;
       for (const r of s.rows) {
-        r.hidden = !(r.dataset.name ?? "").toLowerCase().includes(q);
+        const hit = (r.dataset.name ?? "").toLowerCase().includes(q);
+        if (hit) matched++;
+        r.hidden = !hit || matched > cap;
         if (!r.hidden) shown++;
       }
-      s.none.hidden = !(s.answered && !s.failed && shown === 0);
+      const listed = s.answered && !s.failed;
+      s.count.hidden = !listed;
+      s.count.textContent = String(matched);
+      s.none.hidden = !(listed && shown === 0);
+      s.more.hidden = !(listed && q === "" && matched > limit);
+      s.toggle.setAttribute("aria-expanded", String(s.expanded));
+      s.label.textContent = s.expanded ? "たたむ" : `ほか ${matched - limit} 件を表示`;
     }
   };
   // Draws the answer of a section: its rows, or the message of the read that failed.
@@ -146,7 +188,7 @@ export function openBranchList(anchor: Element, here: BranchSource, options: Bra
     s.rows = rows;
     s.answered = true;
     s.failed = error !== null;
-    s.box.replaceChildren(...(error !== null ? [tag("p", "empty fail", error)] : [...rows, s.none]));
+    s.box.replaceChildren(...(error !== null ? [tag("p", "empty fail", error)] : [...rows, ...(s.limit === null ? [] : [s.more]), s.none]));
     narrow();
   };
 

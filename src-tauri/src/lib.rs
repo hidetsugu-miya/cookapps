@@ -346,6 +346,7 @@ pub fn run() {
             orca_files::orca_file_diff,
             orca_files::orca_local_branches,
             orca_files::orca_remote_branches,
+            orca_files::orca_branch_used,
             orca_files::orca_switch_branch,
             orca_files::orca_git_history,
             orca_files::orca_commit_files,

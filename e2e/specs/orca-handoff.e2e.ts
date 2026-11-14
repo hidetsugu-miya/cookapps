@@ -448,6 +448,39 @@ describe("orca handoff", () => {
       await waitForCalls(handoff);
     });
 
+    it("remembers a remote branch picked as the ref or as the existing branch, and a local branch not (A-9, A-25)", async () => {
+      await openFresh();
+      const used = await mock("orca_branch_used", null);
+      await $(`${MAIL.pane} .ho-base`).click();
+      await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+      await branchRow("feat/c").click();
+      await browser.pause(300);
+      expect(await callsOf(used)).toEqual([]);
+      await $(`${MAIL.pane} .ho-base`).click();
+      await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+      await branchRow("origin/feat/d").click();
+      expect(await waitForCalls(used)).toEqual([{ repo: "proj_example-app", name: "origin/feat/d", environment: null }]);
+      await $(`${MAIL.pane} .ho-seg button:nth-of-type(2)`).click();
+      await $(`${MAIL.pane} .ho-existing`).click();
+      await waitForCount(".orca-dest-pop .orca-branch-row", 4);
+      await branchRow("origin/feat/d").click();
+      expect(await waitForCalls(used, 2)).toEqual([
+        { repo: "proj_example-app", name: "origin/feat/d", environment: null },
+        { repo: "proj_example-app", name: "origin/feat/d", environment: null },
+      ]);
+    });
+
+    it("picks the ref and shows no error when remembering the remote branch fails (A-9)", async () => {
+      await openFresh();
+      await mock("orca_branch_used", rejects("orca-branch-recent.json を書けません"));
+      await $(`${MAIL.pane} .ho-base`).click();
+      await waitForCount(".orca-dest-pop .orca-branch-row", 5);
+      await branchRow("origin/feat/d").click();
+      await waitForCalls("orca_branch_used");
+      expect(await textsOf(`${MAIL.pane} .ho-base`)).toEqual(["origin/feat/d"]);
+      await expect($("#error")).not.toBeDisplayed();
+    });
+
     it("goes back to 既定 with the first row of the list", async () => {
       await openFresh();
       await $(`${MAIL.pane} .ho-base`).click();
@@ -459,6 +492,21 @@ describe("orca handoff", () => {
       await expect(branchRow("feat/c")).toHaveAttribute("aria-current", "true");
       await $$(".orca-dest-pop .orca-branch-row")[0].click();
       expect(await textsOf(`${MAIL.pane} .ho-base`)).toEqual(["既定"]);
+    });
+
+    it("folds the remote branches after the fifth in the list of the ref too, with the button for the rest", async () => {
+      await openFresh();
+      await mock("orca_remote_branches", Array.from({ length: 6 }, (_, i) => ({ name: `origin/r${i + 1}`, localName: `r${i + 1}` })));
+      await $(`${MAIL.pane} .ho-base`).click();
+      // 既定, the three local branches and the six remote ones (the rows after the fifth are only hidden).
+      await waitForCount(".orca-dest-pop .orca-branch-row", 10);
+      expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["ローカル", "リモート"]);
+      expect(await textsOf(".orca-dest-pop .orca-dest-count")).toEqual(["3", "6"]);
+      expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>('.orca-dest-pop .orca-branch-row[data-kind="remote"]')].filter((b) => !b.hidden).length)).toBe(5);
+      await expect($(".orca-dest-more-btn")).toHaveText("ほか 1 件を表示");
+      await $(".orca-dest-more-btn").click();
+      await expect($(".orca-dest-more-btn")).toHaveText("たたむ");
+      await expect(branchRow("origin/r6")).toBeDisplayed();
     });
 
     it("leaves the name of the branch to Orca when its field is blank", async () => {

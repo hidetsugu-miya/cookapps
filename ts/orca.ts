@@ -21,10 +21,10 @@ import type { PaneNode } from "./bindings/PaneNode";
 import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
-import { CHEVRON_SVG, CLAUDE_SVG, DIFF_SVG, FILE_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
+import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DIFF_SVG, FILE_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
-import { closeMenu, openMenu, showMenu } from "./menu.js";
+import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDiff, type DiffCommit, diffsOf, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, SSH_SCRATCH_DIR, showEditors } from "./orca-editor.js";
@@ -34,7 +34,7 @@ import { applyLocal, findTab, focusedTab, forgetPanes, layoutOf, needsSync, type
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals } from "./orca-terminal.js";
 import { initSplit } from "./split.js";
-import { setNavCount, show, showError } from "./view.js";
+import { copyText, setNavCount, show, showError } from "./view.js";
 
 // The name of each status icon (its `aria-label`).
 export const STATUS_LABELS: Record<OrcaStatus, string> = { question: "入力待ち", failed: "失敗", working: "作業中", monitoring: "監視中", interrupted: "中断", done: "完了", idle: "動いていない" };
@@ -1023,11 +1023,17 @@ async function closeTab(tab: Tab) {
   if (!streaming()) load(clockScope(), true);
 }
 
-// The menu of a tab (the right button): it splits its pane, which takes the tab to a new pane at its right or below it. A pane with one tab cannot be split, so it has no menu.
+// The menu of a tab (the right button): it splits its pane, which takes the tab to a new pane at its right or below it (a pane with one tab cannot be split, so it has no split); and on a file of a worktree it copies the file's path and its path from the worktree, as the menu of the file pane does (A-18), after a line when the split is there. A scratchpad file of an SSH host has no path to copy (A-30). A tab with neither has no menu.
 function openTabMenu(anchor: Element, tab: string, pane: string) {
-  if ((panesOf(currentLayout()?.root ?? null).find((p) => p.id === pane)?.tabs.length ?? 0) < 2) return;
-  const item = (label: string, edge: "right" | "bottom") => ({ label, color: "var(--accent)", current: false, pick: () => runPaneOp({ kind: "move", tab, pane, edge }) });
-  openMenu(anchor, [item("右に分割", "right"), item("下に分割", "bottom")]);
+  const item = (label: string, icon: string, pick: () => unknown): MenuItem => ({ label, color: "var(--accent)", icon, current: false, pick });
+  const split = (panesOf(currentLayout()?.root ?? null).find((p) => p.id === pane)?.tabs.length ?? 0) >= 2;
+  const file = projectKey === null ? undefined : filesOf(view?.target ?? null, projectKey).find((f) => f.id === tab);
+  const items: MenuItem[] = split ? [item("右に分割", COLUMNS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "right" })), item("下に分割", ROWS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "bottom" }))] : [];
+  if (file !== undefined && file.host === null) {
+    const [path, from] = [`${file.path.replace(/\/+$/, "")}/${file.relative}`, file.relative];
+    items.push({ ...item("パスのコピー", COPY_PATH_SVG, () => void copyText(path, "パスをコピーしました")), divider: split }, item("相対パスをコピー", COPY_PATH_SVG, () => void copyText(from, "相対パスをコピーしました")));
+  }
+  if (items.length > 0) openMenu(anchor, items);
 }
 
 // The plus (A-16, A-29): a menu of "Claude を起動", "ターミナルを開く" and "スクラッチパッド". The first two start in a worktree of the project (or SSH host) selected in the list pane, and the scratchpad is a file of that worktree; for an SSH host's row it is a file of the host's own scratchpad folder (A-30), which asks for no worktree, and it is not offered for a host that this machine does not list.
