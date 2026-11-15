@@ -22,6 +22,8 @@ let choices = NOBODY;
 // The thread whose recipients the chips hold (null: the next bind fills them), so that Gmail's answer for the same thread leaves what was typed and edited.
 let filled: string | null = null;
 let sending = false;
+// Counts the times the field was reset, so that a send that outlives its thread can tell that the field is another one's now, even for the same thread opened again.
+let session = 0;
 const recipients = recipientRows("mail-reply");
 // Reads the thread again after a reply went out.
 let reload: (target: ReplyTarget) => Promise<void>;
@@ -48,6 +50,7 @@ function clear() {
 
 // The field is empty and hidden: no thread is open.
 export function resetReply() {
+  session++;
   target = null;
   choices = NOBODY;
   filled = null;
@@ -71,6 +74,7 @@ export function bindReply(thread: ReplyTarget, next: ReplyChoices) {
 async function send() {
   const sent = target;
   if (sending || !sent) return;
+  const started = session;
   recipients.commitAll();
   sending = true;
   syncSend();
@@ -87,7 +91,7 @@ async function send() {
       },
     });
     // The thread was left while the mail went out: the field is another thread's now.
-    if (target?.id !== sent.id || target.account !== sent.account) return;
+    if (session !== started || target?.id !== sent.id || target.account !== sent.account) return;
     // The text stays when the account must log in again.
     if (done === null) return applySync(sent.account, { kind: "needsLogin" });
     filled = null;

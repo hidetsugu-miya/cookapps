@@ -857,6 +857,27 @@ describe("thread reply field", () => {
     await expect($("#error")).not.toBeDisplayed();
   });
 
+  it("keeps what was written on the same thread opened again while the reply went out, and does not read the thread again", async () => {
+    await open();
+    const send = await mock("send_mail", holds);
+    await $("#mail-reply-body").setValue("Thanks");
+    await $("#mail-reply-send").click();
+    await waitForCalls(send);
+    await $("#back").click();
+    await expect($("#threads")).toBeDisplayed();
+    const again = await open();
+    await $("#mail-reply-cc-open").click();
+    await $("#mail-reply-cc-input").setValue("dan@example.com,");
+    await $("#mail-reply-body").setValue("Again");
+    await release(send, true);
+    await browser.pause(300);
+    expect(await callsOf(again)).toHaveLength(1);
+    await expect($("#mail-reply-body")).toHaveValue("Again");
+    expect(await chips("cc")).toEqual(["dan@example.com"]);
+    await expect($("#mail-reply-send")).toBeEnabled();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
   it("shows the address in the chip of a Reply-To that is not the sender's, as Rust labels it", async () => {
     const detail = threadDetail("First unread", "Hello from Alice", false);
     const list = { label: "Alice <list@example.net>", mailbox: "Alice <list@example.net>" };
