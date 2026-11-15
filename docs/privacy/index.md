@@ -173,7 +173,7 @@ Anthropic など、MySQL のサーバー以外へは送りません。
 ### AWS Systems Manager 経由の接続
 
 接続で「SSM 経由で接続する」を選んだときだけ、本アプリは AWS Systems Manager の API（`ssm.{リージョン}.amazonaws.com`）と通信します。
-呼び出すのは、踏み台を探す `DescribeInstanceInformation`（踏み台の名前の Name タグと、オンラインかどうか）、ポートフォワードを始める `StartSession`（踏み台のインスタンス ID、DB のホスト、ポート）、閉じるときの `TerminateSession` です。
+呼び出すのは、踏み台を探す `DescribeInstanceInformation`（踏み台の名前の Name タグ。オンラインかどうかは返ってきた答えで確かめます）、ポートフォワードを始める `StartSession`（踏み台のインスタンス ID、DB のホスト、ポート）、閉じるときの `TerminateSession` です。
 呼び出しの認証には、この Mac の AWS の設定とログイン（利用者が `aws login` などで済ませたもの。`~/.aws` にあります）を、接続に登録した AWS のプロファイル名で読んで使います。
 本アプリは AWS へのログインを始めず、AWS の認証情報を保存しません。
 ログインの期限が切れているときは、そう伝えて止まります。

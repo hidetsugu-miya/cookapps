@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.74.1
+
+D-2: a connection through AWS Systems Manager could not be opened: looking for the bastion failed with "AWS の呼び出しに失敗しました: … ValidationException" (#661). The bastion is now asked for by its Name tag alone, and the app picks a node that is Online from the answer.
+
 ## v0.74.0
 
 D-1: the side menu has a button for a new screen, "データベース", after Orca, with a drawn cylinder as its icon (#628, #629). The screen has a list of connections at the left, headed "接続" with a plus ("接続を追加"), and the work pane at the right. A row has a menu with "編集", "切断" (while the connection is open) and "削除", which asks first. The plus and "編集" open a popup with "接続名", "ユーザー名", "パスワード", the check box "SSM 経由で接続する" and, while it is checked, "AWS のプロファイル名", "リージョン" and "踏み台の名前", then "DB のホスト" and "ポート" (3306 for a new connection). A saved password is shown as "保存済み" and is never shown again; leave the field empty on an edit to keep it. The connections are saved in `database-profiles.json` in the config folder, and each password is in the OS keychain.
