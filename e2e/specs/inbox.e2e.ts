@@ -769,7 +769,7 @@ describe("inbox", () => {
 
   describe("writing a new mail (M-11)", () => {
     const other = "other@example.com";
-    const chips = (kind: "to" | "cc" | "bcc") => textsOf(`#new-mail-${kind}-field .reply-chip > span`);
+    const chips = (kind: "to" | "cc" | "bcc") => textsOf(`#new-mail-${kind}-field .mail-reply-chip > span`);
     const compose = async () => {
       await $("#mail-compose").click();
       await expect($("#new-mail")).toBeDisplayed();
@@ -862,7 +862,7 @@ describe("inbox", () => {
       await bootTwoAccounts();
       const send = await mock("send_mail", true);
       await compose();
-      await $("#new-mail-from-select").selectByAttribute("value", other);
+      await $("#new-mail-from-select").selectByVisibleText(other);
       await $("#new-mail-to-input").setValue("dan@example.com");
       await browser.keys(["Enter"]);
       await $("#new-mail-body").setValue("Hi");

@@ -14,11 +14,11 @@ export function recipientRows(prefix: string) {
 
   function drawChips(kind: Kind) {
     const field = $(`${prefix}-${kind}-field`);
-    for (const chip of field.querySelectorAll(".reply-chip")) chip.remove();
+    for (const chip of field.querySelectorAll(".mail-reply-chip")) chip.remove();
     for (const [i, p] of people[kind].entries()) {
-      const chip = tag("span", "reply-chip");
+      const chip = tag("span", "mail-reply-chip");
       chip.title = p.mailbox;
-      const remove = tag("button", "reply-chip-x", "×");
+      const remove = tag("button", "mail-reply-chip-x", "×");
       remove.type = "button";
       remove.setAttribute("aria-label", `${p.label} を外す`);
       remove.onclick = () => {
@@ -73,10 +73,14 @@ export function recipientRows(prefix: string) {
       for (const kind of KINDS) {
         const field = input(kind);
         field.onkeydown = (e) => {
-          if ((e.key === "Enter" && !composing(e)) || e.key === ",") {
+          if (e.key === "Enter" && !composing(e)) {
             e.preventDefault();
             commit(kind);
           }
+        };
+        // A comma ends the address whichever way it came into the field (typed, pasted or inserted by an input method), so it is read from the text, not from the key.
+        field.oninput = (e) => {
+          if (!(e as InputEvent).isComposing && field.value.endsWith(",")) commit(kind);
         };
         field.onblur = () => commit(kind);
       }

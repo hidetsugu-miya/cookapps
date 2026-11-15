@@ -337,6 +337,8 @@ export function goBack() {
   // A thread still loading is left: its answer is ignored.
   openCount++;
   loading.current = null;
+  // A reply still going out does not read the thread again once it is over (`mail-reply.ts`).
+  resetReply();
   if (threadOrigin === "todo") setScreen("todo");
   else show("list");
   handoff.sync();
@@ -346,6 +348,7 @@ export function goBack() {
 function removeCurrent(command: "archive" | "trash") {
   // An answer still awaited for the thread (`refresh`) is ignored, as after "戻る".
   openCount++;
+  resetReply();
   if (threadOrigin === "todo") setScreen("todo");
   else show("list");
   handoff.sync();

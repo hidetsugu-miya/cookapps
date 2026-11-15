@@ -697,17 +697,17 @@ describe("thread AI summary", () => {
 
 describe("thread reply field", () => {
   const alice = "Alice <alice@example.com>";
-  const chips = (kind: "to" | "cc" | "bcc") => textsOf(`#reply-${kind}-field .reply-chip > span`);
+  const chips = (kind: "to" | "cc" | "bcc") => textsOf(`#mail-reply-${kind}-field .mail-reply-chip > span`);
   const pickMode = (value: "one" | "all") =>
     browser.execute((v) => {
-      const select = document.getElementById("reply-mode") as HTMLSelectElement;
+      const select = document.getElementById("mail-reply-mode") as HTMLSelectElement;
       select.value = v;
       select.dispatchEvent(new Event("change"));
     }, value);
   const edges = () =>
     browser.execute(() => {
       const box = (id: string) => document.getElementById(id)!.getBoundingClientRect();
-      return { replyBottom: Math.round(box("reply").bottom), mainBottom: Math.round(box("main").bottom), replyTop: box("reply").top, actionsBottom: box("thread-actions").bottom };
+      return { replyBottom: Math.round(box("mail-reply").bottom), mainBottom: Math.round(box("main").bottom), replyTop: box("mail-reply").top, actionsBottom: box("thread-actions").bottom };
     });
 
   async function open(detail = threadDetail("First unread", "Hello from Alice", false), row: "First unread" | "Second unread" = "First unread") {
@@ -725,16 +725,16 @@ describe("thread reply field", () => {
 
   it("shows the field at the bottom with the recipients of a reply, and no Cc or Bcc", async () => {
     await open();
-    await expect($("#reply")).toBeDisplayed();
-    expect(await browser.execute(() => (document.getElementById("reply-mode") as HTMLSelectElement).value)).toBe("one");
-    expect(await textsOf("#reply-mode option")).toEqual(["返信", "全員に返信"]);
+    await expect($("#mail-reply")).toBeDisplayed();
+    expect(await browser.execute(() => (document.getElementById("mail-reply-mode") as HTMLSelectElement).value)).toBe("one");
+    expect(await textsOf("#mail-reply-mode option")).toEqual(["返信", "全員に返信"]);
     expect(await chips("to")).toEqual(["Alice"]);
-    await expect($("#reply-cc-row")).not.toBeDisplayed();
-    await expect($("#reply-bcc-row")).not.toBeDisplayed();
-    await expect($("#reply-cc-open")).toBeDisplayed();
-    await expect($("#reply-bcc-open")).toBeDisplayed();
-    await expect($("#reply-send")).toBeDisabled();
-    await expect($("#reply-body")).toHaveValue("");
+    await expect($("#mail-reply-cc-row")).not.toBeDisplayed();
+    await expect($("#mail-reply-bcc-row")).not.toBeDisplayed();
+    await expect($("#mail-reply-cc-open")).toBeDisplayed();
+    await expect($("#mail-reply-bcc-open")).toBeDisplayed();
+    await expect($("#mail-reply-send")).toBeDisabled();
+    await expect($("#mail-reply-body")).toHaveValue("");
     const { replyBottom, mainBottom, replyTop, actionsBottom } = await edges();
     expect(replyBottom).toBe(mainBottom);
     expect(replyTop).toBeGreaterThan(actionsBottom);
@@ -748,7 +748,7 @@ describe("thread reply field", () => {
     });
     const after = await edges();
     expect(after.replyBottom).toBe(after.mainBottom);
-    await expect($("#reply-send")).toBeDisplayedInViewport();
+    await expect($("#mail-reply-send")).toBeDisplayedInViewport();
     await expect($("#thread-slack")).toBeDisplayedInViewport();
   });
 
@@ -756,40 +756,43 @@ describe("thread reply field", () => {
     const call = await mock("thread", holds);
     await rowOf("unread-threads", "First unread").$(".subject").click();
     await waitForCalls(call);
-    await expect($("#reply")).not.toBeDisplayed();
+    await expect($("#mail-reply")).not.toBeDisplayed();
     await release(call, threadDetail("First unread", "Hello from Alice", false));
-    await expect($("#reply")).toBeDisplayed();
+    await expect($("#mail-reply")).toBeDisplayed();
     await $("#back").click();
-    await expect($("#reply")).not.toBeDisplayed();
+    await expect($("#mail-reply")).not.toBeDisplayed();
   });
 
   it("switches to a reply to all with its recipients in To and Cc, and back to a reply", async () => {
     await open();
     await pickMode("all");
     expect(await chips("to")).toEqual(["Alice", "Bob"]);
-    await expect($("#reply-cc-row")).toBeDisplayed();
+    await expect($("#mail-reply-cc-row")).toBeDisplayed();
     expect(await chips("cc")).toEqual(["Carol"]);
-    await expect($("#reply-cc-open")).not.toBeDisplayed();
+    await expect($("#mail-reply-cc-open")).not.toBeDisplayed();
     await pickMode("one");
     expect(await chips("to")).toEqual(["Alice"]);
     expect(await chips("cc")).toEqual([]);
   });
 
-  it("opens Cc and Bcc, adds an address as a chip with Enter or by leaving the field, and takes a chip off", async () => {
+  it("opens Cc and Bcc, adds an address as a chip with Enter, a comma or by leaving the field, and takes a chip off", async () => {
     await open();
-    await $("#reply-cc-open").click();
-    await expect($("#reply-cc-row")).toBeDisplayed();
-    await expect($("#reply-cc-open")).not.toBeDisplayed();
-    await $("#reply-cc-input").setValue("dan@example.com");
+    await $("#mail-reply-cc-open").click();
+    await expect($("#mail-reply-cc-row")).toBeDisplayed();
+    await expect($("#mail-reply-cc-open")).not.toBeDisplayed();
+    await $("#mail-reply-cc-input").setValue("dan@example.com");
     await browser.keys(["Enter"]);
     expect(await chips("cc")).toEqual(["dan@example.com"]);
-    await expect($("#reply-cc-input")).toHaveValue("");
-    await $("#reply-bcc-open").click();
-    await $("#reply-bcc-input").setValue("eve@example.com");
-    await $("#reply-body").click();
+    await expect($("#mail-reply-cc-input")).toHaveValue("");
+    await $("#mail-reply-cc-input").setValue("fay@example.com,");
+    expect(await chips("cc")).toEqual(["dan@example.com", "fay@example.com"]);
+    await expect($("#mail-reply-cc-input")).toHaveValue("");
+    await $("#mail-reply-bcc-open").click();
+    await $("#mail-reply-bcc-input").setValue("eve@example.com");
+    await $("#mail-reply-body").click();
     expect(await chips("bcc")).toEqual(["eve@example.com"]);
     await $('[aria-label="dan@example.com を外す"]').click();
-    expect(await chips("cc")).toEqual([]);
+    expect(await chips("cc")).toEqual(["fay@example.com"]);
     await $('[aria-label="Alice を外す"]').click();
     expect(await chips("to")).toEqual([]);
   });
@@ -800,11 +803,11 @@ describe("thread reply field", () => {
     const older = threadDetail("First unread", "Hello from Alice", false);
     await mock("thread", { ...older, messages: [...older.messages, { ...older.messages[0], id: "m2", from: "me@example.com", fromName: "", fromAddress: "me@example.com", body: "Thanks", snippet: "Thanks" }] });
     await pickMode("all");
-    await $("#reply-bcc-open").click();
-    await $("#reply-bcc-input").setValue("eve@example.com");
-    await $("#reply-body").setValue("Thanks");
-    await expect($("#reply-send")).toBeEnabled();
-    await $("#reply-send").click();
+    await $("#mail-reply-bcc-open").click();
+    await $("#mail-reply-bcc-input").setValue("eve@example.com");
+    await $("#mail-reply-body").setValue("Thanks");
+    await expect($("#mail-reply-send")).toBeEnabled();
+    await $("#mail-reply-send").click();
     expect(await waitForCalls(send)).toEqual([
       {
         account,
@@ -820,72 +823,94 @@ describe("thread reply field", () => {
     ]);
     await waitForCount("#messages article", 2);
     expect(await callsOf(open_)).toHaveLength(1);
-    await expect($("#reply-body")).toHaveValue("");
-    await expect($("#reply-send")).toBeDisabled();
+    await expect($("#mail-reply-body")).toHaveValue("");
+    await expect($("#mail-reply-send")).toBeDisabled();
     expect(await chips("to")).toEqual(["Alice"]);
     expect(await chips("bcc")).toEqual([]);
-    await expect($("#reply-bcc-row")).not.toBeDisplayed();
+    await expect($("#mail-reply-bcc-row")).not.toBeDisplayed();
     await expect($("#error")).not.toBeDisplayed();
   });
 
   it("cannot be sent twice while the mail goes out", async () => {
     await open();
     const send = await mock("send_mail", holds);
-    await $("#reply-body").setValue("Thanks");
-    await $("#reply-send").click();
+    await $("#mail-reply-body").setValue("Thanks");
+    await $("#mail-reply-send").click();
     await waitForCalls(send);
-    await expect($("#reply-send")).toBeDisabled();
+    await expect($("#mail-reply-send")).toBeDisabled();
     await release(send, true);
-    await expect($("#reply-body")).toHaveValue("");
+    await expect($("#mail-reply-body")).toHaveValue("");
+  });
+
+  it("does not read the thread again, nor draw it, when the thread was left while the reply went out", async () => {
+    const open_ = await open();
+    const send = await mock("send_mail", holds);
+    await $("#mail-reply-body").setValue("Thanks");
+    await $("#mail-reply-send").click();
+    await waitForCalls(send);
+    await $("#back").click();
+    await expect($("#threads")).toBeDisplayed();
+    await release(send, true);
+    await browser.pause(300);
+    expect(await callsOf(open_)).toHaveLength(1);
+    await expect($("#mail-reply")).not.toBeDisplayed();
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the address in the chip of a Reply-To that is not the sender's, as Rust labels it", async () => {
+    const detail = threadDetail("First unread", "Hello from Alice", false);
+    const list = { label: "Alice <list@example.net>", mailbox: "Alice <list@example.net>" };
+    await open({ ...detail, reply: { one: { to: [list], cc: [] }, all: { to: [list], cc: [] } } });
+    expect(await chips("to")).toEqual(["Alice <list@example.net>"]);
   });
 
   it("shows the error and keeps the text and the recipients when the send fails, and does not read the thread again", async () => {
     const open_ = await open();
     await mock("send_mail", rejects("宛先の形式が正しくありません: x"));
-    await $("#reply-cc-open").click();
-    await $("#reply-cc-input").setValue("x");
-    await $("#reply-body").setValue("Thanks");
-    await $("#reply-send").click();
+    await $("#mail-reply-cc-open").click();
+    await $("#mail-reply-cc-input").setValue("x");
+    await $("#mail-reply-body").setValue("Thanks");
+    await $("#mail-reply-send").click();
     await expect($("#error")).toHaveText("宛先の形式が正しくありません: x");
-    await expect($("#reply-body")).toHaveValue("Thanks");
+    await expect($("#mail-reply-body")).toHaveValue("Thanks");
     expect(await chips("to")).toEqual(["Alice"]);
     expect(await chips("cc")).toEqual(["x"]);
-    await expect($("#reply-send")).toBeEnabled();
+    await expect($("#mail-reply-send")).toBeEnabled();
     expect(await callsOf(open_)).toHaveLength(1);
   });
 
   it("keeps the text when the account must log in again", async () => {
     await open();
     const send = await mock("send_mail", null);
-    await $("#reply-body").setValue("Thanks");
-    await $("#reply-send").click();
+    await $("#mail-reply-body").setValue("Thanks");
+    await $("#mail-reply-send").click();
     await waitForCalls(send);
-    await expect($("#reply-send")).toBeEnabled();
-    await expect($("#reply-body")).toHaveValue("Thanks");
+    await expect($("#mail-reply-send")).toBeEnabled();
+    await expect($("#mail-reply-body")).toHaveValue("Thanks");
   });
 
   it("empties the field with 破棄: the text, Cc and Bcc, and the recipients of a reply", async () => {
     await open();
     await pickMode("all");
-    await $("#reply-bcc-open").click();
-    await $("#reply-bcc-input").setValue("eve@example.com");
-    await $("#reply-body").setValue("Thanks");
-    await $("#reply-discard").click();
-    await expect($("#reply-body")).toHaveValue("");
-    expect(await browser.execute(() => (document.getElementById("reply-mode") as HTMLSelectElement).value)).toBe("one");
+    await $("#mail-reply-bcc-open").click();
+    await $("#mail-reply-bcc-input").setValue("eve@example.com");
+    await $("#mail-reply-body").setValue("Thanks");
+    await $("#mail-reply-discard").click();
+    await expect($("#mail-reply-body")).toHaveValue("");
+    expect(await browser.execute(() => (document.getElementById("mail-reply-mode") as HTMLSelectElement).value)).toBe("one");
     expect(await chips("to")).toEqual(["Alice"]);
-    await expect($("#reply-cc-row")).not.toBeDisplayed();
-    await expect($("#reply-bcc-row")).not.toBeDisplayed();
+    await expect($("#mail-reply-cc-row")).not.toBeDisplayed();
+    await expect($("#mail-reply-bcc-row")).not.toBeDisplayed();
     expect(await chips("bcc")).toEqual([]);
-    await expect($("#reply-send")).toBeDisabled();
+    await expect($("#mail-reply-send")).toBeDisabled();
   });
 
   it("starts empty on the thread opened after another", async () => {
     await open();
-    await $("#reply-body").setValue("Thanks");
+    await $("#mail-reply-body").setValue("Thanks");
     await $("#back").click();
     await open(threadDetail("Second unread", "Second body", false), "Second unread");
-    await expect($("#reply-body")).toHaveValue("");
+    await expect($("#mail-reply-body")).toHaveValue("");
     expect(await chips("to")).toEqual(["Alice"]);
   });
 
@@ -895,12 +920,12 @@ describe("thread reply field", () => {
     const refresh = await mock("thread_refresh", holds);
     await rowOf("unread-threads", "First unread").$(".subject").click();
     await waitForCalls(refresh);
-    await expect($("#reply")).toBeDisplayed();
-    await $("#reply-body").setValue("Thanks");
+    await expect($("#mail-reply")).toBeDisplayed();
+    await $("#mail-reply-body").setValue("Thanks");
     await $('[aria-label="Alice を外す"]').click();
     await release(refresh, { unread: false, thread: threadDetail("First unread", "A new reply", false) } satisfies ThreadRefresh);
     await expect($("#messages .plain")).toHaveText("A new reply");
-    await expect($("#reply-body")).toHaveValue("Thanks");
+    await expect($("#mail-reply-body")).toHaveValue("Thanks");
     expect(await chips("to")).toEqual([]);
   });
 });

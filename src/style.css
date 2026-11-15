@@ -134,37 +134,37 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #thread-actions .icon-btn svg { width: 20px; height: 20px; }
 #thread-actions #trash, #thread-summary:not([hidden]) + #thread-slack { position: relative; margin-left: 10px; }
 #thread-actions #trash::before, #thread-summary:not([hidden]) + #thread-slack::before { content: ""; position: absolute; left: -7px; top: 7px; bottom: 7px; width: 1px; background: var(--chip-line); }
-/* M-10: while a thread is open, #main is a column that holds the thread to the height of the area, and the reply field (#reply) sits at its bottom: it stays there, over the end of the messages, while they scroll. The field reaches the edges of #main's padding, as the row of operations does. */
+/* M-10: while a thread is open, #main is a column that holds the thread to the height of the area, and the reply field (#mail-reply) sits at its bottom: it stays there, over the end of the messages, while they scroll. The field reaches the edges of #main's padding, as the row of operations does. */
 #main:has(> #thread:not([hidden])) { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
 #main > #thread:not([hidden]) { flex: 1 0 auto; display: flex; flex-direction: column; }
-#reply { position: sticky; bottom: 0; z-index: 2; flex: none; margin: auto -24px 0 -32px; padding: 10px 14px; background: var(--bar); border-top: 1px solid var(--line); }
-.reply-card { display: flex; flex-direction: column; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
-.reply-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
-.reply-mode { position: relative; flex: none; display: inline-flex; align-items: center; color: var(--ink-soft); }
-#reply-mode, #new-mail-from-select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 14px 2px 0; cursor: pointer; }
-.reply-mode::after { content: ""; position: absolute; right: 2px; top: 50%; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); pointer-events: none; }
-.reply-key { flex: none; min-width: 2.6em; padding: 2px 0; color: var(--ink-soft); }
-.reply-field { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
-.reply-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 0 2px 0 8px; border: 1px solid var(--chip-line); border-radius: 999px; font-size: calc(12px * var(--fs)); }
-.reply-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reply-chip-x { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink-soft); line-height: 1; cursor: pointer; }
-.reply-chip-x:hover { background: var(--soft); }
-.reply-input { flex: 1 1 80px; min-width: 80px; padding: 2px 0; border: 0; outline: 0; background: transparent; font: inherit; }
-.reply-more { flex: none; display: flex; gap: 8px; }
-.reply-link { padding: 2px 0; border: 0; background: none; color: var(--ink-soft); font: inherit; cursor: pointer; }
-.reply-link:hover { color: var(--accent); }
-#reply-body { display: block; box-sizing: border-box; width: 100%; min-height: 64px; max-height: 40vh; padding: 10px 12px; border: 0; outline: 0; background: transparent; font: inherit; line-height: 1.5; resize: vertical; }
-.reply-foot { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; }
-.reply-foot #reply-discard { margin-left: auto; }
-.reply-foot .text-btn:disabled { opacity: .4; cursor: default; }
+#mail-reply { position: sticky; bottom: 0; z-index: 2; flex: none; margin: auto -24px 0 -32px; padding: 10px 14px; background: var(--bar); border-top: 1px solid var(--line); }
+.mail-reply-card { display: flex; flex-direction: column; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
+.mail-reply-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.mail-reply-mode { position: relative; flex: none; display: inline-flex; align-items: center; color: var(--ink-soft); }
+#mail-reply-mode, #new-mail-from-select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 14px 2px 0; cursor: pointer; }
+.mail-reply-mode::after { content: ""; position: absolute; right: 2px; top: 50%; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+.mail-reply-key { flex: none; min-width: 2.6em; padding: 2px 0; color: var(--ink-soft); }
+.mail-reply-field { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.mail-reply-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 0 2px 0 8px; border: 1px solid var(--chip-line); border-radius: 999px; font-size: calc(12px * var(--fs)); }
+.mail-reply-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-reply-chip-x { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink-soft); line-height: 1; cursor: pointer; }
+.mail-reply-chip-x:hover { background: var(--soft); }
+.mail-reply-input { flex: 1 1 80px; min-width: 80px; padding: 2px 0; border: 0; outline: 0; background: transparent; font: inherit; }
+.mail-reply-more { flex: none; display: flex; gap: 8px; }
+.mail-reply-link { padding: 2px 0; border: 0; background: none; color: var(--ink-soft); font: inherit; cursor: pointer; }
+.mail-reply-link:hover { color: var(--accent); }
+#mail-reply-body { display: block; box-sizing: border-box; width: 100%; min-height: 64px; max-height: 40vh; padding: 10px 12px; border: 0; outline: 0; background: transparent; font: inherit; line-height: 1.5; resize: vertical; }
+.mail-reply-foot { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; }
+.mail-reply-foot #mail-reply-discard { margin-left: auto; }
+.mail-reply-foot .text-btn:disabled { opacity: .4; cursor: default; }
 /* M-11: the screen that writes a new mail takes the place of the thread. The header is a band like the thread's (it holds "戻る", the title and "破棄"); the rows are those of the reply field without its card, and "送信" is in a band fixed at the bottom of the area, as the reply field is. */
 #new-mail-header { box-sizing: border-box; min-height: var(--header-h); padding: 0 32px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #new-mail-header .icon-btn { color: #444746; border-radius: 50%; }
 #new-mail-header #new-mail-discard { flex: none; height: var(--header-btn); padding: 0 12px; }
 #main:has(> #new-mail:not([hidden])) { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
 #main > #new-mail:not([hidden]) { flex: 1 0 auto; display: flex; flex-direction: column; padding-top: 8px; }
-#new-mail .reply-row { padding: 8px 0; }
-#new-mail .reply-key { min-width: 3.4em; }
+#new-mail .mail-reply-row { padding: 8px 0; }
+#new-mail .mail-reply-key { min-width: 3.4em; }
 #new-mail-subject { flex: 1; min-width: 0; padding: 2px 0; border: 0; outline: 0; background: transparent; font: inherit; }
 #new-mail-body { flex: 1; display: block; box-sizing: border-box; width: 100%; min-height: 200px; padding: 12px 0; border: 0; outline: 0; background: transparent; font: inherit; line-height: 1.5; resize: none; }
 #new-mail-foot { position: sticky; bottom: 0; z-index: 2; flex: none; display: flex; align-items: center; gap: 8px; margin: auto -24px 0 -32px; padding: 10px 32px; background: var(--bar); border-top: 1px solid var(--line); }

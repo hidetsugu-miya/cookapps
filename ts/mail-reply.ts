@@ -22,15 +22,15 @@ let choices = NOBODY;
 // The thread whose recipients the chips hold (null: the next bind fills them), so that Gmail's answer for the same thread leaves what was typed and edited.
 let filled: string | null = null;
 let sending = false;
-const recipients = recipientRows("reply");
+const recipients = recipientRows("mail-reply");
 // Reads the thread again after a reply went out.
 let reload: (target: ReplyTarget) => Promise<void>;
 
-const mode = () => $<HTMLSelectElement>("reply-mode");
-const body = () => $<HTMLTextAreaElement>("reply-body");
+const mode = () => $<HTMLSelectElement>("mail-reply-mode");
+const body = () => $<HTMLTextAreaElement>("mail-reply-body");
 
 function syncSend() {
-  $<HTMLButtonElement>("reply-send").disabled = sending || body().value.trim() === "";
+  $<HTMLButtonElement>("mail-reply-send").disabled = sending || body().value.trim() === "";
 }
 
 // To and Cc are the kind of reply's; Bcc is left as it is.
@@ -52,7 +52,7 @@ export function resetReply() {
   choices = NOBODY;
   filled = null;
   clear();
-  $("reply").hidden = true;
+  $("mail-reply").hidden = true;
 }
 
 // Shows the field for `thread`, with the recipients Rust worked out. Drawn again for the same thread (Gmail answered with a change, or a reply went out), it keeps the text and the recipients already there.
@@ -64,7 +64,7 @@ export function bindReply(thread: ReplyTarget, next: ReplyChoices) {
     filled = key;
     fill(mode().value as Mode);
   }
-  $("reply").hidden = false;
+  $("mail-reply").hidden = false;
   syncSend();
 }
 
@@ -106,6 +106,6 @@ export function initReply(reloadThread: (target: ReplyTarget) => Promise<void>) 
   mode().onchange = () => fill(mode().value as Mode);
   recipients.init();
   body().oninput = syncSend;
-  $("reply-send").onclick = send;
-  $("reply-discard").onclick = clear;
+  $("mail-reply-send").onclick = send;
+  $("mail-reply-discard").onclick = clear;
 }

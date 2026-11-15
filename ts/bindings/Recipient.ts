@@ -5,7 +5,7 @@
  */
 export type Recipient = { 
 /**
- * What a chip shows: the name, else the address.
+ * What a chip shows: the name, else the address. A Reply-To address that is none of the From's shows both (`Name <addr>`), so that the chip tells where the reply really goes.
  */
 label: string, 
 /**
