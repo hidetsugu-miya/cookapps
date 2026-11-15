@@ -17,7 +17,6 @@ import {
   claudeReady,
   isoDate,
   mock,
-  orcaOverview,
   orcaRow,
   orcaSsh,
   orcaTerminal,
@@ -29,7 +28,6 @@ import {
   setClock,
   slackThread,
   span,
-  streamList,
   task,
   threadMessage,
   timeline,
@@ -41,6 +39,7 @@ import {
   watchedMessage,
   weekOfToday,
 } from "../support";
+import { orcaOverview, streamList } from "../orca-support";
 
 const OUT = process.env.SHOT_OUT!;
 const now = new Date();
@@ -158,7 +157,7 @@ const worktreeList = (): OrcaWorktree[] => [
 ];
 // The instruction typed in the pane of the handoff photo (A-9).
 const INSTRUCTION = "この差額の原因を調べて、直してください。同じ条件のお客さまがほかにいないかも確かめてください。";
-// The target is a saved environment, so that its list and its terminal are streamed (A-12) and the terminal has colors.
+// The target is a saved environment, so that its list and its terminal are streamed (A-12) and the terminal has colors. `orcaOverview` and `streamList` of `orca-support.ts` put each item in it, as Rust does.
 const ENVIRONMENT = "build-server";
 const streamOverview = () => orcaOverview([], [], { target: ENVIRONMENT, environments: [ENVIRONMENT], ssh: [orcaSsh("s1", "staging"), orcaSsh("s2", "ops-bastion")] });
 const terminals = () => [orcaTerminal("billing-api", "zsh", { branch: "feat/csv-export", path: path("billing-api", "feat/csv-export") })];
@@ -483,7 +482,7 @@ describe("readme shots", () => {
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
     await waitForCalls("orca_stream_open");
-    await sendStream(streamList(rows(), worktreeList(), terminals()));
+    await sendStream(streamList(rows(), worktreeList(), terminals(), ENVIRONMENT));
     await waitForCount("#orca-feed .orca-project", 12);
     await $(`#orca-feed .orca-project[data-key="proj_billing-api"]`).click();
     await $(`.orca-tabs [data-tab="claude:tab_${SHOT_SESSION}:leaf_1"] .orca-tab-btn`).click();
