@@ -862,7 +862,17 @@ describe("inbox", () => {
       await bootTwoAccounts();
       const send = await mock("send_mail", true);
       await compose();
-      await $("#new-mail-from-select").selectByVisibleText(other);
+      // Sets the select as the user does (value, then change); the real WebView's select popup is not driven.
+      await browser.execute(
+        (id, v) => {
+          if (!window.__e2e_once__(id)) return;
+          const select = document.getElementById("new-mail-from-select") as HTMLSelectElement;
+          select.value = v;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        },
+        onceId(),
+        other,
+      );
       await $("#new-mail-to-input").setValue("dan@example.com");
       await browser.keys(["Enter"]);
       await $("#new-mail-body").setValue("Hi");
