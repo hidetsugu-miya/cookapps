@@ -2121,22 +2121,19 @@ describe("todo detail of a subtask: the parent's description", () => {
   const text = "#todo-detail .parent-desc-text";
   const long = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
 
-  it("opens the description under the chip when the name is pressed, and folds it when pressed again", async () => {
+  it("shows the description under the chip, with no button, and the name as plain text", async () => {
     await openFlightsUnder("Book by **Friday**");
-    expect(await $(name).getTagName()).toBe("button");
-    await expect($(name)).toHaveAttribute("aria-expanded", "false");
-    expect(await count(panel)).toBe(0);
-    await $(name).click();
-    await expect($(name)).toHaveAttribute("aria-expanded", "true");
+    expect(await $(name).getTagName()).toBe("span");
+    await expect($(name)).not.toHaveAttribute("aria-expanded");
     await expect($(panel)).toBeDisplayed();
     // Drawn as the description is: Markdown.
     await expect($(`${text} strong`)).toHaveText("Friday");
     // Right under the chip, above the name row.
     expect(await browser.execute(() => document.querySelector("#todo-detail .parent-chip")!.nextElementSibling!.className)).toBe("parent-desc");
     expect(await browser.execute(() => document.querySelector("#todo-detail .parent-desc")!.nextElementSibling!.className)).toBe("head");
+    expect(await count(`${panel} button`)).toBe(0);
     await $(name).click();
-    await expect($(name)).toHaveAttribute("aria-expanded", "false");
-    expect(await count(panel)).toBe(0);
+    await expect($(panel)).toBeDisplayed();
   });
 
   it("cuts a long name of the parent at one line inside the chip", async () => {
@@ -2159,16 +2156,15 @@ describe("todo detail of a subtask: the parent's description", () => {
     expect(shape).toEqual({ overflow: "ellipsis", one: true, cut: true, inside: true });
   });
 
-  it("keeps the arrow button going to the parent, whether the description is open or not", async () => {
+  it("keeps the arrow button going to the parent", async () => {
     await openFlightsUnder("Book by Friday");
-    await $(name).click();
     await expect($(panel)).toBeDisplayed();
     await $("#todo-detail .parent-link").click();
     await expect($("#todo-detail .name")).toHaveValue("Plan trip");
     expect(await count("#todo-detail .parent-chip")).toBe(0);
   });
 
-  it("has the name as plain text, which opens nothing, when the parent has no description", async () => {
+  it("shows no description when the parent has none", async () => {
     await openFlightsUnder("");
     await expect($(name)).toHaveText("Plan trip");
     expect(await $(name).getTagName()).toBe("span");
@@ -2176,9 +2172,8 @@ describe("todo detail of a subtask: the parent's description", () => {
     expect(await count(panel)).toBe(0);
   });
 
-  it("cuts a long description at 3 lines on the screen, and copies all of it with コピー", async () => {
+  it("cuts a long description at 3 lines on the screen", async () => {
     await openFlightsUnder(long);
-    await $(name).click();
     const shape = await browser.execute((q) => {
       const el = document.querySelector<HTMLElement>(q)!;
       const line = parseFloat(getComputedStyle(el).lineHeight);
@@ -2187,17 +2182,10 @@ describe("todo detail of a subtask: the parent's description", () => {
     expect(shape.clamp).toBe("3");
     expect(shape.cut).toBe(true);
     expect(shape.lines).toBeLessThanOrEqual(3.05);
-    await stubClipboard();
-    await expect($(`${panel} button`)).toHaveText("コピー");
-    await $(`${panel} button`).click();
-    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "nothing was copied" });
-    expect(await copiedTexts()).toEqual([long]);
-    await expect($(".toast")).toHaveText("説明をコピーしました");
   });
 
   it("shows a short description in full, and lets its text be selected", async () => {
     await openFlightsUnder("short");
-    await $(name).click();
     const shape = await browser.execute((q) => {
       const el = document.querySelector<HTMLElement>(q)!;
       return { cut: el.scrollHeight > el.clientHeight, select: getComputedStyle(el).webkitUserSelect };
@@ -2205,26 +2193,12 @@ describe("todo detail of a subtask: the parent's description", () => {
     expect(shape).toEqual({ cut: false, select: "text" });
   });
 
-  it("shows the error and keeps the description open when the clipboard refuses", async () => {
+  it("shows the description again when the subtask is opened again", async () => {
     await openFlightsUnder("Book by Friday");
-    await browser.execute(() => {
-      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => Promise.reject(new Error("denied")) } });
-    });
-    await $(name).click();
-    await $(`${panel} button`).click();
-    await expect($("#error")).toHaveText(expect.stringContaining("denied"));
-    await expect($(panel)).toBeDisplayed();
-    await expect($(".toast")).not.toBeDisplayed();
-  });
-
-  it("starts folded when another task is opened", async () => {
-    await openFlightsUnder("Book by Friday");
-    await $(name).click();
     await expect($(panel)).toBeDisplayed();
     await $("#todo-detail .parent-link").click();
     await subRowOf("Book flights").click();
-    await expect($(name)).toHaveAttribute("aria-expanded", "false");
-    expect(await count(panel)).toBe(0);
+    await expect($(panel)).toBeDisplayed();
   });
 });
 
