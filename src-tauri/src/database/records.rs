@@ -281,9 +281,9 @@ pub(super) fn cells_of(row: &MySqlRow) -> Vec<DatabaseCell> {
         .collect()
 }
 
-/// Whether the estimate is read for `page`: the first page reads it (a press on the table, and a reload of that page), a later one uses the one the screen holds, so the walk through the pages costs one round trip each.
-pub fn reads_estimate(page: u32) -> bool {
-    page == 0
+/// Whether the estimate is read for `page`: the first page reads it (a press on the table, and a reload of that page), a later one uses the one the screen holds (`known`), so the walk through the pages costs one round trip each; a screen that holds none (a read failed meanwhile) has it read again.
+pub fn reads_estimate(page: u32, known: Option<u64>) -> bool {
+    page == 0 || known.is_none()
 }
 
 /// The page `page` (from 0) of `database`.`table` on the session, and the estimated rows of the table (`known` is the one the screen holds, used for a page that does not read it).
@@ -308,7 +308,7 @@ pub async fn read(
             cells_of(&row)
         });
     let (rows, has_more) = collect_limited(Box::pin(stream), PAGE_SIZE as usize).await?;
-    let estimate = if reads_estimate(page) {
+    let estimate = if reads_estimate(page, known) {
         sqlx::query_scalar::<_, Option<u64>>(ESTIMATE)
             .bind(database)
             .bind(table)
@@ -584,10 +584,12 @@ mod tests {
     }
 
     #[test]
-    fn the_estimate_is_read_with_the_first_page_only() {
-        assert!(reads_estimate(0));
+    fn the_estimate_is_read_with_the_first_page_and_when_the_screen_holds_none() {
+        assert!(reads_estimate(0, Some(5)));
+        assert!(reads_estimate(0, None));
         for page in [1, 2, 1000] {
-            assert!(!reads_estimate(page), "{page}");
+            assert!(!reads_estimate(page, Some(5)), "{page}");
+            assert!(reads_estimate(page, None), "{page}");
         }
     }
 

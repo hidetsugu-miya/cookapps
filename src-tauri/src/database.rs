@@ -427,12 +427,17 @@ fn saved_login(
     Ok((profile, password))
 }
 
-/// Whether the login read again (`now`) is the one a session was opened with: a connection that was edited or deleted while it opened is not.
+/// Whether the login read again (`now`) is the one a session was opened with: a connection that was edited or deleted while it opened is not (the answer is then what the screen is told).
+/// A login that could not be read again (the keychain, the file) is told as its own error, never as a change.
 fn login_unchanged(
     opened: &(DatabaseProfile, String),
     now: &Result<(DatabaseProfile, String), String>,
-) -> bool {
-    now.as_ref().is_ok_and(|now| now == opened)
+) -> Result<(), String> {
+    match now {
+        Err(e) => Err(e.clone()),
+        Ok(now) if now == opened => Ok(()),
+        Ok(_) => Err("接続が変更または削除されました。もう一度開いてください".to_owned()),
+    }
 }
 
 /// Opens the tunnel and the read only session of `profile` and keeps it in `sessions`. A tunnel opened for a session that cannot be logged in to is closed again.
@@ -569,10 +574,10 @@ pub async fn database_connect(
         })
         .await
         .map_err(|e| e.to_string())?;
-        if !login_unchanged(&(profile, password), &now) {
+        if let Err(why) = login_unchanged(&(profile, password), &now) {
             let closed = sessions.disconnect(&tunnels, &id).await;
-            after_close(closed, "接続が変更または削除されました")?;
-            return Err("接続が変更または削除されました。もう一度開いてください".to_owned());
+            after_close(closed, "接続は閉じました")?;
+            return Err(why);
         }
     }
     match sessions.databases(&tunnels, &id).await {
@@ -596,7 +601,7 @@ pub async fn database_tables(
 }
 
 /// One page of the records of `table` in `database` on the open connection `id` (D-4): `page` counts from 0, and each value is already text.
-/// The estimated rows are read with the page 0; `estimate` is the one the screen holds from it, which a later page answers again.
+/// The estimated rows are read with the page 0, or when `estimate` is none; `estimate` is the one the screen holds from it, which a later page answers again.
 #[tauri::command]
 pub async fn database_records(
     sessions: tauri::State<'_, session::Sessions>,
@@ -1253,26 +1258,42 @@ mod tests {
         let a = save(&dir, &passwords, direct("a"), Some("pa".to_owned())).unwrap();
         let id = a.profile.id.clone();
         let opened = saved_login(&dir, &passwords, &id).unwrap();
-        assert!(login_unchanged(
-            &opened,
-            &saved_login(&dir, &passwords, &id)
-        ));
+        assert_eq!(
+            login_unchanged(&opened, &saved_login(&dir, &passwords, &id)),
+            Ok(())
+        );
         // Edited: another host, or only the password.
         let moved = DatabaseProfile {
             db_host: "10.0.0.9".to_owned(),
             ..a.profile.clone()
         };
         save(&dir, &passwords, moved, None).unwrap();
-        assert!(!login_unchanged(
-            &opened,
-            &saved_login(&dir, &passwords, &id)
-        ));
+        let changed = "接続が変更または削除されました。もう一度開いてください";
+        assert_eq!(
+            login_unchanged(&opened, &saved_login(&dir, &passwords, &id)),
+            Err(changed.to_owned())
+        );
         let now = saved_login(&dir, &passwords, &id).unwrap();
         save(&dir, &passwords, now.0.clone(), Some("new".to_owned())).unwrap();
-        assert!(!login_unchanged(&now, &saved_login(&dir, &passwords, &id)));
-        // Deleted.
+        assert_eq!(
+            login_unchanged(&now, &saved_login(&dir, &passwords, &id)),
+            Err(changed.to_owned())
+        );
+        // Deleted: the file no longer has it, which is a change.
         delete(&dir, &passwords, &id).unwrap();
-        assert!(!login_unchanged(&now, &saved_login(&dir, &passwords, &id)));
+        let gone = saved_login(&dir, &passwords, &id);
+        assert!(gone.is_err());
+        assert_eq!(login_unchanged(&now, &gone), Err(gone.clone().unwrap_err()));
+    }
+
+    #[test]
+    fn a_login_that_cannot_be_read_again_is_told_as_that_error_and_not_as_a_change() {
+        let opened = (direct("a"), "pa".to_owned());
+        let failed = Err("キーチェーンを読めません".to_owned());
+        assert_eq!(
+            login_unchanged(&opened, &failed),
+            Err("キーチェーンを読めません".to_owned())
+        );
     }
 
     #[test]

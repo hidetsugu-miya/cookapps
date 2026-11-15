@@ -5,7 +5,7 @@
 //! TLS is the one the app already has (rustls with `aws_lc_rs`, the feature `tls-rustls-aws-lc-rs` of sqlx): it is used when the server offers it (`MySqlSslMode::Preferred`),
 //! which is also what carries the password of `caching_sha2_password`; the RSA path of sqlx (the crate `rsa`) is not built in.
 //! A connection that goes over a network (no tunnel, and a host that is not the machine itself) requires TLS (`MySqlSslMode::Required`, `ssl_mode_of`), so that nobody on the way can make it fall back to plain text; the certificate is not verified in either mode.
-//! The time zone and the `sql_mode` of the session are the server's own: sqlx's defaults (`time_zone='+00:00'`, `PIPES_AS_CONCAT`) are turned off, so a TIMESTAMP and `NOW()` read as any other client reads them and `||` is OR.
+//! The time zone and the `sql_mode` of the session are the server's own: sqlx's defaults (`time_zone='+00:00'`, `PIPES_AS_CONCAT`, `NO_ENGINE_SUBSTITUTION`) are turned off, so a TIMESTAMP and `NOW()` read as any other client reads them and `||` is OR.
 //! The decisions (what an error of sqlx or of the server is, and what the screen is told for it) are pure functions.
 //! A tunnel that opened while MySQL does not answer (the bastion does not reach the DB) is a failure of its own and never reads as a refused login.
 
@@ -154,7 +154,8 @@ async fn open(
         .username(username)
         .ssl_mode(ssl_mode_of(endpoint))
         .timezone(None)
-        .pipes_as_concat(false);
+        .pipes_as_concat(false)
+        .no_engine_substitution(false);
     if !password.is_empty() {
         options = options.password(password);
     }
@@ -511,11 +512,12 @@ mod tests {
         let connection = open(&endpoint, "reader", "", SECOND).await.unwrap();
         connection.close().await.unwrap();
         let queries = server.await.unwrap();
-        // sqlx's own preface sets time_zone='+00:00' and adds PIPES_AS_CONCAT to the sql_mode unless it is told not to.
+        // sqlx's own preface sets time_zone='+00:00' and adds PIPES_AS_CONCAT and NO_ENGINE_SUBSTITUTION to the sql_mode unless it is told not to.
         assert!(!queries.is_empty());
         for query in &queries {
             assert!(!query.contains("time_zone"), "{query}");
             assert!(!query.contains("PIPES_AS_CONCAT"), "{query}");
+            assert!(!query.contains("NO_ENGINE_SUBSTITUTION"), "{query}");
         }
     }
 
