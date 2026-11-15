@@ -9,6 +9,7 @@ import type { Claude } from "./bindings/Claude";
 import type { ClaudeConnection } from "./bindings/ClaudeConnection";
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
+import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { Effort } from "./bindings/Effort";
 import type { EditorSettings } from "./bindings/EditorSettings";
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
@@ -414,6 +415,14 @@ export interface Commands {
   database_profile_delete: { args: { id: string }; result: null };
   // Tries the connection as typed (D-2): opens the tunnel when it uses SSM, logs in read only, reads `SELECT VERSION()`, closes the tunnel. An empty `password` is the saved one of `profile.id`. Answers the version.
   database_test: { args: { profile: DatabaseProfile; password: string }; result: string };
+  // D-3: opens the connection `id` when it is not open (the tunnel, then a read only session) and answers the names of its databases. Called at every opening of its row: an open connection is reused.
+  database_connect: { args: { id: string }; result: string[] };
+  // D-3: the tables of a database of the open connection `id`, each with its estimated rows, size and engine as text.
+  database_tables: { args: { id: string; database: string }; result: DatabaseTable[] };
+  // D-3: closes the connection `id` and its tunnel.
+  database_disconnect: { args: { id: string }; result: null };
+  // D-3: the ids of the connections that are open now.
+  database_connections: { args: undefined; result: string[] };
 }
 
 // The commands that take JSON arguments; `todoist_upload` takes raw bytes (`invokeRaw`).

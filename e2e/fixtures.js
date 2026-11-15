@@ -71,6 +71,11 @@ const answers = {
   slack_file_images: {},
   // D-1: no connection saved; a spec that saves or deletes one mocks `database_profiles` with the list it should read next, and `database_profile_save` or `database_profile_delete`; `database_test` (D-2) is mocked by the spec that tests a connection.
   database_profiles: [],
+  // D-3: a connection opens with no database and a database with no table, nothing is open to ask about, and a disconnect succeeds; a spec that opens a tree mocks `database_connect` and `database_tables`.
+  database_connect: [],
+  database_tables: [],
+  database_connections: [],
+  database_disconnect: null,
   // No orca command: the Orca screen reads once and stops.
   orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: true },
   orca_destination: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], hosts: [], terminals: [], ssh: [], known: false },

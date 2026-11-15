@@ -207,6 +207,7 @@ pub fn run() {
         .manage(orca::OrcaMirror::default())
         .manage(orca_stream::OrcaStream::default())
         .manage(database::ssm::Tunnels::default())
+        .manage(database::session::Sessions::default())
         .manage(Mutex::new(Badge::default()))
         .setup(|app| {
             // No Dock icon, and no focus taken from the developer's apps while the E2E run drives the window.
@@ -372,6 +373,10 @@ pub fn run() {
             database::database_profile_save,
             database::database_profile_delete,
             database::database_test,
+            database::database_connect,
+            database::database_tables,
+            database::database_disconnect,
+            database::database_connections,
             markdown_patch::markdown_split,
             markdown_patch::markdown_patch,
             ghostty::ghostty_saved,
@@ -392,8 +397,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build tauri application")
         .run(|app, event| {
-            // The port forwards of the database screen keep a plugin process and an SSM session each: close them with the app.
+            // The open connections of the database screen, and their port forwards (a plugin process and an SSM session each): close them with the app.
             if let tauri::RunEvent::Exit = event {
+                let sessions = app.state::<database::session::Sessions>();
+                tauri::async_runtime::block_on(sessions.close_all());
                 let tunnels = app.state::<database::ssm::Tunnels>();
                 tauri::async_runtime::block_on(tunnels.close_all());
             }

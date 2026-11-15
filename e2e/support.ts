@@ -9,6 +9,7 @@ import type { ClaudeConnection } from "../ts/bindings/ClaudeConnection";
 import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
 import type { DatabaseProfileView } from "../ts/bindings/DatabaseProfileView";
+import type { DatabaseTable } from "../ts/bindings/DatabaseTable";
 import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
 import type { FontSettings } from "../ts/bindings/FontSettings";
 import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
@@ -539,6 +540,9 @@ export const databaseProfile = (id: string, name: string, extra: Partial<Databas
   passwordSaved: false,
   ...extra,
 });
+
+// A table of a database as `database_tables` answers it (D-3): the row count, the size and the engine as Rust words them.
+export const databaseTable = (name: string, extra: Partial<DatabaseTable> = {}): DatabaseTable => ({ name, engine: "InnoDB", rows: "1,200", size: "1.5 MB", ...extra });
 
 export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 

@@ -1,9 +1,12 @@
-// The database screen (D-1): the connections at the left (the side menu), and at the right the work pane, which holds nothing yet (the tree of databases and tables and the tabs of records, structure and SQL come next).
-// This module holds the list that `database_profiles` last answered and what is selected; the side menu only draws it (database-side.ts), and the popup (database-form.ts) only asks for the fields.
+// The database screen (D-1, D-3): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last.
+// This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the popup (database-form.ts) only asks for the fields.
+// Rust holds the open connections (the session and its tunnel); an opening of a row reads again, so the tree is never kept apart from the server.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
-import { drawDatabaseSide, type SideActions } from "./database-side.js";
+import type { DatabaseTable } from "./bindings/DatabaseTable";
+import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm } from "./database-form.js";
+import { drawDatabaseWork, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { confirmDelete } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
@@ -11,12 +14,73 @@ import { invoke } from "./ipc.js";
 import { initSplit } from "./split.js";
 import { show, showError } from "./view.js";
 
+interface DatabaseState {
+  expanded: boolean;
+  loading: boolean;
+  error: string | null;
+  tables: DatabaseTable[];
+}
+
+// What a connection has opened. It is dropped when the connection is closed, so a state that is held always belongs to a connection of the list.
+interface ConnectionState {
+  expanded: boolean;
+  connected: boolean;
+  loading: boolean;
+  error: string | null;
+  databases: string[];
+  byName: Map<string, DatabaseState>;
+}
+
 let profiles: DatabaseProfileView[] = [];
-let selected: string | null = null;
+let selected: Selected | null = null;
+const connections = new Map<string, ConnectionState>();
+// The connections whose disconnect is on its way: a press on them waits, so that an opening cannot meet the closing.
+const closing = new Set<string>();
 // The newest read: an older one that ends later is dropped.
 let loadSeq = 0;
 
-const draw = () => drawDatabaseSide({ profiles, selected }, actions);
+const emptyConnection = (): ConnectionState => ({ expanded: false, connected: false, loading: false, error: null, databases: [], byName: new Map() });
+const databaseOf = (c: ConnectionState, name: string) => {
+  let d = c.byName.get(name);
+  if (!d) {
+    d = { expanded: false, loading: false, error: null, tables: [] };
+    c.byName.set(name, d);
+  }
+  return d;
+};
+
+function sideState(): SideState {
+  return {
+    selected,
+    connections: profiles.map((profile) => {
+      const c = connections.get(profile.id) ?? emptyConnection();
+      return {
+        profile,
+        expanded: c.expanded,
+        connected: c.connected,
+        loading: c.loading,
+        error: c.error,
+        databases: c.databases.map((name) => {
+          const d = databaseOf(c, name);
+          return { name, expanded: d.expanded, loading: d.loading, error: d.error, tables: d.tables.map((t) => t.name) };
+        }),
+      };
+    }),
+  };
+}
+
+// The tables of the database that was pressed last; none while a connection or a connection's databases are all that was pressed.
+function workState(): WorkState | null {
+  if (selected?.database == null) return null;
+  const d = connections.get(selected.id)?.byName.get(selected.database);
+  if (!d) return null;
+  return { database: selected.database, loading: d.loading, error: d.error, tables: d.tables, table: selected.table };
+}
+
+const draw = () => {
+  drawDatabaseSide(sideState(), actions);
+  drawDatabaseWork(workState());
+};
 
 // Reads the connections from Rust (the file and the keychain are the only copy) and draws them.
 async function load() {
@@ -25,15 +89,39 @@ async function load() {
     const list = await invoke("database_profiles");
     if (seq !== loadSeq) return;
     profiles = list;
-    if (selected !== null && !profiles.some((p) => p.id === selected)) selected = null;
+    // A connection that is gone from the list has nothing open any more (Rust closed it with the delete).
+    for (const id of [...connections.keys()]) if (!profiles.some((p) => p.id === id)) connections.delete(id);
+    if (selected !== null && !profiles.some((p) => p.id === selected?.id)) selected = null;
     draw();
   } catch (e) {
     if (seq === loadSeq) showError(e);
   }
 }
 
+// Drops what a connection shows when Rust no longer holds its session (a disconnect that was asked, an edit that closed it, a stream that broke); answers the ids dropped.
+async function dropClosed(): Promise<string[]> {
+  let open: string[];
+  try {
+    open = await invoke("database_connections");
+  } catch {
+    return [];
+  }
+  const dropped = [...connections].filter(([id, c]) => c.connected && !open.includes(id)).map(([id]) => id);
+  for (const id of dropped) {
+    connections.delete(id);
+    if (selected?.id === id) selected = { id, database: null, table: null };
+  }
+  if (dropped.length > 0) draw();
+  return dropped;
+}
+
 async function save(profile: DatabaseProfile, password: string) {
-  await invoke("database_profile_save", { profile, password });
+  try {
+    await invoke("database_profile_save", { profile, password });
+  } finally {
+    // Rust closes an edited connection that was open.
+    if (profile.id !== "") await dropClosed();
+  }
   await load();
 }
 
@@ -47,17 +135,108 @@ async function remove(profile: DatabaseProfileView, anchor: Element) {
     } catch (e) {
       showError(e);
     }
+    await dropClosed();
     await load();
   });
 }
 
+// Opens the connection (when it is not open) and reads its databases.
+async function openConnection(profile: DatabaseProfileView) {
+  const c = connections.get(profile.id) ?? emptyConnection();
+  connections.set(profile.id, c);
+  c.expanded = true;
+  c.loading = true;
+  c.error = null;
+  draw();
+  try {
+    const names = await invoke("database_connect", { id: profile.id });
+    // The connection was deleted while it opened: Rust holds a session that no row shows.
+    if (!profiles.some((p) => p.id === profile.id)) {
+      invoke("database_disconnect", { id: profile.id }).catch(showError);
+      return;
+    }
+    if (connections.get(profile.id) !== c) return;
+    c.connected = true;
+    c.databases = names;
+    for (const name of [...c.byName.keys()]) if (!names.includes(name)) c.byName.delete(name);
+  } catch (e) {
+    if (connections.get(profile.id) !== c) return;
+    c.connected = false;
+    c.databases = [];
+    c.byName.clear();
+    c.error = String(e);
+  }
+  c.loading = false;
+  draw();
+}
+
+async function openDatabase(profile: DatabaseProfileView, c: ConnectionState, name: string) {
+  const d = databaseOf(c, name);
+  d.expanded = true;
+  d.loading = true;
+  d.error = null;
+  draw();
+  try {
+    const tables = await invoke("database_tables", { id: profile.id, database: name });
+    if (connections.get(profile.id) !== c) return;
+    d.tables = tables;
+  } catch (e) {
+    if (connections.get(profile.id) !== c) return;
+    d.tables = [];
+    d.error = String(e);
+    // A stream that broke closes the connection: its tree closes and says why.
+    if ((await dropClosed()).includes(profile.id)) {
+      connections.set(profile.id, { ...emptyConnection(), expanded: true, error: d.error });
+      draw();
+      return;
+    }
+  }
+  d.loading = false;
+  draw();
+}
+
 const actions: SideActions = {
-  // A connection opens nothing yet.
-  choose: (profile) => {
-    selected = profile.id;
+  // A row that is closed opens (and is read again); one that is open closes and stays connected; one that failed tries again; one that is being read waits.
+  pressConnection: (profile) => {
+    selected = { id: profile.id, database: null, table: null };
+    const c = connections.get(profile.id);
+    if (closing.has(profile.id) || c?.loading) return draw();
+    if (c?.expanded && c.error === null) {
+      c.expanded = false;
+      return draw();
+    }
+    openConnection(profile);
+  },
+  pressDatabase: (profile, name) => {
+    selected = { id: profile.id, database: name, table: null };
+    const c = connections.get(profile.id);
+    if (!c) return draw();
+    const d = databaseOf(c, name);
+    if (d.loading) return draw();
+    if (d.expanded && d.error === null) {
+      d.expanded = false;
+      return draw();
+    }
+    openDatabase(profile, c, name);
+  },
+  // The table list stays as it is; the tabs of the table come here later.
+  pressTable: (profile, database, table) => {
+    selected = { id: profile.id, database, table };
     draw();
   },
   edit: (profile) => openDatabaseForm(profile, save, test),
+  disconnect: async (profile) => {
+    connections.delete(profile.id);
+    if (selected?.id === profile.id) selected = { id: profile.id, database: null, table: null };
+    closing.add(profile.id);
+    draw();
+    try {
+      await invoke("database_disconnect", { id: profile.id });
+    } catch (e) {
+      showError(e);
+    }
+    closing.delete(profile.id);
+  },
   remove,
 };
 

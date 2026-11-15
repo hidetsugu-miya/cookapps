@@ -162,6 +162,41 @@ pub async fn connect(
         .map_err(|f| f.message(endpoint))
 }
 
+/// What a query on an open session that failed is: the words for the screen, and whether the session is gone with it.
+/// A broken stream, TLS or the protocol (the session cannot be used again) is lost; an error the server answered, or a value that does not decode, is not.
+#[derive(Debug, PartialEq)]
+pub struct QueryFailure {
+    pub message: String,
+    pub lost: bool,
+}
+
+pub fn query_failure(error: &sqlx::Error) -> QueryFailure {
+    match error {
+        sqlx::Error::Io(_) | sqlx::Error::Tls(_) | sqlx::Error::Protocol(_) => QueryFailure {
+            message: format!(
+                "MySQL との接続が切れました。もう一度開いてください: {}",
+                shorten(&error.to_string())
+            ),
+            lost: true,
+        },
+        sqlx::Error::Database(db) => QueryFailure {
+            message: match db.try_downcast_ref::<MySqlDatabaseError>() {
+                Some(e) => format!(
+                    "MySQL がエラーを返しました ({}): {}",
+                    e.number(),
+                    shorten(e.message())
+                ),
+                None => format!("MySQL がエラーを返しました: {}", shorten(db.message())),
+            },
+            lost: false,
+        },
+        other => QueryFailure {
+            message: format!("問い合わせに失敗しました: {}", shorten(&other.to_string())),
+            lost: false,
+        },
+    }
+}
+
 /// The version the server answers to `SELECT VERSION()`, on a session that is closed afterwards.
 pub async fn server_version(
     endpoint: &Endpoint,
@@ -289,6 +324,21 @@ mod tests {
             .contains("db.example.com:3306"));
         assert!(Failure::Timeout.message(&direct).contains("時間内"));
         assert!(!Failure::NoAnswer.message(&direct).contains("トンネル"));
+    }
+
+    #[test]
+    fn a_broken_stream_loses_the_session_and_an_error_of_the_decoding_does_not() {
+        let broken = query_failure(&sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "broken pipe",
+        )));
+        assert!(broken.lost);
+        assert!(broken.message.starts_with("MySQL との接続が切れました"));
+        assert!(broken.message.contains("broken pipe"));
+        assert!(query_failure(&sqlx::Error::Protocol("unexpected packet".to_owned())).lost);
+        let other = query_failure(&sqlx::Error::RowNotFound);
+        assert!(!other.lost);
+        assert!(other.message.starts_with("問い合わせに失敗しました"));
     }
 
     #[test]

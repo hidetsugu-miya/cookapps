@@ -4,9 +4,11 @@
 //! The password of a profile is in the OS keychain (service `KEYRING_SERVICE`, user the profile's id), never in the file and never in the answer of a command:
 //! the screen is told only whether one is saved (`DatabaseProfileView::password_saved`).
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
+//! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the tunnel, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_disconnect` closes it and its tunnel.
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
 pub mod mysql;
+pub mod session;
 pub mod ssm;
 
 use std::{path::Path, sync::Mutex};
@@ -350,14 +352,11 @@ fn test_outcome(
     }
 }
 
-/// Tests `profile` as typed (not as saved): opens the tunnel when it uses SSM, logs in, reads `SELECT VERSION()` and closes the tunnel.
-/// `profile` goes through the same checks as a save, apart from the name's being another connection's.
-pub async fn test_connection(
+/// Opens the tunnel of `profile` when it uses SSM, and answers where MySQL is reached and the id of the tunnel to close (none when there is no tunnel).
+async fn open_endpoint(
     tunnels: &ssm::Tunnels,
-    profile: DatabaseProfile,
-    password: &str,
-) -> Result<String, String> {
-    let profile = check(profile, &[])?;
+    profile: &DatabaseProfile,
+) -> Result<(mysql::Endpoint, Option<u64>), String> {
     let port = u16::try_from(profile.db_port).map_err(|_| "ポートが範囲外です".to_owned())?;
     let opened = if profile.use_ssm {
         let target = ssm::Target {
@@ -372,12 +371,64 @@ pub async fn test_connection(
         None
     };
     let endpoint = endpoint_of(&profile.db_host, port, opened.map(|o| o.port));
+    Ok((endpoint, opened.map(|o| o.id)))
+}
+
+/// Tests `profile` as typed (not as saved): opens the tunnel when it uses SSM, logs in, reads `SELECT VERSION()` and closes the tunnel.
+/// `profile` goes through the same checks as a save, apart from the name's being another connection's.
+pub async fn test_connection(
+    tunnels: &ssm::Tunnels,
+    profile: DatabaseProfile,
+    password: &str,
+) -> Result<String, String> {
+    let profile = check(profile, &[])?;
+    let (endpoint, tunnel) = open_endpoint(tunnels, &profile).await?;
     let tested = mysql::server_version(&endpoint, &profile.username, password).await;
-    let closed = match opened {
-        Some(o) => Some(tunnels.close(o.id).await),
+    let closed = match tunnel {
+        Some(id) => Some(tunnels.close(id).await),
         None => None,
     };
     test_outcome(tested, closed)
+}
+
+/// The saved connection of `id` and the password saved for it (none is an empty password, as in a test), or the reason it cannot be opened.
+fn saved_login(
+    dir: &Path,
+    passwords: &impl PasswordStore,
+    id: &str,
+) -> Result<(DatabaseProfile, String), String> {
+    let profile = load(dir)?
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or("接続が見つかりません。一覧を読み直してください")?;
+    let password = passwords.get(id)?.unwrap_or_default();
+    Ok((profile, password))
+}
+
+/// Opens the tunnel and the read only session of `profile` and keeps it in `sessions`. A tunnel opened for a session that cannot be logged in to is closed again.
+async fn open_session(
+    sessions: &session::Sessions,
+    tunnels: &ssm::Tunnels,
+    profile: &DatabaseProfile,
+    password: &str,
+) -> Result<(), String> {
+    let (endpoint, tunnel) = open_endpoint(tunnels, profile).await?;
+    let connection = match mysql::connect(&endpoint, &profile.username, password).await {
+        Ok(connection) => connection,
+        Err(e) => {
+            if let Some(id) = tunnel {
+                let _ = tunnels.close(id).await;
+            }
+            return Err(e);
+        }
+    };
+    sessions.add(tunnels, &profile.id, tunnel, connection).await;
+    Ok(())
+}
+
+/// The result of a close that comes after a change that was made: a tunnel that cannot be closed is told, because its session is then left at AWS.
+fn after_close(closed: Result<(), String>, done: &str) -> Result<(), String> {
+    closed.map_err(|e| format!("{done}が、トンネルを閉じられませんでした: {e}"))
 }
 
 /// The saved connections, each with whether its password is saved.
@@ -390,19 +441,30 @@ pub async fn database_profiles(app: AppHandle) -> Result<Vec<DatabaseProfileView
 }
 
 /// Saves a connection and answers it as saved. An empty `password` leaves the saved password as it is.
+/// An edited connection that is open is closed (D-3): its session was made with what is saved no more.
 #[tauri::command]
 pub async fn database_profile_save(
     app: AppHandle,
+    sessions: tauri::State<'_, session::Sessions>,
+    tunnels: tauri::State<'_, ssm::Tunnels>,
     profile: DatabaseProfile,
     password: Option<String>,
 ) -> Result<DatabaseProfileView, String> {
     let dir = config_dir(&app)?;
-    tokio::task::spawn_blocking(move || {
+    let id = profile.id.clone();
+    let saved = tokio::task::spawn_blocking(move || {
         let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
         save(&dir, &Keychain, profile, password)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    if !id.is_empty() {
+        after_close(
+            sessions.disconnect(&tunnels, &id).await,
+            "接続は保存しました",
+        )?;
+    }
+    Ok(saved)
 }
 
 /// Tests a connection as typed in the popup and answers the version of the server. An empty `password` is the saved one of `profile.id`.
@@ -420,16 +482,79 @@ pub async fn database_test(
     test_connection(&tunnels, profile, &password).await
 }
 
-/// Deletes a connection and its password.
+/// Deletes a connection and its password. A connection that is open is closed first (D-3).
 #[tauri::command]
-pub async fn database_profile_delete(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn database_profile_delete(
+    app: AppHandle,
+    sessions: tauri::State<'_, session::Sessions>,
+    tunnels: tauri::State<'_, ssm::Tunnels>,
+    id: String,
+) -> Result<(), String> {
     let dir = config_dir(&app)?;
+    let closed = sessions.disconnect(&tunnels, &id).await;
     tokio::task::spawn_blocking(move || {
         let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
         delete(&dir, &Keychain, &id)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    after_close(closed, "接続は削除しました")
+}
+
+/// Opens the connection of `id` when it is not open (the tunnel, then the read only session with the saved password) and answers the names of its databases.
+/// A connection whose databases cannot be read is closed again.
+#[tauri::command]
+pub async fn database_connect(
+    app: AppHandle,
+    sessions: tauri::State<'_, session::Sessions>,
+    tunnels: tauri::State<'_, ssm::Tunnels>,
+    id: String,
+) -> Result<Vec<String>, String> {
+    if !sessions.has(&id).await {
+        let dir = config_dir(&app)?;
+        let wanted = id.clone();
+        let (profile, password) =
+            tokio::task::spawn_blocking(move || saved_login(&dir, &Keychain, &wanted))
+                .await
+                .map_err(|e| e.to_string())??;
+        open_session(&sessions, &tunnels, &profile, &password).await?;
+    }
+    match sessions.databases(&tunnels, &id).await {
+        Ok(databases) => Ok(databases),
+        Err(e) => {
+            let _ = sessions.disconnect(&tunnels, &id).await;
+            Err(e)
+        }
+    }
+}
+
+/// The tables of `database` on the open connection `id`, with the estimated rows, the size and the engine of each.
+#[tauri::command]
+pub async fn database_tables(
+    sessions: tauri::State<'_, session::Sessions>,
+    tunnels: tauri::State<'_, ssm::Tunnels>,
+    id: String,
+    database: String,
+) -> Result<Vec<session::DatabaseTable>, String> {
+    sessions.tables(&tunnels, &id, &database).await
+}
+
+/// Closes the connection of `id` and its tunnel. A connection that is not open is closed already.
+#[tauri::command]
+pub async fn database_disconnect(
+    sessions: tauri::State<'_, session::Sessions>,
+    tunnels: tauri::State<'_, ssm::Tunnels>,
+    id: String,
+) -> Result<(), String> {
+    sessions.disconnect(&tunnels, &id).await
+}
+
+/// The ids of the connections that are open now.
+#[tauri::command]
+pub async fn database_connections(
+    sessions: tauri::State<'_, session::Sessions>,
+) -> Result<Vec<String>, String> {
+    Ok(sessions.ids().await)
 }
 
 #[cfg(test)]
@@ -928,6 +1053,30 @@ mod tests {
         assert_eq!(
             test_outcome(Err("denied".to_owned()), Some(Err("timeout".to_owned()))),
             Err("denied".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_saved_login_is_the_profile_of_the_id_with_its_password_or_none() {
+        let dir = temp_dir("login");
+        let passwords = Memory::default();
+        let a = save(&dir, &passwords, direct("a"), Some("pa".to_owned())).unwrap();
+        let b = save(&dir, &passwords, direct("b"), None).unwrap();
+        let (profile, password) = saved_login(&dir, &passwords, &a.profile.id).unwrap();
+        assert_eq!((profile, password.as_str()), (a.profile, "pa"));
+        let (profile, password) = saved_login(&dir, &passwords, &b.profile.id).unwrap();
+        assert_eq!((profile.name.as_str(), password.as_str()), ("b", ""));
+        let gone = saved_login(&dir, &passwords, "gone").unwrap_err();
+        assert!(gone.contains("見つかりません"), "{gone}");
+    }
+
+    #[test]
+    fn a_tunnel_that_cannot_be_closed_after_a_change_is_told_with_the_change_that_was_made() {
+        assert_eq!(after_close(Ok(()), "接続は保存しました"), Ok(()));
+        let told = after_close(Err("timeout".to_owned()), "接続は削除しました").unwrap_err();
+        assert_eq!(
+            told,
+            "接続は削除しましたが、トンネルを閉じられませんでした: timeout"
         );
     }
 
