@@ -10,6 +10,7 @@ import type { ClaudeConnection } from "./bindings/ClaudeConnection";
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
+import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { Effort } from "./bindings/Effort";
 import type { EditorSettings } from "./bindings/EditorSettings";
@@ -420,6 +421,8 @@ export interface Commands {
   database_connect: { args: { id: string }; result: string[] };
   // D-3: the tables of a database of the open connection `id`, each with its estimated rows, size and engine as text.
   database_tables: { args: { id: string; database: string }; result: DatabaseTable[] };
+  // D-5: the columns of a table of the open connection `id` (name, type, NULL, key, default and comment as text), and the summary of the number of columns, the engine and the character set.
+  database_structure: { args: { id: string; database: string; table: string }; result: DatabaseStructure };
   // D-4: a page of the records of a table of the open connection `id` (`page` counts from 0), each value already text; one more row is read to tell whether a next page exists.
   database_records: { args: { id: string; database: string; table: string; page: number }; result: DatabaseRecords };
   // D-3: closes the connection `id` and its tunnel.

@@ -1,4 +1,4 @@
-import { boot, callsOf, count, databaseCell, databaseNull, databaseProfile, databaseRecords, databaseTable, holds, inbox, mock, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseStructure, databaseTable, holds, inbox, mock, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 const tunnel = databaseProfile("p2", "Example tunnel", { useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", passwordSaved: true });
@@ -756,6 +756,172 @@ describe("database: tree", () => {
       await row("p1/d/shop/t/users").click();
       await waitForCalls(again);
       await expect($("#database-work h3")).toHaveText("shop.users");
+    });
+  });
+
+  describe("structure of a table", () => {
+    const page0 = databaseRecords(["id", "name"], [[databaseCell("1", "number"), databaseCell("Alice")]], { summary: "1–1 行目 / 約 1,200 行" });
+    const comment = "注文を作ったユーザー".repeat(40);
+    const structure = databaseStructure([
+      databaseColumn("id", "bigint unsigned", { key: "PRI", comment: "注文の ID" }),
+      databaseColumn("user_id", "int", { key: "MUL", comment }),
+      databaseColumn("note", "varchar(255)", { nullable: true, default: "NULL" }),
+      databaseColumn("status", "tinyint(1)", { default: "0" }),
+    ]);
+    const asked = { id: "p1", database: "shop", table: "users" };
+    const tab = (id: string) => $(`#database-work [data-tab="${id}"]`);
+    const grid = () =>
+      browser.execute(() => [...document.querySelectorAll("#database-work .database-grid:not(.database-structure) tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
+    const cells = () =>
+      browser.execute(() => [...document.querySelectorAll("#database-work .database-structure tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
+
+    // The app with the table users of the database shop pressed and its first page drawn.
+    async function openTable() {
+      await openTree();
+      await row("p1/d/shop").click();
+      await waitForCount('#database-side-feed [data-key^="p1/d/shop/t/"]', 3);
+      const records = await mock("database_records", page0);
+      await row("p1/d/shop/t/users").click();
+      await waitForCalls(records);
+      await expect($("#database-work .database-range")).toHaveText(page0.summary);
+      return records;
+    }
+
+    it("has the tabs レコード and 構造 with レコード selected, and calls database_structure on a press of 構造 only", async () => {
+      await openTable();
+      expect(await textsOf("#database-work [role='tab']")).toEqual(["レコード", "構造"]);
+      await expect(tab("records")).toHaveAttribute("aria-selected", "true");
+      await expect(tab("structure")).toHaveAttribute("aria-selected", "false");
+      expect(await callsOf("database_structure")).toEqual([]);
+      const command = await mock("database_structure", structure);
+      await tab("structure").click();
+      expect(await waitForCalls(command)).toEqual([asked]);
+      await expect(tab("structure")).toHaveAttribute("aria-selected", "true");
+      await expect(tab("records")).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("draws the columns with the name, type, NULL, key, default and comment, and the summary under them", async () => {
+      await openTable();
+      await mock("database_structure", structure);
+      await tab("structure").click();
+      await expect($("#database-work .database-range")).toHaveText("4 列 / InnoDB / utf8mb4");
+      expect(await textsOf("#database-work .database-structure thead th")).toEqual(["名前", "型", "NULL", "キー", "既定値", "注釈"]);
+      expect(await cells()).toEqual([
+        ["id", "bigint unsigned", "NO", "PRI", "", "注文の ID"],
+        ["user_id", "int", "NO", "MUL", "", comment],
+        ["note", "varchar(255)", "YES", "", "NULL", ""],
+        ["status", "tinyint(1)", "NO", "", "0", ""],
+      ]);
+      expect(await count("#database-work .database-grid")).toBe(1);
+      expect(await count("#database-work .database-pager button")).toBe(0);
+    });
+
+    it("cuts a long comment in its cell with the text as its title", async () => {
+      await openTable();
+      await mock("database_structure", structure);
+      await tab("structure").click();
+      const cell = $("#database-work .database-structure tbody tr:nth-child(2) td:nth-child(6)");
+      await expect(cell).toHaveAttribute("title", comment);
+      expect((await cell.getSize("width")) as number).toBeLessThan(400);
+    });
+
+    it("keeps the table when the tab changes: the title, the selected row, and the records are not read again", async () => {
+      const records = await openTable();
+      await mock("database_structure", structure);
+      await tab("structure").click();
+      await expect($("#database-work .database-range")).toHaveText("4 列 / InnoDB / utf8mb4");
+      await expect($("#database-work h3")).toHaveText("shop.users");
+      await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "true");
+      await tab("records").click();
+      await expect($("#database-work .database-range")).toHaveText(page0.summary);
+      await expect($("#database-work h3")).toHaveText("shop.users");
+      await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "true");
+      expect(await grid()).toEqual([["1", "Alice"]]);
+      expect(await callsOf(records)).toEqual([{ ...asked, page: 0 }]);
+      expect(await callsOf("database_tables")).toHaveLength(1);
+    });
+
+    it("reads the structure again at every press of its tab, and not on a press of the tab that is selected", async () => {
+      await openTable();
+      const command = await mock("database_structure", structure);
+      await tab("structure").click();
+      await waitForCalls(command);
+      await tab("structure").click();
+      await tab("records").click();
+      await tab("structure").click();
+      expect(await waitForCalls(command, 2)).toEqual([asked, asked]);
+    });
+
+    it("selects the records again when a table is pressed", async () => {
+      await openTable();
+      await mock("database_structure", structure);
+      await tab("structure").click();
+      await expect(tab("structure")).toHaveAttribute("aria-selected", "true");
+      const records = await mock("database_records", page0);
+      await row("p1/d/shop/t/users").click();
+      await waitForCalls(records);
+      await expect(tab("records")).toHaveAttribute("aria-selected", "true");
+      expect(await count("#database-work .database-structure")).toBe(0);
+    });
+
+    it("shows 読み込み中… while the structure is read, and draws the columns after", async () => {
+      await openTable();
+      const command = await mock("database_structure", holds);
+      await tab("structure").click();
+      await waitForCalls(command);
+      await expect($("#database-work .database-range")).toHaveText("読み込み中…");
+      expect(await count("#database-work .database-structure")).toBe(0);
+      await release("database_structure", structure);
+      await expect($("#database-work .database-range")).toHaveText("4 列 / InnoDB / utf8mb4");
+      expect(await count("#database-work .database-structure tbody tr")).toBe(4);
+    });
+
+    it("draws only the summary for a table with no column", async () => {
+      await openTable();
+      await mock("database_structure", databaseStructure([], "0 列"));
+      await tab("structure").click();
+      await expect($("#database-work .database-range")).toHaveText("0 列");
+      expect(await count("#database-work .database-structure")).toBe(0);
+    });
+
+    it("shows the error of a read in the danger color with the connection kept, and a press on the tab again reads it", async () => {
+      await openTable();
+      const message = "MySQL がエラーを返しました (1142): SELECT command denied";
+      await mock("database_structure", rejects(message));
+      await mock("database_connections", ["p1"]);
+      await tab("structure").click();
+      await waitForCalls("database_structure");
+      await expect($("#database-work .database-note")).toHaveText(message);
+      await expect($("#database-work .database-note")).toHaveElementClass("danger");
+      expect(await count("#database-work .database-structure")).toBe(0);
+      await expect(dot("p1")).toHaveAttribute("data-state", "connected");
+      await tab("records").click();
+      const again = await mock("database_structure", structure);
+      await tab("structure").click();
+      await waitForCalls(again);
+      await expect($("#database-work .database-range")).toHaveText("4 列 / InnoDB / utf8mb4");
+      expect(await count("#database-work .database-note")).toBe(0);
+    });
+
+    it("closes the tree of a connection that the read shows lost, and says why under the connection", async () => {
+      await openTable();
+      await mock("database_structure", rejects(lost));
+      await mock("database_connections", []);
+      await tab("structure").click();
+      await waitForCalls("database_structure");
+      await waitForCount('#database-side-feed [data-key^="p1/d/"]', 0);
+      expect(await notes()).toEqual([lost]);
+      await expect(dot("p1")).toHaveAttribute("data-state", "closed");
+      expect(await count("#database-work > *")).toBe(0);
+    });
+
+    it("has no control on the structure but the two tabs, and no input", async () => {
+      await openTable();
+      await mock("database_structure", structure);
+      await tab("structure").click();
+      await expect($("#database-work .database-range")).toHaveText("4 列 / InnoDB / utf8mb4");
+      expect(await textsOf("#database-work button")).toEqual(["レコード", "構造"]);
+      expect(await count("#database-work input, #database-work textarea, #database-work [contenteditable]")).toBe(0);
     });
   });
 

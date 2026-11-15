@@ -10,7 +10,9 @@ import type { ClaudeSettings } from "../ts/bindings/ClaudeSettings";
 import type { Comment } from "../ts/bindings/Comment";
 import type { DatabaseProfileView } from "../ts/bindings/DatabaseProfileView";
 import type { DatabaseCell } from "../ts/bindings/DatabaseCell";
+import type { DatabaseColumn } from "../ts/bindings/DatabaseColumn";
 import type { DatabaseRecords } from "../ts/bindings/DatabaseRecords";
+import type { DatabaseStructure } from "../ts/bindings/DatabaseStructure";
 import type { DatabaseTable } from "../ts/bindings/DatabaseTable";
 import type { EmojiCatalog } from "../ts/bindings/EmojiCatalog";
 import type { FontSettings } from "../ts/bindings/FontSettings";
@@ -559,6 +561,12 @@ export const databaseRecords = (columns: string[], rows: DatabaseCell[][], extra
   summary: rows.length === 0 ? "0 行" : `1–${rows.length} 行目`,
   ...extra,
 });
+
+// A column of a table as `database_structure` answers it (D-5): the default and the comment are text, empty for none.
+export const databaseColumn = (name: string, columnType: string, extra: Partial<DatabaseColumn> = {}): DatabaseColumn => ({ name, columnType, nullable: false, key: "", default: "", comment: "", ...extra });
+
+// The structure of a table as `database_structure` answers it.
+export const databaseStructure = (columns: DatabaseColumn[], summary = `${columns.length} 列 / InnoDB / utf8mb4`): DatabaseStructure => ({ columns, summary });
 
 export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 

@@ -18,6 +18,7 @@ use super::{
     mysql::{self, QueryFailure},
     records::{self, DatabaseRecords},
     ssm::Tunnels,
+    structure::{self, DatabaseStructure},
 };
 
 /// One query on an open session. A query that is past it leaves the stream in an unknown state, so the session is closed.
@@ -286,6 +287,25 @@ impl Sessions {
         };
         self.settle(tunnels, id, read).await
     }
+
+    /// The structure of `table` in `database` (D-5).
+    pub async fn structure(
+        &self,
+        tunnels: &Tunnels,
+        id: &str,
+        database: &str,
+        table: &str,
+    ) -> Result<DatabaseStructure, String> {
+        let session = self.session(id).await?;
+        let read = {
+            let mut guard = session.connection.lock().await;
+            let Some(connection) = guard.as_mut() else {
+                return Err(NOT_OPEN.to_owned());
+            };
+            tokio::time::timeout(QUERY_TIMEOUT, structure::read(connection, database, table)).await
+        };
+        self.settle(tunnels, id, read).await
+    }
 }
 
 #[cfg(test)]
@@ -388,6 +408,10 @@ mod tests {
         );
         assert_eq!(
             sessions.records(&tunnels, "a", "shop", "orders", 0).await,
+            Err(NOT_OPEN.to_owned())
+        );
+        assert_eq!(
+            sessions.structure(&tunnels, "a", "shop", "orders").await,
             Err(NOT_OPEN.to_owned())
         );
         sessions.close_all().await;

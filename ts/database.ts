@@ -1,12 +1,12 @@
-// The database screen (D-1, D-3, D-4): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last, or the records of the table that was pressed.
+// The database screen (D-1, D-3, D-4, D-5): the connections at the left (the side menu), which open into their databases and tables, and at the right the work pane with the tables of the database that was pressed last, or the tabs (records, structure) of the table that was pressed.
 // This module holds the list that `database_profiles` last answered, what each connection has opened and what is selected; the side menu and the work pane only draw it (database-side.ts, database-work.ts), and the popup (database-form.ts) only asks for the fields.
-// Rust holds the open connections (the session and its tunnel); an opening of a row reads again, so the tree is never kept apart from the server. The records of a table are held in memory for the table that was pressed last only.
+// Rust holds the open connections (the session and its tunnel); an opening of a row reads again, so the tree is never kept apart from the server. The records and the structure of a table are held in memory for the table that was pressed last only.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { drawDatabaseSide, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm } from "./database-form.js";
-import { drawDatabaseWork, type RecordsState, type WorkActions, type WorkState } from "./database-work.js";
+import { drawDatabaseWork, type RecordsState, type StructureState, type WorkActions, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { confirmDelete } from "./hint.js";
 import { PLUS_SVG } from "./icons.js";
@@ -31,6 +31,13 @@ interface ConnectionState {
   byName: Map<string, DatabaseState>;
 }
 
+// The structure of the table whose tab 構造 was pressed last, with the table it belongs to; dropped when another table is pressed.
+interface StructureView extends StructureState {
+  id: string;
+  database: string;
+  table: string;
+}
+
 // The records of the table that was pressed last, with the table they belong to. A read that ends after another press has replaced this is dropped.
 interface RecordsView extends RecordsState {
   id: string;
@@ -40,6 +47,9 @@ interface RecordsView extends RecordsState {
 
 let profiles: DatabaseProfileView[] = [];
 let records: RecordsView | null = null;
+let structure: StructureView | null = null;
+// The selected tab of the table that is pressed. The table press selects the records.
+let tab = "records";
 let selected: Selected | null = null;
 const connections = new Map<string, ConnectionState>();
 // The connections whose disconnect is on its way: a press on them waits, so that an opening cannot meet the closing.
@@ -89,8 +99,9 @@ function workState(): WorkState | null {
     error: d.error,
     tables: d.tables,
     table: mine ? selected.table : null,
-    tab: "records",
+    tab,
     records: mine && records ? { page: records.page, loading: records.loading, error: records.error, data: records.data } : null,
+    structure: mine && structure?.id === selected.id && structure.database === selected.database && structure.table === selected.table ? { loading: structure.loading, error: structure.error, data: structure.data } : null,
   };
 }
 
@@ -236,9 +247,38 @@ async function readRecords(id: string, database: string, table: string, page: nu
   draw();
 }
 
+// Reads the structure of a table (D-5), at every press of the tab 構造.
+async function readStructure(id: string, database: string, table: string) {
+  const mine: StructureView = { id, database, table, loading: true, error: null, data: null };
+  structure = mine;
+  draw();
+  try {
+    mine.data = await invoke("database_structure", { id, database, table });
+  } catch (e) {
+    mine.error = String(e);
+    // A stream that broke closes the connection: its tree closes and says why.
+    if (structure === mine && (await dropClosed()).includes(id)) {
+      connections.set(id, { ...emptyConnection(), expanded: true, error: mine.error });
+      records = null;
+      structure = null;
+      draw();
+      return;
+    }
+  }
+  mine.loading = false;
+  draw();
+}
+
 const workActions: WorkActions = {
   page: (page) => {
     if (records) readRecords(records.id, records.database, records.table, page);
+  },
+  // The table stays: only the tab changes. The records are kept as they are, and the structure is read at every press of its tab.
+  tab: (id) => {
+    if (id === tab || selected?.table == null) return;
+    tab = id;
+    if (id === "structure") readStructure(selected.id, selected.database ?? "", selected.table);
+    else draw();
   },
 };
 
@@ -269,6 +309,8 @@ const actions: SideActions = {
   // The tabs of the table open in the work pane, with the first page of its records, read again at every press.
   pressTable: (profile, database, table) => {
     selected = { id: profile.id, database, table };
+    tab = "records";
+    structure = null;
     readRecords(profile.id, database, table, 0);
   },
   edit: (profile) => openDatabaseForm(profile, save, test),

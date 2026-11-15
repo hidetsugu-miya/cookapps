@@ -4,13 +4,14 @@
 //! The password of a profile is in the OS keychain (service `KEYRING_SERVICE`, user the profile's id), never in the file and never in the answer of a command:
 //! the screen is told only whether one is saved (`DatabaseProfileView::password_saved`).
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
-//! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the tunnel, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_disconnect` closes it and its tunnel.
+//! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the tunnel, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_disconnect` closes it and its tunnel.
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
 pub mod mysql;
 pub mod records;
 pub mod session;
 pub mod ssm;
+pub mod structure;
 
 use std::{path::Path, sync::Mutex};
 
@@ -553,6 +554,18 @@ pub async fn database_records(
     sessions
         .records(&tunnels, &id, &database, &table, page)
         .await
+}
+
+/// The columns of `table` in `database` on the open connection `id` (D-5), with the number of columns, the engine and the character set of the table.
+#[tauri::command]
+pub async fn database_structure(
+    sessions: tauri::State<'_, session::Sessions>,
+    tunnels: tauri::State<'_, ssm::Tunnels>,
+    id: String,
+    database: String,
+    table: String,
+) -> Result<structure::DatabaseStructure, String> {
+    sessions.structure(&tunnels, &id, &database, &table).await
 }
 
 /// Closes the connection of `id` and its tunnel. A connection that is not open is closed already.
