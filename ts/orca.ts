@@ -945,6 +945,12 @@ export async function readDestination(environment: string | null, force: boolean
   }
 }
 
+// Reads everything, the environments too, whatever screen is shown, and gives what is held after it (the card of the target in the settings).
+export async function readOrcaTargets() {
+  await load("full", true);
+  return view;
+}
+
 // Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the selection as it is.
 export function openInOrca(paneKey: string | null) {
   const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey) ?? null);
@@ -964,7 +970,8 @@ export function showOrca() {
   load("full", true);
 }
 
-async function chooseTarget(environment: string | null) {
+// Saves `environment` as the target (null: this machine) and reads again; the menu at the bottom of the list pane and the card of the Orca tab of the settings (`ts/orca-target.ts`) both pick through it.
+export async function chooseTarget(environment: string | null) {
   if (view === null || environment === view.target) return;
   loadSeq++;
   loading = false;
