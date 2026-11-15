@@ -360,14 +360,76 @@ fn without_status_mark(title: &str) -> &str {
     }
 }
 
-/// The text of a row's line: the first line of the prompt, else the task's title, the conversation's name, the first line of the last answer, or the title of the pane's terminal without its status mark.
+/// The length of the XML tag (`<name …>`, `</name>` or `<name/>`) that `s` starts with, or `None` when it starts with none.
+/// The name begins with an ASCII letter and is followed by a blank, `/` or `>`; a `>` inside a quoted value does not end the tag, and a tag that is never closed is none.
+fn tag_len(s: &str) -> Option<usize> {
+    let body = s.strip_prefix('<')?;
+    let name = body.strip_prefix('/').unwrap_or(body);
+    if !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let name_len = name
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.')))
+        .unwrap_or(name.len());
+    if !name[name_len..].starts_with(|c: char| c.is_whitespace() || matches!(c, '/' | '>')) {
+        return None;
+    }
+    let head = s.len() - name.len() + name_len;
+    let mut quote = None;
+    for (i, c) in s[head..].char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '>') => return Some(head + i + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `line` without its XML tags, which Claude Code's harness puts in a message (`<event …>`, `<system-reminder>`); the text between them stays.
+/// An opening `<` that follows an ASCII letter, a digit or `_` is a generic (`Vec<String>`), not a tag.
+fn without_tags(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        let glued = !after.starts_with("</")
+            && rest[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        match tag_len(after).filter(|_| !glued) {
+            Some(len) => rest = &after[len..],
+            None => {
+                out.push('<');
+                rest = &after[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The first line of `text` that still has text once its tags are taken off, cut to `LINE_LIMIT` characters.
+fn first_text_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(|l| without_tags(l.trim()))
+        .map(|l| l.trim().to_string())
+        .find(|l| !l.is_empty())
+        .map(|l| l.chars().take(LINE_LIMIT).collect())
+}
+
+/// The text of a row's line: the first line of the prompt, else the task's title, the conversation's name, the first line of the last answer, or the title of the pane's terminal without its status mark; each without its XML tags, and the next one when nothing is left.
 fn line_of(agent: &Value, terminal_title: Option<&str>) -> String {
     text_of(agent, "prompt")
-        .and_then(first_line)
-        .or_else(|| text_of(agent, "taskTitle").and_then(first_line))
-        .or_else(|| text_of(agent, "conversationName").and_then(first_line))
-        .or_else(|| text_of(agent, "lastAssistantMessage").and_then(first_line))
-        .or_else(|| terminal_title.and_then(|t| first_line(without_status_mark(t))))
+        .and_then(first_text_line)
+        .or_else(|| text_of(agent, "taskTitle").and_then(first_text_line))
+        .or_else(|| text_of(agent, "conversationName").and_then(first_text_line))
+        .or_else(|| text_of(agent, "lastAssistantMessage").and_then(first_text_line))
+        .or_else(|| terminal_title.and_then(|t| first_text_line(without_status_mark(t))))
         .unwrap_or_default()
 }
 
@@ -2188,6 +2250,82 @@ mod tests {
         assert_eq!(line_of(&a, None), "Answer");
         a.as_object_mut().unwrap().remove("lastAssistantMessage");
         assert_eq!(line_of(&a, None), "");
+    }
+
+    #[test]
+    fn xml_tags_are_taken_off_a_line_and_their_text_stays() {
+        for (line, text) in [
+            (
+                r#"<event kind="repl-eval" at="2026-11-15T08:41:48.666Z">"#,
+                "",
+            ),
+            (
+                "<system-reminder>Fix the list</system-reminder>",
+                "Fix the list",
+            ),
+            ("<task-notification>", ""),
+            ("</task-notification>", ""),
+            ("<br/>", ""),
+            ("<br />done", "done"),
+            (r#"<a title="x > y">text</a>"#, "text"),
+            (r#"<a title='x > y'>text</a>"#, "text"),
+            ("Fix <b>the</b> list", "Fix the list"),
+            ("plain text", "plain text"),
+            ("Vec<String> and Option<u8>", "Vec<String> and Option<u8>"),
+            ("1 < 2 and 3 > 2", "1 < 2 and 3 > 2"),
+            ("a <b and c", "a <b and c"),
+            (r#"<a title="open>text"#, r#"<a title="open>text"#),
+            ("<1> <@x> <>", "<1> <@x> <>"),
+            ("<<b>>", "<>"),
+            (
+                "日本語<command-name>/review</command-name>",
+                "日本語/review",
+            ),
+        ] {
+            assert_eq!(without_tags(line), text, "{line}");
+        }
+    }
+
+    #[test]
+    fn the_first_text_line_skips_lines_that_are_only_tags() {
+        let event =
+            "<event kind=\"repl-eval\" at=\"2026-11-15T08:41:48.666Z\">\nFix the list\n</event>";
+        assert_eq!(first_text_line(event).as_deref(), Some("Fix the list"));
+        let notice = "<task-notification>\nBackground command finished\n</task-notification>";
+        assert_eq!(
+            first_text_line(notice).as_deref(),
+            Some("Background command finished")
+        );
+        let reminder = "<system-reminder>\n  As you answer\nmore\n</system-reminder>";
+        assert_eq!(first_text_line(reminder).as_deref(), Some("As you answer"));
+        assert_eq!(first_text_line("\n  plain\nnext").as_deref(), Some("plain"));
+        assert_eq!(first_text_line("<a>\n<b/>\n</a>"), None);
+        assert_eq!(first_text_line("  \n"), None);
+        let long = format!("<a>{}</a>", "あ".repeat(LINE_LIMIT + 5));
+        assert_eq!(first_text_line(&long).unwrap().chars().count(), LINE_LIMIT);
+    }
+
+    #[test]
+    fn the_line_shows_the_text_inside_the_tags_and_moves_on_when_there_is_none() {
+        let mut a = agent("tabA:leaf1", "working");
+        a["prompt"] =
+            json!("<event kind=\"repl-eval\" at=\"2026-11-15T08:41:48.666Z\">\nFix the list");
+        assert_eq!(line_of(&a, None), "Fix the list");
+        a["prompt"] = json!("<system-reminder>\n</system-reminder>");
+        a["taskTitle"] = json!("<task-notification>Task done</task-notification>");
+        assert_eq!(line_of(&a, None), "Task done");
+        a["taskTitle"] = json!("<a/>");
+        a["conversationName"] = json!("<b>\n</b>");
+        a["lastAssistantMessage"] = json!("<c>Answer</c>");
+        assert_eq!(line_of(&a, None), "Answer");
+        a["lastAssistantMessage"] = json!("<c/>");
+        assert_eq!(
+            line_of(&a, Some("◑ <d>Terminal title</d>")),
+            "Terminal title"
+        );
+        assert_eq!(line_of(&a, Some("◑ <d/>")), "");
+        a["prompt"] = json!("plain prompt");
+        assert_eq!(line_of(&a, None), "plain prompt");
     }
 
     #[test]
