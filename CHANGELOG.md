@@ -3,6 +3,22 @@
 The newest version comes first.
 The project was named cookup until v0.14.6.
 
+## v0.73.0
+
+M-10: an open mail thread has a reply field fixed at the bottom, under the messages, so the thread can be read while the reply is written (#488). "返信" goes to the sender of the last message (to its Reply-To when it has one), and "全員に返信" also to the other people of its To, with its Cc in Cc; the account that reads the thread is left out. The recipients are chips, with × to take one off, and "Cc" and "Bcc" open a row each, where an address typed becomes a chip with Enter, with a comma or by leaving the field. The text is plain text. "送信" sends the reply from the account that received the thread, into the same thread, and the thread is read again with the sent mail in it; a failure shows its error and keeps what was written. "破棄" empties the field. What was written is dropped when the thread is left: no draft is saved.
+
+M-2: the row of icons above the subject of an open mail is 48px high, with a line under it, and a line divides the AI summary from "Slack に貼る" (#488).
+
+M-11: the header of the inbox has "作成", an icon with a pencil, that opens a screen for a new mail in the mail screen itself, not in a dialog (#489). It holds "差出人" (the account the mail goes from; a list to choose from when there are several accounts), "宛先" with "Cc" and "Bcc" as chips like the reply field's, "件名", the text (plain text) and "送信" in a band fixed at the bottom. A mail that went out shows "送信しました" and the inbox comes back; a failure shows its error and keeps what was written. "戻る" and "破棄" show the inbox again and drop what was written.
+
+A reply and a new mail go out with Gmail's `users.messages.send`. The scope the app already asks for, `gmail.modify`, is enough for it, so no account has to log in again. The app saves nothing of a mail it sends. Files cannot be attached.
+
+A-32: the settings have a tab "スキル", right of "Claude", that makes, changes and deletes skills: texts of instructions written once for the Claude calls of the "Slack に貼る" screen and of a Slack thread (#340). The skills are listed at the left, with "新しいスキル" under them, and the one pressed is edited at the right: "名前" (lower-case letters, digits and `-`, up to 64 characters; it cannot be changed once saved), "表示名", "使う画面", "説明" and "指示". "保存" writes the skill to `claude-plugin/skills/{name}/SKILL.md` in the config folder, and "削除" asks first and deletes it for good. No screen chooses a skill for a call yet.
+
+A-3, A-28: the settings have a tab "ログ", the last one, that shows the app's log (#430). It is a table, the newest line first, of the time, the weight ("エラー", "警告" or "情報"), the place and the text. "すべて", "エラー" and "警告" filter the lines, "コピー" copies the lines shown, and "フォルダを開く" opens the folder that holds `app-log.jsonl`. The log is read each time the tab is shown. Nothing writes to the log yet, so the tab says "ログはありません". The settings now have ten tabs.
+
+No change in what the app shows yet, as groundwork for coming features: an operation on a row or a tab of the Orca screen is sent to where that row is (this Mac or a saved environment), not to the target of the screen (#336); and the Claude calls of the "Slack に貼る" screen and of a Slack thread can run a skill, which is given to Claude Code alone, in a folder made for that call (#346).
+
 ## v0.72.1
 
 The Dock badge counts Slack and Orca too (#619). It is now the sum of the unread mail, the Todo tasks whose due moment has come, the unread Slack messages and the Orca sessions that wait for the user, so it shows a number when only Slack or Orca has one. It was the sum of mail and Todo alone.
