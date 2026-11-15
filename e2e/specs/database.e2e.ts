@@ -1,4 +1,4 @@
-import { boot, callsOf, count, databaseProfile, inbox, mock, rejects, textsOf, waitForCalls, waitForCount } from "../support";
+import { boot, callsOf, count, databaseProfile, holds, inbox, mock, rejects, release, textsOf, waitForCalls, waitForCount } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 const tunnel = databaseProfile("p2", "Example tunnel", { useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", passwordSaved: true });
@@ -276,5 +276,109 @@ describe("database: delete", () => {
     await $('.pop[role="alertdialog"] .text-btn.danger').click();
     await waitForCount("#database-side-feed .database-item", 1);
     await expect($('#database-side-feed [data-key="p2"]')).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+describe("database: test the connection", () => {
+  const probe = () => $("#database-form .popup-actions button:nth-child(2)");
+  const result = () => $("#database-test-result");
+
+  it("has the button 接続をテスト between 保存 and キャンセル, with nothing shown and nothing called before it is pressed", async () => {
+    const test = await mock("database_test", "8.0.36");
+    await openDatabase([]);
+    await $("#database-add").click();
+    expect(await textsOf("#database-form .popup-actions button")).toEqual(["保存", "接続をテスト", "キャンセル"]);
+    await expect(probe()).toHaveAttribute("type", "button");
+    await expect(result()).not.toBeDisplayed();
+    expect(await callsOf(test)).toEqual([]);
+  });
+
+  it("sends the fields as typed and the typed password, shows the version as a status, and saves nothing and keeps the popup", async () => {
+    await openDatabase([direct]);
+    const test = await mock("database_test", "8.0.36");
+    const save = await mock("database_profile_save", databaseProfile("p3", "x"));
+    await $("#database-add").click();
+    await fillDirect();
+    await field("password").setValue("secret");
+    await probe().click();
+    expect(await waitForCalls(test)).toEqual([{ profile: typed, password: "secret" }]);
+    await expect(result()).toBeDisplayed();
+    await expect(result()).toHaveText("MySQL 8.0.36");
+    await expect(result()).toHaveElementClass("status");
+    await expect(result()).toHaveElementClass("ok");
+    await expect(result()).toHaveAttribute("role", "status");
+    await expect($("#database-form")).toBeDisplayed();
+    await expect(probe()).toBeEnabled();
+    await expect($("#database-form-error")).not.toBeDisplayed();
+    expect(await callsOf(save)).toEqual([]);
+    expect(await callsOf("database_profiles")).toEqual([null]);
+  });
+
+  it("tests the connection of an edit with its id and the fields as typed now, and an empty password for Rust to read the saved one", async () => {
+    await openDatabase();
+    const test = await mock("database_test", "5.7.44-log");
+    await pickFromMenu("p2", 1);
+    await field("dbPort").setValue("3307");
+    await probe().click();
+    expect(await waitForCalls(test)).toEqual([
+      {
+        profile: { id: "p2", name: "Example tunnel", username: "reader", useSsm: true, awsProfile: "work", region: "ap-northeast-1", bastionName: "bastion", dbHost: "db.internal.example.com", dbPort: 3307 },
+        password: "",
+      },
+    ]);
+    await expect(result()).toHaveText("MySQL 5.7.44-log");
+  });
+
+  it("shows the error as it is, in the danger color, keeps the popup, and a second test replaces it", async () => {
+    await openDatabase([]);
+    const message = "トンネルは開きましたが、MySQL が応えません。踏み台から DB のホストとポートに届くか（DB のセキュリティグループが踏み台からの接続を許しているか）を確かめてください";
+    const test = await mock("database_test", rejects(message));
+    await $("#database-add").click();
+    await fillDirect();
+    await probe().click();
+    await waitForCalls(test);
+    await expect(result()).toHaveText(message);
+    await expect(result()).toHaveElementClass("danger");
+    await expect(result()).not.toHaveElementClass("status");
+    await expect($("#database-form")).toBeDisplayed();
+    await expect(probe()).toBeEnabled();
+    await expect($("#database-form-error")).not.toBeDisplayed();
+    const again = await mock("database_test", "8.4.0");
+    await probe().click();
+    await waitForCalls(again);
+    await expect(result()).toHaveText("MySQL 8.4.0");
+    await expect(result()).not.toHaveElementClass("danger");
+  });
+
+  it("keeps the button off and the old answer hidden while the test is on its way", async () => {
+    await openDatabase([]);
+    const test = await mock("database_test", "8.0.36");
+    await $("#database-add").click();
+    await fillDirect();
+    await probe().click();
+    await waitForCalls(test);
+    await mock("database_test", holds);
+    await probe().click();
+    await waitForCalls("database_test");
+    await expect(probe()).toBeDisabled();
+    await expect(result()).not.toBeDisplayed();
+    await release("database_test", rejects("MySQL へのログインに失敗しました。ユーザー名とパスワードを確かめてください: Access denied"));
+    await expect(probe()).toBeEnabled();
+    await expect(result()).toHaveText("MySQL へのログインに失敗しました。ユーザー名とパスワードを確かめてください: Access denied");
+  });
+
+  it("draws nothing when the popup was closed while the test was on its way, and a new popup shows no answer", async () => {
+    await openDatabase([]);
+    const test = await mock("database_test", holds);
+    await $("#database-add").click();
+    await fillDirect();
+    await probe().click();
+    await waitForCalls(test);
+    await browser.keys("Escape");
+    await expect($("#database-form")).not.toExist();
+    await release("database_test", "8.0.36");
+    await $("#database-add").click();
+    await expect(result()).not.toBeDisplayed();
+    await expect(probe()).toBeEnabled();
   });
 });

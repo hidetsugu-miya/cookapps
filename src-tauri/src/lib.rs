@@ -371,6 +371,7 @@ pub fn run() {
             database::database_profiles,
             database::database_profile_save,
             database::database_profile_delete,
+            database::database_test,
             markdown_patch::markdown_split,
             markdown_patch::markdown_patch,
             ghostty::ghostty_saved,

@@ -94,7 +94,7 @@ impl Failure {
     }
 }
 
-fn shorten(text: &str) -> String {
+pub(super) fn shorten(text: &str) -> String {
     let mut chars = text.trim().chars();
     let head: String = chars.by_ref().take(ERROR_MAX).collect();
     if chars.next().is_some() {

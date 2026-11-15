@@ -1634,4 +1634,7 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-check input { margin: 0; accent-color: var(--accent); }
 .database-ssm { display: flex; flex-direction: column; gap: 12px; }
 .database-form .err { margin: 0; font-size: calc(12px * var(--fs)); }
+.database-form .database-test { margin: 0; }
+.database-test.status { align-self: flex-start; }
+.database-test.err { font-size: calc(12px * var(--fs)); }
 .database-form .popup-actions { justify-content: flex-end; }

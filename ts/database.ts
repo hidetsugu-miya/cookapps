@@ -37,6 +37,9 @@ async function save(profile: DatabaseProfile, password: string) {
   await load();
 }
 
+// The version that the server of the connection as typed answers; Rust opens the tunnel, logs in, reads it and closes the tunnel.
+const test = (profile: DatabaseProfile, password: string) => invoke("database_test", { profile, password });
+
 async function remove(profile: DatabaseProfileView, anchor: Element) {
   confirmDelete(anchor, profile.name, async () => {
     try {
@@ -54,7 +57,7 @@ const actions: SideActions = {
     selected = profile.id;
     draw();
   },
-  edit: (profile) => openDatabaseForm(profile, save),
+  edit: (profile) => openDatabaseForm(profile, save, test),
   remove,
 };
 
@@ -67,6 +70,6 @@ export function showDatabase() {
 export function initDatabase() {
   const add = $("database-add");
   add.innerHTML = PLUS_SVG;
-  add.onclick = () => openDatabaseForm(null, save);
+  add.onclick = () => openDatabaseForm(null, save, test);
   initSplit($("database"), $("database-side-split"), { side: "left", min: 0.15, max: 0.4, initial: 0.2, property: "--side-w" });
 }

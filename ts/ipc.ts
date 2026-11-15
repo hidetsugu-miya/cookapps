@@ -412,6 +412,8 @@ export interface Commands {
   // Saves a connection (a new one with an empty `id`); an empty `password` leaves the saved one as it is. Answers it as saved.
   database_profile_save: { args: { profile: DatabaseProfile; password: string }; result: DatabaseProfileView };
   database_profile_delete: { args: { id: string }; result: null };
+  // Tries the connection as typed (D-2): opens the tunnel when it uses SSM, logs in read only, reads `SELECT VERSION()`, closes the tunnel. An empty `password` is the saved one of `profile.id`. Answers the version.
+  database_test: { args: { profile: DatabaseProfile; password: string }; result: string };
 }
 
 // The commands that take JSON arguments; `todoist_upload` takes raw bytes (`invokeRaw`).

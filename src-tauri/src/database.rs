@@ -6,6 +6,7 @@
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
+pub mod mysql;
 pub mod ssm;
 
 use std::{path::Path, sync::Mutex};
@@ -209,6 +210,8 @@ fn new_id() -> Result<String, String> {
 /// Where the passwords are kept, by the id of a profile.
 pub trait PasswordStore {
     fn exists(&self, id: &str) -> Result<bool, String>;
+    /// The saved password; none when there is none.
+    fn get(&self, id: &str) -> Result<Option<String>, String>;
     fn set(&self, id: &str, password: &str) -> Result<(), String>;
     /// A missing password counts as deleted.
     fn delete(&self, id: &str) -> Result<(), String>;
@@ -226,6 +229,14 @@ impl PasswordStore for Keychain {
         match password_entry(id)?.get_password() {
             Ok(_) => Ok(true),
             Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
+        }
+    }
+
+    fn get(&self, id: &str) -> Result<Option<String>, String> {
+        match password_entry(id)?.get_password() {
+            Ok(password) => Ok(Some(password)),
+            Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(format!("資格情報の読み取りに失敗: {e}")),
         }
     }
@@ -294,6 +305,81 @@ pub fn delete(dir: &Path, passwords: &impl PasswordStore, id: &str) -> Result<()
     store(dir, &profiles)
 }
 
+/// The password a test of a connection logs in with: the one typed, else the one saved for `id` (a new connection has none, and an empty password is a login with none).
+fn test_password(
+    passwords: &impl PasswordStore,
+    id: &str,
+    typed: Option<&str>,
+) -> Result<String, String> {
+    if let PasswordChange::Set(password) = password_change(typed) {
+        return Ok(password);
+    }
+    if id.is_empty() {
+        return Ok(String::new());
+    }
+    Ok(passwords.get(id)?.unwrap_or_default())
+}
+
+/// Where a test connects: the local end of the tunnel when there is one (`tunnel_port`), else the host and the port of the profile.
+fn endpoint_of(host: &str, port: u16, tunnel_port: Option<u16>) -> mysql::Endpoint {
+    match tunnel_port {
+        Some(local) => mysql::Endpoint {
+            host: "127.0.0.1".to_owned(),
+            port: local,
+            tunneled: true,
+        },
+        None => mysql::Endpoint {
+            host: host.to_owned(),
+            port,
+            tunneled: false,
+        },
+    }
+}
+
+/// What a test answers: the version of the server, or what went wrong, and the tunnel it opened is closed either way.
+/// A tunnel that cannot be closed after a test that passed is told too, because its session is then left at AWS.
+fn test_outcome(
+    tested: Result<String, String>,
+    closed: Option<Result<(), String>>,
+) -> Result<String, String> {
+    match (tested, closed) {
+        (Ok(version), Some(Err(e))) => Err(format!(
+            "MySQL {version} に接続できましたが、トンネルを閉じられませんでした: {e}"
+        )),
+        (tested, _) => tested,
+    }
+}
+
+/// Tests `profile` as typed (not as saved): opens the tunnel when it uses SSM, logs in, reads `SELECT VERSION()` and closes the tunnel.
+/// `profile` goes through the same checks as a save, apart from the name's being another connection's.
+pub async fn test_connection(
+    tunnels: &ssm::Tunnels,
+    profile: DatabaseProfile,
+    password: &str,
+) -> Result<String, String> {
+    let profile = check(profile, &[])?;
+    let port = u16::try_from(profile.db_port).map_err(|_| "ポートが範囲外です".to_owned())?;
+    let opened = if profile.use_ssm {
+        let target = ssm::Target {
+            aws_profile: profile.aws_profile.clone(),
+            region: profile.region.clone(),
+            bastion_name: profile.bastion_name.clone(),
+            db_host: profile.db_host.clone(),
+            db_port: port,
+        };
+        Some(tunnels.open(&target).await?)
+    } else {
+        None
+    };
+    let endpoint = endpoint_of(&profile.db_host, port, opened.map(|o| o.port));
+    let tested = mysql::server_version(&endpoint, &profile.username, password).await;
+    let closed = match opened {
+        Some(o) => Some(tunnels.close(o.id).await),
+        None => None,
+    };
+    test_outcome(tested, closed)
+}
+
 /// The saved connections, each with whether its password is saved.
 #[tauri::command]
 pub async fn database_profiles(app: AppHandle) -> Result<Vec<DatabaseProfileView>, String> {
@@ -317,6 +403,21 @@ pub async fn database_profile_save(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Tests a connection as typed in the popup and answers the version of the server. An empty `password` is the saved one of `profile.id`.
+#[tauri::command]
+pub async fn database_test(
+    tunnels: tauri::State<'_, ssm::Tunnels>,
+    profile: DatabaseProfile,
+    password: Option<String>,
+) -> Result<String, String> {
+    let id = profile.id.clone();
+    let password =
+        tokio::task::spawn_blocking(move || test_password(&Keychain, &id, password.as_deref()))
+            .await
+            .map_err(|e| e.to_string())??;
+    test_connection(&tunnels, profile, &password).await
 }
 
 /// Deletes a connection and its password.
@@ -352,6 +453,10 @@ mod tests {
     impl PasswordStore for Memory {
         fn exists(&self, id: &str) -> Result<bool, String> {
             Ok(self.get(id).is_some())
+        }
+
+        fn get(&self, id: &str) -> Result<Option<String>, String> {
+            Ok(self.get(id))
         }
 
         fn set(&self, id: &str, password: &str) -> Result<(), String> {
@@ -756,6 +861,74 @@ mod tests {
         assert_eq!(list(&dir, &passwords).unwrap(), vec![b]);
         // The name can be used again.
         assert!(save(&dir, &passwords, direct("a"), None).is_ok());
+    }
+
+    #[test]
+    fn a_test_logs_in_with_the_typed_password_else_the_saved_one_else_none() {
+        let passwords = Memory::default();
+        passwords.set("a", "saved").unwrap();
+        let of = |id: &str, typed: Option<&str>| test_password(&passwords, id, typed).unwrap();
+        assert_eq!(of("a", Some(" typed ")), " typed ");
+        assert_eq!(of("a", Some("")), "saved");
+        assert_eq!(of("a", None), "saved");
+        assert_eq!(of("b", None), "");
+        assert_eq!(of("", Some("")), "");
+        assert_eq!(of("", Some("new")), "new");
+    }
+
+    #[test]
+    fn a_test_whose_keychain_cannot_be_read_is_an_error() {
+        struct Locked;
+        impl PasswordStore for Locked {
+            fn exists(&self, _: &str) -> Result<bool, String> {
+                Err("locked".to_owned())
+            }
+            fn get(&self, _: &str) -> Result<Option<String>, String> {
+                Err("locked".to_owned())
+            }
+            fn set(&self, _: &str, _: &str) -> Result<(), String> {
+                Err("locked".to_owned())
+            }
+            fn delete(&self, _: &str) -> Result<(), String> {
+                Err("locked".to_owned())
+            }
+        }
+        assert_eq!(test_password(&Locked, "a", None), Err("locked".to_owned()));
+        assert_eq!(
+            test_password(&Locked, "a", Some("typed")),
+            Ok("typed".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_test_goes_to_the_local_end_of_the_tunnel_or_else_to_the_host_of_the_profile() {
+        let tunneled = endpoint_of("db.example.com", 3306, Some(50123));
+        assert_eq!(
+            (tunneled.host.as_str(), tunneled.port, tunneled.tunneled),
+            ("127.0.0.1", 50123, true)
+        );
+        let direct = endpoint_of("db.example.com", 3307, None);
+        assert_eq!(
+            (direct.host.as_str(), direct.port, direct.tunneled),
+            ("db.example.com", 3307, false)
+        );
+    }
+
+    #[test]
+    fn the_outcome_of_a_test_is_the_version_unless_the_tunnel_that_stays_open_is_to_be_told() {
+        let version = || Ok("8.0.36".to_owned());
+        assert_eq!(test_outcome(version(), None), version());
+        assert_eq!(test_outcome(version(), Some(Ok(()))), version());
+        let both = test_outcome(version(), Some(Err("timeout".to_owned()))).unwrap_err();
+        assert!(
+            both.contains("8.0.36") && both.contains("timeout"),
+            "{both}"
+        );
+        // A test that failed keeps its own reason, whatever the close says.
+        assert_eq!(
+            test_outcome(Err("denied".to_owned()), Some(Err("timeout".to_owned()))),
+            Err("denied".to_owned())
+        );
     }
 
     #[test]
