@@ -207,6 +207,73 @@ export function moveUnderLocal(id: string, parentId: string) {
   todoState.openTasks.add(parentId);
 }
 
+// The IDs of the project `id` and of the projects nested under it, however deep.
+function projectTreeIds(id: string) {
+  const ids = new Set([id]);
+  // Todoist lists a project after the one it is nested in, so one pass finds them all.
+  for (const p of todoState.todo!.projects) if (p.parentId && ids.has(p.parentId)) ids.add(p.id);
+  return ids;
+}
+
+// The projects the project `p` may be moved under (T-8): not itself, not one nested under it, not its parent, and not the inbox, which has no sub-projects.
+export function moveTargets(p: ProjectItem) {
+  const tree = projectTreeIds(p.id);
+  return todoState.todo!.projects.filter((x) => !x.inbox && !tree.has(x.id) && x.id !== p.parentId);
+}
+
+// The IDs of the project `id` and of the projects above it that are closed in the side list: a row under one of them is not drawn.
+export function closedChain(id: string) {
+  const ids: string[] = [];
+  for (let p = todoState.projectById.get(id); p; p = p.parentId ? todoState.projectById.get(p.parentId) : undefined) {
+    if (todoState.closedProjects.has(p.id)) ids.push(p.id);
+  }
+  return ids;
+}
+
+// Moves the project `id` with the projects nested under it to the end of the sub-projects of `parentId`, or to the end of the top level when it is null (T-8).
+// The list is in tree order and each project has its depth, so the block moves as a whole and its depths shift. The new parent and the projects above it are opened so the moved row shows.
+export function moveProjectLocal(id: string, parentId: string | null) {
+  const projects = todoState.todo!.projects;
+  const from = projects.findIndex((p) => p.id === id);
+  if (from < 0) return;
+  const root = projects[from];
+  let end = from + 1;
+  while (end < projects.length && projects[end].depth > root.depth) end++;
+  const block = projects.splice(from, end - from);
+  let at = projects.length;
+  let depth = 0;
+  if (parentId !== null) {
+    const parentAt = projects.findIndex((p) => p.id === parentId);
+    if (parentAt < 0) {
+      projects.splice(from, 0, ...block);
+      return;
+    }
+    const parent = projects[parentAt];
+    at = parentAt + 1;
+    while (at < projects.length && projects[at].depth > parent.depth) at++;
+    depth = parent.depth + 1;
+    for (const closed of closedChain(parentId)) todoState.closedProjects.delete(closed);
+  }
+  // Read before the loop: the first project of the block is `root`, and its depth changes first.
+  const shift = depth - root.depth;
+  for (const p of block) p.depth += shift;
+  root.parentId = parentId;
+  projects.splice(at, 0, ...block);
+}
+
+// Takes the project `id` out of the list with the projects nested under it, however deep, and their tasks: Todoist archives or deletes them together (T-8).
+// The view goes back to "今日" when it was one of them, and an open task of theirs is closed.
+export function dropProjectLocal(id: string) {
+  const todo = todoState.todo!;
+  const gone = projectTreeIds(id);
+  const open = todoState.open === null ? undefined : todoState.taskById.get(todoState.open);
+  if (open && gone.has(open.projectId)) todoState.open = null;
+  if (gone.has(todoState.view)) todoState.view = "today";
+  todo.projects = todo.projects.filter((p) => !gone.has(p.id));
+  todo.tasks = todo.tasks.filter((t) => !gone.has(t.projectId));
+  todoState.projectById = new Map(todo.projects.map((p) => [p.id, p]));
+}
+
 // Completes (`done` true), reopens (false) or deletes (null) a task. In the subtask list of the task holding it, it turns done, open or goes, and the counts follow.
 // A completed or deleted one leaves the list with the rows of its subtasks. A reopened one has no row until the reload, which has the data for it.
 export function settleLocal(id: string, done: boolean | null) {

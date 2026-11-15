@@ -8,7 +8,7 @@ import type { OrcaTerminal } from "./OrcaTerminal";
 import type { OrcaWorktree } from "./OrcaWorktree";
 
 /**
- * What the screen draws. `target` is the saved environment's name, `None` for this machine; `environments` are the saved ones, listed even when a read failed so the target can still be changed.
+ * What the screen draws. `target` is the saved environment's name, `None` for this machine; `environments` are the saved ones, listed even when a read failed.
  */
 export type OrcaOverview = { state: OrcaState, message: string, target: string | null, environments: Array<string>, 
 /**

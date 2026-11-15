@@ -53,14 +53,6 @@ export function findTab<T extends { id: string; handle: string | null }>(environ
 // Whether the layout of the project was not asked for with exactly these tabs yet.
 export const needsSync = (environment: string | null, project: string, tabs: string[]) => asked.get(keyOf(environment, project)) !== tabs.join("\n");
 
-// Forgets every layout (the target of the screen changed: the tabs of the old one are not the new one's).
-export function forgetPanes() {
-  layouts.clear();
-  asked.clear();
-  known.clear();
-  latest.clear();
-}
-
 // The least share of its split that a divider leaves a node: `MIN_SHARE` of `orca_panes.rs`.
 export const MIN_SHARE = 0.1;
 

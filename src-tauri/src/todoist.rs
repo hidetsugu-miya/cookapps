@@ -582,6 +582,15 @@ fn task_api_url(id: &str, action: Option<&str>) -> Result<String, String> {
     })
 }
 
+/// `…/projects/{id}` (plus `/{action}`). The ID comes from the frontend; Todoist's are alphanumeric, so anything else is refused.
+fn project_api_url(id: &str, action: Option<&str>) -> Result<String, String> {
+    valid_id(id, "プロジェクト ID")?;
+    Ok(match action {
+        Some(action) => format!("/projects/{id}/{action}"),
+        None => format!("/projects/{id}"),
+    })
+}
+
 /// The URL and body that move task `id` under `parent_id`, as its last subtask. Both IDs come from the frontend, and a task cannot be its own parent.
 fn move_under_request(id: &str, parent_id: &str) -> Result<(String, Value), String> {
     let url = task_api_url(id, Some("move"))?;
@@ -590,6 +599,62 @@ fn move_under_request(id: &str, parent_id: &str) -> Result<(String, Value), Stri
         return Err("タスクを自分自身のサブタスクにはできません".into());
     }
     Ok((url, json!({ "parent_id": parent_id })))
+}
+
+/// The `commands` of the Sync API that move project `id` under `parent_id`, as its last sub-project, or to the top when `None` (T-8; `project_move`). Both IDs come from the frontend, and a project cannot be its own parent.
+fn project_move_commands(id: &str, parent_id: Option<&str>, uuid: &str) -> Result<String, String> {
+    valid_id(id, "プロジェクト ID")?;
+    if let Some(parent_id) = parent_id {
+        valid_id(parent_id, "プロジェクト ID")?;
+        if id == parent_id {
+            return Err("プロジェクトを自分自身のサブプロジェクトにはできません".into());
+        }
+    }
+    Ok(json!([{
+        "type": "project_move",
+        "uuid": uuid,
+        "args": { "id": id, "parent_id": parent_id },
+    }])
+    .to_string())
+}
+
+/// A version 4 UUID in text from 16 random bytes: the Sync API names a command by it and answers under it.
+fn uuid_v4(mut b: [u8; 16]) -> String {
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+
+/// Reads the result of the command `uuid` in a Sync API answer: `"ok"` is a success, and an error object is Todoist's refusal, worded with its message and its explanation.
+fn check_sync_status(text: &str, uuid: &str) -> Result<(), String> {
+    let answer: Value =
+        serde_json::from_str(text).map_err(|e| format!("Todoist の応答を読めません: {e}"))?;
+    match &answer["sync_status"][uuid] {
+        Value::String(status) if status == "ok" => Ok(()),
+        Value::Object(error) => {
+            let message = error
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("理由が不明です");
+            let explanation = error
+                .get("error_extra")
+                .and_then(|extra| extra.get("explanation"))
+                .and_then(Value::as_str);
+            Err(match explanation {
+                Some(explanation) => format!("Todoist が拒否しました: {message} ({explanation})"),
+                None => format!("Todoist が拒否しました: {message}"),
+            })
+        }
+        _ => Err("Todoist の応答にコマンドの結果がありません".into()),
+    }
 }
 
 fn task_web_url(id: &str) -> Result<String, String> {
@@ -1693,6 +1758,74 @@ pub async fn todoist_delete(
     Ok(done.map(|_| true))
 }
 
+/// Archives a project (T-8; `POST /projects/{id}/archive`). Todoist keeps its tasks, and its sub-projects go with it; the next sync drops them from the list.
+#[tauri::command]
+pub async fn todoist_archive_project(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    id: String,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_archive_project";
+    let url =
+        project_api_url(&id, Some("archive")).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let done = request(&auth, &state, command, Method::POST, &url, None).await?;
+    Ok(done.map(|_| true))
+}
+
+/// Deletes a project for good with its sections and tasks (T-8; `DELETE /projects/{id}`); Todoist cannot undo it, so the screen asks first.
+#[tauri::command]
+pub async fn todoist_delete_project(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    id: String,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_delete_project";
+    let url = project_api_url(&id, None).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let done = request(&auth, &state, command, Method::DELETE, &url, None).await?;
+    Ok(done.map(|_| true))
+}
+
+/// Moves a project under another project, as its last sub-project, or to the top when `parent_id` is `None` (T-8). Todoist refuses a parent that is below the project, or a tree that would be too deep; its refusal is the error.
+#[tauri::command]
+pub async fn todoist_move_project(
+    auth: State<'_, Auth>,
+    state: State<'_, TodoistState>,
+    id: String,
+    parent_id: Option<String>,
+) -> Result<Option<bool>, String> {
+    let command = "todoist_move_project";
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).map_err(|e| log_failure(command, TOKEN_USER, e.to_string()))?;
+    let uuid = uuid_v4(random);
+    let commands = project_move_commands(&id, parent_id.as_deref(), &uuid)
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let Some(token) = state
+        .token()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+    else {
+        return Ok(None);
+    };
+    // The Sync API reads a form, and `commands` is JSON text inside it.
+    let res = auth
+        .http()
+        .post(format!("{API_URL}/sync"))
+        .bearer_auth(&token)
+        .form(&[("commands", commands)])
+        .send()
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e.to_string()))?;
+    let sent = answer(res)
+        .await
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    let Some(text) = sent else {
+        state.forget_token().await;
+        return Ok(None);
+    };
+    check_sync_status(&text, &uuid).map_err(|e| log_failure(command, TOKEN_USER, e))?;
+    Ok(Some(true))
+}
+
 /// A task's comments are read up to this many pages (200 each), and so are a project's collaborators.
 // shortcut: past these the rest is dropped, upgrade if a task ever collects that many comments.
 const MAX_COMMENT_PAGES: usize = 5;
@@ -2488,6 +2621,88 @@ mod tests {
         ] {
             assert_eq!(mail_of(description), None, "{description}");
         }
+    }
+
+    #[test]
+    fn project_urls_refuse_ids_that_are_not_alphanumeric() {
+        assert_eq!(
+            project_api_url("6XGgmFVcrG5RRjVr", Some("archive")).unwrap(),
+            "/projects/6XGgmFVcrG5RRjVr/archive"
+        );
+        assert_eq!(project_api_url("6XGg", None).unwrap(), "/projects/6XGg");
+        for id in ["", "a/b", "a?b", "../x", "6XGg/archive"] {
+            assert!(project_api_url(id, None).is_err(), "{id}");
+            assert!(project_api_url(id, Some("archive")).is_err(), "{id}");
+        }
+    }
+
+    #[test]
+    fn project_move_command_names_the_project_and_the_parent() {
+        let uuid = "1ca42128-d12f-4a66-8413-4d6ff2838fde";
+        let text =
+            project_move_commands("6Jf8VQXxpwv56VQ7", Some("6X7fphhgwcXVGccJ"), uuid).unwrap();
+        let commands: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            commands,
+            json!([{
+                "type": "project_move",
+                "uuid": uuid,
+                "args": { "id": "6Jf8VQXxpwv56VQ7", "parent_id": "6X7fphhgwcXVGccJ" }
+            }])
+        );
+    }
+
+    #[test]
+    fn project_move_command_sends_a_null_parent_for_the_top() {
+        let text = project_move_commands("6Jf8VQXxpwv56VQ7", None, "u").unwrap();
+        let commands: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(commands[0]["args"]["parent_id"], Value::Null);
+        assert_eq!(commands[0]["args"]["id"], "6Jf8VQXxpwv56VQ7");
+    }
+
+    #[test]
+    fn project_move_command_refuses_bad_ids_and_a_project_under_itself() {
+        for bad in ["", "a/b", "a\"b", "x y"] {
+            assert!(project_move_commands(bad, None, "u").is_err(), "{bad}");
+            assert!(
+                project_move_commands("p1", Some(bad), "u").is_err(),
+                "{bad}"
+            );
+        }
+        assert!(project_move_commands("p1", Some("p1"), "u").is_err());
+    }
+
+    #[test]
+    fn command_uuids_have_the_form_of_a_version_4_uuid() {
+        assert_eq!(uuid_v4([0xff; 16]), "ffffffff-ffff-4fff-bfff-ffffffffffff");
+        assert_eq!(uuid_v4([0; 16]), "00000000-0000-4000-8000-000000000000");
+        let bytes = [
+            0x1c, 0xa4, 0x21, 0x28, 0xd1, 0x2f, 0x4a, 0x66, 0x84, 0x13, 0x4d, 0x6f, 0xf2, 0x83,
+            0x8f, 0xde,
+        ];
+        assert_eq!(uuid_v4(bytes), "1ca42128-d12f-4a66-8413-4d6ff2838fde");
+    }
+
+    #[test]
+    fn sync_status_ok_is_a_success_and_anything_else_is_a_failure() {
+        let ok = r#"{"sync_token":"t","sync_status":{"u1":"ok"}}"#;
+        assert!(check_sync_status(ok, "u1").is_ok());
+
+        let refused = r#"{"sync_status":{"u1":{"error_tag":"INVALID_ARGUMENT_VALUE","error_code":20,"error":"Invalid argument value","http_code":400,"error_extra":{"argument":"parent_id","explanation":"too deep"}}}}"#;
+        let message = check_sync_status(refused, "u1").unwrap_err();
+        assert!(message.contains("Invalid argument value"), "{message}");
+        assert!(message.contains("too deep"), "{message}");
+
+        let plain = r#"{"sync_status":{"u1":{"error_code":15,"error":"Invalid temporary id"}}}"#;
+        assert!(check_sync_status(plain, "u1")
+            .unwrap_err()
+            .contains("Invalid temporary id"));
+
+        // The status of another command, no status, and text that is not JSON are all failures.
+        assert!(check_sync_status(r#"{"sync_status":{"u2":"ok"}}"#, "u1").is_err());
+        assert!(check_sync_status(r#"{"sync_token":"t"}"#, "u1").is_err());
+        assert!(check_sync_status("not json", "u1").is_err());
+        assert!(check_sync_status(r#"{"sync_status":{"u1":"nope"}}"#, "u1").is_err());
     }
 
     #[test]

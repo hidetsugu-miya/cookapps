@@ -17,7 +17,6 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use crate::{
-    accounts::write_atomic,
     auth::config_dir,
     orca_handoff::{compose, handoff_instruction, HandoffContext},
     orca_stream::{clamp_viewport, OrcaViewport},
@@ -234,7 +233,7 @@ pub enum OrcaState {
     Failed,
 }
 
-/// What the screen draws. `target` is the saved environment's name, `None` for this machine; `environments` are the saved ones, listed even when a read failed so the target can still be changed.
+/// What the screen draws. `target` is the saved environment's name, `None` for this machine; `environments` are the saved ones, listed even when a read failed.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -898,7 +897,7 @@ fn parse_output(out: &str) -> Result<Value, String> {
 // ---- the target ----
 
 /// The Orca the screen talks to: this machine's, or a saved environment (a paired server).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum Target {
     Local,
@@ -926,16 +925,8 @@ fn load_target(dir: &Path) -> Saved {
     }
 }
 
-fn save_target(dir: &Path, environment: Option<&str>) -> Result<(), String> {
-    let target = environment.map_or(Target::Local, |name| Target::Environment {
-        name: name.to_owned(),
-    });
-    let text = serde_json::to_string_pretty(&target).map_err(|e| e.to_string())?;
-    write_atomic(dir, SETTINGS_FILE, &text)
-}
-
 /// The environment to talk to (`None`: this machine). Only when no file was saved yet the first saved environment is used, else this machine.
-/// A saved environment that is no longer listed, or a file that cannot be used while an environment is saved, is an error: the target never changes by itself, and the owner chooses again.
+/// A saved environment that is no longer listed, or a file that cannot be used while an environment is saved, is an error: the target never changes by itself, and the owner corrects the file.
 fn resolve_target(saved: &Saved, environments: &[String]) -> Result<Option<String>, String> {
     let lost = || Err("保存した接続先が見つかりません".to_owned());
     match saved {
@@ -1983,11 +1974,6 @@ pub(crate) async fn local_ssh_targets() -> Vec<OrcaSshTarget> {
         .unwrap_or_default()
 }
 
-fn set_target(dir: &Path, environment: Option<&str>) -> Result<(), String> {
-    check_listed(environment)?;
-    save_target(dir, environment)
-}
-
 pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, String> {
@@ -2027,16 +2013,6 @@ pub async fn orca_destination(
     force: bool,
 ) -> Result<OrcaOverview, String> {
     blocking(move || destination_overview(environment.as_deref(), force)).await
-}
-
-/// Saves the Orca to talk to: a saved environment's name, or `None` for this machine.
-#[tauri::command]
-pub async fn orca_set_target(
-    app: tauri::AppHandle,
-    environment: Option<String>,
-) -> Result<(), String> {
-    let dir = config_dir(&app)?;
-    blocking(move || set_target(&dir, environment.as_deref())).await?
 }
 
 /// Sends `text` and Enter to the terminal `handle`.
@@ -4019,18 +3995,23 @@ mod tests {
     }
 
     #[test]
-    fn the_target_load_gives_what_save_wrote() {
+    fn the_target_load_gives_what_the_file_says() {
         let dir = std::env::temp_dir().join(format!("cookapps-orca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(load_target(&dir), Saved::Nothing);
-        save_target(&dir, Some("Studio")).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(SETTINGS_FILE),
+            r#"{"kind":"environment","name":"Studio"}"#,
+        )
+        .unwrap();
         assert_eq!(
             load_target(&dir),
             Saved::Target(Target::Environment {
                 name: "Studio".into()
             })
         );
-        save_target(&dir, None).unwrap();
+        std::fs::write(dir.join(SETTINGS_FILE), r#"{"kind":"local"}"#).unwrap();
         assert_eq!(load_target(&dir), Saved::Target(Target::Local));
         // A file that exists but cannot be used is not "nothing saved".
         std::fs::write(dir.join(SETTINGS_FILE), "{").unwrap();

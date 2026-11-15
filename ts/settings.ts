@@ -1,4 +1,4 @@
-// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Claude, the skills (`ts/skill-settings.ts`), Orca (the card of the terminal colors is `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
+// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Claude, the skills (`ts/skill-settings.ts`), Orca (the card of the terminal colors `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
 // The heading and the tabs stay at the top while a card scrolls. A token is never shown; Rust keeps it in the keychain.
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";

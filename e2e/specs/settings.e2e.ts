@@ -1224,6 +1224,17 @@ describe("settings: Ghostty (the Orca tab)", () => {
   });
 });
 
+describe("settings: the Orca tab has no card of the target (A-6)", () => {
+  it("has the cards of the terminal colors, the editor and Ghostty's settings, and none of the target", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await expect($("#settings-panel-orca")).toBeDisplayed();
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定"]);
+    expect(await count("#orca-target-items, #orca-target-help")).toBe(0);
+  });
+});
+
 describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
   // The app with `fixtures` added, and the settings screen open on the Orca tab.
   async function openOrcaTab(fixtures: Record<string, unknown> = {}) {
