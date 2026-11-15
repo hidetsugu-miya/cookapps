@@ -7,9 +7,13 @@ import type { OrcaStatus } from "./OrcaStatus";
  */
 export type OrcaRow = { group: OrcaGroup, repo: string, branch: string, 
 /**
- * The one line of the row: the first line of the prompt, else the task, the conversation, or the last answer.
+ * The one line of the row: the first line of the conversation's name, else of the prompt (not pasted data), the task, or the title of the pane's terminal.
  */
 line: string, 
+/**
+ * The first line of the agent's last answer, which the list shows after the line; `None` when it has none.
+ */
+reply: string | null, 
 /**
  * When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
  */

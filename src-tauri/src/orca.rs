@@ -87,8 +87,10 @@ pub struct OrcaRow {
     pub group: OrcaGroup,
     pub repo: String,
     pub branch: String,
-    /// The one line of the row: the first line of the prompt, else the task, the conversation, or the last answer.
+    /// The one line of the row: the first line of the conversation's name, else of the prompt (not pasted data), the task, or the title of the pane's terminal.
     pub line: String,
+    /// The first line of the agent's last answer, which the list shows after the line; `None` when it has none.
+    pub reply: Option<String>,
     /// When the state began for a running or waiting agent, when it last changed for a done one (epoch milliseconds, 0 when unknown).
     #[cfg_attr(test, ts(type = "number"))]
     pub at_ms: i64,
@@ -422,22 +424,66 @@ fn without_tags(line: &str) -> String {
     out
 }
 
-/// The first line of `text` that still has text once its tags are taken off, cut to `LINE_LIMIT` characters.
-fn first_text_line(text: &str) -> Option<String> {
+/// The lines of `text` that still have text once their tags are taken off.
+fn text_lines(text: &str) -> impl Iterator<Item = String> + '_ {
     text.lines()
         .map(|l| l.trim().chars().take(LINE_READ_LIMIT).collect::<String>())
         .map(|l| without_tags(&l).trim().to_string())
-        .find(|l| !l.is_empty())
+        .filter(|l| !l.is_empty())
+}
+
+/// The first line of `text` that still has text once its tags are taken off, cut to `LINE_LIMIT` characters.
+fn first_text_line(text: &str) -> Option<String> {
+    text_lines(text)
+        .next()
         .map(|l| l.chars().take(LINE_LIMIT).collect())
 }
 
-/// The text of a row's line: the first line of the prompt, else the task's title, the conversation's name, the first line of the last answer, or the title of the pane's terminal without its status mark; each without its XML tags, and the next one when nothing is left.
+/// What follows a quoted string at the start of `s` (the string holds no quote inside).
+fn after_string(s: &str) -> Option<&str> {
+    let s = s.strip_prefix('"')?;
+    Some(&s[s.find('"')? + 1..])
+}
+
+/// Whether `text` opens as people do not type: a keyed object, an array of objects or of strings, an XML or HTML document (Orca's `PASTED_DATA_LEAD`).
+fn is_pasted_data(text: &str) -> bool {
+    if let Some(rest) = text.strip_prefix('[') {
+        let rest = rest.trim_start();
+        return rest
+            .strip_prefix('{')
+            .is_some_and(|r| r.trim_start().starts_with('"'))
+            || after_string(rest).is_some_and(|r| r.trim_start().starts_with(','));
+    }
+    if let Some(rest) = text.strip_prefix('{') {
+        return after_string(rest.trim_start()).is_some_and(|r| r.trim_start().starts_with(':'));
+    }
+    let head = text
+        .chars()
+        .take(10)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    ["<?xml", "<!doctype"].iter().any(|lead| {
+        head.strip_prefix(lead)
+            .is_some_and(|r| r.starts_with(char::is_whitespace))
+    })
+}
+
+/// The first line of a prompt that has text once its tags are off, cut to `LINE_LIMIT` characters; `None` when the prompt opens as pasted data (the first lines are read, so that an object over several lines is found).
+fn prompt_label(prompt: &str) -> Option<String> {
+    let head: Vec<String> = text_lines(prompt).take(3).collect();
+    let first = head.first()?;
+    if is_pasted_data(&head.join(" ")) {
+        return None;
+    }
+    Some(first.chars().take(LINE_LIMIT).collect())
+}
+
+/// The text of a row's line: the first line of the conversation's name, else of the prompt (`prompt_label`), the task's title, or the title of the pane's terminal without its status mark; each without its XML tags, and the next one when nothing is left.
 fn line_of(agent: &Value, terminal_title: Option<&str>) -> String {
-    text_of(agent, "prompt")
+    text_of(agent, "conversationName")
         .and_then(first_text_line)
+        .or_else(|| text_of(agent, "prompt").and_then(prompt_label))
         .or_else(|| text_of(agent, "taskTitle").and_then(first_text_line))
-        .or_else(|| text_of(agent, "conversationName").and_then(first_text_line))
-        .or_else(|| text_of(agent, "lastAssistantMessage").and_then(first_text_line))
         .or_else(|| terminal_title.and_then(|t| first_text_line(without_status_mark(t))))
         .unwrap_or_default()
 }
@@ -550,6 +596,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                         .unwrap_or_default()
                         .to_owned(),
                     line: line_of(agent, terminal.and_then(|(_, _, title)| *title)),
+                    reply: text_of(agent, "lastAssistantMessage").and_then(first_text_line),
                     at_ms: if group == OrcaGroup::Done {
                         updated
                     } else {
@@ -2182,6 +2229,7 @@ mod tests {
                 repo: "example".into(),
                 branch: "feat/a".into(),
                 line: "Write the docs".into(),
+                reply: None,
                 at_ms: 2_000,
                 handle: Some("term_1".into()),
                 pane_key: Some("tabA:leaf1".into()),
@@ -2243,22 +2291,74 @@ mod tests {
     }
 
     #[test]
-    fn the_line_takes_the_prompt_then_the_task_the_conversation_and_the_last_answer() {
+    fn the_line_takes_the_conversation_then_the_prompt_the_task_and_the_terminal_title() {
         let mut a = agent("tabA:leaf1", "working");
         a["taskTitle"] = json!("Task\nsecond");
-        a["conversationName"] = json!("Conversation");
+        a["conversationName"] = json!("Conversation\nsecond");
         a["lastAssistantMessage"] = json!("\nAnswer\nmore");
-        assert_eq!(line_of(&a, None), "Write the docs");
+        assert_eq!(line_of(&a, Some("◑ Terminal title")), "Conversation");
+        a["conversationName"] = json!(" ");
+        assert_eq!(line_of(&a, Some("◑ Terminal title")), "Write the docs");
         a["prompt"] = json!("\n\n  \nfirst real line\nnext");
         assert_eq!(line_of(&a, None), "first real line");
         a["prompt"] = json!("  ");
-        assert_eq!(line_of(&a, None), "Task");
+        assert_eq!(line_of(&a, Some("◑ Terminal title")), "Task");
         a["taskTitle"] = json!(" ");
-        assert_eq!(line_of(&a, None), "Conversation");
-        a["conversationName"] = Value::Null;
-        assert_eq!(line_of(&a, None), "Answer");
-        a.as_object_mut().unwrap().remove("lastAssistantMessage");
+        assert_eq!(line_of(&a, Some("◑ Terminal title")), "Terminal title");
+        // The last answer is the reply of the row, never its line.
         assert_eq!(line_of(&a, None), "");
+    }
+
+    #[test]
+    fn the_conversation_is_the_line_when_the_prompt_is_a_message_of_the_harness() {
+        let mut a = agent("tabA:leaf1", "working");
+        a["prompt"] = json!(
+            "<event kind=\"repl-eval\" at=\"2026-11-15T08:41:48.666Z\">\n[late output from eval #1851]\n</event>"
+        );
+        assert_eq!(line_of(&a, None), "[late output from eval #1851]");
+        a["conversationName"] = json!("Gmail返信エディター");
+        assert_eq!(line_of(&a, None), "Gmail返信エディター");
+        a["conversationName"] = json!("<b>Name</b>");
+        assert_eq!(line_of(&a, None), "Name");
+    }
+
+    #[test]
+    fn a_prompt_that_opens_with_pasted_data_is_no_line() {
+        let mut a = agent("tabA:leaf1", "working");
+        a["taskTitle"] = json!("Task");
+        for prompt in [
+            "{\"isAsync\":true,\"status\":\"async_launched\"}",
+            "{ \"a\" : 1}",
+            "<event kind=\"repl-eval\">\n{\"isAsync\":true}\n</event>",
+            "{\n  \"isAsync\": true\n}",
+            "[{\"a\":1}]",
+            "[\n  {\n    \"a\": 1\n  }\n]",
+            "[\"a\", \"b\"]",
+            "<?xml version=\"1.0\"?><a/>",
+            "<?XML\nversion",
+            "<!DOCTYPE html>",
+        ] {
+            a["prompt"] = json!(prompt);
+            assert_eq!(line_of(&a, None), "Task", "{prompt}");
+        }
+        a["taskTitle"] = Value::Null;
+        a["prompt"] = json!("{\"a\":1}");
+        assert_eq!(line_of(&a, Some("◑ Terminal title")), "Terminal title");
+        // Words that only look like it stay a line.
+        for prompt in [
+            "{not json",
+            "{\"a\" 1}",
+            "[late output]",
+            "[1, 2]",
+            "[\"a\"]",
+            "<?xmlish",
+            "<?xml",
+            "<!doctypes x",
+            "Fix {\"a\":1}",
+        ] {
+            a["prompt"] = json!(prompt);
+            assert_eq!(line_of(&a, None), prompt, "{prompt}");
+        }
     }
 
     #[test]
@@ -2345,9 +2445,6 @@ mod tests {
         assert_eq!(line_of(&a, None), "Task done");
         a["taskTitle"] = json!("<a/>");
         a["conversationName"] = json!("<b>\n</b>");
-        a["lastAssistantMessage"] = json!("<c>Answer</c>");
-        assert_eq!(line_of(&a, None), "Answer");
-        a["lastAssistantMessage"] = json!("<c/>");
         assert_eq!(
             line_of(&a, Some("◑ <d>Terminal title</d>")),
             "Terminal title"
@@ -2402,7 +2499,8 @@ mod tests {
         assert_eq!(line(&a, &terminals()), "");
         assert_eq!(line(&a, &json!({"terminals": []})), "");
         a["lastAssistantMessage"] = json!("Answer");
-        assert_eq!(line(&a, &titled("◑ Terminal title")), "Answer");
+        assert_eq!(line(&a, &titled("◑ Terminal title")), "Terminal title");
+        assert_eq!(line(&a, &terminals()), "");
         a["prompt"] = json!("Prompt");
         assert_eq!(line(&a, &titled("◑ Terminal title")), "Prompt");
     }
@@ -2428,6 +2526,32 @@ mod tests {
             let rows = rows_of(&ps(&[a.clone()]), &terminals());
             assert_eq!(rows[0].line, "Write the docs", "{state}");
         }
+    }
+
+    #[test]
+    fn a_row_carries_the_first_line_of_the_last_answer() {
+        let reply = |message: Value| {
+            let mut a = agent("tabA:leaf1", "working");
+            a["lastAssistantMessage"] = message;
+            rows_of(&ps(&[a]), &terminals())[0].reply.clone()
+        };
+        assert_eq!(
+            reply(json!("<c>\n  Answer\nmore")).as_deref(),
+            Some("Answer")
+        );
+        assert_eq!(reply(json!("\n\nOne line")).as_deref(), Some("One line"));
+        assert_eq!(reply(json!("<c/>\n \n")), None);
+        assert_eq!(reply(json!("  ")), None);
+        assert_eq!(reply(Value::Null), None);
+        assert_eq!(
+            reply(json!("あ".repeat(LINE_LIMIT + 50)))
+                .unwrap()
+                .chars()
+                .count(),
+            LINE_LIMIT
+        );
+        let bare = agent("tabA:leaf1", "working");
+        assert_eq!(rows_of(&ps(&[bare]), &terminals())[0].reply, None);
     }
 
     #[test]
@@ -2545,6 +2669,7 @@ mod tests {
                 repo: String::new(),
                 branch: String::new(),
                 line: String::new(),
+                reply: None,
                 at_ms: 0,
                 handle: None,
                 pane_key: None,
