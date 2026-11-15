@@ -9,6 +9,7 @@
 // A search field above the projects (A-19) narrows them by name; ⌘J moves to it.
 // While the screen and the file pane are shown, the clock also reads again, every 10 seconds, what the file pane shows and the files and differences that the panes show (`rereadFiles`; A-18, A-24, A-27), without a word.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
+import type { OrcaLocal } from "./bindings/OrcaLocal";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
 import type { OrcaRow } from "./bindings/OrcaRow";
@@ -52,6 +53,22 @@ const HIDDEN_MS = 60_000;
 let view: OrcaOverview | null = null;
 // The SSH hosts of this machine: the last read that said them (a read that does not say what the target is leaves them).
 let ssh: OrcaSshTarget[] = [];
+// This machine's lists beside a saved environment's (A-33), null while this machine is the target (its lists are `view`'s own) or before a read of it. A read that failed keeps the lists of the last good one and says its state.
+let here: OrcaLocal | null = null;
+// When this machine's lists were last read by the clock while the target is streamed (`loadHere`); the read of `orca_overview` sets it too, as the first read of a target does.
+let hereTry = 0;
+let hereLoading = false;
+// The latest read of this machine's lists is the one used (as `loadSeq` is for `load`).
+let hereSeq = 0;
+// The lists the screen draws: the target's (`view`) and this machine's (`here`) in one (A-33). Every item says where it is (`environment`), so a row of a saved environment is the one with a name.
+interface Lists {
+  rows: OrcaRow[];
+  worktrees: OrcaWorktree[];
+  projects: OrcaProject[];
+  hosts: OrcaProject[];
+  terminals: OrcaTerminal[];
+}
+let mix: Lists = { rows: [], worktrees: [], projects: [], hosts: [], terminals: [] };
 // How much a read asks for (see `orca_overview`).
 type Scope = "full" | "screen" | "badge";
 // The sidebar button's count: the agents that wait for the user, and the notices (see `track`). The rows held, or what a read for the count alone found.
@@ -205,7 +222,7 @@ const placeOf = (item: { environment?: string | null }) => item.environment ?? n
 
 // Where the project `key` of the list is, which the layout of its panes, its files and its diffs are kept under. A key the list does not hold (an SSH host that only this machine lists, or a project that left) has no place of its own: the screen's target.
 function projectPlace(key: string): string | null {
-  const project = view?.projects.find((p) => p.key === key) ?? view?.hosts.find((p) => p.key === key);
+  const project = mix.projects.find((p) => p.key === key) ?? mix.hosts.find((p) => p.key === key);
   return project === undefined ? (view?.target ?? null) : placeOf(project);
 }
 
@@ -216,28 +233,28 @@ const plainTabId = (handle: string) => `orca:${handle}`;
 const keyOfTab = (t: Tab) => t.handle ?? t.id;
 
 // The handles of the terminals of the tabs the read holds: the terminals on the screen are known by them.
-const liveHandles = () => new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null || r.handle === null ? [] : [r.handle])), ...(view?.terminals ?? []).map((t) => t.handle)]);
+const liveHandles = () => new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null || r.handle === null ? [] : [r.handle])), ...mix.terminals.map((t) => t.handle)]);
 
 // The tabs of the project `key`: its Claude sessions and its plain terminals, in the order they were first seen.
 function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
-  for (const r of view?.rows ?? []) {
+  for (const r of mix.rows) {
     if (r.projectKey !== key || r.paneKey === null) continue;
     tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", reply: r.reply, subagents: r.subagents, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
   }
-  for (const t of view?.terminals ?? []) {
+  for (const t of mix.terminals) {
     if (t.projectKey !== key) continue;
-    const repo = view?.worktrees.find((w) => w.path === t.path)?.repo ?? view?.projects.find((p) => p.key === t.projectKey)?.name ?? "";
+    const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
     tabs.push({ id: plainTabId(t.handle), kind: "plain", status: "done", label: "起動中", title: t.title || "ターミナル", reply: null, subagents: 0, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
     // A scratchpad file of an SSH host (A-30) is in no worktree.
-    const where = f.host !== null ? "" : tabs.find((t) => t.path === f.path)?.where ?? view?.worktrees.find((w) => w.path === f.path);
+    const where = f.host !== null ? "" : tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target);
     tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), reply: null, subagents: 0, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target });
   }
   for (const d of diffsOf(place, key)) {
-    const where = tabs.find((t) => t.path === d.path)?.where ?? view?.worktrees.find((w) => w.path === d.path);
+    const where = tabs.find((t) => t.path === d.path)?.where ?? mix.worktrees.find((w) => w.path === d.path && placeOf(w) === d.target);
     tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, reply: null, subagents: 0, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
@@ -307,6 +324,13 @@ function drawSearch() {
   $("orca-search-clear").hidden = query === "";
 }
 
+// The name of the saved environment a row of the list is in (A-33): a project and a session of a saved environment have it, and those of this machine have none. The tabs and the terminals show no place.
+function environmentChip(environment: string) {
+  const chip = tag("span", "orca-env", environment);
+  chip.title = environment;
+  return chip;
+}
+
 // A session of the open project: its status icon and title, selected when it is the tab selected.
 function sessionNode(t: Tab, key: string) {
   const row = tag("button", "orca-session");
@@ -319,6 +343,7 @@ function sessionNode(t: Tab, key: string) {
   // "{title} - {reply}", as Orca's own list draws a row: the reply is the quieter part.
   if (t.reply !== null) title.append(tag("span", "orca-session-reply", ` - ${t.reply}`));
   row.append(statusIcon(t.status, t.label), title);
+  if (t.environment !== null) row.append(environmentChip(t.environment));
   if (t.subagents > 0) {
     const badge = tag("span", "orca-session-subagents");
     const label = `サブエージェント ${t.subagents} 件が作業中`;
@@ -334,7 +359,7 @@ function sessionNode(t: Tab, key: string) {
 }
 
 // A project, or an SSH host: its status icon, its name and the number of its sessions (none drawn when there are none). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
-function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
+function projectNode(key: string, name: string, status: OrcaStatus, sessions: number, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
   const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
@@ -344,6 +369,7 @@ function projectNode(key: string, name: string, status: OrcaStatus, sessions: nu
   const label = tag("span", "orca-project-name");
   label.append(...nameNodes(name, re));
   row.append(statusIcon(status), label);
+  if (environment !== null) row.append(environmentChip(environment));
   if (sessions > 0) row.append(tag("span", "orca-n", String(sessions)));
   row.onclick = () => selectProject(key);
   wrap.append(row);
@@ -376,11 +402,11 @@ function emptyNode(text: string) {
 }
 
 // A row of the project list: a project of this machine or an SSH host.
-type ProjectRow = Pick<OrcaProject, "key" | "name" | "status" | "sessions">;
+type ProjectRow = Pick<OrcaProject, "key" | "name" | "status" | "sessions" | "environment">;
 
 // Keeps `workingOrder` and `opened` in step with the sessions of a read that worked. A project is in the working group when a session of it works (its own status may be a question, which outranks working), or when its icon works with no working Claude row (another agent, or a worktree's status). One that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them); one that does not work leaves it. A project opens when work appears in it that the last read did not have (a working session, or the project's own work with no such session), also when the user closed it; work that went on leaves it as the user left it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing. A project the list no longer holds is forgotten by `opened`.
 function trackWorking() {
-  if (view === null || view.state !== "ready" || switching) return;
+  if (view === null || switching || (view.state !== "ready" && here?.state !== "ready")) return;
   if (view.target !== workingTarget) {
     workingTarget = view.target;
     workingOrder = [];
@@ -390,33 +416,33 @@ function trackWorking() {
     if (projectKey !== null) opened.add(projectKey);
   }
   const now = new Map<string, Set<string>>();
-  for (const r of view.rows) {
+  for (const r of mix.rows) {
     if (r.status !== "working") continue;
     const ids = now.get(r.projectKey) ?? new Set<string>();
     ids.add(r.paneKey ?? `${r.repo}/${r.branch}`);
     now.set(r.projectKey, ids);
   }
   // A project whose icon works with no working Claude row: its own id, which no pane key is.
-  for (const p of view.projects) if (p.status === "working" && !now.has(p.key)) now.set(p.key, new Set([`project:${p.key}`]));
-  const keys = view.projects.map((p) => p.key).filter((k) => now.has(k));
+  for (const p of mix.projects) if (p.status === "working" && !now.has(p.key)) now.set(p.key, new Set([`project:${p.key}`]));
+  const keys = mix.projects.map((p) => p.key).filter((k) => now.has(k));
   const kept = workingOrder.filter((k) => keys.includes(k));
   for (const k of keys) if ([...now.get(k)!].some((id) => !workingIds.get(k)?.has(id))) opened.add(k);
   workingOrder = [...keys.filter((k) => !kept.includes(k)), ...kept];
   workingIds = now;
-  const known = new Set([...view.projects.map((p) => p.key), ...view.hosts.map((h) => h.key), ...ssh.map((t) => `ssh:${t.id}`)]);
+  const known = new Set([...mix.projects.map((p) => p.key), ...mix.hosts.map((h) => h.key), ...ssh.map((t) => `ssh:${t.id}`)]);
   for (const k of opened) if (!known.has(k)) opened.delete(k);
 }
 
 // The rows of the list: the projects of the target (the working ones first, in the order they began to work, then the stopped ones, which have a session and do not work, then those with no session, both as the read lists them), then the SSH hosts (the machine's, then the target's that it does not list).
 function projectRows(): { local: ProjectRow[]; hosts: ProjectRow[] } {
-  const all: ProjectRow[] = view?.projects ?? [];
+  const all: ProjectRow[] = mix.projects;
   const rest = all.filter((p) => !workingOrder.includes(p.key));
   const local: ProjectRow[] = [...workingOrder.flatMap((k) => all.filter((p) => p.key === k)), ...rest.filter((p) => p.sessions > 0), ...rest.filter((p) => p.sessions === 0)];
   const hosts: ProjectRow[] = ssh.map((t) => {
-    const host = view?.hosts.find((h) => h.key === `ssh:${t.id}`);
-    return { key: `ssh:${t.id}`, name: t.label, status: host?.status ?? "idle", sessions: host?.sessions ?? 0 };
+    const host = mix.hosts.find((h) => h.key === `ssh:${t.id}`);
+    return { key: `ssh:${t.id}`, name: t.label, status: host?.status ?? "idle", sessions: host?.sessions ?? 0, environment: host === undefined ? null : placeOf(host) };
   });
-  for (const h of view?.hosts ?? []) if (!hosts.some((r) => r.key === h.key)) hosts.push(h);
+  for (const h of mix.hosts) if (!hosts.some((r) => r.key === h.key)) hosts.push(h);
   return { local, hosts };
 }
 
@@ -453,7 +479,7 @@ function cursorKey(rows = visibleRows(matcher())) {
 // `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here.
 function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
   const { local, hosts } = rows;
-  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, openTabs.get(r.key) ?? tabsOf(r.key).filter((t) => !isDocument(t)), r.key === on, re);
+  const node = (r: ProjectRow) => projectNode(r.key, r.name, r.status, r.sessions, placeOf(r), openTabs.get(r.key) ?? tabsOf(r.key).filter((t) => !isDocument(t)), r.key === on, re);
   const nodes: HTMLElement[] = local.map(node);
   if (hosts.length) nodes.push(tag("h3", "orca-sec", "SSH"), ...hosts.map(node));
   return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
@@ -464,14 +490,14 @@ function drawFeed() {
   trackWorking();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, tabsOf(k).filter((t) => !isDocument(t))]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.reply, t.subagents])]);
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.reply, t.subagents, t.environment])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
-  const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions];
+  const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p)];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
   const re = matcher();
   const rows = visibleRows(re);
   const on = cursorKey(rows);
-  const key = JSON.stringify([view?.state ?? null, view?.projects.map(rowOf), view?.hosts.map(rowOf), ssh, needle(), on, projectKey, sessions, selectedTab(), switching]);
+  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), mix.hosts.map(rowOf), ssh, needle(), on, projectKey, sessions, selectedTab(), switching]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -617,7 +643,7 @@ function filesWorktree(tabs: Tab[]): { path: string; label: string; host: string
   const host = scratchHost();
   if (host !== null) return { path: "", label: SSH_SCRATCH_DIR, host, environment: projectPlace(projectKey!) };
   if (tab !== undefined || projectKey === null || projectKey.startsWith("ssh:")) return null;
-  const main = view?.worktrees.find((w) => w.projectKey === projectKey && w.isMain);
+  const main = mix.worktrees.find((w) => w.projectKey === projectKey && w.isMain);
   // A project with tabs whose layout is not answered yet has no selected tab for a moment: nothing is read for it,
   // except when the only tabs are files of the main worktree (the first file opened in a project with no tab), whose tree stays.
   if (tabs.some((t) => !isDocument(t) || t.path !== main?.path)) return null;
@@ -629,7 +655,7 @@ function drawFiles(tabs: Tab[]) {
   const worktree = filesWorktree(tabs);
   const target = worktree?.environment ?? null;
   // The branch of the heading is a button (A-25) for a worktree of the list that is on a git branch, except an SSH host's, whose branches Rust does not read. It is the git branch, not Orca's name of the worktree.
-  const listed = worktree === null ? undefined : view?.worktrees.find((w) => w.path === worktree.path);
+  const listed = worktree === null ? undefined : mix.worktrees.find((w) => w.path === worktree.path && placeOf(w) === target);
   const branch = listed !== undefined && listed.gitBranch !== "" && worktree?.label === worktreeLabel(listed) && !projectKey?.startsWith("ssh:") ? listed.gitBranch : null;
   syncFiles(worktree === null ? null : { target, path: worktree.path, label: worktree.label, project: projectKey ?? "", branch, host: worktree.host }, worktree === null || projectKey === null ? new Set() : openedIn(target, projectKey, worktree.path));
 }
@@ -676,16 +702,50 @@ function adopt(read: OrcaOverview) {
   if (view !== null && next.target !== view.target) forgetNotices();
   view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees, projects: view!.projects, hosts: view!.hosts, terminals: view!.terminals } : next;
   if (read.known) ssh = read.ssh;
+  // The count and the notices are the target's alone (A-6): `view` holds the target's lists, and this machine's, beside them, are not tracked.
   if (view.state === "ready") track(view.rows);
   else if (view.state === "missing") forgetNotices();
   else workingCount = 0;
   switching = false;
-  // A terminal that left Orca's list leaves the tabs, with its screen.
-  if (!keep && view.state === "ready") {
-    const held = liveHandles();
-    pruneTerminals((handle, source) => source.environment !== view?.target || held.has(handle));
+  adoptHere(next.local);
+  settle();
+}
+
+// Takes this machine's read beside a saved environment's (A-33): while this machine is the target, or the command is missing, there is none. A read that did not come with one (a poll that failed before it, an event of the stream) leaves what is held,
+// and one that failed keeps the lists of the last good read and says its state, so that this machine's rows stay while it cannot be read.
+function adoptHere(read: OrcaLocal | null | undefined) {
+  if (view === null || view.target === null || view.state === "missing") here = null;
+  else if (read) {
+    here = read.state === "ready" ? read : { ...read, rows: here?.rows ?? [], worktrees: here?.worktrees ?? [], projects: here?.projects ?? [], hosts: here?.hosts ?? [], terminals: here?.terminals ?? [] };
+    hereTry = Date.now();
   }
-  if (view.state === "ready") forgetGone();
+  remix();
+}
+
+// Puts the lists of the target and of this machine in one (A-33): this machine's first, and the projects newest first as each list is (a stable sort keeps this machine's first on a tie). The sidebar's count and the side pane of A-9 read `view`, not this.
+function remix() {
+  if (view === null || view.target === null || here === null) {
+    mix = { rows: view?.rows ?? [], worktrees: view?.worktrees ?? [], projects: view?.projects ?? [], hosts: view?.hosts ?? [], terminals: view?.terminals ?? [] };
+    return;
+  }
+  mix = {
+    rows: [...here.rows, ...view.rows],
+    worktrees: [...here.worktrees, ...view.worktrees],
+    projects: [...here.projects, ...view.projects].sort((a, b) => b.atMs - a.atMs),
+    hosts: [...here.hosts, ...view.hosts],
+    terminals: [...here.terminals, ...view.terminals],
+  };
+}
+
+// What a read of the lists leaves to do: a terminal that left Orca's list leaves the tabs with its screen (in each place that was read well), the order of tabs gone is dropped, and a start that waits is looked for.
+function settle() {
+  if (view === null) return;
+  const read = [...(view.state === "ready" ? [view.target] : []), ...(here?.state === "ready" ? [null] : [])];
+  if (read.length > 0) {
+    const held = liveHandles();
+    pruneTerminals((handle, source) => !read.includes(source.environment) || held.has(handle));
+    forgetGone();
+  }
   claimStarted();
 }
 
@@ -700,18 +760,24 @@ function claimStarted() {
     started = null;
     return;
   }
-  if (view === null || view.state !== "ready") return;
-  const same = wait.target === view.target;
-  const row = same && wait.kind === "claude" ? view.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
-  const terminal = same && wait.kind === "terminal" && wait.handle !== null ? view.terminals.find((t) => t.handle === wait.handle) : undefined;
+  if (view === null) return;
+  // The list of the place the start was made in: the target's, or this machine's beside it (A-33). Another target, or no read of this machine yet, ends the wait; a list that failed (or is not read yet) keeps it till its 30 seconds are over.
+  const place = wait.target === view.target ? view : wait.target === null ? here : null;
+  if (place === null) {
+    started = null;
+    return;
+  }
+  if (place.state !== "ready") return;
+  const row = wait.kind === "claude" ? mix.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
+  const terminal = wait.kind === "terminal" && wait.handle !== null ? mix.terminals.find((t) => t.handle === wait.handle) : undefined;
   if (row?.paneKey) pickRow(row);
   if (terminal) pickTerminal(terminal);
-  if (row || terminal || !same) started = null;
+  if (row || terminal) started = null;
 }
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...(view?.rows ?? []).flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...(view?.terminals ?? []).map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
+  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
 }
 
@@ -759,9 +825,9 @@ function onStream(event: OrcaStreamEvent) {
   if (view === null) return;
   if (event.kind === "status") {
     if (event.live) return;
-    adopt({ ...view, state: "failed", message: event.message, ssh: [], known: false });
+    adopt({ ...view, state: "failed", message: event.message, ssh: [], known: false, local: null });
   } else {
-    adopt({ ...view, state: "ready", message: "", rows: event.rows, worktrees: event.worktrees, projects: event.projects, hosts: event.hosts, terminals: event.terminals, ssh: [], known: false });
+    adopt({ ...view, state: "ready", message: "", rows: event.rows, worktrees: event.worktrees, projects: event.projects, hosts: event.hosts, terminals: event.terminals, ssh: [], known: false, local: null });
   }
   draw();
 }
@@ -775,6 +841,8 @@ async function load(scope: Scope, force = false) {
   const seq = ++loadSeq;
   loading = true;
   lastTry = Date.now();
+  // A read of the lists reads this machine's beside a saved environment's, so the clock's read of it (`loadHere`) waits one period.
+  if (scope !== "badge" && view?.target != null) hereTry = Date.now();
   let next: OrcaOverview;
   try {
     next = await invoke("orca_overview", { scope, target: view?.target ?? null });
@@ -794,6 +862,30 @@ async function load(scope: Scope, force = false) {
   adopt(next);
   syncStream();
   draw();
+}
+
+// Reads this machine's lists while a saved environment is the target and streamed (A-33): the stream gives the target's, and `orca_overview` is not read by the clock then. `force` starts a read although another is on its way (after a start or a close), and the return of the older one is dropped. It is the read of the pane of A-9 for this machine (`orca_destination`),
+// which changes nothing else of the screen. A read of a target that changed meanwhile is dropped, and one that failed keeps the lists of the last good one (`adoptHere`).
+async function loadHere(force = false) {
+  const target = view?.target ?? null;
+  if ((hereLoading && !force) || target === null || !streaming()) return;
+  const seq = ++hereSeq;
+  hereLoading = true;
+  hereTry = Date.now();
+  const read = await readDestination(null, false);
+  if (seq !== hereSeq) return;
+  hereLoading = false;
+  hereTry = Date.now();
+  if (view?.target !== target || !streaming()) return;
+  adoptHere(read);
+  settle();
+  draw();
+}
+
+// Reads the list again after an operation in `place` (a start, a close): `orca_overview` reads both places, and a streamed target says its own change by itself, so only this machine's is read then.
+function reread(place: string | null) {
+  if (!streaming()) load(clockScope(), true);
+  else if (place === null) void loadHere(true);
 }
 
 // Reads again, without a word, the files and the differences that the panes show now (the clock, and a branch of the worktree that changed).
@@ -822,7 +914,8 @@ function refresh() {
     started = null;
     draw();
   }
-  // A streamed list is not read by the clock.
+  // A streamed list is not read by the clock, but this machine's beside it is, every period while the screen is shown (A-33).
+  if (streaming() && shown() && !document.hidden && Date.now() - hereTry >= shownMs()) void loadHere();
   if (document.hidden || loading || streaming()) return;
   // A missing command is not looked for again by the clock.
   if (view?.state === "missing") return;
@@ -855,7 +948,7 @@ export async function readDestination(environment: string | null, force: boolean
 
 // Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the selection as it is.
 export function openInOrca(paneKey: string | null) {
-  const row = paneKey === null ? null : (view?.rows.find((r) => r.paneKey === paneKey) ?? null);
+  const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey) ?? null);
   if (row) {
     setProject(row.projectKey);
     chooseTab(claudeTabId(row.paneKey!));
@@ -888,6 +981,8 @@ async function chooseTarget(environment: string | null) {
   forgetPanes();
   pruneTerminals(() => false);
   view = { ...view, target: environment, rows: [], worktrees: [], projects: [], hosts: [], terminals: [] };
+  here = null;
+  remix();
   forgetNotices();
   switching = true;
   syncStream();
@@ -1047,13 +1142,13 @@ async function closeTab(tab: Tab) {
     closing.delete(tab.id);
     draw();
     // The terminal may be gone from Orca already: the list is read again, and the tab leaves only if the read no longer holds it.
-    if (!streaming()) load(clockScope(), true);
+    reread(tab.environment);
     return;
   }
   closing.delete(tab.id);
   draw();
   // A streamed list says the close by itself.
-  if (!streaming()) load(clockScope(), true);
+  reread(tab.environment);
 }
 
 // The menu of a tab (the right button): it splits its pane, which takes the tab to a new pane at its right or below it (a pane with one tab cannot be split, so it has no split); and on a file of a worktree it copies the file's path and its path from the worktree, as the menu of the file pane does (A-18), after a line when the split is there. A scratchpad file of an SSH host has no path to copy (A-30). A tab with neither has no menu.
@@ -1084,7 +1179,7 @@ function openStartMenu(anchor: Element) {
 // A project with one worktree acts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there).
 function chooseWorktree(anchor: Element, act: (worktree: OrcaWorktree) => void) {
   if (view === null || projectKey === null) return;
-  const mine = view.worktrees.filter((w) => w.projectKey === projectKey);
+  const mine = mix.worktrees.filter((w) => w.projectKey === projectKey);
   if (mine.length === 1) act(mine[0]);
   else openWorktreeDialog(anchor, mine, null, act);
 }
@@ -1120,7 +1215,7 @@ async function start(kind: StartKind, worktree: OrcaWorktree) {
       // A streamed list that held the new tab before this reply came is matched now; no event is to come for it.
       claimStarted();
     }
-    if (!streaming()) load(clockScope(), true);
+    reread(target);
   } catch (e) {
     showError(e);
   } finally {

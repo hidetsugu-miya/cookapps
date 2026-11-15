@@ -1,5 +1,6 @@
 // What the two specs of the Orca screen share (`specs/orca.e2e.ts` and `specs/orca-files.e2e.ts`): the sample list, how the screen is opened, and how its tabs, projects and menus are found.
 // A helper that only one of them uses stays in that spec. The mocks stay in `support.ts`; `orcaOverview` and `streamList` here put each item where the list was read from, on top of those of `support.ts`.
+import type { OrcaLocal } from "../ts/bindings/OrcaLocal";
 import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
 import type { OrcaRow } from "../ts/bindings/OrcaRow";
 import type { OrcaStreamEvent } from "../ts/bindings/OrcaStreamEvent";
@@ -38,6 +39,12 @@ export const onThisMachine = (read: OrcaOverview, ...repos: string[]): OrcaOverv
   const keys = repos.map((repo) => `proj_${repo}`);
   const move = <T extends { environment?: string | null }>(items: T[], keyOf: (item: T) => string): T[] => items.map((item) => (keys.includes(keyOf(item)) ? { ...item, environment: null } : item));
   return { ...read, rows: move(read.rows, (r) => r.projectKey), worktrees: move(read.worktrees, (w) => w.projectKey), projects: move(read.projects, (p) => p.key), terminals: move(read.terminals, (t) => t.projectKey) };
+};
+
+// `local` of `orca_overview` (A-6, A-33): this machine's lists beside those of a saved environment, which has its own state. Its items name no place (this machine's); `extra` gives another state or lists.
+export const beside = (rows: OrcaRow[], worktrees: OrcaWorktree[] = [], extra: Partial<OrcaLocal> = {}): OrcaLocal => {
+  const { state, message, rows: held, worktrees: trees, projects, hosts, terminals } = readOf(rows, worktrees);
+  return { state, message, rows: held, worktrees: trees, projects, hosts, terminals, ...extra };
 };
 
 // A saved environment as the target: its list is streamed.
