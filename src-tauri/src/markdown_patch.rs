@@ -379,17 +379,17 @@ pub async fn markdown_patch(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn an_html_block_of_one_br_is_an_empty_paragraph() {
         for html in ["<br />\n", "<br>", " <BR/> \n", "<br />"] {
-            assert!(super::is_empty_paragraph(html), "{html:?}");
+            assert!(is_empty_paragraph(html), "{html:?}");
         }
         for html in ["<br />x", "<br /><br />", "<div>", "<br class=\"a\">", ""] {
-            assert!(!super::is_empty_paragraph(html), "{html:?}");
+            assert!(!is_empty_paragraph(html), "{html:?}");
         }
     }
-
-    use super::*;
 
     #[test]
     fn splits_yaml_and_toml_front_matter() {
