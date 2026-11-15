@@ -16,6 +16,7 @@ use std::{
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
+use tauri_plugin_opener::OpenerExt;
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -377,6 +378,15 @@ pub async fn log_read(app: AppHandle) -> Result<Vec<LogEntry>, String> {
     tokio::task::spawn_blocking(move || read(&dir))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Opens the folder that holds the log (the config directory) in the file manager. The page gives no path: Rust knows it.
+#[tauri::command]
+pub async fn log_open_folder(app: AppHandle) -> Result<(), String> {
+    let dir = config_dir(&app)?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| format!("{} を開けません: {e}", dir.display()))
 }
 
 #[cfg(test)]

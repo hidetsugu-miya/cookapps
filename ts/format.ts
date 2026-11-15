@@ -12,6 +12,11 @@ export const addDays = (iso: string, days: number) => {
   const [y, m, d] = iso.split("-").map(Number);
   return new Date(y, m - 1, d + days);
 };
+// The time of a line of the log (A-28; RFC 3339, UTC) in this Mac's time: "11/14 22:00:55".
+export const logTime = (iso: string) => {
+  const d = new Date(iso);
+  return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+};
 export const hhmm = (min: number) => `${Math.floor(min / 60)}:${pad2(min % 60)}`;
 
 // Short list date: today "9:05", this year "10月17日", older "2025/10/17".

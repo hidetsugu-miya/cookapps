@@ -14,6 +14,7 @@ import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
+import type { LogEntry } from "../ts/bindings/LogEntry";
 import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
 import type { OrcaProject } from "../ts/bindings/OrcaProject";
 import type { OrcaRow } from "../ts/bindings/OrcaRow";
@@ -472,6 +473,9 @@ export const claudeSettings: ClaudeSettings = {
 
 // A saved skill (A-32) as `skill_list` answers it; `extra` changes the parts.
 export const skill = (name: string, extra: Partial<Skill> = {}): Skill => ({ name, displayName: `Skill ${name}`, screens: [], description: `About ${name}`, instructions: `Do ${name}.`, ...extra });
+
+// A line of the log (A-28) as `log_read` answers it.
+export const logLine = (time: string, level: LogEntry["level"], source: string, message: string): LogEntry => ({ time, level, source, message });
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
 export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };

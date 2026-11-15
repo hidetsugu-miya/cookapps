@@ -374,6 +374,7 @@ pub fn run() {
             orca_theme::terminal_theme_set,
             app_log::log_write,
             app_log::log_read,
+            app_log::log_open_folder,
             update::app_info,
             update::update_mode,
             update::set_update_mode,

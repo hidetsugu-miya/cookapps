@@ -1,6 +1,6 @@
-import { account, boot, skill, checked, chooseAppearance, chooseOption, fontSettings, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
+import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "skill" | "orca" | "font" | "update";
+type Tab = "google" | "calendar" | "todoist" | "slack" | "claude" | "skill" | "orca" | "font" | "update" | "log";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -13,7 +13,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "Orca"], ["font", "フォント"], ["update", "アップデート"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "Orca"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -1787,7 +1787,7 @@ describe("settings: tabs", () => {
       key,
     );
 
-  it("has the nine tabs in order, in a tablist, each controlling the card it names", async () => {
+  it("has the ten tabs in order, in a tablist, each controlling the card it names", async () => {
     await openSettings([]);
     await expect($("#settings-tabs")).toHaveAttribute("role", "tablist");
     expect(await textsOf('#settings-tabs [role="tab"]')).toEqual(TABS.map(([, label]) => label));
@@ -1825,8 +1825,8 @@ describe("settings: tabs", () => {
     await expect(panel("google")).not.toBeDisplayed();
     await pressArrow("ArrowLeft");
     await pressArrow("ArrowLeft");
-    expect(await selected()).toEqual(["settings-tab-update"]);
-    await expect(panel("update")).toBeDisplayed();
+    expect(await selected()).toEqual(["settings-tab-log"]);
+    await expect(panel("log")).toBeDisplayed();
     await pressArrow("ArrowRight");
     expect(await selected()).toEqual(["settings-tab-google"]);
   });
@@ -1838,7 +1838,7 @@ describe("settings: tabs", () => {
     expect(await focused()).toBe("settings-tab-calendar");
     await pressArrow("ArrowLeft");
     await pressArrow("ArrowLeft");
-    expect(await focused()).toBe("settings-tab-update");
+    expect(await focused()).toBe("settings-tab-log");
   });
 
   it("opens the Claude tab from 設定を開く in the Claude popup", async () => {
@@ -2163,5 +2163,126 @@ describe("settings: skills (the スキル tab, A-32)", () => {
     await expect($("#error")).toHaveText("スキル「alpha」を消せません");
     await expect($("#skill-form")).toBeDisplayed();
     expect(await rows()).toEqual(["Skill alphaalpha", "Skill betabeta"]);
+  });
+});
+
+describe("settings: log (the ログ tab, A-3, A-28)", () => {
+  // The lines the table shows: the cells of each row.
+  const cells = () => browser.execute(() => [...document.querySelectorAll("#log-body tbody tr")].map((tr) => [...tr.children].map((c) => c.textContent?.trim() ?? "")));
+  const pressed = () => browser.execute(() => [...document.querySelectorAll(".log-filters button")].filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.textContent));
+  const lines = [
+    logLine("2026-11-14T13:00:55.000Z", "error", "メール", "アーカイブできませんでした: Gmail が 500 を返しました"),
+    logLine("2026-11-14T13:00:41.000Z", "warn", "Orca 端末", "入力したターミナルは表示されていないため、送りませんでした"),
+    logLine("2026-11-14T12:58:10.000Z", "warn", "Slack", "一覧を読めませんでした。2 分後に読み直します"),
+    logLine("2026-11-14T12:52:03.000Z", "info", "Orca", "接続先につながりました"),
+  ];
+
+  // The app with the log `read` answers and the ログ tab open.
+  async function openLog(read: unknown = lines, fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, log_read: read, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("log");
+  }
+
+  it("reads the log only when the tab is shown, and again each time it is shown", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, log_read: lines });
+    await $("#nav-settings").click();
+    await browser.pause(300);
+    expect(await callsOf("log_read")).toEqual([]);
+    await openTab("log");
+    await waitForCalls("log_read");
+    await openTab("google");
+    await openTab("log");
+    expect((await waitForCalls("log_read", 2)).length).toBe(2);
+  });
+
+  it("puts the tab after アップデート and draws the lines in the order Rust answered, under 時刻, 重さ, 場所 and 内容", async () => {
+    await openLog();
+    await waitForCount("#log-body tbody tr", 4);
+    expect(await textsOf("#log-body thead th")).toEqual(["時刻", "重さ", "場所", "内容"]);
+    const rows = await cells();
+    expect(rows.map((r) => r.slice(1))).toEqual([
+      ["エラー", "メール", "アーカイブできませんでした: Gmail が 500 を返しました"],
+      ["警告", "Orca 端末", "入力したターミナルは表示されていないため、送りませんでした"],
+      ["警告", "Slack", "一覧を読めませんでした。2 分後に読み直します"],
+      ["情報", "Orca", "接続先につながりました"],
+    ]);
+    expect(rows.map((r) => r[0]!.slice(-2))).toEqual(["55", "41", "10", "03"]);
+    for (const r of rows) expect(r[0]).toMatch(/^\d\d\/\d\d \d\d:\d\d:\d\d$/);
+    expect(await browser.execute(() => [...document.querySelectorAll("#log-body tbody tr")].map((tr) => tr.className))).toEqual(["log-row error", "log-row warn", "log-row warn", "log-row info"]);
+  });
+
+  it("shows every line to start with, and only the errors or only the warnings with エラー and 警告, and every line again with すべて", async () => {
+    await openLog();
+    await waitForCount("#log-body tbody tr", 4);
+    expect(await pressed()).toEqual(["すべて"]);
+    await $("#log-filter-error").click();
+    expect(await pressed()).toEqual(["エラー"]);
+    expect((await cells()).map((r) => r[1])).toEqual(["エラー"]);
+    await $("#log-filter-warn").click();
+    expect(await pressed()).toEqual(["警告"]);
+    expect((await cells()).map((r) => r[2])).toEqual(["Orca 端末", "Slack"]);
+    await $("#log-filter-all").click();
+    expect(await pressed()).toEqual(["すべて"]);
+    await waitForCount("#log-body tbody tr", 4);
+  });
+
+  it("says there is no log, and has nothing to copy, when no line is shown", async () => {
+    await openLog([]);
+    await expect($("#log-body .card-empty")).toHaveText("ログはありません");
+    await expect($("#log-body table")).not.toExist();
+    await expect($("#log-copy")).toBeDisabled();
+    await openLog([lines[3]]);
+    await waitForCount("#log-body tbody tr", 1);
+    await expect($("#log-copy")).toBeEnabled();
+    await $("#log-filter-error").click();
+    await expect($("#log-body .card-empty")).toHaveText("ログはありません");
+    await expect($("#log-copy")).toBeDisabled();
+  });
+
+  it("copies the lines that are shown, one a line, with the time as the file holds it, and not the others", async () => {
+    await openLog();
+    await waitForCount("#log-body tbody tr", 4);
+    await stubClipboard();
+    await $("#log-filter-warn").click();
+    await $("#log-copy").click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the clipboard was never written" });
+    expect(await copiedTexts()).toEqual([
+      "2026-11-14T13:00:41.000Z\t警告\tOrca 端末\t入力したターミナルは表示されていないため、送りませんでした\n2026-11-14T12:58:10.000Z\t警告\tSlack\t一覧を読めませんでした。2 分後に読み直します",
+    ]);
+    await $("#log-filter-all").click();
+    await $("#log-copy").click();
+    await browser.waitUntil(async () => (await copiedTexts()).length === 2, { timeoutMsg: "the clipboard was never written" });
+    expect(((await copiedTexts())[1] as string).split("\n").length).toBe(4);
+  });
+
+  it("opens the folder with フォルダを開く", async () => {
+    await openLog();
+    await mock("log_open_folder", null);
+    await $("#log-open-folder").click();
+    expect((await waitForCalls("log_open_folder")).length).toBe(1);
+    await expect($("#error")).not.toBeDisplayed();
+  });
+
+  it("shows the message when the folder cannot be opened", async () => {
+    await openLog();
+    await mock("log_open_folder", rejects("/example/config を開けません"));
+    await $("#log-open-folder").click();
+    await expect($("#error")).toHaveText("/example/config を開けません");
+  });
+
+  it("shows the message when the log cannot be read, and no table", async () => {
+    await openLog(rejects("app-log.jsonl を読めません"));
+    await expect($("#error")).toHaveText("app-log.jsonl を読めません");
+    await expect($("#log-body table")).not.toExist();
+  });
+
+  it("draws the log read again when the tab is shown again", async () => {
+    await openLog();
+    await waitForCount("#log-body tbody tr", 4);
+    await mock("log_read", [lines[0]]);
+    await openTab("google");
+    await openTab("log");
+    await waitForCount("#log-body tbody tr", 1);
   });
 });

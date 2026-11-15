@@ -386,6 +386,8 @@ export interface Commands {
   log_write: { args: { level: LogLevel; source: string; message: string }; result: null };
   // A-28: the lines of the log of the last 30 days, the newest first.
   log_read: { args: undefined; result: LogEntry[] };
+  // A-3, A-28: opens the folder of the log (the config folder) in the file manager. The page gives no path. Answers null.
+  log_open_folder: { args: undefined; result: null };
   // A-13: the import of Ghostty's settings saved last, null before the first one.
   ghostty_saved: { args: undefined; result: GhosttyImport | null };
   // A-13: reads Ghostty's config files, saves what the terminals take from them and answers it with the entries taken and left.

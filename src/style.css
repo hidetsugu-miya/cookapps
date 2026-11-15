@@ -745,6 +745,22 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .item-meta { color: #666; font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }
 .item-meta.warn { color: var(--warn); }
 .hidden-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; }
+/* The Log tab (A-3, A-28): the head holds the filter, the copy and the folder; the lines are a table, the errors on the warn ground. */
+.log-card { max-width: 860px; }
+.log-card .card-head h2 { flex: 1; }
+.log-filters { display: flex; gap: 4px; margin-right: 8px; }
+.log-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: calc(13px * var(--fs)); }
+.log-table th, .log-table td { text-align: left; vertical-align: top; }
+.log-table th { padding: 8px 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: normal; }
+.log-table td { padding: 10px 12px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.log-table th:nth-child(1), .log-table td:nth-child(1) { width: 128px; padding-left: 20px; }
+.log-table th:nth-child(2), .log-table td:nth-child(2) { width: 72px; padding-left: 0; }
+.log-table th:nth-child(3), .log-table td:nth-child(3) { width: 120px; padding-left: 0; }
+.log-time { font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); white-space: nowrap; }
+.log-row.error { background: var(--del-bg); }
+.log-level { display: inline-block; padding: 2px 8px; border-radius: 10px; background: #f1f1f1; color: var(--effort-low); font-size: calc(11px * var(--fs)); }
+.log-level.error { background: var(--surface); color: var(--del); }
+.log-level.warn { background: var(--warn-bg); color: var(--warn); }
 .card-empty { padding: 12px 20px 14px; border-top: 1px solid var(--line); color: #666; font-size: calc(13px * var(--fs)); }
 /* The entries of Ghostty's config (A-13): the ones taken, and the ones left with the reason. */
 .ghostty-report { padding: 10px 20px 12px; border-top: 1px solid var(--line); }

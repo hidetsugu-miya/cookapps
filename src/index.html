@@ -251,6 +251,7 @@
           <button id="settings-tab-orca" class="tab" role="tab" aria-controls="settings-panel-orca" aria-selected="false" tabindex="-1">Orca</button>
           <button id="settings-tab-font" class="tab" role="tab" aria-controls="settings-panel-font" aria-selected="false" tabindex="-1">フォント</button>
           <button id="settings-tab-update" class="tab" role="tab" aria-controls="settings-panel-update" aria-selected="false" tabindex="-1">アップデート<span class="tab-dot" hidden></span></button>
+          <button id="settings-tab-log" class="tab" role="tab" aria-controls="settings-panel-log" aria-selected="false" tabindex="-1">ログ</button>
         </div>
       </div>
       <section id="settings-panel-google" class="card" role="tabpanel" aria-labelledby="settings-tab-google">
@@ -439,6 +440,21 @@
           </button>
         </div>
         <div id="update-items"></div>
+      </section>
+      <section id="settings-panel-log" class="card log-card" role="tabpanel" aria-labelledby="settings-tab-log" hidden>
+        <div class="card-head">
+          <h2>
+            <span class="logo orca"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg></span>ログ
+          </h2>
+          <div class="log-filters" role="group" aria-label="絞り込み">
+            <button id="log-filter-all" type="button" class="text-btn" aria-pressed="true">すべて</button>
+            <button id="log-filter-error" type="button" class="text-btn" aria-pressed="false">エラー</button>
+            <button id="log-filter-warn" type="button" class="text-btn" aria-pressed="false">警告</button>
+          </div>
+          <button id="log-copy" type="button" class="text-btn">コピー</button>
+          <button id="log-open-folder" type="button" class="text-btn">フォルダを開く</button>
+        </div>
+        <div id="log-body"></div>
       </section>
     </section>
     <section id="prompt" hidden>
