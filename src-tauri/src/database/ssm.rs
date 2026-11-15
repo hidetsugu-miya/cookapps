@@ -39,6 +39,8 @@ const RESPONSE_ENV: &str = "AWS_SSM_START_SESSION_RESPONSE";
 const PLUGIN: &str = "session-manager-plugin";
 /// One call of the AWS API, loading the credentials included.
 const API_TIMEOUT: Duration = Duration::from_secs(20);
+/// `TerminateSession` at the app's exit: the exit waits for it, so it gets a few seconds and not `API_TIMEOUT`. A session that it did not end is told on stderr.
+const EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// From the start of the plugin to its line with the port (it took 2 seconds on 2026-11-14).
 const PORT_TIMEOUT: Duration = Duration::from_secs(30);
 const ERROR_MAX: usize = 300;
@@ -305,12 +307,19 @@ async fn start_plugin(
     }
 }
 
+async fn with_limit<T>(
+    limit: Duration,
+    call: impl std::future::Future<Output = Result<T, Failure>>,
+) -> Result<T, Failure> {
+    tokio::time::timeout(limit, call)
+        .await
+        .map_err(|_| Failure::Timeout)?
+}
+
 async fn with_timeout<T>(
     call: impl std::future::Future<Output = Result<T, Failure>>,
 ) -> Result<T, Failure> {
-    tokio::time::timeout(API_TIMEOUT, call)
-        .await
-        .map_err(|_| Failure::Timeout)?
+    with_limit(API_TIMEOUT, call).await
 }
 
 async fn find_bastion(client: &Client, name: &str) -> Result<String, Failure> {
@@ -340,9 +349,9 @@ async fn find_bastion(client: &Client, name: &str) -> Result<String, Failure> {
         .ok_or_else(|| Failure::BastionNotFound(name.to_owned()))
 }
 
-async fn terminate(client: &Client, session_id: &str) -> Result<(), Failure> {
+async fn terminate(client: &Client, session_id: &str, limit: Duration) -> Result<(), Failure> {
     let request = client.terminate_session().session_id(session_id);
-    with_timeout(async {
+    with_limit(limit, async {
         request
             .send()
             .await
@@ -419,7 +428,7 @@ impl Tunnels {
             Ok(started) => started,
             Err(failure) => {
                 // The session exists at AWS though no plugin carries it: end it, and keep the first reason.
-                let _ = terminate(&client, session_id).await;
+                let _ = terminate(&client, session_id, API_TIMEOUT).await;
                 return Err(failure);
             }
         };
@@ -441,7 +450,7 @@ impl Tunnels {
             return Ok(());
         };
         tunnel.stop_plugin().await;
-        terminate(&tunnel.client, &tunnel.session_id)
+        terminate(&tunnel.client, &tunnel.session_id, API_TIMEOUT)
             .await
             .map_err(|f| f.message())
     }
@@ -455,7 +464,9 @@ impl Tunnels {
         for tunnel in &mut tunnels {
             tunnel.stop_plugin().await;
         }
-        let ends = tunnels.iter().map(|t| terminate(&t.client, &t.session_id));
+        let ends = tunnels
+            .iter()
+            .map(|t| terminate(&t.client, &t.session_id, EXIT_TIMEOUT));
         for result in futures_util::future::join_all(ends).await {
             if let Err(failure) = result {
                 eprintln!("ssm: {}", failure.message());
@@ -473,6 +484,11 @@ mod tests {
             id: id.to_owned(),
             online,
         }
+    }
+
+    #[test]
+    fn the_exit_waits_for_the_end_of_a_session_for_less_than_a_call_of_the_api() {
+        assert!(EXIT_TIMEOUT < API_TIMEOUT);
     }
 
     #[test]

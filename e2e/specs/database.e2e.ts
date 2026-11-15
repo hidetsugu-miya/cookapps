@@ -32,7 +32,7 @@ describe("database", () => {
     const nav = $("#nav-database");
     await expect(nav).toHaveAttribute("aria-label", "データベース");
     await expect(nav).toHaveAttribute("aria-current", "page");
-    expect(await nav.getText()).toBe("");
+    expect((await nav.getText()).trim()).toBe("");
     await expect(nav.$("svg")).toExist();
     await expect($("#database-side")).toBeDisplayed();
     await expect($("#database-pane")).toBeDisplayed();
@@ -160,12 +160,28 @@ describe("database: register", () => {
     await expect($("#database-form-error")).not.toExist();
   });
 
+  it("closes the popup when the keychain refuses after the connection was saved, shows the error on the screen, and lists the connection", async () => {
+    await openDatabase([direct]);
+    const message = "接続は保存しましたが、パスワードを保存できません: keychain is locked";
+    const save = await mock("database_profile_save", rejects(message));
+    await mock("database_profiles", [direct, databaseProfile("p3", "Example new")]);
+    await $("#database-add").click();
+    await fillDirect();
+    await field("password").setValue("secret");
+    await $("#database-form button[type=submit]").click();
+    await waitForCalls(save);
+    await expect($("#database-form")).not.toExist();
+    await expect($("#error")).toHaveText(message);
+    await waitForCount("#database-side-feed .database-item", 2);
+    expect(await names()).toEqual(["Example direct", "Example new"]);
+  });
+
   it("closes on キャンセル and on Escape, calls nothing, and makes the screen behind usable again", async () => {
     await openDatabase([direct]);
     const save = await mock("database_profile_save", databaseProfile("p3", "x"));
     await $("#database-add").click();
     await fillDirect();
-    await $("#database-form .text-btn:not(.primary)").click();
+    await $("#database-form").$("button=キャンセル").click();
     await expect($("#database-form")).not.toExist();
     await $("#database-add").click();
     await expect(field("name")).toHaveValue("");
@@ -562,13 +578,15 @@ describe("database: tree", () => {
         [num("1"), databaseCell("Alice"), databaseCell(long), bin("バイナリ 16 B"), databaseNull, num("12.50")],
         [num("2"), databaseCell("Bob"), databaseCell("注文メモ"), databaseNull, databaseCell("2024-01-02 03:04:05"), num("0.00")],
       ],
-      { hasMore: true, summary: "1–2 行目 / 約 1,200 行" },
+      { hasMore: true, estimate: 1200, summary: "1–2 行目 / 約 1,200 行" },
     );
     const page1 = databaseRecords(columns, [[num("3"), databaseCell("Carol"), databaseCell(""), bin("バイナリ 1.5 KB"), databaseNull, num("1.00")]], {
       page: 1,
+      estimate: 1200,
       summary: "3–3 行目 / 約 1,200 行",
     });
-    const read = (page: number) => ({ id: "p1", database: "shop", table: "users", page });
+    // `estimate` is the one of the page that is shown (none before a first page): Rust reads it with the page 0 only.
+    const read = (page: number, estimate: number | null = null) => ({ id: "p1", database: "shop", table: "users", page, estimate });
     const grid = () =>
       browser.execute(() => [...document.querySelectorAll("#database-work .database-grid tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
     const button = (key: string) => $(`#database-work [data-key="${key}"]`);
@@ -642,14 +660,14 @@ describe("database: tree", () => {
       await openTable();
       const next = await mock("database_records", page1);
       await button("next").click();
-      expect(await waitForCalls(next)).toEqual([read(1)]);
+      expect(await waitForCalls(next)).toEqual([read(1, 1200)]);
       await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
       expect(await grid()).toEqual([["3", "Carol", "", "バイナリ 1.5 KB", "NULL", "1.00"]]);
       await expect(button("prev")).toBeEnabled();
       await expect(button("next")).toBeDisabled();
       const back = await mock("database_records", page0);
       await button("prev").click();
-      expect(await waitForCalls(back)).toEqual([read(0)]);
+      expect(await waitForCalls(back)).toEqual([read(0, 1200)]);
       await expect($("#database-work .database-range")).toHaveText("1–2 行目 / 約 1,200 行");
       await expect(button("prev")).toBeDisabled();
     });
@@ -660,10 +678,10 @@ describe("database: tree", () => {
       await button("next").click();
       await waitForCalls("database_records");
       await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
-      const changed = databaseRecords(columns, [[num("3"), databaseCell("Carol B"), databaseCell(""), bin("バイナリ 4 B"), databaseNull, num("2.00")]], { page: 1, summary: "3–3 行目" });
+      const changed = databaseRecords(columns, [[num("3"), databaseCell("Carol B"), databaseCell(""), bin("バイナリ 4 B"), databaseNull, num("2.00")]], { page: 1, estimate: 1200, summary: "3–3 行目" });
       const again = await mock("database_records", changed);
       await button("reload").click();
-      expect(await waitForCalls(again)).toEqual([read(1)]);
+      expect(await waitForCalls(again)).toEqual([read(1, 1200)]);
       await expect($("#database-work .database-range")).toHaveText("3–3 行目");
       expect(await grid()).toEqual([["3", "Carol B", "", "バイナリ 4 B", "NULL", "2.00"]]);
     });
@@ -676,7 +694,7 @@ describe("database: tree", () => {
       await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
       const again = await mock("database_records", page0);
       await row("p1/d/shop/t/users").click();
-      expect(await waitForCalls(again)).toEqual([read(0)]);
+      expect(await waitForCalls(again)).toEqual([read(0, 1200)]);
       await expect($("#database-work .database-range")).toHaveText("1–2 行目 / 約 1,200 行");
     });
 
@@ -692,6 +710,21 @@ describe("database: tree", () => {
       await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
       expect(await count("#database-work .database-grid tbody tr")).toBe(1);
       expect(await callsOf(wait)).toHaveLength(1);
+    });
+
+    it("does not build the grid again when only the footer changes: the same table stays while the next page is read", async () => {
+      await openTable();
+      await browser.execute(() => {
+        (document.querySelector("#database-work .database-grid") as HTMLElement & { kept?: boolean }).kept = true;
+      });
+      await mock("database_records", holds);
+      await button("next").click();
+      await expect($("#database-work .database-range")).toHaveText("読み込み中…");
+      const kept = () => browser.execute(() => (document.querySelector("#database-work .database-grid") as (HTMLElement & { kept?: boolean }) | null)?.kept === true);
+      expect(await kept()).toBe(true);
+      await release("database_records", page1);
+      await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
+      expect(await kept()).toBe(false);
     });
 
     it("draws only the range for a table with no row", async () => {
@@ -837,7 +870,7 @@ describe("database: tree", () => {
       await expect($("#database-work h3")).toHaveText("shop.users");
       await expect(row("p1/d/shop/t/users")).toHaveAttribute("aria-pressed", "true");
       expect(await grid()).toEqual([["1", "Alice"]]);
-      expect(await callsOf(records)).toEqual([{ ...asked, page: 0 }]);
+      expect(await callsOf(records)).toEqual([{ ...asked, page: 0, estimate: null }]);
       expect(await callsOf("database_tables")).toHaveLength(1);
     });
 

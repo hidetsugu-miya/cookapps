@@ -310,19 +310,38 @@ pub fn delete(dir: &Path, passwords: &impl PasswordStore, id: &str) -> Result<()
     store(dir, &profiles)
 }
 
-/// The password a test of a connection logs in with: the one typed, else the one saved for `id` (a new connection has none, and an empty password is a login with none).
+/// Whether `typed` logs in as the same user at the same place as `saved`: the saved password is the one for that login and for no other.
+fn same_login(saved: &DatabaseProfile, typed: &DatabaseProfile) -> bool {
+    saved.username == typed.username
+        && saved.use_ssm == typed.use_ssm
+        && saved.aws_profile == typed.aws_profile
+        && saved.region == typed.region
+        && saved.bastion_name == typed.bastion_name
+        && saved.db_host == typed.db_host
+        && saved.db_port == typed.db_port
+}
+
+/// The password a test of `profile` (already checked) logs in with: the one typed, else the one saved for its id, but only when the profile still logs in as the saved one does (`same_login`),
+/// so that the saved password is never sent to another place than the one it was saved for. A new connection has no saved password, and an empty password is a login with none.
 fn test_password(
     passwords: &impl PasswordStore,
-    id: &str,
+    saved: &[DatabaseProfile],
+    profile: &DatabaseProfile,
     typed: Option<&str>,
 ) -> Result<String, String> {
     if let PasswordChange::Set(password) = password_change(typed) {
         return Ok(password);
     }
-    if id.is_empty() {
+    let Some(stored) = saved
+        .iter()
+        .find(|p| !profile.id.is_empty() && p.id == profile.id)
+    else {
         return Ok(String::new());
+    };
+    if !same_login(stored, profile) {
+        return Err("接続先やユーザーを変えたときは、パスワードを入力してください".to_owned());
     }
-    Ok(passwords.get(id)?.unwrap_or_default())
+    Ok(passwords.get(&profile.id)?.unwrap_or_default())
 }
 
 /// Where a test connects: the local end of the tunnel when there is one (`tunnel_port`), else the host and the port of the profile.
@@ -408,6 +427,14 @@ fn saved_login(
     Ok((profile, password))
 }
 
+/// Whether the login read again (`now`) is the one a session was opened with: a connection that was edited or deleted while it opened is not.
+fn login_unchanged(
+    opened: &(DatabaseProfile, String),
+    now: &Result<(DatabaseProfile, String), String>,
+) -> bool {
+    now.as_ref().is_ok_and(|now| now == opened)
+}
+
 /// Opens the tunnel and the read only session of `profile` and keeps it in `sessions`. A tunnel opened for a session that cannot be logged in to is closed again.
 async fn open_session(
     sessions: &session::Sessions,
@@ -473,16 +500,25 @@ pub async fn database_profile_save(
 /// Tests a connection as typed in the popup and answers the version of the server. An empty `password` is the saved one of `profile.id`.
 #[tauri::command]
 pub async fn database_test(
+    app: AppHandle,
     tunnels: tauri::State<'_, ssm::Tunnels>,
     profile: DatabaseProfile,
     password: Option<String>,
 ) -> Result<String, String> {
-    let id = profile.id.clone();
-    let password =
-        tokio::task::spawn_blocking(move || test_password(&Keychain, &id, password.as_deref()))
-            .await
-            .map_err(|e| e.to_string())??;
-    test_connection(&tunnels, profile, &password).await
+    let dir = config_dir(&app)?;
+    let profile = check(profile, &[])?;
+    let tested = profile.clone();
+    let password = tokio::task::spawn_blocking(move || {
+        let saved = if profile.id.is_empty() {
+            Vec::new()
+        } else {
+            load(&dir)?
+        };
+        test_password(&Keychain, &saved, &profile, password.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    test_connection(&tunnels, tested, &password).await
 }
 
 /// Deletes a connection and its password. A connection that is open is closed first (D-3).
@@ -495,12 +531,15 @@ pub async fn database_profile_delete(
 ) -> Result<(), String> {
     let dir = config_dir(&app)?;
     let closed = sessions.disconnect(&tunnels, &id).await;
+    let again = id.clone();
     tokio::task::spawn_blocking(move || {
         let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
         delete(&dir, &Keychain, &id)
     })
     .await
     .map_err(|e| e.to_string())??;
+    // A connection that began to open before the delete may have put its session in meanwhile; it checks the file when it has opened, and this closes what it put in before that.
+    let closed = closed.and(sessions.disconnect(&tunnels, &again).await);
     after_close(closed, "接続は削除しました")
 }
 
@@ -521,6 +560,20 @@ pub async fn database_connect(
                 .await
                 .map_err(|e| e.to_string())??;
         open_session(&sessions, &tunnels, &profile, &password).await?;
+        // A save or a delete that came while it opened found no session to close: look again, and close what was opened with a login that is gone.
+        let dir = config_dir(&app)?;
+        let wanted = id.clone();
+        let now = tokio::task::spawn_blocking(move || {
+            let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+            saved_login(&dir, &Keychain, &wanted)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        if !login_unchanged(&(profile, password), &now) {
+            let closed = sessions.disconnect(&tunnels, &id).await;
+            after_close(closed, "接続が変更または削除されました")?;
+            return Err("接続が変更または削除されました。もう一度開いてください".to_owned());
+        }
     }
     match sessions.databases(&tunnels, &id).await {
         Ok(databases) => Ok(databases),
@@ -543,6 +596,7 @@ pub async fn database_tables(
 }
 
 /// One page of the records of `table` in `database` on the open connection `id` (D-4): `page` counts from 0, and each value is already text.
+/// The estimated rows are read with the page 0; `estimate` is the one the screen holds from it, which a later page answers again.
 #[tauri::command]
 pub async fn database_records(
     sessions: tauri::State<'_, session::Sessions>,
@@ -551,9 +605,10 @@ pub async fn database_records(
     database: String,
     table: String,
     page: u32,
+    estimate: Option<u64>,
 ) -> Result<records::DatabaseRecords, String> {
     sessions
-        .records(&tunnels, &id, &database, &table, page)
+        .records(&tunnels, &id, &database, &table, page, estimate)
         .await
 }
 
@@ -1034,13 +1089,84 @@ mod tests {
     fn a_test_logs_in_with_the_typed_password_else_the_saved_one_else_none() {
         let passwords = Memory::default();
         passwords.set("a", "saved").unwrap();
-        let of = |id: &str, typed: Option<&str>| test_password(&passwords, id, typed).unwrap();
+        let saved = [DatabaseProfile {
+            id: "a".to_owned(),
+            ..direct("a")
+        }];
+        let of = |id: &str, typed: Option<&str>| {
+            let profile = DatabaseProfile {
+                id: id.to_owned(),
+                ..direct("a")
+            };
+            test_password(&passwords, &saved, &profile, typed).unwrap()
+        };
         assert_eq!(of("a", Some(" typed ")), " typed ");
         assert_eq!(of("a", Some("")), "saved");
         assert_eq!(of("a", None), "saved");
         assert_eq!(of("b", None), "");
         assert_eq!(of("", Some("")), "");
         assert_eq!(of("", Some("new")), "new");
+    }
+
+    #[test]
+    fn the_saved_password_is_used_only_for_the_login_it_was_saved_for() {
+        let passwords = Memory::default();
+        passwords.set("a", "saved").unwrap();
+        let stored = DatabaseProfile {
+            id: "a".to_owned(),
+            ..ssm("a")
+        };
+        let saved = [stored.clone()];
+        let of = |profile: &DatabaseProfile, typed: Option<&str>| {
+            test_password(&passwords, &saved, profile, typed)
+        };
+        assert_eq!(of(&stored, None), Ok("saved".to_owned()));
+        // Each of the fields that say where and as whom the login goes refuses the saved password.
+        let changed = [
+            DatabaseProfile {
+                db_host: "evil.example.com".to_owned(),
+                ..stored.clone()
+            },
+            DatabaseProfile {
+                db_port: 3307,
+                ..stored.clone()
+            },
+            DatabaseProfile {
+                username: "root".to_owned(),
+                ..stored.clone()
+            },
+            DatabaseProfile {
+                use_ssm: false,
+                ..stored.clone()
+            },
+            DatabaseProfile {
+                aws_profile: "other".to_owned(),
+                ..stored.clone()
+            },
+            DatabaseProfile {
+                region: "us-east-1".to_owned(),
+                ..stored.clone()
+            },
+            DatabaseProfile {
+                bastion_name: "other-bastion".to_owned(),
+                ..stored.clone()
+            },
+        ];
+        for profile in &changed {
+            let told = of(profile, None).unwrap_err();
+            assert_eq!(
+                told, "接続先やユーザーを変えたときは、パスワードを入力してください",
+                "{profile:?}"
+            );
+            // A password typed goes where it was typed for.
+            assert_eq!(of(profile, Some("typed")), Ok("typed".to_owned()));
+        }
+        // The name is not where the login goes.
+        let renamed = DatabaseProfile {
+            name: "renamed".to_owned(),
+            ..stored
+        };
+        assert_eq!(of(&renamed, None), Ok("saved".to_owned()));
     }
 
     #[test]
@@ -1060,9 +1186,17 @@ mod tests {
                 Err("locked".to_owned())
             }
         }
-        assert_eq!(test_password(&Locked, "a", None), Err("locked".to_owned()));
+        let a = DatabaseProfile {
+            id: "a".to_owned(),
+            ..direct("a")
+        };
+        let saved = [a.clone()];
         assert_eq!(
-            test_password(&Locked, "a", Some("typed")),
+            test_password(&Locked, &saved, &a, None),
+            Err("locked".to_owned())
+        );
+        assert_eq!(
+            test_password(&Locked, &saved, &a, Some("typed")),
             Ok("typed".to_owned())
         );
     }
@@ -1110,6 +1244,35 @@ mod tests {
         assert_eq!((profile.name.as_str(), password.as_str()), ("b", ""));
         let gone = saved_login(&dir, &passwords, "gone").unwrap_err();
         assert!(gone.contains("見つかりません"), "{gone}");
+    }
+
+    #[test]
+    fn a_session_is_kept_only_while_the_login_it_was_opened_with_is_still_saved() {
+        let dir = temp_dir("opened");
+        let passwords = Memory::default();
+        let a = save(&dir, &passwords, direct("a"), Some("pa".to_owned())).unwrap();
+        let id = a.profile.id.clone();
+        let opened = saved_login(&dir, &passwords, &id).unwrap();
+        assert!(login_unchanged(
+            &opened,
+            &saved_login(&dir, &passwords, &id)
+        ));
+        // Edited: another host, or only the password.
+        let moved = DatabaseProfile {
+            db_host: "10.0.0.9".to_owned(),
+            ..a.profile.clone()
+        };
+        save(&dir, &passwords, moved, None).unwrap();
+        assert!(!login_unchanged(
+            &opened,
+            &saved_login(&dir, &passwords, &id)
+        ));
+        let now = saved_login(&dir, &passwords, &id).unwrap();
+        save(&dir, &passwords, now.0.clone(), Some("new".to_owned())).unwrap();
+        assert!(!login_unchanged(&now, &saved_login(&dir, &passwords, &id)));
+        // Deleted.
+        delete(&dir, &passwords, &id).unwrap();
+        assert!(!login_unchanged(&now, &saved_login(&dir, &passwords, &id)));
     }
 
     #[test]

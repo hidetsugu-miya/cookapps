@@ -6,6 +6,7 @@
 //! A NULL is the text "NULL", a binary value is its length only, and a text longer than `TEXT_MAX` characters is cut with "…" (the rest is kept nowhere).
 //! The SQL tab (#635) draws its result with the same cells.
 
+use futures_util::TryStreamExt;
 use serde::Serialize;
 use sqlx::{
     mysql::{MySqlConnection, MySqlRow},
@@ -14,7 +15,10 @@ use sqlx::{
 #[cfg(test)]
 use ts_rs::TS;
 
-use super::session::{format_bytes, format_rows};
+use super::{
+    session::{format_bytes, format_rows},
+    sql::{collect_limited, column_names},
+};
 
 /// The rows of a page. One more is read to know that a next page exists.
 pub const PAGE_SIZE: u64 = 100;
@@ -54,6 +58,9 @@ pub struct DatabaseRecords {
     pub rows: Vec<Vec<DatabaseCell>>,
     pub page: u32,
     pub has_more: bool,
+    /// The estimated rows of the table (none for a view). Read with the page 0 only; a later page is given the one the screen holds (`read`'s `known`) and answers it again.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub estimate: Option<u64>,
     pub summary: String,
 }
 
@@ -267,45 +274,57 @@ pub(super) fn cells_of(row: &MySqlRow) -> Vec<DatabaseCell> {
         .iter()
         .enumerate()
         .map(|(i, column)| {
-            // The bytes as they came, with no check of the type; an error is a NULL (and so is the zero date, which the typed decoders also take for one, so none is used).
-            let bytes = row.try_get_unchecked::<Vec<u8>, _>(i).ok();
-            cell_of(column.type_info().name(), bytes.as_deref())
+            // The bytes as they came, borrowed from the row, with no check of the type; an error is a NULL (and so is the zero date, which the typed decoders also take for one, so none is used).
+            let bytes = row.try_get_unchecked::<&[u8], _>(i).ok();
+            cell_of(column.type_info().name(), bytes)
         })
         .collect()
 }
 
-/// The page `page` (from 0) of `database`.`table` on the session, and the estimated rows of the table.
+/// Whether the estimate is read for `page`: the first page reads it (a press on the table, and a reload of that page), a later one uses the one the screen holds, so the walk through the pages costs one round trip each.
+pub fn reads_estimate(page: u32) -> bool {
+    page == 0
+}
+
+/// The page `page` (from 0) of `database`.`table` on the session, and the estimated rows of the table (`known` is the one the screen holds, used for a page that does not read it).
+/// The rows are turned into cells one by one as they come, and the 101st is only counted, so no more than a page is held.
 pub async fn read(
     connection: &mut MySqlConnection,
     database: &str,
     table: &str,
     page: u32,
+    known: Option<u64>,
 ) -> Result<DatabaseRecords, sqlx::Error> {
     let offset = u64::from(page) * PAGE_SIZE;
     // The names are quoted by `quote_identifier`; the limit and the offset are bound.
     let sql = records_sql(database, table);
-    let mut rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let mut columns: Option<Vec<String>> = None;
+    let stream = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(PAGE_SIZE + 1)
         .bind(offset)
-        .fetch_all(&mut *connection)
-        .await?;
-    let has_more = rows.len() as u64 > PAGE_SIZE;
-    rows.truncate(PAGE_SIZE as usize);
-    let estimate = sqlx::query_scalar::<_, Option<u64>>(ESTIMATE)
-        .bind(database)
-        .bind(table)
-        .fetch_optional(&mut *connection)
-        .await?
-        .flatten();
+        .fetch(&mut *connection)
+        .map_ok(|row| {
+            columns.get_or_insert_with(|| column_names(&row));
+            cells_of(&row)
+        });
+    let (rows, has_more) = collect_limited(Box::pin(stream), PAGE_SIZE as usize).await?;
+    let estimate = if reads_estimate(page) {
+        sqlx::query_scalar::<_, Option<u64>>(ESTIMATE)
+            .bind(database)
+            .bind(table)
+            .fetch_optional(&mut *connection)
+            .await?
+            .flatten()
+    } else {
+        known
+    };
     Ok(DatabaseRecords {
-        columns: rows
-            .first()
-            .map(|row| row.columns().iter().map(|c| c.name().to_owned()).collect())
-            .unwrap_or_default(),
+        columns: columns.unwrap_or_default(),
         summary: format_summary(offset, rows.len(), estimate),
-        rows: rows.iter().map(cells_of).collect(),
+        rows,
         page,
         has_more,
+        estimate,
     })
 }
 
@@ -562,6 +581,14 @@ mod tests {
             (bad.kind, bad.text.as_str()),
             (DatabaseCellKind::Binary, "バイナリ 3 B")
         );
+    }
+
+    #[test]
+    fn the_estimate_is_read_with_the_first_page_only() {
+        assert!(reads_estimate(0));
+        for page in [1, 2, 1000] {
+            assert!(!reads_estimate(page), "{page}");
+        }
     }
 
     #[test]

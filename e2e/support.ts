@@ -559,6 +559,7 @@ export const databaseRecords = (columns: string[], rows: DatabaseCell[][], extra
   rows,
   page: 0,
   hasMore: false,
+  estimate: null,
   summary: rows.length === 0 ? "0 行" : `1–${rows.length} 行目`,
   ...extra,
 });

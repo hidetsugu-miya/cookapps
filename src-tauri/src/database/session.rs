@@ -177,6 +177,11 @@ impl Sessions {
         let Some(session) = self.open.lock().await.remove(id) else {
             return Ok(());
         };
+        Self::close_session(tunnels, &session).await
+    }
+
+    /// Closes `session` (already out of `open`) and its tunnel.
+    async fn close_session(tunnels: &Tunnels, session: &Session) -> Result<(), String> {
         if let Ok(mut guard) = session.connection.try_lock() {
             if let Some(connection) = guard.take() {
                 close_connection(connection).await;
@@ -188,26 +193,44 @@ impl Sessions {
         }
     }
 
-    /// Closes every session (the app's exit). The tunnels are closed by `Tunnels::close_all` after it.
+    /// Closes the session of `id` only when it is `session` itself: a query that began on a session that was closed meanwhile, and replaced by a new one, must not close the new one.
+    async fn disconnect_session(&self, tunnels: &Tunnels, id: &str, session: &Arc<Session>) {
+        let current = {
+            let mut open = self.open.lock().await;
+            if open.get(id).is_some_and(|s| Arc::ptr_eq(s, session)) {
+                open.remove(id)
+            } else {
+                None
+            }
+        };
+        if let Some(current) = current {
+            let _ = Self::close_session(tunnels, &current).await;
+        }
+    }
+
+    /// Closes every session (the app's exit), all at once, so that the exit waits for the slowest and not for the sum. The tunnels are closed by `Tunnels::close_all` after it.
     pub async fn close_all(&self) {
         let sessions: Vec<Arc<Session>> = self.open.lock().await.drain().map(|(_, s)| s).collect();
-        for session in sessions {
+        futures_util::future::join_all(sessions.iter().map(|session| async move {
             if let Ok(mut guard) = session.connection.try_lock() {
                 if let Some(connection) = guard.take() {
                     close_connection(connection).await;
                 }
             }
-        }
+        }))
+        .await;
     }
 
     /// What a query answered. A session that the failure shows lost is closed with its tunnel, so that the next press opens a new one.
+    /// `session` is the one the query ran on.
     async fn settle<T>(
         &self,
         tunnels: &Tunnels,
         id: &str,
+        session: &Arc<Session>,
         read: Result<Result<T, sqlx::Error>, tokio::time::error::Elapsed>,
     ) -> Result<T, String> {
-        self.settle_with(tunnels, id, read, mysql::query_failure, TIMED_OUT)
+        self.settle_with(tunnels, id, session, read, mysql::query_failure, TIMED_OUT)
             .await
     }
 
@@ -216,6 +239,7 @@ impl Sessions {
         &self,
         tunnels: &Tunnels,
         id: &str,
+        session: &Arc<Session>,
         read: Result<Result<T, sqlx::Error>, tokio::time::error::Elapsed>,
         failed: fn(&sqlx::Error) -> QueryFailure,
         timed_out: &str,
@@ -229,7 +253,7 @@ impl Sessions {
             },
         };
         if failure.lost {
-            let _ = self.disconnect(tunnels, id).await;
+            self.disconnect_session(tunnels, id, session).await;
         }
         Err(failure.message)
     }
@@ -248,7 +272,7 @@ impl Sessions {
             )
             .await
         };
-        self.settle(tunnels, id, read).await
+        self.settle(tunnels, id, &session, read).await
     }
 
     /// The tables of `database`, by name.
@@ -273,7 +297,7 @@ impl Sessions {
             .await
         };
         Ok(self
-            .settle(tunnels, id, read)
+            .settle(tunnels, id, &session, read)
             .await?
             .into_iter()
             .map(to_table)
@@ -288,6 +312,7 @@ impl Sessions {
         database: &str,
         table: &str,
         page: u32,
+        estimate: Option<u64>,
     ) -> Result<DatabaseRecords, String> {
         let session = self.session(id).await?;
         let read = {
@@ -297,11 +322,11 @@ impl Sessions {
             };
             tokio::time::timeout(
                 QUERY_TIMEOUT,
-                records::read(connection, database, table, page),
+                records::read(connection, database, table, page, estimate),
             )
             .await
         };
-        self.settle(tunnels, id, read).await
+        self.settle(tunnels, id, &session, read).await
     }
 
     /// The text of the user run as one statement in `database` (D-6).
@@ -321,7 +346,7 @@ impl Sessions {
             };
             tokio::time::timeout(sql::CLIENT_LIMIT, sql::run(connection, database, text)).await
         };
-        self.settle_with(tunnels, id, read, sql::failure, SQL_TIMED_OUT)
+        self.settle_with(tunnels, id, &session, read, sql::failure, SQL_TIMED_OUT)
             .await
     }
 
@@ -341,7 +366,7 @@ impl Sessions {
             };
             tokio::time::timeout(QUERY_TIMEOUT, structure::read(connection, database, table)).await
         };
-        self.settle(tunnels, id, read).await
+        self.settle(tunnels, id, &session, read).await
     }
 }
 
@@ -428,6 +453,38 @@ mod tests {
         assert!(!DATABASES.contains('?'));
     }
 
+    fn empty_session() -> Arc<Session> {
+        Arc::new(Session {
+            tunnel: None,
+            connection: Mutex::new(None),
+        })
+    }
+
+    #[tokio::test]
+    async fn a_query_that_shows_the_stream_broken_closes_its_own_session_and_not_a_newer_one() {
+        let sessions = Sessions::default();
+        let tunnels = Tunnels::default();
+        let old = empty_session();
+        let new = empty_session();
+        sessions
+            .open
+            .lock()
+            .await
+            .insert("a".to_owned(), new.clone());
+        let broken = || {
+            Ok::<Result<(), sqlx::Error>, tokio::time::error::Elapsed>(Err(sqlx::Error::Io(
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken pipe"),
+            )))
+        };
+        // The query began on `old`, which was closed and replaced by `new` meanwhile: `new` stays.
+        let told = sessions.settle(&tunnels, "a", &old, broken()).await;
+        assert!(told.unwrap_err().starts_with("MySQL との接続が切れました"));
+        assert!(sessions.has("a").await);
+        // A query on the session that is open is told lost, and it is closed.
+        let _ = sessions.settle(&tunnels, "a", &new, broken()).await;
+        assert!(!sessions.has("a").await);
+    }
+
     #[tokio::test]
     async fn a_connection_that_is_not_open_is_closed_already_and_cannot_be_read() {
         let sessions = Sessions::default();
@@ -444,7 +501,9 @@ mod tests {
             Err(NOT_OPEN.to_owned())
         );
         assert_eq!(
-            sessions.records(&tunnels, "a", "shop", "orders", 0).await,
+            sessions
+                .records(&tunnels, "a", "shop", "orders", 0, None)
+                .await,
             Err(NOT_OPEN.to_owned())
         );
         assert_eq!(

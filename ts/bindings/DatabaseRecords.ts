@@ -4,4 +4,8 @@ import type { DatabaseCell } from "./DatabaseCell";
 /**
  * One page of a table. `page` counts from 0; `summary` is the range and the estimated rows, worded for the footer.
  */
-export type DatabaseRecords = { columns: Array<string>, rows: Array<Array<DatabaseCell>>, page: number, hasMore: boolean, summary: string, };
+export type DatabaseRecords = { columns: Array<string>, rows: Array<Array<DatabaseCell>>, page: number, hasMore: boolean, 
+/**
+ * The estimated rows of the table (none for a view). Read with the page 0 only; a later page is given the one the screen holds (`read`'s `known`) and answers it again.
+ */
+estimate: number | null, summary: string, };

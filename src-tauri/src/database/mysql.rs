@@ -4,6 +4,8 @@
 //! The session is made read only at once (`SET SESSION TRANSACTION READ ONLY`), so that MySQL itself refuses a write.
 //! TLS is the one the app already has (rustls with `aws_lc_rs`, the feature `tls-rustls-aws-lc-rs` of sqlx): it is used when the server offers it (`MySqlSslMode::Preferred`),
 //! which is also what carries the password of `caching_sha2_password`; the RSA path of sqlx (the crate `rsa`) is not built in.
+//! A connection that goes over a network (no tunnel, and a host that is not the machine itself) requires TLS (`MySqlSslMode::Required`, `ssl_mode_of`), so that nobody on the way can make it fall back to plain text; the certificate is not verified in either mode.
+//! The time zone and the `sql_mode` of the session are the server's own: sqlx's defaults (`time_zone='+00:00'`, `PIPES_AS_CONCAT`) are turned off, so a TIMESTAMP and `NOW()` read as any other client reads them and `||` is OR.
 //! The decisions (what an error of sqlx or of the server is, and what the screen is told for it) are pure functions.
 //! A tunnel that opened while MySQL does not answer (the bastion does not reach the DB) is a failure of its own and never reads as a refused login.
 
@@ -18,7 +20,7 @@ use super::ssm::shorten;
 
 /// From the start of the connection to the answer of the first query, TLS and login included.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const READ_ONLY: &str = "SET SESSION TRANSACTION READ ONLY";
+pub const READ_ONLY: &str = "SET SESSION TRANSACTION READ ONLY";
 
 /// Where the MySQL server is reached. `tunneled` is true when `host` and `port` are the local end of a tunnel, which changes what a failure is told as.
 #[derive(Clone, Debug, PartialEq)]
@@ -124,6 +126,21 @@ fn classify(error: &sqlx::Error) -> Failure {
     }
 }
 
+/// How TLS is asked for. A tunnel ends at `127.0.0.1` and is encrypted by SSM already; a host that is the machine itself (`localhost`, a loopback address) goes nowhere on the network.
+/// Any other host is reached over a network, and TLS is required there: with `Preferred` an attacker on the way could make the server look as if it had no TLS, and the password would go in plain text.
+fn ssl_mode_of(endpoint: &Endpoint) -> MySqlSslMode {
+    let loopback = endpoint.host.eq_ignore_ascii_case("localhost")
+        || endpoint
+            .host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if endpoint.tunneled || loopback {
+        MySqlSslMode::Preferred
+    } else {
+        MySqlSslMode::Required
+    }
+}
+
 /// A read only session on `endpoint`, or the reason it could not be opened. The password is not logged and is not in any error.
 async fn open(
     endpoint: &Endpoint,
@@ -135,7 +152,9 @@ async fn open(
         .host(&endpoint.host)
         .port(endpoint.port)
         .username(username)
-        .ssl_mode(MySqlSslMode::Preferred);
+        .ssl_mode(ssl_mode_of(endpoint))
+        .timezone(None)
+        .pipes_as_concat(false);
     if !password.is_empty() {
         options = options.password(password);
     }
@@ -484,5 +503,49 @@ mod tests {
         connection.close().await.unwrap();
         let queries = server.await.unwrap();
         assert_eq!(queries.last().map(String::as_str), Some(READ_ONLY));
+    }
+
+    #[tokio::test]
+    async fn a_session_keeps_the_time_zone_and_the_sql_mode_of_the_server() {
+        let (endpoint, server) = serve(Server::Allow).await;
+        let connection = open(&endpoint, "reader", "", SECOND).await.unwrap();
+        connection.close().await.unwrap();
+        let queries = server.await.unwrap();
+        // sqlx's own preface sets time_zone='+00:00' and adds PIPES_AS_CONCAT to the sql_mode unless it is told not to.
+        assert!(!queries.is_empty());
+        for query in &queries {
+            assert!(!query.contains("time_zone"), "{query}");
+            assert!(!query.contains("PIPES_AS_CONCAT"), "{query}");
+        }
+    }
+
+    fn at(host: &str, tunneled: bool) -> MySqlSslMode {
+        ssl_mode_of(&Endpoint {
+            host: host.to_owned(),
+            port: 3306,
+            tunneled,
+        })
+    }
+
+    #[test]
+    fn a_connection_over_a_network_requires_tls_and_one_to_this_machine_or_through_a_tunnel_does_not(
+    ) {
+        for host in [
+            "db.example.com",
+            "10.0.0.5",
+            "2001:db8::1",
+            "127.0.0.1.example.com",
+        ] {
+            assert!(matches!(at(host, false), MySqlSslMode::Required), "{host}");
+        }
+        for host in ["127.0.0.1", "127.1.2.3", "::1", "localhost", "LocalHost"] {
+            assert!(matches!(at(host, false), MySqlSslMode::Preferred), "{host}");
+        }
+        // The local end of a tunnel is 127.0.0.1; the tunnel is encrypted by SSM.
+        assert!(matches!(at("127.0.0.1", true), MySqlSslMode::Preferred));
+        assert!(matches!(
+            at("db.example.com", true),
+            MySqlSslMode::Preferred
+        ));
     }
 }

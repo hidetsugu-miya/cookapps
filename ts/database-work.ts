@@ -120,7 +120,10 @@ function recordsNode(records: RecordsState, actions: WorkActions) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
   if (records.error !== null) scroll.append(note(records.error, true));
-  else if (records.data !== null && records.data.columns.length > 0) scroll.append(gridNode(records.data.columns, records.data.rows));
+  else if (records.data !== null && records.data.columns.length > 0) {
+    const { data } = records;
+    scroll.append(gridOf(data, () => gridNode(data.columns, data.rows)));
+  }
   const pager = tag("div", "database-pager");
   const range = tag("span", "database-range", records.loading ? "読み込み中…" : (records.data?.summary ?? ""));
   range.setAttribute("role", "status");
@@ -140,12 +143,15 @@ function structureNode(structure: StructureState) {
   const scroll = tag("div", "database-records-scroll");
   if (structure.error !== null) scroll.append(note(structure.error, true));
   else if (structure.data !== null && structure.data.columns.length > 0) {
-    const rows = structure.data.columns.map((c) =>
-      [c.name, c.columnType, c.nullable ? "YES" : "NO", c.key, c.default, c.comment].map((text) => ({ kind: "text" as const, text })),
+    const { data } = structure;
+    scroll.append(
+      gridOf(data, () => {
+        const rows = data.columns.map((c) => [c.name, c.columnType, c.nullable ? "YES" : "NO", c.key, c.default, c.comment].map((text) => ({ kind: "text" as const, text })));
+        const grid = gridNode(STRUCTURE_COLUMNS, rows);
+        grid.classList.add("database-structure");
+        return grid;
+      }),
     );
-    const grid = gridNode(STRUCTURE_COLUMNS, rows);
-    grid.classList.add("database-structure");
-    scroll.append(grid);
   }
   const footer = tag("div", "database-pager");
   const summary = tag("span", "database-range", structure.loading ? "読み込み中…" : (structure.data?.summary ?? ""));
@@ -169,7 +175,10 @@ function sqlNode(sql: SqlState, actions: WorkActions) {
   bar.append(pagerButton("run", "実行", sql.loading, actions.runSql));
   const scroll = tag("div", "database-records-scroll");
   if (sql.error !== null) scroll.append(note(sql.error, true));
-  else if (sql.data !== null && sql.data.columns.length > 0) scroll.append(gridNode(sql.data.columns, sql.data.rows));
+  else if (sql.data !== null && sql.data.columns.length > 0) {
+    const { data } = sql;
+    scroll.append(gridOf(data, () => gridNode(data.columns, data.rows)));
+  }
   const footer = tag("div", "database-pager");
   const summary = tag("span", "database-range", sql.loading ? "実行中…" : (sql.data?.summary ?? ""));
   summary.setAttribute("role", "status");
@@ -178,8 +187,30 @@ function sqlNode(sql: SqlState, actions: WorkActions) {
   return box;
 }
 
+// The grid of a result, made once for the object Rust answered: a draw that only changes the footer or a button (loading on, loading off) puts the same grid back, and does not build up to 1,000 rows again.
+const grids = new WeakMap<object, HTMLElement>();
+function gridOf(data: object, build: () => HTMLElement) {
+  let node = grids.get(data);
+  if (!node) {
+    node = build();
+    grids.set(data, node);
+  }
+  return node;
+}
+
+// The number of each answer of Rust that was drawn: the key of a draw holds the number and not the rows, so a draw does not turn a result of 1,000 rows into text to compare it.
+const versions = new WeakMap<object, number>();
+let versionCount = 0;
+const versionOf = (data: object) => {
+  const known = versions.get(data);
+  if (known !== undefined) return known;
+  versionCount += 1;
+  versions.set(data, versionCount);
+  return versionCount;
+};
+
 export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) {
-  const key = JSON.stringify(state);
+  const key = JSON.stringify(state, (name, value) => (name === "data" && value !== null && typeof value === "object" ? versionOf(value) : value));
   if (key === drawn) return;
   drawn = key;
   const box = $("database-work");

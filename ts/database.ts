@@ -166,13 +166,20 @@ async function dropClosed(): Promise<string[]> {
 }
 
 async function save(profile: DatabaseProfile, password: string) {
+  const known = new Set(profiles.map((p) => p.id));
+  let failure: unknown = null;
   try {
     await invoke("database_profile_save", { profile, password });
-  } finally {
-    // Rust closes an edited connection that was open.
-    if (profile.id !== "") await dropClosed();
+  } catch (e) {
+    failure = e;
   }
+  // Rust closes an edited connection that was open.
+  if (profile.id !== "") await dropClosed();
   await load();
+  if (failure === null) return;
+  // Rust writes the file before the keychain, so a refusal of the keychain leaves the new connection saved: the popup would save it again as a new one. It closes, and the error is shown on the screen.
+  if (profile.id === "" && profiles.some((p) => !known.has(p.id))) return showError(failure);
+  throw failure;
 }
 
 // The version that the server of the connection as typed answers; Rust opens the tunnel, logs in, reads it and closes the tunnel.
@@ -252,7 +259,7 @@ async function readRecords(id: string, database: string, table: string, page: nu
   records = mine;
   draw();
   try {
-    mine.data = await invoke("database_records", { id, database, table, page });
+    mine.data = await invoke("database_records", { id, database, table, page, estimate: mine.data?.estimate ?? null });
     mine.page = mine.data.page;
   } catch (e) {
     mine.data = null;

@@ -3,7 +3,8 @@
 //! The session is read only (D-2), so MySQL itself refuses a write; this module only words that refusal (`server_message`) and keeps the run small.
 //! One statement is run at a time, as a prepared one, so its rows come in the binary protocol that `records::cells_of` reads. The text is not rewritten: only the whitespace and the semicolons at its end are cut (`statement`).
 //! The database the tree has selected is chosen before the run by a `USE` of its own (the name quoted by `records::quote_identifier`), never put in the text of the user.
-//! The limits are asked of MySQL itself before the run (`prepare_sql`: `max_execution_time` stops a SELECT at `SERVER_LIMIT` and `sql_select_limit` ends a SELECT with no LIMIT one row after the limit of the rows) and put back after it (`RESTORE`),
+//! Before the run, one round trip (`prepare_sql`) puts the session read only again (the text of the user may have set it to read write: the run after it would write), sets the limits (`max_execution_time` stops a SELECT at `SERVER_LIMIT` and `sql_select_limit` ends a SELECT with no LIMIT one row after the limit of the rows) and selects the database.
+//! After the run, whatever came of it (a failed `USE` too), `RESTORE` puts the read only and the limits back,
 //! and the rows are read as a stream that stops after `ROWS_MAX` of them (`collect_limited`), so the rows past the limit are never held.
 
 use std::time::{Duration, Instant};
@@ -18,7 +19,7 @@ use sqlx::{
 use ts_rs::TS;
 
 use super::{
-    mysql::{query_failure, QueryFailure},
+    mysql::{query_failure, QueryFailure, READ_ONLY},
     records::{cells_of, quote_identifier, DatabaseCell},
     session::format_rows,
     ssm::shorten,
@@ -30,8 +31,9 @@ pub const ROWS_MAX: usize = 1000;
 pub const SERVER_LIMIT: Duration = Duration::from_secs(30);
 /// How long the app waits for the whole run (the preface, the statement, the restore) before it closes the connection: for what `SERVER_LIMIT` does not stop (a statement that is not a SELECT, a server that does not answer).
 pub const CLIENT_LIMIT: Duration = Duration::from_secs(35);
-/// Puts the limits of a run back to the server's own, so that the reads of the tree and of the tabs after it are as they were.
-const RESTORE: &str = "SET SESSION max_execution_time = DEFAULT, sql_select_limit = DEFAULT";
+/// Puts the session read only again and the limits back to the server's own, so that the reads of the tree and of the tabs after a run are as they were, whatever the text of the user set.
+/// It starts with `READ_ONLY` (a test checks that).
+const RESTORE: &str = "SET SESSION TRANSACTION READ ONLY; SET SESSION max_execution_time = DEFAULT, sql_select_limit = DEFAULT";
 const EMPTY: &str = "SQL を入力してください";
 
 /// The result of a run: the columns and the rows as D-4's cells, and the line under the table. A statement that gives no row has no column.
@@ -55,18 +57,20 @@ pub fn statement(sql: &str) -> Result<&str, String> {
     Ok(text)
 }
 
-/// What is set on the session before a run: the time MySQL lets a SELECT run, and the rows a SELECT with no LIMIT gives (one more than are kept).
-pub fn prepare_sql() -> String {
-    format!(
-        "SET SESSION max_execution_time = {}, sql_select_limit = {}",
-        SERVER_LIMIT.as_millis(),
-        ROWS_MAX + 1
-    )
-}
-
 /// Selects the database of the tree. It is a statement of its own and never part of the text of the user.
 pub fn use_sql(database: &str) -> String {
     format!("USE {}", quote_identifier(database))
+}
+
+/// What is set on the session before a run, in one round trip: read only again, the time MySQL lets a SELECT run, the rows a SELECT with no LIMIT gives (one more than are kept), and the database of the tree.
+/// The statements stop at the first that fails, so a `USE` that fails leaves the limits set, and `RESTORE` follows every run.
+pub fn prepare_sql(database: &str) -> String {
+    format!(
+        "{READ_ONLY}; SET SESSION max_execution_time = {}, sql_select_limit = {}; {}",
+        SERVER_LIMIT.as_millis(),
+        ROWS_MAX + 1,
+        use_sql(database)
+    )
 }
 
 /// `elapsed` as "12 ms", and from a second on as "1.25 秒" (the hundredths cut, not rounded).
@@ -125,7 +129,10 @@ pub fn failure(error: &sqlx::Error) -> QueryFailure {
 }
 
 /// At most `limit` items of `stream`, and whether there was one more. It reads that one more and stops: the rest of the stream is not read.
-async fn collect_limited<S, T, E>(mut stream: S, limit: usize) -> Result<(Vec<T>, bool), E>
+pub(super) async fn collect_limited<S, T, E>(
+    mut stream: S,
+    limit: usize,
+) -> Result<(Vec<T>, bool), E>
 where
     S: Stream<Item = Result<T, E>> + Unpin,
 {
@@ -140,7 +147,7 @@ where
     Ok((items, false))
 }
 
-fn column_names(row: &MySqlRow) -> Vec<String> {
+pub(super) fn column_names(row: &MySqlRow) -> Vec<String> {
     row.columns().iter().map(|c| c.name().to_owned()).collect()
 }
 
@@ -168,16 +175,16 @@ pub async fn run(
     text: &str,
 ) -> Result<DatabaseSqlResult, sqlx::Error> {
     // The statements of the preface and of the restore are run as text, because the protocol of a prepared statement does not take `USE`.
-    sqlx::raw_sql(AssertSqlSafe(prepare_sql()))
+    let prepared = sqlx::raw_sql(AssertSqlSafe(prepare_sql(database)))
         .execute(&mut *connection)
-        .await?;
-    sqlx::raw_sql(AssertSqlSafe(use_sql(database)))
-        .execute(&mut *connection)
-        .await?;
+        .await;
     let started = Instant::now();
-    let read = read(connection, text).await;
+    let read = match prepared {
+        Ok(_) => read(connection, text).await,
+        Err(e) => Err(e),
+    };
     let elapsed = started.elapsed();
-    // After a failure that MySQL answered the session is still there and is put back too; after a broken one this fails as well, and the failure of the run is the one told.
+    // After a failure that MySQL answered (a `USE` that failed too) the session is still there and is put back; after a broken one this fails as well, and the failure of the run is the one told.
     let restored = sqlx::raw_sql(RESTORE).execute(&mut *connection).await;
     let (columns, rows, truncated) = read?;
     restored?;
@@ -228,15 +235,20 @@ mod tests {
     }
 
     #[test]
-    fn the_limits_are_set_before_a_run_and_put_back_after_it() {
+    fn the_session_is_read_only_and_limited_before_a_run_and_put_back_after_it() {
         assert_eq!(
-            prepare_sql(),
-            "SET SESSION max_execution_time = 30000, sql_select_limit = 1001"
+            prepare_sql("shop"),
+            "SET SESSION TRANSACTION READ ONLY; SET SESSION max_execution_time = 30000, sql_select_limit = 1001; USE `shop`"
         );
         assert_eq!(
             RESTORE,
-            "SET SESSION max_execution_time = DEFAULT, sql_select_limit = DEFAULT"
+            "SET SESSION TRANSACTION READ ONLY; SET SESSION max_execution_time = DEFAULT, sql_select_limit = DEFAULT"
         );
+        // A text of the user may have set the session to read write: both put it back, before anything else.
+        assert!(prepare_sql("shop").starts_with(READ_ONLY));
+        assert!(RESTORE.starts_with(READ_ONLY));
+        // The name of the database is quoted in the preface too.
+        assert!(prepare_sql("a`b").ends_with("USE `a``b`"));
         // The client waits longer than MySQL, so that MySQL's own stop is the one that comes first.
         assert!(CLIENT_LIMIT > SERVER_LIMIT);
     }
