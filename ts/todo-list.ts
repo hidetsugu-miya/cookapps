@@ -7,13 +7,13 @@ import { confirmDelete } from "./hint.js";
 import { CHEVRON_SVG, DATE_SVG, DAY_SVG, DELETE_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, OUTDENT_SVG, SUB_SVG, svgOf, TAG_SVG } from "./icons.js";
 import { rowButton, rows } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
-import { openMenu } from "./menu.js";
+import { type MenuItem, openMenu } from "./menu.js";
 import { setScreen } from "./nav.js";
 import { openThread } from "./thread.js";
 import { updateAddMode } from "./todo-add.js";
 import { openDuePop, openProjectMenu } from "./todo-detail.js";
-import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
-import { archiveProject, deleteProject, moveTask, moveUnder, saveTask, setTaskDone } from "./todo-write.js";
+import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, moveTargets, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
+import { archiveProject, deleteProject, moveProject, moveTask, moveUnder, saveTask, setTaskDone } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
 import { showError } from "./view.js";
 
@@ -38,16 +38,26 @@ function projectButton(view: string, icon: string, name: string, count: number) 
 
 const ARCHIVE_SVG = svgOf('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>');
 
+// The places the project `p` may be moved to (T-8): the top level, then the projects `moveTargets` leaves. The pick makes it the last sub-project there.
+function movePlaces(p: ProjectItem) {
+  const places: MenuItem[] = moveTargets(p).map((x) => ({ label: x.name, color: x.color, current: false, depth: x.depth, pick: () => void moveProject(p.id, x.id) }));
+  if (p.parentId !== null) places.unshift({ label: "一番上の階層", color: "", icon: FOLDER_SVG, current: false, pick: () => void moveProject(p.id, null) });
+  return places;
+}
+
 // The menu of a right press on the row of the project `p` (T-8): the items of what can be done to a project are listed here. 削除 asks first, as it cannot be undone.
 function openProjectActions(row: HTMLElement, p: ProjectItem, e: MouseEvent) {
   e.preventDefault();
+  const at = { x: e.clientX, y: e.clientY };
+  const places = movePlaces(p);
   openMenu(
     row,
     [
+      { label: "移動", color: "", icon: FOLDER_SVG, current: false, disabled: places.length === 0, pick: () => openMenu(row, places, { at }) },
       { label: "アーカイブ", color: "", icon: ARCHIVE_SVG, current: false, pick: () => void archiveProject(p.id) },
       { label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmDelete(row, p.name, () => void deleteProject(p.id)) },
     ],
-    { at: { x: e.clientX, y: e.clientY } },
+    { at },
   );
 }
 

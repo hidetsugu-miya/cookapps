@@ -263,6 +263,7 @@ pub fn run() {
             todoist::todoist_delete,
             todoist::todoist_archive_project,
             todoist::todoist_delete_project,
+            todoist::todoist_move_project,
             todoist::todoist_comments,
             todoist::todoist_upload,
             todoist::todoist_add_comment,

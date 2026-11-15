@@ -2,7 +2,7 @@
 import { $ } from "./dom.js";
 import { invoke, type Commands } from "./ipc.js";
 import { loadTodo, renderTodo } from "./todo.js";
-import { addLabelLocal, dropProjectLocal, editingField, moveLocal, moveUnderLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
+import { addLabelLocal, dropProjectLocal, editingField, moveLocal, moveProjectLocal, moveUnderLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
 import { showError } from "./view.js";
 
 // Reloads shortly after the last call, so a run of changes costs one load. Completed tasks are fetched again only when asked for by one of them.
@@ -26,7 +26,7 @@ function scheduleTodoReload(withDone: boolean) {
 }
 
 // The commands todoCall sends: they answer true or false, or null when a token is needed.
-type Write = "todoist_add" | "todoist_add_task" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_create_label" | "todoist_move" | "todoist_move_under" | "todoist_delete" | "todoist_archive_project" | "todoist_delete_project";
+type Write = "todoist_add" | "todoist_add_task" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_create_label" | "todoist_move" | "todoist_move_under" | "todoist_delete" | "todoist_archive_project" | "todoist_delete_project" | "todoist_move_project";
 const send = invoke as (command: Write, args: unknown) => Promise<boolean | null>;
 
 // Runs a change, then reloads whether it worked or not, so the screen shows what Todoist has.
@@ -91,5 +91,7 @@ export async function moveUnder(id: string, parentId: string) {
 // T-8: the project and what is nested under it go from the list at once; the reload brings them back if Todoist refused.
 export const archiveProject = (id: string) => todoCall("todoist_archive_project", { id }, null, () => dropProjectLocal(id));
 export const deleteProject = (id: string) => todoCall("todoist_delete_project", { id }, null, () => dropProjectLocal(id));
+// T-8: the project and what is nested under it move at once to the end of the new parent's sub-projects (null: the top level); the reload undoes it if Todoist refused.
+export const moveProject = (id: string, parentId: string | null) => todoCall("todoist_move_project", { id, parentId }, null, () => moveProjectLocal(id, parentId));
 export const setTaskDone = (id: string, done: boolean, box: HTMLInputElement) =>
   todoCall("todoist_set_done", { id, done }, box, () => settleLocal(id, done));

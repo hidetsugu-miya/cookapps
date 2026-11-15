@@ -3248,12 +3248,12 @@ describe("todo projects", () => {
   };
   const projectNames = () => textsOf("#projects .proj-line .name");
 
-  it("opens a menu of アーカイブ and 削除 on the right press of a project, and none on インボックス and 今日", async () => {
+  it("opens a menu of 移動, アーカイブ and 削除 on the right press of a project, and none on インボックス and 今日", async () => {
     await openTodo();
     await rightClick(projectRow("p4"));
     await expect($(MENU)).toBeDisplayed();
-    expect(await textsOf(`${MENU} > button`)).toEqual(["アーカイブ", "削除"]);
-    await expect($(`${MENU} > button:nth-child(2)`)).toHaveElementClass("danger");
+    expect(await textsOf(`${MENU} > button`)).toEqual(["移動", "アーカイブ", "削除"]);
+    await expect($(`${MENU} > button:nth-child(3)`)).toHaveElementClass("danger");
     await browser.keys("Escape");
     await expect($(MENU)).not.toExist();
     for (const view of ["inbox", "today"]) {
@@ -3267,7 +3267,7 @@ describe("todo projects", () => {
     const archive = await mock("todoist_archive_project", true);
     await mock("todoist_load", without("p4"));
     await rightClick(projectRow("p4"));
-    await $(`${MENU} > button:nth-child(1)`).click();
+    await $(`${MENU} > button:nth-child(2)`).click();
     expect(await waitForCalls(archive)).toEqual([{ id: "p4" }]);
     await expect($(".pop")).not.toExist();
     expect(await projectNames()).toEqual(["Work", "Design", "Sketch"]);
@@ -3280,7 +3280,7 @@ describe("todo projects", () => {
     await projectOf("p3").click();
     await expect($("#todo-title")).toHaveText("Sketch");
     await rightClick(projectRow("p1"));
-    await $(`${MENU} > button:nth-child(1)`).click();
+    await $(`${MENU} > button:nth-child(2)`).click();
     expect(await waitForCalls(archive)).toEqual([{ id: "p1" }]);
     expect(await projectNames()).toEqual(["Home"]);
     await expect($("#todo-title")).toHaveText("今日");
@@ -3292,7 +3292,7 @@ describe("todo projects", () => {
     const del = await mock("todoist_delete_project", true);
     await mock("todoist_load", without("p4"));
     await rightClick(projectRow("p4"));
-    await $(`${MENU} > button:nth-child(2)`).click();
+    await $(`${MENU} > button:nth-child(3)`).click();
     await expect($('.pop[role="alertdialog"]')).toBeDisplayed();
     await expect($('.pop[role="alertdialog"]')).toHaveText(expect.stringContaining("Home"));
     expect(await callsOf(del)).toEqual([]);
@@ -3307,7 +3307,7 @@ describe("todo projects", () => {
     await openTodo();
     const del = await mock("todoist_delete_project", true);
     await rightClick(projectRow("p4"));
-    await $(`${MENU} > button:nth-child(2)`).click();
+    await $(`${MENU} > button:nth-child(3)`).click();
     await $('.pop[role="alertdialog"] .popup-actions .text-btn:not(.danger)').click();
     await expect($(".pop")).not.toExist();
     expect(await callsOf(del)).toEqual([]);
@@ -3321,7 +3321,7 @@ describe("todo projects", () => {
     await projectOf("p1").click();
     await expect($("#todo-title")).toHaveText("Work");
     await rightClick(projectRow("p1"));
-    await $(`${MENU} > button:nth-child(2)`).click();
+    await $(`${MENU} > button:nth-child(3)`).click();
     await $('.pop[role="alertdialog"] .text-btn.danger').click();
     expect(await waitForCalls(del)).toEqual([{ id: "p1" }]);
     await expect($("#todo-title")).toHaveText("今日");
@@ -3332,7 +3332,7 @@ describe("todo projects", () => {
     await openTodo();
     const archive = await mock("todoist_archive_project", rejects("Todoist に接続できません"));
     await rightClick(projectRow("p4"));
-    await $(`${MENU} > button:nth-child(1)`).click();
+    await $(`${MENU} > button:nth-child(2)`).click();
     await waitForCalls(archive);
     // The reload brings back what Todoist has.
     await browser.waitUntil(async () => (await projectNames()).includes("Home"), { timeoutMsg: "Home did not come back" });
@@ -3344,11 +3344,96 @@ describe("todo projects", () => {
     await openTodo();
     const del = await mock("todoist_delete_project", rejects("Todoist に接続できません"));
     await rightClick(projectRow("p4"));
-    await $(`${MENU} > button:nth-child(2)`).click();
+    await $(`${MENU} > button:nth-child(3)`).click();
     await $('.pop[role="alertdialog"] .text-btn.danger').click();
     await waitForCalls(del);
     await browser.waitUntil(async () => (await projectNames()).includes("Home"), { timeoutMsg: "Home did not come back" });
     await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
     expect(await projectNames()).toEqual(["Work", "Design", "Sketch", "Home"]);
+  });
+
+  // The side list as drawn: each project's name and the indent of its row.
+  const projectLines = () =>
+    browser.execute(() =>
+      [...document.querySelectorAll("#projects .proj-line")].map((line) => [line.querySelector(".name")!.textContent, (line as HTMLElement).style.paddingLeft]),
+    );
+  // Opens the menu of `id` and then its 移動 row, which opens the list of places to move it to.
+  const openMoveMenu = async (id: string) => {
+    await rightClick(projectRow(id));
+    await $(`${MENU} > button:nth-child(1)`).click();
+    await expect($(MENU)).toBeDisplayed();
+  };
+
+  it("lists 一番上の階層 and the projects a project may be moved under, without itself, its sub-projects, its parent and the inbox", async () => {
+    await openTodo();
+    // Sketch is nested in Design: Design is its parent, so it is left out, and the top level is a place to go.
+    await openMoveMenu("p3");
+    expect(await textsOf(`${MENU} > button`)).toEqual(["一番上の階層", "Work", "Home"]);
+    await browser.keys("Escape");
+    await expect($(MENU)).not.toExist();
+    // Work holds Design and Sketch, and it is at the top already.
+    await openMoveMenu("p1");
+    expect(await textsOf(`${MENU} > button`)).toEqual(["Home"]);
+    await browser.keys("Escape");
+    // Home is at the top, so there is no 一番上の階層.
+    await openMoveMenu("p4");
+    expect(await textsOf(`${MENU} > button`)).toEqual(["Work", "Design", "Sketch"]);
+  });
+
+  it("moves a project at once with todoist_move_project, the project id and the parent id, as the last sub-project of the parent", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", true);
+    await mock("todoist_load", holds);
+    expect(await projectLines()).toEqual([["Work", "0px"], ["Design", "16px"], ["Sketch", "32px"], ["Home", "0px"]]);
+    await openMoveMenu("p3");
+    await $(`${MENU} > button:nth-child(3)`).click();
+    expect(await waitForCalls(move)).toEqual([{ id: "p3", parentId: "p4" }]);
+    expect(await projectLines()).toEqual([["Work", "0px"], ["Design", "16px"], ["Home", "0px"], ["Sketch", "16px"]]);
+  });
+
+  it("moves a project with its sub-projects, and their indent follows", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", true);
+    await mock("todoist_load", holds);
+    await openMoveMenu("p4");
+    await $(`${MENU} > button:nth-child(3)`).click();
+    expect(await waitForCalls(move)).toEqual([{ id: "p4", parentId: "p3" }]);
+    expect(await projectLines()).toEqual([["Work", "0px"], ["Design", "16px"], ["Sketch", "32px"], ["Home", "48px"]]);
+    // Work now holds every other project and is at the top, so it has nowhere to go and the row is off.
+    await rightClick(projectRow("p1"));
+    await expect($(`${MENU} > button:nth-child(1)`)).toBeDisabled();
+  });
+
+  it("moves a project to the top level with parentId null, after the last project there, and its sub-projects with it", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", true);
+    await mock("todoist_load", holds);
+    await openMoveMenu("p2");
+    expect(await textsOf(`${MENU} > button`)).toEqual(["一番上の階層", "Home"]);
+    await $(`${MENU} > button:nth-child(1)`).click();
+    expect(await waitForCalls(move)).toEqual([{ id: "p2", parentId: null }]);
+    expect(await projectLines()).toEqual([["Work", "0px"], ["Home", "0px"], ["Design", "0px"], ["Sketch", "16px"]]);
+  });
+
+  it("opens a closed parent so that the moved project shows", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", true);
+    await mock("todoist_load", holds);
+    await toggleOf("p1").click();
+    await browser.waitUntil(async () => (await projectLines()).length === 2);
+    await openMoveMenu("p4");
+    await $(`${MENU} > button:nth-child(1)`).click();
+    await waitForCalls(move);
+    expect((await projectLines()).map((l) => l[0])).toEqual(["Work", "Design", "Sketch", "Home"]);
+  });
+
+  it("puts the project back and shows the error when moving fails", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", rejects("Todoist に接続できません"));
+    await openMoveMenu("p3");
+    await $(`${MENU} > button:nth-child(1)`).click();
+    await waitForCalls(move);
+    await browser.waitUntil(async () => JSON.stringify(await projectLines()) === JSON.stringify([["Work", "0px"], ["Design", "16px"], ["Sketch", "32px"], ["Home", "0px"]]), { timeoutMsg: "the list did not come back" });
+    await expect($("#error")).toHaveText(expect.stringContaining("Todoist に接続できません"));
   });
 });
