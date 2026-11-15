@@ -3269,7 +3269,7 @@ describe("todo projects", () => {
     await rightClick(projectRow("p4"));
     await $(`${MENU} > button:nth-child(2)`).click();
     expect(await waitForCalls(archive)).toEqual([{ id: "p4" }]);
-    await expect($(".pop")).not.toExist();
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
     expect(await projectNames()).toEqual(["Work", "Design", "Sketch"]);
   });
 
@@ -3299,7 +3299,7 @@ describe("todo projects", () => {
     expect(await projectNames()).toContain("Home");
     await $('.pop[role="alertdialog"] .text-btn.danger').click();
     expect(await waitForCalls(del)).toEqual([{ id: "p4" }]);
-    await expect($(".pop")).not.toExist();
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
     expect(await projectNames()).toEqual(["Work", "Design", "Sketch"]);
   });
 
@@ -3309,7 +3309,7 @@ describe("todo projects", () => {
     await rightClick(projectRow("p4"));
     await $(`${MENU} > button:nth-child(3)`).click();
     await $('.pop[role="alertdialog"] .popup-actions .text-btn:not(.danger)').click();
-    await expect($(".pop")).not.toExist();
+    await expect($('.pop[role="alertdialog"]')).not.toExist();
     expect(await callsOf(del)).toEqual([]);
     expect(await projectNames()).toEqual(["Work", "Design", "Sketch", "Home"]);
   });
@@ -3425,6 +3425,21 @@ describe("todo projects", () => {
     await $(`${MENU} > button:nth-child(1)`).click();
     await waitForCalls(move);
     expect((await projectLines()).map((l) => l[0])).toEqual(["Work", "Design", "Sketch", "Home"]);
+  });
+
+  it("opens every closed project above the new parent so that the moved project shows", async () => {
+    await openTodo();
+    const move = await mock("todoist_move_project", true);
+    await mock("todoist_load", holds);
+    // Design closes first, then Work, so Sketch is under two closed projects.
+    await toggleOf("p2").click();
+    await browser.waitUntil(async () => (await projectLines()).length === 3);
+    await toggleOf("p1").click();
+    await browser.waitUntil(async () => (await projectLines()).length === 2);
+    await openMoveMenu("p4");
+    await $(`${MENU} > button:nth-child(3)`).click();
+    expect(await waitForCalls(move)).toEqual([{ id: "p4", parentId: "p3" }]);
+    expect(await projectLines()).toEqual([["Work", "0px"], ["Design", "16px"], ["Sketch", "32px"], ["Home", "48px"]]);
   });
 
   it("puts the project back and shows the error when moving fails", async () => {

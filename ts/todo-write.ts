@@ -2,7 +2,7 @@
 import { $ } from "./dom.js";
 import { invoke, type Commands } from "./ipc.js";
 import { loadTodo, renderTodo } from "./todo.js";
-import { addLabelLocal, dropProjectLocal, editingField, moveLocal, moveProjectLocal, moveUnderLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
+import { addLabelLocal, closedChain, dropProjectLocal, editingField, moveLocal, moveProjectLocal, moveUnderLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
 import { showError } from "./view.js";
 
 // Reloads shortly after the last call, so a run of changes costs one load. Completed tasks are fetched again only when asked for by one of them.
@@ -92,6 +92,12 @@ export async function moveUnder(id: string, parentId: string) {
 export const archiveProject = (id: string) => todoCall("todoist_archive_project", { id }, null, () => dropProjectLocal(id));
 export const deleteProject = (id: string) => todoCall("todoist_delete_project", { id }, null, () => dropProjectLocal(id));
 // T-8: the project and what is nested under it move at once to the end of the new parent's sub-projects (null: the top level); the reload undoes it if Todoist refused.
-export const moveProject = (id: string, parentId: string | null) => todoCall("todoist_move_project", { id, parentId }, null, () => moveProjectLocal(id, parentId));
+export async function moveProject(id: string, parentId: string | null) {
+  // The local move opens the parent and the projects above it so the moved row shows: a failed call closes again those that were closed.
+  const wasClosed = parentId === null ? [] : closedChain(parentId);
+  const answer = await todoCall("todoist_move_project", { id, parentId }, null, () => moveProjectLocal(id, parentId));
+  if (answer === null) for (const closed of wasClosed) todoState.closedProjects.add(closed);
+  return answer;
+}
 export const setTaskDone = (id: string, done: boolean, box: HTMLInputElement) =>
   todoCall("todoist_set_done", { id, done }, box, () => settleLocal(id, done));

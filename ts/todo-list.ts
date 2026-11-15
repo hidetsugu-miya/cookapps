@@ -55,7 +55,7 @@ function openProjectActions(row: HTMLElement, p: ProjectItem, e: MouseEvent) {
     [
       { label: "移動", color: "", icon: FOLDER_SVG, current: false, disabled: places.length === 0, pick: () => openMenu(row, places, { at }) },
       { label: "アーカイブ", color: "", icon: ARCHIVE_SVG, current: false, pick: () => void archiveProject(p.id) },
-      { label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmDelete(row, p.name, () => void deleteProject(p.id)) },
+      { label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => confirmDelete(document.querySelector<HTMLElement>(`#projects .proj[data-view="${CSS.escape(p.id)}"]`) ?? row, p.name, () => void deleteProject(p.id)) },
     ],
     { at },
   );
@@ -390,8 +390,13 @@ function projectDropTarget(el: Element | null | undefined, p: ProjectItem, place
 function projectDrag(button: HTMLElement, line: HTMLElement, p: ProjectItem) {
   button.onpointerdown = (e) => {
     if (e.button !== 0) return;
-    const places = new Set(moveTargets(p).map((x) => x.id));
-    pressDrag(e, button, p.name, line, (el) => projectDropTarget(el, p, places), (target) => {
+    // Made when the drag starts (the first `find`), not at each press: a press that is only a click needs none.
+    let places: Set<string> | null = null;
+    const placesOf = () => {
+      places ??= new Set(moveTargets(p).map((x) => x.id));
+      return places;
+    };
+    pressDrag(e, button, p.name, line, (el) => projectDropTarget(el, p, placesOf()), (target) => {
       // A project button's `data-view` is its ID; the heading has none.
       if (target) void moveProject(p.id, target.dataset.view ?? null);
       // Only a redraw held back during the drag; the next refresh fetches.

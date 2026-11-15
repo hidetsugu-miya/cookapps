@@ -221,8 +221,17 @@ export function moveTargets(p: ProjectItem) {
   return todoState.todo!.projects.filter((x) => !x.inbox && !tree.has(x.id) && x.id !== p.parentId);
 }
 
+// The IDs of the project `id` and of the projects above it that are closed in the side list: a row under one of them is not drawn.
+export function closedChain(id: string) {
+  const ids: string[] = [];
+  for (let p = todoState.projectById.get(id); p; p = p.parentId ? todoState.projectById.get(p.parentId) : undefined) {
+    if (todoState.closedProjects.has(p.id)) ids.push(p.id);
+  }
+  return ids;
+}
+
 // Moves the project `id` with the projects nested under it to the end of the sub-projects of `parentId`, or to the end of the top level when it is null (T-8).
-// The list is in tree order and each project has its depth, so the block moves as a whole and its depths shift. The new parent is opened so the moved row shows.
+// The list is in tree order and each project has its depth, so the block moves as a whole and its depths shift. The new parent and the projects above it are opened so the moved row shows.
 export function moveProjectLocal(id: string, parentId: string | null) {
   const projects = todoState.todo!.projects;
   const from = projects.findIndex((p) => p.id === id);
@@ -243,9 +252,11 @@ export function moveProjectLocal(id: string, parentId: string | null) {
     at = parentAt + 1;
     while (at < projects.length && projects[at].depth > parent.depth) at++;
     depth = parent.depth + 1;
-    todoState.closedProjects.delete(parentId);
+    for (const closed of closedChain(parentId)) todoState.closedProjects.delete(closed);
   }
-  for (const p of block) p.depth += depth - root.depth;
+  // Read before the loop: the first project of the block is `root`, and its depth changes first.
+  const shift = depth - root.depth;
+  for (const p of block) p.depth += shift;
   root.parentId = parentId;
   projects.splice(at, 0, ...block);
 }
