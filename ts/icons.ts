@@ -41,7 +41,6 @@ export const LINES_SVG = svgOf('<path d="M4 6h16M4 12h16M4 18h10"/>');
 export const PEOPLE_SVG = svgOf('<circle cx="9" cy="8" r="3.5"/><path d="M3 20c.6-3.6 3-5.5 6-5.5s5.4 1.9 6 5.5M16 5a3.5 3.5 0 0 1 0 6.5M18 14.8c1.7.8 2.7 2.5 3 5.2"/>');
 export const ORCA_SVG = $("nav-orca").querySelector("svg")!.outerHTML;
 export const DATABASE_SVG = $("nav-database").querySelector("svg")!.outerHTML;
-export const MORE_SVG = svgOf('<path d="M5 12h.01M12 12h.01M19 12h.01"/>');
 export const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const ARROW_UP_SVG = svgOf('<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>');
 export const INBOX_SVG = $("nav-mail").querySelector("svg")!.outerHTML;
