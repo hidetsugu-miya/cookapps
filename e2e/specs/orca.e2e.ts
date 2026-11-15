@@ -44,7 +44,7 @@ import {
   waitForCalls,
   waitForCount,
 } from "../support";
-import { beside, claudeTab, filesToggle, onThisMachine, openOrca, openTargetCard, orcaOverview, pickInCard, pickItem, pickTarget, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { beside, claudeTab, filesToggle, onThisMachine, openOrca, openTargetCard, orcaOverview, pickInCard, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
 const twoWorktrees = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" }), orcaWorktree("example-api", "main")];
@@ -239,9 +239,10 @@ describe("orca", () => {
   it("clears the mark when the target changes, and marks again from the read of the new one", async () => {
     await openOrca(orcaOverview([working("example-app")], worktrees(), { target: "Studio", environments: ["Studio", "Lab"] }));
     expect(await marked()).toBe(true);
+    await openTargetCard();
     await mock("orca_set_target", null);
     const overview = await mock("orca_overview", orcaOverview([finished("lab-app")], [], { target: "Lab", environments: ["Studio", "Lab"] }));
-    await pickTarget("Lab");
+    await pickInCard("Lab");
     await waitForCalls(overview);
     expect(await marked()).toBe(false);
     await reread([working("lab-app")], { target: "Lab", environments: ["Studio", "Lab"] });
@@ -368,9 +369,10 @@ describe("orca", () => {
     await openOrca(orcaOverview([working("example-app")], worktrees(), { target: "Studio", environments: ["Studio", "Lab"] }));
     await reread([finished("example-app")], { target: "Studio", environments: ["Studio", "Lab"] });
     await expectCount(1);
+    await openTargetCard();
     await mock("orca_set_target", null);
     const overview = await mock("orca_overview", orcaOverview([finished("lab-app")], [], { target: "Lab", environments: ["Studio", "Lab"] }));
-    await pickTarget("Lab");
+    await pickInCard("Lab");
     await waitForCalls(overview);
     await expect($("#orca-feed .spin")).not.toExist();
     await expectCount(0);
@@ -823,9 +825,11 @@ describe("orca", () => {
     await pressPlus();
     await pickItem(CLAUDE);
     expect(await waitForCalls(start)).toEqual([{ path: "/work/example-app", environment: "Studio" }]);
+    // The tab reads the environments when it is shown, so the answer of the new target is mocked after it.
+    await openTargetCard();
     const save = await mock("orca_set_target", null);
     const overview = await mock("orca_overview", orcaOverview([orcaRow("lab-app", "main", "Lab task")], [], { target: null, environments: ["Studio", "Lab"] }));
-    await pickTarget(null);
+    await pickInCard(null);
     expect(await waitForCalls(save)).toEqual([{ environment: null }]);
     await waitForCalls(overview);
     // The sessions of the old target are gone, with the selection, and the stream of the old target ends.
@@ -881,13 +885,17 @@ describe("orca", () => {
 
   it("says nothing about a new target until its first read comes back", async () => {
     await openOrca(orcaOverview(sample(), worktrees(), studio));
+    await openTargetCard();
     await mock("orca_set_target", null);
     const overview = await mock("orca_overview", holds);
-    await pickTarget(null);
-    await waitForCalls(overview);
+    await pickInCard(null);
+    // The pick reads, and showing the Orca screen again reads once more: the older read is the superseded one.
+    await waitForCalls(overview, 2);
     await expect($("#orca-feed")).toHaveText(expect.stringContaining("読み込んでいます"));
     expect(await textsOf("#orca-notice")).toEqual([""]);
-    await release(overview, orcaOverview([orcaRow("lab-app", "main", "Lab task")], [], { environments: ["Studio", "Lab"] }));
+    const answer = orcaOverview([orcaRow("lab-app", "main", "Lab task")], [], { environments: ["Studio", "Lab"] });
+    await release(overview, answer);
+    await release(overview, answer);
     await waitForCount("#orca-feed .orca-project", 1);
   });
 
@@ -1987,10 +1995,11 @@ describe("orca: a saved environment's stream", () => {
 
   it("ends the stream of the list when the target becomes this machine", async () => {
     await openStudio();
+    await openTargetCard();
     const close = await mock("orca_stream_close", null);
     await mock("orca_set_target", null);
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { environments: ["Studio"] }));
-    await pickTarget(null);
+    await pickInCard(null);
     await waitForCalls(close);
     // An event of the old stream is not drawn.
     await sendStream(streamList([], worktrees()));
@@ -4046,9 +4055,10 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
   it("drops this machine's projects when the target is changed to it", async () => {
     await openOrca(mixed({ environments: ["Studio", "Lab"] }));
     await waitForCount("#orca-feed .orca-project", 4);
+    await openTargetCard();
     await mock("orca_set_target", null);
     await mock("orca_overview", orcaOverview(macRows(), macTrees(), { environments: ["Studio", "Lab"] }));
-    await pickTarget(null);
+    await pickInCard(null);
     await waitForCount("#orca-feed .orca-project", 2);
     expect(await count("#orca-feed .orca-env")).toBe(0);
   });
