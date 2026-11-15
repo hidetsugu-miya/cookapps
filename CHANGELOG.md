@@ -13,6 +13,8 @@ D-4, D-5, D-6: the grids of the records, the structure and the SQL result have a
 
 D-7: the header of the work pane has an icon that opens and closes a pane at its right, whose width is changed by dragging the divider (#673). Its plus opens a plain Orca terminal in the Orca worktree picked from a list (#674). Each terminal opened is a tab, pressed to switch to it and closed with its ×, which closes the terminal in Orca as the tabs of the Orca screen do (#675).
 
+A-8: a session row of the Orca list could show the tags of a Claude Code conversation, such as `<event kind="repl-eval" …>`, as its text; it now shows the first line of the text inside the tags, and keeps a link or code that the user wrote between `<` and `>` (#682).
+
 ## v0.74.2
 
 D-1: the menu of a connection on the database screen ("編集", "切断" while it is open, and "削除") opens with a right click on its row, where the pointer is; the button with three dots at the right of the row is gone (#664).
